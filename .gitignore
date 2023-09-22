@@ -1,0 +1,5 @@
+xdb-server
+test.log
+coverage.out
+.idea/
+gen/
