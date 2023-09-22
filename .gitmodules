@@ -1,0 +1,3 @@
+[submodule "xdb-apis"]
+	path = xdb-apis
+	url = git@github.com:xdblab/xdb-apis.git
