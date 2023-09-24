@@ -2,8 +2,9 @@ package tag
 
 import (
 	"fmt"
-	"go.uber.org/zap"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const LoggingCallAtKey = "logging-call-at"

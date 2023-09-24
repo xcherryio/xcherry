@@ -118,7 +118,8 @@ endef
 # useful to actually re-run to get output again.
 # reuse the intermediates for simplicity and consistency.
 lint: ## (re)run the linter
-	$(call remake,proto-lint lint)
+	@printf "GolangCI Lint...\n"
+	@golangci-lint run --timeout 20m0s
 
 # intentionally not re-making, goimports is slow and it's clear when it's unnecessary
 fmt: $(BUILD)/fmt ## run goimports
@@ -136,7 +137,7 @@ xdb-server:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/server/main.go
 
-.PHONY: bins release clean
+.PHONY: bins release clean help test lint
 
 apis-code-gen: #generate/refresh go code for xdb-apis, do this after update the xdb-apis file
 	rm -Rf ./gen ; true
@@ -144,6 +145,9 @@ apis-code-gen: #generate/refresh go code for xdb-apis, do this after update the 
 	rm ./gen/xdbapis/go.* ; rm -rf ./gen/xdbapis/test; gofmt -s -w gen; true
 
 bins: $(BINS)
+
+test: ## Run unit tests
+	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
 
 clean: ## Clean binaries and build folder
 	rm -f $(BINS)

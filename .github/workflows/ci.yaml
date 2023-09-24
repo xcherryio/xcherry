@@ -1,0 +1,58 @@
+name: CI Actions
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  workflow:
+    name: Lint/Build/Test
+
+    strategy:
+      matrix:
+        go-version: [1.19.x]
+        os: [ ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{matrix.go-version}}
+
+      - name: Checkout Code Base
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
+          submodules: 'true'
+
+      - name: Restore Go Module Cache
+        uses: actions/cache@v2
+        with:
+          path: ~/go/internal/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: generate apis code
+        run: |
+          mkdir -p ~/bin/openapitools
+          curl https://raw.githubusercontent.com/OpenAPITools/openapi-generator/master/bin/utils/openapi-generator-cli.sh > ~/bin/openapitools/openapi-generator-cli
+          chmod u+x ~/bin/openapitools/openapi-generator-cli
+          mv ~/bin/openapitools/openapi-generator-cli /usr/local/bin/openapi-generator
+          make apis-code-gen
+
+      - name: Make Lint
+        run: |
+          export GOPATH=$HOME/go
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.53.3
+          go mod tidy
+          make lint
+
+      - name: Make Binaries
+        run: make bins
+
+      - name: Test
+        run: make test

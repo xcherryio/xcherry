@@ -2,11 +2,13 @@ package log
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb/service/common/log/tag"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"path/filepath"
 	"runtime"
+
+	"github.com/xdblab/xdb/service/common/log/tag"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
