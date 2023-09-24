@@ -2,12 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/xdblab/xdb/gen/xdbapis"
 	"github.com/xdblab/xdb/service/common/config"
 	"github.com/xdblab/xdb/service/common/log"
 	"github.com/xdblab/xdb/service/common/log/tag"
-	"net/http"
 )
 
 type handler struct {

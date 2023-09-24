@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/xdblab/xdb/cmd/server/xdb"
 	"os"
+
+	"github.com/xdblab/xdb/cmd/server/xdb"
 )
 
 // main entry point for the xdb server

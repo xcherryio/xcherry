@@ -2,12 +2,13 @@ package xdb
 
 import (
 	"fmt"
+	rawLog "log"
+
 	"github.com/urfave/cli"
 	"github.com/xdblab/xdb/service/api"
 	"github.com/xdblab/xdb/service/common/config"
 	"github.com/xdblab/xdb/service/common/log"
 	"github.com/xdblab/xdb/service/common/log/tag"
-	rawLog "log"
 )
 
 const serviceAPI = "api"
