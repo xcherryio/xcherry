@@ -2,10 +2,10 @@ name: CI Actions
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 jobs:
   workflow:
     name: Lint/Build/Test
