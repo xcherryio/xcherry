@@ -44,5 +44,8 @@ jobs:
           go mod tidy
           make lint
 
+      - name: Make Binaries
+        run: make bins
+
       - name: Test
         run: make test
