@@ -141,7 +141,7 @@ xdb-server:
 
 bins: $(BINS)
 
-test: ## Run unit tests
+test: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
 
 clean: ## Clean binaries and build folder
