@@ -139,20 +139,14 @@ xdb-server:
 
 .PHONY: bins release clean help test lint
 
-apis-code-gen: #generate/refresh go code for xdb-apis, do this after update the xdb-apis file
-	rm -Rf ./gen ; true
-	openapi-generator generate -i xdb-apis/xdb.yaml -g go -o gen/xdbapis/ -p packageName=xdbapis -p generateInterfaces=true -p isGoSubmodule=false --git-user-id xdblab --git-repo-id xdb-apis
-	rm ./gen/xdbapis/go.* ; rm -rf ./gen/xdbapis/test; gofmt -s -w gen; true
-
 bins: $(BINS)
 
-test: ## Run unit tests
+test: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
 
 clean: ## Clean binaries and build folder
 	rm -f $(BINS)
 	rm -Rf $(BUILD)
-	rm -Rf ./gen
 	$(if \
 		$(filter $(BIN)/fake-codegen, $(wildcard $(BIN)/*)), \
 		$(warning fake build tools may exist, delete the $(BIN) folder to get real ones if desired),)
