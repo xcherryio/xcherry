@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xdblab/xdb/gen/xdbapis"
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/service/common/config"
 	"github.com/xdblab/xdb/service/common/log"
 	"github.com/xdblab/xdb/service/common/log/tag"
@@ -24,7 +24,7 @@ func newHandler(config config.Config, logger log.Logger) *handler {
 }
 
 func (h *handler) ApiV1ProcessStartPost(c *gin.Context) {
-	var req xdbapis.ObjectExecutionStartRequest
+	var req xdbapi.ProcessExecutionStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -49,7 +49,7 @@ func (h *handler) toJson(req any) string {
 }
 
 func invalidRequestSchema(c *gin.Context) {
-	c.JSON(http.StatusBadRequest, xdbapis.ErrorResponse{
-		Detail: xdbapis.PtrString("invalid request schema"),
+	c.JSON(http.StatusBadRequest, xdbapi.ApiErrorResponse{
+		Detail: xdbapi.PtrString("invalid request schema"),
 	})
 }

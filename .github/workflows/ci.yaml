@@ -36,13 +36,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: generate apis code
-        run: |
-          mkdir -p ~/bin/openapitools
-          curl https://raw.githubusercontent.com/OpenAPITools/openapi-generator/master/bin/utils/openapi-generator-cli.sh > ~/bin/openapitools/openapi-generator-cli
-          chmod u+x ~/bin/openapitools/openapi-generator-cli
-          mv ~/bin/openapitools/openapi-generator-cli /usr/local/bin/openapi-generator
-          make apis-code-gen
 
       - name: Make Lint
         run: |
