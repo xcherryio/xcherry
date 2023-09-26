@@ -4,6 +4,9 @@ go 1.19
 
 require (
 	github.com/gin-gonic/gin v1.9.1
+	github.com/iancoleman/strcase v0.3.0
+	github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee
+	github.com/lib/pq v1.2.0
 	github.com/urfave/cli/v2 v2.25.7
 	github.com/xdblab/xdb-apis v0.0.1
 	go.uber.org/zap v1.26.0

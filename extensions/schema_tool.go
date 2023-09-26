@@ -21,10 +21,10 @@
 package extensions
 
 import (
+	"context"
 	"fmt"
 	"github.com/urfave/cli/v2"
 	"github.com/xdblab/xdb/config"
-	"log"
 	"net"
 )
 
@@ -51,24 +51,29 @@ import (
 func CreateDatabase(cli *cli.Context, extensionName string) error {
 	cfg, err := parseConnectConfig(cli, extensionName)
 	if err != nil {
-		return handleErr(err)
+		panic(err)
 	}
 	database := cli.String(CLIOptDatabase)
 	err = doCreateDatabase(cfg, database)
 	if err != nil {
-		return handleErr(fmt.Errorf("error creating database:%v", err))
+		panic(fmt.Errorf("error creating database:%v", err))
 	}
 	return nil
 }
 
 func doCreateDatabase(cfg *config.SQL, name string) error {
 	cfg.DatabaseName = ""
+	// IMPORTATNT! set empty because the database is to be created(not exists yet). It's up to the extension to handle it
+	// e.g.:
+	// MySQL just use an account like root
+	// Postgres will set it to postgres 
+
 	conn, err := NewSQLAdminDB(cfg)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	return conn.CreateDatabase(name)
+	return conn.CreateDatabase(context.Background(), name)
 }
 
 func parseConnectConfig(cli *cli.Context, extensionName string) (*config.SQL, error) {
@@ -106,9 +111,4 @@ func ValidateConnectConfig(cfg *config.SQL) error {
 
 func flag(opt string) string {
 	return "(-" + opt + ")"
-}
-
-func handleErr(err error) error {
-	log.Println(err)
-	return err
 }

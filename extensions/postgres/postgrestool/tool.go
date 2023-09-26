@@ -20,27 +20,27 @@ func BuildCLIOptions() *cli.App {
 		&cli.StringFlag{
 			Name:  extensions.CLIFlagEndpoint,
 			Value: "127.0.0.1",
-			Usage: "hostname or ip address of sql host to connect to",
+			Usage: "hostname or ip address of sql host to connect to postgres",
 		},
 		&cli.IntFlag{
 			Name:  extensions.CLIFlagPort,
 			Value: defaultSQLPort,
-			Usage: "port of sql host to connect to",
+			Usage: "port of sql host to connect to postgres",
 		},
 		&cli.StringFlag{
 			Name:  extensions.CLIFlagUser,
-			Value: "",
-			Usage: "user name used for authentication when connecting to sql host",
+			Value: "xdb",
+			Usage: "user name used for authentication when connecting to postgres",
 		},
 		&cli.StringFlag{
 			Name:  extensions.CLIFlagPassword,
-			Value: "",
-			Usage: "password used for authentication when connecting to sql host",
+			Value: "xdbxdb",
+			Usage: "password used for authentication when connecting to postgres",
 		},
 		&cli.StringFlag{
 			Name:  extensions.CLIFlagDatabase,
-			Value: "cadence",
-			Usage: "name of the sql database",
+			Value: "xdb",
+			Usage: "name of the postgres database",
 		},
 	}
 
@@ -49,12 +49,6 @@ func BuildCLIOptions() *cli.App {
 			Name:    "create-database",
 			Aliases: []string{"create"},
 			Usage:   "creates a database",
-			Flags: []cli.Flag{
-				&cli.StringFlag{
-					Name:  extensions.CLIFlagDatabase,
-					Usage: "name of the database",
-				},
-			},
 			Action: func(c *cli.Context) error {
 				return extensions.CreateDatabase(c, postgres.ExtensionName)
 			},
