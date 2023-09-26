@@ -139,7 +139,7 @@ xdb-server:
 
 .PHONY: bins release clean help test lint
 
-bins: $(BINS)
+bins: xdb-server
 
 test: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic

@@ -2,17 +2,31 @@ package main
 
 import (
 	"fmt"
+	"github.com/urfave/cli/v2"
+	"github.com/xdblab/xdb/cmd/server/bootstrap"
 	"log"
 	"os"
 )
 
 func main() {
 	app := &cli.App{
-		Name:  "boom",
-		Usage: "make an explosive entrance",
-		Action: func(*cli.Context) error {
-			fmt.Println("boom! I say!")
+		Name:  "xdb server",
+		Usage: "start the xdb server",
+		Action: func(c *cli.Context) error {
+			bootstrap.StartXdbServer(c)
 			return nil
+		},
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  bootstrap.FlagConfig,
+				Value: "./config/development.yaml",
+				Usage: "the config to start xdb server",
+			},
+			&cli.StringFlag{
+				Name:  bootstrap.FlagService,
+				Value: fmt.Sprintf("%v,%v", bootstrap.ApiServiceName, bootstrap.AsyncServiceName),
+				Usage: "the services to start, separated by comma",
+			},
 		},
 	}
 
