@@ -1,6 +1,13 @@
 # xdb
 Server and main repo of XDB project
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/xdblab/xdb)](https://goreportcard.com/report/github.com/xdblab/xdb)
+
+[![Coverage Status](https://codecov.io/github/xdblab/xdb/coverage.svg?branch=main)](https://app.codecov.io/gh/xdblab/xdb/branch/main)
+
+[![Build status](https://github.com/xdblab/xdb/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/xdblab/xdb/actions/workflows/ci.yaml)
+
+
 # Documentation
 
 See [wiki](https://github.com/xdblab/xdb/wiki).

@@ -1,4 +1,4 @@
-name: CI Actions
+name: CI Tests
 on:
   push:
     branches:
