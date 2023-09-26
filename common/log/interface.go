@@ -1,6 +1,8 @@
 package log
 
-import "github.com/xdblab/xdb/service/common/log/tag"
+import (
+	"github.com/xdblab/xdb/common/log/tag"
+)
 
 // Logger is our abstraction for logging
 // Usage examples:

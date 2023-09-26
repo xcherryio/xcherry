@@ -2,15 +2,15 @@ package bootstrap
 
 import (
 	"fmt"
+	log2 "github.com/xdblab/xdb/common/log"
+	"github.com/xdblab/xdb/common/log/tag"
+	"github.com/xdblab/xdb/config"
 	rawLog "log"
 	"strings"
 	"sync"
 
 	"github.com/urfave/cli/v2"
 	"github.com/xdblab/xdb/service/api"
-	"github.com/xdblab/xdb/service/common/config"
-	"github.com/xdblab/xdb/service/common/log"
-	"github.com/xdblab/xdb/service/common/log/tag"
 )
 
 const ApiServiceName = "api"
@@ -29,7 +29,7 @@ func StartXdbServer(c *cli.Context) {
 	if err != nil {
 		rawLog.Fatalf("Unable to create a new zap logger %v", err)
 	}
-	logger := log.NewLogger(zapLogger)
+	logger := log2.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(loadedConfig.String()))
 
 	services := getServices(c)
@@ -44,7 +44,7 @@ func StartXdbServer(c *cli.Context) {
 	wg.Wait()
 }
 
-func launchService(svcName string, config config.Config, logger log.Logger) {
+func launchService(svcName string, config config.Config, logger log2.Logger) {
 
 	switch svcName {
 	case ApiServiceName:
