@@ -12,7 +12,12 @@ Server and main repo of XDB project
 
 See [wiki](https://github.com/xdblab/xdb/wiki).
 
-# Development Plan
+# Development 
+
+* To build server: `make bins` 
+* To clean up: `make clean`
+* To run it with [default config](./config/development.yaml) `./xdb-server`. Or see help: `./xdb-server -h`
+  * Alternatively, just click the run button in an IDE should work. 
 
 ## 1.0
 - [ ] StartProcessExecution API
