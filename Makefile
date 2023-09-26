@@ -141,7 +141,7 @@ xdb-server:
 
 bins: xdb-server
 
-test: ## Run all tests
+tests: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
 
 clean: ## Clean binaries and build folder
@@ -155,7 +155,7 @@ cleanTestCache:
 	$Q go clean -testcache
 
 integTests:
-	$Q go test -v ./integ
+	$Q go test -v ./integTests
 
 help:
 	@# print help first, so it's visible

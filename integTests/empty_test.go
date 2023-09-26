@@ -1,4 +1,4 @@
-package integ
+package integTests
 
 import (
 	"fmt"

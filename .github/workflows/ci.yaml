@@ -48,7 +48,7 @@ jobs:
         run: make bins
 
       - name: Test
-        run: make test
+        run: make tests
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
