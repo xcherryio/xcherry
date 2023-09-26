@@ -1,7 +1,7 @@
 version: '3'
 
 include:
-  ./pulsar3.yaml
+  - ./pulsar3.yaml
 
 services:
   postgres:

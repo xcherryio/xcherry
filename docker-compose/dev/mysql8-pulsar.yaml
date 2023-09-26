@@ -1,11 +1,11 @@
 version: '3'
 
 include:
-  ./pulsar3.yaml
+  - ./pulsar3.yaml
 
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.1
     ports:
       - "3306:3306"
     environment:
