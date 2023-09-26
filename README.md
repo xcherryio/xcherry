@@ -8,42 +8,45 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 # Development Plan
 
 ## 1.0
-- [ ] Start ProcessExecution
-    - [ ] Basic
-    - [ ] ProcessIdReusePolicy
-    - [ ] Process timeout
-    - [ ] Retention policy after closed
+- [ ] StartProcessExecution API
+  - [ ] Basic
+  - [ ] ProcessIdReusePolicy
+  - [ ] Process timeout
+  - [ ] Retention policy after closed
 - [ ] Executing `wait_until`/`execute` APIs
+  - [ ] Basic
+  - [ ] Parallel execution of multiple states
+  - [ ] StateOption: WaitUntil/Execute API timeout and retry policy
+  - [ ] AsyncState failure policy for recovery
 - [ ] StateDecision
-    - [ ] Single next State
-    - [ ] Multiple next states
-    - [ ] Force completing process
-    - [ ] Graceful completing process
-    - [ ] Force fail process
-    - [ ] Dead end
-    - [ ] Conditional complete workflow with checking queue emptiness
-- [ ] Parallel execution of multiple states
-- [ ] WaitForProcessCompletion API
-- [ ] StateOption: WaitUntil/Execute API timeout and retry policy
-- [ ] AnyOfCompletion and AllOfCompletion waitingType
-- [ ] TimerCommand
+  - [ ] Single next State
+  - [ ] Multiple next states
+  - [ ] Force completing process
+  - [ ] Graceful completing process
+  - [ ] Force fail process
+  - [ ] Dead end
+  - [ ] Conditional complete process with checking queue emptiness
+- [ ] Commands
+  - [ ] AnyOfCompletion and AllOfCompletion waitingType
+  - [ ] TimerCommand
 - [ ] LocalQueue
-    - [ ] LocalQueueCommand
-    - [ ] MessageId for deduplication
-- [ ] LocalAttribute
-    - [ ] LoadingPolicy (attribute selection + locking)
-    - [ ] InitialUpsert
-- [ ] GlobalAttribute
-    - [ ] LoadingPolicy (attribute selection + locking)
-    - [ ] InitialUpsert
-    - [ ] Multi-tables
-- [ ] Stop ProcessExecution
-- [ ] Error handling for canceled, failed, timeout, terminated
-- [ ] AsyncState failure policy for recovery
+  - [ ] LocalQueueCommand
+  - [ ] MessageId for deduplication
+  - [ ] SendMessage API without RPC
+- [ ] LocalAttribute persistence
+  - [ ] LoadingPolicy (attribute selection + locking)
+  - [ ] InitialUpsert
+- [ ] GlobalAttribute  persistence
+  - [ ] LoadingPolicy (attribute selection + locking)
+  - [ ] InitialUpsert
+  - [ ] Multi-tables
 - [ ] RPC
+- [ ] API error handling for canceled, failed, timeout, terminated
+- [ ] StopProcessExecution API
 - [ ] WaitForStateCompletion API
 - [ ] ResetStateExecution for operation
-- [ ] Describe ProcessExecution API
+- [ ] DescribeProcessExecution API
+- [ ] WaitForProcessCompletion API
 - [ ] History events for operation/debugging
 
 ## Future
@@ -51,8 +54,7 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 - [ ] Skip timer API for testing/operation
 - [ ] Dynamic attributes and queue definition
 - [ ] State options overridden dynamically
-- [ ] Consume more than one messages in a single command
-    - [ ] FIFO/BestMatch policies
+- [ ] Consume more than one messages in a single command with FIFO/BestMatch policies
 - [ ] WaitingType: AnyCombinationsOf
 - [ ] GlobalQueue
 - [ ] CronSchedule
