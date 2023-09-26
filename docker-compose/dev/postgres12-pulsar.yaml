@@ -1,0 +1,13 @@
+version: '3'
+
+include:
+  ./pulsar3.yaml
+
+services:
+  postgres:
+    image: postgres:12.4
+    environment:
+      POSTGRES_USER: xdb
+      POSTGRES_PASSWORD: xdbxdb
+    ports:
+      - "5432:5432"

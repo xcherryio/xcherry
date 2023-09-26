@@ -1,16 +1,9 @@
 version: '3'
-services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      - "MYSQL_ROOT_PASSWORD=xdbxdb"
-  
-  # below is for Pulsar        
+
+services:  
   # Start zookeeper
   zookeeper:
-    image: apachepulsar/pulsar:latest
+    image: apachepulsar/pulsar:3.1.0
     container_name: zookeeper
     restart: on-failure
     networks:
@@ -34,7 +27,7 @@ services:
   pulsar-init:
     container_name: pulsar-init
     hostname: pulsar-init
-    image: apachepulsar/pulsar:latest
+    image: apachepulsar/pulsar:3.1.0
     networks:
       - pulsar
     command: >
@@ -50,7 +43,7 @@ services:
 
   # Start bookie
   bookie:
-    image: apachepulsar/pulsar:latest
+    image: apachepulsar/pulsar:3.1.0
     container_name: bookie
     restart: on-failure
     networks:
@@ -75,7 +68,7 @@ services:
 
   # Start broker
   broker:
-    image: apachepulsar/pulsar:latest
+    image: apachepulsar/pulsar:3.1.0
     container_name: broker
     hostname: broker
     restart: on-failure
