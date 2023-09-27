@@ -21,7 +21,7 @@ services:
       test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
       interval: 10s
       timeout: 5s
-      retries: 30
+      retries: 60
 
   # Init cluster metadata
   pulsar-init:
