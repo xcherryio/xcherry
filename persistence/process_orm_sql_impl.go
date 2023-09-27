@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
@@ -91,24 +92,30 @@ func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.Proc
 }
 
 func (p ProcessORMSQLImpl) DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (*xdbapi.ProcessExecutionDescribeResponse, bool, error) {
-	row, err := p.sqlDB.SelectCurrentProcessExecution(ctx, request.GetProcessId())
+	rows, err := p.sqlDB.SelectCurrentProcessExecution(ctx, request.GetProcessId())
 	if err != nil {
 		if p.sqlDB.IsNotFoundError(err) {
 			return nil, true, nil
 		}
 		return nil, false, err
 	}
+	if len(rows) == 0 {
+		return nil, true, nil
+	}
+	if len(rows) != 1 {
+		return nil, false, fmt.Errorf("internal data corruption, more than one row is not expected")
+	}
 
 	var info extensions.ProcessExecutionInfo
-	err = json.Unmarshal(row.Info, &info)
+	err = json.Unmarshal(rows[0].Info, &info)
 	if err != nil {
 		return nil, false, err
 	}
 
 	return &xdbapi.ProcessExecutionDescribeResponse{
-		ProcessExecutionId: &row.ProcessExecutionId,
+		ProcessExecutionId: &rows[0].ProcessExecutionId,
 		ProcessType:        &info.ProcessType,
 		WorkerUrl:          &info.WorkerURL,
-		StartTimestamp:     ptr.Any(int32(row.StartTime.Unix())),
+		StartTimestamp:     ptr.Any(int32(rows[0].StartTime.Unix())),
 	}, false, nil
 }

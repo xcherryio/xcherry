@@ -40,7 +40,7 @@ type processExecutionTxnCRUD interface {
 }
 
 type processExecutionNonTxnCRUD interface {
-	SelectCurrentProcessExecution(ctx context.Context, processId string) (ProcessExecutionRow, error)
+	SelectCurrentProcessExecution(ctx context.Context, processId string) ([]ProcessExecutionRow, error)
 }
 
 type ErrorChecker interface {

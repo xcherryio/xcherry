@@ -30,8 +30,8 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 	return d.tx.NamedExecContext(ctx, insertExecutionQuery, row)
 }
 
-func (d dbSession) SelectCurrentProcessExecution(ctx context.Context, processId string) (extensions.ProcessExecutionRow, error) {
-	var row extensions.ProcessExecutionRow
+func (d dbSession) SelectCurrentProcessExecution(ctx context.Context, processId string) ([]extensions.ProcessExecutionRow, error) {
+	var row []extensions.ProcessExecutionRow
 	err := d.db.SelectContext(ctx, &row, selectCurrentExecutionQuery, processId)
 	return row, err
 }
