@@ -66,7 +66,7 @@ func doCreateDatabase(cfg *config.SQL, name string) error {
 	// IMPORTATNT! set empty because the database is to be created(not exists yet). It's up to the extension to handle it
 	// e.g.:
 	// MySQL just use an account like root
-	// Postgres will set it to postgres 
+	// Postgres will set it to postgres
 
 	conn, err := NewSQLAdminDB(cfg)
 	if err != nil {

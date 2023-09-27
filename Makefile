@@ -138,7 +138,7 @@ xdb-tools-postgres:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/tools/postgres/main.go
 
-.PHONY: bins release clean help test lint
+.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres integTests
 
 bins: xdb-server xdb-tools-postgres
 

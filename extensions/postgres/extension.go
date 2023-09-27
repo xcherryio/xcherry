@@ -62,7 +62,11 @@ func (d *extension) createSingleDBConn(cfg *config.SQL) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("invalid connect address, it must be in host:port format, %v, err: %v", cfg.ConnectAddr, err)
 	}
 
-	db, err := sqlx.Connect(ExtensionName, buildDSN(cfg, host, port, map[string][]string{}))
+	// TODO there are a lot more config we need to support like in Cadence
+	// https://github.com/uber/cadence/blob/2df19da3d4c6fdfd74a54a6df43447883e3d3567/common/persistence/sql/sqlplugin/postgres/plugin.go#L138
+	sslParams := url.Values{}
+	sslParams.Set("sslmode", "disable")
+	db, err := sqlx.Connect(ExtensionName, buildDSN(cfg, host, port, sslParams))
 	if err != nil {
 		return nil, err
 	}
