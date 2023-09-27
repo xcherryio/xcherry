@@ -64,7 +64,7 @@ func CreateDatabase(cfg *config.SQL, name string) error {
 	// MySQL just use an account like root
 	// Postgres will set it to postgres
 
-	adminSession, err := NewSQLAdminDB(cfg)
+	adminSession, err := NewSQLAdminSession(cfg)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func CreateDatabase(cfg *config.SQL, name string) error {
 }
 
 func DropDatabase(cfg *config.SQL, name string) error {
-	adminSession, err := NewSQLAdminDB(cfg)
+	adminSession, err := NewSQLAdminSession(cfg)
 	if err != nil {
 		return err
 	}

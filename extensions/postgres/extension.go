@@ -38,13 +38,13 @@ const (
 
 type extension struct{}
 
-var _ extensions.DBExtension = (*extension)(nil)
+var _ extensions.SQLDBExtension = (*extension)(nil)
 
 func init() {
-	extensions.RegisterDBExtension(ExtensionName, &extension{})
+	extensions.RegisterSQLDBExtension(ExtensionName, &extension{})
 }
 
-func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.AdminDBSession, error) {
+func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.SQLAdminDBSession, error) {
 	conns, err := d.createSingleDBConn(cfg)
 	if err != nil {
 		return nil, err

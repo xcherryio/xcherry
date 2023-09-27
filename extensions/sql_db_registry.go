@@ -25,23 +25,23 @@ import (
 	"github.com/xdblab/xdb/config"
 )
 
-var registry = map[string]DBExtension{}
+var sqlRegistry = map[string]SQLDBExtension{}
 
-// RegisterDBExtension will register a SQL plugin
-func RegisterDBExtension(name string, ext DBExtension) {
-	if _, ok := registry[name]; ok {
-		panic("extension " + name + " already registered")
+// RegisterSQLDBExtension will register a SQL extension
+func RegisterSQLDBExtension(name string, ext SQLDBExtension) {
+	if _, ok := sqlRegistry[name]; ok {
+		panic("SQL extension " + name + " already registered")
 	}
-	registry[name] = ext
+	sqlRegistry[name] = ext
 }
 
-// NewSQLAdminDB returns a AdminDB
-func NewSQLAdminDB(cfg *config.SQL) (AdminDBSession, error) {
-	plugin, ok := registry[cfg.DBExtensionName]
+// NewSQLAdminSession returns a AdminDB
+func NewSQLAdminSession(cfg *config.SQL) (SQLAdminDBSession, error) {
+	ext, ok := sqlRegistry[cfg.DBExtensionName]
 
 	if !ok {
-		return nil, fmt.Errorf("not supported DBExtensionName %v, only supported: %v", cfg.DBExtensionName, registry)
+		return nil, fmt.Errorf("not supported SQLDBExtensionName %v, only supported: %v", cfg.DBExtensionName, sqlRegistry)
 	}
 
-	return plugin.StartAdminDBSession(cfg)
+	return ext.StartAdminDBSession(cfg)
 }
