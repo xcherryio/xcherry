@@ -41,7 +41,7 @@ type extension struct{}
 var _ extensions.SQLDBExtension = (*extension)(nil)
 
 func init() {
-	extensions.RegisterDBExtension(ExtensionName, &extension{})
+	extensions.RegisterSQLDBExtension(ExtensionName, &extension{})
 }
 
 func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.SQLAdminDBSession, error) {

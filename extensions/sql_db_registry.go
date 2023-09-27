@@ -27,16 +27,16 @@ import (
 
 var sqlRegistry = map[string]SQLDBExtension{}
 
-// RegisterDBExtension will register a SQL plugin
-func RegisterDBExtension(name string, ext SQLDBExtension) {
+// RegisterSQLDBExtension will register a SQL extension
+func RegisterSQLDBExtension(name string, ext SQLDBExtension) {
 	if _, ok := sqlRegistry[name]; ok {
 		panic("SQL extension " + name + " already registered")
 	}
 	sqlRegistry[name] = ext
 }
 
-// NewSQLAdminDB returns a AdminDB
-func NewSQLAdminDB(cfg *config.SQL) (SQLAdminDBSession, error) {
+// NewSQLAdminSession returns a AdminDB
+func NewSQLAdminSession(cfg *config.SQL) (SQLAdminDBSession, error) {
 	ext, ok := sqlRegistry[cfg.DBExtensionName]
 
 	if !ok {
