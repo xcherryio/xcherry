@@ -8,8 +8,8 @@ require (
 	github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee
 	github.com/lib/pq v1.2.0
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xdblab/xdb-apis v0.0.2-0.20230927181242-5041a538b92b
-	github.com/xdblab/xdb-golang-sdk v0.0.0-20230927184619-eb20e7246471
+	github.com/xdblab/xdb-apis v0.0.2-0.20230927205936-f01d0cdf3a06
+	github.com/xdblab/xdb-golang-sdk v0.0.0-20230927211102-ebd0263ac7da
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
 )

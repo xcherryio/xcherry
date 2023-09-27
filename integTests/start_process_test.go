@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestStartProcessPostgres(t *testing.T) {
+func TestStartBasicProcessPostgres(t *testing.T) {
 	if !*postgresIntegTest {
 		t.Skip()
 	}

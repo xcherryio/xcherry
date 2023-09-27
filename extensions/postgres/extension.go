@@ -44,12 +44,20 @@ func init() {
 	extensions.RegisterSQLDBExtension(ExtensionName, &extension{})
 }
 
-func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.SQLAdminDBSession, error) {
-	conns, err := d.createSingleDBConn(cfg)
+func (d *extension) StartDBSession(cfg *config.SQL) (extensions.SQLDBSession, error) {
+	sqlxdb, err := d.createSingleDBConn(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newAdminDBSession(conns), nil
+	return newDBSession(sqlxdb), nil
+}
+
+func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.SQLAdminDBSession, error) {
+	sqlxdb, err := d.createSingleDBConn(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newAdminDBSession(sqlxdb), nil
 }
 
 // CreateDBConnection creates a returns a reference to a logical connection to the
