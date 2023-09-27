@@ -4,12 +4,13 @@ go 1.19
 
 require (
 	github.com/gin-gonic/gin v1.9.1
+	github.com/google/uuid v1.3.1
 	github.com/iancoleman/strcase v0.3.0
 	github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee
 	github.com/lib/pq v1.2.0
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xdblab/xdb-apis v0.0.2-0.20230927205936-f01d0cdf3a06
-	github.com/xdblab/xdb-golang-sdk v0.0.0-20230927211102-ebd0263ac7da
+	github.com/xdblab/xdb-apis v0.0.2-0.20230927220320-501bcd145c7c
+	github.com/xdblab/xdb-golang-sdk v0.0.0-20230927220507-8b0092583fe3
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
 )

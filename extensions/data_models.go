@@ -1,6 +1,21 @@
 package extensions
 
-import "time"
+import (
+	"time"
+)
+
+type ExecutionStatus string
+
+const (
+	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusTimeout   ExecutionStatus = "timeout"
+	ExecutionStatusCompleted ExecutionStatus = "completed"
+	ExecutionStatusFailed    ExecutionStatus = "failed"
+)
+
+func (e ExecutionStatus) String() string {
+	return string(e)
+}
 
 type ProcessExecutionRow struct {
 	Id                     string
@@ -14,6 +29,6 @@ type ProcessExecutionRow struct {
 }
 
 type ProcessExecutionInfo struct {
-	WorkerUrl    string
-	StartStateId string
+	ProcessType string
+	WorkerURL   string
 }

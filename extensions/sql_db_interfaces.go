@@ -11,12 +11,12 @@ type SQLDBExtension interface {
 	StartDBSession(cfg *config.SQL) (SQLDBSession, error)
 	// StartAdminDBSession starts the session for admin operation like DDL
 	StartAdminDBSession(cfg *config.SQL) (SQLAdminDBSession, error)
-	ErrorChecker
 }
 
 type SQLDBSession interface {
 	processExecutionNonTxnCRUD
 
+	ErrorChecker
 	StartTransaction(ctx context.Context) (SQLTransaction, error)
 	Close() error
 }
