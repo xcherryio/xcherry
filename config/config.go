@@ -65,6 +65,9 @@ func NewConfig(configPath string) (*Config, error) {
 
 // String converts the config object into a string
 func (c *Config) String() string {
-	out, _ := json.MarshalIndent(c, "", "    ")
+	out, err := json.MarshalIndent(c, "", "    ")
+	if err != nil {
+		panic(err)
+	}
 	return string(out)
 }

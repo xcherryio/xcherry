@@ -54,11 +54,7 @@ func CreateDatabase(cli *cli.Context, extensionName string) error {
 		panic(err)
 	}
 	database := cli.String(CLIOptDatabase)
-	err = doCreateDatabase(cfg, database)
-	if err != nil {
-		panic(fmt.Errorf("error creating database:%v", err))
-	}
-	return nil
+	return doCreateDatabase(cfg, database)
 }
 
 func doCreateDatabase(cfg *config.SQL, name string) error {

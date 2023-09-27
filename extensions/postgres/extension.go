@@ -59,7 +59,7 @@ func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.AdminDBSess
 func (d *extension) createSingleDBConn(cfg *config.SQL) (*sqlx.DB, error) {
 	host, port, err := net.SplitHostPort(cfg.ConnectAddr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid connect address, it must be in host:port format, %v, err: %v", cfg.ConnectAddr, err)
+		return nil, fmt.Errorf("invalid connect address, it must be in host:port format, %v, err: %w", cfg.ConnectAddr, err)
 	}
 
 	// TODO there are a lot more config we need to support like in Cadence
