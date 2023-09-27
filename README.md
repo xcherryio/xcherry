@@ -18,7 +18,9 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 * To clean up: `make clean`
 * To run it with [default config](./config/development.yaml) `./xdb-server`. Or see help: `./xdb-server -h`
   * Alternatively, just click the run button in an IDE should work. 
-
+* To run database tools:
+  * see `./xdb-tools-postgres -h` for postgres tool
+  
 ## 1.0
 - [ ] StartProcessExecution API
   - [ ] Basic
