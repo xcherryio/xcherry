@@ -3,6 +3,8 @@ package integTests
 import (
 	"flag"
 	"fmt"
+	"github.com/xdblab/xdb-golang-sdk/xdb"
+	"github.com/xdblab/xdb/cmd/server/bootstrap"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
@@ -23,8 +25,9 @@ func TestMain(m *testing.M) {
 
 	var resultCode int
 
+	var sqlConfig *config.SQL
 	if *postgresIntegTest {
-		sqlConfig := &config.SQL{
+		sqlConfig = &config.SQL{
 			ConnectAddr:     fmt.Sprintf("%v:%v", postgrestool.DefaultEndpoint, postgrestool.DefaultPort),
 			User:            postgrestool.DefaultUserName,
 			Password:        postgrestool.DefaultPassword,
@@ -51,6 +54,16 @@ func TestMain(m *testing.M) {
 		}()
 		fmt.Println("test database created:", testDatabaseName)
 	}
+
+	cfg := config.Config{
+		ApiService: config.ApiServiceConfig{
+			Address: ":" + xdb.DefaultServerPort,
+		},
+		Database: config.DatabaseConfig{
+			SQL: sqlConfig,
+		},
+	}
+	bootstrap.StartXdbServer(&cfg, nil)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)

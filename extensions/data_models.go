@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"github.com/jmoiron/sqlx/types"
 	"time"
 )
 
@@ -18,14 +19,14 @@ func (e ExecutionStatus) String() string {
 }
 
 type ProcessExecutionRow struct {
-	Id                     string
+	ProcessExecutionId     string
 	ProcessId              string
 	IsCurrent              bool
 	Status                 string
 	StartTime              time.Time
 	TimeoutSeconds         int
 	HistoryEventIdSequence int
-	Info                   ProcessExecutionInfo
+	Info                   types.JSONText
 }
 
 type ProcessExecutionInfo struct {

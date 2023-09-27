@@ -3,7 +3,7 @@ log:
   level: info
   levelKey: "level"
 apiService:
-  port: 8801
+  address: 0.0.0.0:8801
   defaultPollingMaxWaitSeconds: 60
 sql:
   dbExtensionName: postgres

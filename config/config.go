@@ -39,8 +39,8 @@ type (
 	}
 
 	ApiServiceConfig struct {
-		// Port is the port on which the API service will bind to
-		Port int `yaml:"port"`
+		// Address is the address and port on which the API service will bind to
+		Address string `yaml:"address"`
 		// DefaultPollingMaxWaitSeconds is the default timeout for polling APIs
 		DefaultPollingMaxWaitSeconds int64 `yaml:"defaultPollingMaxWaitSeconds"`
 	}
@@ -77,7 +77,7 @@ func (c *Config) Validate() error {
 	}
 	sql := c.Database.SQL
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
-		return fmt.Errorf("some required configs are missing")
+		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
 	}
 	return nil
 }

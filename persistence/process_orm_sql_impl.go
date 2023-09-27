@@ -2,8 +2,11 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/common/log"
+	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
@@ -11,21 +14,38 @@ import (
 )
 
 type ProcessORMSQLImpl struct {
-	sqlDB extensions.SQLDBSession
+	sqlDB  extensions.SQLDBSession
+	logger log.Logger
 }
 
-func NewProcessORMSQLImpl(sqlConfig config.SQL) (ProcessORM, error) {
+func NewProcessORMSQLImpl(sqlConfig config.SQL, logger log.Logger) (ProcessORM, error) {
 	session, err := extensions.NewSQLSession(&sqlConfig)
 	return &ProcessORMSQLImpl{
-		sqlDB: session,
+		sqlDB:  session,
+		logger: logger,
 	}, err
 }
 
-func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (*xdbapi.ProcessExecutionStartResponse, bool, error) {
+func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, err error) {
 	tx, err := p.sqlDB.StartTransaction(ctx)
 	if err != nil {
 		return nil, false, err
 	}
+	defer func() {
+		if alreadyStarted || err != nil {
+			err2 := tx.Rollback()
+			if err2 != nil {
+				p.logger.Error("error on rollback transaction", tag.Error(err2))
+			}
+		} else {
+			// at here, err must be nil, so we can safely override it and return to caller
+			err2 := tx.Commit()
+			if err2 != nil {
+				err = err2
+				p.logger.Error("error on committing transaction", tag.Error(err))
+			}
+		}
+	}()
 	exeUUID, err := uuid.NewUUID()
 	if err != nil {
 		return nil, false, err
@@ -45,17 +65,23 @@ func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.Proc
 		timeoutSeconds = int(sc.GetTimeoutSeconds())
 	}
 
+	info := extensions.ProcessExecutionInfo{
+		ProcessType: request.GetProcessType(),
+		WorkerURL:   request.GetWorkerUrl(),
+	}
+	infoJ, err := json.Marshal(info)
+	if err != nil {
+		return nil, false, err
+	}
+
 	row := extensions.ProcessExecutionRow{
-		Id:                     eUUID,
+		ProcessExecutionId:     eUUID,
 		ProcessId:              request.ProcessId,
 		Status:                 extensions.ExecutionStatusRunning.String(),
 		StartTime:              time.Now(),
 		TimeoutSeconds:         timeoutSeconds,
 		HistoryEventIdSequence: 0,
-		Info: extensions.ProcessExecutionInfo{
-			ProcessType: request.GetProcessType(),
-			WorkerURL:   request.GetWorkerUrl(),
-		},
+		Info:                   infoJ,
 	}
 	_, err = tx.InsertProcessExecution(ctx, row)
 	return &xdbapi.ProcessExecutionStartResponse{
@@ -72,10 +98,17 @@ func (p ProcessORMSQLImpl) DescribeLatestProcess(ctx context.Context, request xd
 		}
 		return nil, false, err
 	}
+
+	var info extensions.ProcessExecutionInfo
+	err = json.Unmarshal(row.Info, &info)
+	if err != nil {
+		return nil, false, err
+	}
+
 	return &xdbapi.ProcessExecutionDescribeResponse{
-		ProcessExecutionId: &row.Id,
-		ProcessType:        &row.Info.ProcessType,
-		WorkerUrl:          &row.Info.WorkerURL,
+		ProcessExecutionId: &row.ProcessExecutionId,
+		ProcessType:        &info.ProcessType,
+		WorkerUrl:          &info.WorkerURL,
 		StartTimestamp:     ptr.Any(int32(row.StartTime.Unix())),
 	}, false, nil
 }

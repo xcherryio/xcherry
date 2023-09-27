@@ -13,7 +13,7 @@ func main() {
 		Name:  "xdb server",
 		Usage: "start the xdb server",
 		Action: func(c *cli.Context) error {
-			bootstrap.StartXdbServer(c)
+			bootstrap.StartXdbServerCli(c)
 			return nil
 		},
 		Flags: []cli.Flag{

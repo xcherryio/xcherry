@@ -13,7 +13,7 @@ const (
 
 	insertExecutionQuery = `INSERT INTO xdb_sys_process_execution
 	(id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, info) VALUES
-	(:process_id, :process_execution_id)`
+	(:process_execution_id, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, :info)`
 
 	selectCurrentExecutionQuery = `SELECT
 	ce.process_execution_id, e.process_id, e.is_current, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.info
