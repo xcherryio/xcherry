@@ -5,6 +5,7 @@ import (
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
+	"github.com/xdblab/xdb/persistence"
 	rawLog "log"
 	"strings"
 	"sync"
@@ -21,25 +22,30 @@ const FlagService = "service"
 
 func StartXdbServer(c *cli.Context) {
 	configPath := c.String("config")
-	loadedConfig, err := config.NewConfig(configPath)
+	cfg, err := config.NewConfig(configPath)
 	if err != nil {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
-	zapLogger, err := loadedConfig.Log.NewZapLogger()
+	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
 		rawLog.Fatalf("Unable to create a new zap logger %v", err)
 	}
 	logger := log2.NewLogger(zapLogger)
-	logger.Info("config is loaded", tag.Value(loadedConfig.String()))
-	err = loadedConfig.Validate()
+	logger.Info("config is loaded", tag.Value(cfg.String()))
+	err = cfg.Validate()
 	if err != nil {
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
-	
+
 	services := getServices(c)
 
+	processOrm, err := persistence.NewProcessORMSQLImpl(*cfg.DataBase.SQL)
+	if err != nil {
+		logger.Fatal("error on persistence setup", tag.Error(err))
+	}
+
 	for _, svc := range services {
-		go launchService(svc, *loadedConfig, logger)
+		go launchService(svc, *cfg, processOrm, logger)
 	}
 
 	// TODO improve by waiting for the started services to stop
@@ -48,12 +54,12 @@ func StartXdbServer(c *cli.Context) {
 	wg.Wait()
 }
 
-func launchService(svcName string, config config.Config, logger log2.Logger) {
+func launchService(svcName string, cfg config.Config, processOrm persistence.ProcessORM, logger log2.Logger) {
 
 	switch svcName {
 	case ApiServiceName:
-		apiService := api.NewService(config, logger.WithTags(tag.Service(svcName)))
-		rawLog.Fatal(apiService.Run(fmt.Sprintf(":%v", config.ApiService.Port)))
+		ginController := api.NewAPIServiceGinController(cfg, processOrm, logger.WithTags(tag.Service(svcName)))
+		rawLog.Fatal(ginController.Run(fmt.Sprintf(":%v", cfg.ApiService.Port)))
 	case AsyncServiceName:
 		fmt.Println("TODO for starting async service")
 	default:
