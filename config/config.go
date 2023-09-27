@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 
@@ -11,8 +12,8 @@ type (
 	Config struct {
 		// Log is the logging config
 		Log Logger `yaml:"log"`
-		// Api is the API config
-		Api ApiConfig `yaml:"api"`
+		// ApiService is the API service config
+		ApiService ApiServiceConfig `yaml:"apiService"`
 	}
 
 	// Logger contains the config items for logger
@@ -33,10 +34,11 @@ type (
 		Encoding string `yaml:"encoding"`
 	}
 
-	ApiConfig struct {
+	ApiServiceConfig struct {
 		// Port is the port on which the API service will bind to
-		Port           int   `yaml:"port"`
-		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
+		Port int `yaml:"port"`
+		// DefaultPollingMaxWaitSeconds is the default timeout for polling APIs
+		DefaultPollingMaxWaitSeconds int64 `yaml:"defaultPollingMaxWaitSeconds"`
 	}
 )
 
@@ -59,4 +61,13 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// String converts the config object into a string
+func (c *Config) String() string {
+	out, err := json.MarshalIndent(c, "", "    ")
+	if err != nil {
+		panic(err)
+	}
+	return string(out)
 }

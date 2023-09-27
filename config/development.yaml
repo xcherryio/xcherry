@@ -2,5 +2,6 @@ log:
   stdout: true
   level: info
   levelKey: "level"
-api:
+apiService:
   port: 8801
+  defaultPollingMaxWaitSeconds: 60

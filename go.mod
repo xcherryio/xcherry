@@ -4,7 +4,10 @@ go 1.19
 
 require (
 	github.com/gin-gonic/gin v1.9.1
-	github.com/urfave/cli v1.22.14
+	github.com/iancoleman/strcase v0.3.0
+	github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee
+	github.com/lib/pq v1.2.0
+	github.com/urfave/cli/v2 v2.25.7
 	github.com/xdblab/xdb-apis v0.0.1
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -30,6 +33,7 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
+	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/crypto v0.9.0 // indirect

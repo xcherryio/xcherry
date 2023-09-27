@@ -130,32 +130,32 @@ fmt: $(BUILD)/fmt ## run goimports
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 
-BINS =
-
-BINS += xdb-server
 xdb-server:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/server/main.go
 
-.PHONY: bins release clean help test lint
+xdb-tools-postgres:
+	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
+	@go build -o $@ cmd/tools/postgres/main.go
 
-bins: $(BINS)
+.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres 
 
-test: ## Run all tests
+bins: xdb-server xdb-tools-postgres
+
+tests: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
 
-clean: ## Clean binaries and build folder
-	rm -f $(BINS)
-	rm -Rf $(BUILD)
-	$(if \
-		$(filter $(BIN)/fake-codegen, $(wildcard $(BIN)/*)), \
-		$(warning fake build tools may exist, delete the $(BIN) folder to get real ones if desired),)
+clean: ## Clean binaries
+	rm xdb-server; rm xdb-tools-postgres;
 
 cleanTestCache:
 	$Q go clean -testcache
 
-integTests:
-	$Q go test -v ./integ
+integTestsAll:
+	$Q go test -v ./integTests -postgres=true
+
+integTestsPostgres:
+	$Q go test -v ./integTests -postgres=true
 
 help:
 	@# print help first, so it's visible

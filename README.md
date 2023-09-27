@@ -5,15 +5,22 @@ Server and main repo of XDB project
 
 [![Coverage Status](https://codecov.io/github/xdblab/xdb/coverage.svg?branch=main)](https://app.codecov.io/gh/xdblab/xdb/branch/main)
 
-[![Build status](https://github.com/xdblab/xdb/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/xdblab/xdb/actions/workflows/ci.yaml)
+[![Build status](https://github.com/xdblab/xdb/actions/workflows/ci-postgres.yaml/badge.svg?branch=main)](https://github.com/xdblab/xdb/actions/workflows/ci-postgres.yaml)
 
 
 # Documentation
 
 See [wiki](https://github.com/xdblab/xdb/wiki).
 
-# Development Plan
+# Development 
 
+* To build server: `make bins` 
+* To clean up: `make clean`
+* To run it with [default config](./config/development.yaml) `./xdb-server`. Or see help: `./xdb-server -h`
+  * Alternatively, just click the run button in an IDE should work. 
+* To run database tools:
+  * see `./xdb-tools-postgres -h` for postgres tool
+  
 ## 1.0
 - [ ] StartProcessExecution API
   - [ ] Basic
