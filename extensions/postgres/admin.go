@@ -14,6 +14,11 @@ type adminDBSession struct {
 	db *sqlx.DB
 }
 
+func (a adminDBSession) ExecuteSchemaDDL(ctx context.Context, ddlQuery string) error {
+	_, err := a.db.ExecContext(ctx, ddlQuery)
+	return err
+}
+
 func (a adminDBSession) CreateDatabase(ctx context.Context, database string) error {
 	_, err := a.db.ExecContext(ctx, fmt.Sprintf(createDatabaseQuery, database))
 	return err

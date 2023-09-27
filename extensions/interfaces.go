@@ -11,5 +11,6 @@ type DBExtension interface {
 
 type AdminDBSession interface {
 	CreateDatabase(ctx context.Context, database string) error
+	ExecuteSchemaDDL(ctx context.Context, ddlQuery string) error
 	Close() error
 }
