@@ -3,9 +3,9 @@ package config
 type (
 	// SQL is the configuration for connecting to a SQL backed datastore
 	SQL struct {
-		// User is the username to be used for the conn
+		// User is the username to be used for connecting to database
 		User string `yaml:"user"`
-		// Password is the password corresponding to the user name
+		// Password is the password corresponding to the username
 		Password string `yaml:"password"`
 		// DatabaseName is the name of SQL database to connect to
 		DatabaseName string `yaml:"databaseName"`

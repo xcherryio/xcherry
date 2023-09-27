@@ -31,6 +31,10 @@ func StartXdbServer(c *cli.Context) {
 	}
 	logger := log2.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(loadedConfig.String()))
+	err = loadedConfig.Validate()
+	if err != nil {
+		logger.Fatal("config is invalid", tag.Error(err))
+	}
 
 	services := getServices(c)
 

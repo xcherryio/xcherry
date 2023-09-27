@@ -5,3 +5,10 @@ log:
 apiService:
   port: 8801
   defaultPollingMaxWaitSeconds: 60
+sql:
+  dbExtensionName: postgres
+  user: xdb
+  password: xdbxdb
+  databaseName: xdb
+  connectAddr: 127.0.0.1:5432
+  
