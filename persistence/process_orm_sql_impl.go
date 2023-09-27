@@ -119,3 +119,7 @@ func (p ProcessORMSQLImpl) DescribeLatestProcess(ctx context.Context, request xd
 		StartTimestamp:     ptr.Any(int32(rows[0].StartTime.Unix())),
 	}, false, nil
 }
+
+func (p ProcessORMSQLImpl) Close() error {
+	return p.sqlDB.Close()
+}

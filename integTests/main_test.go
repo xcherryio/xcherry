@@ -63,8 +63,13 @@ func TestMain(m *testing.M) {
 			SQL: sqlConfig,
 		},
 	}
-	bootstrap.StartXdbServer(&cfg, nil)
+	processOrm := bootstrap.StartXdbServer(&cfg, nil)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)
+	err := processOrm.Close()
+	if err != nil {
+		fmt.Println("error when closing processOrm")
+	}
+
 }
