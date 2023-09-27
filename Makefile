@@ -138,7 +138,7 @@ xdb-tools-postgres:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/tools/postgres/main.go
 
-.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres integTests
+.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres 
 
 bins: xdb-server xdb-tools-postgres
 
@@ -151,8 +151,11 @@ clean: ## Clean binaries
 cleanTestCache:
 	$Q go clean -testcache
 
-integTests:
-	$Q go test -v ./integTests
+integTestsAll:
+	$Q go test -v ./integTests -postgres=true
+
+integTestsPostgres:
+	$Q go test -v ./integTests -postgres=true
 
 help:
 	@# print help first, so it's visible

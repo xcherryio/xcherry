@@ -64,12 +64,21 @@ func CreateDatabase(cfg *config.SQL, name string) error {
 	// MySQL just use an account like root
 	// Postgres will set it to postgres
 
-	conn, err := NewSQLAdminDB(cfg)
+	adminSession, err := NewSQLAdminDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	return conn.CreateDatabase(context.Background(), name)
+	defer adminSession.Close()
+	return adminSession.CreateDatabase(context.Background(), name)
+}
+
+func DropDatabase(cfg *config.SQL, name string) error {
+	adminSession, err := NewSQLAdminDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer adminSession.Close()
+	return adminSession.DropDatabase(context.Background(), name)
 }
 
 func parseConnectConfig(cli *cli.Context, extensionName string) (*config.SQL, error) {

@@ -10,8 +10,15 @@ import (
 // It's a small bug in sqlx library
 const createDatabaseQuery = "CREATE database %v"
 
+const dropDatabaseQuery = "Drop database %v"
+
 type adminDBSession struct {
 	db *sqlx.DB
+}
+
+func (a adminDBSession) DropDatabase(ctx context.Context, database string) error {
+	_, err := a.db.ExecContext(ctx, fmt.Sprintf(dropDatabaseQuery, database))
+	return err
 }
 
 func (a adminDBSession) ExecuteSchemaDDL(ctx context.Context, ddlQuery string) error {
