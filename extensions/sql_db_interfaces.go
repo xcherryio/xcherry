@@ -5,11 +5,11 @@ import (
 	"github.com/xdblab/xdb/config"
 )
 
-type DBExtension interface {
-	StartAdminDBSession(cfg *config.SQL) (AdminDBSession, error)
+type SQLDBExtension interface {
+	StartAdminDBSession(cfg *config.SQL) (SQLAdminDBSession, error)
 }
 
-type AdminDBSession interface {
+type SQLAdminDBSession interface {
 	CreateDatabase(ctx context.Context, database string) error
 	DropDatabase(ctx context.Context, database string) error
 	ExecuteSchemaDDL(ctx context.Context, ddlQuery string) error
