@@ -2,7 +2,6 @@
 
 The goal of XDB is to write **MINIMUM** code to support any database. XDB creates a minimum interface to implement an extension.
 
-This folder is for the extensions that XDB is extending:
 * [SQL DB interfaces](./sql_db_interfaces.go) defines the contracts of how to implement an extension for a SQL database
   * A [go-sql-driver](https://github.com/golang/go/wiki/SQLDrivers) is required in order to use this interface 
 * [NoSQL DB interfaces](./nosql_db_interfaces.go) defines the contracts of how to implement an extension for a NoSQL database
