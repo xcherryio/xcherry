@@ -39,7 +39,7 @@ func StartXdbServer(c *cli.Context) {
 
 	services := getServices(c)
 
-	processOrm, err := persistence.NewProcessORMSQLImpl(*cfg.DataBase.SQL)
+	processOrm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}

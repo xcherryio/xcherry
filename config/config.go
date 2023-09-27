@@ -17,7 +17,7 @@ type (
 		ApiService ApiServiceConfig `yaml:"apiService"`
 		// Database is the database that XDB will be extending on
 		// either sql or nosql is needed
-		DataBase DatabaseConfig `yaml:"dataBase"`
+		Database DatabaseConfig `yaml:"database"`
 	}
 
 	// Logger contains the config items for logger
@@ -72,10 +72,10 @@ func NewConfig(configPath string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if c.DataBase.SQL == nil {
+	if c.Database.SQL == nil {
 		return fmt.Errorf("sql config is required")
 	}
-	sql := c.DataBase.SQL
+	sql := c.Database.SQL
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing")
 	}
