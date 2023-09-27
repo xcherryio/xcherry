@@ -42,7 +42,7 @@ func BuildCLIOptions() *cli.App {
 		},
 		&cli.StringFlag{
 			Name:    extensions.CLIFlagPassword,
-			Aliases: []string{"p"},
+			Aliases: []string{"pw"},
 			Value:   DefaultPassword,
 			Usage:   "password used for authentication when connecting to postgres",
 		},
