@@ -9,6 +9,8 @@ import (
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
 	"testing"
 	"time"
+
+	"github.com/xdblab/xdb-golang-sdk/integTests/worker"
 )
 
 var testDatabaseName = fmt.Sprintf("tst%v", time.Now().UnixNano())
@@ -16,6 +18,9 @@ var testDatabaseName = fmt.Sprintf("tst%v", time.Now().UnixNano())
 func TestMain(m *testing.M) {
 	flag.Parse()
 	fmt.Printf("start running integ test, using database %v, postgres:%v \n", testDatabaseName, *postgresIntegTest)
+
+	worker.StartGinWorker(workerService)
+
 	var resultCode int
 
 	if *postgresIntegTest {

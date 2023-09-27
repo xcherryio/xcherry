@@ -35,7 +35,7 @@ func StartXdbServer(c *cli.Context) {
 	if err != nil {
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
-
+	
 	services := getServices(c)
 
 	for _, svc := range services {
