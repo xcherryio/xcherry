@@ -47,17 +47,17 @@ import (
 //	return nil
 //}
 
-// CreateDatabase creates a sql database
-func CreateDatabase(cli *cli.Context, extensionName string) error {
+// CreateDatabaseByCli creates a sql database
+func CreateDatabaseByCli(cli *cli.Context, extensionName string) error {
 	cfg, err := parseConnectConfig(cli, extensionName)
 	if err != nil {
 		panic(err)
 	}
 	database := cli.String(CLIOptDatabase)
-	return doCreateDatabase(cfg, database)
+	return CreateDatabase(cfg, database)
 }
 
-func doCreateDatabase(cfg *config.SQL, name string) error {
+func CreateDatabase(cfg *config.SQL, name string) error {
 	cfg.DatabaseName = ""
 	// IMPORTATNT! set empty because the database is to be created(not exists yet). It's up to the extension to handle it
 	// e.g.:

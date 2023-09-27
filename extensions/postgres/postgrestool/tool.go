@@ -50,7 +50,7 @@ func BuildCLIOptions() *cli.App {
 			Aliases: []string{"create"},
 			Usage:   "creates a database",
 			Action: func(c *cli.Context) error {
-				return extensions.CreateDatabase(c, postgres.ExtensionName)
+				return extensions.CreateDatabaseByCli(c, postgres.ExtensionName)
 			},
 		},
 	}
