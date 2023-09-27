@@ -6,7 +6,12 @@ import (
 	"github.com/xdblab/xdb/extensions/postgres"
 )
 
-const defaultSQLPort = 5432
+const DefaultEndpoint = "127.0.0.1"
+const DefaultPort = 5432
+const DefaultUserName = "xdb"
+const DefaultPassword = "xdbxdb"
+const DefaultDatabaseName = "xdb"
+const DefaultSchemaFilePath = "./extensions/postgres/schema/all_in_one.sql"
 
 // BuildCLIOptions builds the options for cli
 func BuildCLIOptions() *cli.App {
@@ -18,29 +23,34 @@ func BuildCLIOptions() *cli.App {
 
 	app.Flags = []cli.Flag{
 		&cli.StringFlag{
-			Name:  extensions.CLIFlagEndpoint,
-			Value: "127.0.0.1",
-			Usage: "hostname or ip address of sql host to connect to postgres",
+			Name:    extensions.CLIFlagEndpoint,
+			Aliases: []string{"e"},
+			Value:   DefaultEndpoint,
+			Usage:   "hostname or ip address of sql host to connect to postgres",
 		},
 		&cli.IntFlag{
-			Name:  extensions.CLIFlagPort,
-			Value: defaultSQLPort,
-			Usage: "port of sql host to connect to postgres",
+			Name:    extensions.CLIFlagPort,
+			Aliases: []string{"p"},
+			Value:   DefaultPort,
+			Usage:   "port of sql host to connect to postgres",
 		},
 		&cli.StringFlag{
-			Name:  extensions.CLIFlagUser,
-			Value: "xdb",
-			Usage: "user name used for authentication when connecting to postgres",
+			Name:    extensions.CLIFlagUser,
+			Aliases: []string{"u"},
+			Value:   DefaultUserName,
+			Usage:   "user name used for authentication when connecting to postgres",
 		},
 		&cli.StringFlag{
-			Name:  extensions.CLIFlagPassword,
-			Value: "xdbxdb",
-			Usage: "password used for authentication when connecting to postgres",
+			Name:    extensions.CLIFlagPassword,
+			Aliases: []string{"pw"},
+			Value:   DefaultPassword,
+			Usage:   "password used for authentication when connecting to postgres",
 		},
 		&cli.StringFlag{
-			Name:  extensions.CLIFlagDatabase,
-			Value: "xdb",
-			Usage: "name of the postgres database",
+			Name:    extensions.CLIFlagDatabase,
+			Aliases: []string{"db"},
+			Value:   DefaultDatabaseName,
+			Usage:   "name of the postgres database",
 		},
 	}
 
@@ -51,6 +61,22 @@ func BuildCLIOptions() *cli.App {
 			Usage:   "creates a database",
 			Action: func(c *cli.Context) error {
 				return extensions.CreateDatabaseByCli(c, postgres.ExtensionName)
+			},
+		},
+		{
+			Name:    "install-schema",
+			Aliases: []string{"install"},
+			Usage:   "install schema into a database",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    extensions.CLIFlagFile,
+					Aliases: []string{"f"},
+					Value:   DefaultSchemaFilePath,
+					Usage:   "file path of the schema file to install",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				return extensions.SetupSchemaByCli(c, postgres.ExtensionName)
 			},
 		},
 	}
