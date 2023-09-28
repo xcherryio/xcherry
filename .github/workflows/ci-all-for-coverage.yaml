@@ -8,7 +8,7 @@ on:
       - main
 jobs:
   workflow:
-    name: Lint/Build/Test
+    name: Build/Test
 
     strategy:
       matrix:
