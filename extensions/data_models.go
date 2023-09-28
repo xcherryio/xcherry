@@ -30,6 +30,6 @@ type ProcessExecutionRow struct {
 }
 
 type ProcessExecutionInfo struct {
-	ProcessType string
-	WorkerURL   string
+	ProcessType string `json:"processType"`
+	WorkerURL   string `json:"workerURL"`
 }

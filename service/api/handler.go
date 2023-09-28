@@ -42,7 +42,6 @@ func (h *handler) StartProcess(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
-	return
 }
 
 func (h *handler) DescribeProcess(c *gin.Context) {
