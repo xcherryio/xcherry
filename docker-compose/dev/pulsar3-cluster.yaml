@@ -1,5 +1,6 @@
 version: '3'
 
+# from: https://pulsar.apache.org/docs/next/getting-started-docker-compose/
 services:  
   # Start zookeeper
   zookeeper:
@@ -7,7 +8,7 @@ services:
     container_name: zookeeper
     restart: on-failure
     networks:
-      - pulsar
+      - xdb
     # Comment out this otherwise Github action will not be able to run
 #    volumes:
 #      - /tmp/zookeeper:/pulsar/data/zookeeper
@@ -31,7 +32,7 @@ services:
     hostname: pulsar-init
     image: apachepulsar/pulsar:3.1.0
     networks:
-      - pulsar
+      - xdb
     command: >
       bin/pulsar initialize-cluster-metadata \
                --cluster cluster-a \
@@ -49,7 +50,7 @@ services:
     container_name: bookie
     restart: on-failure
     networks:
-      - pulsar
+      - xdb
     environment:
       - clusterName=cluster-a
       - zkServers=zookeeper:2181
@@ -76,7 +77,7 @@ services:
     hostname: broker
     restart: on-failure
     networks:
-      - pulsar
+      - xdb
     environment:
       - metadataStoreUrl=zk:zookeeper:2181
       - zookeeperServers=zookeeper:2181
@@ -97,5 +98,5 @@ services:
       - "8080:8080"
     command: bash -c "bin/apply-config-from-env.py conf/broker.conf && exec bin/pulsar broker"
 networks:
-  pulsar:
+  xdb:
     driver: bridge

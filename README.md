@@ -71,7 +71,7 @@ Run one of the [docker-compose files](./docker-compose/dev) to run a database + 
 - [ ] StopProcessExecution API
 - [ ] WaitForStateCompletion API
 - [ ] ResetStateExecution for operation
-- [ ] DescribeProcessExecution API
+- [x] DescribeProcessExecution API
 - [ ] WaitForProcessCompletion API
 - [ ] History events for operation/debugging
 

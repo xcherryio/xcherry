@@ -1,14 +1,8 @@
 version: '3.8'
 
+# from https://pulsar.apache.org/docs/3.1.x/standalone-docker/
+# docker run -it -p 6650:6650  -p 8080:8080 --mount source=pulsardata,target=/pulsar/data --mount source=pulsarconf,target=/pulsar/conf apachepulsar/pulsar:3.1.0 bin/pulsar standalone
 services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      - "MYSQL_ROOT_PASSWORD=xdbxdb"
-    networks:
-      - xdb
   pulsar-server:
     image: apachepulsar/pulsar:3.1.0
     entrypoint: bin/pulsar standalone
@@ -25,6 +19,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+#    volumes:
+#      - ./data:/pulsar/data/zookeeper
+#      - ./conf:/pulsar/conf
 networks:
   xdb:
     driver: bridge
