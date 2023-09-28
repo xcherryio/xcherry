@@ -1,0 +1,22 @@
+version: '3.8'
+  
+include:
+  - ./pulsar3-standalone.yaml
+  
+services:
+  postgres:
+    image: debezium/example-postgres:1.8 # this is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
+    environment:
+      POSTGRES_USER: xdb
+      POSTGRES_PASSWORD: xdbxdb
+    ports:
+      - "5432:5432"
+    networks:
+      - xdb
+  pulsar-debezium-postgres-connect:
+    image: apachepulsar/pulsar:3.1.0
+    entrypoint: bin/pulsar-admin source localrun --source-config-file connectors/debezium-postgres-source-config.yaml
+    networks:
+      - xdb
+    volumes:
+      - ./connectors:/pulsar/connectors

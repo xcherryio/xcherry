@@ -1,0 +1,20 @@
+tenant: "public"
+namespace: "default"
+name: "debezium-postgres-source"
+topicName: "debezium-postgres-topic"
+archive: "connectors/pulsar-io-debezium-postgres-3.1.0.nar"
+parallelism: 1
+
+configs:
+  
+  ## config for pg, docker image: debezium/example-postgress:0.8
+  database.hostname: "localhost"
+  database.port: "5432"
+  database.user: "xdb"
+  database.password: "xdbxdb"
+  database.dbname: "postgres" # what is this??
+  database.server.name: "dbserver1"
+  # schema.whitelist: "inventory" # include all databases so that it will work for integ tests
+  
+  ## PULSAR_SERVICE_URL_CONFIG
+  pulsar.service.url: "pulsar://127.0.0.1:6650"

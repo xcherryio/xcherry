@@ -1,12 +1,13 @@
 version: '3.8'
 
 # Note this is to contain all dependencies to run for integ tests locally
+# TODO add Pulsar Debezium Connect
 include:
   - ./pulsar3-standalone.yaml
 
 services:
   mysql:
-    image: mysql:8.0
+    image: debezium/example-mysql:2.4 # this is MySQL8 with sample:https://github.com/debezium/container-images/blob/main/examples/mysql/2.4/Dockerfile
     ports:
       - "3306:3306"
     environment:
@@ -14,7 +15,7 @@ services:
     networks:
       - xdb
   postgres:
-    image: postgres:12.4
+    image: debezium/example-postgress:1.8 # this is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
     environment:
       POSTGRES_USER: xdb
       POSTGRES_PASSWORD: xdbxdb
