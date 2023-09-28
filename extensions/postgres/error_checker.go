@@ -21,11 +21,11 @@ func (d dbSession) IsDupEntryError(err error) bool {
 }
 
 func (d dbSession) IsNotFoundError(err error) bool {
-	return err == sql.ErrNoRows
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 func (d dbSession) IsTimeoutError(err error) bool {
-	return err == context.DeadlineExceeded
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func (d dbSession) IsThrottlingError(err error) bool {
