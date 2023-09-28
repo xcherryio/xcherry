@@ -4,4 +4,3 @@ test.log
 coverage.out
 .idea/
 gen/
-docker-compose/dev/data/
