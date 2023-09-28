@@ -24,7 +24,9 @@ func NewServiceImpl(cfg config.Config, processOrm persistence.ProcessORM, logger
 	}
 }
 
-func (s serviceImpl) StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (resp *xdbapi.ProcessExecutionStartResponse, err *ErrorWithStatus) {
+func (s serviceImpl) StartProcess(
+	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
+) (resp *xdbapi.ProcessExecutionStartResponse, err *ErrorWithStatus) {
 	resp, alreadyStarted, perr := s.processOrm.StartProcess(ctx, request)
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)
@@ -40,7 +42,9 @@ func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 	return NewErrorWithStatus(500, err.Error())
 }
 
-func (s serviceImpl) DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (resp *xdbapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus) {
+func (s serviceImpl) DescribeLatestProcess(
+	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
+) (resp *xdbapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus) {
 	resp, notExists, perr := s.processOrm.DescribeLatestProcess(ctx, request)
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)

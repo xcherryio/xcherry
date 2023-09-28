@@ -27,7 +27,9 @@ func NewProcessORMSQLImpl(sqlConfig config.SQL, logger log.Logger) (ProcessORM, 
 	}, err
 }
 
-func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, err error) {
+func (p ProcessORMSQLImpl) StartProcess(
+	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
+) (resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, err error) {
 	tx, err := p.sqlDB.StartTransaction(ctx)
 	if err != nil {
 		return nil, false, err
@@ -91,7 +93,9 @@ func (p ProcessORMSQLImpl) StartProcess(ctx context.Context, request xdbapi.Proc
 
 }
 
-func (p ProcessORMSQLImpl) DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (*xdbapi.ProcessExecutionDescribeResponse, bool, error) {
+func (p ProcessORMSQLImpl) DescribeLatestProcess(
+	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
+) (*xdbapi.ProcessExecutionDescribeResponse, bool, error) {
 	rows, err := p.sqlDB.SelectCurrentProcessExecution(ctx, request.GetProcessId())
 	if err != nil {
 		if p.sqlDB.IsNotFoundError(err) {

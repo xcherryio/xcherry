@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"github.com/lib/pq"
 )
 
@@ -14,7 +15,8 @@ const ErrInsufficientResources = "53000"
 const ErrTooManyConnections = "53300"
 
 func (d dbSession) IsDupEntryError(err error) bool {
-	sqlErr, ok := err.(*pq.Error)
+	var sqlErr pq.Error
+	ok := errors.As(err, &sqlErr)
 	return ok && sqlErr.Code == ErrDupEntry
 }
 
@@ -27,7 +29,8 @@ func (d dbSession) IsTimeoutError(err error) bool {
 }
 
 func (d dbSession) IsThrottlingError(err error) bool {
-	sqlErr, ok := err.(*pq.Error)
+	var sqlErr pq.Error
+	ok := errors.As(err, &sqlErr)
 	if ok {
 		if sqlErr.Code == ErrTooManyConnections ||
 			sqlErr.Code == ErrInsufficientResources {
