@@ -143,7 +143,7 @@ xdb-tools-postgres:
 bins: xdb-server xdb-tools-postgres
 
 tests: ## Run all tests
-	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
+	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic -postgres=true
 
 clean: ## Clean binaries
 	rm xdb-server; rm xdb-tools-postgres;

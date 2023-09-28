@@ -1,4 +1,4 @@
-name: Postgres Tests
+name: All Tests
 on:
   push:
     branches:
@@ -25,12 +25,18 @@ jobs:
       - name: Checkout Code Base
         uses: actions/checkout@v3
 
-      - name: "Set up Postgres Pulsar environment"
-        run: docker compose -f docker-compose/dev/postgres12-pulsar.yaml up -d
+      - name: Make Binaries
+        run: make bins
+
+      - name: "Set up all databases + Pulsar environment"
+        run: docker compose -f docker-compose/dev/integ-all.yaml up -d
         
       - name: Dump docker logs
         if: always()
         uses: jwalton/gh-docker-logs@v2
         
       - name: Run Test # wait for 5 seconds for env to be ready
-        run: sleep 5 && make integTestsPostgres
+        run: sleep 5 && make tests
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v3
