@@ -35,8 +35,8 @@ jobs:
         if: always()
         uses: jwalton/gh-docker-logs@v2
         
-      - name: Run Test # wait for 20 seconds for env to be ready
-        run: sleep 20 && make tests
+      - name: Run Test # wait for 5 seconds for env to be ready
+        run: sleep 5 && make integTestsPostgres
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
