@@ -1,7 +1,7 @@
-version: '3'
+version: '3.8'
 
 include:
-  - ./pulsar3.yaml
+  - ./pulsar3-standalone.yaml
 
 services:
   postgres:
@@ -11,3 +11,5 @@ services:
       POSTGRES_PASSWORD: xdbxdb
     ports:
       - "5432:5432"
+    networks:
+      - xdb

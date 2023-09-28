@@ -1,7 +1,7 @@
-version: '3'
+version: '3.8'
 
 include:
-  - ./pulsar3.yaml
+  - ./pulsar3-standalone.yaml
 
 services:
   mysql:
@@ -10,3 +10,5 @@ services:
       - "3306:3306"
     environment:
       - "MYSQL_ROOT_PASSWORD=xdbxdb"
+    networks:
+      - xdb

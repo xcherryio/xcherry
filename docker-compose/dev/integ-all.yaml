@@ -1,8 +1,8 @@
-version: '3'
+version: '3.8'
 
 # Note this is to contain all dependencies to run for integ tests locally
 include:
-  - ./pulsar3.yaml
+  - ./pulsar3-standalone.yaml
 
 services:
   mysql:
@@ -11,6 +11,8 @@ services:
       - "3306:3306"
     environment:
       - "MYSQL_ROOT_PASSWORD=xdbxdb"
+    networks:
+      - xdb
   postgres:
     image: postgres:12.4
     environment:
@@ -18,3 +20,5 @@ services:
       POSTGRES_PASSWORD: xdbxdb
     ports:
       - "5432:5432"
+    networks:
+      - xdb
