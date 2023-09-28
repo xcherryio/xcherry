@@ -8,7 +8,7 @@ parallelism: 1
 configs:
   
   ## config for pg, docker image: debezium/example-postgress:0.8
-  database.hostname: "localhost"
+  database.hostname: "postgres"
   database.port: "5432"
   database.user: "xdb"
   database.password: "xdbxdb"
@@ -17,4 +17,4 @@ configs:
   # schema.whitelist: "inventory" # include all databases so that it will work for integ tests
   
   ## PULSAR_SERVICE_URL_CONFIG
-  pulsar.service.url: "pulsar://127.0.0.1:6650"
+  pulsar.service.url: "pulsar://pulsar-server:6650"
