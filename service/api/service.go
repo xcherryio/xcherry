@@ -1,19 +1,15 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
+	"context"
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
-const ProcessStartApiPath = "/api/v1/process/start"
-
-func NewService(config config.Config, logger log.Logger) *gin.Engine {
-	router := gin.Default()
-
-	handler := newHandler(config, logger)
-
-	router.POST(ProcessStartApiPath, handler.ApiV1ProcessStartPost)
-
-	return router
+// Service is the interface of API service, which decoupled from REST server framework like Gin
+// So that users can choose to use other REST frameworks to serve requests
+type Service interface {
+	StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (
+		resp *xdbapi.ProcessExecutionStartResponse, err *ErrorWithStatus)
+	DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (
+		resp *xdbapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus)
 }

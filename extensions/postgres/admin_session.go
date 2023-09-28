@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jmoiron/sqlx"
+	"github.com/xdblab/xdb/extensions"
 )
 
 // NOTE we have to use %v because somehow postgres doesn't work with ? here
@@ -14,6 +15,14 @@ const dropDatabaseQuery = "Drop database %v"
 
 type adminDBSession struct {
 	db *sqlx.DB
+}
+
+var _ extensions.SQLAdminDBSession = (*adminDBSession)(nil)
+
+func newAdminDBSession(db *sqlx.DB) *adminDBSession {
+	return &adminDBSession{
+		db: db,
+	}
 }
 
 func (a adminDBSession) DropDatabase(ctx context.Context, database string) error {
@@ -33,10 +42,4 @@ func (a adminDBSession) CreateDatabase(ctx context.Context, database string) err
 
 func (a adminDBSession) Close() error {
 	return a.db.Close()
-}
-
-func newAdminDBSession(db *sqlx.DB) *adminDBSession {
-	return &adminDBSession{
-		db: db,
-	}
 }

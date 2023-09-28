@@ -35,6 +35,17 @@ func RegisterSQLDBExtension(name string, ext SQLDBExtension) {
 	sqlRegistry[name] = ext
 }
 
+// NewSQLSession returns a regular session
+func NewSQLSession(cfg *config.SQL) (SQLDBSession, error) {
+	ext, ok := sqlRegistry[cfg.DBExtensionName]
+
+	if !ok {
+		return nil, fmt.Errorf("not supported SQLDBExtensionName %v, only supported: %v", cfg.DBExtensionName, sqlRegistry)
+	}
+
+	return ext.StartDBSession(cfg)
+}
+
 // NewSQLAdminSession returns a AdminDB
 func NewSQLAdminSession(cfg *config.SQL) (SQLAdminDBSession, error) {
 	ext, ok := sqlRegistry[cfg.DBExtensionName]

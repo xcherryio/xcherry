@@ -2,15 +2,15 @@ package bootstrap
 
 import (
 	"fmt"
+	"github.com/urfave/cli/v2"
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
+	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/service/api"
 	rawLog "log"
 	"strings"
 	"sync"
-
-	"github.com/urfave/cli/v2"
-	"github.com/xdblab/xdb/service/api"
 )
 
 const ApiServiceName = "api"
@@ -19,24 +19,15 @@ const AsyncServiceName = "async"
 const FlagConfig = "config"
 const FlagService = "service"
 
-func StartXdbServer(c *cli.Context) {
+func StartXdbServerCli(c *cli.Context) {
 	configPath := c.String("config")
-	loadedConfig, err := config.NewConfig(configPath)
+	services := getServices(c)
+
+	cfg, err := config.NewConfig(configPath)
 	if err != nil {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
-	zapLogger, err := loadedConfig.Log.NewZapLogger()
-	if err != nil {
-		rawLog.Fatalf("Unable to create a new zap logger %v", err)
-	}
-	logger := log2.NewLogger(zapLogger)
-	logger.Info("config is loaded", tag.Value(loadedConfig.String()))
-
-	services := getServices(c)
-
-	for _, svc := range services {
-		go launchService(svc, *loadedConfig, logger)
-	}
+	StartXdbServer(cfg, services)
 
 	// TODO improve by waiting for the started services to stop
 	wg := sync.WaitGroup{}
@@ -44,12 +35,39 @@ func StartXdbServer(c *cli.Context) {
 	wg.Wait()
 }
 
-func launchService(svcName string, config config.Config, logger log2.Logger) {
+func StartXdbServer(cfg *config.Config, services []string) persistence.ProcessORM {
+	if len(services) == 0 {
+		services = []string{ApiServiceName, AsyncServiceName}
+	}
+
+	zapLogger, err := cfg.Log.NewZapLogger()
+	if err != nil {
+		rawLog.Fatalf("Unable to create a new zap logger %v", err)
+	}
+	logger := log2.NewLogger(zapLogger)
+	logger.Info("config is loaded", tag.Value(cfg.String()))
+	err = cfg.Validate()
+	if err != nil {
+		logger.Fatal("config is invalid", tag.Error(err))
+	}
+
+	processOrm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL, logger)
+	if err != nil {
+		logger.Fatal("error on persistence setup", tag.Error(err))
+	}
+
+	for _, svc := range services {
+		go launchService(svc, *cfg, processOrm, logger)
+	}
+	return processOrm
+}
+
+func launchService(svcName string, cfg config.Config, processOrm persistence.ProcessORM, logger log2.Logger) {
 
 	switch svcName {
 	case ApiServiceName:
-		apiService := api.NewService(config, logger.WithTags(tag.Service(svcName)))
-		rawLog.Fatal(apiService.Run(fmt.Sprintf(":%v", config.ApiService.Port)))
+		ginController := api.NewAPIServiceGinController(cfg, processOrm, logger.WithTags(tag.Service(svcName)))
+		rawLog.Fatal(ginController.Run(cfg.ApiService.Address))
 	case AsyncServiceName:
 		fmt.Println("TODO for starting async service")
 	default:

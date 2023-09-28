@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 
@@ -14,6 +15,9 @@ type (
 		Log Logger `yaml:"log"`
 		// ApiService is the API service config
 		ApiService ApiServiceConfig `yaml:"apiService"`
+		// Database is the database that XDB will be extending on
+		// either sql or nosql is needed
+		Database DatabaseConfig `yaml:"database"`
 	}
 
 	// Logger contains the config items for logger
@@ -35,10 +39,14 @@ type (
 	}
 
 	ApiServiceConfig struct {
-		// Port is the port on which the API service will bind to
-		Port int `yaml:"port"`
+		// Address is the address and port on which the API service will bind to
+		Address string `yaml:"address"`
 		// DefaultPollingMaxWaitSeconds is the default timeout for polling APIs
 		DefaultPollingMaxWaitSeconds int64 `yaml:"defaultPollingMaxWaitSeconds"`
+	}
+
+	DatabaseConfig struct {
+		SQL *SQL `yaml:"sql"`
 	}
 )
 
@@ -61,6 +69,26 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return config, nil
+}
+
+func (c *Config) Validate() error {
+	if c.Database.SQL == nil {
+		return fmt.Errorf("sql config is required")
+	}
+	sql := c.Database.SQL
+	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
+		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+	}
+	return nil
+}
+
+func anyAbsent(strs ...string) bool {
+	for _, s := range strs {
+		if s == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // String converts the config object into a string
