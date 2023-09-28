@@ -8,6 +8,7 @@ services:
     restart: on-failure
     networks:
       - pulsar
+    # Comment out this otherwise Github action will not be able to run
 #    volumes:
 #      - /tmp/zookeeper:/pulsar/data/zookeeper
     environment:
@@ -63,6 +64,7 @@ services:
       pulsar-init:
         condition: service_completed_successfully
     # Map the local directory to the container to avoid bookie startup failure due to insufficient container disks.
+    # Comment out this otherwise Github action will not be able to run
 #    volumes:
 #      - /tmp/bookkeeper:/pulsar/data/bookkeeper
     command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
