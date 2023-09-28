@@ -35,7 +35,7 @@ Run one of the [docker-compose files](./docker-compose/dev) to run a database + 
   
 ## 1.0
 - [ ] StartProcessExecution API
-  - [ ] Basic
+  - [x] Basic
   - [ ] ProcessIdReusePolicy
   - [ ] Process timeout
   - [ ] Retention policy after closed
