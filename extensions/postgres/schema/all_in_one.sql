@@ -1,10 +1,10 @@
-CREATE TABLE xdb_sys_current_process_execution(
+CREATE TABLE xdb_sys_current_process_executions(
     process_id VARCHAR(255) NOT NULL,
     process_execution_id BYTEA NOT NULL,
     PRIMARY KEY (process_id, process_execution_id)
 );
 
-CREATE TABLE xdb_sys_process_execution(
+CREATE TABLE xdb_sys_process_executions(
     id BYTEA NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     --

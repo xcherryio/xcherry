@@ -7,18 +7,18 @@ import (
 )
 
 const (
-	insertCurrentExecutionQuery = `INSERT INTO xdb_sys_current_process_execution
+	insertCurrentExecutionQuery = `INSERT INTO xdb_sys_current_process_executions
 	(process_id, process_execution_id) VALUES
 	($1, $2)`
 
-	insertExecutionQuery = `INSERT INTO xdb_sys_process_execution
+	insertExecutionQuery = `INSERT INTO xdb_sys_process_executions
 	(id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, info) VALUES
 	(:process_execution_id, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, :info)`
 
 	selectCurrentExecutionQuery = `SELECT
 	ce.process_execution_id, e.process_id, e.is_current, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.info
-	FROM xdb_sys_current_process_execution ce
-	INNER JOIN xdb_sys_process_execution e ON e.process_id = ce.process_id
+	FROM xdb_sys_current_process_executions ce
+	INNER JOIN xdb_sys_process_executions e ON e.process_id = ce.process_id
 	WHERE ce.process_id = $1`
 )
 
