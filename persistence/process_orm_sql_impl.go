@@ -11,6 +11,7 @@ import (
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/extensions/postgres"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type ProcessORMSQLImpl struct {
 }
 
 func NewProcessORMSQLImpl(sqlConfig config.SQL, logger log.Logger) (ProcessORM, error) {
+	// init() will not work because `postgres` package has not been imported before executing this function
+	println(postgres.ExtensionName)
+
 	session, err := extensions.NewSQLSession(&sqlConfig)
 	return &ProcessORMSQLImpl{
 		sqlDB:  session,
@@ -80,6 +84,7 @@ func (p ProcessORMSQLImpl) StartProcess(
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId:     eUUID,
 		ProcessId:              request.ProcessId,
+		IsCurrent:              true,
 		Status:                 extensions.ExecutionStatusRunning.String(),
 		StartTime:              time.Now(),
 		TimeoutSeconds:         timeoutSeconds,

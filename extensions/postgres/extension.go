@@ -60,8 +60,8 @@ func (d *extension) StartAdminDBSession(cfg *config.SQL) (extensions.SQLAdminDBS
 	return newAdminDBSession(sqlxdb), nil
 }
 
-// CreateDBConnection creates a returns a reference to a logical connection to the
-// underlying SQL database. The returned object is to tied to a single
+// CreateDBConnection returns a reference to a logical connection to the
+// underlying SQL database. The returned object is tied to a single
 // SQL database and the object can be used to perform CRUD operations on
 // the tables in the database
 func (d *extension) createSingleDBConn(cfg *config.SQL) (*sqlx.DB, error) {
@@ -88,7 +88,7 @@ func buildDSN(cfg *config.SQL, host string, port string, params url.Values) stri
 	dbName := cfg.DatabaseName
 	//NOTE: postgres doesn't allow to connect with empty dbName, the admin dbName is "postgres"
 	if dbName == "" {
-		dbName = "postgres"
+		dbName = ExtensionName
 	}
 
 	credentialString := generateCredentialString(cfg.User, cfg.Password)

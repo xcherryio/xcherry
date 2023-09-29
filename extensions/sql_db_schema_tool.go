@@ -65,7 +65,7 @@ func CreateDatabaseByCli(cli *cli.Context, extensionName string) error {
 }
 
 func CreateDatabase(cfg config.SQL, name string) error {
-	// cfg config.SQL will be modified as this cannot using pointer "cfg *config.SQL
+	// cfg config.SQL will be modified as this cannot use pointer "cfg *config.SQL
 	cfg.DatabaseName = ""
 	// IMPORTATNT! set empty because the database is to be created(not exists yet). It's up to the extension to handle it
 	// e.g.:
