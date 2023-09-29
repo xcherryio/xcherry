@@ -28,3 +28,13 @@ docker-compose -f <filename> up
   * For production setup, users can refer to the documentation, and follow the setup like: 
     * [MySQL config](https://github.com/debezium/container-images/blob/main/examples/mysql/2.4/mysql.cnf)
     * [Postgres config](https://github.com/debezium/container-images/blob/main/postgres/16/postgresql.conf.sample) which used in [startup](https://github.com/debezium/container-images/blob/main/postgres/16/Dockerfile#L51)
+
+### Tips
+To test consuming messages, you can use command like(Java 11+ is required for JAVA_HOME):
+```shell
+bin/pulsar-client consume -s "sub-products" public/default/dbserver1.inventory.products -n 0
+```
+or 
+```shell
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk17.0.7.jdk/Contents/Home bin/pulsar-client consume -s "sub-test2" public/default/dbserver1.public.test2 -n 0
+```

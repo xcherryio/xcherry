@@ -1,6 +1,6 @@
 version: '3.8'
 
-# TODO add Pulsar Debezium Connect
+# TODO add Pulsar Debezium Connect for MySQL
 services:
   mysql:
     image: debezium/example-mysql:2.4 # this is MySQL8 with sample:https://github.com/debezium/container-images/blob/main/examples/mysql/2.4/Dockerfile

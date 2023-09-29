@@ -1,6 +1,6 @@
 version: '3.8'
 
-# TODO add Pulsar Debezium Connect
+# TODO add Pulsar Debezium Connect for MySQL
 include:
   - ./pulsar3-standalone.yaml
 
