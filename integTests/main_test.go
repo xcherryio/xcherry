@@ -42,8 +42,8 @@ func TestMain(m *testing.M) {
 			fmt.Println("ignore error for setup database", err)
 			//panic(err)
 		} else {
-			fmt.Println("wait for 2 seconds so that topics for new tables are created")
-			time.Sleep(time.Second * 2)
+			fmt.Println("wait for 5 seconds so that topics for new tables are created")
+			time.Sleep(time.Second * 5)
 		}
 		defer func() {
 			if *keepDatabaseForDebugWhenTestFails && resultCode != 0 {

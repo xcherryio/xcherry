@@ -31,12 +31,12 @@ jobs:
       - name: "Set up all databases + Pulsar environment"
         run: docker compose -f docker-compose/dev/integ-all.yaml up -d
         
+      - name: Run Test # wait for 5 seconds for env to be ready
+        run: sleep 5 && make tests
+
       - name: Dump docker logs
         if: always()
         uses: jwalton/gh-docker-logs@v2
         
-      - name: Run Test # wait for 5 seconds for env to be ready
-        run: sleep 5 && make tests
-
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
