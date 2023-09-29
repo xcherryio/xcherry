@@ -6,10 +6,10 @@ archive: "connectors/pulsar-io-debezium-postgres-3.1.0.nar"
 parallelism: 1
 
 configs:
-  database.hostname: "postgres"
+  database.hostname: "localhost"
   database.port: "5432"
-  database.user: "xdb"
-  database.password: "xdbxdb"
+  database.user: "postgres"
+  database.password: "postgres"
   database.dbname: "postgres"
   database.server.name: "dbserver1"
   schema.whitelist: "inventory"
