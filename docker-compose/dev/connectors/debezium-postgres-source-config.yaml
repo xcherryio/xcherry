@@ -1,0 +1,20 @@
+tenant: "public"
+namespace: "default"
+name: "debezium-postgres-source"
+topicName: "debezium-postgres-topic"
+archive: "connectors/pulsar-io-debezium-postgres-3.1.0.nar"
+parallelism: 1
+
+configs:
+  database.hostname: "localhost"
+  database.port: "5432"
+  database.user: "xdb"
+  database.password: "xdbxdb"
+  database.dbname: "xdb" # not sure what this for, it doesn't seem matter??
+  database.server.name: "dbserver1"
+  #schema.whitelist: "public" # TODO not sure why this is not working for filtering
+  #table.whitelist: "someTableName" # TODO not sure why this is not working  for filtering
+  pulsar.service.url: "pulsar://pulsar:6650" # this is not working:https://github.com/apache/pulsar/issues/21276
+  database.history.pulsar.service.url: "pulsar://pulsar:6650" # this is not working:https://github.com/apache/pulsar/issues/21276
+  
+  

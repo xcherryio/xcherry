@@ -11,8 +11,6 @@ services:
       - "8080:8080"
     networks:
       - xdb
-    environment:
-      - "MYSQL_ROOT_PASSWORD=xdbxdb"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://pulsar-server:8080/metrics/"]
       interval: 30s

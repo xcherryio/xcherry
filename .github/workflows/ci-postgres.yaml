@@ -1,4 +1,4 @@
-name: Postgres Tests
+name: Postgres14 Tests
 on:
   push:
     branches:
@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: "Set up Postgres Pulsar environment"
-        run: docker compose -f docker-compose/dev/postgres12-pulsar.yaml up -d
+        run: docker compose -f docker-compose/dev/postgres14-pulsar.yaml up -d
         
       - name: Dump docker logs
         if: always()
