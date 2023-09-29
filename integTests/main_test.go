@@ -16,17 +16,14 @@ import (
 	"github.com/xdblab/xdb-golang-sdk/integTests/worker"
 )
 
-var testDatabaseName = fmt.Sprintf("tst%v", time.Now().UnixNano())
-
 func TestMain(m *testing.M) {
 	flag.Parse()
-	fmt.Printf("start running integ test, using database %v, postgres:%v \n", testDatabaseName, *postgresIntegTest)
+	fmt.Printf("start running integ test, using, postgres:%v \n", *postgresIntegTest)
 
 	worker.StartGinWorker(workerService)
 
 	var resultCode int
 
-	testDatabaseName = "xdb" // hack for testing
 	var sqlConfig *config.SQL
 	if *postgresIntegTest {
 		sqlConfig = &config.SQL{
@@ -34,12 +31,11 @@ func TestMain(m *testing.M) {
 			User:            postgrestool.DefaultUserName,
 			Password:        postgrestool.DefaultPassword,
 			DBExtensionName: postgres.ExtensionName,
-			DatabaseName:    testDatabaseName,
+			DatabaseName:    postgrestool.DefaultDatabaseName,
 		}
-		err := extensions.CreateDatabase(*sqlConfig, testDatabaseName)
+		err := extensions.CreateDatabase(*sqlConfig, postgrestool.DefaultDatabaseName)
 		if err != nil {
 			fmt.Println("ignore error for creating database", err)
-			//panic(err)
 		}
 		err = extensions.SetupSchema(sqlConfig, "../"+postgrestool.DefaultSchemaFilePath)
 		if err != nil {
@@ -50,14 +46,8 @@ func TestMain(m *testing.M) {
 			if *keepDatabaseForDebugWhenTestFails && resultCode != 0 {
 				return
 			}
-			err := extensions.DropDatabase(*sqlConfig, testDatabaseName)
-			if err != nil {
-				fmt.Println("ignore error for dropping database", err)
-				//panic(err)
-			}
-			fmt.Println("test database deleted:", testDatabaseName)
+			// TODO clean up data in the testing database
 		}()
-		fmt.Println("test database created:", testDatabaseName)
 	}
 
 	cfg := config.Config{
