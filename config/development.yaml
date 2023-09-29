@@ -15,5 +15,8 @@ database:
 asyncService:
   messageQueue:
     pulsar:
-      url: pulsar://localhost:6650
-    
+      pulsarClientOptions:
+        url: pulsar://localhost:6650
+      cdcTopic: public/default/debezium-postgres-topic
+      defaultCDCTopicSubscription: default-shared
+      

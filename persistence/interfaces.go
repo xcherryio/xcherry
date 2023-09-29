@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/config"
 )
 
 // ProcessORM is for operating on the database for process execution
@@ -17,6 +16,6 @@ type ProcessORM interface {
 
 // ProcessMQ is consuming/processing events of process execution
 type ProcessMQ interface {
-	Start(prcOrm ProcessORM, cfg config.Config) error
+	Start() error
 	Stop() error
 }

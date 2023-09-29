@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"fmt"
 	"github.com/urfave/cli/v2"
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -37,9 +36,9 @@ func StartXdbServerCli(c *cli.Context) {
 
 type StopFunc func() error
 
-func StartXdbServer(cfg *config.Config, services []string) StopFunc {
+func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
 	if len(services) == 0 {
-		services = []string{ApiServiceName, AsyncServiceName}
+		services = map[string]bool{ApiServiceName: true, AsyncServiceName: true}
 	}
 
 	zapLogger, err := cfg.Log.NewZapLogger()
@@ -58,28 +57,33 @@ func StartXdbServer(cfg *config.Config, services []string) StopFunc {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
 
-	for _, svc := range services {
-		go launchService(svc, *cfg, processOrm, logger)
+	if services[ApiServiceName] {
+		go func() {
+			ginController := api.NewAPIServiceGinController(*cfg, processOrm, logger.WithTags(tag.Service(ApiServiceName)))
+			rawLog.Fatal(ginController.Run(cfg.ApiService.Address))
+		}()
+	}
+	var processMQ persistence.ProcessMQ
+	if services[AsyncServiceName] {
+		// TODO
+		mq := persistence.NewPulsarProcessMQ(*cfg, processOrm, logger)
+		err := mq.Start()
+		if err != nil {
+			panic(err)
+		}
 	}
 	return func() error {
+		if processMQ != nil {
+			err := processMQ.Stop()
+			if err != nil {
+				return err
+			}
+		}
 		return processOrm.Close()
 	}
 }
 
-func launchService(svcName string, cfg config.Config, processOrm persistence.ProcessORM, logger log2.Logger) {
-
-	switch svcName {
-	case ApiServiceName:
-		ginController := api.NewAPIServiceGinController(cfg, processOrm, logger.WithTags(tag.Service(svcName)))
-		rawLog.Fatal(ginController.Run(cfg.ApiService.Address))
-	case AsyncServiceName:
-		fmt.Println("TODO for starting async service")
-	default:
-		logger.Fatal("unsupported service", tag.Service(svcName))
-	}
-}
-
-func getServices(c *cli.Context) []string {
+func getServices(c *cli.Context) map[string]bool {
 	val := strings.TrimSpace(c.String(FlagService))
 	tokens := strings.Split(val, ",")
 
@@ -87,10 +91,10 @@ func getServices(c *cli.Context) []string {
 		rawLog.Fatal("No services specified for starting")
 	}
 
-	var services []string
+	services := map[string]bool{}
 	for _, token := range tokens {
 		t := strings.TrimSpace(token)
-		services = append(services, t)
+		services[t] = true
 	}
 
 	return services

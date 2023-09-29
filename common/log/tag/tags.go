@@ -77,6 +77,14 @@ func Value(v interface{}) Tag {
 	return newObjectTag("value", v)
 }
 
+func ID(v string) Tag {
+	return newStringTag("ID", v)
+}
+
+func Key(v string) Tag {
+	return newStringTag("Key", v)
+}
+
 func DefaultValue(v interface{}) Tag {
 	return newObjectTag("default-value", v)
 }
