@@ -32,7 +32,7 @@ func (p processMQPulsar) Start() error {
 		return err
 	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
-		Topic:            pulsarCfg.CDCTopic,
+		TopicsPattern:    pulsarCfg.CDCTopicsPrefix + ".*",
 		SubscriptionName: pulsarCfg.DefaultCDCTopicSubscription,
 		Type:             pulsar.Shared,
 	})

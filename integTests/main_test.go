@@ -3,6 +3,7 @@ package integTests
 import (
 	"flag"
 	"fmt"
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/xdblab/xdb-golang-sdk/xdb"
 	"github.com/xdblab/xdb/cmd/server/bootstrap"
 	"github.com/xdblab/xdb/config"
@@ -61,6 +62,17 @@ func TestMain(m *testing.M) {
 		},
 		Database: config.DatabaseConfig{
 			SQL: sqlConfig,
+		},
+		AsyncService: config.AsyncServiceConfig{
+			MessageQueue: config.MessageQueueConfig{
+				Pulsar: &config.PulsarMQConfig{
+					PulsarClientOptions: pulsar.ClientOptions{
+						URL: "pulsar://localhost:6650",
+					},
+					CDCTopicsPrefix:             "public/default/dbserver1.public.",
+					DefaultCDCTopicSubscription: "default-shared",
+				},
+			},
 		},
 	}
 	stopF := bootstrap.StartXdbServer(&cfg, nil)

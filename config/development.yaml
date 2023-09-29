@@ -17,6 +17,6 @@ asyncService:
     pulsar:
       pulsarClientOptions:
         url: pulsar://localhost:6650
-      cdcTopic: public/default/debezium-postgres-topic
+      cdcTopicsPrefix: public/default/dbserver1.public.
       defaultCDCTopicSubscription: default-shared
       

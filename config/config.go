@@ -64,10 +64,11 @@ type (
 	PulsarMQConfig struct {
 		// PulsarClientOptions is the config to connect to Pulsar service
 		PulsarClientOptions pulsar.ClientOptions `yaml:"pulsarClientOptions"`
-		// CDCTopic is the topic that pulsar CDC connector sends messages to
-		// XDB will consume messages from this topic for processing
+		// CDCTopicsPrefix is the prefix of topics that pulsar CDC connector sends messages to
+		// The topics are per database table
+		// XDB will consume messages from those topics for processing
 		// Currently only one topic is supported for all tasks(timer/worker)
-		CDCTopic string `yaml:"cdcTopic"`
+		CDCTopicsPrefix string `yaml:"cdcTopic"`
 		// DefaultCDCTopicSubscription is the subscription that XDB will use to consuming the CDC topic
 		// currently only one subscription is supported, which means all the worker/timer tasks from all the XDB Process Types
 		// will share the same subscription with the consumer groups.
@@ -109,7 +110,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("pulsar config is required")
 	}
 	pulsarCfg := c.AsyncService.MessageQueue.Pulsar
-	if anyAbsent(pulsarCfg.CDCTopic, pulsarCfg.DefaultCDCTopicSubscription) {
+	if anyAbsent(pulsarCfg.CDCTopicsPrefix, pulsarCfg.DefaultCDCTopicSubscription) {
 		return fmt.Errorf("some required configs are missing:pulsarCfg.CDCTopic, pulsarCfg.DefaultCDCTopicSubscription")
 	}
 	return nil
