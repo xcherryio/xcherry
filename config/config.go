@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/apache/pulsar-client-go/pulsar"
 	"log"
 	"os"
 
@@ -18,6 +19,8 @@ type (
 		// Database is the database that XDB will be extending on
 		// either sql or nosql is needed
 		Database DatabaseConfig `yaml:"database"`
+		// AsyncService is config for async service
+		AsyncService AsyncServiceConfig `yaml:"asyncService"`
 	}
 
 	// Logger contains the config items for logger
@@ -47,6 +50,29 @@ type (
 
 	DatabaseConfig struct {
 		SQL *SQL `yaml:"sql"`
+	}
+
+	AsyncServiceConfig struct {
+		MessageQueue MessageQueueConfig `yaml:"messageQueue"`
+	}
+
+	MessageQueueConfig struct {
+		// currently only Pulsar+CDC is the only option
+		Pulsar *PulsarMQConfig `yaml:"pulsar"`
+	}
+
+	PulsarMQConfig struct {
+		// PulsarClientOptions is the config to connect to Pulsar service
+		PulsarClientOptions pulsar.ClientOptions `yaml:"pulsarClientOptions"`
+		// CDCTopic is the topic that pulsar CDC connector sends messages to
+		// XDB will consume messages from this topic for processing
+		// Currently only one topic is supported for all tasks(timer/worker)
+		CDCTopic string `yaml:"cdcTopic"`
+		// DefaultCDCTopicSubscription is the subscription that XDB will use to consuming the CDC topic
+		// currently only one subscription is supported, which means all the worker/timer tasks from all the XDB Process Types
+		// will share the same subscription with the consumer groups.
+		// In the future, we will support subscription based on different process types for better isolation
+		DefaultCDCTopicSubscription string `yaml:"defaultCDCTopicSubscription"`
 	}
 )
 
@@ -78,6 +104,13 @@ func (c *Config) Validate() error {
 	sql := c.Database.SQL
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+	}
+	if c.AsyncService.MessageQueue.Pulsar == nil {
+		return fmt.Errorf("pulsar config is required")
+	}
+	pulsarCfg := c.AsyncService.MessageQueue.Pulsar
+	if anyAbsent(pulsarCfg.CDCTopic, pulsarCfg.DefaultCDCTopicSubscription) {
+		return fmt.Errorf("some required configs are missing:pulsarCfg.CDCTopic, pulsarCfg.DefaultCDCTopicSubscription")
 	}
 	return nil
 }

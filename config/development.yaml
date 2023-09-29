@@ -12,4 +12,8 @@ database:
     password: xdbxdb
     databaseName: xdb
     connectAddr: 127.0.0.1:5432
-  
+asyncService:
+  messageQueue:
+    pulsar:
+      url: pulsar://localhost:6650
+    
