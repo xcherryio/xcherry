@@ -16,7 +16,8 @@ services:
   pulsar-debezium-postgres-connect:
     image: apachepulsar/pulsar:3.1.0
     entrypoint: bin/pulsar-admin source localrun --source-config-file connectors/debezium-postgres-source-config.yaml
-    networks:
-      - xdb
+    network_mode: host # use host for now until the issue is resolved
     volumes:
       - ./connectors:/pulsar/connectors
+    depends_on:
+      - pulsar-server
