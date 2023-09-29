@@ -5,10 +5,10 @@ include:
   
 services:
   postgres:
-    image: debezium/example-postgres:0.8 # this is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
-#    environment:
+    image: debezium/example-postgres:1.8 # 1.8 is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
+    environment:
 #      POSTGRES_USER: xdb
-#      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     networks:
