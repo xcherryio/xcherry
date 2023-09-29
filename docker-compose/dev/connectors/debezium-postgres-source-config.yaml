@@ -12,9 +12,9 @@ configs:
   database.password: "postgres"
   database.dbname: "postgres"
   database.server.name: "dbserver1"
-  schema.whitelist: "inventory"
-  #table.whitelist: "inventory"
-  pulsar.service.url: "pulsar://pulsar:6650"
-  database.history.pulsar.service.url: "pulsar://pulsar:6650"
+  #schema.whitelist: "public" # TODO not sure why this is not working for filtering
+  #table.whitelist: "someTableName" # TODO not sure why this is not working  for filtering
+  pulsar.service.url: "pulsar://pulsar:6650" # this is not working:https://github.com/apache/pulsar/issues/21276
+  database.history.pulsar.service.url: "pulsar://pulsar:6650" # this is not working:https://github.com/apache/pulsar/issues/21276
   
   

@@ -4,6 +4,13 @@ CREATE TABLE xdb_sys_current_process_executions(
     PRIMARY KEY (process_id, process_execution_id)
 );
 
+CREATE TABLE test2(
+       process_id int NOT NULL,
+       PRIMARY KEY (process_id)
+);
+
+insert into test2 values(123);
+
 CREATE TABLE xdb_sys_process_executions(
     id BYTEA NOT NULL,
     process_id VARCHAR(255) NOT NULL,
