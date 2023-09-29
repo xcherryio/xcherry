@@ -15,7 +15,7 @@ services:
     networks:
       - xdb
   postgres:
-    image: debezium/example-postgress:1.8 # this is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
+    image: debezium/example-postgres:1.8 # this is postgres14 with sample data(inventory): https://github.com/debezium/container-images/blob/main/examples/postgres/1.8/Dockerfile#L1
     environment:
       POSTGRES_USER: xdb
       POSTGRES_PASSWORD: xdbxdb
