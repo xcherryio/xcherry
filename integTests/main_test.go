@@ -63,14 +63,14 @@ func TestMain(m *testing.M) {
 			SQL: sqlConfig,
 		},
 	}
-	processOrm := bootstrap.StartXdbServer(&cfg, nil)
+	stopF := bootstrap.StartXdbServer(&cfg, nil)
 	// TODO not sure this can fix some flaky failure on Github CI
 	// wait for server to be ready ...
 	time.Sleep(time.Millisecond * 100)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)
-	err := processOrm.Close()
+	err := stopF()
 	if err != nil {
 		fmt.Println("error when closing processOrm")
 	}

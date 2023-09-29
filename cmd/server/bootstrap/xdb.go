@@ -35,7 +35,9 @@ func StartXdbServerCli(c *cli.Context) {
 	wg.Wait()
 }
 
-func StartXdbServer(cfg *config.Config, services []string) persistence.ProcessORM {
+type StopFunc func() error
+
+func StartXdbServer(cfg *config.Config, services []string) StopFunc {
 	if len(services) == 0 {
 		services = []string{ApiServiceName, AsyncServiceName}
 	}
@@ -59,7 +61,9 @@ func StartXdbServer(cfg *config.Config, services []string) persistence.ProcessOR
 	for _, svc := range services {
 		go launchService(svc, *cfg, processOrm, logger)
 	}
-	return processOrm
+	return func() error {
+		return processOrm.Close()
+	}
 }
 
 func launchService(svcName string, cfg config.Config, processOrm persistence.ProcessORM, logger log2.Logger) {
