@@ -47,6 +47,7 @@ func (p processMQPulsar) Start() error {
 		if err == nil {
 			break
 		} else {
+			p.logger.Warn("error on subscribing, maybe topics are not ready? wait and retry", tag.Error(err))
 			time.Sleep(time.Second)
 		}
 	}
