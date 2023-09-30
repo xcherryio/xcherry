@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"github.com/urfave/cli/v2"
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -9,6 +10,7 @@ import (
 	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/service/api"
 	rawLog "log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +24,10 @@ const FlagConfig = "config"
 const FlagService = "service"
 
 func StartXdbServerCli(c *cli.Context) {
+	// register interrupt signal for graceful shutdown
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	configPath := c.String("config")
 	services := getServices(c)
 
@@ -29,15 +35,19 @@ func StartXdbServerCli(c *cli.Context) {
 	if err != nil {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
-	StartXdbServer(cfg, services)
+	waitShutdown := StartXdbServer(rootCtx, cfg, services)
+	// wait for os signals
+	<-rootCtx.Done()
+	err = waitShutdown()
+	if err != nil {
+		fmt.Println("shutdown error:", err)
+	}
+
 }
 
-type StopFunc func() error
+type WaitForGracefulShutdown func() error
 
-func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
-	// register interrupt signal for graceful shutdown
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-
+func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[string]bool) WaitForGracefulShutdown {
 	if len(services) == 0 {
 		services = map[string]bool{ApiServiceName: true, AsyncServiceName: true}
 	}
@@ -73,6 +83,10 @@ func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
 				MaxHeaderBytes:    svrCfg.MaxHeaderBytes,
 				TLSConfig:         svrCfg.TLSConfig,
 				Handler:           ginController,
+				BaseContext: func(listener net.Listener) context.Context {
+					// for graceful shutdown
+					return rootCtx
+				},
 			}
 
 			err := httpServer.ListenAndServe()
@@ -82,7 +96,7 @@ func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
 
 	var mq persistence.ProcessMQ
 	if services[AsyncServiceName] {
-		// TODO
+		// TODO implement a service
 		mq := persistence.NewPulsarProcessMQ(rootCtx, *cfg, orm, logger)
 		err := mq.Start()
 		if err != nil {
@@ -90,26 +104,24 @@ func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
 		}
 	}
 
-	<-rootCtx.Done()
-	// graceful shutdown
-	if httpServer != nil {
-		// TODO: maybe pass a new context with some buffer for graceful shutdown
-		err = httpServer.Shutdown(rootCtx)
-		logger.Info("http server is shutdown", tag.Error(err))
-	}
-	if mq != nil {
-		err = mq.Stop()
-		if err != nil {
-			logger.Error("error on closing message queue", tag.Error(err))
-		}
-	}
-	err = orm.Close()
-	if err != nil {
-		logger.Error("error on closing database", tag.Error(err))
-	}
-
 	return func() error {
-		stop()
+		// graceful shutdown
+		// TODO: maybe pass a new context with some buffer for graceful shutdown
+		if httpServer != nil {
+			err = httpServer.Shutdown(rootCtx)
+			logger.Info("http server is shutdown", tag.Error(err))
+		}
+		if mq != nil {
+			err = mq.Stop()
+			if err != nil {
+				logger.Error("error on closing message queue", tag.Error(err))
+			}
+		}
+		err = orm.Close()
+		if err != nil {
+			logger.Error("error on closing database", tag.Error(err))
+		}
+		// TODO may return some error in the future for non-recovery errors
 		return nil
 	}
 }

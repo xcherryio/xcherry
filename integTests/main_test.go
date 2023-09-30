@@ -1,6 +1,7 @@
 package integTests
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"github.com/apache/pulsar-client-go/pulsar"
@@ -73,13 +74,16 @@ func TestMain(m *testing.M) {
 			},
 		},
 	}
-	stopF := bootstrap.StartXdbServer(&cfg, nil)
+
+	ctx, canc := context.WithCancel(context.Background())
+	stopF := bootstrap.StartXdbServer(ctx, &cfg, nil)
 	// looks like this wait can fix some flaky failure
 	// where API call is made before Gin server is ready
 	time.Sleep(time.Millisecond * 100)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)
+	canc()
 	err := stopF()
 	if err != nil {
 		fmt.Println("error when closing processOrm")
