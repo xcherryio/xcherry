@@ -1,11 +1,13 @@
 package config
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"github.com/apache/pulsar-client-go/pulsar"
 	"log"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,10 +44,25 @@ type (
 	}
 
 	ApiServiceConfig struct {
-		// Address is the address and port on which the API service will bind to
-		Address string `yaml:"address"`
-		// DefaultPollingMaxWaitSeconds is the default timeout for polling APIs
-		DefaultPollingMaxWaitSeconds int64 `yaml:"defaultPollingMaxWaitSeconds"`
+		// HttpServer is the config for starting http.Server
+		HttpServer HttpServerConfig
+	}
+
+	// HttpServerConfig is the config that will be mapped into http.Server
+	HttpServerConfig struct {
+		// Addr optionally specifies the TCP address for the server to listen on,
+		// in the form "host:port". If empty, ":http" (port 80) is used.
+		// The service names are defined in RFC 6335 and assigned by IANA.
+		// See net.Dial for details of the address format.
+		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
+		Addr         string
+		ReadTimeout  time.Duration
+		WriteTimeout time.Duration
+		TLSConfig    *tls.Config
+		// the rest are less frequently used
+		ReadHeaderTimeout time.Duration
+		IdleTimeout       time.Duration
+		MaxHeaderBytes    int
 	}
 
 	DatabaseConfig struct {

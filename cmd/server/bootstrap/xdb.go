@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"github.com/urfave/cli/v2"
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -8,8 +9,10 @@ import (
 	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/service/api"
 	rawLog "log"
+	"net/http"
+	"os"
+	"os/signal"
 	"strings"
-	"sync"
 )
 
 const ApiServiceName = "api"
@@ -27,16 +30,14 @@ func StartXdbServerCli(c *cli.Context) {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
 	StartXdbServer(cfg, services)
-
-	// TODO improve by waiting for the started services to stop
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	wg.Wait()
 }
 
 type StopFunc func() error
 
 func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
+	// register interrupt signal for graceful shutdown
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+
 	if len(services) == 0 {
 		services = map[string]bool{ApiServiceName: true, AsyncServiceName: true}
 	}
@@ -52,34 +53,64 @@ func StartXdbServer(cfg *config.Config, services map[string]bool) StopFunc {
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	processOrm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL, logger)
+	orm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
 
+	var httpServer *http.Server
 	if services[ApiServiceName] {
 		go func() {
-			ginController := api.NewAPIServiceGinController(*cfg, processOrm, logger.WithTags(tag.Service(ApiServiceName)))
-			rawLog.Fatal(ginController.Run(cfg.ApiService.Address))
+			ginController := api.NewAPIServiceGinController(*cfg, orm, logger.WithTags(tag.Service(ApiServiceName)))
+
+			svrCfg := cfg.ApiService.HttpServer
+			httpServer = &http.Server{
+				Addr:              svrCfg.Addr,
+				ReadTimeout:       svrCfg.ReadTimeout,
+				WriteTimeout:      svrCfg.WriteTimeout,
+				ReadHeaderTimeout: svrCfg.ReadHeaderTimeout,
+				IdleTimeout:       svrCfg.IdleTimeout,
+				MaxHeaderBytes:    svrCfg.MaxHeaderBytes,
+				TLSConfig:         svrCfg.TLSConfig,
+				Handler:           ginController,
+			}
+
+			err := httpServer.ListenAndServe()
+			logger.Info("Http Server for API service is closed", tag.Error(err))
 		}()
 	}
-	var processMQ persistence.ProcessMQ
+
+	var mq persistence.ProcessMQ
 	if services[AsyncServiceName] {
 		// TODO
-		mq := persistence.NewPulsarProcessMQ(*cfg, processOrm, logger)
+		mq := persistence.NewPulsarProcessMQ(rootCtx, *cfg, orm, logger)
 		err := mq.Start()
 		if err != nil {
 			panic(err)
 		}
 	}
-	return func() error {
-		if processMQ != nil {
-			err := processMQ.Stop()
-			if err != nil {
-				return err
-			}
+
+	<-rootCtx.Done()
+	// graceful shutdown
+	if httpServer != nil {
+		// TODO: maybe pass a new context with some buffer for graceful shutdown
+		err = httpServer.Shutdown(rootCtx)
+		logger.Info("http server is shutdown", tag.Error(err))
+	}
+	if mq != nil {
+		err = mq.Stop()
+		if err != nil {
+			logger.Error("error on closing message queue", tag.Error(err))
 		}
-		return processOrm.Close()
+	}
+	err = orm.Close()
+	if err != nil {
+		logger.Error("error on closing database", tag.Error(err))
+	}
+
+	return func() error {
+		stop()
+		return nil
 	}
 }
 

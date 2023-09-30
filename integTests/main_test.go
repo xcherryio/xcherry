@@ -52,7 +52,11 @@ func TestMain(m *testing.M) {
 
 	cfg := config.Config{
 		ApiService: config.ApiServiceConfig{
-			Address: ":" + xdb.DefaultServerPort,
+			HttpServer: config.HttpServerConfig{
+				Addr:         "localhost:" + xdb.DefaultServerPort,
+				ReadTimeout:  5 * time.Second,
+				WriteTimeout: 60 * time.Second,
+			},
 		},
 		Database: config.DatabaseConfig{
 			SQL: sqlConfig,
