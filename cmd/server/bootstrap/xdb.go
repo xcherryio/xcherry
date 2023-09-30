@@ -9,12 +9,14 @@ import (
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/service/api"
+	"go.uber.org/multierr"
 	rawLog "log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 )
 
 const ApiServiceName = "api"
@@ -35,19 +37,22 @@ func StartXdbServerCli(c *cli.Context) {
 	if err != nil {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
-	waitShutdown := StartXdbServer(rootCtx, cfg, services)
+	shutdownFunc := StartXdbServer(rootCtx, cfg, services)
 	// wait for os signals
 	<-rootCtx.Done()
-	err = waitShutdown()
+
+	ctx, cancF := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancF()
+	err = shutdownFunc(ctx)
 	if err != nil {
 		fmt.Println("shutdown error:", err)
 	}
 
 }
 
-type WaitForGracefulShutdown func() error
+type GracefulShutdown func(ctx context.Context) error
 
-func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[string]bool) WaitForGracefulShutdown {
+func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[string]bool) GracefulShutdown {
 	if len(services) == 0 {
 		services = map[string]bool{ApiServiceName: true, AsyncServiceName: true}
 	}
@@ -104,25 +109,26 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		}
 	}
 
-	return func() error {
+	return func(ctx context.Context) error {
 		// graceful shutdown
-		// TODO: maybe pass a new context with some buffer for graceful shutdown
+		var errs error
 		if httpServer != nil {
-			err = httpServer.Shutdown(rootCtx)
-			logger.Info("http server is shutdown", tag.Error(err))
-		}
-		if mq != nil {
-			err = mq.Stop()
+			err := httpServer.Shutdown(ctx)
 			if err != nil {
-				logger.Error("error on closing message queue", tag.Error(err))
+				errs = multierr.Append(errs, err)
 			}
 		}
-		err = orm.Close()
-		if err != nil {
-			logger.Error("error on closing database", tag.Error(err))
+		if mq != nil {
+			err := mq.Stop()
+			if err != nil {
+				errs = multierr.Append(errs, err)
+			}
 		}
-		// TODO may return some error in the future for non-recovery errors
-		return nil
+		err := orm.Close()
+		if err != nil {
+			errs = multierr.Append(errs, err)
+		}
+		return errs
 	}
 }
 

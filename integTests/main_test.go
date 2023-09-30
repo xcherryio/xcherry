@@ -75,16 +75,16 @@ func TestMain(m *testing.M) {
 		},
 	}
 
-	ctx, canc := context.WithCancel(context.Background())
-	stopF := bootstrap.StartXdbServer(ctx, &cfg, nil)
+	rootCtx, rootCtxCancelFunc := context.WithCancel(context.Background())
+	shutdownFunc := bootstrap.StartXdbServer(rootCtx, &cfg, nil)
 	// looks like this wait can fix some flaky failure
 	// where API call is made before Gin server is ready
 	time.Sleep(time.Millisecond * 100)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)
-	canc()
-	err := stopF()
+	rootCtxCancelFunc() // this will request shutdown the server
+	err := shutdownFunc(rootCtx)
 	if err != nil {
 		fmt.Println("error when closing processOrm")
 	}
