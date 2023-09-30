@@ -3,9 +3,10 @@ log:
   level: info
   levelKey: "level"
 apiService:
-  httpServer:
+  httpServer: # see more config fields in config.go
      address: 0.0.0.0:8801
-  defaultPollingMaxWaitSeconds: 60
+     readTimeout: 5s
+     writeTimeout: 60s
 database:
   sql:
     dbExtensionName: postgres

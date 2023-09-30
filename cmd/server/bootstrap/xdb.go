@@ -47,7 +47,6 @@ func StartXdbServerCli(c *cli.Context) {
 	if err != nil {
 		fmt.Println("shutdown error:", err)
 	}
-
 }
 
 type GracefulShutdown func(ctx context.Context) error

@@ -7,11 +7,7 @@ import (
 	"time"
 )
 
-func TestStartBasicProcessPostgres(t *testing.T) {
-	if !*postgresIntegTest {
-		t.Skip()
-	}
-
+func TestStartBasicProcess(t *testing.T) {
 	basic.TestStartIOProcess(t, client)
 
 	fmt.Println("waiting for messages")

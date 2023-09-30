@@ -19,7 +19,7 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  bootstrap.FlagConfig,
-				Value: "./config/development.yaml",
+				Value: "./config/development-postgres.yaml",
 				Usage: "the config to start xdb server",
 			},
 			&cli.StringFlag{

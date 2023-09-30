@@ -25,11 +25,20 @@ jobs:
       - name: Checkout Code Base
         uses: actions/checkout@v3
 
+      - name: Make Binaries
+        run: make bins
+        
       - name: "Set up Postgres Pulsar environment"
         run: docker compose -f docker-compose/dev/postgres14-pulsar.yaml up -d
+
+      - name: Install Postgres schema #wait for 5 seconds for env to be ready 
+        run: sleep 5 && make install-schema-postgres
         
-      - name: Run Test # wait for 5 seconds for env to be ready
-        run: sleep 5 && make integTestsPostgres
+      - name: Start Postgres server # then run in the background
+        run: ./xdb-server&
+
+      - name: Run Postgres IntegrationTest
+        run:  make integTests
         
       - name: Dump docker logs
         if: always()

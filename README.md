@@ -19,19 +19,20 @@ Run one of the [docker-compose files](./docker-compose/dev) to run a database + 
 
 ## Build
 * To build all the binaries: `make bins`
-* To run integration tests
-  * `make integTestsPostgres` will test against Postgres + Pulsar
-  * `make integTestsAll` will test all supported databases + Pulsar
 
-## Run
+## Run server
 
-### server
-* To run it with [default config](./config/development.yaml) `./xdb-server`. Or see help: `./xdb-server -h`
-  * Alternatively, clicking the run button in an IDE should work.
+* To run it with [default config(with Postgres)](./config/development-postgres.yaml)
+  * Run `./xdb-tools-postgres install-schema` to install the required schema for the default config
+    * See more options in `./xdb-tools-postgres`
+  * Then Run `./xdb-server`. 
+    * Or see more options: `./xdb-server -h`
+  * Alternatively, clicking the run button in an IDE should also work(after schemas are install).
 
-### tools
-* To run database tools:
-  * see `./xdb-tools-postgres -h` for postgres tool (for setup database, schema, etc)
+## Run Integration Test against the started server
+Once the server is running:
+* `make integTests` will run [the integration tests defined in this repo](./integTests).
+
   
 ## 1.0
 - [ ] StartProcessExecution API

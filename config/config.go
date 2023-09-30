@@ -84,7 +84,7 @@ type (
 		// CDCTopicsPrefix is the prefix of topics that pulsar CDC connector sends messages to
 		// The topics are per database table
 		// XDB will consume messages from those topics for processing
-		CDCTopicsPrefix string `yaml:"cdcTopic"`
+		CDCTopicsPrefix string `yaml:"cdcTopicsPrefix"`
 		// DefaultCDCTopicSubscription is the subscription that XDB will use to consuming the CDC topic
 		// currently only one subscription is supported, which means all the worker/timer tasks from all the XDB Process Types
 		// will share the same subscription with the consumer groups.
