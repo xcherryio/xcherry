@@ -5,6 +5,7 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
+	"time"
 )
 
 type processMQPulsar struct {
@@ -31,13 +32,25 @@ func (p processMQPulsar) Start() error {
 	if err != nil {
 		return err
 	}
-	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
-		Topics: []string{
-			pulsarCfg.CDCTopicsPrefix + "xdb_sys_process_executions",
-		},
-		SubscriptionName: pulsarCfg.DefaultCDCTopicSubscription,
-		Type:             pulsar.Shared,
-	})
+	var consumer pulsar.Consumer
+	for i := 0; i < 60; i++ {
+		// using a loop with wait because there is a racing condition
+		// where the topics are not created yet when subscribing.
+		// The topics are created by CDC connector
+		consumer, err = client.Subscribe(pulsar.ConsumerOptions{
+			Topics: []string{
+				pulsarCfg.CDCTopicsPrefix + "xdb_sys_process_executions",
+			},
+			SubscriptionName: pulsarCfg.DefaultCDCTopicSubscription,
+			Type:             pulsar.Shared,
+		})
+		if err == nil {
+			break
+		} else {
+			time.Sleep(time.Second)
+		}
+	}
+
 	if err != nil {
 		return err
 	}

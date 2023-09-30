@@ -41,9 +41,6 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			fmt.Println("ignore error for setup database", err)
 			//panic(err)
-		} else {
-			fmt.Println("wait for 5 seconds so that topics for new tables are created")
-			time.Sleep(time.Second * 5)
 		}
 		defer func() {
 			if *keepDatabaseForDebugWhenTestFails && resultCode != 0 {
@@ -73,8 +70,8 @@ func TestMain(m *testing.M) {
 		},
 	}
 	stopF := bootstrap.StartXdbServer(&cfg, nil)
-	// TODO not sure this can fix some flaky failure on Github CI
-	// wait for server to be ready ...
+	// looks like this wait can fix some flaky failure
+	// where API call is made before Gin server is ready
 	time.Sleep(time.Millisecond * 100)
 
 	resultCode = m.Run()
