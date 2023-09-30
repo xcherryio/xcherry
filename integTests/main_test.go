@@ -3,6 +3,7 @@ package integTests
 import (
 	"flag"
 	"fmt"
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/xdblab/xdb-golang-sdk/xdb"
 	"github.com/xdblab/xdb/cmd/server/bootstrap"
 	"github.com/xdblab/xdb/config"
@@ -15,11 +16,9 @@ import (
 	"github.com/xdblab/xdb-golang-sdk/integTests/worker"
 )
 
-var testDatabaseName = fmt.Sprintf("tst%v", time.Now().UnixNano())
-
 func TestMain(m *testing.M) {
 	flag.Parse()
-	fmt.Printf("start running integ test, using database %v, postgres:%v \n", testDatabaseName, *postgresIntegTest)
+	fmt.Printf("start running integ test, using, postgres:%v \n", *postgresIntegTest)
 
 	worker.StartGinWorker(workerService)
 
@@ -32,27 +31,23 @@ func TestMain(m *testing.M) {
 			User:            postgrestool.DefaultUserName,
 			Password:        postgrestool.DefaultPassword,
 			DBExtensionName: postgres.ExtensionName,
-			DatabaseName:    testDatabaseName,
+			DatabaseName:    postgrestool.DefaultDatabaseName,
 		}
-		err := extensions.CreateDatabase(*sqlConfig, testDatabaseName)
+		err := extensions.CreateDatabase(*sqlConfig, postgrestool.DefaultDatabaseName)
 		if err != nil {
-			panic(err)
+			fmt.Println("ignore error for creating database", err)
 		}
 		err = extensions.SetupSchema(sqlConfig, "../"+postgrestool.DefaultSchemaFilePath)
 		if err != nil {
-			panic(err)
+			fmt.Println("ignore error for setup database", err)
+			//panic(err)
 		}
 		defer func() {
 			if *keepDatabaseForDebugWhenTestFails && resultCode != 0 {
 				return
 			}
-			err := extensions.DropDatabase(*sqlConfig, testDatabaseName)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println("test database deleted:", testDatabaseName)
+			// TODO clean up data in the testing database
 		}()
-		fmt.Println("test database created:", testDatabaseName)
 	}
 
 	cfg := config.Config{
@@ -62,15 +57,26 @@ func TestMain(m *testing.M) {
 		Database: config.DatabaseConfig{
 			SQL: sqlConfig,
 		},
+		AsyncService: config.AsyncServiceConfig{
+			MessageQueue: config.MessageQueueConfig{
+				Pulsar: &config.PulsarMQConfig{
+					PulsarClientOptions: pulsar.ClientOptions{
+						URL: "pulsar://localhost:6650",
+					},
+					CDCTopicsPrefix:             "public/default/dbserver1.public.",
+					DefaultCDCTopicSubscription: "default-shared",
+				},
+			},
+		},
 	}
-	processOrm := bootstrap.StartXdbServer(&cfg, nil)
-	// TODO not sure this can fix some flaky failure on Github CI
-	// wait for server to be ready ...
+	stopF := bootstrap.StartXdbServer(&cfg, nil)
+	// looks like this wait can fix some flaky failure
+	// where API call is made before Gin server is ready
 	time.Sleep(time.Millisecond * 100)
 
 	resultCode = m.Run()
 	fmt.Println("finished running integ test with status code", resultCode)
-	err := processOrm.Close()
+	err := stopF()
 	if err != nil {
 		fmt.Println("error when closing processOrm")
 	}

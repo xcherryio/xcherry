@@ -5,6 +5,7 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
+// ProcessORM is for operating on the database for process execution
 type ProcessORM interface {
 	StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (
 		resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, err error)
@@ -13,6 +14,8 @@ type ProcessORM interface {
 	Close() error
 }
 
+// ProcessMQ is consuming/processing events of process execution
 type ProcessMQ interface {
-	// TODO
+	Start() error
+	Stop() error
 }

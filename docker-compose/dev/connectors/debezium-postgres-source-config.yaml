@@ -10,7 +10,7 @@ configs:
   database.port: "5432"
   database.user: "xdb"
   database.password: "xdbxdb"
-  database.dbname: "xdb" # not sure what this for, it doesn't seem matter??
+  database.dbname: "xdb" 
   database.server.name: "dbserver1"
   #schema.whitelist: "public" # TODO not sure why this is not working for filtering
   #table.whitelist: "someTableName" # TODO not sure why this is not working  for filtering
