@@ -80,7 +80,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 
 			svrCfg := cfg.ApiService.HttpServer
 			httpServer = &http.Server{
-				Addr:              svrCfg.Addr,
+				Addr:              svrCfg.Address,
 				ReadTimeout:       svrCfg.ReadTimeout,
 				WriteTimeout:      svrCfg.WriteTimeout,
 				ReadHeaderTimeout: svrCfg.ReadHeaderTimeout,

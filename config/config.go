@@ -45,24 +45,24 @@ type (
 
 	ApiServiceConfig struct {
 		// HttpServer is the config for starting http.Server
-		HttpServer HttpServerConfig
+		HttpServer HttpServerConfig `yaml:"httpServer"`
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
 	HttpServerConfig struct {
-		// Addr optionally specifies the TCP address for the server to listen on,
+		// Address optionally specifies the TCP address for the server to listen on,
 		// in the form "host:port". If empty, ":http" (port 80) is used.
 		// The service names are defined in RFC 6335 and assigned by IANA.
 		// See net.Dial for details of the address format.
 		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
-		Addr         string
-		ReadTimeout  time.Duration
-		WriteTimeout time.Duration
-		TLSConfig    *tls.Config
+		Address      string        `yaml:"address"`
+		ReadTimeout  time.Duration `yaml:"readTimeout"`
+		WriteTimeout time.Duration `yaml:"writeTimeout"`
+		TLSConfig    *tls.Config   `yaml:"tlsConfig"`
 		// the rest are less frequently used
-		ReadHeaderTimeout time.Duration
-		IdleTimeout       time.Duration
-		MaxHeaderBytes    int
+		ReadHeaderTimeout time.Duration `yaml:"readHeaderTimeout"`
+		IdleTimeout       time.Duration `yaml:"idleTimeout"`
+		MaxHeaderBytes    int           `yaml:"maxHeaderBytes"`
 	}
 
 	DatabaseConfig struct {

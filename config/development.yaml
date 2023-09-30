@@ -3,7 +3,8 @@ log:
   level: info
   levelKey: "level"
 apiService:
-  address: 0.0.0.0:8801
+  httpServer:
+     address: 0.0.0.0:8801
   defaultPollingMaxWaitSeconds: 60
 database:
   sql:
