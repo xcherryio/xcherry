@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -13,16 +14,16 @@ type processMQPulsar struct {
 	prcOrm   ProcessORM
 	consumer pulsar.Consumer
 	client   pulsar.Client
-	stopCh   chan struct{}
 	logger   log.Logger
+	rootCtx  context.Context
 }
 
-func NewPulsarProcessMQ(cfg config.Config, prcOrm ProcessORM, logger log.Logger) ProcessMQ {
+func NewPulsarProcessMQ(rootCtx context.Context, cfg config.Config, prcOrm ProcessORM, logger log.Logger) ProcessMQ {
 	return &processMQPulsar{
-		cfg:    cfg,
-		prcOrm: prcOrm,
-		stopCh: make(chan struct{}),
-		logger: logger,
+		cfg:     cfg,
+		prcOrm:  prcOrm,
+		logger:  logger,
+		rootCtx: rootCtx,
 	}
 }
 
@@ -63,7 +64,6 @@ func (p processMQPulsar) Start() error {
 }
 
 func (p processMQPulsar) Stop() error {
-	close(p.stopCh)
 	p.consumer.Close()
 	p.client.Close()
 	return nil
@@ -90,8 +90,8 @@ func (p processMQPulsar) processMessages() {
 					tag.Key(msg.Message.Key()),
 					tag.Value(string(msg.Message.Payload())))
 			}
-		case <-p.stopCh:
-			p.logger.Info("message processor is closed")
+		case <-p.rootCtx.Done():
+			p.logger.Info("message processor is being closed")
 			return
 		}
 	}
