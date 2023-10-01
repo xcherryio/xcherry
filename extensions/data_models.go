@@ -5,20 +5,66 @@ import (
 	"time"
 )
 
-type ExecutionStatus string
+type ProcessExecutionStatus int
 
 const (
-	ExecutionStatusRunning   ExecutionStatus = "running"
-	ExecutionStatusTimeout   ExecutionStatus = "timeout"
-	ExecutionStatusCompleted ExecutionStatus = "completed"
-	ExecutionStatusFailed    ExecutionStatus = "failed"
+	ExecutionStatusUndefined ProcessExecutionStatus = 0
+	ExecutionStatusRunning   ProcessExecutionStatus = 1
+	ExecutionStatusCompleted ProcessExecutionStatus = 2
+	ExecutionStatusFailed    ProcessExecutionStatus = 3
+	ExecutionStatusTimeout   ProcessExecutionStatus = 4
 )
 
-func (e ExecutionStatus) String() string {
-	return string(e)
+func (e ProcessExecutionStatus) String() string {
+	switch e {
+	case ExecutionStatusRunning:
+		return "Running"
+	case ExecutionStatusCompleted:
+		return "Completed"
+	case ExecutionStatusFailed:
+		return "Failed"
+	case ExecutionStatusTimeout:
+		return "Timeout"
+	default:
+		panic("this is not supported")
+	}
 }
 
+type StateExecutionStatus int
+
+const (
+	StateExecutionStatusSkipped   StateExecutionStatus = -1
+	StateExecutionStatusUndefined StateExecutionStatus = 0
+	StateExecutionStatusRunning   StateExecutionStatus = 1
+	StateExecutionStatusCompleted StateExecutionStatus = 2
+	StateExecutionStatusFailed    StateExecutionStatus = 3
+	StateExecutionStatusTimeout   StateExecutionStatus = 4
+)
+
+func (e StateExecutionStatus) String() string {
+	switch e {
+	case StateExecutionStatusSkipped:
+		return "Skipped"
+	case StateExecutionStatusRunning:
+		return "Running"
+	case StateExecutionStatusCompleted:
+		return "Completed"
+	case StateExecutionStatusFailed:
+		return "Failed"
+	case StateExecutionStatusTimeout:
+		return "Timeout"
+	default:
+		panic("this is not supported")
+	}
+}
+
+type CurrentProcessExecutionRow struct {
+	Namespace          string
+	ProcessId          string
+	ProcessExecutionId string
+}
 type ProcessExecutionRow struct {
+	Namespace              string
 	ProcessExecutionId     string
 	ProcessId              string
 	IsCurrent              bool

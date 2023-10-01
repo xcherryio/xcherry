@@ -35,12 +35,12 @@ type SQLAdminDBSession interface {
 }
 
 type processExecutionTxnCRUD interface {
-	InsertCurrentProcessExecution(ctx context.Context, processId, processExecutionId string) (sql.Result, error)
+	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) (sql.Result, error)
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) (sql.Result, error)
 }
 
 type processExecutionNonTxnCRUD interface {
-	SelectCurrentProcessExecution(ctx context.Context, processId string) ([]ProcessExecutionRow, error)
+	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) ([]ProcessExecutionRow, error)
 }
 
 type ErrorChecker interface {
