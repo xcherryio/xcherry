@@ -40,6 +40,7 @@ CREATE TABLE xdb_sys_worker_tasks(
     process_execution_id BYTEA NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id String NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
+    task_type SMALLINT, -- 1: waitUntil 2: execute
     info jsonb ,
     PRIMARY KEY (shard_id, task_sequence)
 );
@@ -52,6 +53,7 @@ CREATE TABLE xdb_sys_timer_tasks(
     process_execution_id BYTEA NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id String NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
+    task_type SMALLINT, -- 1: process timeout 2: user timer command
     info jsonb ,
     PRIMARY KEY (shard_id, start_time, task_sequence)    
 );

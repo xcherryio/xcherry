@@ -75,7 +75,7 @@ type ProcessExecutionRow struct {
 	Info                   types.JSONText
 }
 
-type ProcessExecutionInfo struct {
+type ProcessExecutionInfoJson struct {
 	ProcessType string `json:"processType"`
 	WorkerURL   string `json:"workerURL"`
 }
