@@ -72,7 +72,7 @@ func (p ProcessORMSQLImpl) StartProcess(
 		timeoutSeconds = int(sc.GetTimeoutSeconds())
 	}
 
-	info := extensions.ProcessExecutionInfo{
+	info := extensions.ProcessExecutionInfoJson{
 		ProcessType: request.GetProcessType(),
 		WorkerURL:   request.GetWorkerUrl(),
 	}
@@ -115,7 +115,7 @@ func (p ProcessORMSQLImpl) DescribeLatestProcess(
 		return nil, false, fmt.Errorf("internal data corruption, more than one row is not expected")
 	}
 
-	var info extensions.ProcessExecutionInfo
+	var info extensions.ProcessExecutionInfoJson
 	err = json.Unmarshal(rows[0].Info, &info)
 	if err != nil {
 		return nil, false, err

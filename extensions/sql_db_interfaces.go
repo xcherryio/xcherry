@@ -37,6 +37,10 @@ type SQLAdminDBSession interface {
 type processExecutionTxnCRUD interface {
 	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) (sql.Result, error)
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) (sql.Result, error)
+	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId string)
+	InsertStateExecution(ctx context.Context, row AsyncStateExecutionRow) (sql.Result, error)
+	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) (sql.Result, error)
+	DeleteWorkerTask(ctx context.Context, filter WorkerTaskRowDeleteFilter) (sql.Result, error)
 }
 
 type processExecutionNonTxnCRUD interface {
