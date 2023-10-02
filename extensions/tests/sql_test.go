@@ -69,18 +69,17 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	})
 	ass.Nil(err)
 	prcExeRow := extensions.ProcessExecutionRow{
-		ProcessExecutionRowForUpdate: extensions.ProcessExecutionRowForUpdate{
-			ProcessExecutionId:     prcExeId,
-			IsCurrent:              true,
-			Status:                 extensions.ProcessExecutionStatusRunning,
-			HistoryEventIdSequence: 1,
-			StateIdSequence:        stateIdSequenceJson,
-		},
-		Namespace:      namespace,
-		ProcessId:      processId,
-		StartTime:      time.Now(),
-		TimeoutSeconds: 10,
-		Info:           info,
+
+		ProcessExecutionId:     prcExeId,
+		IsCurrent:              true,
+		Status:                 extensions.ProcessExecutionStatusRunning,
+		HistoryEventIdSequence: 1,
+		StateIdSequence:        stateIdSequenceJson,
+		Namespace:              namespace,
+		ProcessId:              processId,
+		StartTime:              time.Now(),
+		TimeoutSeconds:         10,
+		Info:                   info,
 	}
 	err = txn.InsertProcessExecution(ctx, prcExeRow)
 	ass.Nil(err)
@@ -96,18 +95,14 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	startStateId := "init-state"
 	stateIdSequence := int32(0)
 	stateRow := extensions.AsyncStateExecutionRow{
-		AsyncStateExecutionRowForUpdate: extensions.AsyncStateExecutionRowForUpdate{
-			AsyncStateExecutionSelectFilter: extensions.AsyncStateExecutionSelectFilter{
-				ProcessExecutionId: prcExeId,
-				StateId:            startStateId,
-				StateIdSequence:    stateIdSequence,
-			},
-			WaitUntilStatus: extensions.StateExecutionStatusRunning,
-			ExecuteStatus:   extensions.StateExecutionStatusUndefined,
-			PreviousVersion: 0,
-		},
-		Info:  stateExeInfo,
-		Input: inputJson,
+		ProcessExecutionId: prcExeId,
+		StateId:            startStateId,
+		StateIdSequence:    stateIdSequence,
+		WaitUntilStatus:    extensions.StateExecutionStatusRunning,
+		ExecuteStatus:      extensions.StateExecutionStatusUndefined,
+		PreviousVersion:    0,
+		Info:               stateExeInfo,
+		Input:              inputJson,
 	}
 	err = txn.InsertAsyncStateExecution(ctx, stateRow)
 	ass.Nil(err)
@@ -153,7 +148,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	// test select worker tasks
 	workerTasks, err := session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
 	ass.Equal(1, len(workerTasks))
-	
+
 }
 
 func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {

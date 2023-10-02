@@ -26,7 +26,9 @@ const selectAsyncStateExecutionForUpdateQuery = `SELECT wait_until_status, execu
 func (d dbSession) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
 	var row extensions.AsyncStateExecutionRowForUpdate
 	err := d.db.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, filter.ProcessExecutionId, filter.StateId, filter.StateIdSequence)
-	row.AsyncStateExecutionSelectFilter = filter
+	row.ProcessExecutionId = filter.ProcessExecutionId
+	row.StateId = filter.StateId
+	row.StateIdSequence = filter.StateIdSequence
 	return &row, err
 }
 
