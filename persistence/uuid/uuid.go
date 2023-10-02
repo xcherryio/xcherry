@@ -33,7 +33,7 @@ import (
 //   - db serialization converts uuid to bytes as opposed to string
 type UUID []byte
 
-func NewUUID() UUID {
+func MustNewUUID() UUID {
 	exeUUID, err := uuid.NewUUID()
 	if err != nil {
 		panic(err)

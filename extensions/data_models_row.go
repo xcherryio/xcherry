@@ -11,10 +11,18 @@ type (
 		Namespace          string
 		ProcessId          string
 		ProcessExecutionId uuid.UUID
+		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
+		// A db extension must implement the code to read/write from/into this field
+		// xdb will not use this for any other logic
+		ProcessExecutionIdString string
 	}
 
 	ProcessExecutionRowForUpdate struct {
 		ProcessExecutionId uuid.UUID
+		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
+		// A db extension must implement the code to read/write from/into this field
+		// xdb will not use this for any other logic
+		ProcessExecutionIdString string
 
 		IsCurrent              bool
 		Status                 ProcessExecutionStatus
@@ -35,8 +43,13 @@ type (
 
 	AsyncStateExecutionSelectFilter struct {
 		ProcessExecutionId uuid.UUID
-		StateId            string
-		StateIdSequence    int32
+		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
+		// A db extension must implement the code to read/write from/into this field
+		// xdb will not use this for any other logic
+		ProcessExecutionIdString string
+
+		StateId         string
+		StateIdSequence int32
 	}
 
 	AsyncStateExecutionRowForUpdate struct {
@@ -59,8 +72,13 @@ type (
 		TaskType WorkerTaskType
 
 		ProcessExecutionId uuid.UUID
-		StateId            string
-		StateIdSequence    int32
+		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
+		// A db extension must implement the code to read/write from/into this field
+		// xdb will not use this for any other logic
+		ProcessExecutionIdString string
+
+		StateId         string
+		StateIdSequence int32
 	}
 
 	WorkerTaskRow struct {

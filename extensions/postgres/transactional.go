@@ -11,15 +11,17 @@ const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_current_process_
 	($1, $2, $3)`
 
 func (d dbTx) InsertCurrentProcessExecution(ctx context.Context, row extensions.CurrentProcessExecutionRow) error {
-	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId)
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
 	return err
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
-	(namespace, id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, info) VALUES
-	(:namespace, :process_execution_id, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, :info)`
+	(namespace, id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, state_id_sequence, info) VALUES
+	(:namespace, :process_execution_id_string, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, :state_id_sequence, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.tx.NamedExecContext(ctx, insertProcessExecutionQuery, row)
 	return err
 }
