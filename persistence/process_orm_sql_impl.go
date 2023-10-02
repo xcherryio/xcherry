@@ -80,7 +80,7 @@ func (p ProcessORMSQLImpl) StartProcess(
 	//	ProcessExecutionId:     eUUID,
 	//	ProcessId:              request.ProcessId,
 	//	IsCurrent:              true,
-	//	Status:                 extensions.ExecutionStatusRunning.String(),
+	//	Status:                 extensions.ProcessExecutionStatusRunning.String(),
 	//	StartTime:              time.Now(),
 	//	TimeoutSeconds:         timeoutSeconds,
 	//	HistoryEventIdSequence: 0,

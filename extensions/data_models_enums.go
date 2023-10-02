@@ -3,22 +3,22 @@ package extensions
 type ProcessExecutionStatus int32
 
 const (
-	ExecutionStatusUndefined ProcessExecutionStatus = 0
-	ExecutionStatusRunning   ProcessExecutionStatus = 1
-	ExecutionStatusCompleted ProcessExecutionStatus = 2
-	ExecutionStatusFailed    ProcessExecutionStatus = 3
-	ExecutionStatusTimeout   ProcessExecutionStatus = 4
+	ProcessExecutionStatusUndefined ProcessExecutionStatus = 0
+	ProcessExecutionStatusRunning   ProcessExecutionStatus = 1
+	ProcessExecutionStatusCompleted ProcessExecutionStatus = 2
+	ProcessExecutionStatusFailed    ProcessExecutionStatus = 3
+	ProcessExecutionStatusTimeout   ProcessExecutionStatus = 4
 )
 
 func (e ProcessExecutionStatus) String() string {
 	switch e {
-	case ExecutionStatusRunning:
+	case ProcessExecutionStatusRunning:
 		return "Running"
-	case ExecutionStatusCompleted:
+	case ProcessExecutionStatusCompleted:
 		return "Completed"
-	case ExecutionStatusFailed:
+	case ProcessExecutionStatusFailed:
 		return "Failed"
-	case ExecutionStatusTimeout:
+	case ProcessExecutionStatusTimeout:
 		return "Timeout"
 	default:
 		panic("this is not supported")

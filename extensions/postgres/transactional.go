@@ -43,7 +43,7 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 
 const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
 	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, info, input) VALUES
-	(:process_execution_id_string, :state_id, :state_id_sequence, :version, :wait_until_status, :info, :input)`
+	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :info, :input)`
 
 func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()

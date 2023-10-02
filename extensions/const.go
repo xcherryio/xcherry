@@ -1,6 +1,11 @@
 package extensions
 
 const (
+	// DefaultShardId is the shardId for standalone mode for localBasicMQ
+	DefaultShardId = 0
+)
+
+const (
 	// CLIFlagEndpoint is the cli option for endpoint
 	CLIFlagEndpoint = "endpoint"
 	// CLIFlagPort is the cli option for port

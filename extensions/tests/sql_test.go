@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/jmoiron/sqlx/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
@@ -60,7 +61,7 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		ProcessExecutionRowForUpdate: extensions.ProcessExecutionRowForUpdate{
 			ProcessExecutionId:     prcExeId,
 			IsCurrent:              true,
-			Status:                 extensions.ExecutionStatusRunning,
+			Status:                 extensions.ProcessExecutionStatusRunning,
 			HistoryEventIdSequence: 1,
 			StateIdSequence:        stateIdSequenceJson,
 		},
@@ -71,6 +72,43 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		Info:           info,
 	}
 	err = txn.InsertProcessExecution(ctx, prcExeRow)
+	assertions.Nil(err)
+
+	inputJson, err := json.Marshal(extensions.EncodedDataJson{
+		Encoding: ptr.Any("test-encoding"),
+		Data:     ptr.Any("test-data"),
+	})
+	assertions.Nil(err)
+	stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{})
+	assertions.Nil(err)
+
+	startStateId := "init-state"
+	stateIdSequence := int32(0)
+	stateRow := extensions.AsyncStateExecutionRow{
+		AsyncStateExecutionRowForUpdate: extensions.AsyncStateExecutionRowForUpdate{
+			AsyncStateExecutionSelectFilter: extensions.AsyncStateExecutionSelectFilter{
+				ProcessExecutionId: prcExeId,
+				StateId:            startStateId,
+				StateIdSequence:    stateIdSequence,
+			},
+			WaitUntilStatus: extensions.StateExecutionStatusRunning,
+			ExecuteStatus:   extensions.StateExecutionStatusUndefined,
+			PreviousVersion: 0,
+		},
+		Info:  stateExeInfo,
+		Input: inputJson,
+	}
+	err = txn.InsertAsyncStateExecution(ctx, stateRow)
+	assertions.Nil(err)
+
+	workerTaskRow := extensions.WorkerTaskRowForInsert{
+		ShardId:            extensions.DefaultShardId,
+		TaskType:           extensions.WorkerTaskTypeWaitUntil,
+		ProcessExecutionId: prcExeId,
+		StateId:            startStateId,
+		StateIdSequence:    stateIdSequence,
+	}
+	err = txn.InsertWorkerTask(ctx, workerTaskRow)
 	assertions.Nil(err)
 
 	err = txn.Commit()
