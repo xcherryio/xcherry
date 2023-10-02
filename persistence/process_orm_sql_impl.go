@@ -2,17 +2,12 @@ package persistence
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"github.com/google/uuid"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
-	"time"
 )
 
 type ProcessORMSQLImpl struct {
@@ -53,80 +48,81 @@ func (p ProcessORMSQLImpl) StartProcess(
 			}
 		}
 	}()
-	exeUUID, err := uuid.NewUUID()
-	if err != nil {
-		return nil, false, err
-	}
-	eUUID := exeUUID.String()
-	_, err = tx.InsertCurrentProcessExecution(ctx, request.ProcessId, eUUID)
-	if err != nil {
-		if p.sqlDB.IsDupEntryError(err) {
-			// TODO support other ProcessIdReusePolicy on this error
-			return nil, true, nil
-		}
-		return nil, false, err
-	}
-
-	timeoutSeconds := 0
-	if sc, ok := request.GetProcessStartConfigOk(); ok {
-		timeoutSeconds = int(sc.GetTimeoutSeconds())
-	}
-
-	info := extensions.ProcessExecutionInfoJson{
-		ProcessType: request.GetProcessType(),
-		WorkerURL:   request.GetWorkerUrl(),
-	}
-	infoJ, err := json.Marshal(info)
-	if err != nil {
-		return nil, false, err
-	}
-
-	row := extensions.ProcessExecutionRow{
-		ProcessExecutionId:     eUUID,
-		ProcessId:              request.ProcessId,
-		IsCurrent:              true,
-		Status:                 extensions.ExecutionStatusRunning.String(),
-		StartTime:              time.Now(),
-		TimeoutSeconds:         timeoutSeconds,
-		HistoryEventIdSequence: 0,
-		Info:                   infoJ,
-	}
-	_, err = tx.InsertProcessExecution(ctx, row)
-	return &xdbapi.ProcessExecutionStartResponse{
-		ProcessExecutionId: eUUID,
-	}, false, err
-
+	//exeUUID, err := uuid.NewUUID()
+	//if err != nil {
+	//	return nil, false, err
+	//}
+	//eUUID := exeUUID.String()
+	//_, err = tx.InsertCurrentProcessExecution(ctx, request.ProcessId, eUUID)
+	//if err != nil {
+	//	if p.sqlDB.IsDupEntryError(err) {
+	//		// TODO support other ProcessIdReusePolicy on this error
+	//		return nil, true, nil
+	//	}
+	//	return nil, false, err
+	//}
+	//
+	//timeoutSeconds := 0
+	//if sc, ok := request.GetProcessStartConfigOk(); ok {
+	//	timeoutSeconds = int(sc.GetTimeoutSeconds())
+	//}
+	//
+	//info := extensions.ProcessExecutionInfoJson{
+	//	ProcessType: request.GetProcessType(),
+	//	WorkerURL:   request.GetWorkerUrl(),
+	//}
+	//infoJ, err := json.Marshal(info)
+	//if err != nil {
+	//	return nil, false, err
+	//}
+	//
+	//row := extensions.ProcessExecutionRow{
+	//	ProcessExecutionId:     eUUID,
+	//	ProcessId:              request.ProcessId,
+	//	IsCurrent:              true,
+	//	Status:                 extensions.ExecutionStatusRunning.String(),
+	//	StartTime:              time.Now(),
+	//	TimeoutSeconds:         timeoutSeconds,
+	//	HistoryEventIdSequence: 0,
+	//	Info:                   infoJ,
+	//}
+	//_, err = tx.InsertProcessExecution(ctx, row)
+	//return &xdbapi.ProcessExecutionStartResponse{
+	//	ProcessExecutionId: eUUID,
+	//}, false, err
+	return nil, false, nil
 }
 
 func (p ProcessORMSQLImpl) DescribeLatestProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
 ) (*xdbapi.ProcessExecutionDescribeResponse, bool, error) {
-	rows, err := p.sqlDB.SelectCurrentProcessExecution(ctx, request.GetProcessId())
-	if err != nil {
-		if p.sqlDB.IsNotFoundError(err) {
-			return nil, true, nil
-		}
-		return nil, false, err
-	}
-	if len(rows) == 0 {
-		return nil, true, nil
-	}
-	if len(rows) != 1 {
-		return nil, false, fmt.Errorf("internal data corruption, more than one row is not expected")
-	}
-
-	var info extensions.ProcessExecutionInfoJson
-	err = json.Unmarshal(rows[0].Info, &info)
-	if err != nil {
-		return nil, false, err
-	}
-
-	return &xdbapi.ProcessExecutionDescribeResponse{
-		ProcessExecutionId: &rows[0].ProcessExecutionId,
-		ProcessType:        &info.ProcessType,
-		WorkerUrl:          &info.WorkerURL,
-		StartTimestamp:     ptr.Any(int32(rows[0].StartTime.Unix())),
-	}, false, nil
+	//rows, err := p.sqlDB.SelectCurrentProcessExecution(ctx, request.GetProcessId())
+	//if err != nil {
+	//	if p.sqlDB.IsNotFoundError(err) {
+	//		return nil, true, nil
+	//	}
+	//	return nil, false, err
+	//}
+	//if len(rows) == 0 {
+	//	return nil, true, nil
+	//}
+	//if len(rows) != 1 {
+	//	return nil, false, fmt.Errorf("internal data corruption, more than one row is not expected")
+	//}
+	//
+	//var info extensions.ProcessExecutionInfoJson
+	//err = json.Unmarshal(rows[0].Info, &info)
+	//if err != nil {
+	//	return nil, false, err
+	//}
+	//
+	//return &xdbapi.ProcessExecutionDescribeResponse{
+	//	ProcessExecutionId: &rows[0].ProcessExecutionId,
+	//	ProcessType:        &info.ProcessType,
+	//	WorkerUrl:          &info.WorkerURL,
+	//	StartTimestamp:     ptr.Any(int32(rows[0].StartTime.Unix())),
+	//}, false, nil
+	return nil, false, nil
 }
 
 func (p ProcessORMSQLImpl) Close() error {

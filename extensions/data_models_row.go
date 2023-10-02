@@ -2,7 +2,7 @@ package extensions
 
 import (
 	"github.com/jmoiron/sqlx/types"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/uuid"
 	"time"
 )
 
@@ -10,16 +10,16 @@ type (
 	CurrentProcessExecutionRow struct {
 		Namespace          string
 		ProcessId          string
-		ProcessExecutionId persistence.UUID
+		ProcessExecutionId uuid.UUID
 	}
 
 	ProcessExecutionRowForUpdate struct {
-		ProcessExecutionId persistence.UUID
+		ProcessExecutionId uuid.UUID
 
-		IsCurrent                bool
-		Status                   ProcessExecutionStatus
-		HistoryEventIdSequence   int32
-		StateExecutionIdSequence types.JSONText
+		IsCurrent              bool
+		Status                 ProcessExecutionStatus
+		HistoryEventIdSequence int32
+		StateIdSequence        types.JSONText
 	}
 
 	ProcessExecutionRow struct {
@@ -34,7 +34,7 @@ type (
 	}
 
 	AsyncStateExecutionSelectFilter struct {
-		ProcessExecutionId persistence.UUID
+		ProcessExecutionId uuid.UUID
 		StateId            string
 		StateIdSequence    int32
 	}
@@ -44,7 +44,7 @@ type (
 
 		WaitUntilStatus StateExecutionStatus
 		ExecuteStatus   StateExecutionStatus
-		Version         int32 // for conditional check
+		PreviousVersion int32 // for conditional check
 	}
 
 	AsyncStateExecutionRow struct {
@@ -58,7 +58,7 @@ type (
 		ShardId  int32
 		TaskType WorkerTaskType
 
-		ProcessExecutionId persistence.UUID
+		ProcessExecutionId uuid.UUID
 		StateId            string
 		StateIdSequence    int32
 	}

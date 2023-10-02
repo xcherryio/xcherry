@@ -3,7 +3,7 @@ package extensions
 import (
 	"context"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/uuid"
 )
 
 type SQLDBExtension interface {
@@ -38,7 +38,8 @@ type transactionalCRUD interface {
 	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) error
 
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
-	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId persistence.UUID) (*ProcessExecutionRowForUpdate, error)
+	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
+	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
@@ -50,7 +51,7 @@ type nonTransactionalCRUD interface {
 	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
 
-	BatchSelectWorkerTasksOfFirstPage(ctx context.Context, pageSize int32) ([]WorkerTaskRow, error)
+	BatchSelectWorkerTasksOfFirstPage(ctx context.Context, shardId, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
 }
 
@@ -59,4 +60,5 @@ type ErrorChecker interface {
 	IsNotFoundError(err error) bool
 	IsTimeoutError(err error) bool
 	IsThrottlingError(err error) bool
+	IsConflictError(err error) bool
 }

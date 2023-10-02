@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/lib/pq"
 )
 
@@ -13,6 +14,8 @@ const ErrDupEntry = "23505"
 
 const ErrInsufficientResources = "53000"
 const ErrTooManyConnections = "53300"
+
+var conflictError = fmt.Errorf("conflict on updating")
 
 func (d dbSession) IsDupEntryError(err error) bool {
 	var sqlErr pq.Error
@@ -38,4 +41,8 @@ func (d dbSession) IsThrottlingError(err error) bool {
 		}
 	}
 	return false
+}
+
+func (d dbSession) IsConflictError(err error) bool {
+	return errors.Is(err, conflictError)
 }
