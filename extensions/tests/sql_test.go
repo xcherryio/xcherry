@@ -17,25 +17,36 @@ import (
 )
 
 func TestPostgres(t *testing.T) {
+	testDBName := fmt.Sprintf("test%v", time.Now().UnixNano())
+	fmt.Println("using database name ", testDBName)
+
 	sqlConfig := &config.SQL{
 		ConnectAddr:     fmt.Sprintf("%v:%v", postgrestool.DefaultEndpoint, postgrestool.DefaultPort),
 		User:            postgrestool.DefaultUserName,
 		Password:        postgrestool.DefaultPassword,
 		DBExtensionName: postgres.ExtensionName,
-		DatabaseName:    postgrestool.DefaultDatabaseName,
+		DatabaseName:    testDBName,
 	}
+	ass := assert.New(t)
+
+	err := extensions.CreateDatabase(*sqlConfig, testDBName)
+	ass.Nil(err)
+
+	err = extensions.SetupSchema(sqlConfig, "../../"+postgrestool.DefaultSchemaFilePath)
+	ass.Nil(err)
+
 	session, err := extensions.NewSQLSession(sqlConfig)
 	if err != nil {
 		panic(err)
 	}
-	testSQL(assert.New(t), session)
+	testSQL(ass, session)
 }
 
-func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
+func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ctx := context.Background()
 	// start process transaction
 	txn, err := session.StartTransaction(ctx)
-	assertions.Nil(err)
+	ass.Nil(err)
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	prcExeId := uuid.MustNewUUID()
@@ -44,19 +55,19 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		ProcessId:          processId,
 		ProcessExecutionId: prcExeId,
 	})
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	info, err := json.Marshal(extensions.ProcessExecutionInfoJson{
 		ProcessType: "test-type",
 		WorkerURL:   "test-url",
 	})
-	assertions.Nil(err)
+	ass.Nil(err)
 	stateIdSequenceJson, err := json.Marshal(extensions.StateExecutionIdSequenceJson{
 		SequenceMap: map[string]int{
 			"start-state": 1,
 		},
 	})
-	assertions.Nil(err)
+	ass.Nil(err)
 	prcExeRow := extensions.ProcessExecutionRow{
 		ProcessExecutionRowForUpdate: extensions.ProcessExecutionRowForUpdate{
 			ProcessExecutionId:     prcExeId,
@@ -72,15 +83,15 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		Info:           info,
 	}
 	err = txn.InsertProcessExecution(ctx, prcExeRow)
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	inputJson, err := json.Marshal(extensions.EncodedDataJson{
 		Encoding: ptr.Any("test-encoding"),
 		Data:     ptr.Any("test-data"),
 	})
-	assertions.Nil(err)
+	ass.Nil(err)
 	stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{})
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	startStateId := "init-state"
 	stateIdSequence := int32(0)
@@ -99,7 +110,7 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		Input: inputJson,
 	}
 	err = txn.InsertAsyncStateExecution(ctx, stateRow)
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	workerTaskRow := extensions.WorkerTaskRowForInsert{
 		ShardId:            extensions.DefaultShardId,
@@ -109,21 +120,31 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		StateIdSequence:    stateIdSequence,
 	}
 	err = txn.InsertWorkerTask(ctx, workerTaskRow)
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	err = txn.Commit()
-	assertions.Nil(err)
+	ass.Nil(err)
 
 	row, err := session.SelectCurrentProcessExecution(ctx, namespace, processId)
-	assertions.Nil(err)
+	ass.Nil(err)
 
-	assertTimeEqual(assertions, prcExeRow.StartTime, row.StartTime)
-	assertJsonValueEqual(assertions, prcExeRow.Info, row.Info, extensions.ProcessExecutionInfoJson{}, extensions.ProcessExecutionInfoJson{})
-	assertJsonValueEqual(assertions, prcExeRow.StateIdSequence, row.StateIdSequence, extensions.StateExecutionIdSequenceJson{}, extensions.StateExecutionIdSequenceJson{})
+	assertTimeEqual(ass, prcExeRow.StartTime, row.StartTime)
+	assertJsonValueEqual(ass, prcExeRow.Info, row.Info, extensions.ProcessExecutionInfoJson{}, extensions.ProcessExecutionInfoJson{})
+	assertJsonValueEqual(ass, prcExeRow.StateIdSequence, row.StateIdSequence, extensions.StateExecutionIdSequenceJson{}, extensions.StateExecutionIdSequenceJson{})
 	row.StartTime = prcExeRow.StartTime
 	row.Info = prcExeRow.Info
 	row.StateIdSequence = prcExeRow.StateIdSequence
-	assertions.Equal(&prcExeRow, row)
+	ass.Equal(&prcExeRow, row)
+
+	// test insert the same processId
+	txn2, err := session.StartTransaction(ctx)
+	ass.Nil(err)
+	err = txn2.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+		Namespace:          namespace,
+		ProcessId:          processId,
+		ProcessExecutionId: prcExeId,
+	})
+	ass.True(session.IsDupEntryError(err))
 }
 
 func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {

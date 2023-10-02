@@ -8,19 +8,18 @@ import (
 	"github.com/lib/pq"
 )
 
-// ErrDupEntry indicates a duplicate primary key i.e. the row already exists,
+// ErrDupEntryCode indicates a duplicate primary key i.e. the row already exists,
 // check http://www.postgresql.org/docs/9.3/static/errcodes-appendix.html
-const ErrDupEntry = "23505"
+const ErrDupEntryCode = pq.ErrorCode("23505")
 
-const ErrInsufficientResources = "53000"
-const ErrTooManyConnections = "53300"
+const ErrInsufficientResourcesCode = pq.ErrorCode("53000")
+const ErrTooManyConnectionsCode = pq.ErrorCode("53300")
 
 var conflictError = fmt.Errorf("conflict on updating")
 
 func (d dbSession) IsDupEntryError(err error) bool {
-	var sqlErr pq.Error
-	ok := errors.As(err, &sqlErr)
-	return ok && sqlErr.Code == ErrDupEntry
+	sqlErr, ok := err.(*pq.Error)
+	return ok && sqlErr.Code == ErrDupEntryCode
 }
 
 func (d dbSession) IsNotFoundError(err error) bool {
@@ -32,11 +31,10 @@ func (d dbSession) IsTimeoutError(err error) bool {
 }
 
 func (d dbSession) IsThrottlingError(err error) bool {
-	var sqlErr pq.Error
-	ok := errors.As(err, &sqlErr)
+	sqlErr, ok := err.(*pq.Error)
 	if ok {
-		if sqlErr.Code == ErrTooManyConnections ||
-			sqlErr.Code == ErrInsufficientResources {
+		if sqlErr.Code == ErrTooManyConnectionsCode ||
+			sqlErr.Code == ErrInsufficientResourcesCode {
 			return true
 		}
 	}
