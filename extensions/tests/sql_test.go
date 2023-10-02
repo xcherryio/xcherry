@@ -145,6 +145,15 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		ProcessExecutionId: prcExeId,
 	})
 	ass.True(session.IsDupEntryError(err))
+
+	// test select wrong id
+	_, err = session.SelectCurrentProcessExecution(ctx, namespace, "a wrong id")
+	ass.True(session.IsNotFoundError(err))
+
+	// test select worker tasks
+	workerTasks, err := session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
+	ass.Equal(1, len(workerTasks))
+	
 }
 
 func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {
