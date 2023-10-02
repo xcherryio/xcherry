@@ -6,7 +6,7 @@ import (
 )
 
 const selectCurrentExecutionQuery = `SELECT
-	ce.process_execution_id, e.process_id, e.is_current, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.info
+	ce.process_execution_id, e.is_current, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_id_sequence, e.info
 	FROM xdb_sys_current_process_executions ce
 	INNER JOIN xdb_sys_process_executions e ON e.process_id = ce.process_id
 	WHERE ce.namespace = $1 AND ce.process_id = $2`
@@ -14,6 +14,9 @@ const selectCurrentExecutionQuery = `SELECT
 func (d dbSession) SelectCurrentProcessExecution(ctx context.Context, namespace, processId string) (*extensions.ProcessExecutionRow, error) {
 	var row extensions.ProcessExecutionRow
 	err := d.db.GetContext(ctx, &row, selectCurrentExecutionQuery, namespace, processId)
+	row.Namespace = namespace
+	row.ProcessId = processId
+	row.StartTime = FromPostgresDateTime(row.StartTime)
 	return &row, err
 }
 

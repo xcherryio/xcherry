@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jmoiron/sqlx/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
@@ -55,7 +56,7 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		},
 	})
 	assertions.Nil(err)
-	err = txn.InsertProcessExecution(ctx, extensions.ProcessExecutionRow{
+	prcExeRow := extensions.ProcessExecutionRow{
 		ProcessExecutionRowForUpdate: extensions.ProcessExecutionRowForUpdate{
 			ProcessExecutionId:     prcExeId,
 			IsCurrent:              true,
@@ -68,9 +69,33 @@ func testSQL(assertions *assert.Assertions, session extensions.SQLDBSession) {
 		StartTime:      time.Now(),
 		TimeoutSeconds: 10,
 		Info:           info,
-	})
+	}
+	err = txn.InsertProcessExecution(ctx, prcExeRow)
 	assertions.Nil(err)
 
 	err = txn.Commit()
 	assertions.Nil(err)
+
+	row, err := session.SelectCurrentProcessExecution(ctx, namespace, processId)
+	assertions.Nil(err)
+
+	assertTimeEqual(assertions, prcExeRow.StartTime, row.StartTime)
+	assertJsonValueEqual(assertions, prcExeRow.Info, row.Info, extensions.ProcessExecutionInfoJson{}, extensions.ProcessExecutionInfoJson{})
+	assertJsonValueEqual(assertions, prcExeRow.StateIdSequence, row.StateIdSequence, extensions.StateExecutionIdSequenceJson{}, extensions.StateExecutionIdSequenceJson{})
+	row.StartTime = prcExeRow.StartTime
+	row.Info = prcExeRow.Info
+	row.StateIdSequence = prcExeRow.StateIdSequence
+	assertions.Equal(&prcExeRow, row)
+}
+
+func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {
+	assertions.Equal(t1.UnixNano(), t2.UnixNano())
+}
+
+func assertJsonValueEqual(assertions *assert.Assertions, v1, v2 types.JSONText, t1, t2 interface{}) {
+	err := json.Unmarshal(v1, &t1)
+	assertions.Nil(err)
+	err = json.Unmarshal(v2, &t2)
+	assertions.Nil(err)
+	assertions.Equal(t1, t2)
 }
