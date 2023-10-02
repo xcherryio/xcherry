@@ -15,7 +15,7 @@ const ErrDupEntryCode = pq.ErrorCode("23505")
 const ErrInsufficientResourcesCode = pq.ErrorCode("53000")
 const ErrTooManyConnectionsCode = pq.ErrorCode("53300")
 
-var conflictError = fmt.Errorf("conflict on updating")
+var conditionalUpdateFailure = fmt.Errorf("no affect on updating with conditional")
 
 func (d dbSession) IsDupEntryError(err error) bool {
 	sqlErr, ok := err.(*pq.Error)
@@ -41,6 +41,6 @@ func (d dbSession) IsThrottlingError(err error) bool {
 	return false
 }
 
-func (d dbSession) IsConflictError(err error) bool {
-	return errors.Is(err, conflictError)
+func (d dbSession) IsConditionalUpdateFailure(err error) bool {
+	return errors.Is(err, conditionalUpdateFailure)
 }

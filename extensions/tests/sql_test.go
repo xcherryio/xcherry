@@ -93,6 +93,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ass.Nil(err)
 
 	startStateId := "init-state"
+	previousVersion := int32(1)
 	stateIdSequence := int32(0)
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: prcExeId,
@@ -100,7 +101,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		StateIdSequence:    stateIdSequence,
 		WaitUntilStatus:    extensions.StateExecutionStatusRunning,
 		ExecuteStatus:      extensions.StateExecutionStatusUndefined,
-		PreviousVersion:    0,
+		PreviousVersion:    previousVersion,
 		Info:               stateExeInfo,
 		Input:              inputJson,
 	}
@@ -140,6 +141,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		ProcessExecutionId: prcExeId,
 	})
 	ass.True(session.IsDupEntryError(err))
+	ass.Nil(txn2.Rollback())
 
 	// test select wrong id
 	_, err = session.SelectCurrentProcessExecution(ctx, namespace, "a wrong id")
@@ -147,8 +149,69 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 
 	// test select worker tasks
 	workerTasks, err := session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
+	ass.Nil(err)
 	ass.Equal(1, len(workerTasks))
+	// TODO assert equal
 
+	err = session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
+		ShardId:                  extensions.DefaultShardId,
+		MaxTaskSequenceInclusive: workerTasks[0].TaskSequence,
+	})
+	ass.Nil(err)
+	workerTasks, err = session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
+	ass.Nil(err)
+	ass.Equal(0, len(workerTasks))
+
+	// async state execution
+	stateRowSelect, err := session.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
+		ProcessExecutionId: prcExeId,
+		StateId:            startStateId,
+		StateIdSequence:    stateIdSequence,
+	})
+	ass.Nil(err)
+	ass.Equal(previousVersion, stateRowSelect.PreviousVersion)
+
+	txn3, err := session.StartTransaction(ctx)
+	ass.Nil(err)
+	stateRowSelect.PreviousVersion = 0 // override for error
+	err = txn3.UpdateAsyncStateExecution(ctx, *stateRowSelect)
+	ass.True(session.IsConditionalUpdateFailure(err))
+	ass.Nil(txn3.Rollback())
+
+	txn4, err := session.StartTransaction(ctx)
+	ass.Nil(err)
+	stateRowSelect.PreviousVersion = previousVersion
+	stateRowSelect.WaitUntilStatus = extensions.StateExecutionStatusCompleted
+	stateRowSelect.ExecuteStatus = extensions.StateExecutionStatusRunning
+	err = txn4.UpdateAsyncStateExecution(ctx, *stateRowSelect)
+	ass.Nil(err)
+	ass.Nil(txn4.Commit())
+
+	previousVersion++
+	stateRowSelect, err = session.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
+		ProcessExecutionId: prcExeId,
+		StateId:            startStateId,
+		StateIdSequence:    stateIdSequence,
+	})
+	ass.Nil(err)
+	ass.Equal(previousVersion, stateRowSelect.PreviousVersion)
+
+	txn5, err := session.StartTransaction(ctx)
+	ass.Nil(err)
+	stateRowSelect.WaitUntilStatus = extensions.StateExecutionStatusCompleted
+	stateRowSelect.ExecuteStatus = extensions.StateExecutionStatusCompleted
+	err = txn5.UpdateAsyncStateExecution(ctx, *stateRowSelect)
+	ass.Nil(err)
+	prcRow2, err := txn5.SelectProcessExecutionForUpdate(ctx, prcExeId)
+	ass.Nil(err)
+	prcRow2.Status = extensions.ProcessExecutionStatusCompleted
+	err = txn5.UpdateProcessExecution(ctx, *prcRow2)
+	ass.Nil(err)
+	ass.Nil(txn5.Commit())
+
+	prcRow3, err := session.SelectCurrentProcessExecution(ctx, namespace, processId)
+	ass.Nil(err)
+	ass.Equal(extensions.ProcessExecutionStatusCompleted, prcRow3.Status)
 }
 
 func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {

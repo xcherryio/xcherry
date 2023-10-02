@@ -32,7 +32,7 @@ is_current = :is_current,
 status = :status,
 history_event_id_sequence= :history_event_id_sequence,
 state_id_sequence= :state_id_sequence
-WHERE process_execution_id=:process_execution_id_string
+WHERE id=:process_execution_id_string
 `
 
 func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.ProcessExecutionRowForUpdate) error {
@@ -42,8 +42,8 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 }
 
 const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
-	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, info, input) VALUES
-	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :info, :input)`
+	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, execute_status, info, input) VALUES
+	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :execute_status, :info, :input)`
 
 func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
@@ -54,15 +54,24 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
 version = :previous_version +1,
 wait_until_status = :wait_until_status,
-execute_status = :execute_status,
+execute_status = :execute_status
 WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id AND state_id_sequence=:state_id_sequence AND version = :previous_version
 `
 
 func (d dbTx) UpdateAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	_, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
-	// TODO check conflict error
-	return err
+	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
+	if err != nil {
+		return err
+	}
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if effected != 1 {
+		return conditionalUpdateFailure
+	}
+	return nil
 }
 
 const insertWorkerTaskQuery = `INSERT INTO xdb_sys_worker_tasks
@@ -75,11 +84,11 @@ func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRow
 	return err
 }
 
-const selectProcessExecutionForUpdateQuery = `SELECT process_execution_id, is_current, status, history_event_id_sequence, state_id_sequence
-	FROM xdb_sys_process_executions WHERE process_execution_id=$1`
+const selectProcessExecutionForUpdateQuery = `SELECT id as process_execution_id, is_current, status, history_event_id_sequence, state_id_sequence
+	FROM xdb_sys_process_executions WHERE id=$1`
 
 func (d dbTx) SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*extensions.ProcessExecutionRowForUpdate, error) {
 	var row extensions.ProcessExecutionRowForUpdate
-	err := d.tx.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, processExecutionId)
+	err := d.tx.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, processExecutionId.String())
 	return &row, err
 }

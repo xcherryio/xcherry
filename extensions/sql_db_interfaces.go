@@ -60,5 +60,5 @@ type ErrorChecker interface {
 	IsNotFoundError(err error) bool
 	IsTimeoutError(err error) bool
 	IsThrottlingError(err error) bool
-	IsConflictError(err error) bool
+	IsConditionalUpdateFailure(err error) bool
 }

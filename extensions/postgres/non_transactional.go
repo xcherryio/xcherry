@@ -25,7 +25,8 @@ const selectAsyncStateExecutionForUpdateQuery = `SELECT wait_until_status, execu
 
 func (d dbSession) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
 	var row extensions.AsyncStateExecutionRowForUpdate
-	err := d.db.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, filter.ProcessExecutionId, filter.StateId, filter.StateIdSequence)
+	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
+	err := d.db.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
 	row.ProcessExecutionId = filter.ProcessExecutionId
 	row.StateId = filter.StateId
 	row.StateIdSequence = filter.StateIdSequence
@@ -44,6 +45,6 @@ func (d dbSession) BatchSelectWorkerTasksOfFirstPage(ctx context.Context, shardI
 const batchDeleteWorkerTaskQuery = `DELETE FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence <= $2`
 
 func (d dbSession) BatchDeleteWorkerTask(ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter) error {
-	_, err := d.db.ExecContext(ctx, batchSelectWorkerTasksOfFirstPageQuery, filter.ShardId, filter.MaxTaskSequenceInclusive)
+	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MaxTaskSequenceInclusive)
 	return err
 }
