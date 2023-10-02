@@ -11,3 +11,9 @@ type StateExecutionIdSequenceJson struct {
 
 type AsyncStateExecutionInfoJson struct {
 }
+
+// EncodedDataJson represents xdbapi.EncodedObject
+type EncodedDataJson struct {
+	Encoding *string `json:"encoding"`
+	Data     *string `json:"data"`
+}

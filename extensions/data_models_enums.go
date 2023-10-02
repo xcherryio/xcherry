@@ -56,8 +56,8 @@ func (e StateExecutionStatus) String() string {
 type WorkerTaskType int32
 
 const (
-	WorkerTaskTypeWaitUntil = 1
-	WorkerTaskTypeExecute   = 2
+	WorkerTaskTypeWaitUntil WorkerTaskType = 1
+	WorkerTaskTypeExecute   WorkerTaskType = 2
 )
 
 func (e WorkerTaskType) String() string {
@@ -70,3 +70,11 @@ func (e WorkerTaskType) String() string {
 		panic("this is not supported")
 	}
 }
+
+type TimerTaskType int32
+
+const (
+	TimerTaskTypeProcessTimeout    TimerTaskType = 1
+	TimerTaskTypeTimerCommand      TimerTaskType = 2
+	TimerTaskTypeWorkerTaskBackoff TimerTaskType = 3
+)

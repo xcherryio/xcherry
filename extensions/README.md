@@ -28,3 +28,6 @@ logic should be in `mysql/` package, including:
 * Testing
 * Tooling logic
 * etc
+
+## Resources
+* [Illustrated guide to SQLX](https://jmoiron.github.io/sqlx/)

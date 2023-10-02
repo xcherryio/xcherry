@@ -14,8 +14,10 @@ type (
 	}
 
 	ProcessExecutionRowForUpdate struct {
+		ProcessExecutionId persistence.UUID
+
 		IsCurrent                bool
-		Status                   string
+		Status                   ProcessExecutionStatus
 		HistoryEventIdSequence   int32
 		StateExecutionIdSequence types.JSONText
 	}
@@ -23,8 +25,7 @@ type (
 	ProcessExecutionRow struct {
 		ProcessExecutionRowForUpdate
 
-		Namespace          string
-		ProcessExecutionId persistence.UUID
+		Namespace string
 
 		ProcessId      string
 		StartTime      time.Time
@@ -43,14 +44,13 @@ type (
 
 		WaitUntilStatus StateExecutionStatus
 		ExecuteStatus   StateExecutionStatus
+		Version         int32 // for conditional check
 	}
 
 	AsyncStateExecutionRow struct {
-		AsyncStateExecutionSelectFilter
-
 		AsyncStateExecutionRowForUpdate
 
-		Input []byte
+		Input types.JSONText
 		Info  types.JSONText
 	}
 
@@ -63,8 +63,13 @@ type (
 		StateIdSequence    int32
 	}
 
-	WorkerTaskRowDeleteFilter struct {
-		ShardId      int32
+	WorkerTaskRow struct {
+		WorkerTaskRowForInsert
 		TaskSequence int64
+	}
+
+	WorkerTaskRangeDeleteFilter struct {
+		ShardId                  int32
+		MaxTaskSequenceInclusive int64
 	}
 )

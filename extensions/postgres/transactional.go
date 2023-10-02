@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence"
 )
 
 const (
@@ -30,8 +31,27 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 	return d.tx.NamedExecContext(ctx, insertExecutionQuery, row)
 }
 
-func (d dbSession) SelectCurrentProcessExecution(ctx context.Context, namespace, processId string) ([]extensions.ProcessExecutionRow, error) {
-	var row []extensions.ProcessExecutionRow
-	err := d.db.SelectContext(ctx, &row, selectCurrentExecutionQuery, namespace, processId)
-	return row, err
+func (d dbTx) SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId persistence.UUID) (*extensions.ProcessExecutionRowForUpdate, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) (sql.Result, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRowForInsert) (sql.Result, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) DeleteWorkerTask(ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter) (sql.Result, error) {
+	//TODO implement me
+	panic("implement me")
 }

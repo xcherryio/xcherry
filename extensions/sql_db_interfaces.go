@@ -2,8 +2,8 @@ package extensions
 
 import (
 	"context"
-	"database/sql"
 	"github.com/xdblab/xdb/config"
+	"github.com/xdblab/xdb/persistence"
 )
 
 type SQLDBExtension interface {
@@ -14,7 +14,7 @@ type SQLDBExtension interface {
 }
 
 type SQLDBSession interface {
-	processExecutionNonTxnCRUD
+	nonTransactionalCRUD
 
 	ErrorChecker
 	StartTransaction(ctx context.Context) (SQLTransaction, error)
@@ -22,7 +22,7 @@ type SQLDBSession interface {
 }
 
 type SQLTransaction interface {
-	processExecutionTxnCRUD
+	transactionalCRUD
 	Commit() error
 	Rollback() error
 }
@@ -34,17 +34,24 @@ type SQLAdminDBSession interface {
 	Close() error
 }
 
-type processExecutionTxnCRUD interface {
-	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) (sql.Result, error)
-	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) (sql.Result, error)
-	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId string)
-	InsertStateExecution(ctx context.Context, row AsyncStateExecutionRow) (sql.Result, error)
-	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) (sql.Result, error)
-	DeleteWorkerTask(ctx context.Context, filter WorkerTaskRowDeleteFilter) (sql.Result, error)
+type transactionalCRUD interface {
+	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) error
+
+	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
+	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId persistence.UUID) (*ProcessExecutionRowForUpdate, error)
+
+	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
+	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
+
+	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
 }
 
-type processExecutionNonTxnCRUD interface {
-	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) ([]ProcessExecutionRow, error)
+type nonTransactionalCRUD interface {
+	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
+	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
+
+	BatchSelectWorkerTasksOfFirstPage(ctx context.Context, pageSize int32) ([]WorkerTaskRow, error)
+	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
 }
 
 type ErrorChecker interface {

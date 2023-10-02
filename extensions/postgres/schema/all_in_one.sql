@@ -25,12 +25,13 @@ CREATE TABLE xdb_sys_async_state_executions(
    state_id String NOT NULL,
    state_id_sequence INTEGER NOT NULL,
    --
+   version INTEGER NOT NULL , -- for conditional update to avoid locking
    wait_until_status SMALLINT NOT NULL, -- -1: skipped/0:undefined/1:running/2:completed/3:failed/4:timeout
    execute_status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout
    wait_until_commands jsonb,
    wait_until_command_results jsonb,
    info jsonb ,
-   input BYTEA,
+   input jsonb,
    PRIMARY KEY (process_execution_id, state_id, state_id_sequence)
 );
 
@@ -54,7 +55,7 @@ CREATE TABLE xdb_sys_timer_tasks(
     process_execution_id uuid NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id String NOT NULL, -- for looking up xdb_sys_async_state_executions
     state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
-    task_type SMALLINT, -- 1: process timeout 2: user timer command
+    task_type SMALLINT, -- 1: process timeout 2: user timer command, 3: worker_task_backoff
     info jsonb ,
     PRIMARY KEY (shard_id, start_time, task_sequence)    
 );
