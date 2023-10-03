@@ -63,6 +63,8 @@ func (w *workerTaskQueueSQLImpl) TriggerPolling(pollTime time.Time) {
 	w.pollTimer.Update(pollTime)
 }
 
+type LocalNotifyNewWorkerTask func(pollTime time.Time)
+
 func (w *workerTaskQueueSQLImpl) Start() error {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
@@ -71,7 +73,7 @@ func (w *workerTaskQueueSQLImpl) Start() error {
 	startWorkerTaskConcurrentProcessor(
 		w.rootCtx, qCfg.ProcessorConcurrency,
 		w.taskToProcessChan, w.taskCompletionChan,
-		w.dbSession, w.logger)
+		w.dbSession, w.logger, w.TriggerPolling)
 
 	for {
 		select {

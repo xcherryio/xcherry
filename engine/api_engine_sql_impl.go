@@ -28,41 +28,40 @@ func NewAPIEngineSQLImpl(sqlConfig config.SQL, logger log.Logger) (APIEngine, er
 
 func (p APIEngineSQLImpl) StartProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
-) (resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, err error) {
-	tx, err := p.sqlDB.StartTransaction(ctx)
-	if err != nil {
-		return nil, false, err
+) (resp *xdbapi.ProcessExecutionStartResponse, alreadyStarted bool, retErr error) {
+	tx, retErr := p.sqlDB.StartTransaction(ctx)
+	if retErr != nil {
+		return nil, false, retErr
 	}
 	defer func() {
-		if alreadyStarted || err != nil {
+		if alreadyStarted || retErr != nil {
 			err2 := tx.Rollback()
 			if err2 != nil {
 				p.logger.Error("error on rollback transaction", tag.Error(err2))
 			}
 		} else {
-			// at here, err must be nil, so we can safely override it and return to caller
-			err2 := tx.Commit()
-			if err2 != nil {
-				err = err2
-				p.logger.Error("error on committing transaction", tag.Error(err))
+			// at here, retErr must be nil, so we can safely override it and return to caller
+			retErr = tx.Commit()
+			if retErr != nil {
+				p.logger.Error("error on committing transaction", tag.Error(retErr))
 			}
 		}
 	}()
 	prcExeId := uuid.MustNewUUID()
-	if err != nil {
-		return nil, false, err
+	if retErr != nil {
+		return nil, false, retErr
 	}
-	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+	retErr = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          request.Namespace,
 		ProcessId:          request.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
-	if err != nil {
-		if p.sqlDB.IsDupEntryError(err) {
+	if retErr != nil {
+		if p.sqlDB.IsDupEntryError(retErr) {
 			// TODO support other ProcessIdReusePolicy on this error
 			return nil, true, nil
 		}
-		return nil, false, err
+		return nil, false, retErr
 	}
 
 	timeoutSeconds := int32(0)
@@ -70,12 +69,12 @@ func (p APIEngineSQLImpl) StartProcess(
 		timeoutSeconds = sc.GetTimeoutSeconds()
 	}
 
-	processExeInfo, err := json.Marshal(extensions.ProcessExecutionInfoJson{
+	processExeInfo, retErr := json.Marshal(extensions.ProcessExecutionInfoJson{
 		ProcessType: request.GetProcessType(),
 		WorkerURL:   request.GetWorkerUrl(),
 	})
-	if err != nil {
-		return nil, false, err
+	if retErr != nil {
+		return nil, false, retErr
 	}
 
 	sequenceMap := map[string]int{}
@@ -127,18 +126,18 @@ func (p APIEngineSQLImpl) StartProcess(
 		} else {
 			workerTaskRow.TaskType = extensions.WorkerTaskTypeWaitUntil
 		}
-		
+
 		err = tx.InsertWorkerTask(ctx, workerTaskRow)
 		if err != nil {
 			return nil, false, err
 		}
 	}
 
-	stateIdSequence, err := json.Marshal(extensions.StateExecutionIdSequenceJson{
+	stateIdSequence, retErr := json.Marshal(extensions.StateExecutionIdSequenceJson{
 		SequenceMap: sequenceMap,
 	})
-	if err != nil {
-		return nil, false, err
+	if retErr != nil {
+		return nil, false, retErr
 	}
 
 	row := extensions.ProcessExecutionRow{
@@ -156,10 +155,10 @@ func (p APIEngineSQLImpl) StartProcess(
 
 		Info: processExeInfo,
 	}
-	err = tx.InsertProcessExecution(ctx, row)
+	retErr = tx.InsertProcessExecution(ctx, row)
 	return &xdbapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: prcExeId.String(),
-	}, false, err
+	}, false, retErr
 }
 
 func (p APIEngineSQLImpl) DescribeLatestProcess(

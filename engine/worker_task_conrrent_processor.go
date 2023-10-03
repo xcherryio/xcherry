@@ -12,17 +12,16 @@ import (
 	"github.com/xdblab/xdb/extensions"
 	"io/ioutil"
 	"net/http"
+	"time"
 )
 
 // TODO refactor to be more modularized
 
 func startWorkerTaskConcurrentProcessor(
-	ctx context.Context,
-	concurrency int,
+	ctx context.Context, concurrency int,
 	taskToProcessChan chan extensions.WorkerTaskRow,
 	taskCompletionChan chan<- extensions.WorkerTaskRow,
-	dbSession extensions.SQLDBSession, logger log.Logger,
-) {
+	dbSession extensions.SQLDBSession, logger log.Logger, notify LocalNotifyNewWorkerTask) {
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			for {
@@ -33,7 +32,7 @@ func startWorkerTaskConcurrentProcessor(
 					if !ok {
 						return
 					}
-					err := processWorkerTask(ctx, task, dbSession, logger)
+					err := processWorkerTask(ctx, task, dbSession, logger, notify)
 					if err != nil {
 						// put it back to the queue for retry
 						// Note that if the error is because of invoking worker APIs,
@@ -49,9 +48,8 @@ func startWorkerTaskConcurrentProcessor(
 	}
 }
 
-func processWorkerTask(
-	ctx context.Context, task extensions.WorkerTaskRow,
-	session extensions.SQLDBSession, logger log.Logger) error {
+func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, session extensions.SQLDBSession,
+	logger log.Logger, notify LocalNotifyNewWorkerTask) error {
 
 	logger.Info("execute worker task", tag.ID(tag.AnyToStr(task.TaskSequence)))
 
@@ -85,9 +83,9 @@ func processWorkerTask(
 	})
 
 	if stateRow.WaitUntilStatus == extensions.StateExecutionStatusRunning {
-		return processWaitUntilTask(ctx, task, info, stateRow, input, apiClient, session, logger)
+		return processWaitUntilTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
 	} else if stateRow.ExecuteStatus == extensions.StateExecutionStatusRunning {
-		return processExecuteTask(ctx, task, info, stateRow, input, apiClient, session, logger)
+		return processExecuteTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
 	} else {
 		logger.Warn("noop for worker task ",
 			tag.ID(tag.AnyToStr(task.TaskSequence)),
@@ -99,8 +97,9 @@ func processWorkerTask(
 
 func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, info extensions.AsyncStateExecutionInfoJson,
 	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
-	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger,
+	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
 ) (retErr error) {
+	hasNewWorkerTask := false
 	// TODO fix using backoff retry when worker API returns error by pushing the task into timer queue
 	attempt := int32(1)
 
@@ -139,12 +138,15 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 			err2 := txn.Rollback()
 			logger.Error("failed at rolling back transaction", tag.Error(err2))
 		}
+		if retErr == nil && hasNewWorkerTask {
+			notifyNewTask(time.Now())
+		}
 	}()
 
 	stateRow.WaitUntilStatus = extensions.StateExecutionStatusCompleted
 	if resp.CommandRequest.GetWaitingType() != xdbapi.EMPTY_COMMAND {
 		// TODO set command request from resp
-
+		return fmt.Errorf("not supported command type %v", resp.CommandRequest.GetWaitingType())
 	} else {
 		stateRow.ExecuteStatus = extensions.StateExecutionStatusRunning
 	}
@@ -162,13 +164,15 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 		StateId:            task.StateId,
 		StateIdSequence:    task.StateIdSequence,
 	})
+	hasNewWorkerTask = true
 	return retErr
 }
 
 func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info extensions.AsyncStateExecutionInfoJson,
 	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
-	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger,
+	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
 ) (retErr error) {
+	hasNewWorkerTask := false
 	// TODO fix using backoff retry when worker API returns error by pushing the task into timer queue
 	attempt := int32(1)
 
@@ -211,6 +215,9 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 		} else {
 			err2 := txn.Rollback()
 			logger.Error("failed at rolling back transaction", tag.Error(err2))
+		}
+		if hasNewWorkerTask && retErr == nil {
+			notifyNewTask(time.Now())
 		}
 	}()
 
@@ -296,6 +303,7 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 				return retErr
 			}
 		}
+		hasNewWorkerTask = true
 		// finally update process execution row
 		seqJ, retErr := json.Marshal(stateIdSequence)
 		if retErr != nil {
