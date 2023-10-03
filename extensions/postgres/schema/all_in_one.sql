@@ -49,7 +49,7 @@ CREATE TABLE xdb_sys_worker_tasks(
 
 CREATE TABLE xdb_sys_timer_tasks(
     shard_id INTEGER NOT NULL, -- for sharding xdb-local-mq
-    start_time TIMESTAMP NOT NULL,
+    fire_time TIMESTAMP NOT NULL,
     task_sequence bigserial, -- to help ensure the PK uniqueness 
     --
     process_execution_id uuid NOT NULL, -- for looking up xdb_sys_async_state_executions
@@ -57,5 +57,5 @@ CREATE TABLE xdb_sys_timer_tasks(
     state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
     task_type SMALLINT, -- 1: process timeout 2: user timer command, 3: worker_task_backoff
     info jsonb ,
-    PRIMARY KEY (shard_id, start_time, task_sequence)    
+    PRIMARY KEY (shard_id, fire_time, task_sequence)    
 );

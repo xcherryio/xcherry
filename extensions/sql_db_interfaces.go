@@ -2,8 +2,8 @@ package extensions
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence/uuid"
 )
 
 type SQLDBExtension interface {

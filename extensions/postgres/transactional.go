@@ -2,8 +2,8 @@ package postgres
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence/uuid"
 )
 
 const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_current_process_executions

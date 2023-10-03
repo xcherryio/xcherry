@@ -5,7 +5,7 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/engine"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +18,8 @@ type handler struct {
 	svc    Service
 }
 
-func newHandler(cfg config.Config, processOrm persistence.ProcessORM, logger log.Logger) *handler {
-	svc := NewServiceImpl(cfg, processOrm, logger)
+func newHandler(cfg config.Config, apiEngine engine.APIEngine, logger log.Logger) *handler {
+	svc := NewServiceImpl(cfg, apiEngine, logger)
 	return &handler{
 		config: cfg,
 		logger: logger,

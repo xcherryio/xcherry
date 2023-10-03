@@ -7,7 +7,7 @@ import (
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/engine"
 	"github.com/xdblab/xdb/service/api"
 	"go.uber.org/multierr"
 	rawLog "log"
@@ -67,7 +67,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	orm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL, logger)
+	apiEngine, err := engine.NewAPIEngineSQLImpl(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
@@ -75,7 +75,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	var httpServer *http.Server
 	if services[ApiServiceName] {
 		go func() {
-			ginController := api.NewAPIServiceGinController(*cfg, orm, logger.WithTags(tag.Service(ApiServiceName)))
+			ginController := api.NewAPIServiceGinController(*cfg, apiEngine, logger.WithTags(tag.Service(ApiServiceName)))
 
 			svrCfg := cfg.ApiService.HttpServer
 			httpServer = &http.Server{
@@ -98,14 +98,9 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		}()
 	}
 
-	var mq persistence.ProcessMQ
+	var mq engine.ProcessMQ
 	if services[AsyncServiceName] {
 		// TODO implement a service
-		mq := persistence.NewPulsarProcessMQ(rootCtx, *cfg, orm, logger)
-		err := mq.Start()
-		if err != nil {
-			panic(err)
-		}
 	}
 
 	return func(ctx context.Context) error {
@@ -123,7 +118,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 				errs = multierr.Append(errs, err)
 			}
 		}
-		err := orm.Close()
+		err := apiEngine.Close()
 		if err != nil {
 			errs = multierr.Append(errs, err)
 		}

@@ -6,6 +6,8 @@ import (
 	"github.com/xdblab/xdb/cmd/server/bootstrap"
 	"log"
 	"os"
+	
+	_ "github.com/xdblab/xdb/extensions/postgres" // import postgres
 )
 
 func main() {

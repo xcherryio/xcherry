@@ -2,7 +2,7 @@ package extensions
 
 import (
 	"github.com/jmoiron/sqlx/types"
-	"github.com/xdblab/xdb/persistence/uuid"
+	"github.com/xdblab/xdb/common/uuid"
 	"time"
 )
 
@@ -120,7 +120,7 @@ type (
 
 		StateId         string
 		StateIdSequence int32
-		
+
 		TaskSequence int64
 	}
 

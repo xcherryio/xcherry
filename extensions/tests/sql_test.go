@@ -7,11 +7,11 @@ import (
 	"github.com/jmoiron/sqlx/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
-	"github.com/xdblab/xdb/persistence/uuid"
 	"testing"
 	"time"
 )
@@ -43,6 +43,7 @@ func TestPostgres(t *testing.T) {
 }
 
 func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
+	// TODO this test need to be refactored to be easier to read!!!!
 	ctx := context.Background()
 	// start process transaction
 	txn, err := session.StartTransaction(ctx)
