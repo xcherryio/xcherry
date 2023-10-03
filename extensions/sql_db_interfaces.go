@@ -51,7 +51,7 @@ type nonTransactionalCRUD interface {
 	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
 
-	BatchSelectWorkerTasksOfFirstPage(ctx context.Context, shardId, pageSize int32) ([]WorkerTaskRow, error)
+	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
 }
 

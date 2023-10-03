@@ -62,7 +62,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	}
 	logger := log2.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(cfg.String()))
-	err = cfg.Validate()
+	err = cfg.ValidateAndSetDefaults()
 	if err != nil {
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
@@ -98,7 +98,6 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		}()
 	}
 
-	var mq engine.ProcessMQ
 	if services[AsyncServiceName] {
 		// TODO implement a service
 	}
@@ -108,12 +107,6 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		var errs error
 		if httpServer != nil {
 			err := httpServer.Shutdown(ctx)
-			if err != nil {
-				errs = multierr.Append(errs, err)
-			}
-		}
-		if mq != nil {
-			err := mq.Stop()
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}

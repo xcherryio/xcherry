@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/apache/pulsar-client-go/pulsar"
 	"log"
 	"os"
 	"time"
@@ -70,26 +69,16 @@ type (
 	}
 
 	AsyncServiceConfig struct {
-		MessageQueue MessageQueueConfig `yaml:"messageQueue"`
+		WorkerTaskQueue WorkerTaskQueueConfig `yaml:"workerTaskQueue"`
 	}
 
-	MessageQueueConfig struct {
-		// currently only Pulsar+CDC is the only option
-		Pulsar *PulsarMQConfig `yaml:"pulsar"`
-	}
-
-	PulsarMQConfig struct {
-		// PulsarClientOptions is the config to connect to Pulsar service
-		PulsarClientOptions pulsar.ClientOptions `yaml:"pulsarClientOptions"`
-		// CDCTopicsPrefix is the prefix of topics that pulsar CDC connector sends messages to
-		// The topics are per database table
-		// XDB will consume messages from those topics for processing
-		CDCTopicsPrefix string `yaml:"cdcTopicsPrefix"`
-		// DefaultCDCTopicSubscription is the subscription that XDB will use to consuming the CDC topic
-		// currently only one subscription is supported, which means all the worker/timer tasks from all the XDB Process Types
-		// will share the same subscription with the consumer groups.
-		// In the future, we will support subscription based on different process types for better isolation
-		DefaultCDCTopicSubscription string `yaml:"defaultCDCTopicSubscription"`
+	WorkerTaskQueueConfig struct {
+		MaxPollInterval      time.Duration `yaml:"maxPollInterval"`
+		CommitInterval       time.Duration `yaml:"commitInterval"`
+		IntervalJitter       time.Duration `yaml:"intervalJitter"`
+		ProcessorConcurrency int           `yaml:"processorConcurrency"`
+		ProcessorBufferSize  int           `yaml:"processorBufferSize"`
+		PollPageSize         int32         `yaml:"pollPageSize"`
 	}
 )
 
@@ -114,7 +103,7 @@ func NewConfig(configPath string) (*Config, error) {
 	return config, nil
 }
 
-func (c *Config) Validate() error {
+func (c *Config) ValidateAndSetDefaults() error {
 	if c.Database.SQL == nil {
 		return fmt.Errorf("sql config is required")
 	}
@@ -122,12 +111,21 @@ func (c *Config) Validate() error {
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
 	}
-	if c.AsyncService.MessageQueue.Pulsar == nil {
-		return fmt.Errorf("pulsar config is required")
+	workerTaskQConfig := c.AsyncService.WorkerTaskQueue
+	if workerTaskQConfig.MaxPollInterval == 0 {
+		workerTaskQConfig.MaxPollInterval = time.Minute
 	}
-	pulsarCfg := c.AsyncService.MessageQueue.Pulsar
-	if anyAbsent(pulsarCfg.CDCTopicsPrefix, pulsarCfg.DefaultCDCTopicSubscription) {
-		return fmt.Errorf("some required configs are missing:pulsarCfg.CDCTopic, pulsarCfg.DefaultCDCTopicSubscription")
+	if workerTaskQConfig.IntervalJitter == 0 {
+		workerTaskQConfig.MaxPollInterval = time.Second * 5
+	}
+	if workerTaskQConfig.ProcessorConcurrency == 0 {
+		workerTaskQConfig.ProcessorConcurrency = 10
+	}
+	if workerTaskQConfig.ProcessorBufferSize == 0 {
+		workerTaskQConfig.ProcessorBufferSize = 1000
+	}
+	if workerTaskQConfig.PollPageSize == 0 {
+		workerTaskQConfig.PollPageSize = 1000
 	}
 	return nil
 }

@@ -34,17 +34,17 @@ func (d dbSession) SelectAsyncStateExecutionForUpdate(ctx context.Context, filte
 }
 
 const batchSelectWorkerTasksOfFirstPageQuery = `SELECT shard_id, task_sequence, process_execution_id, state_id, state_id_sequence, task_type
-	FROM xdb_sys_worker_tasks WHERE shard_id = $1 ORDER BY task_sequence ASC LIMIT $2`
+	FROM xdb_sys_worker_tasks WHERE shard_id = $1 task_sequence>= $2 ORDER BY task_sequence ASC LIMIT $3`
 
-func (d dbSession) BatchSelectWorkerTasksOfFirstPage(ctx context.Context, shardId int32, pageSize int32) ([]extensions.WorkerTaskRow, error) {
+func (d dbSession) BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]extensions.WorkerTaskRow, error) {
 	var rows []extensions.WorkerTaskRow
-	err := d.db.SelectContext(ctx, &rows, batchSelectWorkerTasksOfFirstPageQuery, shardId, pageSize)
+	err := d.db.SelectContext(ctx, &rows, batchSelectWorkerTasksOfFirstPageQuery, shardId, startSequenceInclusive, pageSize)
 	return rows, err
 }
 
-const batchDeleteWorkerTaskQuery = `DELETE FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence <= $2`
+const batchDeleteWorkerTaskQuery = `DELETE FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence>= $2 task_sequence <= $3`
 
 func (d dbSession) BatchDeleteWorkerTask(ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter) error {
-	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MaxTaskSequenceInclusive)
+	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
 	return err
 }

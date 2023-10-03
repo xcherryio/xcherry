@@ -149,7 +149,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ass.True(session.IsNotFoundError(err))
 
 	// test select worker tasks
-	workerTasks, err := session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
+	workerTasks, err := session.BatchSelectWorkerTasks(ctx, extensions.DefaultShardId, 0, 1000)
 	ass.Nil(err)
 	ass.Equal(1, len(workerTasks))
 	// TODO assert equal
@@ -159,7 +159,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		MaxTaskSequenceInclusive: workerTasks[0].TaskSequence,
 	})
 	ass.Nil(err)
-	workerTasks, err = session.BatchSelectWorkerTasksOfFirstPage(ctx, extensions.DefaultShardId, 1000)
+	workerTasks, err = session.BatchSelectWorkerTasks(ctx, extensions.DefaultShardId, 0, 1000)
 	ass.Nil(err)
 	ass.Equal(0, len(workerTasks))
 

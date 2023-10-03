@@ -125,7 +125,9 @@ type (
 	}
 
 	WorkerTaskRangeDeleteFilter struct {
-		ShardId                  int32
+		ShardId int32
+
+		MinTaskSequenceInclusive int64
 		MaxTaskSequenceInclusive int64
 	}
 )

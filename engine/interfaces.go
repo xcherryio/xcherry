@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"time"
 )
 
 // APIEngine is for operating on the database for process execution
@@ -14,8 +15,9 @@ type APIEngine interface {
 	Close() error
 }
 
-// ProcessMQ is consuming/processing events of process execution
-type ProcessMQ interface {
+// TaskQueue is task queue
+type TaskQueue interface {
 	Start() error
-	Stop() error
+	TriggerPolling(pollTime time.Time)
+	Stop(ctx context.Context) error
 }
