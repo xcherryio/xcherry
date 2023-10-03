@@ -1,5 +1,7 @@
 package extensions
 
+// TODO add helper methods for conversion
+
 type ProcessExecutionInfoJson struct {
 	ProcessType string `json:"processType"`
 	WorkerURL   string `json:"workerURL"`
@@ -10,10 +12,7 @@ type StateExecutionIdSequenceJson struct {
 }
 
 type AsyncStateExecutionInfoJson struct {
-}
-
-// EncodedDataJson represents xdbapi.EncodedObject
-type EncodedDataJson struct {
-	Encoding *string `json:"encoding"`
-	Data     *string `json:"data"`
+	ProcessId   string `json:"processId"`
+	ProcessType string `json:"processType"`
+	WorkerURL   string `json:"workerURL"`
 }

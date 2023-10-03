@@ -55,10 +55,11 @@ const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions se
 version = :previous_version +1,
 wait_until_status = :wait_until_status,
 execute_status = :execute_status
-WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id AND state_id_sequence=:state_id_sequence AND version = :previous_version
-`
+WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id AND state_id_sequence=:state_id_sequence AND version = :previous_version`
 
-func (d dbTx) UpdateAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate) error {
+func (d dbTx) UpdateAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) error {
+	// ignore static info because they are not changing
+	// TODO how to make that clear? maybe rename the method?
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
 	if err != nil {

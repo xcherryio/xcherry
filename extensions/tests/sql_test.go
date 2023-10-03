@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/jmoiron/sqlx/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
@@ -85,12 +86,15 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	err = txn.InsertProcessExecution(ctx, prcExeRow)
 	ass.Nil(err)
 
-	inputJson, err := json.Marshal(extensions.EncodedDataJson{
+	inputJson, err := json.Marshal(xdbapi.EncodedObject{
 		Encoding: ptr.Any("test-encoding"),
 		Data:     ptr.Any("test-data"),
 	})
 	ass.Nil(err)
-	stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{})
+	stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{
+		ProcessType: "test-type",
+		WorkerURL:   "test-url",
+	})
 	ass.Nil(err)
 
 	startStateId := "init-state"

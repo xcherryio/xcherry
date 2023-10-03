@@ -41,7 +41,7 @@ func NewWorkerTaskProcessorSQLImpl(
 	return &workerTaskQueueSQLImpl{
 		shardId:   shardId,
 		dbSession: session,
-		logger:    logger,
+		logger:    logger.WithTags(tag.Shard(shardId)),
 		rootCtx:   rootCtx,
 		cfg:       cfg,
 

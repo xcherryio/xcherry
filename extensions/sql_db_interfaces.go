@@ -42,14 +42,14 @@ type transactionalCRUD interface {
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
-	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
+	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
 
 	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
 }
 
 type nonTransactionalCRUD interface {
 	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
-	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
+	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 
 	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error

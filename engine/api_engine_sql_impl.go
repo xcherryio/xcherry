@@ -87,7 +87,10 @@ func (p APIEngineSQLImpl) StartProcess(
 			return nil, false, err
 		}
 
-		stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{})
+		stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{
+			ProcessType: request.GetProcessType(),
+			WorkerURL:   request.GetWorkerUrl(),
+		})
 		if err != nil {
 			return nil, false, err
 		}
@@ -100,6 +103,13 @@ func (p APIEngineSQLImpl) StartProcess(
 			Input:              stateInput,
 			Info:               stateExeInfo,
 		}
+		if request.StartStateConfig.GetSkipWaitUntil() {
+			stateRow.WaitUntilStatus = extensions.StateExecutionStatusSkipped
+			stateRow.ExecuteStatus = extensions.StateExecutionStatusRunning
+		} else {
+			stateRow.WaitUntilStatus = extensions.StateExecutionStatusRunning
+			stateRow.ExecuteStatus = extensions.StateExecutionStatusUndefined
+		}
 
 		err = tx.InsertAsyncStateExecution(ctx, stateRow)
 		if err != nil {
@@ -108,11 +118,16 @@ func (p APIEngineSQLImpl) StartProcess(
 
 		workerTaskRow := extensions.WorkerTaskRowForInsert{
 			ShardId:            extensions.DefaultShardId,
-			TaskType:           extensions.WorkerTaskTypeWaitUntil,
 			ProcessExecutionId: prcExeId,
 			StateId:            request.GetStartStateId(),
 			StateIdSequence:    1,
 		}
+		if request.StartStateConfig.GetSkipWaitUntil() {
+			workerTaskRow.TaskType = extensions.WorkerTaskTypeExecute
+		} else {
+			workerTaskRow.TaskType = extensions.WorkerTaskTypeWaitUntil
+		}
+		
 		err = tx.InsertWorkerTask(ctx, workerTaskRow)
 		if err != nil {
 			return nil, false, err

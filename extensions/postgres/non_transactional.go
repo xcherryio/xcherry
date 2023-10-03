@@ -20,11 +20,11 @@ func (d dbSession) SelectCurrentProcessExecution(ctx context.Context, namespace,
 	return &row, err
 }
 
-const selectAsyncStateExecutionForUpdateQuery = `SELECT wait_until_status, execute_status, version as previous_version
+const selectAsyncStateExecutionForUpdateQuery = `SELECT wait_until_status, execute_status, version as previous_version, info, input
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
 
-func (d dbSession) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
-	var row extensions.AsyncStateExecutionRowForUpdate
+func (d dbSession) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRow, error) {
+	var row extensions.AsyncStateExecutionRow
 	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
 	err := d.db.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
 	row.ProcessExecutionId = filter.ProcessExecutionId
