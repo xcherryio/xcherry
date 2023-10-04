@@ -10,6 +10,6 @@ type Server interface {
 
 type Service interface {
 	Start() error
-	NotifyPollingWorkerTask(shardId int32)
+	NotifyPollingWorkerTask(shardId int32) error
 	Stop(ctx context.Context) error
 }

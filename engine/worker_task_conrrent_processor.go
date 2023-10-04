@@ -2,79 +2,122 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/urlautofix"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence"
 	"io/ioutil"
 	"net/http"
 	"time"
 )
 
-// TODO refactor to be more modularized
+type workerTaskConcurrentProcessor struct {
+	rootCtx            context.Context
+	cfg                config.Config
+	taskToProcessChans chan persistence.WorkerTask
+	// for quickly checking if the shardId is being processed
+	currentShards map[int32]bool
+	// shardId to the channel
+	taskToCommitChans map[int32]chan<- persistence.WorkerTask
+	// shardId to the notifier
+	workerTaskNotifier map[int32]LocalNotifyNewWorkerTask
+	store              persistence.ProcessStore
+	logger             log.Logger
+}
 
-func startWorkerTaskConcurrentProcessor(
-	ctx context.Context, concurrency int,
-	taskToProcessChan chan extensions.WorkerTaskRow,
-	taskCompletionChan chan<- extensions.WorkerTaskRow,
-	dbSession extensions.SQLDBSession, logger log.Logger, notify LocalNotifyNewWorkerTask) {
+func NewWorkerTaskConcurrentProcessor(
+	ctx context.Context, cfg config.Config,
+	store persistence.ProcessStore, logger log.Logger) WorkerTaskProcessor {
+	bufferSize := cfg.AsyncService.WorkerTaskQueue.ProcessorBufferSize
+	return &workerTaskConcurrentProcessor{
+		rootCtx:            ctx,
+		cfg:                cfg,
+		taskToProcessChans: make(chan persistence.WorkerTask, bufferSize),
+		taskToCommitChans:  make(map[int32]chan<- persistence.WorkerTask),
+		workerTaskNotifier: make(map[int32]LocalNotifyNewWorkerTask),
+		store:              store,
+		logger:             logger,
+	}
+}
+
+func (w *workerTaskConcurrentProcessor) Stop(context.Context) error {
+	return nil
+}
+func (w *workerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.WorkerTask {
+	return w.taskToProcessChans
+}
+
+func (w *workerTaskConcurrentProcessor) AddWorkerTaskQueue(
+	shardId int32, tasksToCommitChan chan<- persistence.WorkerTask, notifier LocalNotifyNewWorkerTask,
+) (alreadyExisted bool) {
+	exists := w.currentShards[shardId]
+	w.currentShards[shardId] = true
+	w.workerTaskNotifier[shardId] = notifier
+	w.taskToCommitChans[shardId] = tasksToCommitChan
+	return exists
+}
+
+func (w *workerTaskConcurrentProcessor) Start() error {
+	concurrency := w.cfg.AsyncService.WorkerTaskQueue.ProcessorConcurrency
+
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
+				case <-w.rootCtx.Done():
 					return
-				case task, ok := <-taskToProcessChan:
+				case task, ok := <-w.taskToProcessChans:
 					if !ok {
 						return
 					}
-					err := processWorkerTask(ctx, task, dbSession, logger, notify)
-					if err != nil {
-						// put it back to the queue for retry
-						// Note that if the error is because of invoking worker APIs,
-						// processWorkerTask will use timer queue for backoff retry instead(To be implemented)
-						taskToProcessChan <- task
-					} else {
-						taskCompletionChan <- task
+					if !w.currentShards[task.ShardId] {
+						w.logger.Info("skip the stale task that is due to shard movement", tag.Shard(task.ShardId), tag.ID(task.GetId()))
+						continue
 					}
 
+					notifier := w.workerTaskNotifier[task.ShardId]
+					err := w.processWorkerTask(w.rootCtx, task, notifier)
+
+					if w.currentShards[task.ShardId] { // check again
+						commitChan := w.taskToCommitChans[task.ShardId]
+						if err != nil {
+							// put it back to the queue for immediate retry
+							// Note that if the error is because of invoking worker APIs, it will be sent to
+							// timer task instead
+							w.taskToProcessChans <- task
+						} else {
+							commitChan <- task
+						}
+					}
 				}
 			}
 		}()
 	}
+	return nil
 }
 
-func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, session extensions.SQLDBSession,
-	logger log.Logger, notify LocalNotifyNewWorkerTask) error {
+func (w *workerTaskConcurrentProcessor) processWorkerTask(
+	ctx context.Context, task persistence.WorkerTask, notifier LocalNotifyNewWorkerTask,
+) error {
 
-	logger.Info("execute worker task", tag.ID(tag.AnyToStr(task.TaskSequence)))
+	w.logger.Info("execute worker task", tag.ID(task.GetId()))
 
-	stateRow, err := session.SelectAsyncStateExecutionForUpdate(
-		ctx, extensions.AsyncStateExecutionSelectFilter{
-			ProcessExecutionId: task.ProcessExecutionId,
-			StateId:            task.StateId,
-			StateIdSequence:    task.StateIdSequence,
-		})
-	if err != nil {
-		return err
-	}
-	var info persistence.AsyncStateExecutionInfoJson
-	err = json.Unmarshal(stateRow.Info, &info)
-	if err != nil {
-		return err
-	}
-	var input xdbapi.EncodedObject
-	err = json.Unmarshal(stateRow.Input, &input)
+	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
+		ProcessExecutionId: task.ProcessExecutionId,
+		StateExecutionId: persistence.StateExecutionId{
+			StateId:         task.StateId,
+			StateIdSequence: task.StateIdSequence,
+		},
+	})
 	if err != nil {
 		return err
 	}
 
-	iwfWorkerBaseUrl := urlautofix.FixWorkerUrl(info.WorkerURL)
+	iwfWorkerBaseUrl := urlautofix.FixWorkerUrl(prep.Info.WorkerURL)
 	apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
 		Servers: []xdbapi.ServerConfiguration{
 			{
@@ -83,24 +126,24 @@ func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, sessi
 		},
 	})
 
-	if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
-		return processWaitUntilTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
-	} else if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
-		return processExecuteTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
+	if prep.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+		return w.processWaitUntilTask(ctx, task, *prep, apiClient, notifier)
+	} else if prep.ExecuteStatus == persistence.StateExecutionStatusRunning {
+		return w.processExecuteTask(ctx, task, *prep, apiClient, notifier)
 	} else {
-		logger.Warn("noop for worker task ",
+		w.logger.Warn("noop for worker task ",
 			tag.ID(tag.AnyToStr(task.TaskSequence)),
 			tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
-				stateRow.WaitUntilStatus, stateRow.ExecuteStatus)))
+				prep.WaitUntilStatus, prep.ExecuteStatus)))
 		return nil
 	}
 }
 
-func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, info persistence.AsyncStateExecutionInfoJson,
-	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
-	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
-) (retErr error) {
-	hasNewWorkerTask := false
+func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
+	ctx context.Context, task persistence.WorkerTask,
+	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	notifier LocalNotifyNewWorkerTask,
+) error {
 	// TODO fix using backoff retry when worker API returns error by pushing the task into timer queue
 	attempt := int32(1)
 
@@ -108,72 +151,51 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
 		xdbapi.AsyncStateWaitUntilRequest{
 			Context: &xdbapi.Context{
-				ProcessId:          info.ProcessId,
-				ProcessExecutionId: task.ProcessExecutionIdString,
+				ProcessId:          prep.Info.ProcessId,
+				ProcessExecutionId: task.ProcessExecutionId.String(),
 				Attempt:            ptr.Any(attempt),
-				StateExecutionId:   ptr.Any(getAsyncStateExecutionId(task.StateId, task.StateIdSequence)),
+				StateExecutionId:   ptr.Any(task.StateExecutionId.GetId()),
 				// TODO more fields
 			},
-			ProcessType: ptr.Any(info.ProcessType),
+			ProcessType: ptr.Any(prep.Info.ProcessType),
 			StateId:     ptr.Any(task.StateId),
 			StateInput: &xdbapi.EncodedObject{
-				Encoding: input.Encoding,
-				Data:     input.Data,
+				Encoding: prep.Input.Encoding,
+				Data:     prep.Input.Data,
 			},
 		},
 	).Execute()
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
-		logger.Info("worker API return error", tag.Error(err))
+		w.logger.Info("worker API return error", tag.Error(err))
 		// TODO instead of returning error, we should do backoff retry by pushing this task into timer queue
 		return err
 	}
-	txn, retErr := session.StartTransaction(ctx)
-	if retErr != nil {
-		return retErr
-	}
-	defer func() {
-		if retErr == nil {
-			retErr = txn.Commit()
-		} else {
-			err2 := txn.Rollback()
-			logger.Error("failed at rolling back transaction", tag.Error(err2))
-		}
-		if retErr == nil && hasNewWorkerTask {
-			notifyNewTask(time.Now())
-		}
-	}()
 
-	stateRow.WaitUntilStatus = persistence.StateExecutionStatusCompleted
-	if resp.CommandRequest.GetWaitingType() != xdbapi.EMPTY_COMMAND {
-		// TODO set command request from resp
-		return fmt.Errorf("not supported command type %v", resp.CommandRequest.GetWaitingType())
-	} else {
-		stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
-	}
-	retErr = txn.UpdateAsyncStateExecution(ctx, *stateRow)
-	if retErr != nil {
-		if session.IsConditionalUpdateFailure(retErr) {
-			logger.Warn("UpdateAsyncStateExecution failed at conditional update")
-		}
-		return retErr
-	}
-	retErr = txn.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
-		ShardId:            task.ShardId,
-		TaskType:           persistence.WorkerTaskTypeExecute,
+	compResp, err := w.store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
-		StateId:            task.StateId,
-		StateIdSequence:    task.StateIdSequence,
+		StateExecutionId: persistence.StateExecutionId{
+			StateId:         task.StateId,
+			StateIdSequence: task.StateIdSequence,
+		},
+		Prepare:        prep,
+		CommandRequest: *resp.CommandRequest,
+		TaskShardId:    task.ShardId,
 	})
-	hasNewWorkerTask = true
-	return retErr
+	if err != nil {
+		return err
+	}
+	if compResp.HasNewWorkerTask {
+		notifier(time.Now())
+	}
+	return nil
 }
 
-func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info persistence.AsyncStateExecutionInfoJson,
-	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
-	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
+func (w *workerTaskConcurrentProcessor) processExecuteTask(
+	ctx context.Context, task persistence.WorkerTask,
+	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	notifyNewTask LocalNotifyNewWorkerTask,
 ) (retErr error) {
-	hasNewWorkerTask := false
 	// TODO fix using backoff retry when worker API returns error by pushing the task into timer queue
 	attempt := int32(1)
 
@@ -181,23 +203,23 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 	resp, httpResp, err := req.AsyncStateExecuteRequest(
 		xdbapi.AsyncStateExecuteRequest{
 			Context: &xdbapi.Context{
-				ProcessId:          info.ProcessId,
-				ProcessExecutionId: task.ProcessExecutionIdString,
+				ProcessId:          prep.Info.ProcessId,
+				ProcessExecutionId: task.ProcessExecutionId.String(),
 				Attempt:            ptr.Any(attempt),
-				StateExecutionId:   ptr.Any(getAsyncStateExecutionId(task.StateId, task.StateIdSequence)),
+				StateExecutionId:   ptr.Any(task.StateExecutionId.GetId()),
 				// TODO more fields
 			},
-			ProcessType: ptr.Any(info.ProcessType),
+			ProcessType: ptr.Any(prep.Info.ProcessType),
 			StateId:     ptr.Any(task.StateId),
 			StateInput: &xdbapi.EncodedObject{
-				Encoding: input.Encoding,
-				Data:     input.Data,
+				Encoding: prep.Input.Encoding,
+				Data:     prep.Input.Data,
 			},
 		},
 	).Execute()
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
-		logger.Info("worker API return error", tag.Error(err))
+		w.logger.Info("worker API return error", tag.Error(err))
 		// TODO instead of returning error, we should do backoff retry by pushing this task into timer queue
 		return err
 	}
@@ -206,123 +228,23 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 		return err
 	}
 
-	txn, retErr := session.StartTransaction(ctx)
-	if retErr != nil {
-		return retErr
+	compResp, err := w.store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+		ProcessExecutionId: task.ProcessExecutionId,
+		StateExecutionId: persistence.StateExecutionId{
+			StateId:         task.StateId,
+			StateIdSequence: task.StateIdSequence,
+		},
+		Prepare:       prep,
+		StateDecision: *resp.StateDecision,
+		TaskShardId:   task.ShardId,
+	})
+	if err != nil {
+		return err
 	}
-	defer func() {
-		if retErr == nil {
-			retErr = txn.Commit()
-		} else {
-			err2 := txn.Rollback()
-			logger.Error("failed at rolling back transaction", tag.Error(err2))
-		}
-		if hasNewWorkerTask && retErr == nil {
-			notifyNewTask(time.Now())
-		}
-	}()
-
-	stateRow.ExecuteStatus = persistence.StateExecutionStatusCompleted
-	retErr = txn.UpdateAsyncStateExecution(ctx, *stateRow)
-	if retErr != nil {
-		if session.IsConditionalUpdateFailure(retErr) {
-			logger.Warn("UpdateAsyncStateExecution failed at conditional update")
-		}
-		return retErr
+	if compResp.HasNewWorkerTask {
+		notifyNewTask(time.Now())
 	}
-
-	if resp.StateDecision == nil {
-		return nil
-	}
-
-	if resp.StateDecision.HasThreadCloseDecision() {
-		threadDecision := resp.StateDecision.GetThreadCloseDecision()
-		if threadDecision.GetCloseType() == xdbapi.DEAD_END {
-			return nil
-		}
-	}
-
-	// at this point, it's either going to next states or closing the process
-	prcRow, retErr := txn.SelectProcessExecutionForUpdate(ctx, task.ProcessExecutionId)
-	if retErr != nil {
-		return retErr
-	}
-	var stateIdSequence persistence.StateExecutionSequenceMapsJson
-	retErr = json.Unmarshal(prcRow.StateIdSequence, &stateIdSequence)
-	if retErr != nil {
-		return retErr
-	}
-
-	if len(resp.StateDecision.GetNextStates()) > 0 {
-		nextStates := resp.StateDecision.GetNextStates()
-		// go to next states
-		for _, next := range nextStates {
-			stateIdSequence.SequenceMap[next.StateId]++
-			stateIdSeq := stateIdSequence.SequenceMap[next.StateId]
-
-			stateInput, retErr := json.Marshal(next.StateInput)
-			if retErr != nil {
-				return retErr
-			}
-
-			stateRow := extensions.AsyncStateExecutionRow{
-				ProcessExecutionId: task.ProcessExecutionId,
-				StateId:            task.StateId,
-				StateIdSequence:    int32(stateIdSeq),
-				PreviousVersion:    1,
-				Input:              stateInput,
-				Info:               stateRow.Info, // reuse the info from last execution as it won't change
-			}
-
-			if next.StateConfig.GetSkipWaitUntil() {
-				stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
-				stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
-			} else {
-				stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
-				stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
-			}
-
-			retErr = txn.InsertAsyncStateExecution(ctx, stateRow)
-			if retErr != nil {
-				return retErr
-			}
-
-			workerTaskRow := extensions.WorkerTaskRowForInsert{
-				ShardId:            persistence.DefaultShardId,
-				ProcessExecutionId: task.ProcessExecutionId,
-				StateId:            next.StateId,
-				StateIdSequence:    int32(stateIdSeq),
-			}
-			if next.StateConfig.GetSkipWaitUntil() {
-				workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
-			} else {
-				workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
-			}
-
-			retErr = txn.InsertWorkerTask(ctx, workerTaskRow)
-			if retErr != nil {
-				return retErr
-			}
-		}
-		hasNewWorkerTask = true
-		// finally update process execution row
-		seqJ, retErr := json.Marshal(stateIdSequence)
-		if retErr != nil {
-			return retErr
-		}
-		prcRow.StateIdSequence = seqJ
-		return txn.UpdateProcessExecution(ctx, *prcRow)
-	} else {
-		threadDecision := resp.StateDecision.GetThreadCloseDecision()
-		// close the thread
-		if threadDecision.GetCloseType() != xdbapi.FORCE_COMPLETE_PROCESS {
-			return fmt.Errorf("cannot support close type: %v", threadDecision.GetCloseType())
-		}
-
-		// update process execution row
-		prcRow.Status = persistence.ProcessExecutionStatusCompleted
-		return txn.UpdateProcessExecution(ctx, *prcRow)
-	}
+	return nil
 }
 
 func checkDecision(decision *xdbapi.StateDecision) error {
@@ -333,9 +255,6 @@ func checkDecision(decision *xdbapi.StateDecision) error {
 		return fmt.Errorf("cannot have both thread decision and next states")
 	}
 	return nil
-}
-func getAsyncStateExecutionId(stateId string, sequence int32) string {
-	return fmt.Sprintf("%v-%v", stateId, sequence)
 }
 
 func checkHttpError(err error, httpResp *http.Response) bool {

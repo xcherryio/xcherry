@@ -5,22 +5,23 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence"
 	"math/rand"
 	"time"
 )
 
 type workerTaskQueueSQLImpl struct {
-	shardId   int32
-	dbSession extensions.SQLDBSession
-	logger    log.Logger
-	rootCtx   context.Context
-	cfg       config.Config
+	shardId int32
+	store   persistence.ProcessStore
+	logger  log.Logger
+	rootCtx context.Context
+	cfg     config.Config
 
-	pollTimer                 TimerGate
-	commitTimer               TimerGate
-	taskToProcessChan         chan extensions.WorkerTaskRow
-	taskCompletionChan        chan extensions.WorkerTaskRow
+	pollTimer         TimerGate
+	commitTimer       TimerGate
+	processor         WorkerTaskProcessor
+	tasksToCommitChan chan persistence.WorkerTask
+	// the starting sequenceId(inclusive) to read worker tasks
 	currentReadCursor         int64
 	pendingTaskSequenceToPage map[int64]*workerTaskPage
 	completedPages            []*workerTaskPage
@@ -33,24 +34,25 @@ type workerTaskPage struct {
 }
 
 func NewWorkerTaskProcessorSQLImpl(
-	rootCtx context.Context, shardId int32, cfg config.Config, session extensions.SQLDBSession, logger log.Logger,
-) (TaskQueue, error) {
+	rootCtx context.Context, shardId int32, cfg config.Config, store persistence.ProcessStore,
+	processor WorkerTaskProcessor, logger log.Logger,
+) TaskQueue {
 	qCfg := cfg.AsyncService.WorkerTaskQueue
 
 	return &workerTaskQueueSQLImpl{
-		shardId:   shardId,
-		dbSession: session,
-		logger:    logger.WithTags(tag.Shard(shardId)),
-		rootCtx:   rootCtx,
-		cfg:       cfg,
+		shardId: shardId,
+		store:   store,
+		logger:  logger.WithTags(tag.Shard(shardId)),
+		rootCtx: rootCtx,
+		cfg:     cfg,
 
 		pollTimer:                 NewLocalTimerGate(logger),
 		commitTimer:               NewLocalTimerGate(logger),
-		taskToProcessChan:         make(chan extensions.WorkerTaskRow, qCfg.ProcessorBufferSize),
-		taskCompletionChan:        make(chan extensions.WorkerTaskRow, qCfg.ProcessorBufferSize),
+		processor:                 processor,
+		tasksToCommitChan:         make(chan persistence.WorkerTask, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
 		pendingTaskSequenceToPage: make(map[int64]*workerTaskPage),
-	}, nil
+	}
 }
 
 func (w *workerTaskQueueSQLImpl) Stop(ctx context.Context) error {
@@ -67,24 +69,19 @@ type LocalNotifyNewWorkerTask func(pollTime time.Time)
 func (w *workerTaskQueueSQLImpl) Start() error {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
-	w.pollTimer.Update(time.Now()) // fire immediately to make the first poll for the first page
+	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan, w.TriggerPolling)
 
-	startWorkerTaskConcurrentProcessor(
-		w.rootCtx, qCfg.ProcessorConcurrency,
-		w.taskToProcessChan, w.taskCompletionChan,
-		w.dbSession, w.logger, w.TriggerPolling)
+	w.pollTimer.Update(time.Now()) // fire immediately to make the first poll for the first page
 
 	for {
 		select {
 		case <-w.pollTimer.FireChan():
 			w.pollAndDispatch()
-			jitter := time.Duration(rand.Int63n(int64(qCfg.IntervalJitter)))
-			w.pollTimer.Update(time.Now().Add(qCfg.MaxPollInterval).Add(jitter))
+			w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
 		case <-w.commitTimer.FireChan():
 			_ = w.commitCompletedPages(w.rootCtx)
-			jitter := time.Duration(rand.Int63n(int64(qCfg.IntervalJitter)))
-			w.commitTimer.Update(time.Now().Add(qCfg.CommitInterval).Add(jitter))
-		case task, ok := <-w.taskCompletionChan:
+			w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
+		case task, ok := <-w.tasksToCommitChan:
 			if ok {
 				w.receiveCompletedTask(task)
 			}
@@ -95,30 +92,37 @@ func (w *workerTaskQueueSQLImpl) Start() error {
 	}
 }
 
+func (w *workerTaskQueueSQLImpl) getNextPollTime(interval, jitter time.Duration) time.Time {
+	jitterD := time.Duration(rand.Int63n(int64(jitter)))
+	return time.Now().Add(interval).Add(jitterD)
+}
+
 func (w *workerTaskQueueSQLImpl) pollAndDispatch() {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
-	workerTasks, err := w.dbSession.BatchSelectWorkerTasks(
-		w.rootCtx, w.shardId, w.currentReadCursor, qCfg.PollPageSize)
+	resp, err := w.store.GetWorkerTasks(
+		w.rootCtx, persistence.GetWorkerTasksRequest{
+			ShardId:                w.shardId,
+			StartSequenceInclusive: w.currentReadCursor,
+			PageSize:               qCfg.PollPageSize,
+		})
 
 	if err != nil {
 		w.logger.Error("failed at polling worker task", tag.Error(err))
 		// TODO maybe schedule an earlier next time?
 	} else {
-		if len(workerTasks) > 0 {
-			firstTask := workerTasks[0]
-			lastTask := workerTasks[len(workerTasks)-1]
-			w.currentReadCursor = lastTask.TaskSequence + 1
+		if len(resp.Tasks) > 0 {
+			w.currentReadCursor = resp.MaxSequenceInclusive + 1
 
 			page := &workerTaskPage{
-				minTaskSequence: firstTask.TaskSequence,
-				maxTaskSequence: lastTask.TaskSequence,
-				pendingCount:    len(workerTasks),
+				minTaskSequence: resp.MinSequenceInclusive,
+				maxTaskSequence: resp.MaxSequenceInclusive,
+				pendingCount:    len(resp.Tasks),
 			}
 
-			for _, task := range workerTasks {
-				w.taskToProcessChan <- task
-				w.pendingTaskSequenceToPage[task.TaskSequence] = page
+			for _, task := range resp.Tasks {
+				w.processor.GetTasksToProcessChan() <- task
+				w.pendingTaskSequenceToPage[*task.TaskSequence] = page
 			}
 		}
 	}
@@ -128,7 +132,7 @@ func (w *workerTaskQueueSQLImpl) commitCompletedPages(ctx context.Context) error
 	if len(w.completedPages) > 0 {
 		// TODO optimize by combining into single query (as long as it won't exceed certain limit)
 		for idx, page := range w.completedPages {
-			err := w.dbSession.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
+			err := w.store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
 				ShardId:                  w.shardId,
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
@@ -147,9 +151,9 @@ func (w *workerTaskQueueSQLImpl) commitCompletedPages(ctx context.Context) error
 	return nil
 }
 
-func (w *workerTaskQueueSQLImpl) receiveCompletedTask(task extensions.WorkerTaskRow) {
-	page := w.pendingTaskSequenceToPage[task.TaskSequence]
-	delete(w.pendingTaskSequenceToPage, task.TaskSequence)
+func (w *workerTaskQueueSQLImpl) receiveCompletedTask(task persistence.WorkerTask) {
+	page := w.pendingTaskSequenceToPage[*task.TaskSequence]
+	delete(w.pendingTaskSequenceToPage, *task.TaskSequence)
 
 	page.pendingCount--
 	if page.pendingCount == 0 {

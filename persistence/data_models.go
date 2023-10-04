@@ -107,6 +107,13 @@ type (
 	}
 )
 
+func (t WorkerTask) GetId() string {
+	if t.TaskSequence == nil {
+		return "<WRONG ID, TaskSequence IS EMPTY>"
+	}
+	return fmt.Sprintf("%v-%v", t.ShardId, *t.TaskSequence)
+}
+
 func (s StateExecutionId) GetId() string {
 	return fmt.Sprintf("%v-%v", s.StateId, s.StateIdSequence)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/service/api"
+	"github.com/xdblab/xdb/service/async"
 	"go.uber.org/multierr"
 	rawLog "log"
 	"os"
@@ -78,8 +79,14 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 			logger.Fatal("Failed to start api server", tag.Error(err))
 		}
 	}
+	
+	var asyncServer async.Server
 	if services[AsyncServiceName] {
-		// TODO implement a service
+		asyncServer := async.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))
+		err = asyncServer.Start()
+		if err != nil {
+			logger.Fatal("Failed to start async server", tag.Error(err))
+		}
 	}
 
 	return func(ctx context.Context) error {
@@ -88,6 +95,12 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		// first stop api server
 		if apiServer != nil {
 			err := apiServer.Stop(ctx)
+			if err != nil {
+				errs = multierr.Append(errs, err)
+			}
+		}
+		if asyncServer != nil {
+			err := asyncServer.Stop(ctx)
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}

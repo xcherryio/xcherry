@@ -31,7 +31,14 @@ func (h *ginHandler) NotifyWorkerTask(c *gin.Context) {
 		})
 		return
 	}
-	h.svc.NotifyPollingWorkerTask(int32(shardId))
+	err = h.svc.NotifyPollingWorkerTask(int32(shardId))
+	if err != nil {
+		c.JSON(400, map[string]string{
+			"message": err.Error(),
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, map[string]string{
 		"message": "success",
 	})
