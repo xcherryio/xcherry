@@ -9,8 +9,8 @@ import (
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/urlautofix"
-	"github.com/xdblab/xdb/engine/persistence"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -63,7 +63,7 @@ func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, sessi
 	if err != nil {
 		return err
 	}
-	var info extensions.AsyncStateExecutionInfoJson
+	var info persistence.AsyncStateExecutionInfoJson
 	err = json.Unmarshal(stateRow.Info, &info)
 	if err != nil {
 		return err
@@ -83,9 +83,9 @@ func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, sessi
 		},
 	})
 
-	if stateRow.WaitUntilStatus == extensions.StateExecutionStatusRunning {
+	if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
 		return processWaitUntilTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
-	} else if stateRow.ExecuteStatus == extensions.StateExecutionStatusRunning {
+	} else if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
 		return processExecuteTask(ctx, task, info, stateRow, input, apiClient, session, logger, notify)
 	} else {
 		logger.Warn("noop for worker task ",
@@ -96,7 +96,7 @@ func processWorkerTask(ctx context.Context, task extensions.WorkerTaskRow, sessi
 	}
 }
 
-func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, info extensions.AsyncStateExecutionInfoJson,
+func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, info persistence.AsyncStateExecutionInfoJson,
 	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
 	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
 ) (retErr error) {
@@ -144,12 +144,12 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 		}
 	}()
 
-	stateRow.WaitUntilStatus = extensions.StateExecutionStatusCompleted
+	stateRow.WaitUntilStatus = persistence.StateExecutionStatusCompleted
 	if resp.CommandRequest.GetWaitingType() != xdbapi.EMPTY_COMMAND {
 		// TODO set command request from resp
 		return fmt.Errorf("not supported command type %v", resp.CommandRequest.GetWaitingType())
 	} else {
-		stateRow.ExecuteStatus = extensions.StateExecutionStatusRunning
+		stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
 	}
 	retErr = txn.UpdateAsyncStateExecution(ctx, *stateRow)
 	if retErr != nil {
@@ -160,7 +160,7 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 	}
 	retErr = txn.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
 		ShardId:            task.ShardId,
-		TaskType:           extensions.WorkerTaskTypeExecute,
+		TaskType:           persistence.WorkerTaskTypeExecute,
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateId:            task.StateId,
 		StateIdSequence:    task.StateIdSequence,
@@ -169,7 +169,7 @@ func processWaitUntilTask(ctx context.Context, task extensions.WorkerTaskRow, in
 	return retErr
 }
 
-func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info extensions.AsyncStateExecutionInfoJson,
+func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info persistence.AsyncStateExecutionInfoJson,
 	stateRow *extensions.AsyncStateExecutionRow, input xdbapi.EncodedObject,
 	apiClient *xdbapi.APIClient, session extensions.SQLDBSession, logger log.Logger, notifyNewTask LocalNotifyNewWorkerTask,
 ) (retErr error) {
@@ -222,7 +222,7 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 		}
 	}()
 
-	stateRow.ExecuteStatus = extensions.StateExecutionStatusCompleted
+	stateRow.ExecuteStatus = persistence.StateExecutionStatusCompleted
 	retErr = txn.UpdateAsyncStateExecution(ctx, *stateRow)
 	if retErr != nil {
 		if session.IsConditionalUpdateFailure(retErr) {
@@ -247,7 +247,7 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 	if retErr != nil {
 		return retErr
 	}
-	var stateIdSequence extensions.StateExecutionIdSequenceJson
+	var stateIdSequence persistence.StateExecutionSequenceMapsJson
 	retErr = json.Unmarshal(prcRow.StateIdSequence, &stateIdSequence)
 	if retErr != nil {
 		return retErr
@@ -275,11 +275,11 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 			}
 
 			if next.StateConfig.GetSkipWaitUntil() {
-				stateRow.WaitUntilStatus = extensions.StateExecutionStatusSkipped
-				stateRow.ExecuteStatus = extensions.StateExecutionStatusRunning
+				stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
+				stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
 			} else {
-				stateRow.WaitUntilStatus = extensions.StateExecutionStatusRunning
-				stateRow.ExecuteStatus = extensions.StateExecutionStatusUndefined
+				stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
+				stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
 			}
 
 			retErr = txn.InsertAsyncStateExecution(ctx, stateRow)
@@ -294,9 +294,9 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 				StateIdSequence:    int32(stateIdSeq),
 			}
 			if next.StateConfig.GetSkipWaitUntil() {
-				workerTaskRow.TaskType = extensions.WorkerTaskTypeExecute
+				workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
 			} else {
-				workerTaskRow.TaskType = extensions.WorkerTaskTypeWaitUntil
+				workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
 			}
 
 			retErr = txn.InsertWorkerTask(ctx, workerTaskRow)
@@ -320,14 +320,14 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 		}
 
 		// update process execution row
-		prcRow.Status = extensions.ProcessExecutionStatusCompleted
+		prcRow.Status = persistence.ProcessExecutionStatusCompleted
 		return txn.UpdateProcessExecution(ctx, *prcRow)
 	}
 }
 
 func checkDecision(decision *xdbapi.StateDecision) error {
 	if decision == nil {
-		return nil
+		return fmt.Errorf(" a decision is required")
 	}
 	if decision.HasThreadCloseDecision() && len(decision.GetNextStates()) > 0 {
 		return fmt.Errorf("cannot have both thread decision and next states")

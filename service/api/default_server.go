@@ -6,7 +6,7 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/engine/persistence"
+	"github.com/xdblab/xdb/persistence"
 	"net"
 	"net/http"
 )

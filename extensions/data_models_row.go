@@ -3,6 +3,7 @@ package extensions
 import (
 	"github.com/jmoiron/sqlx/types"
 	"github.com/xdblab/xdb/common/uuid"
+	"github.com/xdblab/xdb/persistence"
 	"time"
 )
 
@@ -13,7 +14,7 @@ type (
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 	}
 
@@ -21,26 +22,26 @@ type (
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
-		IsCurrent              bool
-		Status                 ProcessExecutionStatus
-		HistoryEventIdSequence int32
-		StateIdSequence        types.JSONText
+		IsCurrent                  bool
+		Status                     persistence.ProcessExecutionStatus
+		HistoryEventIdSequence     int32
+		StateExecutionSequenceMaps types.JSONText
 	}
 
 	ProcessExecutionRow struct {
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
-		IsCurrent              bool
-		Status                 ProcessExecutionStatus
-		HistoryEventIdSequence int32
-		StateIdSequence        types.JSONText
+		IsCurrent                  bool
+		Status                     persistence.ProcessExecutionStatus
+		HistoryEventIdSequence     int32
+		StateExecutionSequenceMaps types.JSONText
 
 		Namespace string
 
@@ -54,25 +55,40 @@ type (
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
 		StateId         string
 		StateIdSequence int32
 	}
 
-	AsyncStateExecutionRow struct {
+	AsyncStateExecutionRowForUpdate struct {
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
 		StateId         string
 		StateIdSequence int32
 
-		WaitUntilStatus StateExecutionStatus
-		ExecuteStatus   StateExecutionStatus
+		WaitUntilStatus persistence.StateExecutionStatus
+		ExecuteStatus   persistence.StateExecutionStatus
+		PreviousVersion int32 // for conditional check
+	}
+
+	AsyncStateExecutionRow struct {
+		ProcessExecutionId uuid.UUID
+		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
+		// A db extension must implement the code to read/write from/into this field
+		// xdb persistence layer will not use this for any other logic
+		ProcessExecutionIdString string
+
+		StateId         string
+		StateIdSequence int32
+
+		WaitUntilStatus persistence.StateExecutionStatus
+		ExecuteStatus   persistence.StateExecutionStatus
 		PreviousVersion int32 // for conditional check
 
 		Input types.JSONText
@@ -81,12 +97,12 @@ type (
 
 	WorkerTaskRowForInsert struct {
 		ShardId  int32
-		TaskType WorkerTaskType
+		TaskType persistence.WorkerTaskType
 
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
 		StateId         string
@@ -95,12 +111,12 @@ type (
 
 	WorkerTaskRow struct {
 		ShardId  int32
-		TaskType WorkerTaskType
+		TaskType persistence.WorkerTaskType
 
 		ProcessExecutionId uuid.UUID
 		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
 		// A db extension must implement the code to read/write from/into this field
-		// xdb will not use this for any other logic
+		// xdb persistence layer will not use this for any other logic
 		ProcessExecutionIdString string
 
 		StateId         string

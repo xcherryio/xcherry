@@ -10,10 +10,10 @@ import (
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/engine/persistence"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
+	"github.com/xdblab/xdb/persistence"
 	"testing"
 	"time"
 )
@@ -60,12 +60,12 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	})
 	ass.Nil(err)
 
-	info, err := json.Marshal(extensions.ProcessExecutionInfoJson{
+	info, err := json.Marshal(persistence.ProcessExecutionInfoJson{
 		ProcessType: "test-type",
 		WorkerURL:   "test-url",
 	})
 	ass.Nil(err)
-	stateIdSequenceJson, err := json.Marshal(extensions.StateExecutionIdSequenceJson{
+	stateIdSequenceJson, err := json.Marshal(persistence.StateExecutionSequenceMapsJson{
 		SequenceMap: map[string]int{
 			"start-state": 1,
 		},
@@ -75,7 +75,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 
 		ProcessExecutionId:     prcExeId,
 		IsCurrent:              true,
-		Status:                 extensions.ProcessExecutionStatusRunning,
+		Status:                 persistence.ProcessExecutionStatusRunning,
 		HistoryEventIdSequence: 1,
 		StateIdSequence:        stateIdSequenceJson,
 		Namespace:              namespace,
@@ -92,7 +92,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		Data:     ptr.Any("test-data"),
 	})
 	ass.Nil(err)
-	stateExeInfo, err := json.Marshal(extensions.AsyncStateExecutionInfoJson{
+	stateExeInfo, err := json.Marshal(persistence.AsyncStateExecutionInfoJson{
 		ProcessType: "test-type",
 		WorkerURL:   "test-url",
 	})
@@ -105,8 +105,8 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 		ProcessExecutionId: prcExeId,
 		StateId:            startStateId,
 		StateIdSequence:    stateIdSequence,
-		WaitUntilStatus:    extensions.StateExecutionStatusRunning,
-		ExecuteStatus:      extensions.StateExecutionStatusUndefined,
+		WaitUntilStatus:    persistence.StateExecutionStatusRunning,
+		ExecuteStatus:      persistence.StateExecutionStatusUndefined,
 		PreviousVersion:    previousVersion,
 		Info:               stateExeInfo,
 		Input:              inputJson,
@@ -116,7 +116,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 
 	workerTaskRow := extensions.WorkerTaskRowForInsert{
 		ShardId:            persistence.DefaultShardId,
-		TaskType:           extensions.WorkerTaskTypeWaitUntil,
+		TaskType:           persistence.WorkerTaskTypeWaitUntil,
 		ProcessExecutionId: prcExeId,
 		StateId:            startStateId,
 		StateIdSequence:    stateIdSequence,
@@ -131,8 +131,8 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ass.Nil(err)
 
 	assertTimeEqual(ass, prcExeRow.StartTime, row.StartTime)
-	assertJsonValueEqual(ass, prcExeRow.Info, row.Info, extensions.ProcessExecutionInfoJson{}, extensions.ProcessExecutionInfoJson{})
-	assertJsonValueEqual(ass, prcExeRow.StateIdSequence, row.StateIdSequence, extensions.StateExecutionIdSequenceJson{}, extensions.StateExecutionIdSequenceJson{})
+	assertJsonValueEqual(ass, prcExeRow.Info, row.Info, persistence.ProcessExecutionInfoJson{}, persistence.ProcessExecutionInfoJson{})
+	assertJsonValueEqual(ass, prcExeRow.StateIdSequence, row.StateIdSequence, persistence.StateExecutionSequenceMapsJson{}, persistence.StateExecutionSequenceMapsJson{})
 	row.StartTime = prcExeRow.StartTime
 	row.Info = prcExeRow.Info
 	row.StateIdSequence = prcExeRow.StateIdSequence
@@ -187,8 +187,8 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	txn4, err := session.StartTransaction(ctx)
 	ass.Nil(err)
 	stateRowSelect.PreviousVersion = previousVersion
-	stateRowSelect.WaitUntilStatus = extensions.StateExecutionStatusCompleted
-	stateRowSelect.ExecuteStatus = extensions.StateExecutionStatusRunning
+	stateRowSelect.WaitUntilStatus = persistence.StateExecutionStatusCompleted
+	stateRowSelect.ExecuteStatus = persistence.StateExecutionStatusRunning
 	err = txn4.UpdateAsyncStateExecution(ctx, *stateRowSelect)
 	ass.Nil(err)
 	ass.Nil(txn4.Commit())
@@ -204,20 +204,20 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 
 	txn5, err := session.StartTransaction(ctx)
 	ass.Nil(err)
-	stateRowSelect.WaitUntilStatus = extensions.StateExecutionStatusCompleted
-	stateRowSelect.ExecuteStatus = extensions.StateExecutionStatusCompleted
+	stateRowSelect.WaitUntilStatus = persistence.StateExecutionStatusCompleted
+	stateRowSelect.ExecuteStatus = persistence.StateExecutionStatusCompleted
 	err = txn5.UpdateAsyncStateExecution(ctx, *stateRowSelect)
 	ass.Nil(err)
 	prcRow2, err := txn5.SelectProcessExecutionForUpdate(ctx, prcExeId)
 	ass.Nil(err)
-	prcRow2.Status = extensions.ProcessExecutionStatusCompleted
+	prcRow2.Status = persistence.ProcessExecutionStatusCompleted
 	err = txn5.UpdateProcessExecution(ctx, *prcRow2)
 	ass.Nil(err)
 	ass.Nil(txn5.Commit())
 
 	prcRow3, err := session.SelectCurrentProcessExecution(ctx, namespace, processId)
 	ass.Nil(err)
-	ass.Equal(extensions.ProcessExecutionStatusCompleted, prcRow3.Status)
+	ass.Equal(persistence.ProcessExecutionStatusCompleted, prcRow3.Status)
 }
 
 func assertTimeEqual(assertions *assert.Assertions, t1, t2 time.Time) {

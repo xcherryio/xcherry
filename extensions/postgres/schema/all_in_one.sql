@@ -15,7 +15,7 @@ CREATE TABLE xdb_sys_process_executions(
     start_time TIMESTAMP NOT NULL,
     timeout_seconds INTEGER,
     history_event_id_sequence INTEGER,
-    state_id_sequence jsonb NOT NULL , -- a map from stateId to the sequence number
+    state_execution_sequence_maps jsonb NOT NULL , -- some maps from stateId and sequence number
     info jsonb , -- workerURL, processType, etc
     PRIMARY KEY (id)
 );

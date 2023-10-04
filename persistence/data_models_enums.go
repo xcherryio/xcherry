@@ -1,4 +1,4 @@
-package extensions
+package persistence
 
 type ProcessExecutionStatus int32
 
@@ -34,6 +34,7 @@ const (
 	StateExecutionStatusCompleted StateExecutionStatus = 2
 	StateExecutionStatusFailed    StateExecutionStatus = 3
 	StateExecutionStatusTimeout   StateExecutionStatus = 4
+	StateExecutionStatusAborted   StateExecutionStatus = 5
 )
 
 func (e StateExecutionStatus) String() string {
@@ -48,6 +49,8 @@ func (e StateExecutionStatus) String() string {
 		return "Failed"
 	case StateExecutionStatusTimeout:
 		return "Timeout"
+	case StateExecutionStatusAborted:
+		return "Aborted"
 	default:
 		panic("this is not supported")
 	}

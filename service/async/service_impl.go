@@ -5,7 +5,7 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/engine"
-	"github.com/xdblab/xdb/engine/persistence"
+	persistence2 "github.com/xdblab/xdb/persistence"
 )
 
 type asyncService struct {
@@ -15,9 +15,9 @@ type asyncService struct {
 }
 
 func NewAsyncServiceImpl(
-	rootCtx context.Context, store persistence.ProcessStore, cfg config.Config, logger log.Logger,
+	rootCtx context.Context, store persistence2.ProcessStore, cfg config.Config, logger log.Logger,
 ) Service {
-	workerQueue := engine.NewWorkerTaskProcessorSQLImpl(rootCtx, persistence.DefaultShardId, cfg, store logger)
+	workerQueue := engine.NewWorkerTaskProcessorSQLImpl(rootCtx, persistence2.DefaultShardId, cfg, store logger)
 	return &asyncService{
 		rootCtx: rootCtx,
 		cfg:     cfg,
