@@ -15,36 +15,35 @@ type (
 	Config struct {
 		// Log is the logging config
 		Log Logger `yaml:"log"`
-		// ApiService is the API service config
-		ApiService ApiServiceConfig `yaml:"apiService"`
+
 		// Database is the database that XDB will be extending on
 		// either sql or nosql is needed
 		Database DatabaseConfig `yaml:"database"`
+
+		// ApiService is the API service config
+		ApiService ApiServiceConfig `yaml:"apiService"`
+
 		// AsyncService is config for async service
 		AsyncService AsyncServiceConfig `yaml:"asyncService"`
 	}
 
-	// Logger contains the config items for logger
-	Logger struct {
-		// Stdout is true then the output needs to goto standard out
-		// By default this is false and output will go to standard error
-		Stdout bool `yaml:"stdout"`
-		// Level is the desired log level
-		Level string `yaml:"level"`
-		// OutputFile is the path to the log output file
-		// Stdout must be false, otherwise Stdout will take precedence
-		OutputFile string `yaml:"outputFile"`
-		// LevelKey is the desired log level, defaults to "level"
-		LevelKey string `yaml:"levelKey"`
-		// Encoding decides the format, supports "console" and "json".
-		// "json" will print the log in JSON format(better for machine), while "console" will print in plain-text format(more human friendly)
-		// Default is "json"
-		Encoding string `yaml:"encoding"`
+	DatabaseConfig struct {
+		SQL *SQL `yaml:"sql"`
 	}
 
 	ApiServiceConfig struct {
 		// HttpServer is the config for starting http.Server
 		HttpServer HttpServerConfig `yaml:"httpServer"`
+	}
+
+	AsyncServiceConfig struct {
+		Mode            AsyncServiceMode      `yaml:"mode"`
+		WorkerTaskQueue WorkerTaskQueueConfig `yaml:"workerTaskQueue"`
+		// InternalHttpServer is the config for starting a http.Server
+		// to serve some internal APIs
+		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
+		// ClientAddress is the address for API service to call AsyncService's internal API
+		ClientAddress string `yaml:"clientAddress"`
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -64,14 +63,6 @@ type (
 		MaxHeaderBytes    int           `yaml:"maxHeaderBytes"`
 	}
 
-	DatabaseConfig struct {
-		SQL *SQL `yaml:"sql"`
-	}
-
-	AsyncServiceConfig struct {
-		WorkerTaskQueue WorkerTaskQueueConfig `yaml:"workerTaskQueue"`
-	}
-
 	WorkerTaskQueueConfig struct {
 		MaxPollInterval      time.Duration `yaml:"maxPollInterval"`
 		CommitInterval       time.Duration `yaml:"commitInterval"`
@@ -80,6 +71,20 @@ type (
 		ProcessorBufferSize  int           `yaml:"processorBufferSize"`
 		PollPageSize         int32         `yaml:"pollPageSize"`
 	}
+
+	AsyncServiceMode string
+)
+
+const (
+	// AsyncServiceModeStandalone means there is only one node for async service
+	// This is the only supported mode now
+	AsyncServiceModeStandalone = "standalone"
+	// AsyncServiceModeConsistentHashingCluster means all the nodes of async service
+	// will form a consistent hashing ring, which is used for shard ownership management
+	// TODO
+	//  1. add ringpop config
+	//  2. add async client address config for APIService to call async service with LBS
+	AsyncServiceModeConsistentHashingCluster = "consistent-hashing-cluster"
 )
 
 // NewConfig returns a new decoded Config struct
@@ -110,6 +115,12 @@ func (c *Config) ValidateAndSetDefaults() error {
 	sql := c.Database.SQL
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+	}
+	if c.AsyncService.Mode == "" {
+		c.AsyncService.Mode = AsyncServiceModeStandalone
+	}
+	if c.AsyncService.Mode != AsyncServiceModeStandalone {
+		return fmt.Errorf("currently only standalone mode is supported")
 	}
 	workerTaskQConfig := c.AsyncService.WorkerTaskQueue
 	if workerTaskQConfig.MaxPollInterval == 0 {

@@ -13,7 +13,7 @@ const PathDescribeProcessExecution = "/api/v1/xdb/service/process-execution/desc
 func NewAPIServiceGinController(cfg config.Config, apiEngine engine.APIEngine, logger log.Logger) *gin.Engine {
 	router := gin.Default()
 
-	handler := newHandler(cfg, apiEngine, logger)
+	handler := newGinHandler(cfg, apiEngine, logger)
 
 	router.POST(PathStartProcessExecution, handler.StartProcess)
 	router.POST(PathDescribeProcessExecution, handler.DescribeProcess)

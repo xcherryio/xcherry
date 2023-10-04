@@ -7,7 +7,7 @@ import (
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/engine"
+	"github.com/xdblab/xdb/engine/persistence"
 	"github.com/xdblab/xdb/service/api"
 	"go.uber.org/multierr"
 	rawLog "log"
@@ -67,7 +67,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	apiEngine, err := engine.NewAPIEngineSQLImpl(*cfg.Database.SQL, logger)
+	apiEngine, err := persistence.NewSQLPersistence(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
