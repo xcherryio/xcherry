@@ -7,7 +7,7 @@ import (
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/sql"
 	"github.com/xdblab/xdb/service/api"
 	"github.com/xdblab/xdb/service/async"
 	"go.uber.org/multierr"
@@ -66,7 +66,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	sqlStore, err := persistence.NewSQLPersistence(*cfg.Database.SQL, logger)
+	sqlStore, err := sql.NewSQLProcessStore(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
@@ -79,7 +79,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 			logger.Fatal("Failed to start api server", tag.Error(err))
 		}
 	}
-	
+
 	var asyncServer async.Server
 	if services[AsyncServiceName] {
 		asyncServer := async.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))

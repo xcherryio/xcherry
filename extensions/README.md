@@ -17,7 +17,8 @@ TODO more details
 * Implement interface
 * Makefile for tools binary
 * Schema
-* Integration test
+* [Persistence integration test](./tests)
+* [End to end integration test](../integTests)
 * CI
 
 Each sub-directory should contain all the implementation for that database specific. For example, all the MySQL specific

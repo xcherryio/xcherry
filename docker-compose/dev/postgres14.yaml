@@ -1,14 +1,6 @@
 version: '3.8'
 
 services:
-  mysql:
-    image: mysql:8.1
-    ports:
-      - "3306:3306"
-    environment:
-      - "MYSQL_ROOT_PASSWORD=xdbxdb"
-    networks:
-      - xdb
   postgres:
     image: postgres:12.4
     environment:
@@ -16,8 +8,7 @@ services:
       POSTGRES_PASSWORD: xdbxdb
     ports:
       - "5432:5432"
-    networks:
-      - xdb
+        
 networks:
   xdb:
     driver: bridge

@@ -8,11 +8,12 @@ import (
 
 type (
 	StartProcessRequest struct {
-		Request xdbapi.ProcessExecutionStartRequest
+		Request        xdbapi.ProcessExecutionStartRequest
+		NewTaskShardId int32
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId string
+		ProcessExecutionId uuid.UUID
 		AlreadyStarted     bool
 	}
 
@@ -106,6 +107,14 @@ type (
 		HasNewWorkerTask bool
 	}
 )
+
+func (t WorkerTask) GetTaskSequence() int64 {
+	if t.TaskSequence == nil {
+		// this shouldn't happen!
+		return -1
+	}
+	return *t.TaskSequence
+}
 
 func (t WorkerTask) GetId() string {
 	if t.TaskSequence == nil {

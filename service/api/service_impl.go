@@ -6,17 +6,17 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	persistence2 "github.com/xdblab/xdb/persistence"
+	persistence "github.com/xdblab/xdb/persistence"
 	"net/http"
 )
 
 type serviceImpl struct {
 	cfg    config.Config
-	store  persistence2.ProcessStore
+	store  persistence.ProcessStore
 	logger log.Logger
 }
 
-func NewServiceImpl(cfg config.Config, store persistence2.ProcessStore, logger log.Logger) Service {
+func NewServiceImpl(cfg config.Config, store persistence.ProcessStore, logger log.Logger) Service {
 	return &serviceImpl{
 		cfg:    cfg,
 		store:  store,
@@ -27,7 +27,10 @@ func NewServiceImpl(cfg config.Config, store persistence2.ProcessStore, logger l
 func (s serviceImpl) StartProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
 ) (response *xdbapi.ProcessExecutionStartResponse, retErr *ErrorWithStatus) {
-	resp, perr := s.store.StartProcess(ctx, persistence2.StartProcessRequest{Request: request})
+	resp, perr := s.store.StartProcess(ctx, persistence.StartProcessRequest{
+		Request:        request,
+		NewTaskShardId: persistence.DefaultShardId,
+	})
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)
 	}
@@ -38,7 +41,7 @@ func (s serviceImpl) StartProcess(
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
 	return &xdbapi.ProcessExecutionStartResponse{
-		ProcessExecutionId: resp.ProcessExecutionId,
+		ProcessExecutionId: resp.ProcessExecutionId.String(),
 	}, nil
 }
 
@@ -50,7 +53,7 @@ func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 func (s serviceImpl) DescribeLatestProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
 ) (response *xdbapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
-	resp, perr := s.store.DescribeLatestProcess(ctx, persistence2.DescribeLatestProcessRequest{
+	resp, perr := s.store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: request.Namespace,
 		ProcessId: request.ProcessId,
 	})

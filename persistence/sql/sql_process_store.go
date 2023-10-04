@@ -1,4 +1,4 @@
-package persistence
+package sql
 
 import (
 	"context"
@@ -10,29 +10,30 @@ import (
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence"
 	"time"
 )
 
-type sqlPersistenceImpl struct {
+type sqlProcessStoreImpl struct {
 	session extensions.SQLDBSession
 	logger  log.Logger
 }
 
-func NewSQLPersistence(sqlConfig config.SQL, logger log.Logger) (ProcessStore, error) {
+func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
 	session, err := extensions.NewSQLSession(&sqlConfig)
-	return &sqlPersistenceImpl{
+	return &sqlProcessStoreImpl{
 		session: session,
 		logger:  logger,
 	}, err
 }
 
-func (p sqlPersistenceImpl) Close() error {
+func (p sqlProcessStoreImpl) Close() error {
 	return p.session.Close()
 }
 
-func (p sqlPersistenceImpl) StartProcess(
-	ctx context.Context, request StartProcessRequest,
-) (*StartProcessResponse, error) {
+func (p sqlProcessStoreImpl) StartProcess(
+	ctx context.Context, request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	tx, err := p.session.StartTransaction(ctx)
 	if err != nil {
 		return nil, err
@@ -54,9 +55,9 @@ func (p sqlPersistenceImpl) StartProcess(
 	return resp, err
 }
 
-func (p sqlPersistenceImpl) doStartProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, request StartProcessRequest,
-) (*StartProcessResponse, error) {
+func (p sqlProcessStoreImpl) doStartProcessTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	req := request.Request
 	prcExeId := uuid.MustNewUUID()
 
@@ -69,7 +70,7 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 	if err != nil {
 		if p.session.IsDupEntryError(err) {
 			// TODO support other ProcessIdReusePolicy on this error
-			return &StartProcessResponse{
+			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
@@ -81,21 +82,21 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 		timeoutSeconds = sc.GetTimeoutSeconds()
 	}
 
-	processExeInfoBytes, err := FromStartRequestToProcessInfoBytes(req)
+	processExeInfoBytes, err := persistence.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
 		return nil, err
 	}
 
-	sequenceMaps := NewStateExecutionSequenceMaps()
+	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
 	if req.StartStateId != nil {
 		stateIdSeq := sequenceMaps.StartNewStateExecution(req.GetStartStateId())
 
-		stateInputBytes, err := FromEncodedObjectIntoBytes(req.StartStateInput)
+		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
 			return nil, err
 		}
 
-		stateInfoBytes, err := FromStartRequestToStateInfoBytes(req)
+		stateInfoBytes, err := persistence.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
 			return nil, err
 		}
@@ -112,11 +113,11 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 		}
 
 		if req.StartStateConfig.GetSkipWaitUntil() {
-			stateRow.WaitUntilStatus = StateExecutionStatusSkipped
-			stateRow.ExecuteStatus = StateExecutionStatusRunning
+			stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
+			stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
 		} else {
-			stateRow.WaitUntilStatus = StateExecutionStatusRunning
-			stateRow.ExecuteStatus = StateExecutionStatusUndefined
+			stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
+			stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
 		}
 
 		err = tx.InsertAsyncStateExecution(ctx, stateRow)
@@ -125,15 +126,15 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 		}
 
 		workerTaskRow := extensions.WorkerTaskRowForInsert{
-			ShardId:            DefaultShardId,
+			ShardId:            request.NewTaskShardId,
 			ProcessExecutionId: prcExeId,
 			StateId:            req.GetStartStateId(),
 			StateIdSequence:    1,
 		}
 		if req.StartStateConfig.GetSkipWaitUntil() {
-			workerTaskRow.TaskType = WorkerTaskTypeExecute
+			workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
 		} else {
-			workerTaskRow.TaskType = WorkerTaskTypeWaitUntil
+			workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
 		}
 
 		err = tx.InsertWorkerTask(ctx, workerTaskRow)
@@ -151,7 +152,7 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 		ProcessExecutionId: prcExeId,
 
 		IsCurrent:                  true,
-		Status:                     ProcessExecutionStatusRunning,
+		Status:                     persistence.ProcessExecutionStatusRunning,
 		HistoryEventIdSequence:     0,
 		StateExecutionSequenceMaps: sequenceMapsBytes,
 		Namespace:                  req.Namespace,
@@ -164,28 +165,28 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 	}
 
 	err = tx.InsertProcessExecution(ctx, row)
-	return &StartProcessResponse{
-		ProcessExecutionId: prcExeId.String(),
+	return &persistence.StartProcessResponse{
+		ProcessExecutionId: prcExeId,
 		AlreadyStarted:     false,
 	}, err
 }
 
-func (p sqlPersistenceImpl) DescribeLatestProcess(
-	ctx context.Context, request DescribeLatestProcessRequest,
-) (*DescribeLatestProcessResponse, error) {
+func (p sqlProcessStoreImpl) DescribeLatestProcess(
+	ctx context.Context, request persistence.DescribeLatestProcessRequest,
+) (*persistence.DescribeLatestProcessResponse, error) {
 	row, err := p.session.SelectCurrentProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
-			return &DescribeLatestProcessResponse{
+			return &persistence.DescribeLatestProcessResponse{
 				NotExists: true,
 			}, nil
 		}
 		return nil, err
 	}
 
-	info, err := BytesToProcessExecutionInfo(row.Info)
+	info, err := persistence.BytesToProcessExecutionInfo(row.Info)
 
-	return &DescribeLatestProcessResponse{
+	return &persistence.DescribeLatestProcessResponse{
 		Response: &xdbapi.ProcessExecutionDescribeResponse{
 			ProcessExecutionId: ptr.Any(row.ProcessExecutionId.String()),
 			ProcessType:        &info.ProcessType,
@@ -195,26 +196,26 @@ func (p sqlPersistenceImpl) DescribeLatestProcess(
 	}, nil
 }
 
-func (p sqlPersistenceImpl) GetWorkerTasks(ctx context.Context, request GetWorkerTasksRequest) (*GetWorkerTasksResponse, error) {
+func (p sqlProcessStoreImpl) GetWorkerTasks(ctx context.Context, request persistence.GetWorkerTasksRequest) (*persistence.GetWorkerTasksResponse, error) {
 	workerTasks, err := p.session.BatchSelectWorkerTasks(
 		ctx, request.ShardId, request.StartSequenceInclusive, request.PageSize)
 	if err != nil {
 		return nil, err
 	}
-	var tasks []WorkerTask
+	var tasks []persistence.WorkerTask
 	for _, t := range workerTasks {
-		tasks = append(tasks, WorkerTask{
+		tasks = append(tasks, persistence.WorkerTask{
 			ShardId:            request.ShardId,
 			TaskSequence:       ptr.Any(t.TaskSequence),
 			TaskType:           t.TaskType,
 			ProcessExecutionId: t.ProcessExecutionId,
-			StateExecutionId: StateExecutionId{
+			StateExecutionId: persistence.StateExecutionId{
 				StateId:         t.StateId,
 				StateIdSequence: t.StateIdSequence,
 			},
 		})
 	}
-	resp := &GetWorkerTasksResponse{
+	resp := &persistence.GetWorkerTasksResponse{
 		Tasks: tasks,
 	}
 	if len(workerTasks) > 0 {
@@ -226,7 +227,7 @@ func (p sqlPersistenceImpl) GetWorkerTasks(ctx context.Context, request GetWorke
 	return resp, nil
 }
 
-func (p sqlPersistenceImpl) DeleteWorkerTasks(ctx context.Context, request DeleteWorkerTasksRequest) error {
+func (p sqlProcessStoreImpl) DeleteWorkerTasks(ctx context.Context, request persistence.DeleteWorkerTasksRequest) error {
 	return p.session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
 		ShardId:                  request.ShardId,
 		MinTaskSequenceInclusive: request.MinTaskSequenceInclusive,
@@ -234,7 +235,7 @@ func (p sqlPersistenceImpl) DeleteWorkerTasks(ctx context.Context, request Delet
 	})
 }
 
-func (p sqlPersistenceImpl) PrepareStateExecution(ctx context.Context, request PrepareStateExecutionRequest) (*PrepareStateExecutionResponse, error) {
+func (p sqlProcessStoreImpl) PrepareStateExecution(ctx context.Context, request persistence.PrepareStateExecutionRequest) (*persistence.PrepareStateExecutionResponse, error) {
 	stateRow, err := p.session.SelectAsyncStateExecutionForUpdate(
 		ctx, extensions.AsyncStateExecutionSelectFilter{
 			ProcessExecutionId: request.ProcessExecutionId,
@@ -244,15 +245,15 @@ func (p sqlPersistenceImpl) PrepareStateExecution(ctx context.Context, request P
 	if err != nil {
 		return nil, err
 	}
-	info, err := BytesToAsyncStateExecutionInfo(stateRow.Info)
+	info, err := persistence.BytesToAsyncStateExecutionInfo(stateRow.Info)
 	if err != nil {
 		return nil, err
 	}
-	input, err := BytesToEncodedObject(stateRow.Input)
+	input, err := persistence.BytesToEncodedObject(stateRow.Input)
 	if err != nil {
 		return nil, err
 	}
-	return &PrepareStateExecutionResponse{
+	return &persistence.PrepareStateExecutionResponse{
 		WaitUntilStatus: stateRow.WaitUntilStatus,
 		ExecuteStatus:   stateRow.ExecuteStatus,
 		PreviousVersion: stateRow.PreviousVersion,
@@ -261,9 +262,9 @@ func (p sqlPersistenceImpl) PrepareStateExecution(ctx context.Context, request P
 	}, nil
 }
 
-func (p sqlPersistenceImpl) CompleteWaitUntilExecution(
-	ctx context.Context, request CompleteWaitUntilExecutionRequest,
-) (*CompleteWaitUntilExecutionResponse, error) {
+func (p sqlProcessStoreImpl) CompleteWaitUntilExecution(
+	ctx context.Context, request persistence.CompleteWaitUntilExecutionRequest,
+) (*persistence.CompleteWaitUntilExecutionResponse, error) {
 	if request.CommandRequest.GetWaitingType() != xdbapi.EMPTY_COMMAND {
 		// TODO set command request from resp
 		return nil, fmt.Errorf("not supported command type %v", request.CommandRequest.GetWaitingType())
@@ -290,15 +291,15 @@ func (p sqlPersistenceImpl) CompleteWaitUntilExecution(
 	return resp, err
 }
 
-func (p sqlPersistenceImpl) doCompleteWaitUntilExecutionTx(
-	ctx context.Context, tx extensions.SQLTransaction, request CompleteWaitUntilExecutionRequest,
-) (*CompleteWaitUntilExecutionResponse, error) {
+func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteWaitUntilExecutionRequest,
+) (*persistence.CompleteWaitUntilExecutionResponse, error) {
 	stateRow := extensions.AsyncStateExecutionRowForUpdate{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
-		WaitUntilStatus:    StateExecutionStatusCompleted,
-		ExecuteStatus:      StateExecutionStatusRunning,
+		WaitUntilStatus:    persistence.StateExecutionStatusCompleted,
+		ExecuteStatus:      persistence.StateExecutionStatusRunning,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 	}
 
@@ -311,7 +312,7 @@ func (p sqlPersistenceImpl) doCompleteWaitUntilExecutionTx(
 	}
 	err = tx.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
 		ShardId:            request.TaskShardId,
-		TaskType:           WorkerTaskTypeExecute,
+		TaskType:           persistence.WorkerTaskTypeExecute,
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
@@ -319,14 +320,14 @@ func (p sqlPersistenceImpl) doCompleteWaitUntilExecutionTx(
 	if err != nil {
 		return nil, err
 	}
-	return &CompleteWaitUntilExecutionResponse{
+	return &persistence.CompleteWaitUntilExecutionResponse{
 		HasNewWorkerTask: true,
 	}, nil
 }
 
-func (p sqlPersistenceImpl) CompleteExecuteExecution(
-	ctx context.Context, request CompleteExecuteExecutionRequest,
-) (*CompleteExecuteExecutionResponse, error) {
+func (p sqlProcessStoreImpl) CompleteExecuteExecution(
+	ctx context.Context, request persistence.CompleteExecuteExecutionRequest,
+) (*persistence.CompleteExecuteExecutionResponse, error) {
 
 	tx, err := p.session.StartTransaction(ctx)
 	if err != nil {
@@ -349,9 +350,9 @@ func (p sqlPersistenceImpl) CompleteExecuteExecution(
 	return resp, err
 }
 
-func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
-	ctx context.Context, tx extensions.SQLTransaction, request CompleteExecuteExecutionRequest,
-) (*CompleteExecuteExecutionResponse, error) {
+func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteExecuteExecutionRequest,
+) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewWorkerTask := false
 
 	currStateRow := extensions.AsyncStateExecutionRowForUpdate{
@@ -359,7 +360,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
 		WaitUntilStatus:    request.Prepare.WaitUntilStatus,
-		ExecuteStatus:      StateExecutionStatusCompleted,
+		ExecuteStatus:      persistence.StateExecutionStatusCompleted,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 	}
 
@@ -385,7 +386,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
-	sequenceMaps, err := NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
+	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +395,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		hasNewWorkerTask = true
 
 		// reuse the info from last state execution as it won't change
-		stateInfo, err := FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
+		stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
 		if err != nil {
 			return nil, err
 		}
@@ -402,7 +403,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		for _, next := range request.StateDecision.GetNextStates() {
 			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
 
-			stateInput, err := FromEncodedObjectIntoBytes(next.StateInput)
+			stateInput, err := persistence.FromEncodedObjectIntoBytes(next.StateInput)
 			if err != nil {
 				return nil, err
 			}
@@ -417,11 +418,11 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 			}
 
 			if next.StateConfig.GetSkipWaitUntil() {
-				newStateRow.WaitUntilStatus = StateExecutionStatusSkipped
-				newStateRow.ExecuteStatus = StateExecutionStatusRunning
+				newStateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
+				newStateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
 			} else {
-				newStateRow.WaitUntilStatus = StateExecutionStatusRunning
-				newStateRow.ExecuteStatus = StateExecutionStatusUndefined
+				newStateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
+				newStateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
 			}
 
 			err = tx.InsertAsyncStateExecution(ctx, newStateRow)
@@ -436,9 +437,9 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 				StateIdSequence:    int32(stateIdSeq),
 			}
 			if next.StateConfig.GetSkipWaitUntil() {
-				workerTaskRow.TaskType = WorkerTaskTypeExecute
+				workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
 			} else {
-				workerTaskRow.TaskType = WorkerTaskTypeWaitUntil
+				workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
 			}
 
 			err = tx.InsertWorkerTask(ctx, workerTaskRow)
@@ -457,7 +458,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 			return nil, err
 		}
 		prcRow.StateExecutionSequenceMaps = seqJ
-		return &CompleteExecuteExecutionResponse{
+		return &persistence.CompleteExecuteExecutionResponse{
 			HasNewWorkerTask: hasNewWorkerTask,
 		}, nil
 	} else {
@@ -477,11 +478,11 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 				if err != nil {
 					return nil, err
 				}
-				if stateRow.WaitUntilStatus == StateExecutionStatusRunning {
-					stateRow.WaitUntilStatus = StateExecutionStatusAborted
+				if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+					stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
 				}
-				if stateRow.ExecuteStatus == StateExecutionStatusRunning {
-					stateRow.ExecuteStatus = StateExecutionStatusAborted
+				if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
+					stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
 				}
 				err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
 					ProcessExecutionId: stateRow.ProcessExecutionId,
@@ -502,7 +503,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		}
 
 		// update process execution row
-		prcRow.Status = ProcessExecutionStatusCompleted
+		prcRow.Status = persistence.ProcessExecutionStatusCompleted
 		prcRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
 		if err != nil {
 			return nil, err
@@ -511,7 +512,7 @@ func (p sqlPersistenceImpl) doCompleteExecuteExecutionTx(
 		if err != nil {
 			return nil, err
 		}
-		return &CompleteExecuteExecutionResponse{
+		return &persistence.CompleteExecuteExecutionResponse{
 			HasNewWorkerTask: hasNewWorkerTask,
 		}, nil
 	}

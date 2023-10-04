@@ -28,6 +28,15 @@ func NewLogger(zapLogger *zap.Logger) Logger {
 	}
 }
 
+// NewDevelopmentLogger returns a logger at debug level and log into STDERR
+func NewDevelopmentLogger() Logger {
+	zapLogger, err := zap.NewDevelopment()
+	if err != nil {
+		panic(err)
+	}
+	return NewLogger(zapLogger)
+}
+
 func (lg *loggerImpl) buildFieldsWithCallat(tags []tag.Tag) []zap.Field {
 	fs := lg.buildFields(tags)
 	fs = append(fs, zap.String(tag.LoggingCallAtKey, caller(lg.skip)))
