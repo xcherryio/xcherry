@@ -5,7 +5,7 @@ import (
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/engine"
+	"github.com/xdblab/xdb/engine/persistence"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +18,8 @@ type ginHandler struct {
 	svc    Service
 }
 
-func newGinHandler(cfg config.Config, apiEngine engine.APIEngine, logger log.Logger) *ginHandler {
-	svc := NewServiceImpl(cfg, apiEngine, logger)
+func newGinHandler(cfg config.Config, store persistence.ProcessStore, logger log.Logger) *ginHandler {
+	svc := NewServiceImpl(cfg, store, logger)
 	return &ginHandler{
 		config: cfg,
 		logger: logger,

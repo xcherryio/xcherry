@@ -10,6 +10,7 @@ import (
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
+	"github.com/xdblab/xdb/engine/persistence"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
@@ -114,7 +115,7 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ass.Nil(err)
 
 	workerTaskRow := extensions.WorkerTaskRowForInsert{
-		ShardId:            extensions.DefaultShardId,
+		ShardId:            persistence.DefaultShardId,
 		TaskType:           extensions.WorkerTaskTypeWaitUntil,
 		ProcessExecutionId: prcExeId,
 		StateId:            startStateId,
@@ -153,17 +154,17 @@ func testSQL(ass *assert.Assertions, session extensions.SQLDBSession) {
 	ass.True(session.IsNotFoundError(err))
 
 	// test select worker tasks
-	workerTasks, err := session.BatchSelectWorkerTasks(ctx, extensions.DefaultShardId, 0, 1000)
+	workerTasks, err := session.BatchSelectWorkerTasks(ctx, persistence.DefaultShardId, 0, 1000)
 	ass.Nil(err)
 	ass.Equal(1, len(workerTasks))
 	// TODO assert equal
 
 	err = session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
-		ShardId:                  extensions.DefaultShardId,
+		ShardId:                  persistence.DefaultShardId,
 		MaxTaskSequenceInclusive: workerTasks[0].TaskSequence,
 	})
 	ass.Nil(err)
-	workerTasks, err = session.BatchSelectWorkerTasks(ctx, extensions.DefaultShardId, 0, 1000)
+	workerTasks, err = session.BatchSelectWorkerTasks(ctx, persistence.DefaultShardId, 0, 1000)
 	ass.Nil(err)
 	ass.Equal(0, len(workerTasks))
 

@@ -11,8 +11,6 @@ import (
 	"github.com/xdblab/xdb/service/api"
 	"go.uber.org/multierr"
 	rawLog "log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -67,37 +65,19 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	apiEngine, err := persistence.NewSQLPersistence(*cfg.Database.SQL, logger)
+	sqlStore, err := persistence.NewSQLPersistence(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
 
-	var httpServer *http.Server
+	var apiServer api.Server
 	if services[ApiServiceName] {
-		go func() {
-			ginController := api.NewAPIServiceGinController(*cfg, apiEngine, logger.WithTags(tag.Service(ApiServiceName)))
-
-			svrCfg := cfg.ApiService.HttpServer
-			httpServer = &http.Server{
-				Addr:              svrCfg.Address,
-				ReadTimeout:       svrCfg.ReadTimeout,
-				WriteTimeout:      svrCfg.WriteTimeout,
-				ReadHeaderTimeout: svrCfg.ReadHeaderTimeout,
-				IdleTimeout:       svrCfg.IdleTimeout,
-				MaxHeaderBytes:    svrCfg.MaxHeaderBytes,
-				TLSConfig:         svrCfg.TLSConfig,
-				Handler:           ginController,
-				BaseContext: func(listener net.Listener) context.Context {
-					// for graceful shutdown
-					return rootCtx
-				},
-			}
-
-			err := httpServer.ListenAndServe()
-			logger.Info("Http Server for API service is closed", tag.Error(err))
-		}()
+		apiServer = api.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(ApiServiceName)))
+		err = apiServer.Start()
+		if err != nil {
+			logger.Fatal("Failed to start api server", tag.Error(err))
+		}
 	}
-
 	if services[AsyncServiceName] {
 		// TODO implement a service
 	}
@@ -105,13 +85,15 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	return func(ctx context.Context) error {
 		// graceful shutdown
 		var errs error
-		if httpServer != nil {
-			err := httpServer.Shutdown(ctx)
+		// first stop api server
+		if apiServer != nil {
+			err := apiServer.Stop(ctx)
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		}
-		err := apiEngine.Close()
+		// stop sqlStore
+		err := sqlStore.Close()
 		if err != nil {
 			errs = multierr.Append(errs, err)
 		}

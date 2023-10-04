@@ -33,11 +33,10 @@ type workerTaskPage struct {
 }
 
 func NewWorkerTaskProcessorSQLImpl(
-	rootCtx context.Context, shardId int32, cfg config.Config, logger log.Logger,
+	rootCtx context.Context, shardId int32, cfg config.Config, session extensions.SQLDBSession, logger log.Logger,
 ) (TaskQueue, error) {
 	qCfg := cfg.AsyncService.WorkerTaskQueue
 
-	session, err := extensions.NewSQLSession(cfg.Database.SQL)
 	return &workerTaskQueueSQLImpl{
 		shardId:   shardId,
 		dbSession: session,
@@ -51,7 +50,7 @@ func NewWorkerTaskProcessorSQLImpl(
 		taskCompletionChan:        make(chan extensions.WorkerTaskRow, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
 		pendingTaskSequenceToPage: make(map[int64]*workerTaskPage),
-	}, err
+	}, nil
 }
 
 func (w *workerTaskQueueSQLImpl) Stop(ctx context.Context) error {

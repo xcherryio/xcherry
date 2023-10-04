@@ -9,6 +9,7 @@ import (
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/urlautofix"
+	"github.com/xdblab/xdb/engine/persistence"
 	"github.com/xdblab/xdb/extensions"
 	"io/ioutil"
 	"net/http"
@@ -287,7 +288,7 @@ func processExecuteTask(ctx context.Context, task extensions.WorkerTaskRow, info
 			}
 
 			workerTaskRow := extensions.WorkerTaskRowForInsert{
-				ShardId:            extensions.DefaultShardId,
+				ShardId:            persistence.DefaultShardId,
 				ProcessExecutionId: task.ProcessExecutionId,
 				StateId:            next.StateId,
 				StateIdSequence:    int32(stateIdSeq),

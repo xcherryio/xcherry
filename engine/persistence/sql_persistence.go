@@ -18,7 +18,7 @@ type sqlPersistenceImpl struct {
 	logger log.Logger
 }
 
-func NewSQLPersistence(sqlConfig config.SQL, logger log.Logger) (Persistence, error) {
+func NewSQLPersistence(sqlConfig config.SQL, logger log.Logger) (ProcessStore, error) {
 	session, err := extensions.NewSQLSession(&sqlConfig)
 	return &sqlPersistenceImpl{
 		sqlDB:  session,
@@ -121,7 +121,7 @@ func (p sqlPersistenceImpl) doStartProcessTx(
 		}
 
 		workerTaskRow := extensions.WorkerTaskRowForInsert{
-			ShardId:            extensions.DefaultShardId,
+			ShardId:            DefaultShardId,
 			ProcessExecutionId: prcExeId,
 			StateId:            req.GetStartStateId(),
 			StateIdSequence:    1,
