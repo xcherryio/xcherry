@@ -37,6 +37,7 @@ func NewWorkerTaskConcurrentProcessor(
 		rootCtx:            ctx,
 		cfg:                cfg,
 		taskToProcessChans: make(chan persistence.WorkerTask, bufferSize),
+		currentShards:      map[int32]bool{},
 		taskToCommitChans:  make(map[int32]chan<- persistence.WorkerTask),
 		workerTaskNotifier: make(map[int32]LocalNotifyNewWorkerTask),
 		store:              store,

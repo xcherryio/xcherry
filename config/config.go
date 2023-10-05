@@ -117,17 +117,20 @@ func (c *Config) ValidateAndSetDefaults() error {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
 	}
 	if c.AsyncService.Mode == "" {
-		c.AsyncService.Mode = AsyncServiceModeStandalone
+		return fmt.Errorf("must set async service mode")
 	}
 	if c.AsyncService.Mode != AsyncServiceModeStandalone {
 		return fmt.Errorf("currently only standalone mode is supported")
 	}
-	workerTaskQConfig := c.AsyncService.WorkerTaskQueue
+	workerTaskQConfig := &c.AsyncService.WorkerTaskQueue
 	if workerTaskQConfig.MaxPollInterval == 0 {
 		workerTaskQConfig.MaxPollInterval = time.Minute
 	}
+	if workerTaskQConfig.CommitInterval == 0 {
+		workerTaskQConfig.CommitInterval = time.Minute
+	}
 	if workerTaskQConfig.IntervalJitter == 0 {
-		workerTaskQConfig.MaxPollInterval = time.Second * 5
+		workerTaskQConfig.IntervalJitter = time.Second * 5
 	}
 	if workerTaskQConfig.ProcessorConcurrency == 0 {
 		workerTaskQConfig.ProcessorConcurrency = 10

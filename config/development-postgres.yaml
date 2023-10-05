@@ -15,10 +15,6 @@ database:
     databaseName: xdb
     connectAddr: 127.0.0.1:5432
 asyncService:
-  messageQueue:
-    pulsar:
-      pulsarClientOptions:
-        url: pulsar://localhost:6650
-      cdcTopicsPrefix: public/default/dbserver1.public.
-      defaultCDCTopicSubscription: default-shared
-      
+  mode: standalone
+  internalHttpServer:
+    address: 0.0.0.0:8701
