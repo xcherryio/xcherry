@@ -11,6 +11,7 @@ import (
 	"github.com/xdblab/xdb/service/async"
 	"io/ioutil"
 	"net/http"
+	"time"
 )
 
 type serviceImpl struct {
@@ -77,7 +78,16 @@ func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
 	go func() {
 		url := fmt.Sprintf("%v%v?shardId=%v",
 			s.cfg.AsyncService.ClientAddress, async.PathNotifyWorkerTask, shardId)
-		resp, err := http.Get(url)
+		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
+		defer canf()
+		
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			s.logger.Error("failed to create request to notify remote worker task",
+				tag.Value(url), tag.Error(err))
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			statusCode := -1
 			responseBody := "cannot read body from http response"

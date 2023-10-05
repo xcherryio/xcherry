@@ -388,7 +388,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	threadDecision := request.StateDecision.GetThreadCloseDecision()
 	if request.StateDecision.HasThreadCloseDecision() {
 		if threadDecision.GetCloseType() == xdbapi.DEAD_END {
-			return nil, nil
+			return &persistence.CompleteExecuteExecutionResponse{}, nil
 		}
 	}
 
