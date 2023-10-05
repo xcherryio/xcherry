@@ -41,14 +41,15 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	})
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
+	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 
 	// start again
-	startResp, err = store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp2, err := store.StartProcess(ctx, persistence.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 	ass.Nil(err)
-	ass.True(startResp.AlreadyStarted)
+	ass.True(startResp2.AlreadyStarted)
 
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,
@@ -74,7 +75,7 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	ass.Nil(err)
 	ass.Equal(1, len(getTasksResp.Tasks))
 	workerTask := getTasksResp.Tasks[0]
-	ass.Equal(persistence.DefaultShardId, workerTask.ShardId)
+	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
 	ass.True(workerTask.TaskSequence != nil)
 
 	err = store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
@@ -137,7 +138,7 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	})
 	ass.Equal(1, len(getTasksResp.Tasks))
 	workerTask = getTasksResp.Tasks[0]
-	ass.Equal(persistence.DefaultShardId, workerTask.ShardId)
+	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
 	ass.True(workerTask.TaskSequence != nil)
 
 	err = store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{

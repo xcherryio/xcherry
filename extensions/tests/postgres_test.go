@@ -35,4 +35,6 @@ func TestPostgres(t *testing.T) {
 	store, err := sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
 
 	testSQL(ass, store)
+	_ = extensions.DropDatabase(*sqlConfig, testDBName)
+	fmt.Println("testing database deleted")
 }
