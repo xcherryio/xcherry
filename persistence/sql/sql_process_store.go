@@ -391,6 +391,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
+	err = sequenceMaps.CompleteNewStateExecution(request.StateId, int(request.StateIdSequence))
+	if err != nil {
+		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v",
+			request.StateId, request.StateIdSequence, sequenceMaps)
+	}
+
 	if len(request.StateDecision.GetNextStates()) > 0 {
 		hasNewWorkerTask = true
 
@@ -453,11 +459,11 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		if err != nil {
 			return nil, err
 		}
+		prcRow.StateExecutionSequenceMaps = seqJ
 		err = tx.UpdateProcessExecution(ctx, *prcRow)
 		if err != nil {
 			return nil, err
 		}
-		prcRow.StateExecutionSequenceMaps = seqJ
 		return &persistence.CompleteExecuteExecutionResponse{
 			HasNewWorkerTask: hasNewWorkerTask,
 		}, nil

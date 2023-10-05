@@ -64,11 +64,11 @@ func (s *StateExecutionSequenceMapsJson) StartNewStateExecution(stateId string) 
 }
 
 func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId string, stateSeq int) error {
-	stateMap, ok := s.PendingExecutionMap[stateId]
-	if !ok || !stateMap[stateSeq] {
-		return fmt.Errorf("the state is not started, all current running states: %v", stateMap)
+	pendingMap, ok := s.PendingExecutionMap[stateId]
+	if !ok || !pendingMap[stateSeq] {
+		return fmt.Errorf("the state is not started, all current running states: %v", pendingMap)
 	}
-	delete(stateMap, stateSeq)
+	delete(pendingMap, stateSeq)
 	return nil
 }
 

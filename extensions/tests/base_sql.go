@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
+func testSQL_StartProcess_Executing_Complete(ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	// start process
 	namespace := "test-ns"
@@ -76,6 +76,8 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	ass.Equal(1, len(getTasksResp.Tasks))
 	workerTask := getTasksResp.Tasks[0]
 	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
+	ass.Equal(persistence.WorkerTaskTypeWaitUntil, workerTask.TaskType)
+	ass.Equal(1, int(workerTask.StateIdSequence))
 	ass.True(workerTask.TaskSequence != nil)
 
 	err = store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
@@ -139,6 +141,8 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	ass.Equal(1, len(getTasksResp.Tasks))
 	workerTask = getTasksResp.Tasks[0]
 	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
+	ass.Equal(persistence.WorkerTaskTypeExecute, workerTask.TaskType)
+	ass.Equal(1, int(workerTask.StateIdSequence))
 	ass.True(workerTask.TaskSequence != nil)
 
 	err = store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
@@ -150,7 +154,7 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	getTasksResp, err = store.GetWorkerTasks(ctx, persistence.GetWorkerTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
-		PageSize:               0,
+		PageSize:               10,
 	})
 	ass.Equal(0, len(getTasksResp.Tasks))
 
@@ -162,7 +166,71 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 	ass.Equal(persistence.StateExecutionStatusCompleted, prep.WaitUntilStatus)
 	ass.Equal(persistence.StateExecutionStatusRunning, prep.ExecuteStatus)
 
+	stateId2 := "state2"
 	compExeResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+		ProcessExecutionId: startResp.ProcessExecutionId,
+		StateExecutionId:   stateExeId,
+		Prepare:            *prep,
+		StateDecision: xdbapi.StateDecision{
+			NextStates: []xdbapi.StateMovement{
+				{
+					StateId: stateId2,
+					// no input, skip waitUntil
+					StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				},
+				{
+					StateId: startStateId, // use the same stateId
+					// no input, skip waitUntil
+					StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				},
+			},
+		},
+		TaskShardId: persistence.DefaultShardId,
+	})
+	ass.Nil(err)
+	ass.True(compExeResp.HasNewWorkerTask)
+
+	getTasksResp, err = store.GetWorkerTasks(ctx, persistence.GetWorkerTasksRequest{
+		ShardId:                persistence.DefaultShardId,
+		StartSequenceInclusive: 0,
+		PageSize:               10,
+	})
+	ass.Nil(err)
+	ass.Equal(2, len(getTasksResp.Tasks))
+	workerTask = getTasksResp.Tasks[0]
+	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
+	ass.True(workerTask.TaskSequence != nil)
+	ass.Equal(persistence.WorkerTaskTypeExecute, workerTask.TaskType)
+	ass.Equal(stateId2, workerTask.StateId)
+	ass.Equal(1, int(workerTask.StateIdSequence))
+
+	workerTask = getTasksResp.Tasks[1]
+	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
+	ass.True(workerTask.TaskSequence != nil)
+	ass.Equal(persistence.WorkerTaskTypeExecute, workerTask.TaskType)
+	ass.Equal(startStateId, workerTask.StateId)
+	ass.Equal(2, int(workerTask.StateIdSequence))
+
+	err = store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
+		ShardId:                  persistence.DefaultShardId,
+		MinTaskSequenceInclusive: getTasksResp.MinSequenceInclusive,
+		MaxTaskSequenceInclusive: getTasksResp.MaxSequenceInclusive,
+	})
+
+	stateExeId = persistence.StateExecutionId{
+		StateId:         workerTask.StateId,
+		StateIdSequence: workerTask.StateIdSequence,
+	}
+
+	prep, err = store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
+		ProcessExecutionId: startResp.ProcessExecutionId,
+		StateExecutionId:   stateExeId,
+	})
+	ass.Nil(err)
+	ass.Equal(persistence.StateExecutionStatusSkipped, prep.WaitUntilStatus)
+	ass.Equal(persistence.StateExecutionStatusRunning, prep.ExecuteStatus)
+
+	compExeResp, err = store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
 		ProcessExecutionId: startResp.ProcessExecutionId,
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
@@ -170,9 +238,6 @@ func testSQL(ass *assert.Assertions, store persistence.ProcessStore) {
 			ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 				CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
 			},
-			// TODO test next states
-			// NextStates: []xdbapi.StateMovement{
-			//},
 		},
 		TaskShardId: persistence.DefaultShardId,
 	})
