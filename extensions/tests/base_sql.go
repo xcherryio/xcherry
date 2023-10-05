@@ -41,6 +41,7 @@ func testSQL_StartProcess_Executing_Complete(ass *assert.Assertions, store persi
 	})
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
+	ass.True(startResp.HasNewWorkerTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 
 	// start again
@@ -50,6 +51,7 @@ func testSQL_StartProcess_Executing_Complete(ass *assert.Assertions, store persi
 	})
 	ass.Nil(err)
 	ass.True(startResp2.AlreadyStarted)
+	ass.False(startResp2.HasNewWorkerTask)
 
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,

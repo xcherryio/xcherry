@@ -141,6 +141,9 @@ func (c *Config) ValidateAndSetDefaults() error {
 	if workerTaskQConfig.PollPageSize == 0 {
 		workerTaskQConfig.PollPageSize = 1000
 	}
+	if c.AsyncService.ClientAddress == "" {
+		c.AsyncService.ClientAddress = c.ApiService.HttpServer.Address
+	}
 	return nil
 }
 

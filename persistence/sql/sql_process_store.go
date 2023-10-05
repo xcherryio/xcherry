@@ -60,6 +60,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 ) (*persistence.StartProcessResponse, error) {
 	req := request.Request
 	prcExeId := uuid.MustNewUUID()
+	hasNewWorkerTask := false
 
 	err := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          req.Namespace,
@@ -141,6 +142,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		if err != nil {
 			return nil, err
 		}
+		hasNewWorkerTask = true
 	}
 
 	sequenceMapsBytes, err := sequenceMaps.ToBytes()
@@ -168,6 +170,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	return &persistence.StartProcessResponse{
 		ProcessExecutionId: prcExeId,
 		AlreadyStarted:     false,
+		HasNewWorkerTask:   hasNewWorkerTask,
 	}, err
 }
 

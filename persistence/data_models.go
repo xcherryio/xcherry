@@ -15,6 +15,7 @@ type (
 	StartProcessResponse struct {
 		ProcessExecutionId uuid.UUID
 		AlreadyStarted     bool
+		HasNewWorkerTask   bool
 	}
 
 	DescribeLatestProcessRequest struct {

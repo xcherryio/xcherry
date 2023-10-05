@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	persistence "github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/service/async"
+	"io/ioutil"
 	"net/http"
 )
 
@@ -40,6 +43,9 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
+	if resp.HasNewWorkerTask {
+		s.notifyRemoteWorkerTask(persistence.DefaultShardId)
+	}
 	return &xdbapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: resp.ProcessExecutionId.String(),
 	}, nil
@@ -64,4 +70,27 @@ func (s serviceImpl) DescribeLatestProcess(
 		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 	return resp.Response, nil
+}
+
+func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
+	// execute in the background as best effort
+	go func() {
+		resp, err := http.Get(fmt.Sprintf("%v%v?shardId=%v",
+			s.cfg.AsyncService.ClientAddress, async.PathNotifyWorkerTask, shardId))
+		if err != nil || resp.StatusCode != http.StatusOK {
+			statusCode := -1
+			responseBody := "cannot read body from http response"
+			if resp != nil {
+				statusCode = resp.StatusCode
+				body, err := ioutil.ReadAll(resp.Body)
+				if err == nil {
+					responseBody = string(body)
+				}
+			}
+			s.logger.Error("failed to notify remote worker task",
+				tag.Shard(shardId), tag.Error(err), tag.StatusCode(statusCode),
+				tag.Message(responseBody))
+		}
+		defer resp.Body.Close()
+	}()
 }

@@ -11,7 +11,7 @@ import (
 	"net/http"
 )
 
-const PathNotifyWorkerTask = "/api/v1/xdb/internal/notify-worker-task"
+const PathNotifyWorkerTask = "/internal/api/v1/xdb/notify-worker-task"
 
 type defaultSever struct {
 	rootCtx    context.Context
