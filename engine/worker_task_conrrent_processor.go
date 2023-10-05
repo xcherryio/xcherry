@@ -290,5 +290,5 @@ func composeHttpError(err error, httpResp *http.Response) error {
 		}
 		statusCode = httpResp.StatusCode
 	}
-	return fmt.Errorf("statusCode: %v, responseBody: %v, errMsg: %v", statusCode, responseBody, err)
+	return fmt.Errorf("statusCode: %v, responseBody: %v, errMsg: %w", statusCode, responseBody, err)
 }

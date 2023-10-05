@@ -25,6 +25,8 @@ func (e ProcessExecutionStatus) String() string {
 		return string(xdbapi.TIMEOUT)
 	case ProcessExecutionStatusTerminated:
 		return string(xdbapi.TERMINATED)
+	case ProcessExecutionStatusUndefined:
+		return "UNDEFINED"
 	default:
 		panic("this is not supported")
 	}

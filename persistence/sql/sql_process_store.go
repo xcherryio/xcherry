@@ -188,6 +188,9 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	}
 
 	info, err := persistence.BytesToProcessExecutionInfo(row.Info)
+	if err != nil {
+		return nil, err
+	}
 
 	return &persistence.DescribeLatestProcessResponse{
 		Response: &xdbapi.ProcessExecutionDescribeResponse{
@@ -403,7 +406,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	err = sequenceMaps.CompleteNewStateExecution(request.StateId, int(request.StateIdSequence))
 	if err != nil {
-		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v, err:%v",
+		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v, err:%w",
 			request.StateId, request.StateIdSequence, sequenceMaps, err)
 	}
 

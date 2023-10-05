@@ -18,7 +18,8 @@ func (d dbTx) InsertCurrentProcessExecution(ctx context.Context, row extensions.
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
 	(namespace, id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, info) VALUES
-	(:namespace, :process_execution_id_string, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, :state_execution_sequence_maps, :info)`
+	(:namespace, :process_execution_id_string, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
+	 :state_execution_sequence_maps, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
 	row.StartTime = ToPostgresDateTime(row.StartTime)
