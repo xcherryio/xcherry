@@ -38,7 +38,7 @@ jobs:
         run: ./xdb-server&
 
       - name: Run Postgres IntegrationTest
-        run:  make integTests
+        run:  make integTestsWithLocalServer
         
       - name: Dump docker logs
         if: always()

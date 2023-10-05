@@ -30,12 +30,6 @@ jobs:
 
       - name: "Set up all databases + Pulsar environment"
         run: docker compose -f docker-compose/dev/integ-all.yaml up -d
-
-      - name: Install Postgres schema #wait for 5 seconds for env to be ready 
-        run: sleep 5 && make install-schema-postgres
-        
-      - name: Start Postgres server # then run in the background
-        run: ./xdb-server --config ./config/development-postgres.yaml & 
         
       - name: Run Tests
         run:  make tests
@@ -44,5 +38,5 @@ jobs:
         if: always()
         uses: jwalton/gh-docker-logs@v2
         
-      - name: Upload coverage reports to Codecov # TODO merge reports from multiple test commands when MySQL is added
+      - name: Upload coverage reports to Codecov 
         uses: codecov/codecov-action@v3
