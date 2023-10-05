@@ -167,6 +167,9 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 			},
 		},
 	).Execute()
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
 		w.logger.Info("worker API return error", tag.Error(err))
@@ -225,6 +228,9 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 			},
 		},
 	).Execute()
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
 		w.logger.Info("worker API return error", tag.Error(err))
