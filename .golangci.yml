@@ -496,6 +496,7 @@ linters:
     - maligned
     - prealloc
     - scopelint
+    - musttag
   disable-all: false
   presets:
     - bugs
