@@ -477,60 +477,61 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return &persistence.CompleteExecuteExecutionResponse{
 			HasNewWorkerTask: hasNewWorkerTask,
 		}, nil
-	} else {
-		// close the thread
-		if threadDecision.GetCloseType() != xdbapi.FORCE_COMPLETE_PROCESS {
-			return nil, fmt.Errorf("cannot support close type: %v", threadDecision.GetCloseType())
-		}
+	}
 
-		// also stop(abort) other running state executions
-		for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
-			for stateIdSeq := range stateIdSeqMap {
-				stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
-					ctx, extensions.AsyncStateExecutionSelectFilter{
-						ProcessExecutionId: request.ProcessExecutionId,
-						StateId:            stateId,
-						StateIdSequence:    int32(stateIdSeq),
-					})
-				if err != nil {
-					return nil, err
-				}
-				if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
-					stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
-				}
-				if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
-					stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
-				}
-				err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
-					ProcessExecutionId: stateRow.ProcessExecutionId,
-					StateId:            stateRow.StateId,
-					StateIdSequence:    stateRow.StateIdSequence,
-					WaitUntilStatus:    stateRow.WaitUntilStatus,
-					ExecuteStatus:      stateRow.ExecuteStatus,
-					PreviousVersion:    stateRow.PreviousVersion,
+	// otherwise close the thread
+	if threadDecision.GetCloseType() != xdbapi.FORCE_COMPLETE_PROCESS {
+		return nil, fmt.Errorf("cannot support close type: %v", threadDecision.GetCloseType())
+	}
+
+	// also stop(abort) other running state executions
+	for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
+		for stateIdSeq := range stateIdSeqMap {
+			stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
+				ctx, extensions.AsyncStateExecutionSelectFilter{
+					ProcessExecutionId: request.ProcessExecutionId,
+					StateId:            stateId,
+					StateIdSequence:    int32(stateIdSeq),
 				})
-				if err != nil {
-					return nil, err
-				}
-				err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
-				if err != nil {
-					return nil, err
-				}
+			if err != nil {
+				return nil, err
+			}
+			if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+				stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
+			}
+			if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
+				stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
+			}
+			err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
+				ProcessExecutionId: stateRow.ProcessExecutionId,
+				StateId:            stateRow.StateId,
+				StateIdSequence:    stateRow.StateIdSequence,
+				WaitUntilStatus:    stateRow.WaitUntilStatus,
+				ExecuteStatus:      stateRow.ExecuteStatus,
+				PreviousVersion:    stateRow.PreviousVersion,
+			})
+			if err != nil {
+				return nil, err
+			}
+			err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
+			if err != nil {
+				return nil, err
 			}
 		}
-
-		// update process execution row
-		prcRow.Status = persistence.ProcessExecutionStatusCompleted
-		prcRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
-		if err != nil {
-			return nil, err
-		}
-		err = tx.UpdateProcessExecution(ctx, *prcRow)
-		if err != nil {
-			return nil, err
-		}
-		return &persistence.CompleteExecuteExecutionResponse{
-			HasNewWorkerTask: hasNewWorkerTask,
-		}, nil
 	}
+
+	// update process execution row
+	prcRow.Status = persistence.ProcessExecutionStatusCompleted
+	prcRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	err = tx.UpdateProcessExecution(ctx, *prcRow)
+	if err != nil {
+		return nil, err
+	}
+	return &persistence.CompleteExecuteExecutionResponse{
+		HasNewWorkerTask: hasNewWorkerTask,
+	}, nil
+
 }

@@ -41,10 +41,14 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRow, error) {
+func (d dbTx) SelectAsyncStateExecutionForUpdate(
+	ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter,
+) (*extensions.AsyncStateExecutionRow, error) {
 	var row extensions.AsyncStateExecutionRow
 	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
-	err := d.tx.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
+	err := d.tx.GetContext(
+		ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString,
+		filter.StateId, filter.StateIdSequence)
 	row.ProcessExecutionId = filter.ProcessExecutionId
 	row.StateId = filter.StateId
 	row.StateIdSequence = filter.StateIdSequence
@@ -65,9 +69,12 @@ const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions se
 version = :previous_version +1,
 wait_until_status = :wait_until_status,
 execute_status = :execute_status
-WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id AND state_id_sequence=:state_id_sequence AND version = :previous_version`
+WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
+  AND state_id_sequence=:state_id_sequence AND version = :previous_version`
 
-func (d dbTx) UpdateAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate) error {
+func (d dbTx) UpdateAsyncStateExecution(
+	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate,
+) error {
 	// ignore static info because they are not changing
 	// TODO how to make that clear? maybe rename the method?
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
@@ -95,10 +102,13 @@ func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRow
 	return err
 }
 
-const selectProcessExecutionForUpdateQuery = `SELECT id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps
+const selectProcessExecutionForUpdateQuery = `SELECT 
+    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps
 	FROM xdb_sys_process_executions WHERE id=$1`
 
-func (d dbTx) SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*extensions.ProcessExecutionRowForUpdate, error) {
+func (d dbTx) SelectProcessExecutionForUpdate(
+	ctx context.Context, processExecutionId uuid.UUID,
+) (*extensions.ProcessExecutionRowForUpdate, error) {
 	var row extensions.ProcessExecutionRowForUpdate
 	err := d.tx.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, processExecutionId.String())
 	return &row, err

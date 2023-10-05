@@ -11,6 +11,7 @@ import (
 )
 
 func testSQL_StartProcess_Executing_Complete(ass *assert.Assertions, store persistence.ProcessStore) {
+	// TODO need to refactor this test
 	ctx := context.Background()
 	// start process
 	namespace := "test-ns"
