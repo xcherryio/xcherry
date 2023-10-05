@@ -88,12 +88,14 @@ func testSQLBasicExecution(ass *assert.Assertions, store persistence.ProcessStor
 		MinTaskSequenceInclusive: getTasksResp.MinSequenceInclusive,
 		MaxTaskSequenceInclusive: getTasksResp.MaxSequenceInclusive,
 	})
+	ass.Nil(err)
 
 	getTasksResp, err = store.GetWorkerTasks(ctx, persistence.GetWorkerTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
 	})
+	ass.Nil(err)
 	ass.Equal(0, len(getTasksResp.Tasks))
 
 	stateExeId := persistence.StateExecutionId{
@@ -141,6 +143,7 @@ func testSQLBasicExecution(ass *assert.Assertions, store persistence.ProcessStor
 		StartSequenceInclusive: 0,
 		PageSize:               10,
 	})
+	ass.Nil(err)
 	ass.Equal(1, len(getTasksResp.Tasks))
 	workerTask = getTasksResp.Tasks[0]
 	ass.Equal(persistence.DefaultShardId, int(workerTask.ShardId))
@@ -153,12 +156,14 @@ func testSQLBasicExecution(ass *assert.Assertions, store persistence.ProcessStor
 		MinTaskSequenceInclusive: getTasksResp.MinSequenceInclusive,
 		MaxTaskSequenceInclusive: getTasksResp.MaxSequenceInclusive,
 	})
+	ass.Nil(err)
 
 	getTasksResp, err = store.GetWorkerTasks(ctx, persistence.GetWorkerTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
 	})
+	ass.Nil(err)
 	ass.Equal(0, len(getTasksResp.Tasks))
 
 	prep, err = store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
@@ -219,6 +224,7 @@ func testSQLBasicExecution(ass *assert.Assertions, store persistence.ProcessStor
 		MinTaskSequenceInclusive: getTasksResp.MinSequenceInclusive,
 		MaxTaskSequenceInclusive: getTasksResp.MaxSequenceInclusive,
 	})
+	ass.Nil(err)
 
 	stateExeId = persistence.StateExecutionId{
 		StateId:         workerTask.StateId,

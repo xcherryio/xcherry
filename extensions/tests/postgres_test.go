@@ -33,7 +33,8 @@ func TestPostgres(t *testing.T) {
 	ass.Nil(err)
 
 	store, err := sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
-
+	ass.Nil(err)
+	
 	testSQLBasicExecution(ass, store)
 
 	_ = extensions.DropDatabase(*sqlConfig, testDBName)
