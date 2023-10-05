@@ -45,7 +45,7 @@ func (s serviceImpl) StartProcess(
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
 	if resp.HasNewWorkerTask {
-		s.notifyRemoteWorkerTask(persistence.DefaultShardId)
+		s.notifyRemoteWorkerTask(ctx, persistence.DefaultShardId)
 	}
 	return &xdbapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: resp.ProcessExecutionId.String(),
@@ -73,14 +73,14 @@ func (s serviceImpl) DescribeLatestProcess(
 	return resp.Response, nil
 }
 
-func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
+func (s serviceImpl) notifyRemoteWorkerTask(_ context.Context, shardId int32) {
 	// execute in the background as best effort
 	go func() {
 		url := fmt.Sprintf("%v%v?shardId=%v",
 			s.cfg.AsyncService.ClientAddress, async.PathNotifyWorkerTask, shardId)
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
-		
+
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			s.logger.Error("failed to create request to notify remote worker task",
