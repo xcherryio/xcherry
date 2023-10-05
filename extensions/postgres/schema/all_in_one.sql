@@ -11,7 +11,7 @@ CREATE TABLE xdb_sys_process_executions(
     process_id VARCHAR(255) NOT NULL,
     --
     is_current BOOLEAN NOT NULL , -- for quick debugging
-    status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout
+    status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:terminated
     start_time TIMESTAMP NOT NULL,
     timeout_seconds INTEGER,
     history_event_id_sequence INTEGER,

@@ -8,5 +8,5 @@ import (
 
 func TestStartBasicProcess(t *testing.T) {
 	basic.TestStartIOProcess(t, client)
-	time.Sleep(time.Second * 500)
+	time.Sleep(time.Second * 5)
 }

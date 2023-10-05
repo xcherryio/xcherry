@@ -195,6 +195,7 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 			ProcessType:        &info.ProcessType,
 			WorkerUrl:          &info.WorkerURL,
 			StartTimestamp:     ptr.Any(int32(row.StartTime.Unix())),
+			Status:             xdbapi.ProcessStatus(row.Status.String()).Ptr(),
 		},
 	}, nil
 }

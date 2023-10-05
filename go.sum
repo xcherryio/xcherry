@@ -85,10 +85,10 @@ github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4d
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/urfave/cli/v2 v2.25.7 h1:VAzn5oq403l5pHjc4OhD54+XGO9cdKVL/7lDjF+iKUs=
 github.com/urfave/cli/v2 v2.25.7/go.mod h1:8qnjx1vcq5s2/wpsqoZFndg2CE5tNFyrTvS6SinrnYQ=
-github.com/xdblab/xdb-apis v0.0.2-0.20231001195255-77af31bf957f h1:kydvax6hi5OrON8SsoEXETv4LVtZUox2oAAWJziDHo0=
-github.com/xdblab/xdb-apis v0.0.2-0.20231001195255-77af31bf957f/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
-github.com/xdblab/xdb-golang-sdk v0.0.0-20231001195737-50ef704d23f2 h1:J8oDMUKJJKd2Y0exOXeUrWCVod/jT554Bd1eBZIW2NY=
-github.com/xdblab/xdb-golang-sdk v0.0.0-20231001195737-50ef704d23f2/go.mod h1:XNM48gOharefj1oOiFlOi3Ay0DNIAXdLsaBhRUX5VgA=
+github.com/xdblab/xdb-apis v0.0.2-0.20231005051845-66e4a041c65f h1:DWtIS/A5yL+S2b/7FSwTgvqM/IsljYoRsmHkhfGZ2+Q=
+github.com/xdblab/xdb-apis v0.0.2-0.20231005051845-66e4a041c65f/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231005052227-27f879829dbb h1:4NvtWmcpuzpE1WnQRPZkpGcoPiIPOFt7MP8wIULaIFU=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231005052227-27f879829dbb/go.mod h1:x6GmJTXo/ESgQfMdIVFR5wM9qXki/sJGnDTaB8MBFo0=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 h1:bAn7/zixMGCfxrRTfdpNzjtPYqr8smhKouy9mxVdGPU=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673/go.mod h1:N3UwUGtsrSj3ccvlPHLoLsHnpR27oXr4ZE984MbSER8=
 go.uber.org/goleak v1.2.0 h1:xqgm/S+aQvhWFTtR0XK3Jvg7z8kGV8P4X14IzwN3Eqk=
