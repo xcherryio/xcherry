@@ -396,8 +396,8 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	err = sequenceMaps.CompleteNewStateExecution(request.StateId, int(request.StateIdSequence))
 	if err != nil {
-		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v",
-			request.StateId, request.StateIdSequence, sequenceMaps)
+		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v, err:%v",
+			request.StateId, request.StateIdSequence, sequenceMaps, err)
 	}
 
 	if len(request.StateDecision.GetNextStates()) > 0 {

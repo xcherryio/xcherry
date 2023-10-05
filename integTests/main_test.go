@@ -42,6 +42,14 @@ func TestMain(m *testing.M) {
 			if err != nil {
 				panic(err)
 			}
+			defer func() {
+				err := extensions.DropDatabase(*sqlConfig, testDBName)
+				if err != nil {
+					fmt.Println("failed to drop database ", testDBName, err)
+				} else {
+					fmt.Println("testing database is deleted")
+				}
+			}()
 			err = extensions.SetupSchema(sqlConfig, "../"+postgrestool.DefaultSchemaFilePath)
 			if err != nil {
 				panic(err)

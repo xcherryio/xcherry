@@ -75,8 +75,9 @@ func (s serviceImpl) DescribeLatestProcess(
 func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
 	// execute in the background as best effort
 	go func() {
-		resp, err := http.Get(fmt.Sprintf("%v%v?shardId=%v",
-			s.cfg.AsyncService.ClientAddress, async.PathNotifyWorkerTask, shardId))
+		url := fmt.Sprintf("%v%v?shardId=%v",
+			s.cfg.AsyncService.ClientAddress, async.PathNotifyWorkerTask, shardId)
+		resp, err := http.Get(url)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			statusCode := -1
 			responseBody := "cannot read body from http response"

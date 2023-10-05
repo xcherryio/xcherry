@@ -89,6 +89,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 							// put it back to the queue for immediate retry
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
+							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChans <- task
 						} else {
 							commitChan <- task
@@ -172,6 +173,12 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 		// TODO instead of returning error, we should do backoff retry by pushing this task into timer queue
 		return err
 	}
+	commandRequest := xdbapi.CommandRequest{
+		WaitingType: xdbapi.EMPTY_COMMAND.Ptr(),
+	}
+	if resp.CommandRequest != nil {
+		commandRequest = resp.GetCommandRequest()
+	}
 
 	compResp, err := w.store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -180,7 +187,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 			StateIdSequence: task.StateIdSequence,
 		},
 		Prepare:        prep,
-		CommandRequest: *resp.CommandRequest,
+		CommandRequest: commandRequest,
 		TaskShardId:    task.ShardId,
 	})
 	if err != nil {
