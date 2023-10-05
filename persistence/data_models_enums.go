@@ -58,6 +58,8 @@ func (e StateExecutionStatus) String() string {
 		return "Timeout"
 	case StateExecutionStatusAborted:
 		return "Aborted"
+	case StateExecutionStatusUndefined:
+		return "Undefined"
 	default:
 		panic("this is not supported")
 	}
