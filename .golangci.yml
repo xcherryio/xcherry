@@ -107,7 +107,7 @@ linters-settings:
     comparison: true
 
   funlen:
-    lines: 100
+    lines: 160
     statements: 60
 
   gocognit:

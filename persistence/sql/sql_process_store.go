@@ -200,7 +200,9 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	}, nil
 }
 
-func (p sqlProcessStoreImpl) GetWorkerTasks(ctx context.Context, request persistence.GetWorkerTasksRequest) (*persistence.GetWorkerTasksResponse, error) {
+func (p sqlProcessStoreImpl) GetWorkerTasks(
+	ctx context.Context, request persistence.GetWorkerTasksRequest,
+) (*persistence.GetWorkerTasksResponse, error) {
 	workerTasks, err := p.session.BatchSelectWorkerTasks(
 		ctx, request.ShardId, request.StartSequenceInclusive, request.PageSize)
 	if err != nil {
@@ -231,7 +233,9 @@ func (p sqlProcessStoreImpl) GetWorkerTasks(ctx context.Context, request persist
 	return resp, nil
 }
 
-func (p sqlProcessStoreImpl) DeleteWorkerTasks(ctx context.Context, request persistence.DeleteWorkerTasksRequest) error {
+func (p sqlProcessStoreImpl) DeleteWorkerTasks(
+	ctx context.Context, request persistence.DeleteWorkerTasksRequest,
+) error {
 	return p.session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
 		ShardId:                  request.ShardId,
 		MinTaskSequenceInclusive: request.MinTaskSequenceInclusive,
@@ -239,7 +243,9 @@ func (p sqlProcessStoreImpl) DeleteWorkerTasks(ctx context.Context, request pers
 	})
 }
 
-func (p sqlProcessStoreImpl) PrepareStateExecution(ctx context.Context, request persistence.PrepareStateExecutionRequest) (*persistence.PrepareStateExecutionResponse, error) {
+func (p sqlProcessStoreImpl) PrepareStateExecution(
+	ctx context.Context, request persistence.PrepareStateExecutionRequest,
+) (*persistence.PrepareStateExecutionResponse, error) {
 	stateRow, err := p.session.SelectAsyncStateExecutionForUpdate(
 		ctx, extensions.AsyncStateExecutionSelectFilter{
 			ProcessExecutionId: request.ProcessExecutionId,
@@ -480,11 +486,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		// also stop(abort) other running state executions
 		for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
 			for stateIdSeq := range stateIdSeqMap {
-				stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
-					ProcessExecutionId: request.ProcessExecutionId,
-					StateId:            stateId,
-					StateIdSequence:    int32(stateIdSeq),
-				})
+				stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
+					ctx, extensions.AsyncStateExecutionSelectFilter{
+						ProcessExecutionId: request.ProcessExecutionId,
+						StateId:            stateId,
+						StateIdSequence:    int32(stateIdSeq),
+					})
 				if err != nil {
 					return nil, err
 				}
