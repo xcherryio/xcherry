@@ -142,7 +142,10 @@ func (c *Config) ValidateAndSetDefaults() error {
 		workerTaskQConfig.PollPageSize = 1000
 	}
 	if c.AsyncService.ClientAddress == "" {
-		c.AsyncService.ClientAddress = c.ApiService.HttpServer.Address
+		if c.ApiService.HttpServer.Address == "" {
+			return fmt.Errorf("ApiService.HttpServer.Address cannot be empty")
+		}
+		c.AsyncService.ClientAddress = "http://" + c.ApiService.HttpServer.Address
 	}
 	return nil
 }

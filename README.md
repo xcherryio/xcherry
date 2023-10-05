@@ -31,7 +31,7 @@ Run one of the [docker-compose files](./docker-compose/dev) to run a database + 
 
 ## Run Integration Test against the started server
 Once the server is running:
-* `make integTests` will run [the integration tests defined in this repo](./integTests).
+* `make integTestsWithLocalServer` will run [the integration tests defined in this repo](./integTests).
 
   
 ## 1.0

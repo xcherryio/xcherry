@@ -73,23 +73,26 @@ func (w *workerTaskQueueSQLImpl) Start() error {
 
 	w.pollTimer.Update(time.Now()) // fire immediately to make the first poll for the first page
 
-	for {
-		select {
-		case <-w.pollTimer.FireChan():
-			w.pollAndDispatch()
-			w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
-		case <-w.commitTimer.FireChan():
-			_ = w.commitCompletedPages(w.rootCtx)
-			w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
-		case task, ok := <-w.tasksToCommitChan:
-			if ok {
-				w.receiveCompletedTask(task)
+	go func() {
+		for {
+			select {
+			case <-w.pollTimer.FireChan():
+				w.pollAndDispatch()
+				w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
+			case <-w.commitTimer.FireChan():
+				_ = w.commitCompletedPages(w.rootCtx)
+				w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
+			case task, ok := <-w.tasksToCommitChan:
+				if ok {
+					w.receiveCompletedTask(task)
+				}
+			case <-w.rootCtx.Done():
+				w.logger.Info("processor is being closed")
+				return
 			}
-		case <-w.rootCtx.Done():
-			w.logger.Info("processor is being closed")
-			return nil
 		}
-	}
+	}()
+	return nil
 }
 
 func (w *workerTaskQueueSQLImpl) getNextPollTime(interval, jitter time.Duration) time.Time {

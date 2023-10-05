@@ -154,6 +154,9 @@ cleanTestCache:
 integTests:
 	$Q go test -v ./integTests
 
+integTestsWithLocalServer:
+	$Q go test -v ./integTests -useLocalServer=true
+
 install-schema-postgres: xdb-tools-postgres
 	$Q ./xdb-tools-postgres install-schema
 
