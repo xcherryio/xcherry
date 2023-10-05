@@ -81,6 +81,7 @@ func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
 			statusCode := -1
 			responseBody := "cannot read body from http response"
 			if resp != nil {
+				defer resp.Body.Close()
 				statusCode = resp.StatusCode
 				body, err := ioutil.ReadAll(resp.Body)
 				if err == nil {
@@ -91,6 +92,5 @@ func (s serviceImpl) notifyRemoteWorkerTask(shardId int32) {
 				tag.Shard(shardId), tag.Error(err), tag.StatusCode(statusCode),
 				tag.Message(responseBody))
 		}
-		defer resp.Body.Close()
 	}()
 }
