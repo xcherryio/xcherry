@@ -5,7 +5,7 @@ Server and main repo of XDB project
 
 [![Coverage Status](https://codecov.io/github/xdblab/xdb/coverage.svg?branch=main)](https://app.codecov.io/gh/xdblab/xdb/branch/main)
 
-[![Build status](https://github.com/xdblab/xdb/actions/workflows/ci-postgres.yaml/badge.svg?branch=main)](https://github.com/xdblab/xdb/actions/workflows/ci-postgres.yaml)
+[![Build status](https://github.com/xdblab/xdb/actions/workflows/ci-postgres14.yaml/badge.svg?branch=main)](https://github.com/xdblab/xdb/actions/workflows/ci-postgres14.yaml)
 
 
 # Documentation
