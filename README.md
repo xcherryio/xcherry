@@ -12,28 +12,27 @@ Server and main repo of XDB project
 
 See [wiki](https://github.com/xdblab/xdb/wiki).
 
-# Development 
+# How to use 
 
-## Dependencies
-Run one of the [docker-compose files](./docker-compose/dev) to run a database + Apache Pulsar
+### Option 1: brew install
+TODO: brew install xdb
 
-## Build
-* To build all the binaries: `make bins`
 
-## Run server
+### Option 2: use docker-compose of xdb to connect with your own database
+* Install the database schema to your database
+  * [Postgres schema](./extensions/postgres/schema)
+* Run docker-compose file from this project:
+  * `docker-compose -f ./docker-compose/docker-compose.yaml up`
 
-* To run it with [default config(with Postgres)](./config/development-postgres.yaml)
-  * Run `./xdb-tools-postgres install-schema` to install the required schema for the default config
-    * See more options in `./xdb-tools-postgres`
-  * Then Run `./xdb-server`. 
-    * Or see more options: `./xdb-server -h`
-  * Alternatively, clicking the run button in an IDE should also work(after schemas are install).
+### Option 3: use example docker-compose of xdb with a database
+In this case you don't want to connect to your existing database:
 
-## Run Integration Test against the started server
-Once the server is running:
-* `make integTestsWithLocalServer` will run [the integration tests defined in this repo](./integTests).
+* `docker-compose -f ./docker-compose/docker-compose-postgres-example.yaml up`
+  * Will include a PostgresSQL database 
+# Contribution 
+See [contribution](./CONTRIBUTING.md) 
 
-  
+# Development Plan
 ## 1.0
 - [ ] StartProcessExecution API
   - [x] Basic
