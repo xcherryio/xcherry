@@ -49,7 +49,7 @@ type (
 )
 
 // licenseFileName is the name of the license file
-const licenseFileName = "LICENSE"
+const licenseFileName = "LICENSE-HEADER"
 
 // unique prefix that identifies a license header
 const licenseHeaderPrefixOld = "Copyright (c)"
