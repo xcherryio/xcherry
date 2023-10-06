@@ -33,7 +33,7 @@ type workerTaskPage struct {
 	pendingCount    int
 }
 
-func NewWorkerTaskProcessorSQLImpl(
+func NewWorkerTaskQueueSQLImpl(
 	rootCtx context.Context, shardId int32, cfg config.Config, store persistence.ProcessStore,
 	processor WorkerTaskProcessor, logger log.Logger,
 ) TaskQueue {

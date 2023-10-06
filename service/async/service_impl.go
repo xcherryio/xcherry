@@ -28,7 +28,7 @@ func NewAsyncServiceImpl(
 
 	// TODO for config.AsyncServiceModeConsistentHashingCluster
 	// the worker queue will be created dynamically
-	workerTaskQueue := engine.NewWorkerTaskProcessorSQLImpl(
+	workerTaskQueue := engine.NewWorkerTaskQueueSQLImpl(
 		rootCtx, persistence.DefaultShardId, cfg, store, workerTaskProcessor, logger)
 
 	return &asyncService{
