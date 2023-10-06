@@ -29,31 +29,10 @@ In this case you don't want to connect to your existing database:
 
 * `docker-compose -f ./docker-compose/docker-compose-postgres-example.yaml up`
   * Will include a PostgresSQL database 
-# Development 
+# Contribution 
+See [contribution](./CONTRIBUTING.md) 
 
-## Dependencies
-Run one of the [docker-compose files](./docker-compose/dev) to run a database + Apache Pulsar
-
-## Build
-* To build all the binaries: `make bins`
-
-## Run server
-
-
-### Option 2
-* Prepare a supported database 
-  * E.g.run a Postgres with [default config(with Postgres)](./config/development-postgres.yaml)
-  * Run `./xdb-tools-postgres install-schema` to install the required schema to your database
-    * See more options in `./xdb-tools-postgres`
-* Then Run `./xdb-server`. 
-  * Or see more options: `./xdb-server -h`
-  * Alternatively, clicking the run button in an IDE should also work(after schemas are install).
-
-## Run Integration Test against the started server
-Once the server is running:
-* `make integTestsWithLocalServer` will run [the integration tests defined in this repo](./integTests).
-
-  
+# Development Plan
 ## 1.0
 - [ ] StartProcessExecution API
   - [x] Basic
