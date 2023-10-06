@@ -7,12 +7,11 @@ import (
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/sql"
 	"github.com/xdblab/xdb/service/api"
+	"github.com/xdblab/xdb/service/async"
 	"go.uber.org/multierr"
 	rawLog "log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -62,68 +61,52 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	}
 	logger := log2.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(cfg.String()))
-	err = cfg.Validate()
+	err = cfg.ValidateAndSetDefaults()
 	if err != nil {
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	orm, err := persistence.NewProcessORMSQLImpl(*cfg.Database.SQL, logger)
+	sqlStore, err := sql.NewSQLProcessStore(*cfg.Database.SQL, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
 
-	var httpServer *http.Server
+	var apiServer api.Server
 	if services[ApiServiceName] {
-		go func() {
-			ginController := api.NewAPIServiceGinController(*cfg, orm, logger.WithTags(tag.Service(ApiServiceName)))
-
-			svrCfg := cfg.ApiService.HttpServer
-			httpServer = &http.Server{
-				Addr:              svrCfg.Address,
-				ReadTimeout:       svrCfg.ReadTimeout,
-				WriteTimeout:      svrCfg.WriteTimeout,
-				ReadHeaderTimeout: svrCfg.ReadHeaderTimeout,
-				IdleTimeout:       svrCfg.IdleTimeout,
-				MaxHeaderBytes:    svrCfg.MaxHeaderBytes,
-				TLSConfig:         svrCfg.TLSConfig,
-				Handler:           ginController,
-				BaseContext: func(listener net.Listener) context.Context {
-					// for graceful shutdown
-					return rootCtx
-				},
-			}
-
-			err := httpServer.ListenAndServe()
-			logger.Info("Http Server for API service is closed", tag.Error(err))
-		}()
+		apiServer = api.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(ApiServiceName)))
+		err = apiServer.Start()
+		if err != nil {
+			logger.Fatal("Failed to start api server", tag.Error(err))
+		}
 	}
 
-	var mq persistence.ProcessMQ
+	var asyncServer async.Server
 	if services[AsyncServiceName] {
-		// TODO implement a service
-		mq := persistence.NewPulsarProcessMQ(rootCtx, *cfg, orm, logger)
-		err := mq.Start()
+		asyncServer := async.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))
+		err = asyncServer.Start()
 		if err != nil {
-			panic(err)
+			logger.Fatal("Failed to start async server", tag.Error(err))
 		}
 	}
 
 	return func(ctx context.Context) error {
 		// graceful shutdown
 		var errs error
-		if httpServer != nil {
-			err := httpServer.Shutdown(ctx)
+		// first stop api server
+		if apiServer != nil {
+			err := apiServer.Stop(ctx)
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		}
-		if mq != nil {
-			err := mq.Stop()
+		if asyncServer != nil {
+			err := asyncServer.Stop(ctx)
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		}
-		err := orm.Close()
+		// stop sqlStore
+		err := sqlStore.Close()
 		if err != nil {
 			errs = multierr.Append(errs, err)
 		}

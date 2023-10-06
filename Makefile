@@ -143,7 +143,7 @@ xdb-tools-postgres:
 bins: xdb-server xdb-tools-postgres
 
 tests: ## Run all tests
-	$Q go test -v ./... -coverprofile=coverage.out -covermode=atomic
+	$Q go test -v ./... -coverprofile=coverage.out -cover -coverpkg ./...
 
 clean: ## Clean binaries
 	rm xdb-server; rm xdb-tools-postgres;
@@ -152,7 +152,10 @@ cleanTestCache:
 	$Q go clean -testcache
 
 integTests:
-	$Q go test -v ./integTests
+	$Q go test -v ./integTests  
+
+integTestsWithLocalServer:
+	$Q go test -v ./integTests -useLocalServer=true
 
 install-schema-postgres: xdb-tools-postgres
 	$Q ./xdb-tools-postgres install-schema

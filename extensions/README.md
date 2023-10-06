@@ -17,7 +17,8 @@ TODO more details
 * Implement interface
 * Makefile for tools binary
 * Schema
-* Integration test
+* [Persistence integration test](./tests)
+* [End to end integration test](../integTests)
 * CI
 
 Each sub-directory should contain all the implementation for that database specific. For example, all the MySQL specific
@@ -28,3 +29,6 @@ logic should be in `mysql/` package, including:
 * Testing
 * Tooling logic
 * etc
+
+## Resources
+* [Illustrated guide to SQLX](https://jmoiron.github.io/sqlx/)

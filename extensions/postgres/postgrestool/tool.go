@@ -11,7 +11,7 @@ const DefaultPort = 5432
 const DefaultUserName = "xdb"
 const DefaultPassword = "xdbxdb"
 const DefaultDatabaseName = "xdb"
-const DefaultSchemaFilePath = "./extensions/postgres/schema/all_in_one.sql"
+const DefaultSchemaFilePath = "./extensions/postgres/schema/xdb_sys_schema.sql"
 
 // BuildCLIOptions builds the options for cli
 func BuildCLIOptions() *cli.App {

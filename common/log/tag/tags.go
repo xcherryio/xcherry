@@ -73,6 +73,22 @@ func Service(sv string) Tag {
 	return newStringTag("service", sv)
 }
 
+func Message(msg string) Tag {
+	return newStringTag("message", msg)
+}
+
+func Shard(shardId int32) Tag {
+	return newInt64("shard", int64(shardId))
+}
+
+func StatusCode(status int) Tag {
+	return newInt("status", int(status))
+}
+
+func AnyToStr(v interface{}) string {
+	return fmt.Sprintf("%v", v)
+}
+
 func Value(v interface{}) Tag {
 	return newObjectTag("value", v)
 }

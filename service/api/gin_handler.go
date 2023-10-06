@@ -12,22 +12,22 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
-type handler struct {
+type ginHandler struct {
 	config config.Config
 	logger log.Logger
 	svc    Service
 }
 
-func newHandler(cfg config.Config, processOrm persistence.ProcessORM, logger log.Logger) *handler {
-	svc := NewServiceImpl(cfg, processOrm, logger)
-	return &handler{
+func newGinHandler(cfg config.Config, store persistence.ProcessStore, logger log.Logger) *ginHandler {
+	svc := NewServiceImpl(cfg, store, logger)
+	return &ginHandler{
 		config: cfg,
 		logger: logger,
 		svc:    svc,
 	}
 }
 
-func (h *handler) StartProcess(c *gin.Context) {
+func (h *ginHandler) StartProcess(c *gin.Context) {
 	var req xdbapi.ProcessExecutionStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
@@ -44,7 +44,7 @@ func (h *handler) StartProcess(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (h *handler) DescribeProcess(c *gin.Context) {
+func (h *ginHandler) DescribeProcess(c *gin.Context) {
 	var req xdbapi.ProcessExecutionDescribeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
@@ -63,7 +63,7 @@ func (h *handler) DescribeProcess(c *gin.Context) {
 	return
 }
 
-func (h *handler) toJson(req any) string {
+func (h *ginHandler) toJson(req any) string {
 	str, err := json.Marshal(req)
 	if err != nil {
 		h.logger.Error("error when serializing request", tag.Error(err), tag.DefaultValue(req))

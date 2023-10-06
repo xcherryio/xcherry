@@ -102,13 +102,13 @@ linters-settings:
     # Check whether fmt.Errorf uses the %w verb for formatting errors. See the readme for caveats
     errorf: true
     # Check for plain type assertions and type switches
-    asserts: true
+    asserts: false
     # Check for plain error comparisons
     comparison: true
 
   funlen:
-    lines: 100
-    statements: 60
+    lines: 250
+    statements: 100
 
   gocognit:
     # minimal code complexity to report, 30 by default (but we recommend 10-20)
@@ -496,6 +496,7 @@ linters:
     - maligned
     - prealloc
     - scopelint
+    - musttag
   disable-all: false
   presets:
     - bugs

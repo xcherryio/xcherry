@@ -29,7 +29,7 @@ jobs:
         run: make bins
         
       - name: "Set up Postgres Pulsar environment"
-        run: docker compose -f docker-compose/dev/postgres14-pulsar.yaml up -d
+        run: docker compose -f docker-compose/dev/postgres14.yaml up -d
 
       - name: Install Postgres schema #wait for 5 seconds for env to be ready 
         run: sleep 5 && make install-schema-postgres
@@ -38,7 +38,7 @@ jobs:
         run: ./xdb-server&
 
       - name: Run Postgres IntegrationTest
-        run:  make integTests
+        run:  make integTestsWithLocalServer
         
       - name: Dump docker logs
         if: always()

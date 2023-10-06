@@ -1,3 +1,4 @@
-# XDB persistence layer
+## Persistence 
 
-The critical implementation of utilizing DB extensions, Pulsar into APIs for api-service and async-service to call.  
+Persistence layer is an abstraction for operating on database(SQL/NoSQL in the xDatabase [extensions](../extensions)), MessageQueue, etc
+, so that engine layer doesn't  have to understand internal details of database(e.g. SQL vs NoSQL, error handling) 

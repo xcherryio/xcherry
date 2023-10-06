@@ -2,7 +2,7 @@ package extensions
 
 import (
 	"context"
-	"database/sql"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
 )
 
@@ -14,7 +14,7 @@ type SQLDBExtension interface {
 }
 
 type SQLDBSession interface {
-	processExecutionNonTxnCRUD
+	nonTransactionalCRUD
 
 	ErrorChecker
 	StartTransaction(ctx context.Context) (SQLTransaction, error)
@@ -22,7 +22,7 @@ type SQLDBSession interface {
 }
 
 type SQLTransaction interface {
-	processExecutionTxnCRUD
+	transactionalCRUD
 	Commit() error
 	Rollback() error
 }
@@ -34,13 +34,26 @@ type SQLAdminDBSession interface {
 	Close() error
 }
 
-type processExecutionTxnCRUD interface {
-	InsertCurrentProcessExecution(ctx context.Context, processId, processExecutionId string) (sql.Result, error)
-	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) (sql.Result, error)
+type transactionalCRUD interface {
+	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) error
+
+	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
+	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
+	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
+
+	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
+	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
+	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
+
+	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
 }
 
-type processExecutionNonTxnCRUD interface {
-	SelectCurrentProcessExecution(ctx context.Context, processId string) ([]ProcessExecutionRow, error)
+type nonTransactionalCRUD interface {
+	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
+	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
+
+	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
+	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
 }
 
 type ErrorChecker interface {
@@ -48,4 +61,5 @@ type ErrorChecker interface {
 	IsNotFoundError(err error) bool
 	IsTimeoutError(err error) bool
 	IsThrottlingError(err error) bool
+	IsConditionalUpdateFailure(err error) bool
 }
