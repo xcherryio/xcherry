@@ -16,9 +16,9 @@ import (
 )
 
 type workerTaskConcurrentProcessor struct {
-	rootCtx            context.Context
-	cfg                config.Config
-	taskToProcessChans chan persistence.WorkerTask
+	rootCtx           context.Context
+	cfg               config.Config
+	taskToProcessChan chan persistence.WorkerTask
 	// for quickly checking if the shardId is being processed
 	currentShards map[int32]bool
 	// shardId to the channel
@@ -36,7 +36,7 @@ func NewWorkerTaskConcurrentProcessor(
 	return &workerTaskConcurrentProcessor{
 		rootCtx:            ctx,
 		cfg:                cfg,
-		taskToProcessChans: make(chan persistence.WorkerTask, bufferSize),
+		taskToProcessChan:  make(chan persistence.WorkerTask, bufferSize),
 		currentShards:      map[int32]bool{},
 		taskToCommitChans:  make(map[int32]chan<- persistence.WorkerTask),
 		workerTaskNotifier: make(map[int32]LocalNotifyNewWorkerTask),
@@ -49,7 +49,7 @@ func (w *workerTaskConcurrentProcessor) Stop(context.Context) error {
 	return nil
 }
 func (w *workerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.WorkerTask {
-	return w.taskToProcessChans
+	return w.taskToProcessChan
 }
 
 func (w *workerTaskConcurrentProcessor) AddWorkerTaskQueue(
@@ -71,7 +71,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 				select {
 				case <-w.rootCtx.Done():
 					return
-				case task, ok := <-w.taskToProcessChans:
+				case task, ok := <-w.taskToProcessChan:
 					if !ok {
 						return
 					}
@@ -91,7 +91,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
 							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
-							w.taskToProcessChans <- task
+							w.taskToProcessChan <- task
 						} else {
 							commitChan <- task
 						}
