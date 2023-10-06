@@ -1,5 +1,6 @@
 xdb-server
 xdb-tools-postgres
+copyright
 test.log
 coverage.out
 .idea/

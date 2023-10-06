@@ -138,9 +138,12 @@ xdb-tools-postgres:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/tools/postgres/main.go
 
-.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres install-schema-postgres integTests
+copyright:
+	@go build -o $@ cmd/tools/copyright/main.go
 
-bins: xdb-server xdb-tools-postgres
+.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres install-schema-postgres integTests copyright
+
+bins: xdb-server xdb-tools-postgres copyright
 
 tests: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -cover -coverpkg ./...
