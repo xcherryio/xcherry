@@ -5,9 +5,6 @@ services:
     image: xdblab/xdb-server:latest
     environment:
       CONFIG_PATH: /xdb/config/development-postgres.yaml
-    volumes:
-      - ../config:/xdb/config # map to local config folder, so that you can modify the config directly for database username/password/etc
-      - ../script:/xdb/script
     ports:
       - "8801:8801"
       - "8701:8701"
@@ -15,7 +12,7 @@ services:
       postgres:
         condition: service_healthy
     entrypoint: "/xdb/script/install-schema-and-start-server.sh"
-    network_mode: host # use host mode so that you can connect to your local database outside of this docker-compose; 
+    network_mode: host # use host mode so that the 127.0.0.1 can point to Postgres
     # host network also make it possible for async service callback(otherwise it requires to set env AUTO_FIX_LOCALHOST_WORKER_URL=hostURL
   postgres:
     image: postgres:14
