@@ -12,6 +12,23 @@ Server and main repo of XDB project
 
 See [wiki](https://github.com/xdblab/xdb/wiki).
 
+# How to use 
+
+### Option 1: brew install
+TODO: brew install xdb
+
+
+### Option 2: use docker-compose of xdb to connect with your own database
+* Install the database schema to your database
+  * [Postgres schema](./extensions/postgres/schema)
+* Run docker-compose file from this project:
+  * `docker-compose -f ./docker-compose/docker-compose.yaml up`
+
+### Option 3: use example docker-compose of xdb with a database
+In this case you don't want to connect to your existing database:
+
+* `docker-compose -f ./docker-compose/docker-compose-postgres-example.yaml up`
+  * Will include a PostgresSQL database 
 # Development 
 
 ## Dependencies
@@ -22,11 +39,14 @@ Run one of the [docker-compose files](./docker-compose/dev) to run a database + 
 
 ## Run server
 
-* To run it with [default config(with Postgres)](./config/development-postgres.yaml)
-  * Run `./xdb-tools-postgres install-schema` to install the required schema for the default config
+
+### Option 2
+* Prepare a supported database 
+  * E.g.run a Postgres with [default config(with Postgres)](./config/development-postgres.yaml)
+  * Run `./xdb-tools-postgres install-schema` to install the required schema to your database
     * See more options in `./xdb-tools-postgres`
-  * Then Run `./xdb-server`. 
-    * Or see more options: `./xdb-server -h`
+* Then Run `./xdb-server`. 
+  * Or see more options: `./xdb-server -h`
   * Alternatively, clicking the run button in an IDE should also work(after schemas are install).
 
 ## Run Integration Test against the started server
