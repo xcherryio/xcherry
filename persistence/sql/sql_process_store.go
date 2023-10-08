@@ -16,6 +16,8 @@ package sql
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -24,7 +26,6 @@ import (
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
-	"time"
 )
 
 type sqlProcessStoreImpl struct {
@@ -98,7 +99,16 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	prcExeId := uuid.MustNewUUID()
 	hasNewWorkerTask := false
 
-	err := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+	if req.ProcessStartConfig == nil {
+		return nil, fmt.Errorf("processStartConfig is required")
+	}
+
+	prevProcessExecution, err := tx.SelectProcessExecutionForUpdate(ctx, prcExeId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          req.Namespace,
 		ProcessId:          req.ProcessId,
 		ProcessExecutionId: prcExeId,
@@ -106,12 +116,75 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	if err != nil {
 		if p.session.IsDupEntryError(err) {
-			// TODO support other ProcessIdReusePolicy on this error
-			return &persistence.StartProcessResponse{
-				AlreadyStarted: true,
-			}, nil
+			// process with the same id is running
+			if req.ProcessStartConfig.GetIdReusePolicy() == xdbapi.TERMINATE_IF_RUNNING {
+				// mark the previous process execution as terminated
+				prevProcessExecution.IsCurrent = false
+				prevProcessExecution.Status = persistence.ProcessExecutionStatusTerminated
+				tx.UpdateProcessExecution(ctx, *prevProcessExecution)
+
+				// mark all pending state executions as aborted
+				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prevProcessExecution.StateExecutionSequenceMaps)
+				if err != nil {
+					return nil, err
+				}
+				for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
+					for stateIdSeq := range stateIdSeqMap {
+						stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
+							ctx, extensions.AsyncStateExecutionSelectFilter{
+								ProcessExecutionId: prcExeId,
+								StateId:            stateId,
+								StateIdSequence:    int32(stateIdSeq),
+							})
+						if err != nil {
+							return nil, err
+						}
+						if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+							stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
+						}
+						if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
+							stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
+						}
+						err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
+							ProcessExecutionId: stateRow.ProcessExecutionId,
+							StateId:            stateRow.StateId,
+							StateIdSequence:    stateRow.StateIdSequence,
+							WaitUntilStatus:    stateRow.WaitUntilStatus,
+							ExecuteStatus:      stateRow.ExecuteStatus,
+							PreviousVersion:    stateRow.PreviousVersion,
+						})
+						if err != nil {
+							return nil, err
+						}
+						err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+			} else {
+				return &persistence.StartProcessResponse{
+					AlreadyStarted: true,
+				}, nil
+			}
 		}
 		return nil, err
+	} else {
+		// case when previous process execution is finished
+		if prevProcessExecution != nil {
+			switch req.ProcessStartConfig.GetIdReusePolicy() {
+			case xdbapi.DISALLOW_REUSE:
+				return nil, fmt.Errorf("ProcessId %v is already used. Process ID reuse policy: disallow reuse.", req.ProcessId)
+			case xdbapi.ALLOW_IF_NO_RUNNING, xdbapi.TERMINATE_IF_RUNNING:
+				// no need to check here
+			case xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
+				if prevProcessExecution.Status == persistence.ProcessExecutionStatusCompleted {
+					return nil, fmt.Errorf("Process execution already finished successfully. ProcessId: %v, ProcessExecutionId: %v. Process ID reuse policy: allow duplicate process ID if last run failed.", req.ProcessId, prevProcessExecution.ProcessExecutionId)
+				}
+			default:
+				return nil, fmt.Errorf("Unsupported ProcessIdReusePolicy %v", req.ProcessStartConfig.GetIdReusePolicy())
+			}
+		}
 	}
 
 	timeoutSeconds := int32(0)
