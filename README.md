@@ -40,8 +40,8 @@ See [contribution](./CONTRIBUTING.md)
   - [ ] Process timeout
   - [ ] Retention policy after closed
 - [ ] Executing `wait_until`/`execute` APIs
-  - [ ] Basic
-  - [ ] Parallel execution of multiple states
+  - [x] Basic sequential execution
+  - [x] Parallel execution of multiple states
   - [ ] StateOption: WaitUntil/Execute API timeout and retry policy
   - [ ] AsyncState failure policy for recovery
 - [ ] StateDecision
