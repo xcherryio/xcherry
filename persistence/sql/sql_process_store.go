@@ -130,7 +130,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 			return nil, err
 		}
 
-		err = insertWorkerTask(ctx, tx, prcExeId, stateId, stateConfig, request.NewTaskShardId)
+		err = insertWorkerTask(ctx, tx, prcExeId, stateId, 1, stateConfig, request.NewTaskShardId)
 		if err != nil {
 			return nil, err
 		}
@@ -429,7 +429,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 				return nil, err
 			}
 
-			err = insertWorkerTask(ctx, tx, prcExeId, stateId, stateConfig, request.TaskShardId)
+			err = insertWorkerTask(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, request.TaskShardId)
 			if err != nil {
 				return nil, err
 			}
@@ -511,7 +511,8 @@ func insertAsyncStateExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	processExecutionId uuid.UUID,
-	stateId string, stateIdSeq int,
+	stateId string,
+	stateIdSeq int,
 	stateConfig *xdbapi.AsyncStateConfig,
 	stateInput []byte,
 	stateInfo []byte) error {
@@ -542,13 +543,14 @@ func insertWorkerTask(
 	tx extensions.SQLTransaction,
 	processExecutionId uuid.UUID,
 	stateId string,
+	stateIdSeq int,
 	stateConfig *xdbapi.AsyncStateConfig,
 	shardId int32) error {
 	workerTaskRow := extensions.WorkerTaskRowForInsert{
 		ShardId:            shardId,
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
-		StateIdSequence:    1,
+		StateIdSequence:    int32(stateIdSeq),
 	}
 	if stateConfig.GetSkipWaitUntil() {
 		workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
