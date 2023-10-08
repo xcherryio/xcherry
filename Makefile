@@ -143,7 +143,7 @@ xdb-tools-copyright:
 
 .PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres install-schema-postgres integTests copyright
 
-bins: xdb-server xdb-tools-postgres copyright
+bins: xdb-server xdb-tools-postgres xdb-tools-copyright
 
 tests: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -cover -coverpkg ./...
