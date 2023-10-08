@@ -27,13 +27,16 @@ jobs:
 
       - name: Make Binaries
         run: make bins
-
+        
       - name: "Set up all databases + Pulsar environment"
         run: docker compose -f docker-compose/dev/integ-all.yaml up -d
         
       - name: Run Tests
         run:  make tests
 
+      - name: Check copyright
+        run: ./xdb-tools-copyright -verifyOnly
+      
       - name: Dump docker logs
         if: always()
         uses: jwalton/gh-docker-logs@v2
