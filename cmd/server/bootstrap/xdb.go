@@ -31,7 +31,7 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v2"
-	log2 "github.com/xdblab/xdb/common/log"
+	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence/sql"
@@ -81,7 +81,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	if err != nil {
 		rawLog.Fatalf("Unable to create a new zap logger %v", err)
 	}
-	logger := log2.NewLogger(zapLogger)
+	logger := log.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(cfg.String()))
 	err = cfg.ValidateAndSetDefaults()
 	if err != nil {
