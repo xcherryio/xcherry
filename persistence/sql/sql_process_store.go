@@ -103,19 +103,16 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		return nil, fmt.Errorf("processStartConfig is required")
 	}
 
-	prevProcessExecution, err := tx.SelectProcessExecutionForUpdate(ctx, prcExeId)
-	if err != nil {
-		return nil, err
-	}
+	prevProcessExecution, errGetPrevExecution := tx.SelectProcessExecutionForUpdate(ctx, prcExeId)
 
-	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+	errInsertCurrentProcessExecution := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          req.Namespace,
 		ProcessId:          req.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
 
-	if err != nil {
-		if p.session.IsDupEntryError(err) {
+	if errInsertCurrentProcessExecution != nil {
+		if p.session.IsDupEntryError(errInsertCurrentProcessExecution) {
 			// process with the same id is running
 			if req.ProcessStartConfig.GetIdReusePolicy() == xdbapi.TERMINATE_IF_RUNNING {
 				// mark the previous process execution as terminated
@@ -168,10 +165,10 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 				}, nil
 			}
 		}
-		return nil, err
+		return nil, errInsertCurrentProcessExecution
 	} else {
 		// case when previous process execution is finished
-		if prevProcessExecution != nil {
+		if p.session.IsNotFoundError(errGetPrevExecution) {
 			switch req.ProcessStartConfig.GetIdReusePolicy() {
 			case xdbapi.DISALLOW_REUSE:
 				return nil, fmt.Errorf("ProcessId %v is already used. Process ID reuse policy: disallow reuse.", req.ProcessId)
