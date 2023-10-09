@@ -17,13 +17,19 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package bootstrap
 
 import (
 	"context"
 	"fmt"
+	rawLog "log"
+	"os"
+	"os/signal"
+	"strings"
+	"time"
+
 	"github.com/urfave/cli/v2"
 	log2 "github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -32,11 +38,6 @@ import (
 	"github.com/xdblab/xdb/service/api"
 	"github.com/xdblab/xdb/service/async"
 	"go.uber.org/multierr"
-	rawLog "log"
-	"os"
-	"os/signal"
-	"strings"
-	"time"
 )
 
 const ApiServiceName = "api"

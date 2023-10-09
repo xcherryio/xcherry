@@ -17,21 +17,22 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package engine
 
 import (
 	"context"
+	"math/rand"
+	"time"
+
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence"
-	"math/rand"
-	"time"
 )
 
-type workerTaskQueueSQLImpl struct {
+type workerTaskQueueImpl struct {
 	shardId int32
 	store   persistence.ProcessStore
 	logger  log.Logger
@@ -54,13 +55,13 @@ type workerTaskPage struct {
 	pendingCount    int
 }
 
-func NewWorkerTaskQueueSQLImpl(
+func NewWorkerTaskQueueImpl(
 	rootCtx context.Context, shardId int32, cfg config.Config, store persistence.ProcessStore,
 	processor WorkerTaskProcessor, logger log.Logger,
 ) TaskQueue {
 	qCfg := cfg.AsyncService.WorkerTaskQueue
 
-	return &workerTaskQueueSQLImpl{
+	return &workerTaskQueueImpl{
 		shardId: shardId,
 		store:   store,
 		logger:  logger.WithTags(tag.Shard(shardId)),
@@ -76,18 +77,18 @@ func NewWorkerTaskQueueSQLImpl(
 	}
 }
 
-func (w *workerTaskQueueSQLImpl) Stop(ctx context.Context) error {
+func (w *workerTaskQueueImpl) Stop(ctx context.Context) error {
 	// a final attempt to commit the completed page
 	return w.commitCompletedPages(ctx)
 }
 
-func (w *workerTaskQueueSQLImpl) TriggerPolling(pollTime time.Time) {
+func (w *workerTaskQueueImpl) TriggerPolling(pollTime time.Time) {
 	w.pollTimer.Update(pollTime)
 }
 
 type LocalNotifyNewWorkerTask func(pollTime time.Time)
 
-func (w *workerTaskQueueSQLImpl) Start() error {
+func (w *workerTaskQueueImpl) Start() error {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
 	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan, w.TriggerPolling)
@@ -116,12 +117,12 @@ func (w *workerTaskQueueSQLImpl) Start() error {
 	return nil
 }
 
-func (w *workerTaskQueueSQLImpl) getNextPollTime(interval, jitter time.Duration) time.Time {
+func (w *workerTaskQueueImpl) getNextPollTime(interval, jitter time.Duration) time.Time {
 	jitterD := time.Duration(rand.Int63n(int64(jitter)))
 	return time.Now().Add(interval).Add(jitterD)
 }
 
-func (w *workerTaskQueueSQLImpl) pollAndDispatch() {
+func (w *workerTaskQueueImpl) pollAndDispatch() {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
 	resp, err := w.store.GetWorkerTasks(
@@ -152,7 +153,7 @@ func (w *workerTaskQueueSQLImpl) pollAndDispatch() {
 	}
 }
 
-func (w *workerTaskQueueSQLImpl) commitCompletedPages(ctx context.Context) error {
+func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
 		// TODO optimize by combining into single query (as long as it won't exceed certain limit)
 		for idx, page := range w.completedPages {
@@ -175,7 +176,7 @@ func (w *workerTaskQueueSQLImpl) commitCompletedPages(ctx context.Context) error
 	return nil
 }
 
-func (w *workerTaskQueueSQLImpl) receiveCompletedTask(task persistence.WorkerTask) {
+func (w *workerTaskQueueImpl) receiveCompletedTask(task persistence.WorkerTask) {
 	page := w.pendingTaskSequenceToPage[*task.TaskSequence]
 	delete(w.pendingTaskSequenceToPage, *task.TaskSequence)
 
