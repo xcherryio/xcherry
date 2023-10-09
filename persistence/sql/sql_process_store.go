@@ -92,6 +92,45 @@ func (p sqlProcessStoreImpl) StopProcess(ctx context.Context, request persistenc
 	return resp, err
 }
 
+func (p sqlProcessStoreImpl) markPendingStateAsAborted(ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, sequenceMaps persistence.StateExecutionSequenceMapsJson) error {
+	for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
+		for stateIdSeq := range stateIdSeqMap {
+			stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
+				ctx, extensions.AsyncStateExecutionSelectFilter{
+					ProcessExecutionId: processExecutionId,
+					StateId:            stateId,
+					StateIdSequence:    int32(stateIdSeq),
+				})
+			if err != nil {
+				return err
+			}
+			if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+				stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
+			}
+			if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
+				stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
+			}
+			err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
+				ProcessExecutionId: stateRow.ProcessExecutionId,
+				StateId:            stateRow.StateId,
+				StateIdSequence:    stateRow.StateIdSequence,
+				WaitUntilStatus:    stateRow.WaitUntilStatus,
+				ExecuteStatus:      stateRow.ExecuteStatus,
+				PreviousVersion:    stateRow.PreviousVersion,
+			})
+			if err != nil {
+				return err
+			}
+			err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func (p sqlProcessStoreImpl) doStartProcessTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
@@ -100,7 +139,9 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	hasNewWorkerTask := false
 
 	if req.ProcessStartConfig == nil {
-		return nil, fmt.Errorf("processStartConfig is required")
+		req.ProcessStartConfig = &xdbapi.ProcessStartConfig{
+			IdReusePolicy: xdbapi.DISALLOW_REUSE.Ptr(),
+		}
 	}
 
 	prevProcessExecution, errGetPrevExecution := tx.SelectProcessExecutionForUpdate(ctx, prcExeId)
@@ -128,39 +169,9 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 				if err != nil {
 					return nil, err
 				}
-				for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
-					for stateIdSeq := range stateIdSeqMap {
-						stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
-							ctx, extensions.AsyncStateExecutionSelectFilter{
-								ProcessExecutionId: prcExeId,
-								StateId:            stateId,
-								StateIdSequence:    int32(stateIdSeq),
-							})
-						if err != nil {
-							return nil, err
-						}
-						if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
-							stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
-						}
-						if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
-							stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
-						}
-						err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
-							ProcessExecutionId: stateRow.ProcessExecutionId,
-							StateId:            stateRow.StateId,
-							StateIdSequence:    stateRow.StateIdSequence,
-							WaitUntilStatus:    stateRow.WaitUntilStatus,
-							ExecuteStatus:      stateRow.ExecuteStatus,
-							PreviousVersion:    stateRow.PreviousVersion,
-						})
-						if err != nil {
-							return nil, err
-						}
-						err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
-						if err != nil {
-							return nil, err
-						}
-					}
+				err = p.markPendingStateAsAborted(ctx, tx, prevProcessExecution.ProcessExecutionId, sequenceMaps)
+				if err != nil {
+					return nil, err
 				}
 			} else {
 				return &persistence.StartProcessResponse{
@@ -609,39 +620,9 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	}
 
 	// also stop(abort) other running state executions
-	for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
-		for stateIdSeq := range stateIdSeqMap {
-			stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
-				ctx, extensions.AsyncStateExecutionSelectFilter{
-					ProcessExecutionId: request.ProcessExecutionId,
-					StateId:            stateId,
-					StateIdSequence:    int32(stateIdSeq),
-				})
-			if err != nil {
-				return nil, err
-			}
-			if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
-				stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
-			}
-			if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
-				stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
-			}
-			err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
-				ProcessExecutionId: stateRow.ProcessExecutionId,
-				StateId:            stateRow.StateId,
-				StateIdSequence:    stateRow.StateIdSequence,
-				WaitUntilStatus:    stateRow.WaitUntilStatus,
-				ExecuteStatus:      stateRow.ExecuteStatus,
-				PreviousVersion:    stateRow.PreviousVersion,
-			})
-			if err != nil {
-				return nil, err
-			}
-			err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
-			if err != nil {
-				return nil, err
-			}
-		}
+	err = p.markPendingStateAsAborted(ctx, tx, request.ProcessExecutionId, sequenceMaps)
+	if err != nil {
+		return nil, err
 	}
 
 	// update process execution row
