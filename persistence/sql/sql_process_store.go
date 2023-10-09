@@ -144,32 +144,45 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		}
 	}
 
-	prevProcessExecution, errGetPrevExecution := tx.SelectProcessExecutionForUpdate(ctx, prcExeId)
-
 	errInsertCurrentProcessExecution := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          req.Namespace,
 		ProcessId:          req.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
 
+	currentProcessExecutionRow, errGetCurrentProcessExecution := p.session.SelectCurrentProcessExecution(ctx, req.Namespace, req.ProcessId)
+
 	if errInsertCurrentProcessExecution != nil {
 		if p.session.IsDupEntryError(errInsertCurrentProcessExecution) {
 			// process with the same id is running
 			if req.ProcessStartConfig.GetIdReusePolicy() == xdbapi.TERMINATE_IF_RUNNING {
 				// mark the previous process execution as terminated
-				prevProcessExecution.IsCurrent = false
-				prevProcessExecution.Status = persistence.ProcessExecutionStatusTerminated
-				err := tx.UpdateProcessExecution(ctx, *prevProcessExecution)
+
+				// in this case there should be a current process execution
+				// we should be able to get a process execution row
+				// if there is an error here, there is something wrong with query of SelectCurrentProcessExecution
+				if errGetCurrentProcessExecution != nil {
+					return nil, errGetCurrentProcessExecution
+				}
+				currentProcessExecutionRowForUpdate := extensions.ProcessExecutionRowForUpdate{
+					ProcessExecutionId:         currentProcessExecutionRow.ProcessExecutionId,
+					ProcessExecutionIdString:   currentProcessExecutionRow.ProcessExecutionId.String(),
+					IsCurrent:                  false,
+					Status:                     persistence.ProcessExecutionStatusTerminated,
+					HistoryEventIdSequence:     currentProcessExecutionRow.HistoryEventIdSequence,
+					StateExecutionSequenceMaps: currentProcessExecutionRow.StateExecutionSequenceMaps,
+				}
+				err := tx.UpdateProcessExecution(ctx, currentProcessExecutionRowForUpdate)
 				if err != nil {
 					return nil, err
 				}
 
 				// mark all pending state executions as aborted
-				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prevProcessExecution.StateExecutionSequenceMaps)
+				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(currentProcessExecutionRow.StateExecutionSequenceMaps)
 				if err != nil {
 					return nil, err
 				}
-				err = p.markPendingStateAsAborted(ctx, tx, prevProcessExecution.ProcessExecutionId, sequenceMaps)
+				err = p.markPendingStateAsAborted(ctx, tx, currentProcessExecutionRow.ProcessExecutionId, sequenceMaps)
 				if err != nil {
 					return nil, err
 				}
@@ -182,15 +195,15 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		return nil, errInsertCurrentProcessExecution
 	} else {
 		// case when previous process execution is finished
-		if p.session.IsNotFoundError(errGetPrevExecution) {
+		if p.session.IsNotFoundError(errGetCurrentProcessExecution) {
 			switch req.ProcessStartConfig.GetIdReusePolicy() {
 			case xdbapi.DISALLOW_REUSE:
 				return nil, fmt.Errorf("ProcessId %v is already used. Process ID reuse policy: disallow reuse.", req.ProcessId)
 			case xdbapi.ALLOW_IF_NO_RUNNING, xdbapi.TERMINATE_IF_RUNNING:
 				// no need to check here
 			case xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
-				if prevProcessExecution.Status == persistence.ProcessExecutionStatusCompleted {
-					return nil, fmt.Errorf("Process execution already finished successfully. ProcessId: %v, ProcessExecutionId: %v. Process ID reuse policy: allow duplicate process ID if last run failed.", req.ProcessId, prevProcessExecution.ProcessExecutionId)
+				if currentProcessExecutionRow.Status == persistence.ProcessExecutionStatusCompleted {
+					return nil, fmt.Errorf("Process execution already finished successfully. ProcessId: %v, ProcessExecutionId: %v. Process ID reuse policy: allow duplicate process ID if last run failed.", req.ProcessId, currentProcessExecutionRow.ProcessExecutionId)
 				}
 			default:
 				return nil, fmt.Errorf("Unsupported ProcessIdReusePolicy %v", req.ProcessStartConfig.GetIdReusePolicy())
