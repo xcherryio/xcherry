@@ -17,7 +17,7 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package sql
 
@@ -111,7 +111,9 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
 	if req.StartStateId != nil {
+		stateId := req.GetStartStateId()
 		stateIdSeq := sequenceMaps.StartNewStateExecution(req.GetStartStateId())
+		stateConfig := req.StartStateConfig
 
 		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
@@ -123,46 +125,16 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 			return nil, err
 		}
 
-		stateRow := extensions.AsyncStateExecutionRow{
-			ProcessExecutionId: prcExeId,
-			StateId:            req.GetStartStateId(),
-			StateIdSequence:    int32(stateIdSeq),
-			// the waitUntil/execute status will be set later
-
-			PreviousVersion: 1,
-			Input:           stateInputBytes,
-			Info:            stateInfoBytes,
-		}
-
-		if req.StartStateConfig.GetSkipWaitUntil() {
-			stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
-			stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
-		} else {
-			stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
-			stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
-		}
-
-		err = tx.InsertAsyncStateExecution(ctx, stateRow)
+		err = insertAsyncStateExecution(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
 		if err != nil {
 			return nil, err
 		}
 
-		workerTaskRow := extensions.WorkerTaskRowForInsert{
-			ShardId:            request.NewTaskShardId,
-			ProcessExecutionId: prcExeId,
-			StateId:            req.GetStartStateId(),
-			StateIdSequence:    1,
-		}
-		if req.StartStateConfig.GetSkipWaitUntil() {
-			workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
-		} else {
-			workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
-		}
-
-		err = tx.InsertWorkerTask(ctx, workerTaskRow)
+		err = insertWorkerTask(ctx, tx, prcExeId, stateId, 1, stateConfig, request.NewTaskShardId)
 		if err != nil {
 			return nil, err
 		}
+
 		hasNewWorkerTask = true
 	}
 
@@ -440,49 +412,24 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 			return nil, err
 		}
 
+		prcExeId := request.ProcessExecutionId
+
 		for _, next := range request.StateDecision.GetNextStates() {
+			stateId := next.StateId
 			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
+			stateConfig := next.StateConfig
 
 			stateInput, err := persistence.FromEncodedObjectIntoBytes(next.StateInput)
 			if err != nil {
 				return nil, err
 			}
 
-			newStateRow := extensions.AsyncStateExecutionRow{
-				ProcessExecutionId: request.ProcessExecutionId,
-				StateId:            next.StateId,
-				StateIdSequence:    int32(stateIdSeq),
-				PreviousVersion:    1,
-				Input:              stateInput,
-				Info:               stateInfo,
-			}
-
-			if next.StateConfig.GetSkipWaitUntil() {
-				newStateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
-				newStateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
-			} else {
-				newStateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
-				newStateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
-			}
-
-			err = tx.InsertAsyncStateExecution(ctx, newStateRow)
+			err = insertAsyncStateExecution(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, stateInput, stateInfo)
 			if err != nil {
 				return nil, err
 			}
 
-			workerTaskRow := extensions.WorkerTaskRowForInsert{
-				ShardId:            request.TaskShardId,
-				ProcessExecutionId: request.ProcessExecutionId,
-				StateId:            next.StateId,
-				StateIdSequence:    int32(stateIdSeq),
-			}
-			if next.StateConfig.GetSkipWaitUntil() {
-				workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
-			} else {
-				workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
-			}
-
-			err = tx.InsertWorkerTask(ctx, workerTaskRow)
+			err = insertWorkerTask(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, request.TaskShardId)
 			if err != nil {
 				return nil, err
 			}
@@ -558,4 +505,58 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		HasNewWorkerTask: hasNewWorkerTask,
 	}, nil
 
+}
+
+func insertAsyncStateExecution(
+	ctx context.Context,
+	tx extensions.SQLTransaction,
+	processExecutionId uuid.UUID,
+	stateId string,
+	stateIdSeq int,
+	stateConfig *xdbapi.AsyncStateConfig,
+	stateInput []byte,
+	stateInfo []byte) error {
+	stateRow := extensions.AsyncStateExecutionRow{
+		ProcessExecutionId: processExecutionId,
+		StateId:            stateId,
+		StateIdSequence:    int32(stateIdSeq),
+		// the waitUntil/execute status will be set later
+
+		PreviousVersion: 1,
+		Input:           stateInput,
+		Info:            stateInfo,
+	}
+
+	if stateConfig.GetSkipWaitUntil() {
+		stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
+		stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
+	} else {
+		stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
+		stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
+	}
+
+	return tx.InsertAsyncStateExecution(ctx, stateRow)
+}
+
+func insertWorkerTask(
+	ctx context.Context,
+	tx extensions.SQLTransaction,
+	processExecutionId uuid.UUID,
+	stateId string,
+	stateIdSeq int,
+	stateConfig *xdbapi.AsyncStateConfig,
+	shardId int32) error {
+	workerTaskRow := extensions.WorkerTaskRowForInsert{
+		ShardId:            shardId,
+		ProcessExecutionId: processExecutionId,
+		StateId:            stateId,
+		StateIdSequence:    int32(stateIdSeq),
+	}
+	if stateConfig.GetSkipWaitUntil() {
+		workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
+	} else {
+		workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
+	}
+
+	return tx.InsertWorkerTask(ctx, workerTaskRow)
 }
