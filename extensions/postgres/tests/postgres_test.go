@@ -52,7 +52,7 @@ func TestPostgres(t *testing.T) {
 	err := extensions.CreateDatabase(*sqlConfig, testDBName)
 	ass.Nil(err)
 
-	err = extensions.SetupSchema(sqlConfig, "../../"+postgrestool.DefaultSchemaFilePath)
+	err = extensions.SetupSchema(sqlConfig, "../../../"+postgrestool.DefaultSchemaFilePath)
 	ass.Nil(err)
 
 	store, err := sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
