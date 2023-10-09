@@ -118,7 +118,10 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 				// mark the previous process execution as terminated
 				prevProcessExecution.IsCurrent = false
 				prevProcessExecution.Status = persistence.ProcessExecutionStatusTerminated
-				tx.UpdateProcessExecution(ctx, *prevProcessExecution)
+				err := tx.UpdateProcessExecution(ctx, *prevProcessExecution)
+				if err != nil {
+					return nil, err
+				}
 
 				// mark all pending state executions as aborted
 				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prevProcessExecution.StateExecutionSequenceMaps)
