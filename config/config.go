@@ -17,7 +17,7 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package config
 
@@ -49,6 +49,9 @@ type (
 	}
 
 	DatabaseConfig struct {
+		// SQL is the SQL database config
+		// either sql or nosql is needed to run XDB
+		// Only SQL is supported for now.
 		SQL *SQL `yaml:"sql"`
 	}
 
@@ -58,7 +61,9 @@ type (
 	}
 
 	AsyncServiceConfig struct {
+		// Mode is the mode of async service. Currently only standalone mode is supported
 		Mode            AsyncServiceMode      `yaml:"mode"`
+		// WorkerTaskQueue is the config for worker task queue
 		WorkerTaskQueue WorkerTaskQueueConfig `yaml:"workerTaskQueue"`
 		// InternalHttpServer is the config for starting a http.Server
 		// to serve some internal APIs
@@ -74,10 +79,20 @@ type (
 		// The service names are defined in RFC 6335 and assigned by IANA.
 		// See net.Dial for details of the address format.
 		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
-		Address      string        `yaml:"address"`
-		ReadTimeout  time.Duration `yaml:"readTimeout"`
+		Address string `yaml:"address"`
+		// ReadTimeout is the maximum duration for reading the entire
+		// request, including the body. Because ReadTimeout does not
+		// let Handlers make per-request decisions on each request body's acceptable
+		// deadline or upload rate, most users will prefer to use
+		// ReadHeaderTimeout. It is valid to use them both.
+		ReadTimeout time.Duration `yaml:"readTimeout"`
+		/// WriteTimeout is the maximum duration before timing out
+		// writes of the response. It is valid to use them both ReadTimeout and WriteTimeout.
+		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
 		WriteTimeout time.Duration `yaml:"writeTimeout"`
-		TLSConfig    *tls.Config   `yaml:"tlsConfig"`
+		// TLSConfig optionally provides a TLS configuration for use
+		// by ServeTLS and ListenAndServeTLS
+		TLSConfig *tls.Config `yaml:"tlsConfig"`
 		// the rest are less frequently used
 		ReadHeaderTimeout time.Duration `yaml:"readHeaderTimeout"`
 		IdleTimeout       time.Duration `yaml:"idleTimeout"`
@@ -85,12 +100,24 @@ type (
 	}
 
 	WorkerTaskQueueConfig struct {
-		MaxPollInterval      time.Duration `yaml:"maxPollInterval"`
-		CommitInterval       time.Duration `yaml:"commitInterval"`
-		IntervalJitter       time.Duration `yaml:"intervalJitter"`
-		ProcessorConcurrency int           `yaml:"processorConcurrency"`
-		ProcessorBufferSize  int           `yaml:"processorBufferSize"`
-		PollPageSize         int32         `yaml:"pollPageSize"`
+		// MaxPollInterval is the maximum interval that the poller will wait between
+		// polls. If not specified then the default value of 1 minute is used.
+		MaxPollInterval time.Duration `yaml:"maxPollInterval"`
+		// CommitInterval is the interval that the poller will use to commit the progress of
+		// the queue processing. If not specified then the default value of 1 minute is used.
+		CommitInterval time.Duration `yaml:"commitInterval"`
+		// IntervalJitterCoefficient is the jitter factor for the poll and commit interval.
+		IntervalJitter time.Duration `yaml:"intervalJitter"`
+		// ProcessorConcurrency is the number of goroutines that will be created to process
+		// tasks per async service instance. If not specified then the default value of 10.
+		ProcessorConcurrency int `yaml:"processorConcurrency"`
+		// ProcessorBufferSize is the size of the buffer for each processor. The processor
+		// will stop polling for tasks if the buffer is full and resume polling when it is
+		// no longer full. If not specified then the default value of 1000 is used.
+		ProcessorBufferSize int `yaml:"processorBufferSize"`
+		// PollPageSize is the page size used by the poller to fetch tasks from the database.
+		// If not specified then the default value of 1000 is used.
+		PollPageSize int32 `yaml:"pollPageSize"`
 	}
 
 	AsyncServiceMode string

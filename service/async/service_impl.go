@@ -17,19 +17,20 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package async
 
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/engine"
 	"github.com/xdblab/xdb/persistence"
-	"time"
 )
 
 type asyncService struct {
@@ -49,7 +50,7 @@ func NewAsyncServiceImpl(
 
 	// TODO for config.AsyncServiceModeConsistentHashingCluster
 	// the worker queue will be created dynamically
-	workerTaskQueue := engine.NewWorkerTaskQueueSQLImpl(
+	workerTaskQueue := engine.NewWorkerTaskQueueImpl(
 		rootCtx, persistence.DefaultShardId, cfg, store, workerTaskProcessor, logger)
 
 	return &asyncService{

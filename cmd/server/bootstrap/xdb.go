@@ -17,26 +17,27 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package bootstrap
 
 import (
 	"context"
 	"fmt"
+	rawLog "log"
+	"os"
+	"os/signal"
+	"strings"
+	"time"
+
 	"github.com/urfave/cli/v2"
-	log2 "github.com/xdblab/xdb/common/log"
+	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence/sql"
 	"github.com/xdblab/xdb/service/api"
 	"github.com/xdblab/xdb/service/async"
 	"go.uber.org/multierr"
-	rawLog "log"
-	"os"
-	"os/signal"
-	"strings"
-	"time"
 )
 
 const ApiServiceName = "api"
@@ -80,7 +81,7 @@ func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[st
 	if err != nil {
 		rawLog.Fatalf("Unable to create a new zap logger %v", err)
 	}
-	logger := log2.NewLogger(zapLogger)
+	logger := log.NewLogger(zapLogger)
 	logger.Info("config is loaded", tag.Value(cfg.String()))
 	err = cfg.ValidateAndSetDefaults()
 	if err != nil {
