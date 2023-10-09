@@ -140,7 +140,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	if req.ProcessStartConfig == nil {
 		req.ProcessStartConfig = &xdbapi.ProcessStartConfig{
-			IdReusePolicy: xdbapi.DISALLOW_REUSE.Ptr(),
+			IdReusePolicy: xdbapi.ALLOW_IF_NO_RUNNING.Ptr(),
 		}
 	}
 
