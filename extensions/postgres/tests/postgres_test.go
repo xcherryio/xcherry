@@ -17,21 +17,24 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
 package tests
 
 import (
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/extensions/postgres"
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
+
 	"github.com/xdblab/xdb/persistence/sql"
-	"testing"
-	"time"
+	"github.com/xdblab/xdb/persistence/sql/basetest"
 )
 
 func TestPostgres(t *testing.T) {
@@ -50,13 +53,13 @@ func TestPostgres(t *testing.T) {
 	err := extensions.CreateDatabase(*sqlConfig, testDBName)
 	ass.Nil(err)
 
-	err = extensions.SetupSchema(sqlConfig, "../../"+postgrestool.DefaultSchemaFilePath)
+	err = extensions.SetupSchema(sqlConfig, "../../../"+postgrestool.DefaultSchemaFilePath)
 	ass.Nil(err)
 
 	store, err := sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
 	ass.Nil(err)
-	
-	testSQLBasicExecution(ass, store)
+
+	basetest.SQLBasicTest(ass, store)
 
 	_ = extensions.DropDatabase(*sqlConfig, testDBName)
 	fmt.Println("testing database deleted")

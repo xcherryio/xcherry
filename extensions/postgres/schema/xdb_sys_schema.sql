@@ -39,10 +39,10 @@ CREATE TABLE xdb_sys_worker_tasks(
     shard_id INTEGER NOT NULL, -- for sharding xdb-local-mq
     task_sequence bigserial,   
     --
-    process_execution_id uuid NOT NULL, -- for looking up xdb_sys_async_state_executions
-    state_id VARCHAR(32) NOT NULL, -- for looking up xdb_sys_async_state_executions
-    state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
-    task_type SMALLINT, -- 1: waitUntil 2: execute
+    task_type SMALLINT NOT NULL, -- 1: waitUntil 2: execute
+    process_execution_id uuid, -- for looking up xdb_sys_async_state_executions
+    state_id VARCHAR(32), -- for looking up xdb_sys_async_state_executions
+    state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
     info jsonb ,
     PRIMARY KEY (shard_id, task_sequence)
 );
@@ -52,10 +52,10 @@ CREATE TABLE xdb_sys_timer_tasks(
     fire_time TIMESTAMP NOT NULL,
     task_sequence bigserial, -- to help ensure the PK uniqueness 
     --
-    process_execution_id uuid NOT NULL, -- for looking up xdb_sys_async_state_executions
-    state_id VARCHAR(32) NOT NULL, -- for looking up xdb_sys_async_state_executions
-    state_id_sequence INTEGER NOT NULL, -- for looking up xdb_sys_async_state_executions
     task_type SMALLINT, -- 1: process timeout 2: user timer command, 3: worker_task_backoff
+    process_execution_id uuid, -- for looking up xdb_sys_async_state_executions
+    state_id VARCHAR(32), -- for looking up xdb_sys_async_state_executions
+    state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
     info jsonb ,
     PRIMARY KEY (shard_id, fire_time, task_sequence)    
 );
