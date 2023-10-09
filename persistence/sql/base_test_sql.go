@@ -17,21 +17,22 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.    
+// under the License.
 
-package tests
+package sql
 
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/persistence"
-	"time"
 )
 
-func testSQLBasicExecution(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLBasicExecutionTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// TODO need to refactor this test
 	ctx := context.Background()
 	// start process
