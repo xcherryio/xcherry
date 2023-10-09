@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/urfave/cli/v2"
 	"github.com/xdblab/xdb/cmd/server/bootstrap"
@@ -34,13 +33,6 @@ import (
 )
 
 func main() {
-	ex, err := os.Executable()
-	if err != nil {
-		panic(err)
-	}
-	exPath := filepath.Dir(ex)
-	fmt.Println("exPath:", exPath)
-
 	app := &cli.App{
 		Name:  "xdb server",
 		Usage: "start the xdb server",
