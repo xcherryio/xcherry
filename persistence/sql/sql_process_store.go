@@ -144,6 +144,10 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		}
 	}
 
+	if req.ProcessStartConfig.IdReusePolicy == nil {
+		req.ProcessStartConfig.IdReusePolicy = xdbapi.ALLOW_IF_NO_RUNNING.Ptr()
+	}
+
 	errInsertCurrentProcessExecution := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
 		Namespace:          req.Namespace,
 		ProcessId:          req.ProcessId,
@@ -162,6 +166,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 				// we should be able to get a process execution row
 				// if there is an error here, there is something wrong with query of SelectCurrentProcessExecution
 				if errGetCurrentProcessExecution != nil {
+					p.logger.Error(errGetCurrentProcessExecution.Error())
 					return nil, errGetCurrentProcessExecution
 				}
 				currentProcessExecutionRowForUpdate := extensions.ProcessExecutionRowForUpdate{
@@ -174,25 +179,32 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 				}
 				err := tx.UpdateProcessExecution(ctx, currentProcessExecutionRowForUpdate)
 				if err != nil {
+					p.logger.Error(err.Error())
 					return nil, err
 				}
 
 				// mark all pending state executions as aborted
 				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(currentProcessExecutionRow.StateExecutionSequenceMaps)
 				if err != nil {
+					p.logger.Error(err.Error())
 					return nil, err
 				}
 				err = p.markPendingStateAsAborted(ctx, tx, currentProcessExecutionRow.ProcessExecutionId, sequenceMaps)
 				if err != nil {
+					p.logger.Error(err.Error())
 					return nil, err
 				}
 			} else {
 				return &persistence.StartProcessResponse{
-					AlreadyStarted: true,
+					ProcessExecutionId: prcExeId,
+					AlreadyStarted:     true,
+					HasNewWorkerTask:   hasNewWorkerTask,
 				}, nil
 			}
+		} else {
+			p.logger.Error(errInsertCurrentProcessExecution.Error())
+			return nil, errInsertCurrentProcessExecution
 		}
-		return nil, errInsertCurrentProcessExecution
 	} else {
 		// case when previous process execution is finished
 		if p.session.IsNotFoundError(errGetCurrentProcessExecution) {
