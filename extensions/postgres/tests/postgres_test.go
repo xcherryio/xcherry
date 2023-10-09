@@ -34,6 +34,7 @@ import (
 	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
 
 	"github.com/xdblab/xdb/persistence/sql"
+	"github.com/xdblab/xdb/persistence/sql/basetest"
 )
 
 func TestPostgres(t *testing.T) {
@@ -58,7 +59,7 @@ func TestPostgres(t *testing.T) {
 	store, err := sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
 	ass.Nil(err)
 
-	sql.SQLBasicTest(ass, store)
+	basetest.SQLBasicTest(ass, store)
 
 	_ = extensions.DropDatabase(*sqlConfig, testDBName)
 	fmt.Println("testing database deleted")

@@ -19,12 +19,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package sql
+package basetest
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
@@ -37,93 +35,6 @@ const testProcessType = "test-type"
 const testWorkerUrl = "test-url"
 const stateId1 = "state-1"
 const stateId2 = "state-2"
-
-func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
-	ctx := context.Background()
-	namespace := "test-ns"
-	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
-	input := createTestInput()
-
-	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
-
-	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
-
-	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId)
-
-	// Test waitUntil API execution
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
-
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
-
-	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
-
-	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
-
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
-
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
-
-	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
-
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
-			{
-				StateId: stateId2,
-				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
-			},
-			{
-				StateId: stateId1, // use the same stateId
-				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
-				StateInput:  &input,
-			},
-		},
-	}
-	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
-
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
-	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
-
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
-
-	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
-		},
-	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
-}
 
 func createTestInput() xdbapi.EncodedObject {
 	return xdbapi.EncodedObject{
