@@ -54,7 +54,7 @@ const licenseFileName = "licenseheader.txt"
 // unique prefix that identifies a license header
 const licenseHeaderPrefixOld = "Copyright (c)"
 const licenseHeaderPrefix = "// Apache License 2.0"
-const xdbCopyright = "// Copyright (c) XDBLab organization"
+const xdbCopyright = "// Copyright 2023 XDBLab organization"
 const cadenceModificationHeader = "// Modifications Copyright (c) XDBLab organization"
 const temporalCopyright = "// Copyright (c) 2020 Uber Technologies, Inc."
 const temporalPartialCopyright = "// Portions of the Software are attributed to Copyright (c) 2020 Uber Technologies Inc."
@@ -142,7 +142,7 @@ func (task *addLicenseHeaderTask) run() error {
 		}
 		return nil
 	}
-	task.license = fmt.Sprintf("%v\n\n%v\n\n%v", licenseHeaderPrefix, xdbCopyright, task.license)
+	task.license = fmt.Sprintf("%v\n\n%v", xdbCopyright, task.license)
 	err = filepath.Walk(task.config.rootDir, task.handleFile)
 	if err != nil {
 		return fmt.Errorf("copyright header check failed, err=%v", err.Error())
