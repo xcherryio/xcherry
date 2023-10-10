@@ -15,7 +15,7 @@ package postgres
 
 import (
 	"context"
-
+	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
 )
 
@@ -37,7 +37,7 @@ func (d dbSession) SelectLatestProcessExecution(
 }
 
 const selectAsyncStateExecutionForUpdateQuery = `SELECT 
-    wait_until_status, execute_status, version as previous_version, info, input
+    wait_until_status, execute_status, version as previous_version, info, input, last_failure
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
 
 func (d dbSession) SelectAsyncStateExecutionForUpdate(
@@ -53,7 +53,7 @@ func (d dbSession) SelectAsyncStateExecutionForUpdate(
 }
 
 const batchSelectWorkerTasksOfFirstPageQuery = `SELECT 
-    shard_id, task_sequence, process_execution_id, state_id, state_id_sequence, task_type
+    shard_id, task_sequence, process_execution_id, state_id, state_id_sequence, task_type, info
 	FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence>= $2 ORDER BY task_sequence ASC LIMIT $3`
 
 func (d dbSession) BatchSelectWorkerTasks(
@@ -72,4 +72,32 @@ func (d dbSession) BatchDeleteWorkerTask(
 ) error {
 	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
 	return err
+}
+
+const batchSelectTimerTasksOfFirstPageQuery = `SELECT 
+    shard_id, fire_time_unix_seconds, task_sequence, process_execution_id, state_id, state_id_sequence, task_type, info
+	FROM xdb_sys_timer_tasks WHERE shard_id = $1 AND fire_time_unix_seconds <= $2 
+	ORDER BY fire_time_unix_seconds, task_sequence ASC LIMIT $3`
+
+func (d dbSession) BatchSelectTimerTasks(ctx context.Context, filter extensions.TimerTaskRangeSelectFilter) ([]extensions.TimerTaskRow, error) {
+	var rows []extensions.TimerTaskRow
+	err := d.db.SelectContext(ctx, &rows, batchSelectTimerTasksOfFirstPageQuery,
+		filter.ShardId, filter.MaxFireTimeUnixSecondsInclusive, filter.PageSize)
+	return rows, err
+}
+
+const selectTimerTasksForTimestampsQuery = `SELECT 
+    shard_id, fire_time_unix_seconds, task_sequence, process_execution_id, state_id, state_id_sequence, task_type, info
+	FROM xdb_sys_timer_tasks WHERE shard_id = ? AND fire_time_unix_seconds IN (?) AND task_sequence >= ? 
+	ORDER BY fire_time_unix_seconds, task_sequence ASC`
+
+func (d dbSession) SelectTimerTasksForTimestamps(ctx context.Context, filter extensions.TimerTaskSelectByTimestampsFilter) ([]extensions.TimerTaskRow, error) {
+	var rows []extensions.TimerTaskRow
+	query, args, err := sqlx.In(selectTimerTasksForTimestampsQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.MinTaskSequenceInclusive)
+	if err != nil {
+		return nil, err
+	}
+	query = d.db.Rebind(query)
+	err = d.db.SelectContext(ctx, &rows, query, args...)
+	return rows, err
 }

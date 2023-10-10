@@ -20,16 +20,19 @@ import (
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/persistence"
+	"go.uber.org/multierr"
 	"net"
 	"net/http"
 )
 
-const PathNotifyWorkerTask = "/internal/api/v1/xdb/notify-worker-task"
+const PathNotifyWorkerTasks = "/internal/api/v1/xdb/notify-worker-tasks"
+const PathNotifyTimerTasks = "/internal/api/v1/xdb/notify-timer-tasks"
 
 type defaultSever struct {
-	rootCtx    context.Context
-	cfg        config.Config
-	logger     log.Logger
+	rootCtx context.Context
+	cfg     config.Config
+	logger  log.Logger
+
 	engine     *gin.Engine
 	httpServer *http.Server
 	svc        Service
@@ -44,7 +47,8 @@ func NewDefaultAPIServerWithGin(
 
 	handler := newGinHandler(cfg, svc, logger)
 
-	engine.GET(PathNotifyWorkerTask, handler.NotifyWorkerTask)
+	engine.POST(PathNotifyWorkerTasks, handler.NotifyWorkerTasks)
+	engine.POST(PathNotifyTimerTasks, handler.NotifyTimerTasks)
 
 	svrCfg := cfg.AsyncService.InternalHttpServer
 	httpServer := &http.Server{
@@ -83,5 +87,7 @@ func (s defaultSever) Start() error {
 }
 
 func (s defaultSever) Stop(ctx context.Context) error {
-	return s.httpServer.Shutdown(ctx)
+	err1 := s.httpServer.Shutdown(ctx)
+	err2 := s.svc.Stop(ctx)
+	return multierr.Combine(err1, err2)
 }

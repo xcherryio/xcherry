@@ -43,7 +43,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -60,7 +60,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -91,9 +91,9 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -105,7 +105,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 		persistence.StateExecutionStatusRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
+			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
@@ -209,7 +209,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -226,7 +226,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -257,9 +257,9 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -271,7 +271,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 		persistence.StateExecutionStatusRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
+			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
@@ -306,7 +306,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -323,7 +323,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -354,9 +354,9 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -368,7 +368,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 		persistence.StateExecutionStatusRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
+			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
@@ -412,7 +412,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -442,9 +442,9 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -456,7 +456,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 		persistence.StateExecutionStatusRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.GRACEFUL_COMPLETE_PROCESS.Ptr(),
+			CloseType: xdbapi.GRACEFUL_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
@@ -497,7 +497,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -527,9 +527,9 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -541,7 +541,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 		persistence.StateExecutionStatusRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_FAIL_PROCESS.Ptr(),
+			CloseType: xdbapi.FORCE_FAIL_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)

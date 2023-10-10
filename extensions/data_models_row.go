@@ -21,22 +21,33 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
+/**
+* Why we need ProcessExecutionIdString field, in addition to ProcessExecutionId?
+* Because different database driver has different way to deal with UUID.
+* In some database like MySQL/MariaDB/Oracle, UUID is stored as binary(16) type, which is not human readable directly.
+* Therefore, they provide some helper functions to convert UUID to/from string. But the queries to read/write UUID are still byte array.
+* Some databases like Postgres, provide UUID type out of the box, the queries to read/write UUID are string.
+* For the first type of database, the extension implementation can use the UUID form of ProcessExecutionId, which has implemented the Scan/Value interface.
+* For the second type of database, the extension implementation can use the string form of ProcessExecutionId, which is the ProcessExecutionIdString field.
+* Having this two fields available so that the extension implementation doesn't need to create a new struct and copy/convert the fields.
+*
+* Note that this field is a "helper" field, meaning that the caller of the interface(the persistence/ layer of this repo) will not read or write this field.
+* The extension implementation is responsible to read/write this field. For example, before writing into database, Postgres extension will write the field
+* by converting UUID to string. After reading from database, Postgres extension will read into the string field, then converting it to the UUID field.
+ */
+
 type (
 	LatestProcessExecutionRow struct {
 		Namespace          string
 		ProcessId          string
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 	}
 
 	ProcessExecutionRowForUpdate struct {
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
 		IsCurrent                  bool
@@ -48,9 +59,7 @@ type (
 
 	ProcessExecutionRow struct {
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
 		IsCurrent                  bool
@@ -68,9 +77,7 @@ type (
 
 	AsyncStateExecutionSelectFilter struct {
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
 		StateId         string
@@ -79,32 +86,29 @@ type (
 
 	AsyncStateExecutionRowForUpdate struct {
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
-
-		StateId         string
-		StateIdSequence int32
+		StateId                  string
+		StateIdSequence          int32
 
 		WaitUntilStatus persistence.StateExecutionStatus
 		ExecuteStatus   persistence.StateExecutionStatus
 		PreviousVersion int32 // for conditional check
+		LastFailure     types.JSONText
 	}
 
 	AsyncStateExecutionRow struct {
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
-
-		StateId         string
-		StateIdSequence int32
+		StateId                  string
+		StateIdSequence          int32
 
 		WaitUntilStatus persistence.StateExecutionStatus
 		ExecuteStatus   persistence.StateExecutionStatus
 		PreviousVersion int32 // for conditional check
+
+		LastFailure types.JSONText
 
 		Input types.JSONText
 		Info  types.JSONText
@@ -115,29 +119,34 @@ type (
 		TaskType persistence.WorkerTaskType
 
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
+		StateId                  string
+		StateIdSequence          int32
 
-		StateId         string
-		StateIdSequence int32
+		Info types.JSONText
 	}
 
 	WorkerTaskRow struct {
-		ShardId  int32
+		ShardId      int32
+		TaskSequence int64
+
 		TaskType persistence.WorkerTaskType
 
 		ProcessExecutionId uuid.UUID
-		// An extra field for some driver to deal with UUID using plain string, it's always empty in request
-		// A db extension must implement the code to read/write from/into this field
-		// xdb persistence layer will not use this for any other logic
+		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
+		StateId                  string
+		StateIdSequence          int32
 
-		StateId         string
-		StateIdSequence int32
+		Info types.JSONText
+	}
 
+	WorkerTaskRowDeleteFilter struct {
+		ShardId      int32
 		TaskSequence int64
+
+		OptionalPartitionKey *persistence.PartitionKey
 	}
 
 	WorkerTaskRangeDeleteFilter struct {
@@ -145,5 +154,57 @@ type (
 
 		MinTaskSequenceInclusive int64
 		MaxTaskSequenceInclusive int64
+	}
+
+	TimerTaskRowForInsert struct {
+		ShardId             int32
+		FireTimeUnixSeconds int64
+		TaskType            persistence.TimerTaskType
+
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+		StateId                  string
+		StateIdSequence          int32
+
+		Info types.JSONText
+	}
+
+	TimerTaskRow struct {
+		ShardId             int32
+		FireTimeUnixSeconds int64
+		TaskSequence        int64
+
+		TaskType persistence.TimerTaskType
+
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+		StateId                  string
+		StateIdSequence          int32
+
+		Info types.JSONText
+	}
+
+	TimerTaskRowDeleteFilter struct {
+		ShardId             int32
+		FireTimeUnixSeconds int64
+		TaskSequence        int64
+
+		OptionalPartitionKey *persistence.PartitionKey
+	}
+
+	TimerTaskRangeSelectFilter struct {
+		ShardId int32
+
+		MaxFireTimeUnixSecondsInclusive int64
+		PageSize                        int32
+	}
+
+	TimerTaskSelectByTimestampsFilter struct {
+		ShardId int32
+
+		FireTimeUnixSeconds      []int64
+		MinTaskSequenceInclusive int64
 	}
 )

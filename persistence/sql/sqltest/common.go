@@ -30,8 +30,8 @@ const stateId2 = "state-2"
 
 func createTestInput() xdbapi.EncodedObject {
 	return xdbapi.EncodedObject{
-		Encoding: ptr.Any("test-encoding"),
-		Data:     ptr.Any("test-data"),
+		Encoding: "test-encoding",
+		Data:     "test-data",
 	}
 }
 
@@ -268,13 +268,62 @@ func checkAndGetWorkerTasks(
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
 }
 
-func verifyWorkerTask(ass *assert.Assertions, task persistence.WorkerTask, taskType persistence.WorkerTaskType, stateId string, stateSeq int) {
+func getAndCheckTimerTasksUpToTs(
+	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
+	upToTimestamp int64,
+) (int64, int64, []persistence.TimerTask) {
+	getTasksResp, err := store.GetTimerTasksUpToTimestamp(ctx, persistence.GetTimerTasksRequest{
+		ShardId:                          persistence.DefaultShardId,
+		MaxFireTimestampSecondsInclusive: upToTimestamp,
+		PageSize:                         10,
+	})
+	ass.Nil(err)
+	ass.Equal(expectedLength, len(getTasksResp.Tasks))
+	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
+}
+
+func getAndCheckTimerTasksUpForTimestamps(
+	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
+	forTimestamps []int64, minTaskSeq int64,
+) (int64, int64, []persistence.TimerTask) {
+	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, persistence.GetTimerTasksForTimestampsRequest{
+		ShardId:              persistence.DefaultShardId,
+		MinSequenceInclusive: minTaskSeq,
+		DetailedRequests: []xdbapi.NotifyTimerTasksRequest{
+			{
+				FireTimestamps: forTimestamps,
+			},
+		},
+	})
+	ass.Nil(err)
+	ass.Equal(expectedLength, len(getTasksResp.Tasks))
+	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
+}
+
+func verifyWorkerTask(
+	ass *assert.Assertions, task persistence.WorkerTask,
+	taskType persistence.WorkerTaskType, stateExeId string,
+	info persistence.WorkerTaskInfoJson,
+) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
 	ass.Equal(taskType, task.TaskType)
-	ass.Equal(stateId, task.StateId)
-	ass.Equal(stateSeq, int(task.StateIdSequence))
+	ass.Equal(stateExeId, task.GetStateExecutionId())
 	ass.True(task.TaskSequence != nil)
+	ass.Equal(info, task.WorkerTaskInfo)
+}
+
+func verifyTimerTask(
+	ass *assert.Assertions, task persistence.TimerTask,
+	taskType persistence.TimerTaskType, stateExeId string,
+	taskInfo persistence.TimerTaskInfoJson,
+) {
+	ass.NotNil(task.StateIdSequence)
+	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
+	ass.Equal(taskType, task.TaskType)
+	ass.Equal(stateExeId, task.GetStateExecutionId())
+	ass.True(task.TaskSequence != nil)
+	ass.Equal(taskInfo, task.TimerTaskInfo)
 }
 
 func deleteAndVerifyWorkerTasksDeleted(
@@ -332,7 +381,7 @@ func completeWaitUntilExecution(
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
 		CommandRequest: xdbapi.CommandRequest{
-			WaitingType: xdbapi.EMPTY_COMMAND.Ptr(),
+			WaitingType: xdbapi.EMPTY_COMMAND,
 		},
 		TaskShardId: persistence.DefaultShardId,
 	})

@@ -11,22 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package async
+package engine
 
 import (
-	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/common/ptr"
 )
 
-type Server interface {
-	// Start will start running on the background
-	Start() error
-	Stop(ctx context.Context) error
-}
-
-type Service interface {
-	Start() error
-	NotifyPollingWorkerTask(req xdbapi.NotifyWorkerTasksRequest) error
-	NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest) error
-	Stop(ctx context.Context) error
+// Default: infinite retry with 1 second initial interval, 120 seconds max interval, and 2 backoff factor,
+var defaultWorkerTaskBackoffRetryPolicy = xdbapi.RetryPolicy{
+	InitialIntervalSeconds:         ptr.Any(int32(1)),
+	BackoffCoefficient:             ptr.Any(float32(2)),
+	MaximumIntervalSeconds:         ptr.Any(int32(120)),
+	MaximumAttempts:                ptr.Any(int32(0)),
+	MaximumAttemptsDurationSeconds: ptr.Any(int32(0)),
 }
