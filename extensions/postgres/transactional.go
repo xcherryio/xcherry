@@ -106,6 +106,34 @@ func (d dbTx) UpdateAsyncStateExecution(
 	return nil
 }
 
+const updateAsyncStateWaitUntilToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions set
+version = version + 1
+wait_until_status = 5
+WHERE process_execution_id=$1 AND wait_until_status=1
+`
+
+const updateAsyncStateExecutionToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions set
+version = version + 1
+execute_status = 5
+WHERE process_execution_id=$1 AND execute_status=1
+`
+
+func (d dbTx) UpdateAsyncStateExecutionToAbortRunning(
+	ctx context.Context, processExecutionId uuid.UUID,
+) error {
+	_, err := d.tx.ExecContext(ctx, updateAsyncStateWaitUntilToAbortRunningQuery, processExecutionId.String())
+	if err != nil {
+		return err
+	}
+
+	_, err = d.tx.ExecContext(ctx, updateAsyncStateExecutionToAbortRunningQuery, processExecutionId.String())
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 const insertWorkerTaskQuery = `INSERT INTO xdb_sys_worker_tasks
 	(shard_id, process_execution_id, state_id, state_id_sequence, task_type) VALUES
 	(:shard_id, :process_execution_id_string, :state_id, :state_id_sequence, :task_type)`

@@ -26,8 +26,8 @@ CREATE TABLE xdb_sys_async_state_executions(
    state_id_sequence INTEGER NOT NULL,
    --
    version INTEGER NOT NULL , -- for conditional update to avoid locking
-   wait_until_status SMALLINT NOT NULL, -- -1: skipped/0:undefined/1:running/2:completed/3:failed/4:timeout
-   execute_status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout
+   wait_until_status SMALLINT NOT NULL, -- -1: skipped/0:undefined/1:running/2:completed/3:failed/4:timeout/5:aborted
+   execute_status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:aborted
    wait_until_commands jsonb,
    wait_until_command_results jsonb,
    info jsonb ,

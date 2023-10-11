@@ -68,6 +68,29 @@ func (p sqlProcessStoreImpl) StartProcess(
 	return resp, err
 }
 
+func (p sqlProcessStoreImpl) StopProcess(ctx context.Context, request persistence.StopProcessRequest) error {
+	tx, err := p.session.StartTransaction(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = p.doStopProcessTx(ctx, tx, request)
+	if err != nil {
+		err2 := tx.Rollback()
+		if err2 != nil {
+			p.logger.Error("error on rollback transaction", tag.Error(err2))
+		}
+	} else {
+		err = tx.Commit()
+		if err != nil {
+			p.logger.Error("error on committing transaction", tag.Error(err))
+			return err
+		}
+	}
+
+	return err
+}
+
 func (p sqlProcessStoreImpl) doStartProcessTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
@@ -157,6 +180,64 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		AlreadyStarted:     false,
 		HasNewWorkerTask:   hasNewWorkerTask,
 	}, err
+}
+
+func (p sqlProcessStoreImpl) doStopProcessTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.StopProcessRequest,
+) error {
+	curProcExecRow, err := p.session.SelectCurrentProcessExecution(ctx, request.Namespace, request.ProcessId)
+	if err != nil {
+		if p.session.IsNotFoundError(err) {
+			// early stop when there is no such process running
+			return nil
+		}
+		return err
+	}
+
+	// handle xdb_sys_current_process_executions - delete
+	err = p.session.DeleteCurrentProcessExecution(ctx, request.Namespace, request.ProcessId)
+	if err != nil {
+		return err
+	}
+
+	// handle xdb_sys_process_executions - update
+	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
+	if err != nil {
+		return err
+	}
+
+	procExecRow.IsCurrent = false
+	procExecRow.Status = persistence.ProcessExecutionStatusTerminated
+	if request.ProcessStopType == xdbapi.FAIL {
+		procExecRow.Status = persistence.ProcessExecutionStatusFailed
+	}
+
+	err = tx.UpdateProcessExecution(ctx, *procExecRow)
+	if err != nil {
+		return err
+	}
+
+	// handle xdb_sys_async_state_executions - update
+	// find all related rows with the processExecutionId, and
+	// modify the wait_until/execute status from running to aborted
+	err = tx.UpdateAsyncStateExecutionToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
+	if err != nil {
+		return err
+	}
+
+	// handle xdb_sys_worker_tasks - delete all rows with the processExecutionId
+	err = p.session.DeleteWorkerTasks(ctx, curProcExecRow.ProcessExecutionId)
+	if err != nil {
+		return err
+	}
+
+	// handle xdb_sys_timer_tasks - delete all rows with the processExecutionId
+	err = p.session.DeleteTimerTasks(ctx, curProcExecRow.ProcessExecutionId)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (p sqlProcessStoreImpl) DescribeLatestProcess(

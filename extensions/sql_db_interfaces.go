@@ -57,16 +57,21 @@ type transactionalCRUD interface {
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
-
+	UpdateAsyncStateExecutionToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
 }
 
 type nonTransactionalCRUD interface {
 	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
+	DeleteCurrentProcessExecution(ctx context.Context, namespace string, processId string) error
+
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 
 	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
+	DeleteWorkerTasks(ctx context.Context, processExecutionId uuid.UUID) error
+
+	DeleteTimerTasks(ctx context.Context, processExecutionId uuid.UUID) error
 }
 
 type ErrorChecker interface {

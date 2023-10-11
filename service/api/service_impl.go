@@ -65,6 +65,20 @@ func (s serviceImpl) StartProcess(
 	}, nil
 }
 
+func (s serviceImpl) StopProcess(
+	ctx context.Context, request xdbapi.ProcessExecutionStopRequest) *ErrorWithStatus {
+	err := s.store.StopProcess(ctx, persistence.StopProcessRequest{
+		Namespace:       request.GetNamespace(),
+		ProcessId:       request.GetProcessId(),
+		ProcessStopType: request.GetStopType(),
+	})
+	if err != nil {
+		return s.handleUnknownError(err)
+	}
+
+	return nil
+}
+
 func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 	s.logger.Error("unknown error on operation", tag.Error(err))
 	return NewErrorWithStatus(500, err.Error())

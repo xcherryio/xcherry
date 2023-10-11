@@ -29,6 +29,7 @@ type Server interface {
 type Service interface {
 	StartProcess(ctx context.Context, request xdbapi.ProcessExecutionStartRequest) (
 		resp *xdbapi.ProcessExecutionStartResponse, err *ErrorWithStatus)
+	StopProcess(ctx context.Context, request xdbapi.ProcessExecutionStopRequest) *ErrorWithStatus
 	DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (
 		resp *xdbapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus)
 }

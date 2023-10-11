@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
 )
 
@@ -33,6 +34,14 @@ func (d dbSession) SelectCurrentProcessExecution(
 	row.ProcessId = processId
 	row.StartTime = FromPostgresDateTime(row.StartTime)
 	return &row, err
+}
+
+const deleteCurrentProcessExecutionQuery = `DELETE
+	FROM xdb_sys_current_process_executions WHERE namespace = $1 AND process_id = $2`
+
+func (d dbSession) DeleteCurrentProcessExecution(ctx context.Context, namespace string, processId string) error {
+	_, err := d.db.ExecContext(ctx, deleteCurrentProcessExecutionQuery, namespace, processId)
+	return err
 }
 
 const selectAsyncStateExecutionForUpdateQuery = `SELECT 
@@ -70,5 +79,23 @@ func (d dbSession) BatchDeleteWorkerTask(
 	ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter,
 ) error {
 	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
+	return err
+}
+
+const deleteWorkerTasksQuery = `DELETE
+	FROM xdb_sys_worker_tasks where process_execution_id = $1
+`
+
+func (d dbSession) DeleteWorkerTasks(ctx context.Context, processExecutionId uuid.UUID) error {
+	_, err := d.db.ExecContext(ctx, deleteWorkerTasksQuery, processExecutionId.String())
+	return err
+}
+
+const deleteTimerTasksQuery = `DELETE
+	FROM xdb_sys_timer_tasks where process_execution_id = $1
+`
+
+func (d dbSession) DeleteTimerTasks(ctx context.Context, processExecutionId uuid.UUID) error {
+	_, err := d.db.ExecContext(ctx, deleteTimerTasksQuery, processExecutionId.String())
 	return err
 }

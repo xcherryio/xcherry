@@ -26,6 +26,7 @@ import (
 
 const PathStartProcessExecution = "/api/v1/xdb/service/process-execution/start"
 const PathDescribeProcessExecution = "/api/v1/xdb/service/process-execution/describe"
+const PathStopProcessExecution = "/api/v1/xdb/service/process-execution/stop"
 
 type defaultSever struct {
 	rootCtx    context.Context
@@ -44,6 +45,7 @@ func NewDefaultAPIServerWithGin(
 
 	engine.POST(PathStartProcessExecution, handler.StartProcess)
 	engine.POST(PathDescribeProcessExecution, handler.DescribeProcess)
+	engine.POST(PathStopProcessExecution, handler.StopProcess)
 
 	svrCfg := cfg.ApiService.HttpServer
 	httpServer := &http.Server{
