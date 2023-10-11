@@ -49,11 +49,11 @@ type (
 )
 
 // licenseFileName is the name of the license file
-const licenseFileName = "licenseheader.txt"
+const licenseFileName = "./script/licenseheader.txt"
 
 // unique prefix that identifies a license header
 const licenseHeaderPrefixOld = "Copyright (c)"
-const licenseHeaderPrefix = "// Apache License 2.0"
+const licenseHeaderPrefix = "// Copyright 2023 XDBLab organization"
 const xdbCopyright = "// Copyright 2023 XDBLab organization"
 const cadenceModificationHeader = "// Modifications Copyright (c) XDBLab organization"
 const temporalCopyright = "// Copyright (c) 2020 Uber Technologies, Inc."
