@@ -107,13 +107,13 @@ func (d dbTx) UpdateAsyncStateExecution(
 }
 
 const updateAsyncStateWaitUntilToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions set
-version = version + 1
+version = version + 1,
 wait_until_status = 5
 WHERE process_execution_id=$1 AND wait_until_status=1
 `
 
 const updateAsyncStateExecutionToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions set
-version = version + 1
+version = version + 1,
 execute_status = 5
 WHERE process_execution_id=$1 AND execute_status=1
 `
