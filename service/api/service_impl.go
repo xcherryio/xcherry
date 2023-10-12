@@ -67,13 +67,17 @@ func (s serviceImpl) StartProcess(
 
 func (s serviceImpl) StopProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStopRequest) *ErrorWithStatus {
-	err := s.store.StopProcess(ctx, persistence.StopProcessRequest{
+	resp, err := s.store.StopProcess(ctx, persistence.StopProcessRequest{
 		Namespace:       request.GetNamespace(),
 		ProcessId:       request.GetProcessId(),
 		ProcessStopType: request.GetStopType(),
 	})
 	if err != nil {
 		return s.handleUnknownError(err)
+	}
+
+	if resp.NotExists {
+		return NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 
 	return nil

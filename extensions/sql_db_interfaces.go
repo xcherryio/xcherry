@@ -63,7 +63,6 @@ type transactionalCRUD interface {
 
 type nonTransactionalCRUD interface {
 	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
-	DeleteCurrentProcessExecution(ctx context.Context, namespace string, processId string) error
 
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 

@@ -36,14 +36,6 @@ func (d dbSession) SelectCurrentProcessExecution(
 	return &row, err
 }
 
-const deleteCurrentProcessExecutionQuery = `DELETE
-	FROM xdb_sys_current_process_executions WHERE namespace = $1 AND process_id = $2`
-
-func (d dbSession) DeleteCurrentProcessExecution(ctx context.Context, namespace string, processId string) error {
-	_, err := d.db.ExecContext(ctx, deleteCurrentProcessExecutionQuery, namespace, processId)
-	return err
-}
-
 const selectAsyncStateExecutionForUpdateQuery = `SELECT 
     wait_until_status, execute_status, version as previous_version, info, input
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
