@@ -15,7 +15,6 @@ package postgres
 
 import (
 	"context"
-	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
 )
 
@@ -71,23 +70,5 @@ func (d dbSession) BatchDeleteWorkerTask(
 	ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter,
 ) error {
 	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
-	return err
-}
-
-const deleteWorkerTasksQuery = `DELETE
-	FROM xdb_sys_worker_tasks where process_execution_id = $1
-`
-
-func (d dbSession) DeleteWorkerTasks(ctx context.Context, processExecutionId uuid.UUID) error {
-	_, err := d.db.ExecContext(ctx, deleteWorkerTasksQuery, processExecutionId.String())
-	return err
-}
-
-const deleteTimerTasksQuery = `DELETE
-	FROM xdb_sys_timer_tasks where process_execution_id = $1
-`
-
-func (d dbSession) DeleteTimerTasks(ctx context.Context, processExecutionId uuid.UUID) error {
-	_, err := d.db.ExecContext(ctx, deleteTimerTasksQuery, processExecutionId.String())
 	return err
 }

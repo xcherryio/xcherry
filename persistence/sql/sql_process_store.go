@@ -196,13 +196,24 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	// handle xdb_sys_process_executions - update
+	// handle xdb_sys_process_executions
 	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}
 
 	procExecRow.IsCurrent = false
+
+	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
+	if err != nil {
+		return nil, err
+	}
+	sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
+	procExecRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+
 	procExecRow.Status = persistence.ProcessExecutionStatusTerminated
 	if request.ProcessStopType == xdbapi.FAIL {
 		procExecRow.Status = persistence.ProcessExecutionStatusFailed
@@ -213,22 +224,10 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	// handle xdb_sys_async_state_executions - update
+	// handle xdb_sys_async_state_executions
 	// find all related rows with the processExecutionId, and
 	// modify the wait_until/execute status from running to aborted
 	err = tx.UpdateAsyncStateExecutionToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
-
-	// handle xdb_sys_worker_tasks - delete all rows with the processExecutionId
-	err = p.session.DeleteWorkerTasks(ctx, curProcExecRow.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
-
-	// handle xdb_sys_timer_tasks - delete all rows with the processExecutionId
-	err = p.session.DeleteTimerTasks(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}

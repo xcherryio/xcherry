@@ -68,9 +68,6 @@ type nonTransactionalCRUD interface {
 
 	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
-	DeleteWorkerTasks(ctx context.Context, processExecutionId uuid.UUID) error
-
-	DeleteTimerTasks(ctx context.Context, processExecutionId uuid.UUID) error
 }
 
 type ErrorChecker interface {
