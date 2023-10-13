@@ -14,10 +14,11 @@
 package extensions
 
 import (
+	"time"
+
 	"github.com/jmoiron/sqlx/types"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/persistence"
-	"time"
 )
 
 type (

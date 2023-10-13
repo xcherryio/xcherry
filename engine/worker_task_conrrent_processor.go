@@ -188,7 +188,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 	}
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
-		w.logger.Info("worker API return error", tag.Error(err))
+		//w.logger.Info("worker API return error", tag.Error(err))
 		// TODO instead of returning error, we should do backoff retry by pushing this task into timer queue
 		return err
 	}

@@ -5,16 +5,18 @@
 //
 // http://www.apache.org/licenses/LICENSE-2.0
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
 package postgres
 
 import (
 	"context"
+
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
 )
@@ -27,6 +29,31 @@ func (d dbTx) InsertCurrentProcessExecution(ctx context.Context, row extensions.
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
 	return err
+}
+
+const selectCurrentProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id FROM xdb_sys_current_process_executions WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
+
+func (d dbTx) SelectCurrentProcessExecutionForUpdate(
+	ctx context.Context, namespace string, processId string,
+) ([]extensions.CurrentProcessExecutionRow, error) {
+	var rows []extensions.CurrentProcessExecutionRow
+	err := d.tx.SelectContext(ctx, &rows, selectCurrentProcessExecutionForUpdateQuery, namespace, processId)
+	return rows, err
+}
+
+const updateCurrentProcessExecutionQuery = `UPDATE xdb_sys_current_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
+
+func (d dbTx) UpdateCurrentProcessExecution(ctx context.Context, row extensions.CurrentProcessExecutionRow) error {
+	_, err := d.tx.ExecContext(ctx, updateCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId.String())
+	return err
+}
+
+const selectProcessExecutionQuery = `SELECT * FROM xdb_sys_process_executions WHERE namespace=$1 AND process_id=$2`
+
+func (d dbTx) SelectProcessExecutionByProcessId(ctx context.Context, namespace string, processId string) ([]extensions.ProcessExecutionRow, error) {
+	var row []extensions.ProcessExecutionRow
+	err := d.tx.SelectContext(ctx, &row, selectProcessExecutionQuery, processId)
+	return row, err
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions

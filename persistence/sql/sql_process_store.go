@@ -102,6 +102,7 @@ func (p sqlProcessStoreImpl) markPendingStateAsAborted(ctx context.Context, tx e
 					StateIdSequence:    int32(stateIdSeq),
 				})
 			if err != nil {
+				p.logger.Error(err.Error())
 				return err
 			}
 			if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
@@ -119,10 +120,14 @@ func (p sqlProcessStoreImpl) markPendingStateAsAborted(ctx context.Context, tx e
 				PreviousVersion:    stateRow.PreviousVersion,
 			})
 			if err != nil {
-				return err
+				if !p.session.IsConditionalUpdateFailure(err) {
+					p.logger.Error(err.Error())
+					return err
+				}
 			}
 			err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
 			if err != nil {
+				p.logger.Error(err.Error())
 				return err
 			}
 		}
@@ -135,8 +140,6 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
 	req := request.Request
-	prcExeId := uuid.MustNewUUID()
-	hasNewWorkerTask := false
 
 	if req.ProcessStartConfig == nil {
 		req.ProcessStartConfig = &xdbapi.ProcessStartConfig{
@@ -148,80 +151,246 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		req.ProcessStartConfig.IdReusePolicy = xdbapi.ALLOW_IF_NO_RUNNING.Ptr()
 	}
 
-	errInsertCurrentProcessExecution := tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
-		Namespace:          req.Namespace,
-		ProcessId:          req.ProcessId,
+	switch *req.ProcessStartConfig.IdReusePolicy {
+	case xdbapi.DISALLOW_REUSE:
+		return p.applyDisallowReusePolicy(ctx, tx, request)
+	case xdbapi.ALLOW_IF_NO_RUNNING:
+		return p.applyAllowIfNoRunningPolicy(ctx, tx, request)
+	case xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
+		return p.applyAllowIfPreviousExitAbnormallyPolicy(ctx, tx, request)
+	case xdbapi.TERMINATE_IF_RUNNING:
+		return p.applyTerminateIfRunningPolicy(ctx, tx, request)
+	default:
+		return nil, fmt.Errorf("unknown id reuse policy %v", req.ProcessStartConfig.IdReusePolicy)
+	}
+}
+
+func (p sqlProcessStoreImpl) applyDisallowReusePolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	previousProcessExecutions, err := tx.SelectProcessExecutionByProcessId(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		return nil, err
+	}
+	if len(previousProcessExecutions) > 0 {
+		return &persistence.StartProcessResponse{
+			AlreadyStarted: true,
+		}, nil
+	}
+
+	prcExeId := uuid.MustNewUUID()
+	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+		Namespace:          request.Request.Namespace,
+		ProcessId:          request.Request.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	currentProcessExecutionRow, errGetCurrentProcessExecution := p.session.SelectCurrentProcessExecution(ctx, req.Namespace, req.ProcessId)
+	hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+	if err != nil {
+		return nil, err
+	}
 
-	if errInsertCurrentProcessExecution != nil {
-		if p.session.IsDupEntryError(errInsertCurrentProcessExecution) {
-			// process with the same id is running
-			if req.ProcessStartConfig.GetIdReusePolicy() == xdbapi.TERMINATE_IF_RUNNING {
-				// mark the previous process execution as terminated
+	return &persistence.StartProcessResponse{
+		ProcessExecutionId: prcExeId,
+		AlreadyStarted:     false,
+		HasNewWorkerTask:   hasNewWorkerTask,
+	}, nil
+}
 
-				// in this case there should be a current process execution
-				// we should be able to get a process execution row
-				// if there is an error here, there is something wrong with query of SelectCurrentProcessExecution
-				if errGetCurrentProcessExecution != nil {
-					p.logger.Error(errGetCurrentProcessExecution.Error())
-					return nil, errGetCurrentProcessExecution
-				}
-				currentProcessExecutionRowForUpdate := extensions.ProcessExecutionRowForUpdate{
-					ProcessExecutionId:         currentProcessExecutionRow.ProcessExecutionId,
-					ProcessExecutionIdString:   currentProcessExecutionRow.ProcessExecutionId.String(),
-					IsCurrent:                  false,
-					Status:                     persistence.ProcessExecutionStatusTerminated,
-					HistoryEventIdSequence:     currentProcessExecutionRow.HistoryEventIdSequence,
-					StateExecutionSequenceMaps: currentProcessExecutionRow.StateExecutionSequenceMaps,
-				}
-				err := tx.UpdateProcessExecution(ctx, currentProcessExecutionRowForUpdate)
-				if err != nil {
-					p.logger.Error(err.Error())
-					return nil, err
-				}
+func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		return nil, err
+	}
+	if len(runningProcessExecutions) > 1 {
+		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
+	}
 
-				// mark all pending state executions as aborted
-				sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(currentProcessExecutionRow.StateExecutionSequenceMaps)
-				if err != nil {
-					p.logger.Error(err.Error())
-					return nil, err
-				}
-				err = p.markPendingStateAsAborted(ctx, tx, currentProcessExecutionRow.ProcessExecutionId, sequenceMaps)
-				if err != nil {
-					p.logger.Error(err.Error())
-					return nil, err
-				}
-			} else {
-				return &persistence.StartProcessResponse{
-					ProcessExecutionId: prcExeId,
-					AlreadyStarted:     true,
-					HasNewWorkerTask:   hasNewWorkerTask,
-				}, nil
-			}
-		} else {
-			p.logger.Error(errInsertCurrentProcessExecution.Error())
-			return nil, errInsertCurrentProcessExecution
-		}
-	} else {
-		// case when previous process execution is finished
-		if p.session.IsNotFoundError(errGetCurrentProcessExecution) {
-			switch req.ProcessStartConfig.GetIdReusePolicy() {
-			case xdbapi.DISALLOW_REUSE:
-				return nil, fmt.Errorf("ProcessId %v is already used. Process ID reuse policy: disallow reuse.", req.ProcessId)
-			case xdbapi.ALLOW_IF_NO_RUNNING, xdbapi.TERMINATE_IF_RUNNING:
-				// no need to check here
-			case xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
-				if currentProcessExecutionRow.Status == persistence.ProcessExecutionStatusCompleted {
-					return nil, fmt.Errorf("Process execution already finished successfully. ProcessId: %v, ProcessExecutionId: %v. Process ID reuse policy: allow duplicate process ID if last run failed.", req.ProcessId, currentProcessExecutionRow.ProcessExecutionId)
-				}
-			default:
-				return nil, fmt.Errorf("Unsupported ProcessIdReusePolicy %v", req.ProcessStartConfig.GetIdReusePolicy())
-			}
+	// if it is still running, return already started
+	if len(runningProcessExecutions) == 1 {
+		return &persistence.StartProcessResponse{
+			AlreadyStarted: true,
+		}, nil
+	}
+
+	prcExeId := uuid.MustNewUUID()
+	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+		Namespace:          request.Request.Namespace,
+		ProcessId:          request.Request.ProcessId,
+		ProcessExecutionId: prcExeId,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &persistence.StartProcessResponse{
+		ProcessExecutionId: prcExeId,
+		AlreadyStarted:     false,
+		HasNewWorkerTask:   hasNewWorkerTask,
+	}, nil
+}
+
+func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		return nil, err
+	}
+	if len(runningProcessExecutions) > 1 {
+		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
+	}
+
+	// if it is still running, return already started
+	if len(runningProcessExecutions) == 1 {
+		return &persistence.StartProcessResponse{
+			AlreadyStarted: true,
+		}, nil
+	}
+
+	// no running process execution, check if there is any previous process execution
+	previousProcessExecutions, err := tx.SelectProcessExecutionByProcessId(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		return nil, err
+	}
+
+	// there could multiple previous process executions, disallow if any of them is completed
+	for _, previousProcessExecution := range previousProcessExecutions {
+		if previousProcessExecution.Status == persistence.ProcessExecutionStatusCompleted {
+			return &persistence.StartProcessResponse{
+				AlreadyStarted: true,
+			}, nil
 		}
 	}
+
+	prcExeId := uuid.MustNewUUID()
+	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+		Namespace:          request.Request.Namespace,
+		ProcessId:          request.Request.ProcessId,
+		ProcessExecutionId: prcExeId,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &persistence.StartProcessResponse{
+		ProcessExecutionId: prcExeId,
+		AlreadyStarted:     false,
+		HasNewWorkerTask:   hasNewWorkerTask,
+	}, nil
+}
+
+func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		p.logger.Error(err.Error())
+		return nil, err
+	}
+	if len(runningProcessExecutions) > 1 {
+		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
+	}
+
+	// if it is still running, terminate it
+	if len(runningProcessExecutions) == 1 {
+		runningProcessExecution, err := tx.SelectProcessExecutionForUpdate(ctx, runningProcessExecutions[0].ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		// mark state as aborted
+		sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(runningProcessExecution.StateExecutionSequenceMaps)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		err = p.markPendingStateAsAborted(ctx, tx, runningProcessExecution.ProcessExecutionId, sequenceMaps)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		// mark process as terminated
+		processExecution, err := tx.SelectProcessExecutionForUpdate(ctx, runningProcessExecutions[0].ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
+			ProcessExecutionId:         processExecution.ProcessExecutionId,
+			IsCurrent:                  false,
+			Status:                     persistence.ProcessExecutionStatusTerminated,
+			HistoryEventIdSequence:     processExecution.HistoryEventIdSequence,
+			StateExecutionSequenceMaps: processExecution.StateExecutionSequenceMaps,
+		})
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		// update current process execution and process execution table
+		processExecutionId := uuid.MustNewUUID()
+		err = tx.UpdateCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: processExecutionId,
+		})
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, processExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: processExecutionId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
+	} else {
+		prcExeId := uuid.MustNewUUID()
+		err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: prcExeId,
+		})
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: prcExeId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
+	}
+}
+
+func (p sqlProcessStoreImpl) insertProcessExecution(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest, processExecutionId uuid.UUID) (bool, error) {
+	req := request.Request
+	hasNewWorkerTask := false
 
 	timeoutSeconds := int32(0)
 	if sc, ok := req.GetProcessStartConfigOk(); ok {
@@ -230,7 +399,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	processExeInfoBytes, err := persistence.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
-		return nil, err
+		return hasNewWorkerTask, err
 	}
 
 	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
@@ -241,22 +410,22 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
-			return nil, err
+			return hasNewWorkerTask, err
 		}
 
 		stateInfoBytes, err := persistence.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
-			return nil, err
+			return hasNewWorkerTask, err
 		}
 
-		err = insertAsyncStateExecution(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
+		err = insertAsyncStateExecution(ctx, tx, processExecutionId, stateId, stateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
 		if err != nil {
-			return nil, err
+			return hasNewWorkerTask, err
 		}
 
-		err = insertWorkerTask(ctx, tx, prcExeId, stateId, 1, stateConfig, request.NewTaskShardId)
+		err = insertWorkerTask(ctx, tx, processExecutionId, stateId, 1, stateConfig, request.NewTaskShardId)
 		if err != nil {
-			return nil, err
+			return hasNewWorkerTask, err
 		}
 
 		hasNewWorkerTask = true
@@ -264,11 +433,11 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	sequenceMapsBytes, err := sequenceMaps.ToBytes()
 	if err != nil {
-		return nil, err
+		return hasNewWorkerTask, err
 	}
 
 	row := extensions.ProcessExecutionRow{
-		ProcessExecutionId: prcExeId,
+		ProcessExecutionId: processExecutionId,
 
 		IsCurrent:                  true,
 		Status:                     persistence.ProcessExecutionStatusRunning,
@@ -284,11 +453,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	}
 
 	err = tx.InsertProcessExecution(ctx, row)
-	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
-	}, err
+	return hasNewWorkerTask, err
 }
 
 func (p sqlProcessStoreImpl) doStopProcessTx(
