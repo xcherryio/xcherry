@@ -208,6 +208,9 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	if err != nil {
 		return nil, err
 	}
+
+	pendingExecutionMap := sequenceMaps.PendingExecutionMap
+
 	sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 	procExecRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
 	if err != nil {
@@ -224,10 +227,17 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
+	// early stop when there are no pending tasks
+	if len(pendingExecutionMap) == 0 {
+		return &persistence.StopProcessResponse{
+			NotExists: false,
+		}, nil
+	}
+
 	// handle xdb_sys_async_state_executions
 	// find all related rows with the processExecutionId, and
 	// modify the wait_until/execute status from running to aborted
-	err = tx.UpdateAsyncStateExecutionToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
+	err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}

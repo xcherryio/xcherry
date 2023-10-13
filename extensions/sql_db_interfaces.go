@@ -57,7 +57,7 @@ type transactionalCRUD interface {
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
-	UpdateAsyncStateExecutionToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
+	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
 }
 
