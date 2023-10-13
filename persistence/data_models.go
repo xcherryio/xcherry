@@ -31,6 +31,16 @@ type (
 		HasNewWorkerTask   bool
 	}
 
+	StopProcessRequest struct {
+		Namespace       string
+		ProcessId       string
+		ProcessStopType xdbapi.ProcessExecutionStopType
+	}
+
+	StopProcessResponse struct {
+		NotExists bool
+	}
+
 	DescribeLatestProcessRequest struct {
 		Namespace string
 		ProcessId string

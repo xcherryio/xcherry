@@ -57,6 +57,24 @@ func (h *ginHandler) StartProcess(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *ginHandler) StopProcess(c *gin.Context) {
+	var req xdbapi.ProcessExecutionStopRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+	h.logger.Debug("received StopProcess API request", tag.Value(h.toJson(req)))
+
+	err := h.svc.StopProcess(c.Request.Context(), req)
+
+	if err != nil {
+		c.JSON(err.StatusCode, err.Error)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct{}{})
+}
+
 func (h *ginHandler) DescribeProcess(c *gin.Context) {
 	var req xdbapi.ProcessExecutionDescribeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
