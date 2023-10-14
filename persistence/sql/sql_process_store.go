@@ -247,6 +247,7 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(ctx contex
 
 	// if it is still running, return already started
 	if len(runningProcessExecutions) == 1 {
+		p.logger.Error("still running")
 		return &persistence.StartProcessResponse{
 			AlreadyStarted: true,
 		}, nil
