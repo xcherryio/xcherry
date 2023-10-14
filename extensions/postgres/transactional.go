@@ -21,13 +21,13 @@ import (
 	"github.com/xdblab/xdb/extensions"
 )
 
-const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_latest_process_executions
+const insertLatestProcessExecutionQuery = `INSERT INTO xdb_sys_latest_process_executions
 	(namespace, process_id, process_execution_id) VALUES
 	($1, $2, $3)`
 
 func (d dbTx) InsertLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
+	_, err := d.tx.ExecContext(ctx, insertLatestProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
 	return err
 }
 
