@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package basetest
+package sqltest
 
 import (
 	"context"
@@ -68,7 +68,8 @@ func createStartRequest(namespace, processId string, input xdbapi.EncodedObject)
 	}
 }
 
-func retryStartProcessForFailure(ctx context.Context, ass *assert.Assertions,
+func retryStartProcessForFailure(
+	ctx context.Context, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) {
 	startReq := createStartRequest(namespace, processId, input)
