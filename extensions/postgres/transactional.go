@@ -31,7 +31,9 @@ func (d dbTx) InsertLatestProcessExecution(ctx context.Context, row extensions.L
 	return err
 }
 
-const selectLatestProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id FROM xdb_sys_latest_process_executions WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
+const selectLatestProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id 
+FROM xdb_sys_latest_process_executions 
+WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
 
 func (d dbTx) SelectLatestProcessExecutionForUpdate(
 	ctx context.Context, namespace string, processId string,
