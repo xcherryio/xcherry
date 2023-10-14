@@ -50,13 +50,12 @@ type SQLAdminDBSession interface {
 }
 
 type transactionalCRUD interface {
-	InsertCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) error
-	SelectCurrentProcessExecutionForUpdate(ctx context.Context, namespace string, processId string) ([]CurrentProcessExecutionRow, error)
-	UpdateCurrentProcessExecution(ctx context.Context, row CurrentProcessExecutionRow) error
+	InsertLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
+	SelectLatestProcessExecutionForUpdate(ctx context.Context, namespace string, processId string) ([]LatestProcessExecutionRow, error)
+	UpdateLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
 
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
 	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
-	SelectProcessExecutionByProcessId(ctx context.Context, namespace string, processId string) ([]ProcessExecutionRow, error)
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
@@ -67,7 +66,7 @@ type transactionalCRUD interface {
 }
 
 type nonTransactionalCRUD interface {
-	SelectCurrentProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
+	SelectLatestProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
 
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 

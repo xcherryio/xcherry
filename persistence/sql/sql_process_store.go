@@ -166,7 +166,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 }
 
 func (p sqlProcessStoreImpl) applyDisallowReusePolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	previousProcessExecutions, err := tx.SelectProcessExecutionByProcessId(ctx, request.Request.Namespace, request.Request.ProcessId)
+	previousProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(ctx context.Context, tx ex
 	}
 
 	prcExeId := uuid.MustNewUUID()
-	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+	err = tx.InsertLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
 		Namespace:          request.Request.Namespace,
 		ProcessId:          request.Request.ProcessId,
 		ProcessExecutionId: prcExeId,
@@ -199,23 +199,31 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(ctx context.Context, tx ex
 }
 
 func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
-	if len(runningProcessExecutions) > 1 {
-		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
+	if len(latestProcessExecutions) > 1 {
+		return nil, fmt.Errorf("more than one latest process execution for process id %v", request.Request.ProcessId)
 	}
 
 	// if it is still running, return already started
-	if len(runningProcessExecutions) == 1 {
-		return &persistence.StartProcessResponse{
-			AlreadyStarted: true,
-		}, nil
+	if len(latestProcessExecutions) == 1 {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecutions[0].ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+
+		if processExecutionRowForUpdate.IsCurrent {
+			return &persistence.StartProcessResponse{
+				AlreadyStarted: true,
+			}, nil
+		}
 	}
 
 	prcExeId := uuid.MustNewUUID()
-	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+	err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
 		Namespace:          request.Request.Namespace,
 		ProcessId:          request.Request.ProcessId,
 		ProcessExecutionId: prcExeId,
@@ -237,147 +245,153 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(ctx context.Context, tx
 }
 
 func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
-	if len(runningProcessExecutions) > 1 {
+	if len(latestProcessExecutions) > 1 {
 		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
 	}
 
-	// if it is still running, return already started
-	if len(runningProcessExecutions) == 1 {
-		p.logger.Error("still running")
-		return &persistence.StartProcessResponse{
-			AlreadyStarted: true,
-		}, nil
-	}
+	if len(latestProcessExecutions) == 1 {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecutions[0].ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
 
-	// no running process execution, check if there is any previous process execution
-	previousProcessExecutions, err := tx.SelectProcessExecutionByProcessId(ctx, request.Request.Namespace, request.Request.ProcessId)
-	if err != nil {
-		return nil, err
-	}
-
-	// there could multiple previous process executions, disallow if any of them is completed
-	for _, previousProcessExecution := range previousProcessExecutions {
-		if previousProcessExecution.Status == persistence.ProcessExecutionStatusCompleted {
+		// if it is still running, return already started
+		if processExecutionRowForUpdate.IsCurrent {
 			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
-	}
 
-	prcExeId := uuid.MustNewUUID()
-	err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
-		Namespace:          request.Request.Namespace,
-		ProcessId:          request.Request.ProcessId,
-		ProcessExecutionId: prcExeId,
-	})
-	if err != nil {
-		return nil, err
-	}
+		// if it is not running, but completed normally, return error
+		// otherwise, start a new process
+		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusCompleted {
+			return nil, fmt.Errorf("process %v has completed normally", request.Request.ProcessId)
+		} else {
+			prcExeId := uuid.MustNewUUID()
+			err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
+				Namespace:          request.Request.Namespace,
+				ProcessId:          request.Request.ProcessId,
+				ProcessExecutionId: prcExeId,
+			})
+			if err != nil {
+				return nil, err
+			}
 
-	hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
-	if err != nil {
-		return nil, err
-	}
+			hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+			if err != nil {
+				return nil, err
+			}
 
-	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
-	}, nil
-}
-
-func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	runningProcessExecutions, err := tx.SelectCurrentProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
-	if err != nil {
-		p.logger.Error(err.Error())
-		return nil, err
-	}
-	if len(runningProcessExecutions) > 1 {
-		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
-	}
-
-	// if it is still running, terminate it
-	if len(runningProcessExecutions) == 1 {
-		runningProcessExecution, err := tx.SelectProcessExecutionForUpdate(ctx, runningProcessExecutions[0].ProcessExecutionId)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
+			return &persistence.StartProcessResponse{
+				ProcessExecutionId: prcExeId,
+				AlreadyStarted:     false,
+				HasNewWorkerTask:   hasNewWorkerTask,
+			}, nil
 		}
-
-		// mark state as aborted
-		sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(runningProcessExecution.StateExecutionSequenceMaps)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		err = p.markPendingStateAsAborted(ctx, tx, runningProcessExecution.ProcessExecutionId, sequenceMaps)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		// mark process as terminated
-		processExecution, err := tx.SelectProcessExecutionForUpdate(ctx, runningProcessExecutions[0].ProcessExecutionId)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
-			ProcessExecutionId:         processExecution.ProcessExecutionId,
-			IsCurrent:                  false,
-			Status:                     persistence.ProcessExecutionStatusTerminated,
-			HistoryEventIdSequence:     processExecution.HistoryEventIdSequence,
-			StateExecutionSequenceMaps: processExecution.StateExecutionSequenceMaps,
-		})
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		// update current process execution and process execution table
-		processExecutionId := uuid.MustNewUUID()
-		err = tx.UpdateCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
-			Namespace:          request.Request.Namespace,
-			ProcessId:          request.Request.ProcessId,
-			ProcessExecutionId: processExecutionId,
-		})
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, processExecutionId)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
-
-		return &persistence.StartProcessResponse{
-			ProcessExecutionId: processExecutionId,
-			AlreadyStarted:     false,
-			HasNewWorkerTask:   hasNewWorkerTask,
-		}, nil
 	} else {
+		// if there is no previous run with the process id, start a new process
 		prcExeId := uuid.MustNewUUID()
-		err = tx.InsertCurrentProcessExecution(ctx, extensions.CurrentProcessExecutionRow{
+		err = tx.InsertLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
 			Namespace:          request.Request.Namespace,
 			ProcessId:          request.Request.ProcessId,
 			ProcessExecutionId: prcExeId,
 		})
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 
 		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
 		if err != nil {
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: prcExeId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
+	}
+}
+
+func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	if err != nil {
+		p.logger.Error(err.Error())
+		return nil, err
+	}
+	if len(latestProcessExecutions) > 1 {
+		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
+	}
+
+	// if it is still running, terminate it and start a new process
+	// otherwise, start a new process
+	if len(latestProcessExecutions) == 1 {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecutions[0].ProcessExecutionId)
+		if err != nil {
 			p.logger.Error(err.Error())
+			return nil, err
+		}
+		// mark the process as terminated
+		if processExecutionRowForUpdate.IsCurrent {
+			tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
+				ProcessExecutionId:         processExecutionRowForUpdate.ProcessExecutionId,
+				IsCurrent:                  false,
+				Status:                     persistence.ProcessExecutionStatusTerminated,
+				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
+				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
+			})
+		}
+		// mark the pending states as aborted
+		sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(processExecutionRowForUpdate.StateExecutionSequenceMaps)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+		err = p.markPendingStateAsAborted(ctx, tx, processExecutionRowForUpdate.ProcessExecutionId, sequenceMaps)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
+		// update the latest process execution and start a new process
+		prcExeId := uuid.MustNewUUID()
+		err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+		if err != nil {
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: prcExeId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
+	} else {
+		// if there is no previous run with the process id, start a new process
+		prcExeId := uuid.MustNewUUID()
+		err = tx.InsertLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+		if err != nil {
 			return nil, err
 		}
 
@@ -460,7 +474,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(ctx context.Context, tx exte
 func (p sqlProcessStoreImpl) doStopProcessTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.StopProcessRequest,
 ) (*persistence.StopProcessResponse, error) {
-	curProcExecRow, err := p.session.SelectCurrentProcessExecution(ctx, request.Namespace, request.ProcessId)
+	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
 			// early stop when there is no such process running
@@ -525,7 +539,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	ctx context.Context, request persistence.DescribeLatestProcessRequest,
 ) (*persistence.DescribeLatestProcessResponse, error) {
-	row, err := p.session.SelectCurrentProcessExecution(ctx, request.Namespace, request.ProcessId)
+	row, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
 			return &persistence.DescribeLatestProcessResponse{

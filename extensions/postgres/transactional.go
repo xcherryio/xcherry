@@ -21,39 +21,31 @@ import (
 	"github.com/xdblab/xdb/extensions"
 )
 
-const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_current_process_executions
+const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_latest_process_executions
 	(namespace, process_id, process_execution_id) VALUES
 	($1, $2, $3)`
 
-func (d dbTx) InsertCurrentProcessExecution(ctx context.Context, row extensions.CurrentProcessExecutionRow) error {
+func (d dbTx) InsertLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
 	return err
 }
 
-const selectCurrentProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id FROM xdb_sys_current_process_executions WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
+const selectLatestProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id FROM xdb_sys_latest_process_executions WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
 
-func (d dbTx) SelectCurrentProcessExecutionForUpdate(
+func (d dbTx) SelectLatestProcessExecutionForUpdate(
 	ctx context.Context, namespace string, processId string,
-) ([]extensions.CurrentProcessExecutionRow, error) {
-	var rows []extensions.CurrentProcessExecutionRow
-	err := d.tx.SelectContext(ctx, &rows, selectCurrentProcessExecutionForUpdateQuery, namespace, processId)
+) ([]extensions.LatestProcessExecutionRow, error) {
+	var rows []extensions.LatestProcessExecutionRow
+	err := d.tx.SelectContext(ctx, &rows, selectLatestProcessExecutionForUpdateQuery, namespace, processId)
 	return rows, err
 }
 
-const updateCurrentProcessExecutionQuery = `UPDATE xdb_sys_current_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
+const updateLatestProcessExecutionQuery = `UPDATE xdb_sys_latest_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
 
-func (d dbTx) UpdateCurrentProcessExecution(ctx context.Context, row extensions.CurrentProcessExecutionRow) error {
-	_, err := d.tx.ExecContext(ctx, updateCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId.String())
+func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
+	_, err := d.tx.ExecContext(ctx, updateLatestProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId.String())
 	return err
-}
-
-const selectProcessExecutionQuery = `SELECT * FROM xdb_sys_process_executions WHERE namespace=$1 AND process_id=$2`
-
-func (d dbTx) SelectProcessExecutionByProcessId(ctx context.Context, namespace string, processId string) ([]extensions.ProcessExecutionRow, error) {
-	var row []extensions.ProcessExecutionRow
-	err := d.tx.SelectContext(ctx, &row, selectProcessExecutionQuery, processId)
-	return row, err
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions

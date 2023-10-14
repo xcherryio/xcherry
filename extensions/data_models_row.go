@@ -22,7 +22,7 @@ import (
 )
 
 type (
-	CurrentProcessExecutionRow struct {
+	LatestProcessExecutionRow struct {
 		Namespace          string
 		ProcessId          string
 		ProcessExecutionId uuid.UUID
