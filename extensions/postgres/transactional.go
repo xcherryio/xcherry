@@ -131,8 +131,8 @@ func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRow
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps
-	FROM xdb_sys_process_executions WHERE id=$1`
+    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
 	ctx context.Context, processExecutionId uuid.UUID,

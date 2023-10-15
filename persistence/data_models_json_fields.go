@@ -82,6 +82,9 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 		return fmt.Errorf("the state is not started, all current running states: %v", pendingMap)
 	}
 	delete(pendingMap, stateSeq)
+	if len(pendingMap) == 0 {
+		delete(s.PendingExecutionMap, stateId)
+	}
 	return nil
 }
 
