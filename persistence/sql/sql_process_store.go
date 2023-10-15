@@ -317,11 +317,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 			ProcessExecutionId: prcExeId,
 		})
 		if err != nil {
+			p.logger.Error(err.Error())
 			return nil, err
 		}
 
 		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
 		if err != nil {
+			p.logger.Error(err.Error())
 			return nil, err
 		}
 
@@ -340,11 +342,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		ProcessExecutionId: prcExeId,
 	})
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
 	hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -536,6 +540,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	// handle xdb_sys_process_executions
 	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -543,6 +548,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 
 	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -551,6 +557,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 	procExecRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -561,6 +568,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -576,6 +584,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	// modify the wait_until/execute status from running to aborted
 	err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
