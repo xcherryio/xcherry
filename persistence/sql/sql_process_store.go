@@ -308,28 +308,28 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		// otherwise, start a new process
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusCompleted {
 			return nil, fmt.Errorf("process %v has completed normally", request.Request.ProcessId)
-		} else {
-			prcExeId := uuid.MustNewUUID()
-			err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
-				Namespace:          request.Request.Namespace,
-				ProcessId:          request.Request.ProcessId,
-				ProcessExecutionId: prcExeId,
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
-			if err != nil {
-				return nil, err
-			}
-
-			return &persistence.StartProcessResponse{
-				ProcessExecutionId: prcExeId,
-				AlreadyStarted:     false,
-				HasNewWorkerTask:   hasNewWorkerTask,
-			}, nil
 		}
+
+		prcExeId := uuid.MustNewUUID()
+		err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+		if err != nil {
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: prcExeId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
 	}
 
 	// if there is no previous run with the process id, start a new process
