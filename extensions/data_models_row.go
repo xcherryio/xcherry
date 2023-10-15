@@ -42,6 +42,7 @@ type (
 		Status                     persistence.ProcessExecutionStatus
 		HistoryEventIdSequence     int32
 		StateExecutionSequenceMaps types.JSONText
+		WaitToComplete             bool
 	}
 
 	ProcessExecutionRow struct {

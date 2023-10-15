@@ -441,6 +441,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewWorkerTask := false
 
+	// Step 1: update state info
 	currStateRow := extensions.AsyncStateExecutionRowForUpdate{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
@@ -458,12 +459,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
-	threadDecision := request.StateDecision.GetThreadCloseDecision()
-	if request.StateDecision.HasThreadCloseDecision() {
-		if threadDecision.GetCloseType() == xdbapi.DEAD_END {
-			return &persistence.CompleteExecuteExecutionResponse{}, nil
-		}
-	}
+	// Step 2: update the process info
 
 	// at this point, it's either going to next states or closing the process
 	// either will require to do transaction on process execution row
@@ -477,11 +473,15 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
+	// Step 2 - 1: remove current state from PendingExecutionMap
+
 	err = sequenceMaps.CompleteNewStateExecution(request.StateId, int(request.StateIdSequence))
 	if err != nil {
 		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v, err:%w",
 			request.StateId, request.StateIdSequence, sequenceMaps, err)
 	}
+
+	// Step 2 - 2: add next states to PendingExecutionMap
 
 	if len(request.StateDecision.GetNextStates()) > 0 {
 		hasNewWorkerTask = true
@@ -514,77 +514,68 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 				return nil, err
 			}
 		}
-
-		// finally update process execution row
-		seqJ, err := sequenceMaps.ToBytes()
-		if err != nil {
-			return nil, err
-		}
-		prcRow.StateExecutionSequenceMaps = seqJ
-		err = tx.UpdateProcessExecution(ctx, *prcRow)
-		if err != nil {
-			return nil, err
-		}
-		return &persistence.CompleteExecuteExecutionResponse{
-			HasNewWorkerTask: hasNewWorkerTask,
-		}, nil
 	}
 
-	// otherwise close the thread
-	if threadDecision.GetCloseType() != xdbapi.FORCE_COMPLETE_PROCESS {
-		return nil, fmt.Errorf("cannot support close type: %v", threadDecision.GetCloseType())
+	// Step 2 - 3:
+	// If the process was previously configured to gracefully complete and there are no states running,
+	// then gracefully complete the process regardless of the thread close type set in this state.
+
+	toGracefullyComplete := prcRow.WaitToComplete && len(sequenceMaps.PendingExecutionMap) == 0
+
+	toAbortRunningAsyncStates := false
+
+	threadDecision := request.StateDecision.GetThreadCloseDecision()
+	if !toGracefullyComplete && request.StateDecision.HasThreadCloseDecision() {
+		switch threadDecision.GetCloseType() {
+		case xdbapi.GRACEFUL_COMPLETE_PROCESS:
+			prcRow.WaitToComplete = true
+			toGracefullyComplete = len(sequenceMaps.PendingExecutionMap) == 0
+		case xdbapi.FORCE_COMPLETE_PROCESS:
+			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
+
+			prcRow.Status = persistence.ProcessExecutionStatusCompleted
+			prcRow.IsCurrent = false
+			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
+		case xdbapi.FORCE_FAIL_PROCESS:
+			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
+
+			prcRow.Status = persistence.ProcessExecutionStatusFailed
+			prcRow.IsCurrent = false
+			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
+		case xdbapi.DEAD_END:
+			// do nothing
+		}
 	}
 
-	// also stop(abort) other running state executions
-	for stateId, stateIdSeqMap := range sequenceMaps.PendingExecutionMap {
-		for stateIdSeq := range stateIdSeqMap {
-			stateRow, err := tx.SelectAsyncStateExecutionForUpdate(
-				ctx, extensions.AsyncStateExecutionSelectFilter{
-					ProcessExecutionId: request.ProcessExecutionId,
-					StateId:            stateId,
-					StateIdSequence:    int32(stateIdSeq),
-				})
-			if err != nil {
-				return nil, err
-			}
-			if stateRow.WaitUntilStatus == persistence.StateExecutionStatusRunning {
-				stateRow.WaitUntilStatus = persistence.StateExecutionStatusAborted
-			}
-			if stateRow.ExecuteStatus == persistence.StateExecutionStatusRunning {
-				stateRow.ExecuteStatus = persistence.StateExecutionStatusAborted
-			}
-			err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
-				ProcessExecutionId: stateRow.ProcessExecutionId,
-				StateId:            stateRow.StateId,
-				StateIdSequence:    stateRow.StateIdSequence,
-				WaitUntilStatus:    stateRow.WaitUntilStatus,
-				ExecuteStatus:      stateRow.ExecuteStatus,
-				PreviousVersion:    stateRow.PreviousVersion,
-			})
-			if err != nil {
-				return nil, err
-			}
-			err = sequenceMaps.CompleteNewStateExecution(stateId, stateIdSeq)
-			if err != nil {
-				return nil, err
-			}
+	if toGracefullyComplete {
+		prcRow.Status = persistence.ProcessExecutionStatusCompleted
+		prcRow.IsCurrent = false
+	}
+
+	if toAbortRunningAsyncStates {
+		// handle xdb_sys_async_state_executions
+		// find all related rows with the processExecutionId, and
+		// modify the wait_until/execute status from running to aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, request.ProcessExecutionId)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	// update process execution row
-	prcRow.Status = persistence.ProcessExecutionStatusCompleted
 	prcRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
 	if err != nil {
 		return nil, err
 	}
+
 	err = tx.UpdateProcessExecution(ctx, *prcRow)
 	if err != nil {
 		return nil, err
 	}
+
 	return &persistence.CompleteExecuteExecutionResponse{
 		HasNewWorkerTask: hasNewWorkerTask,
 	}, nil
-
 }
 
 func insertAsyncStateExecution(

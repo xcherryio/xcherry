@@ -23,4 +23,6 @@ func TestBasic(t *testing.T) {
 	ass := assert.New(t)
 
 	sqltest.SQLBasicTest(ass, store)
+	sqltest.SQLGracefulCompleteTest(ass, store)
+	sqltest.SQLForceFailTest(ass, store)
 }

@@ -10,19 +10,20 @@ CREATE TABLE xdb_sys_process_executions(
     id uuid NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     --
-    is_current BOOLEAN NOT NULL , -- for quick debugging
+    is_current BOOLEAN NOT NULL DEFAULT true, -- for quick debugging
     status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:terminated
     start_time TIMESTAMP NOT NULL,
     timeout_seconds INTEGER,
     history_event_id_sequence INTEGER,
     state_execution_sequence_maps jsonb NOT NULL , -- some maps from stateId and sequence number
+    wait_to_complete BOOLEAN NOT NULL DEFAULT false, -- if set to true, the process will be gracefully completed when there is no running state
     info jsonb , -- workerURL, processType, etc
     PRIMARY KEY (id)
 );
 
 CREATE TABLE xdb_sys_async_state_executions(
    process_execution_id uuid NOT NULL,
-   state_id VARCHAR(32) NOT NULL,
+   state_id VARCHAR(255) NOT NULL,
    state_id_sequence INTEGER NOT NULL,
    --
    version INTEGER NOT NULL , -- for conditional update to avoid locking
