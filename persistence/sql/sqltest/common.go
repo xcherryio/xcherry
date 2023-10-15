@@ -89,7 +89,8 @@ func retryStartProcessForFailure(
 	ass.False(startResp2.HasNewWorkerTask)
 }
 
-func describeProcess(ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, namespace, processId string) {
+func describeProcess(ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore,
+	namespace, processId string, processStatus xdbapi.ProcessStatus) {
 	// Incorrect process id description
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,
@@ -107,6 +108,7 @@ func describeProcess(ctx context.Context, ass *assert.Assertions, store persiste
 	ass.False(descResp.NotExists)
 	ass.Equal(testProcessType, descResp.Response.GetProcessType())
 	ass.Equal(testWorkerUrl, descResp.Response.GetWorkerUrl())
+	ass.Equal(processStatus, descResp.Response.GetStatus())
 }
 
 func checkAndGetWorkerTasks(
