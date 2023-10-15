@@ -171,7 +171,10 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	}
 }
 
-func (p sqlProcessStoreImpl) applyDisallowReusePolicy(ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
+	ctx context.Context,
+	tx extensions.SQLTransaction,
+	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
 	previousProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -229,28 +232,28 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
-		} else {
-			prcExeId := uuid.MustNewUUID()
-			err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
-				Namespace:          request.Request.Namespace,
-				ProcessId:          request.Request.ProcessId,
-				ProcessExecutionId: prcExeId,
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
-			if err != nil {
-				return nil, err
-			}
-
-			return &persistence.StartProcessResponse{
-				ProcessExecutionId: prcExeId,
-				AlreadyStarted:     false,
-				HasNewWorkerTask:   hasNewWorkerTask,
-			}, nil
 		}
+
+		prcExeId := uuid.MustNewUUID()
+		err = tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
+			Namespace:          request.Request.Namespace,
+			ProcessId:          request.Request.ProcessId,
+			ProcessExecutionId: prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		hasNewWorkerTask, err := p.insertProcessExecution(ctx, tx, request, prcExeId)
+		if err != nil {
+			return nil, err
+		}
+
+		return &persistence.StartProcessResponse{
+			ProcessExecutionId: prcExeId,
+			AlreadyStarted:     false,
+			HasNewWorkerTask:   hasNewWorkerTask,
+		}, nil
 	}
 
 	prcExeId := uuid.MustNewUUID()
@@ -375,13 +378,17 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		}
 		// mark the process as terminated
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
-			tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
+			err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
 				ProcessExecutionId:         processExecutionRowForUpdate.ProcessExecutionId,
 				IsCurrent:                  false,
 				Status:                     persistence.ProcessExecutionStatusTerminated,
 				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
 			})
+			if err != nil {
+				p.logger.Error(err.Error())
+				return nil, err
+			}
 		}
 		// mark the pending states as aborted
 		sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(processExecutionRowForUpdate.StateExecutionSequenceMaps)
