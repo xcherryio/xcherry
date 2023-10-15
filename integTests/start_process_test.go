@@ -14,12 +14,17 @@
 package integTests
 
 import (
-	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
 	"testing"
 	"time"
+
+	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
 )
 
 func TestStartBasicProcess(t *testing.T) {
 	basic.TestStartIOProcess(t, client)
+	basic.TestProcessIdReusePolicyAllowIfNoRunning(t, client)
+	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t, client)
+	basic.TestProcessIdReusePolicyDisallowReuse(t, client)
+	basic.TestProcessIdReusePolicyTerminateIfRunning(t, client)
 	time.Sleep(time.Second * 5)
 }
