@@ -41,11 +41,12 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions set
+const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
 is_current = :is_current, 
 status = :status,
 history_event_id_sequence= :history_event_id_sequence,
-state_execution_sequence_maps= :state_execution_sequence_maps
+state_execution_sequence_maps= :state_execution_sequence_maps,
+wait_to_complete = :wait_to_complete
 WHERE id=:process_execution_id_string
 `
 

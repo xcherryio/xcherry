@@ -35,6 +35,13 @@ func createTestInput() xdbapi.EncodedObject {
 	}
 }
 
+func createNilInput() xdbapi.EncodedObject {
+	return xdbapi.EncodedObject{
+		Encoding: nil,
+		Data:     nil,
+	}
+}
+
 func startProcess(
 	ctx context.Context, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
