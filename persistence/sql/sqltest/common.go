@@ -35,7 +35,7 @@ func createTestInput() xdbapi.EncodedObject {
 	}
 }
 
-func createNilInput() xdbapi.EncodedObject {
+func createEmptyEncodedObject() xdbapi.EncodedObject {
 	return xdbapi.EncodedObject{
 		Encoding: nil,
 		Data:     nil,

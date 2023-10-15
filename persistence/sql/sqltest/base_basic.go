@@ -110,7 +110,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	}
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createNilInput(),
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
 		persistence.StateExecutionStatusSkipped,
 		persistence.StateExecutionStatusAborted)
 }

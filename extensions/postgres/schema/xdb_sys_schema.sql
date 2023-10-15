@@ -23,7 +23,7 @@ CREATE TABLE xdb_sys_process_executions(
 
 CREATE TABLE xdb_sys_async_state_executions(
    process_execution_id uuid NOT NULL,
-   state_id VARCHAR(32) NOT NULL,
+   state_id VARCHAR(255) NOT NULL,
    state_id_sequence INTEGER NOT NULL,
    --
    version INTEGER NOT NULL , -- for conditional update to avoid locking
