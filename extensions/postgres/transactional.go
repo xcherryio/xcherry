@@ -61,11 +61,12 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions set
+const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
 is_current = :is_current, 
 status = :status,
 history_event_id_sequence= :history_event_id_sequence,
-state_execution_sequence_maps= :state_execution_sequence_maps
+state_execution_sequence_maps= :state_execution_sequence_maps,
+wait_to_complete = :wait_to_complete
 WHERE id=:process_execution_id_string
 `
 
@@ -151,8 +152,8 @@ func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRow
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps
-	FROM xdb_sys_process_executions WHERE id=$1`
+    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
 	ctx context.Context, processExecutionId uuid.UUID,
