@@ -14,15 +14,21 @@
 package tests
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/persistence/sql/sqltest"
-	"testing"
 )
 
 func TestBasic(t *testing.T) {
-	ass := assert.New(t)
+	assert := assert.New(t)
 
-	sqltest.SQLBasicTest(ass, store)
-	sqltest.SQLGracefulCompleteTest(ass, store)
-	sqltest.SQLForceFailTest(ass, store)
+	sqltest.SQLBasicTest(assert, store)
+	sqltest.SQLGracefulCompleteTest(assert, store)
+	sqltest.SQLForceFailTest(assert, store)
+
+	sqltest.SQLProcessIdReusePolicyDisallowReuseTest(assert, store)
+	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(assert, store)
+	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(assert, store)
+	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(assert, store)
 }

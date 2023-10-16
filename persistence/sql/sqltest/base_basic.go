@@ -118,6 +118,245 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
 }
 
+func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(ass *assert.Assertions, store persistence.ProcessStore) {
+	ctx := context.Background()
+	namespace := "test-ns"
+	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
+	input := createTestInput()
+
+	// Start the process and verify it started correctly.
+	startProcess(ctx, ass, store, namespace, processId, input)
+
+	// Try to start the process again and verify the behavior.
+	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+
+	// Describe the process.
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+
+	// stop the process with temerminated
+	terminateProcess(ctx, ass, store, namespace, processId)
+
+	// Describe the process, verify it's terminated
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.TERMINATED)
+
+	// start the process with allow if previous exit abnormally
+	startProcessWithAllowIfPreviousExitAbnormally(ctx, ass, store, namespace, processId, input)
+}
+
+func SQLProcessIdReusePolicyTerminateIfRunning(ass *assert.Assertions, store persistence.ProcessStore) {
+	ctx := context.Background()
+	namespace := "test-ns"
+	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
+	input := createTestInput()
+
+	// Start the process and verify it started correctly.
+	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+
+	// Try to start the process again and verify the behavior.
+	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+
+	// Describe the process.
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+
+	prcExeID2 := startProcessWithTerminateIfRunningPolicy(ctx, ass, store, namespace, processId, input)
+
+	ass.NotEqual(prcExeId.String(), prcExeID2.String())
+}
+
+func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store persistence.ProcessStore) {
+	ctx := context.Background()
+	namespace := "test-ns"
+	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
+	input := createTestInput()
+
+	// Start the process and verify it started correctly.
+	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+
+	// Try to start the process again and verify the behavior.
+	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+
+	// Describe the process.
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+
+	// Test waitUntil API execution
+	// Check initial worker tasks.
+	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
+	task := workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution.
+	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusRunning,
+		persistence.StateExecutionStatusUndefined)
+
+	// Complete 'WaitUntil' execution.
+	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+
+	// Check initial worker tasks.
+	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
+	task = workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution for Execute API
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusCompleted,
+		persistence.StateExecutionStatusRunning)
+
+	decision1 := xdbapi.StateDecision{
+		NextStates: []xdbapi.StateMovement{
+			{
+				StateId: stateId2,
+				// no input, skip waitUntil
+				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+			},
+			{
+				StateId: stateId1, // use the same stateId
+				// no input, skip waitUntil
+				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateInput:  &input,
+			},
+		},
+	}
+	// Complete 'Execute' execution.
+	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+
+	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
+	task = workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	task = workerTasks[1]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution for Execute API again
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusSkipped,
+		persistence.StateExecutionStatusRunning)
+	decision2 := xdbapi.StateDecision{
+		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
+			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
+		},
+	}
+	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+
+	// Verify stateId2 was aborted and process has completed
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
+		persistence.StateExecutionStatusSkipped,
+		persistence.StateExecutionStatusAborted)
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+
+	// try to start with disallow_reuse policy, and verify it's returning already started
+	startProcessWithDisallowReusePolicy(ctx, ass, store, namespace, processId, input)
+}
+
+func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persistence.ProcessStore) {
+	ctx := context.Background()
+	namespace := "test-ns"
+	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
+	input := createTestInput()
+
+	// Start the process and verify it started correctly.
+	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+
+	// Try to start the process again and verify the behavior.
+	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+
+	// Describe the process.
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+
+	// Test waitUntil API execution
+	// Check initial worker tasks.
+	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
+	task := workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1, 1)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution.
+	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusRunning,
+		persistence.StateExecutionStatusUndefined)
+
+	// Complete 'WaitUntil' execution.
+	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+
+	// Check initial worker tasks.
+	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
+	task = workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 1)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution for Execute API
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusCompleted,
+		persistence.StateExecutionStatusRunning)
+
+	decision1 := xdbapi.StateDecision{
+		NextStates: []xdbapi.StateMovement{
+			{
+				StateId: stateId2,
+				// no input, skip waitUntil
+				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+			},
+			{
+				StateId: stateId1, // use the same stateId
+				// no input, skip waitUntil
+				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateInput:  &input,
+			},
+		},
+	}
+	// Complete 'Execute' execution.
+	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+
+	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
+	task = workerTasks[0]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2, 1)
+	task = workerTasks[1]
+	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1, 2)
+
+	// Delete and verify worker tasks are deleted.
+	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+
+	// Prepare state execution for Execute API again
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	verifyStateExecution(ass, prep, processId, input,
+		persistence.StateExecutionStatusSkipped,
+		persistence.StateExecutionStatusRunning)
+	decision2 := xdbapi.StateDecision{
+		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
+			CloseType: xdbapi.FORCE_COMPLETE_PROCESS.Ptr(),
+		},
+	}
+	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+
+	// Verify stateId2 was aborted and process has completed
+	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
+		persistence.StateExecutionStatusSkipped,
+		persistence.StateExecutionStatusAborted)
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+
+	// start with allow if no running,
+	startProcessWithAllowIfNoRunningPolicy(ctx, ass, store, namespace, processId, input)
+}
+
 func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns-2"
