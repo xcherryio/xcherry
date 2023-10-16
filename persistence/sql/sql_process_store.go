@@ -599,15 +599,19 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	row, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
+			p.logger.Error(err.Error())
+
 			return &persistence.DescribeLatestProcessResponse{
 				NotExists: true,
 			}, nil
 		}
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
 	info, err := persistence.BytesToProcessExecutionInfo(row.Info)
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -675,6 +679,7 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 			StateIdSequence:    request.StateIdSequence,
 		})
 	if err != nil {
+		p.logger.Error(err.Error())
 		return nil, err
 	}
 	info, err := persistence.BytesToAsyncStateExecutionInfo(stateRow.Info)

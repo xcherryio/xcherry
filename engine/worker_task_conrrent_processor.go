@@ -131,6 +131,7 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 		},
 	})
 	if err != nil {
+		w.logger.Error(err.Error())
 		return err
 	}
 
