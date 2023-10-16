@@ -104,7 +104,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
-							//w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
+							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
 						} else {
 							commitChan <- task
@@ -121,7 +121,7 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	ctx context.Context, task persistence.WorkerTask, notifier LocalNotifyNewWorkerTask,
 ) error {
 
-	//w.logger.Info("execute worker task", tag.ID(task.GetId()))
+	w.logger.Info("execute worker task", tag.ID(task.GetId()))
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -131,7 +131,6 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 		},
 	})
 	if err != nil {
-		w.logger.Error(err.Error())
 		return err
 	}
 
@@ -149,10 +148,10 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	} else if prep.ExecuteStatus == persistence.StateExecutionStatusRunning {
 		return w.processExecuteTask(ctx, task, *prep, apiClient, notifier)
 	} else {
-		//w.logger.Warn("noop for worker task ",
-		//tag.ID(tag.AnyToStr(task.TaskSequence)),
-		//tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
-		//prep.WaitUntilStatus, prep.ExecuteStatus)))
+		w.logger.Warn("noop for worker task ",
+			tag.ID(tag.AnyToStr(task.TaskSequence)),
+			tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
+				prep.WaitUntilStatus, prep.ExecuteStatus)))
 		return nil
 	}
 }
@@ -188,7 +187,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 	}
 	if checkHttpError(err, httpResp) {
 		err := composeHttpError(err, httpResp)
-		//w.logger.Info("worker API return error", tag.Error(err))
+		w.logger.Info("worker API return error", tag.Error(err))
 		// TODO instead of returning error, we should do backoff retry by pushing this task into timer queue
 		return err
 	}
