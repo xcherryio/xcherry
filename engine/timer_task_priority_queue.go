@@ -46,7 +46,10 @@ func (pq *TimerTaskPriorityQueue) Swap(i, j int) {
 }
 
 func (pq *TimerTaskPriorityQueue) Push(x any) {
-	item := x.(*persistence.TimerTask)
+	item, ok := x.(*persistence.TimerTask)
+	if !ok {
+		panic("Pushed item is not a TimerTask")
+	}
 	*pq = append(*pq, item)
 }
 

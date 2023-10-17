@@ -34,11 +34,14 @@ func TestTimerTaskPriorityQueue(t *testing.T) {
 	heap.Push(&pq, &persistence.TimerTask{FireTimestampSeconds: 1})
 	heap.Push(&pq, &persistence.TimerTask{FireTimestampSeconds: 2})
 	heap.Push(&pq, &persistence.TimerTask{FireTimestampSeconds: 4})
-	
+
 	for i := 0; i < 8; i++ {
 		task0 := pq[0]
 		task := heap.Pop(&pq)
 		assert.Equal(t, task0, task)
-		assert.Equal(t, int64(i+1), task.(*persistence.TimerTask).FireTimestampSeconds)
+		task1, ok := task.(*persistence.TimerTask)
+		assert.Equal(t, true, ok)
+
+		assert.Equal(t, int64(i+1), task1.FireTimestampSeconds)
 	}
 }

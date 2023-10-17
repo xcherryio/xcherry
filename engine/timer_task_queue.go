@@ -205,7 +205,8 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 		w.currMaxLoadedTaskTimestamp = maxWindowTime.Unix()
 		w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
 	}
-	w.logger.Debug("load and dispatch timer tasks succeeded with new currMaxLoadedTaskTimestamp", tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp))
+	w.logger.Debug("load and dispatch timer tasks succeeded with new currMaxLoadedTaskTimestamp",
+		tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp))
 }
 
 func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
@@ -319,7 +320,8 @@ func (w *timerTaskQueueImpl) filterNotifyRequest(req xdbapi.NotifyTimerTasksRequ
 				*minTimestampToUpdate = ts
 			}
 		} else {
-			w.logger.Debug("task fire timestamp is not within the current preload time window, skip", tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp), tag.UnixTimestamp(ts))
+			w.logger.Debug("task fire timestamp is not within the current preload time window, skip",
+				tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp), tag.UnixTimestamp(ts))
 		}
 	}
 	if len(filteredFireTimestamps) == 0 {
