@@ -55,6 +55,7 @@ type transactionalCRUD interface {
 
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
 	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
+	SelectProcessExecution(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)

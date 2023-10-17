@@ -162,3 +162,15 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 	err := d.tx.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, processExecutionId.String())
 	return &row, err
 }
+
+const selectProcessExecutionQuery = `SELECT 
+    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+	FROM xdb_sys_process_executions WHERE id=$1 `
+
+func (d dbTx) SelectProcessExecution(
+	ctx context.Context, processExecutionId uuid.UUID,
+) (*extensions.ProcessExecutionRowForUpdate, error) {
+	var row extensions.ProcessExecutionRowForUpdate
+	err := d.tx.GetContext(ctx, &row, selectProcessExecutionQuery, processExecutionId.String())
+	return &row, err
+}

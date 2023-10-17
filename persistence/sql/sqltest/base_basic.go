@@ -143,6 +143,33 @@ func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(ass *assert.Assertions
 	startProcessWithAllowIfPreviousExitAbnormally(ctx, ass, store, namespace, processId, input)
 }
 
+func SQLProcessIdReusePolicyDefault(ass *assert.Assertions, store persistence.ProcessStore) {
+	ctx := context.Background()
+	namespace := "test-ns"
+	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
+	input := createTestInput()
+
+	// Start the process and verify it started correctly.
+	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+
+	// Try to start the process again and verify the behavior.
+	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+
+	// Describe the process.
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+
+	// stop the process with temerminated
+	terminateProcess(ctx, ass, store, namespace, processId)
+
+	// Describe the process, verify it's terminated
+	describeProcess(ctx, ass, store, namespace, processId, xdbapi.TERMINATED)
+
+	// start with default process id reuse policy and it should start correctly
+	prcExeID2 := startProcess(ctx, ass, store, namespace, processId, input)
+
+	ass.NotEqual(prcExeId.String(), prcExeID2.String())
+}
+
 func SQLProcessIdReusePolicyTerminateIfRunning(ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"

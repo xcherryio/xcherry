@@ -31,4 +31,5 @@ func TestBasic(t *testing.T) {
 	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(assert, store)
 	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(assert, store)
 	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(assert, store)
+	sqltest.SQLProcessIdReusePolicyDefault(assert, store)
 }
