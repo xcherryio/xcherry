@@ -196,8 +196,8 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 
 			w.remainingToFireTimersHeap = NewTimerTaskPriorityQueue(resp.Tasks)
 
-			task0 := w.remainingToFireTimersHeap[0]
-			w.nextFiringTimer.Update(time.Unix(task0.FireTimestampSeconds, 0))
+			minTask := w.remainingToFireTimersHeap[0]
+			w.nextFiringTimer.Update(time.Unix(minTask.FireTimestampSeconds, 0))
 		}
 	}
 }
@@ -285,12 +285,12 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 				heap.Push(&w.remainingToFireTimersHeap, &task)
 			}
 
-			minTimestamp := time.Unix(resp.MinFireTimestampSecondsInclusive, 0)
-			if w.nextFiringTimer.InactiveOrFireAfter(minTimestamp) {
+			minTime := time.Unix(resp.MinFireTimestampSecondsInclusive, 0)
+			if w.nextFiringTimer.InactiveOrFireAfter(minTime) {
 				// update the next firing timer if
 				// 1. the nextFireTimer is not active(meaning there wasn't any more tasks to fire)
 				// 2. any of the new tasks are earlier than the current min
-				w.nextFiringTimer.Update(minTimestamp)
+				w.nextFiringTimer.Update(minTime)
 			}
 		}
 	}
