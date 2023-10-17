@@ -20,4 +20,5 @@
 
 ## Checklist before merge
 [ ] If applicable, merge the xdb-apis/xdb-golang-sdk PRs to main branch
+[ ] If applicable, merge the xdb-apis/xdb-apis PRs to main branch
 [ ] Update `go.mod` to use the commitID of the main branches for xdb-apis/xdb-golang-sdk
