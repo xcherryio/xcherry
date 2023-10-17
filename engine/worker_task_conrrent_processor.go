@@ -102,7 +102,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
-							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
+							w.logger.Info("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
 						} else {
 							commitChan <- task
@@ -119,7 +119,7 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	ctx context.Context, task persistence.WorkerTask,
 ) error {
 
-	w.logger.Info("start executing worker task", tag.ID(task.GetTaskId()))
+	w.logger.Debug("start executing worker task", tag.ID(task.GetTaskId()))
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -184,7 +184,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 	}
 	if w.checkResponseAndError(err, httpResp) {
 		status, details, err := w.composeHttpError(err, httpResp)
-		w.logger.Debug("state waitUntil API return error", tag.Error(err))
+		w.logger.Info("state waitUntil API return error", tag.Error(err))
 		// TODO add a new field in async_state_execution to record the current failure info for debugging
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
@@ -269,7 +269,7 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 	}
 	if w.checkResponseAndError(err, httpResp) {
 		status, details, err := w.composeHttpError(err, httpResp)
-		w.logger.Debug("state execute API return error", tag.Error(err))
+		w.logger.Info("state execute API return error", tag.Error(err))
 		// TODO add a new field in async_state_execution to record the current failure info for debugging
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
@@ -367,7 +367,7 @@ func (w *workerTaskConcurrentProcessor) retryTask(
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 		FireTimestamps:     []int64{fireTimeUnixSeconds},
 	})
-	w.logger.Info("retry is scheduled", tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
+	w.logger.Debug("retry is scheduled", tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
 	return nil
 }
 
@@ -383,7 +383,7 @@ func (w *workerTaskConcurrentProcessor) checkResponseAndError(err error, httpRes
 	if httpResp != nil {
 		status = httpResp.StatusCode
 	}
-	w.logger.Info("worker task executed", tag.Error(err), tag.StatusCode(status))
+	w.logger.Debug("worker task executed", tag.Error(err), tag.StatusCode(status))
 
 	if err != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
 		return true

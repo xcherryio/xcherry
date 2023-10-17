@@ -114,7 +114,7 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 	task persistence.TimerTask,
 ) error {
 
-	w.logger.Info("execute timer task", tag.ID(task.GetStateExecutionId()))
+	w.logger.Debug("start executing timer task", tag.ID(task.GetStateExecutionId()))
 
 	switch task.TaskType {
 	case persistence.TimerTaskTypeWorkerTaskBackoff:

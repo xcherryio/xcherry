@@ -155,7 +155,10 @@ func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 				w.pendingTaskSequenceToPage[*task.TaskSequence] = page
 			}
 		}
+		w.logger.Debug("poll time succeeded", tag.Value(len(resp.Tasks)))
+
 		w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
+
 	}
 }
 
@@ -168,7 +171,7 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
 			}
-			w.logger.Info("completing worker task page", tag.Value(req))
+			w.logger.Debug("completing worker task page", tag.Value(req))
 
 			err := w.store.DeleteWorkerTasks(ctx, req)
 			if err != nil {
@@ -182,7 +185,7 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 		// reset to empty
 		w.completedPages = nil
 	} else {
-		w.logger.Info("no worker tasks to commit/delete")
+		w.logger.Debug("no worker tasks to commit/delete")
 	}
 	return nil
 }

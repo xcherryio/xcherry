@@ -69,6 +69,9 @@ func TestMain(m *testing.M) {
 			}
 
 			cfg := config.Config{
+				Log: config.Logger{
+					Level: "debug",
+				},
 				ApiService: config.ApiServiceConfig{
 					HttpServer: config.HttpServerConfig{
 						Address:      ":" + xdb.DefaultServerPort,

@@ -1,12 +1,12 @@
 CREATE TABLE xdb_sys_latest_process_executions(
-    namespace VARCHAR(15) NOT NULL,
+    namespace VARCHAR(31) NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     process_execution_id uuid NOT NULL,
     PRIMARY KEY (namespace, process_id)
 );
 
 CREATE TABLE xdb_sys_process_executions(
-    namespace VARCHAR(15) NOT NULL, -- for quick debugging
+    namespace VARCHAR(31) NOT NULL, -- for quick debugging
     id uuid NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     --
@@ -43,7 +43,7 @@ CREATE TABLE xdb_sys_worker_tasks(
     --
     task_type SMALLINT NOT NULL, -- 1: waitUntil 2: execute
     process_execution_id uuid, -- for looking up xdb_sys_async_state_executions
-    state_id VARCHAR(32), -- for looking up xdb_sys_async_state_executions
+    state_id VARCHAR(255), -- for looking up xdb_sys_async_state_executions
     state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
     info jsonb ,
     PRIMARY KEY (shard_id, task_sequence)
@@ -56,7 +56,7 @@ CREATE TABLE xdb_sys_timer_tasks(
     --
     task_type SMALLINT, -- 1: process timeout 2: user timer command, 3: worker_task_backoff
     process_execution_id uuid, -- for looking up xdb_sys_async_state_executions
-    state_id VARCHAR(32), -- for looking up xdb_sys_async_state_executions
+    state_id VARCHAR(255), -- for looking up xdb_sys_async_state_executions
     state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
     info jsonb ,
     PRIMARY KEY (shard_id, fire_time_unix_seconds, task_sequence)    

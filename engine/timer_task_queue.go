@@ -200,6 +200,7 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 			w.nextFiringTimer.Update(time.Unix(minTask.FireTimestampSeconds, 0))
 		}
 	}
+	w.logger.Debug("load and dispatch timer tasks succeeded", tag.Value(len(resp.Tasks)))
 }
 
 func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
@@ -298,6 +299,8 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 			}
 		}
 	}
+
+	w.logger.Debug("triggered polling timer tasks succeeded", tag.Value(len(resp.Tasks)))
 }
 
 // filterNotifyRequest filters out the fire timestamps that are outside current preload time window
