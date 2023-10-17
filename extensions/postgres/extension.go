@@ -22,10 +22,11 @@ package postgres
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
 	"net"
 	"net/url"
+
+	"github.com/xdblab/xdb/config"
+	"github.com/xdblab/xdb/extensions"
 
 	"github.com/iancoleman/strcase"
 	"github.com/jmoiron/sqlx"

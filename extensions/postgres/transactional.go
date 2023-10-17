@@ -15,17 +15,51 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
 )
 
-const insertCurrentProcessExecutionQuery = `INSERT INTO xdb_sys_current_process_executions
+const insertLatestProcessExecutionQuery = `INSERT INTO xdb_sys_latest_process_executions
 	(namespace, process_id, process_execution_id) VALUES
 	($1, $2, $3)`
 
-func (d dbTx) InsertCurrentProcessExecution(ctx context.Context, row extensions.CurrentProcessExecutionRow) error {
+func (d dbTx) InsertLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	_, err := d.tx.ExecContext(ctx, insertCurrentProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
+	_, err := d.tx.ExecContext(ctx, insertLatestProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionIdString)
+	return err
+}
+
+const selectLatestProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id 
+FROM xdb_sys_latest_process_executions 
+WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
+
+func (d dbTx) SelectLatestProcessExecutionForUpdate(
+	ctx context.Context, namespace string, processId string,
+) (*extensions.LatestProcessExecutionRow, bool, error) {
+	var rows []extensions.LatestProcessExecutionRow
+	err := d.tx.SelectContext(ctx, &rows, selectLatestProcessExecutionForUpdateQuery, namespace, processId)
+
+	if err != nil {
+		return nil, false, err
+	}
+
+	if len(rows) > 1 {
+		return nil, false, fmt.Errorf("more than one row found for namespace %s and processId %s", namespace, processId)
+	}
+
+	if len(rows) == 0 {
+		return &extensions.LatestProcessExecutionRow{}, false, err
+	}
+
+	return &rows[0], true, err
+}
+
+const updateLatestProcessExecutionQuery = `UPDATE xdb_sys_latest_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
+
+func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
+	_, err := d.tx.ExecContext(ctx, updateLatestProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId.String())
 	return err
 }
 
@@ -140,5 +174,17 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 ) (*extensions.ProcessExecutionRowForUpdate, error) {
 	var row extensions.ProcessExecutionRowForUpdate
 	err := d.tx.GetContext(ctx, &row, selectProcessExecutionForUpdateQuery, processExecutionId.String())
+	return &row, err
+}
+
+const selectProcessExecutionQuery = `SELECT 
+    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+	FROM xdb_sys_process_executions WHERE id=$1 `
+
+func (d dbTx) SelectProcessExecution(
+	ctx context.Context, processExecutionId uuid.UUID,
+) (*extensions.ProcessExecutionRowForUpdate, error) {
+	var row extensions.ProcessExecutionRowForUpdate
+	err := d.tx.GetContext(ctx, &row, selectProcessExecutionQuery, processExecutionId.String())
 	return &row, err
 }

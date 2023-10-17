@@ -1,4 +1,4 @@
-CREATE TABLE xdb_sys_current_process_executions(
+CREATE TABLE xdb_sys_latest_process_executions(
     namespace VARCHAR(15) NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     process_execution_id uuid NOT NULL,

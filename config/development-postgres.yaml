@@ -5,7 +5,7 @@ log:
 apiService:
   httpServer: # see more config fields in config.go
      address: 0.0.0.0:8801
-     readTimeout: 5s
+     readTimeout: 10s
      writeTimeout: 60s
 database:
   sql:

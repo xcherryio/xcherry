@@ -59,6 +59,150 @@ func startProcess(
 	return startResp.ProcessExecutionId
 }
 
+func terminateProcess(ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string) {
+	resp, err := store.StopProcess(ctx, persistence.StopProcessRequest{
+		Namespace:       namespace,
+		ProcessId:       processId,
+		ProcessStopType: xdbapi.TERMINATE,
+	})
+
+	ass.Nil(err)
+	ass.False(resp.NotExists)
+}
+
+func startProcessWithAllowIfPreviousExitAbnormally(ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
+	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+		Request:        startReq,
+		NewTaskShardId: persistence.DefaultShardId,
+	})
+
+	ass.Nil(err)
+	ass.False(startResp.AlreadyStarted)
+	ass.True(startResp.HasNewWorkerTask)
+	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
+	return startResp.ProcessExecutionId
+}
+
+func startProcessWithTerminateIfRunningPolicy(ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
+	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+		Request:        startReq,
+		NewTaskShardId: persistence.DefaultShardId,
+	})
+
+	ass.Nil(err)
+	ass.False(startResp.AlreadyStarted)
+	ass.True(startResp.HasNewWorkerTask)
+	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
+	return startResp.ProcessExecutionId
+}
+
+func startProcessWithAllowIfNoRunningPolicy(
+	ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	startReq := createStartRequestWithAllowIfNoRunningPolicy(namespace, processId, input)
+	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+		Request:        startReq,
+		NewTaskShardId: persistence.DefaultShardId,
+	})
+
+	ass.Nil(err)
+	ass.False(startResp.AlreadyStarted)
+	ass.True(startResp.HasNewWorkerTask)
+	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
+	return startResp.ProcessExecutionId
+}
+
+func startProcessWithDisallowReusePolicy(
+	ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	startReq := createStartRequestWithDisallowReusePolicy(namespace, processId, input)
+	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+		Request:        startReq,
+		NewTaskShardId: persistence.DefaultShardId,
+	})
+
+	ass.Nil(err)
+	ass.True(startResp.AlreadyStarted)
+	return startResp.ProcessExecutionId
+}
+
+func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+	// Other values like processType, workerUrl etc. are kept constants for simplicity
+	return xdbapi.ProcessExecutionStartRequest{
+		Namespace:        namespace,
+		ProcessId:        processId,
+		ProcessType:      "test-type",
+		WorkerUrl:        "test-url",
+		StartStateId:     ptr.Any(stateId1),
+		StartStateInput:  &input,
+		StartStateConfig: nil,
+		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+			TimeoutSeconds: ptr.Any(int32(100)),
+			IdReusePolicy:  xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY.Ptr().Ptr(),
+		},
+	}
+}
+
+func createStartRequestWithDisallowReusePolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+	// Other values like processType, workerUrl etc. are kept constants for simplicity
+	return xdbapi.ProcessExecutionStartRequest{
+		Namespace:        namespace,
+		ProcessId:        processId,
+		ProcessType:      "test-type",
+		WorkerUrl:        "test-url",
+		StartStateId:     ptr.Any(stateId1),
+		StartStateInput:  &input,
+		StartStateConfig: nil,
+		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+			TimeoutSeconds: ptr.Any(int32(100)),
+			IdReusePolicy:  xdbapi.DISALLOW_REUSE.Ptr(),
+		},
+	}
+}
+
+func createStartRequestWithAllowIfNoRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+	// Other values like processType, workerUrl etc. are kept constants for simplicity
+	return xdbapi.ProcessExecutionStartRequest{
+		Namespace:        namespace,
+		ProcessId:        processId,
+		ProcessType:      "test-type",
+		WorkerUrl:        "test-url",
+		StartStateId:     ptr.Any(stateId1),
+		StartStateInput:  &input,
+		StartStateConfig: nil,
+		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+			TimeoutSeconds: ptr.Any(int32(100)),
+			IdReusePolicy:  xdbapi.ALLOW_IF_NO_RUNNING.Ptr(),
+		},
+	}
+}
+
+func createStartRequestWithTerminateIfRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+	// Other values like processType, workerUrl etc. are kept constants for simplicity
+	return xdbapi.ProcessExecutionStartRequest{
+		Namespace:        namespace,
+		ProcessId:        processId,
+		ProcessType:      "test-type",
+		WorkerUrl:        "test-url",
+		StartStateId:     ptr.Any(stateId1),
+		StartStateInput:  &input,
+		StartStateConfig: nil,
+		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+			TimeoutSeconds: ptr.Any(int32(100)),
+			IdReusePolicy:  xdbapi.TERMINATE_IF_RUNNING.Ptr(),
+		},
+	}
+}
+
 func createStartRequest(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{

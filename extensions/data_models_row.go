@@ -14,14 +14,15 @@
 package extensions
 
 import (
+	"time"
+
 	"github.com/jmoiron/sqlx/types"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/persistence"
-	"time"
 )
 
 type (
-	CurrentProcessExecutionRow struct {
+	LatestProcessExecutionRow struct {
 		Namespace          string
 		ProcessId          string
 		ProcessExecutionId uuid.UUID
