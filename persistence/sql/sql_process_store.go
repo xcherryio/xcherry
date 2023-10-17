@@ -122,11 +122,11 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	previousProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	_, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
-	if len(previousProcessExecutions) > 0 {
+	if found {
 		return &persistence.StartProcessResponse{
 			AlreadyStarted: true,
 		}, nil
@@ -148,19 +148,16 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
-	}
-	if len(latestProcessExecutions) > 1 {
-		return nil, fmt.Errorf("more than one latest process execution for process id %v", request.Request.ProcessId)
 	}
 
 	// if it is still running, return already started
 	// if finished, start a new process
 	// if there is no previous run with the process id, start a new process
-	if len(latestProcessExecutions) == 1 {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecutions[0].ProcessExecutionId)
+	if found {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			p.logger.Error(err.Error())
 			return nil, err
@@ -199,16 +196,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
-	if len(latestProcessExecutions) > 1 {
-		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
-	}
 
-	if len(latestProcessExecutions) == 1 {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecutions[0].ProcessExecutionId)
+	if found {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			p.logger.Error(err.Error())
 			return nil, err
@@ -257,19 +251,16 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
-	latestProcessExecutions, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
+	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		p.logger.Error(err.Error())
 		return nil, err
 	}
-	if len(latestProcessExecutions) > 1 {
-		return nil, fmt.Errorf("more than one running process execution for process id %v", request.Request.ProcessId)
-	}
 
 	// if it is still running, terminate it and start a new process
 	// otherwise, start a new process
-	if len(latestProcessExecutions) == 1 {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecutions[0].ProcessExecutionId)
+	if found {
+		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			p.logger.Error(err.Error())
 			return nil, err

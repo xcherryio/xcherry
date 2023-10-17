@@ -50,7 +50,7 @@ type SQLAdminDBSession interface {
 
 type transactionalCRUD interface {
 	InsertLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
-	SelectLatestProcessExecutionForUpdate(ctx context.Context, namespace string, processId string) ([]LatestProcessExecutionRow, error)
+	SelectLatestProcessExecutionForUpdate(ctx context.Context, namespace string, processId string) (*LatestProcessExecutionRow, bool, error)
 	UpdateLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
 
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error

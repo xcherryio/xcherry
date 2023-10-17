@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
@@ -36,10 +37,23 @@ WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
 
 func (d dbTx) SelectLatestProcessExecutionForUpdate(
 	ctx context.Context, namespace string, processId string,
-) ([]extensions.LatestProcessExecutionRow, error) {
+) (*extensions.LatestProcessExecutionRow, bool, error) {
 	var rows []extensions.LatestProcessExecutionRow
 	err := d.tx.SelectContext(ctx, &rows, selectLatestProcessExecutionForUpdateQuery, namespace, processId)
-	return rows, err
+
+	if err != nil {
+		return nil, false, err
+	}
+
+	if len(rows) > 1 {
+		return nil, false, fmt.Errorf("more than one row found for namespace %s and processId %s", namespace, processId)
+	}
+
+	if len(rows) == 0 {
+		return &extensions.LatestProcessExecutionRow{}, false, err
+	}
+
+	return &rows[0], true, err
 }
 
 const updateLatestProcessExecutionQuery = `UPDATE xdb_sys_latest_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
