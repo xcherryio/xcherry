@@ -29,7 +29,7 @@ func GetNextBackoff(completedAttempts int32, firstAttemptStartTimestampSeconds i
 		return 0, false
 	}
 	initInterval := *policy.InitialIntervalSeconds
-	nextInterval := int32(float64(initInterval) * math.Pow(float64(*policy.BackoffCoefficient), float64(completedAttempts)))
+	nextInterval := int32(float64(initInterval) * math.Pow(float64(*policy.BackoffCoefficient), float64(completedAttempts-1)))
 	if nextInterval > *policy.MaximumIntervalSeconds {
 		nextInterval = *policy.MaximumIntervalSeconds
 	}

@@ -15,6 +15,7 @@ package extensions
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
@@ -31,7 +32,7 @@ type SQLDBSession interface {
 	nonTransactionalCRUD
 
 	ErrorChecker
-	StartTransaction(ctx context.Context) (SQLTransaction, error)
+	StartTransaction(ctx context.Context, opts *sql.TxOptions) (SQLTransaction, error)
 	Close() error
 }
 

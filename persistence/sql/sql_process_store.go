@@ -15,6 +15,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -31,6 +32,10 @@ import (
 type sqlProcessStoreImpl struct {
 	session extensions.SQLDBSession
 	logger  log.Logger
+}
+
+var defaultTxOpts *sql.TxOptions = &sql.TxOptions{
+	Isolation: sql.LevelReadCommitted,
 }
 
 func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
@@ -52,7 +57,7 @@ func (p sqlProcessStoreImpl) CleanUpTasksForTest(ctx context.Context, shardId in
 func (p sqlProcessStoreImpl) StartProcess(
 	ctx context.Context, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +79,7 @@ func (p sqlProcessStoreImpl) StartProcess(
 }
 
 func (p sqlProcessStoreImpl) StopProcess(ctx context.Context, request persistence.StopProcessRequest) (*persistence.StopProcessResponse, error) {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +216,6 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	if found {
 		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 
@@ -225,12 +229,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		// if it is not running, but completed normally, return error
 		// otherwise, start a new process
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusCompleted {
-			return nil, fmt.Errorf("process %v has completed normally", request.Request.ProcessId)
+			return &persistence.StartProcessResponse{
+				AlreadyStarted: true,
+			}, nil
 		}
 
 		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 
@@ -261,7 +266,6 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 ) (*persistence.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -270,7 +274,6 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 	if found {
 		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 		// mark the process as terminated
@@ -283,18 +286,18 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
 			})
 			if err != nil {
-				p.logger.Error(err.Error())
 				return nil, err
 			}
 		}
-		// mark the pending states as aborted
-		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, processExecutionRowForUpdate.ProcessExecutionId)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
+
 		// update the latest process execution and start a new process
 		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		if err != nil {
+			return nil, err
+		}
+
+		// mark the pending states as aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, processExecutionRowForUpdate.ProcessExecutionId)
 		if err != nil {
 			return nil, err
 		}
@@ -482,26 +485,21 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		procExecRow.Status = persistence.ProcessExecutionStatusFailed
 	}
 
-	// early stop when there are no pending tasks
-	if len(pendingExecutionMap) == 0 {
-		return &persistence.StopProcessResponse{
-			NotExists: false,
-		}, nil
-	}
-
-	// handle xdb_sys_async_state_executions
-	// find all related rows with the processExecutionId, and
-	// modify the wait_until/execute status from running to aborted
-	err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
-	if err != nil {
-		p.logger.Error(err.Error())
-		return nil, err
-	}
-
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
 	if err != nil {
 		p.logger.Error(err.Error())
 		return nil, err
+	}
+
+	if len(pendingExecutionMap) > 0 {
+		// handle xdb_sys_async_state_executions
+		// find all related rows with the processExecutionId, and
+		// modify the wait_until/execute status from running to aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
 	}
 
 	return &persistence.StopProcessResponse{
@@ -626,7 +624,7 @@ func (p sqlProcessStoreImpl) CompleteWaitUntilExecution(
 		return nil, fmt.Errorf("not supported command type %v", request.CommandRequest.GetWaitingType())
 	}
 
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +684,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	ctx context.Context, request persistence.CompleteExecuteExecutionRequest,
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -923,7 +921,7 @@ func (p sqlProcessStoreImpl) GetTimerTasksUpToTimestamp(
 }
 
 func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request persistence.BackoffWorkerTaskRequest) error {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
 	}
@@ -947,7 +945,7 @@ func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request pers
 func (p sqlProcessStoreImpl) ConvertTimerTaskToWorkerTask(
 	ctx context.Context, request persistence.ConvertTimerTaskToWorkerTaskRequest,
 ) error {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
 	}

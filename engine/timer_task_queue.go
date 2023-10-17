@@ -198,6 +198,9 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 
 			minTask := w.remainingToFireTimersHeap[0]
 			w.nextFiringTimer.Update(time.Unix(minTask.FireTimestampSeconds, 0))
+		} else {
+			w.currMaxLoadedTaskTimestamp = maxWindowTime.Unix()
+			w.currMaxLoadedTaskSequence = 0
 		}
 	}
 	w.logger.Debug("load and dispatch timer tasks succeeded", tag.Value(len(resp.Tasks)))
@@ -223,12 +226,13 @@ func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerT
 		}
 	}
 
+	minTime := time.Unix(minTimestamp, 0)
 	if minTimestamp != math.MaxInt64 {
-		minTime := time.Unix(minTimestamp, 0)
 		if w.triggerPollTimer.InactiveOrFireAfter(minTime) {
 			w.triggerPollTimer.Update(minTime)
 		}
 	}
+	w.logger.Debug("notify is received and drained, current min:", tag.Value(minTime), tag.Value(minTimestamp))
 }
 
 func (w *timerTaskQueueImpl) shouldLoadNextBatch() bool {

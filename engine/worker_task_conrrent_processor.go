@@ -367,7 +367,7 @@ func (w *workerTaskConcurrentProcessor) retryTask(
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 		FireTimestamps:     []int64{fireTimeUnixSeconds},
 	})
-	w.logger.Debug("retry is scheduled", tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
+	w.logger.Debug("retry is scheduled", tag.Value(nextIntervalSecs), tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
 	return nil
 }
 
