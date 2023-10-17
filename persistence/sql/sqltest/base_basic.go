@@ -24,6 +24,11 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
+func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
+	err := store.CleanUpTasksForTest(context.Background(), persistence.DefaultShardId)
+	ass.Nil(err)
+}
+
 func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"

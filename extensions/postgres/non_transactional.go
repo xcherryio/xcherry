@@ -101,3 +101,12 @@ func (d dbSession) SelectTimerTasksForTimestamps(ctx context.Context, filter ext
 	err = d.db.SelectContext(ctx, &rows, query, args...)
 	return rows, err
 }
+
+func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM xdb_sys_worker_tasks WHERE shard_id = $1`, shardId)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.ExecContext(ctx, `DELETE FROM xdb_sys_timer_tasks WHERE shard_id = $1`, shardId)
+	return err
+}

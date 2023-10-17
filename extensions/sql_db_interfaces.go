@@ -79,6 +79,8 @@ type nonTransactionalCRUD interface {
 
 	BatchSelectTimerTasks(ctx context.Context, filter TimerTaskRangeSelectFilter) ([]TimerTaskRow, error)
 	SelectTimerTasksForTimestamps(ctx context.Context, filter TimerTaskSelectByTimestampsFilter) ([]TimerTaskRow, error)
+
+	CleanUpTasksForTest(ctx context.Context, shardId int32) error
 }
 
 type ErrorChecker interface {

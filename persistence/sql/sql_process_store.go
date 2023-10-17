@@ -45,6 +45,10 @@ func (p sqlProcessStoreImpl) Close() error {
 	return p.session.Close()
 }
 
+func (p sqlProcessStoreImpl) CleanUpTasksForTest(ctx context.Context, shardId int32) error {
+	return p.session.CleanUpTasksForTest(ctx, shardId)
+}
+
 func (p sqlProcessStoreImpl) StartProcess(
 	ctx context.Context, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
@@ -511,8 +515,6 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	row, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
-			p.logger.Error(err.Error())
-
 			return &persistence.DescribeLatestProcessResponse{
 				NotExists: true,
 			}, nil

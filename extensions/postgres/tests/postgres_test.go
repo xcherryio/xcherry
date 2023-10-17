@@ -23,10 +23,6 @@ func TestBasic(t *testing.T) {
 	sqltest.SQLBasicTest(assert.New(t), store)
 }
 
-func TestBackoffTimer(t *testing.T) {
-	sqltest.SQLBackoffTest(assert.New(t), store)
-}
-
 func TestGracefulComplete(t *testing.T) {
 	sqltest.SQLGracefulCompleteTest(assert.New(t), store)
 }
@@ -53,4 +49,9 @@ func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
 
 func TestProcessIdReusePolicyDefault(t *testing.T) {
 	sqltest.SQLProcessIdReusePolicyDefault(assert.New(t), store)
+}
+
+func TestBackoffTimer(t *testing.T) {
+	sqltest.CleanupEnv(assert.New(t), store)
+	sqltest.SQLBackoffTest(assert.New(t), store)
 }
