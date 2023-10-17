@@ -34,9 +34,13 @@ type (
 		FireChan() <-chan struct{}
 		// FireAfter checks whether the current timer will fire after the provided time
 		FireAfter(checkTime time.Time) bool
+		// InactiveOrFireAfter checks whether the current timer is inactive, or will fire after the provided time
+		InactiveOrFireAfter(checkTime time.Time) bool
 		// Update updates the TimerGate, return true if update is successful
 		// success means TimerGate is idle, or TimerGate is set with a sooner time to fire the timer
 		Update(nextTime time.Time) bool
+		// Stop stops the timer if it's active
+		Stop()
 		// IsActive returns whether the timer is active(not fired yet)
 		IsActive() bool
 		// Close shutdown the TimerGate
@@ -106,8 +110,17 @@ func NewLocalTimerGate(logger log.Logger) TimerGate {
 	return timer
 }
 
+func (tg *LocalTimerGateImpl) Stop() {
+	tg.isActive = false
+	tg.timer.Stop()
+}
+
 func (tg *LocalTimerGateImpl) IsActive() bool {
 	return tg.isActive
+}
+
+func (tg *LocalTimerGateImpl) InactiveOrFireAfter(checkTime time.Time) bool {
+	return !tg.isActive || tg.FireAfter(checkTime)
 }
 
 func (tg *LocalTimerGateImpl) FireChan() <-chan struct{} {

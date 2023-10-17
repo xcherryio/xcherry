@@ -17,6 +17,7 @@ import (
 	"container/heap"
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"math"
 	"math/rand"
 	"time"
 
@@ -39,6 +40,8 @@ type timerTaskQueueImpl struct {
 	nextPreloadTimer TimerGate
 	// the timer for next firing of the loaded timers
 	nextFiringTimer TimerGate
+	// the timer to trigger a polling for newly created timers
+	triggerPollTimer TimerGate
 
 	// tracks the max task sequence that has been loaded
 	// so that the triggered polling can start from the next sequence
@@ -69,6 +72,9 @@ type timerTaskQueueImpl struct {
 	// The queue will check if the new timers are within the currentMaxLoadedTaskTimestamp, and if so,
 	// it will load the new timers and add to the remainingToFireTimersHeap
 	triggeredPollingChan chan xdbapi.NotifyTimerTasksRequest
+
+	// the current pending requests to poll
+	currentNotifyRequests []xdbapi.NotifyTimerTasksRequest
 }
 
 func NewTimerTaskQueueImpl(
@@ -88,6 +94,7 @@ func NewTimerTaskQueueImpl(
 
 		nextPreloadTimer: NewLocalTimerGate(logger),
 		nextFiringTimer:  NewLocalTimerGate(logger),
+		triggerPollTimer: NewLocalTimerGate(logger),
 
 		currMaxLoadedTaskSequence:  0,
 		currMaxLoadedTaskTimestamp: 0,
@@ -96,6 +103,7 @@ func NewTimerTaskQueueImpl(
 		firedToCompleteTimerSequenceMap: make(map[int64]struct{}),
 		tasksCompletionChan:             make(chan persistence.TimerTask, qCfg.ProcessorBufferSize),
 		triggeredPollingChan:            make(chan xdbapi.NotifyTimerTasksRequest, qCfg.TriggerNotificationBufferSize),
+		currentNotifyRequests:           nil,
 	}
 }
 
@@ -103,6 +111,7 @@ func (w *timerTaskQueueImpl) Stop(ctx context.Context) error {
 	// close timer to prevent goroutine leakage
 	w.nextPreloadTimer.Close()
 	w.nextFiringTimer.Close()
+	w.triggerPollTimer.Close()
 
 	return nil
 }
@@ -138,9 +147,10 @@ func (w *timerTaskQueueImpl) Start() error {
 			case req, ok := <-w.triggeredPollingChan:
 				if ok {
 					// drain all the requests to poll in batch
-					reqs := w.drainAllNotifyRequests(&req)
-					w.triggeredPolling(reqs)
+					w.drainAllNotifyRequests(&req)
 				}
+			case <-w.triggerPollTimer.FireChan():
+				w.triggeredPolling()
 			case <-w.rootCtx.Done():
 				w.logger.Info("processor is being closed")
 				return
@@ -159,9 +169,10 @@ func (w *timerTaskQueueImpl) getNextPollTime(interval, jitter time.Duration) tim
 // and prepare the next preload(update the preloadTimer and reset the flag)
 func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 
-	// as we are loading next page, we can drain all the pending requests
+	// as we are loading next page, we can drain all the pending requests and stop triggerPolling
 	// because the new timers will be loaded anyway
 	w.drainAllNotifyRequests(nil)
+	w.triggerPollTimer.Stop()
 
 	qCfg := w.cfg.AsyncService.TimerTaskQueue
 	maxWindowTime := w.getNextPollTime(qCfg.MaxTimerPreloadLookAhead, qCfg.IntervalJitter)
@@ -191,28 +202,32 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 	}
 }
 
-func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) []xdbapi.NotifyTimerTasksRequest {
-	var reqs []xdbapi.NotifyTimerTasksRequest
-	if initReq == nil {
-		reqs = make([]xdbapi.NotifyTimerTasksRequest, 0, len(w.triggeredPollingChan))
-	} else {
-		reqs = make([]xdbapi.NotifyTimerTasksRequest, 0, len(w.triggeredPollingChan)+1)
-		filteredReq := w.filterNotifyRequest(*initReq)
+func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
+	minTimestamp := int64(math.MaxInt64)
+
+	if initReq != nil {
+		filteredReq := w.filterNotifyRequest(*initReq, &minTimestamp)
 		if filteredReq != nil {
-			reqs = append(reqs, *filteredReq)
+			w.currentNotifyRequests = append(w.currentNotifyRequests, *filteredReq)
 		}
 	}
 
 	for len(w.triggeredPollingChan) > 0 {
 		req, ok := <-w.triggeredPollingChan
 		if ok {
-			filteredReq := w.filterNotifyRequest(req)
+			filteredReq := w.filterNotifyRequest(req, &minTimestamp)
 			if filteredReq != nil {
-				reqs = append(reqs, *filteredReq)
+				w.currentNotifyRequests = append(w.currentNotifyRequests, *filteredReq)
 			}
 		}
 	}
-	return reqs
+
+	if minTimestamp != math.MaxInt64 {
+		minTime := time.Unix(minTimestamp, 0)
+		if w.triggerPollTimer.InactiveOrFireAfter(minTime) {
+			w.triggerPollTimer.Update(minTime)
+		}
+	}
 }
 
 func (w *timerTaskQueueImpl) shouldLoadNextBatch() bool {
@@ -240,8 +255,9 @@ func (w *timerTaskQueueImpl) sendFiredTimerToProcessor() {
 	}
 }
 
-func (w *timerTaskQueueImpl) triggeredPolling(reqs []xdbapi.NotifyTimerTasksRequest) {
-	if len(reqs) == 0 {
+func (w *timerTaskQueueImpl) triggeredPolling() {
+	if len(w.currentNotifyRequests) == 0 {
+		w.logger.Error("triggered polling but no pending requests, something wrong in the logic")
 		return // nothing to poll
 	}
 
@@ -249,7 +265,7 @@ func (w *timerTaskQueueImpl) triggeredPolling(reqs []xdbapi.NotifyTimerTasksRequ
 		w.rootCtx, persistence.GetTimerTasksForTimestampsRequest{
 			ShardId:              w.shardId,
 			MinSequenceInclusive: w.currMaxLoadedTaskSequence + 1,
-			DetailedRequests:     reqs,
+			DetailedRequests:     w.currentNotifyRequests,
 		})
 
 	if err != nil {
@@ -269,7 +285,7 @@ func (w *timerTaskQueueImpl) triggeredPolling(reqs []xdbapi.NotifyTimerTasksRequ
 			}
 
 			minTimestamp := time.Unix(resp.MinFireTimestampSecondsInclusive, 0)
-			if !w.nextFiringTimer.IsActive() || w.nextFiringTimer.FireAfter(minTimestamp) {
+			if w.nextFiringTimer.InactiveOrFireAfter(minTimestamp) {
 				// update the next firing timer if
 				// 1. the nextFireTimer is not active(meaning there wasn't any more tasks to fire)
 				// 2. any of the new tasks are earlier than the current min
@@ -280,11 +296,14 @@ func (w *timerTaskQueueImpl) triggeredPolling(reqs []xdbapi.NotifyTimerTasksRequ
 }
 
 // filterNotifyRequest filters out the fire timestamps that are outside current preload time window
-func (w *timerTaskQueueImpl) filterNotifyRequest(req xdbapi.NotifyTimerTasksRequest) *xdbapi.NotifyTimerTasksRequest {
+func (w *timerTaskQueueImpl) filterNotifyRequest(req xdbapi.NotifyTimerTasksRequest, minTimestampToUpdate *int64) *xdbapi.NotifyTimerTasksRequest {
 	var filteredFireTimestamps []int64
 	for _, ts := range req.FireTimestamps {
 		if ts <= w.currMaxLoadedTaskTimestamp {
 			filteredFireTimestamps = append(filteredFireTimestamps, ts)
+			if ts < *minTimestampToUpdate {
+				*minTimestampToUpdate = ts
+			}
 		}
 	}
 	if len(filteredFireTimestamps) == 0 {
