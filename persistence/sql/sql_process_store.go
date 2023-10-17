@@ -917,7 +917,7 @@ func (p sqlProcessStoreImpl) GetTimerTasksUpToTimestamp(
 	if err != nil {
 		return nil, err
 	}
-	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks)
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, &request.PageSize)
 }
 
 func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request persistence.BackoffWorkerTaskRequest) error {
@@ -1067,5 +1067,5 @@ func (p sqlProcessStoreImpl) GetTimerTasksForTimestamps(
 	if err != nil {
 		return nil, err
 	}
-	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks)
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, nil)
 }

@@ -176,7 +176,6 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 
 	qCfg := w.cfg.AsyncService.TimerTaskQueue
 	maxWindowTime := w.getNextPollTime(qCfg.MaxTimerPreloadLookAhead, qCfg.IntervalJitter)
-	w.nextPreloadTimer.Update(maxWindowTime)
 
 	resp, err := w.store.GetTimerTasksUpToTimestamp(
 		w.rootCtx, persistence.GetTimerTasksRequest{
@@ -191,19 +190,22 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 		w.nextPreloadTimer.Update(w.getNextPollTime(0, qCfg.IntervalJitter))
 	} else {
 		if len(resp.Tasks) > 0 {
-			w.currMaxLoadedTaskTimestamp = resp.MaxFireTimestampSecondsInclusive
-			w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
+			if *resp.FullPage {
+				// there are a full page of timers, the server is busy,
+				//truncate the window so that we can load next page earlier
+				maxWindowTime = time.Unix(resp.MaxFireTimestampSecondsInclusive, 0)
+			}
 
 			w.remainingToFireTimersHeap = NewTimerTaskPriorityQueue(resp.Tasks)
-
 			minTask := w.remainingToFireTimersHeap[0]
 			w.nextFiringTimer.Update(time.Unix(minTask.FireTimestampSeconds, 0))
-		} else {
-			w.currMaxLoadedTaskTimestamp = maxWindowTime.Unix()
-			w.currMaxLoadedTaskSequence = 0
 		}
+
+		w.nextPreloadTimer.Update(maxWindowTime)
+		w.currMaxLoadedTaskTimestamp = maxWindowTime.Unix()
+		w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
 	}
-	w.logger.Debug("load and dispatch timer tasks succeeded", tag.Value(len(resp.Tasks)))
+	w.logger.Debug("load and dispatch timer tasks succeeded with new currMaxLoadedTaskTimestamp", tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp))
 }
 
 func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
@@ -316,6 +318,8 @@ func (w *timerTaskQueueImpl) filterNotifyRequest(req xdbapi.NotifyTimerTasksRequ
 			if ts < *minTimestampToUpdate {
 				*minTimestampToUpdate = ts
 			}
+		} else {
+			w.logger.Debug("task fire timestamp is not within the current preload time window, skip", tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp), tag.UnixTimestamp(ts))
 		}
 	}
 	if len(filteredFireTimestamps) == 0 {

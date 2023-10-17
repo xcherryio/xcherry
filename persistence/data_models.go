@@ -115,6 +115,9 @@ type (
 		MaxFireTimestampSecondsInclusive int64
 		// MinSequenceInclusive is the sequence of last task in the order
 		MaxSequenceInclusive int64
+		// indicates if the response is full page or not
+		// only applicable for request with pageSize
+		FullPage *bool
 	}
 
 	GetTimerTasksForTimestampsRequest struct {

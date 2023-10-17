@@ -21,7 +21,7 @@ import (
 )
 
 func createGetTimerTaskResponse(
-	shardId int32, dbTimerTasks []extensions.TimerTaskRow,
+	shardId int32, dbTimerTasks []extensions.TimerTaskRow, reqPageSize *int32,
 ) (*persistence.GetTimerTasksResponse, error) {
 	var tasks []persistence.TimerTask
 	for _, t := range dbTimerTasks {
@@ -61,6 +61,13 @@ func createGetTimerTaskResponse(
 			if t.TaskSequence > resp.MaxSequenceInclusive {
 				resp.MaxSequenceInclusive = t.TaskSequence
 			}
+		}
+	}
+	if reqPageSize != nil {
+		if len(dbTimerTasks) == int(*reqPageSize) {
+			resp.FullPage = ptr.Any(true)
+		} else {
+			resp.FullPage = ptr.Any(false)
 		}
 	}
 	return resp, nil
