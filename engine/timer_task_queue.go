@@ -136,7 +136,7 @@ func (w *timerTaskQueueImpl) Start() error {
 					w.loadAndDispatchAndPrepareNext()
 				}
 			case <-w.nextFiringTimer.FireChan():
-				w.sendFiredTimerToProcessor()
+				w.sendAllFiredTimerTasksToProcessor()
 			case task, ok := <-w.tasksCompletionChan:
 				if ok {
 					delete(w.firedToCompleteTimerSequenceMap, *task.TaskSequence)
@@ -239,9 +239,10 @@ func (w *timerTaskQueueImpl) shouldLoadNextBatch() bool {
 	return false
 }
 
-func (w *timerTaskQueueImpl) sendFiredTimerToProcessor() {
+func (w *timerTaskQueueImpl) sendAllFiredTimerTasksToProcessor() {
 	for {
 		if len(w.remainingToFireTimersHeap) == 0 {
+			w.logger.Error("remainingToFireTimersHeap is empty, something wrong in the logic")
 			break
 		}
 		minTask := w.remainingToFireTimersHeap[0]
