@@ -43,7 +43,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -60,7 +60,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -91,9 +91,9 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -209,7 +209,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -226,7 +226,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -257,9 +257,9 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -306,7 +306,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task := workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -323,7 +323,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -354,9 +354,9 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -412,7 +412,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -442,9 +442,9 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -497,7 +497,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
@@ -527,9 +527,9 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
 	task = workerTasks[0]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
 	task = workerTasks[1]
-	verifyWorkerTask(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)

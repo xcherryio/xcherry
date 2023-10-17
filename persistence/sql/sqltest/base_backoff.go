@@ -75,7 +75,7 @@ func startProcessAndBackoffWorkerTask(
 	// Check initial worker tasks.
 	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
 	workerTask := workerTasks[0]
-	verifyWorkerTask(ass, workerTask, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{})
+	verifyWorkerTaskNoInfo(ass, workerTask, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify worker tasks are deleted.
 	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)

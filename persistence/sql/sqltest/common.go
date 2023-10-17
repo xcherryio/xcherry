@@ -37,8 +37,8 @@ func createTestInput() xdbapi.EncodedObject {
 
 func createEmptyEncodedObject() xdbapi.EncodedObject {
 	return xdbapi.EncodedObject{
-		Encoding: nil,
-		Data:     nil,
+		Encoding: "",
+		Data:     "",
 	}
 }
 
@@ -59,8 +59,10 @@ func startProcess(
 	return startResp.ProcessExecutionId
 }
 
-func terminateProcess(ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string) {
+func terminateProcess(
+	ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string,
+) {
 	resp, err := store.StopProcess(ctx, persistence.StopProcessRequest{
 		Namespace:       namespace,
 		ProcessId:       processId,
@@ -71,7 +73,8 @@ func terminateProcess(ctx context.Context, ass *assert.Assertions,
 	ass.False(resp.NotExists)
 }
 
-func startProcessWithAllowIfPreviousExitAbnormally(ctx context.Context, ass *assert.Assertions,
+func startProcessWithAllowIfPreviousExitAbnormally(
+	ctx context.Context, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
@@ -87,7 +90,8 @@ func startProcessWithAllowIfPreviousExitAbnormally(ctx context.Context, ass *ass
 	return startResp.ProcessExecutionId
 }
 
-func startProcessWithTerminateIfRunningPolicy(ctx context.Context, ass *assert.Assertions,
+func startProcessWithTerminateIfRunningPolicy(
+	ctx context.Context, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
@@ -233,8 +237,10 @@ func retryStartProcessForFailure(
 	ass.False(startResp2.HasNewWorkerTask)
 }
 
-func describeProcess(ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore,
-	namespace, processId string, processStatus xdbapi.ProcessStatus) {
+func describeProcess(
+	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore,
+	namespace, processId string, processStatus xdbapi.ProcessStatus,
+) {
 	// Incorrect process id description
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,
@@ -298,6 +304,13 @@ func getAndCheckTimerTasksUpForTimestamps(
 	ass.Nil(err)
 	ass.Equal(expectedLength, len(getTasksResp.Tasks))
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
+}
+
+func verifyWorkerTaskNoInfo(
+	ass *assert.Assertions, task persistence.WorkerTask,
+	taskType persistence.WorkerTaskType, stateExeId string,
+) {
+	verifyWorkerTask(ass, task, taskType, stateExeId, persistence.WorkerTaskInfoJson{})
 }
 
 func verifyWorkerTask(
