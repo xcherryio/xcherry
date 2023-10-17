@@ -119,7 +119,7 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	ctx context.Context, task persistence.WorkerTask,
 ) error {
 
-	w.logger.Info("execute worker task", tag.ID(task.GetTaskId()))
+	w.logger.Info("start executing worker task", tag.ID(task.GetTaskId()))
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -182,7 +182,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 	if httpResp != nil {
 		defer httpResp.Body.Close()
 	}
-	if checkHttpError(err, httpResp) {
+	if w.checkResponseAndError(err, httpResp) {
 		status, details, err := w.composeHttpError(err, httpResp)
 		w.logger.Debug("state waitUntil API return error", tag.Error(err))
 		// TODO add a new field in async_state_execution to record the current failure info for debugging
@@ -264,7 +264,10 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 	if httpResp != nil {
 		defer httpResp.Body.Close()
 	}
-	if checkHttpError(err, httpResp) {
+	if err == nil {
+		err = checkDecision(resp.StateDecision)
+	}
+	if w.checkResponseAndError(err, httpResp) {
 		status, details, err := w.composeHttpError(err, httpResp)
 		w.logger.Debug("state execute API return error", tag.Error(err))
 		// TODO add a new field in async_state_execution to record the current failure info for debugging
@@ -275,10 +278,6 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 		}
 		// TODO otherwise we should fail the state and process execution if the backoff is exhausted(unless using a state recovery policy)
 		// Also need to abort all other state executions
-		return err
-	}
-	err = checkDecision(resp.StateDecision)
-	if err != nil {
 		return err
 	}
 
@@ -368,6 +367,7 @@ func (w *workerTaskConcurrentProcessor) retryTask(
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 		FireTimestamps:     []int64{fireTimeUnixSeconds},
 	})
+	w.logger.Info("retry is scheduled", tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
 	return nil
 }
 
@@ -378,7 +378,13 @@ func checkDecision(decision xdbapi.StateDecision) error {
 	return nil
 }
 
-func checkHttpError(err error, httpResp *http.Response) bool {
+func (w *workerTaskConcurrentProcessor) checkResponseAndError(err error, httpResp *http.Response) bool {
+	status := 0
+	if httpResp != nil {
+		status = httpResp.StatusCode
+	}
+	w.logger.Info("worker task executed", tag.Error(err), tag.StatusCode(status))
+
 	if err != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
 		return true
 	}

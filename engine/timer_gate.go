@@ -97,7 +97,6 @@ func NewLocalTimerGate(logger log.Logger) TimerGate {
 				case timer.fireChan <- struct{}{}:
 				default:
 					// ignore if caller is not able to consume the previous signal
-					logger.Warn("timer.fireChan is full when sending signal")
 				}
 
 			case <-timer.closeChan:

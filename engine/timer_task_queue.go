@@ -240,9 +240,13 @@ func (w *timerTaskQueueImpl) shouldLoadNextBatch() bool {
 }
 
 func (w *timerTaskQueueImpl) sendAllFiredTimerTasksToProcessor() {
+	if len(w.remainingToFireTimersHeap) == 0 {
+		w.logger.Error("remainingToFireTimersHeap is empty, something wrong in the logic")
+		return
+	}
+
 	for {
 		if len(w.remainingToFireTimersHeap) == 0 {
-			w.logger.Error("remainingToFireTimersHeap is empty, something wrong in the logic")
 			break
 		}
 		minTask := w.remainingToFireTimersHeap[0]

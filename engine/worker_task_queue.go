@@ -95,7 +95,10 @@ func (w *workerTaskQueueImpl) Start() error {
 
 	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan)
 
-	w.pollTimer.Update(time.Now()) // fire immediately to make the first poll for the first page
+	// fire immediately to make the first poll for the first page
+	w.pollTimer.Update(time.Now())
+	// schedule the first commit timer firing
+	w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 
 	go func() {
 		for {
@@ -160,11 +163,14 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
 		// TODO optimize by combining all pages into single query (as long as it won't exceed certain limit)
 		for idx, page := range w.completedPages {
-			err := w.store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
+			req := persistence.DeleteWorkerTasksRequest{
 				ShardId:                  w.shardId,
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
-			})
+			}
+			w.logger.Info("completing worker task page", tag.Value(req))
+
+			err := w.store.DeleteWorkerTasks(ctx, req)
 			if err != nil {
 				w.logger.Error("failed at deleting completed worker tasks", tag.Error(err))
 				// fix the completed pages -- current page to the end
@@ -175,6 +181,8 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 		}
 		// reset to empty
 		w.completedPages = nil
+	} else {
+		w.logger.Info("no worker tasks to commit/delete")
 	}
 	return nil
 }
