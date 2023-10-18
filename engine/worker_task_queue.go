@@ -15,6 +15,7 @@ package engine
 
 import (
 	"context"
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"math/rand"
 	"time"
 
@@ -31,14 +32,21 @@ type workerTaskQueueImpl struct {
 	rootCtx context.Context
 	cfg     config.Config
 
-	pollTimer         TimerGate
-	commitTimer       TimerGate
-	processor         WorkerTaskProcessor
+	processor WorkerTaskProcessor
+
+	// timers for polling worker tasks and dispatch to processor
+	pollTimer TimerGate
+	// timers for committing(deleting) completed worker tasks
+	commitTimer TimerGate
+
+	// tasksToCommitChan is the channel to receive completed tasks from processor
 	tasksToCommitChan chan persistence.WorkerTask
-	// the starting sequenceId(inclusive) to read worker tasks
-	currentReadCursor         int64
+	// currentReadCursor is the starting sequenceId(inclusive) to read next worker tasks
+	currentReadCursor int64
+	// pendingTaskSequenceToPage is the mapping from task sequence to page
 	pendingTaskSequenceToPage map[int64]*workerTaskPage
-	completedPages            []*workerTaskPage
+	// completedPages is the pages that are ready to be committed
+	completedPages []*workerTaskPage
 }
 
 type workerTaskPage struct {
@@ -50,7 +58,7 @@ type workerTaskPage struct {
 func NewWorkerTaskQueueImpl(
 	rootCtx context.Context, shardId int32, cfg config.Config, store persistence.ProcessStore,
 	processor WorkerTaskProcessor, logger log.Logger,
-) TaskQueue {
+) WorkerTaskQueue {
 	qCfg := cfg.AsyncService.WorkerTaskQueue
 
 	return &workerTaskQueueImpl{
@@ -70,29 +78,33 @@ func NewWorkerTaskQueueImpl(
 }
 
 func (w *workerTaskQueueImpl) Stop(ctx context.Context) error {
+	// close timer to prevent goroutine leakage
+	w.pollTimer.Close()
+	w.commitTimer.Close()
+
 	// a final attempt to commit the completed page
 	return w.commitCompletedPages(ctx)
 }
 
-func (w *workerTaskQueueImpl) TriggerPolling(pollTime time.Time) {
-	w.pollTimer.Update(pollTime)
+func (w *workerTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyWorkerTasksRequest) {
+	w.pollTimer.Update(time.Now())
 }
-
-type LocalNotifyNewWorkerTask func(pollTime time.Time)
 
 func (w *workerTaskQueueImpl) Start() error {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
-	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan, w.TriggerPolling)
+	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan)
 
-	w.pollTimer.Update(time.Now()) // fire immediately to make the first poll for the first page
+	// fire immediately to make the first poll for the first page
+	w.pollTimer.Update(time.Now())
+	// schedule the first commit timer firing
+	w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 
 	go func() {
 		for {
 			select {
 			case <-w.pollTimer.FireChan():
-				w.pollAndDispatch()
-				w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
+				w.pollAndDispatchAndPrepareNext()
 			case <-w.commitTimer.FireChan():
 				_ = w.commitCompletedPages(w.rootCtx)
 				w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
@@ -114,7 +126,7 @@ func (w *workerTaskQueueImpl) getNextPollTime(interval, jitter time.Duration) ti
 	return time.Now().Add(interval).Add(jitterD)
 }
 
-func (w *workerTaskQueueImpl) pollAndDispatch() {
+func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 	qCfg := w.cfg.AsyncService.WorkerTaskQueue
 
 	resp, err := w.store.GetWorkerTasks(
@@ -126,7 +138,8 @@ func (w *workerTaskQueueImpl) pollAndDispatch() {
 
 	if err != nil {
 		w.logger.Error("failed at polling worker task", tag.Error(err))
-		// TODO maybe schedule an earlier next time?
+		// schedule an earlier next poll
+		w.pollTimer.Update(w.getNextPollTime(0, qCfg.IntervalJitter))
 	} else {
 		if len(resp.Tasks) > 0 {
 			w.currentReadCursor = resp.MaxSequenceInclusive + 1
@@ -142,18 +155,25 @@ func (w *workerTaskQueueImpl) pollAndDispatch() {
 				w.pendingTaskSequenceToPage[*task.TaskSequence] = page
 			}
 		}
+		w.logger.Debug("poll time succeeded", tag.Value(len(resp.Tasks)))
+
+		w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
+
 	}
 }
 
 func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
-		// TODO optimize by combining into single query (as long as it won't exceed certain limit)
+		// TODO optimize by combining all pages into single query (as long as it won't exceed certain limit)
 		for idx, page := range w.completedPages {
-			err := w.store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
+			req := persistence.DeleteWorkerTasksRequest{
 				ShardId:                  w.shardId,
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
-			})
+			}
+			w.logger.Debug("completing worker task page", tag.Value(req))
+
+			err := w.store.DeleteWorkerTasks(ctx, req)
 			if err != nil {
 				w.logger.Error("failed at deleting completed worker tasks", tag.Error(err))
 				// fix the completed pages -- current page to the end
@@ -164,6 +184,8 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 		}
 		// reset to empty
 		w.completedPages = nil
+	} else {
+		w.logger.Debug("no worker tasks to commit/delete")
 	}
 	return nil
 }

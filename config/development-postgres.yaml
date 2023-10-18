@@ -1,6 +1,6 @@
 log:
   stdout: true
-  level: info
+  level: debug
   levelKey: "level"
 apiService:
   httpServer: # see more config fields in config.go

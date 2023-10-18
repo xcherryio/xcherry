@@ -15,6 +15,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -33,6 +34,10 @@ type sqlProcessStoreImpl struct {
 	logger  log.Logger
 }
 
+var defaultTxOpts *sql.TxOptions = &sql.TxOptions{
+	Isolation: sql.LevelReadCommitted,
+}
+
 func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
 	session, err := extensions.NewSQLSession(&sqlConfig)
 	return &sqlProcessStoreImpl{
@@ -45,10 +50,14 @@ func (p sqlProcessStoreImpl) Close() error {
 	return p.session.Close()
 }
 
+func (p sqlProcessStoreImpl) CleanUpTasksForTest(ctx context.Context, shardId int32) error {
+	return p.session.CleanUpTasksForTest(ctx, shardId)
+}
+
 func (p sqlProcessStoreImpl) StartProcess(
 	ctx context.Context, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +79,7 @@ func (p sqlProcessStoreImpl) StartProcess(
 }
 
 func (p sqlProcessStoreImpl) StopProcess(ctx context.Context, request persistence.StopProcessRequest) (*persistence.StopProcessResponse, error) {
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +130,8 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	_, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -147,7 +157,8 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -195,7 +206,8 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -204,7 +216,6 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	if found {
 		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 
@@ -218,12 +229,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		// if it is not running, but completed normally, return error
 		// otherwise, start a new process
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusCompleted {
-			return nil, fmt.Errorf("process %v has completed normally", request.Request.ProcessId)
+			return &persistence.StartProcessResponse{
+				AlreadyStarted: true,
+			}, nil
 		}
 
 		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 
@@ -250,10 +262,10 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (*persistence.StartProcessResponse, error) {
+	request persistence.StartProcessRequest,
+) (*persistence.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -262,7 +274,6 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 	if found {
 		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 		// mark the process as terminated
@@ -275,18 +286,18 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
 			})
 			if err != nil {
-				p.logger.Error(err.Error())
 				return nil, err
 			}
 		}
-		// mark the pending states as aborted
-		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, processExecutionRowForUpdate.ProcessExecutionId)
-		if err != nil {
-			p.logger.Error(err.Error())
-			return nil, err
-		}
+
 		// update the latest process execution and start a new process
 		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		if err != nil {
+			return nil, err
+		}
+
+		// mark the pending states as aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, processExecutionRowForUpdate.ProcessExecutionId)
 		if err != nil {
 			return nil, err
 		}
@@ -314,7 +325,8 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (bool, uuid.UUID, error) {
+	request persistence.StartProcessRequest,
+) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
 	hasNewWorkerTask := false
 	err := tx.InsertLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
@@ -336,7 +348,8 @@ func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest) (bool, uuid.UUID, error) {
+	request persistence.StartProcessRequest,
+) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
 	hasNewWorkerTask := false
 	err := tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
@@ -360,7 +373,8 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	request persistence.StartProcessRequest,
-	processExecutionId uuid.UUID) (bool, error) {
+	processExecutionId uuid.UUID,
+) (bool, error) {
 	req := request.Request
 	hasNewWorkerTask := false
 
@@ -471,26 +485,21 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		procExecRow.Status = persistence.ProcessExecutionStatusFailed
 	}
 
-	// early stop when there are no pending tasks
-	if len(pendingExecutionMap) == 0 {
-		return &persistence.StopProcessResponse{
-			NotExists: false,
-		}, nil
-	}
-
-	// handle xdb_sys_async_state_executions
-	// find all related rows with the processExecutionId, and
-	// modify the wait_until/execute status from running to aborted
-	err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
-	if err != nil {
-		p.logger.Error(err.Error())
-		return nil, err
-	}
-
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
 	if err != nil {
 		p.logger.Error(err.Error())
 		return nil, err
+	}
+
+	if len(pendingExecutionMap) > 0 {
+		// handle xdb_sys_async_state_executions
+		// find all related rows with the processExecutionId, and
+		// modify the wait_until/execute status from running to aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
 	}
 
 	return &persistence.StopProcessResponse{
@@ -504,8 +513,6 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	row, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
-			p.logger.Error(err.Error())
-
 			return &persistence.DescribeLatestProcessResponse{
 				NotExists: true,
 			}, nil
@@ -541,6 +548,10 @@ func (p sqlProcessStoreImpl) GetWorkerTasks(
 	}
 	var tasks []persistence.WorkerTask
 	for _, t := range workerTasks {
+		info, err := persistence.BytesToWorkerTaskInfo(t.Info)
+		if err != nil {
+			return nil, err
+		}
 		tasks = append(tasks, persistence.WorkerTask{
 			ShardId:            request.ShardId,
 			TaskSequence:       ptr.Any(t.TaskSequence),
@@ -550,6 +561,7 @@ func (p sqlProcessStoreImpl) GetWorkerTasks(
 				StateId:         t.StateId,
 				StateIdSequence: t.StateIdSequence,
 			},
+			WorkerTaskInfo: info,
 		})
 	}
 	resp := &persistence.GetWorkerTasksResponse{
@@ -612,7 +624,7 @@ func (p sqlProcessStoreImpl) CompleteWaitUntilExecution(
 		return nil, fmt.Errorf("not supported command type %v", request.CommandRequest.GetWaitingType())
 	}
 
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -643,6 +655,7 @@ func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
 		WaitUntilStatus:    persistence.StateExecutionStatusCompleted,
 		ExecuteStatus:      persistence.StateExecutionStatusRunning,
 		PreviousVersion:    request.Prepare.PreviousVersion,
+		LastFailure:        nil,
 	}
 
 	err := tx.UpdateAsyncStateExecution(ctx, stateRow)
@@ -671,7 +684,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	ctx context.Context, request persistence.CompleteExecuteExecutionRequest,
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 
-	tx, err := p.session.StartTransaction(ctx)
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -705,6 +718,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		WaitUntilStatus:    request.Prepare.WaitUntilStatus,
 		ExecuteStatus:      persistence.StateExecutionStatusCompleted,
 		PreviousVersion:    request.Prepare.PreviousVersion,
+		LastFailure:        nil,
 	}
 
 	err := tx.UpdateAsyncStateExecution(ctx, currStateRow)
@@ -842,13 +856,15 @@ func insertAsyncStateExecution(
 	stateIdSeq int,
 	stateConfig *xdbapi.AsyncStateConfig,
 	stateInput []byte,
-	stateInfo []byte) error {
+	stateInfo []byte,
+) error {
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
 
+		LastFailure:     nil,
 		PreviousVersion: 1,
 		Input:           stateInput,
 		Info:            stateInfo,
@@ -872,7 +888,8 @@ func insertWorkerTask(
 	stateId string,
 	stateIdSeq int,
 	stateConfig *xdbapi.AsyncStateConfig,
-	shardId int32) error {
+	shardId int32,
+) error {
 	workerTaskRow := extensions.WorkerTaskRowForInsert{
 		ShardId:            shardId,
 		ProcessExecutionId: processExecutionId,
@@ -886,4 +903,169 @@ func insertWorkerTask(
 	}
 
 	return tx.InsertWorkerTask(ctx, workerTaskRow)
+}
+
+func (p sqlProcessStoreImpl) GetTimerTasksUpToTimestamp(
+	ctx context.Context, request persistence.GetTimerTasksRequest,
+) (*persistence.GetTimerTasksResponse, error) {
+	dbTimerTasks, err := p.session.BatchSelectTimerTasks(
+		ctx, extensions.TimerTaskRangeSelectFilter{
+			ShardId:                         request.ShardId,
+			MaxFireTimeUnixSecondsInclusive: request.MaxFireTimestampSecondsInclusive,
+			PageSize:                        request.PageSize,
+		})
+	if err != nil {
+		return nil, err
+	}
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, &request.PageSize)
+}
+
+func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request persistence.BackoffWorkerTaskRequest) error {
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
+	if err != nil {
+		return err
+	}
+
+	err = p.doBackoffWorkerTaskTx(ctx, tx, request)
+	if err != nil {
+		err2 := tx.Rollback()
+		if err2 != nil {
+			p.logger.Error("error on rollback transaction", tag.Error(err2))
+		}
+	} else {
+		err = tx.Commit()
+		if err != nil {
+			p.logger.Error("error on committing transaction", tag.Error(err))
+			return err
+		}
+	}
+	return err
+}
+
+func (p sqlProcessStoreImpl) ConvertTimerTaskToWorkerTask(
+	ctx context.Context, request persistence.ConvertTimerTaskToWorkerTaskRequest,
+) error {
+	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
+	if err != nil {
+		return err
+	}
+
+	err = p.doConvertTimerTaskToWorkerTaskTx(ctx, tx, request)
+	if err != nil {
+		err2 := tx.Rollback()
+		if err2 != nil {
+			p.logger.Error("error on rollback transaction", tag.Error(err2))
+		}
+	} else {
+		err = tx.Commit()
+		if err != nil {
+			p.logger.Error("error on committing transaction", tag.Error(err))
+			return err
+		}
+	}
+	return err
+
+}
+
+func (p sqlProcessStoreImpl) doConvertTimerTaskToWorkerTaskTx(
+	ctx context.Context, tx extensions.SQLTransaction,
+	request persistence.ConvertTimerTaskToWorkerTaskRequest,
+) error {
+	currentTask := request.Task
+	timerInfo := currentTask.TimerTaskInfo
+	taskInfoBytes, err := persistence.FromWorkerTaskInfoIntoBytes(persistence.WorkerTaskInfoJson{
+		WorkerTaskBackoffInfo: timerInfo.WorkerTaskBackoffInfo,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = tx.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
+		ShardId:            currentTask.ShardId,
+		TaskType:           *timerInfo.WorkerTaskType,
+		ProcessExecutionId: currentTask.ProcessExecutionId,
+		StateId:            currentTask.StateId,
+		StateIdSequence:    currentTask.StateIdSequence,
+		Info:               taskInfoBytes,
+	})
+	if err != nil {
+		return err
+	}
+	return tx.DeleteTimerTask(ctx, extensions.TimerTaskRowDeleteFilter{
+		ShardId:              currentTask.ShardId,
+		FireTimeUnixSeconds:  currentTask.FireTimestampSeconds,
+		TaskSequence:         *currentTask.TaskSequence,
+		OptionalPartitionKey: currentTask.OptionalPartitionKey,
+	})
+}
+func (p sqlProcessStoreImpl) doBackoffWorkerTaskTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.BackoffWorkerTaskRequest,
+) error {
+	task := request.Task
+	prep := request.Prep
+
+	if task.WorkerTaskInfo.WorkerTaskBackoffInfo == nil {
+		return fmt.Errorf("WorkerTaskBackoffInfo cannot be nil")
+	}
+	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
+		request.LastFailureStatus, request.LastFailureDetails, task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts)
+
+	if err != nil {
+		return err
+	}
+	err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
+		ProcessExecutionId: task.ProcessExecutionId,
+		StateId:            task.StateId,
+		StateIdSequence:    task.StateIdSequence,
+		WaitUntilStatus:    prep.WaitUntilStatus,
+		ExecuteStatus:      prep.ExecuteStatus,
+		PreviousVersion:    prep.PreviousVersion,
+		LastFailure:        failureBytes,
+	})
+	if err != nil {
+		return err
+	}
+	timerInfoBytes, err := persistence.CreateTimerTaskInfoBytes(task.WorkerTaskInfo.WorkerTaskBackoffInfo, &task.TaskType)
+	if err != nil {
+		return err
+	}
+	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+		ShardId:             task.ShardId,
+		FireTimeUnixSeconds: request.FireTimestampSeconds,
+		TaskType:            persistence.TimerTaskTypeWorkerTaskBackoff,
+		ProcessExecutionId:  task.ProcessExecutionId,
+		StateId:             task.StateId,
+		StateIdSequence:     task.StateIdSequence,
+		Info:                timerInfoBytes,
+	})
+	if err != nil {
+		return err
+	}
+	return tx.DeleteWorkerTask(ctx, extensions.WorkerTaskRowDeleteFilter{
+		ShardId:      task.ShardId,
+		TaskSequence: task.GetTaskSequence(),
+		OptionalPartitionKey: &persistence.PartitionKey{
+			Namespace: prep.Info.Namespace,
+			ProcessId: prep.Info.ProcessId,
+		},
+	})
+}
+
+func (p sqlProcessStoreImpl) GetTimerTasksForTimestamps(
+	ctx context.Context, request persistence.GetTimerTasksForTimestampsRequest,
+) (*persistence.GetTimerTasksResponse, error) {
+	var ts []int64
+	for _, req := range request.DetailedRequests {
+		ts = append(ts, req.FireTimestamps...)
+	}
+	dbTimerTasks, err := p.session.SelectTimerTasksForTimestamps(
+		ctx, extensions.TimerTaskSelectByTimestampsFilter{
+			ShardId:                  request.ShardId,
+			FireTimeUnixSeconds:      ts,
+			MinTaskSequenceInclusive: request.MinSequenceInclusive,
+		})
+	if err != nil {
+		return nil, err
+	}
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, nil)
 }

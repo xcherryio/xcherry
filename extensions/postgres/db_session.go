@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
 )
@@ -36,8 +37,8 @@ func newDBSession(db *sqlx.DB) *dbSession {
 	}
 }
 
-func (d dbSession) StartTransaction(ctx context.Context) (extensions.SQLTransaction, error) {
-	tx, err := d.db.Beginx()
+func (d dbSession) StartTransaction(ctx context.Context, opts *sql.TxOptions) (extensions.SQLTransaction, error) {
+	tx, err := d.db.BeginTxx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

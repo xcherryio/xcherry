@@ -117,7 +117,8 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
 version = :previous_version +1,
 wait_until_status = :wait_until_status,
-execute_status = :execute_status
+execute_status = :execute_status,
+last_failure = :last_failure     
 WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
   AND state_id_sequence=:state_id_sequence AND version = :previous_version`
 
@@ -156,8 +157,8 @@ func (d dbTx) BatchUpdateAsyncStateExecutionsToAbortRunning(
 }
 
 const insertWorkerTaskQuery = `INSERT INTO xdb_sys_worker_tasks
-	(shard_id, process_execution_id, state_id, state_id_sequence, task_type) VALUES
-	(:shard_id, :process_execution_id_string, :state_id, :state_id_sequence, :task_type)`
+	(shard_id, process_execution_id, state_id, state_id_sequence, task_type, info) VALUES
+	(:shard_id, :process_execution_id_string, :state_id, :state_id_sequence, :task_type, :info)`
 
 func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRowForInsert) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
@@ -187,4 +188,30 @@ func (d dbTx) SelectProcessExecution(
 	var row extensions.ProcessExecutionRowForUpdate
 	err := d.tx.GetContext(ctx, &row, selectProcessExecutionQuery, processExecutionId.String())
 	return &row, err
+}
+
+const insertTimerTaskQuery = `INSERT INTO xdb_sys_timer_tasks
+	(shard_id, fire_time_unix_seconds, process_execution_id, state_id, state_id_sequence, task_type, info) VALUES
+	(:shard_id, :fire_time_unix_seconds, :process_execution_id_string, :state_id, :state_id_sequence, :task_type, :info)`
+
+func (d dbTx) InsertTimerTask(ctx context.Context, row extensions.TimerTaskRowForInsert) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	_, err := d.tx.NamedExecContext(ctx, insertTimerTaskQuery, row)
+	return err
+}
+
+const deleteSingleWorkerTaskQuery = `DELETE 
+	FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence= $2`
+
+func (d dbTx) DeleteWorkerTask(ctx context.Context, filter extensions.WorkerTaskRowDeleteFilter) error {
+	_, err := d.tx.ExecContext(ctx, deleteSingleWorkerTaskQuery, filter.ShardId, filter.TaskSequence)
+	return err
+}
+
+const deleteSingleTimerTaskQuery = `DELETE 
+	FROM xdb_sys_timer_tasks WHERE shard_id = $1 AND fire_time_unix_seconds = $2 AND task_sequence= $3`
+
+func (d dbTx) DeleteTimerTask(ctx context.Context, filter extensions.TimerTaskRowDeleteFilter) error {
+	_, err := d.tx.ExecContext(ctx, deleteSingleTimerTaskQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.TaskSequence)
+	return err
 }

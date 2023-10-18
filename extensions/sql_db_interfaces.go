@@ -15,6 +15,7 @@ package extensions
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/config"
@@ -31,7 +32,7 @@ type SQLDBSession interface {
 	nonTransactionalCRUD
 
 	ErrorChecker
-	StartTransaction(ctx context.Context) (SQLTransaction, error)
+	StartTransaction(ctx context.Context, opts *sql.TxOptions) (SQLTransaction, error)
 	Close() error
 }
 
@@ -63,6 +64,10 @@ type transactionalCRUD interface {
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
 	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
+	InsertTimerTask(ctx context.Context, row TimerTaskRowForInsert) error
+
+	DeleteWorkerTask(ctx context.Context, filter WorkerTaskRowDeleteFilter) error
+	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
 }
 
 type nonTransactionalCRUD interface {
@@ -72,6 +77,11 @@ type nonTransactionalCRUD interface {
 
 	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
 	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
+
+	BatchSelectTimerTasks(ctx context.Context, filter TimerTaskRangeSelectFilter) ([]TimerTaskRow, error)
+	SelectTimerTasksForTimestamps(ctx context.Context, filter TimerTaskSelectByTimestampsFilter) ([]TimerTaskRow, error)
+
+	CleanUpTasksForTest(ctx context.Context, shardId int32) error
 }
 
 type ErrorChecker interface {

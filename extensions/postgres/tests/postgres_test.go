@@ -14,22 +14,44 @@
 package tests
 
 import (
-	"testing"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/persistence/sql/sqltest"
+	"testing"
 )
 
 func TestBasic(t *testing.T) {
-	assert := assert.New(t)
+	sqltest.SQLBasicTest(assert.New(t), store)
+}
 
-	sqltest.SQLBasicTest(assert, store)
-	sqltest.SQLGracefulCompleteTest(assert, store)
-	sqltest.SQLForceFailTest(assert, store)
+func TestGracefulComplete(t *testing.T) {
+	sqltest.SQLGracefulCompleteTest(assert.New(t), store)
+}
 
-	sqltest.SQLProcessIdReusePolicyDisallowReuseTest(assert, store)
-	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(assert, store)
-	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(assert, store)
-	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(assert, store)
-	sqltest.SQLProcessIdReusePolicyDefault(assert, store)
+func TestForceFail(t *testing.T) {
+	sqltest.SQLForceFailTest(assert.New(t), store)
+}
+
+func TestProcessIdReusePolicyDisallowReuse(t *testing.T) {
+	sqltest.SQLProcessIdReusePolicyDisallowReuseTest(assert.New(t), store)
+}
+
+func TestProcessIdReusePolicyAllowIfNoRunning(t *testing.T) {
+	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(assert.New(t), store)
+}
+
+func TestProcessIdReusePolicyTerminateIfRunning(t *testing.T) {
+	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(assert.New(t), store)
+}
+
+func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
+	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(assert.New(t), store)
+}
+
+func TestProcessIdReusePolicyDefault(t *testing.T) {
+	sqltest.SQLProcessIdReusePolicyDefault(assert.New(t), store)
+}
+
+func TestBackoffTimer(t *testing.T) {
+	sqltest.CleanupEnv(assert.New(t), store)
+	sqltest.SQLBackoffTest(assert.New(t), store)
 }

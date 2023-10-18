@@ -13,7 +13,10 @@
 
 package async
 
-import "context"
+import (
+	"context"
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+)
 
 type Server interface {
 	// Start will start running on the background
@@ -23,6 +26,7 @@ type Server interface {
 
 type Service interface {
 	Start() error
-	NotifyPollingWorkerTask(shardId int32) error
+	NotifyPollingWorkerTask(req xdbapi.NotifyWorkerTasksRequest) error
+	NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest) error
 	Stop(ctx context.Context) error
 }

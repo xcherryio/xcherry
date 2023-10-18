@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/common/ptr"
+	"time"
 )
 
 type ProcessExecutionInfoJson struct {
@@ -89,16 +91,20 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 }
 
 type AsyncStateExecutionInfoJson struct {
-	ProcessId   string `json:"processId"`
-	ProcessType string `json:"processType"`
-	WorkerURL   string `json:"workerURL"`
+	Namespace   string                   `json:"namespace"`
+	ProcessId   string                   `json:"processId"`
+	ProcessType string                   `json:"processType"`
+	WorkerURL   string                   `json:"workerURL"`
+	StateConfig *xdbapi.AsyncStateConfig `json:"stateConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
 	return json.Marshal(AsyncStateExecutionInfoJson{
+		Namespace:   req.Namespace,
 		ProcessId:   req.ProcessId,
 		ProcessType: req.GetProcessType(),
 		WorkerURL:   req.GetWorkerUrl(),
+		StateConfig: req.StartStateConfig,
 	})
 }
 
@@ -120,4 +126,73 @@ func BytesToEncodedObject(bytes []byte) (xdbapi.EncodedObject, error) {
 	var obj xdbapi.EncodedObject
 	err := json.Unmarshal(bytes, &obj)
 	return obj, err
+}
+
+type WorkerTaskBackoffInfoJson struct {
+	// CompletedAttempts is the number of attempts that have been completed
+	// for calculating next backoff interval
+	CompletedAttempts int32 `json:"completedAttempts"`
+	// FirstAttemptTimestampSeconds is the timestamp of the first attempt
+	// for calculating next backoff interval
+	FirstAttemptTimestampSeconds int64 `json:"firstAttemptTimestampSeconds"`
+}
+
+type WorkerTaskInfoJson struct {
+	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
+}
+
+func BytesToWorkerTaskInfo(bytes []byte) (WorkerTaskInfoJson, error) {
+	var obj WorkerTaskInfoJson
+	err := json.Unmarshal(bytes, &obj)
+	return obj, err
+}
+
+func FromWorkerTaskInfoIntoBytes(obj WorkerTaskInfoJson) ([]byte, error) {
+	return json.Marshal(obj)
+}
+
+type TimerTaskInfoJson struct {
+	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
+	WorkerTaskType        *WorkerTaskType            `json:"workerTaskType"`
+}
+
+func BytesToTimerTaskInfo(bytes []byte) (TimerTaskInfoJson, error) {
+	var obj TimerTaskInfoJson
+	err := json.Unmarshal(bytes, &obj)
+	return obj, err
+}
+
+func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *WorkerTaskType) ([]byte, error) {
+	obj := TimerTaskInfoJson{
+		WorkerTaskBackoffInfo: backoff,
+		WorkerTaskType:        taskType,
+	}
+	return json.Marshal(obj)
+}
+
+type StateExecutionFailureJson struct {
+	StatusCode           *int32  `json:"statusCode"`
+	Details              *string `json:"details"`
+	CompletedAttempts    *int32  `json:"completedAttempts"`
+	LastAttemptTimestamp *int64  `json:"lastAttemptTimestamp"`
+}
+
+func BytesToStateExecutionFailure(bytes []byte) (StateExecutionFailureJson, error) {
+	var obj StateExecutionFailureJson
+	if len(bytes) == 0 {
+		return obj, nil
+	}
+
+	err := json.Unmarshal(bytes, &obj)
+	return obj, err
+}
+
+func CreateStateExecutionFailureBytesForBackoff(status int32, details string, completedAttempts int32) ([]byte, error) {
+	obj := StateExecutionFailureJson{
+		StatusCode:           &status,
+		Details:              &details,
+		CompletedAttempts:    &completedAttempts,
+		LastAttemptTimestamp: ptr.Any(time.Now().Unix()),
+	}
+	return json.Marshal(obj)
 }

@@ -72,6 +72,18 @@ type (
 		MaxTaskSequenceInclusive int64
 	}
 
+	BackoffWorkerTaskRequest struct {
+		LastFailureStatus    int32
+		LastFailureDetails   string
+		Prep                 PrepareStateExecutionResponse
+		Task                 WorkerTask
+		FireTimestampSeconds int64
+	}
+
+	ConvertTimerTaskToWorkerTaskRequest struct {
+		Task TimerTask
+	}
+
 	WorkerTask struct {
 		ShardId int32
 		// TaskSequence represents the increasing order in the queue of the shard
@@ -83,6 +95,75 @@ type (
 
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
+		WorkerTaskInfo WorkerTaskInfoJson
+
+		// only needed for distributed database that doesn't support global secondary index
+		OptionalPartitionKey *PartitionKey
+	}
+
+	GetTimerTasksRequest struct {
+		ShardId                          int32
+		MaxFireTimestampSecondsInclusive int64
+		PageSize                         int32
+	}
+
+	GetTimerTasksResponse struct {
+		Tasks                            []TimerTask
+		MinFireTimestampSecondsInclusive int64
+		// MinSequenceInclusive is the sequence of first task in the order
+		MinSequenceInclusive             int64
+		MaxFireTimestampSecondsInclusive int64
+		// MinSequenceInclusive is the sequence of last task in the order
+		MaxSequenceInclusive int64
+		// indicates if the response is full page or not
+		// only applicable for request with pageSize
+		FullPage bool
+	}
+
+	GetTimerTasksForTimestampsRequest struct {
+		// ShardId is the shardId in all DetailedRequests
+		// just for convenience using xdbapi.NotifyTimerTasksRequest which also has
+		// the ShardId field, but the caller will ensure the ShardId is the same in all
+		ShardId int32
+		// MinSequenceInclusive is the minimum sequence required for the timer tasks to load
+		// because the tasks with smaller sequence are already loaded
+		MinSequenceInclusive int64
+		// DetailedRequests is the list of NotifyTimerTasksRequest
+		// which contains the fire timestamps and other info of all timer tasks to pull
+		DetailedRequests []xdbapi.NotifyTimerTasksRequest
+	}
+
+	DeleteTimerTasksRequest struct {
+		ShardId int32
+
+		MinFireTimestampSecondsInclusive int64
+		MinTaskSequenceInclusive         int64
+
+		MaxFireTimestampSecondsInclusive int64
+		MaxTaskSequenceInclusive         int64
+	}
+
+	TimerTask struct {
+		ShardId              int32
+		FireTimestampSeconds int64
+		// TaskSequence represents the increasing order in the queue of the shard
+		// It should be empty when inserting, because the persistence/database will
+		// generate the value automatically
+		TaskSequence *int64
+
+		TaskType TimerTaskType
+
+		ProcessExecutionId uuid.UUID
+		StateExecutionId
+		TimerTaskInfo TimerTaskInfoJson
+
+		// only needed for distributed database that doesn't support global secondary index
+		OptionalPartitionKey *PartitionKey
+	}
+
+	PartitionKey struct {
+		Namespace string
+		ProcessId string
 	}
 
 	StateExecutionId struct {
@@ -101,8 +182,9 @@ type (
 		// PreviousVersion is for conditional check in the future transactional update
 		PreviousVersion int32
 
-		Input xdbapi.EncodedObject
-		Info  AsyncStateExecutionInfoJson
+		Input       xdbapi.EncodedObject
+		Info        AsyncStateExecutionInfoJson
+		LastFailure *StateExecutionFailureJson
 	}
 
 	CompleteWaitUntilExecutionRequest struct {
@@ -140,13 +222,13 @@ func (t WorkerTask) GetTaskSequence() int64 {
 	return *t.TaskSequence
 }
 
-func (t WorkerTask) GetId() string {
+func (t WorkerTask) GetTaskId() string {
 	if t.TaskSequence == nil {
 		return "<WRONG ID, TaskSequence IS EMPTY>"
 	}
 	return fmt.Sprintf("%v-%v", t.ShardId, *t.TaskSequence)
 }
 
-func (s StateExecutionId) GetId() string {
+func (s StateExecutionId) GetStateExecutionId() string {
 	return fmt.Sprintf("%v-%v", s.StateId, s.StateIdSequence)
 }

@@ -34,9 +34,15 @@ type (
 		FireChan() <-chan struct{}
 		// FireAfter checks whether the current timer will fire after the provided time
 		FireAfter(checkTime time.Time) bool
+		// InactiveOrFireAfter checks whether the current timer is inactive, or will fire after the provided time
+		InactiveOrFireAfter(checkTime time.Time) bool
 		// Update updates the TimerGate, return true if update is successful
 		// success means TimerGate is idle, or TimerGate is set with a sooner time to fire the timer
 		Update(nextTime time.Time) bool
+		// Stop stops the timer if it's active
+		Stop()
+		// IsActive returns whether the timer is active(not fired yet)
+		IsActive() bool
 		// Close shutdown the TimerGate
 		Close()
 	}
@@ -50,6 +56,8 @@ type (
 
 		timeSource clock.TimeSource
 
+		// whether the timer is active(not fired yet)
+		isActive bool
 		// the actual timer which will fire
 		timer *time.Timer
 		// variable indicating when the above timer will fire
@@ -67,6 +75,7 @@ func NewLocalTimerGate(logger log.Logger) TimerGate {
 		closeChan:      make(chan struct{}),
 		timeSource:     clock.NewRealTimeSource(),
 		logger:         logger,
+		isActive:       false,
 	}
 
 	if !timer.timer.Stop() {
@@ -82,12 +91,12 @@ func NewLocalTimerGate(logger log.Logger) TimerGate {
 		for {
 			select {
 			case <-timer.timer.C:
+				timer.isActive = false
 				select {
 				// when timer fires, send a signal to channel
 				case timer.fireChan <- struct{}{}:
 				default:
 					// ignore if caller is not able to consume the previous signal
-					logger.Warn("timer.fireChan is full when sending signal")
 				}
 
 			case <-timer.closeChan:
@@ -100,6 +109,19 @@ func NewLocalTimerGate(logger log.Logger) TimerGate {
 	return timer
 }
 
+func (tg *LocalTimerGateImpl) Stop() {
+	tg.isActive = false
+	tg.timer.Stop()
+}
+
+func (tg *LocalTimerGateImpl) IsActive() bool {
+	return tg.isActive
+}
+
+func (tg *LocalTimerGateImpl) InactiveOrFireAfter(checkTime time.Time) bool {
+	return !tg.isActive || tg.FireAfter(checkTime)
+}
+
 func (tg *LocalTimerGateImpl) FireChan() <-chan struct{} {
 	return tg.fireChan
 }
@@ -109,11 +131,17 @@ func (tg *LocalTimerGateImpl) FireAfter(checkTime time.Time) bool {
 }
 
 func (tg *LocalTimerGateImpl) Update(nextTime time.Time) bool {
+	tg.isActive = true
 	// NOTE: negative duration will make the timer fire immediately
 	now := tg.timeSource.Now()
 
 	if tg.timer.Stop() && tg.nextWakeupTime.Before(nextTime) {
-		// this means the timer, before stopped, is active && next nextWakeupTime do not need to be updated
+		// Here stops the timer first then checking the nextWakeupTime. So that the timer will not be fired
+		// when checking. This is useful when there are multiple updates happen concurrently, but we only
+		// want to fire the timer once.
+
+		// The nextWakeupTime being earlier than next time means that,
+		// the old timer, before stopped, is active && next nextWakeupTime do not need to be updated
 		// So reset it back to the previous wakeup time
 		tg.timer.Reset(tg.nextWakeupTime.Sub(now))
 		return false

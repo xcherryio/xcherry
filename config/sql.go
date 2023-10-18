@@ -23,8 +23,10 @@ type (
 		// DatabaseName is the name of SQL database to connect to
 		DatabaseName string `yaml:"databaseName"`
 		// ConnectAddr is the remote addr of the database
+		// e.g. localhost:5432
 		ConnectAddr string `yaml:"connectAddr"`
 		// DBExtensionName is the name of the extension
+		// that XDB will be using to extend the database
 		DBExtensionName string `yaml:"dbExtensionName"`
 	}
 )

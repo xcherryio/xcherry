@@ -113,6 +113,10 @@ func Value(v interface{}) Tag {
 	return newObjectTag("value", v)
 }
 
+func UnixTimestamp(v int64) Tag {
+	return newTimeTag("UnixTimestamp", time.Unix(v, 0))
+}
+
 func ID(v string) Tag {
 	return newStringTag("ID", v)
 }

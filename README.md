@@ -36,21 +36,21 @@ See [contribution](./CONTRIBUTING.md)
 ## 1.0
 - [ ] StartProcessExecution API
   - [x] Basic
-  - [ ] ProcessIdReusePolicy
+  - [x] ProcessIdReusePolicy
   - [ ] Process timeout
   - [ ] Retention policy after closed
 - [ ] Executing `wait_until`/`execute` APIs
   - [x] Basic sequential execution
   - [x] Parallel execution of multiple states
-  - [ ] StateOption: WaitUntil/Execute API timeout and retry policy
+  - [x] StateOption: WaitUntil/Execute API timeout and retry policy
   - [ ] AsyncState failure policy for recovery
 - [ ] StateDecision
   - [x] Single next State
   - [x] Multiple next states
   - [x] Force completing process
-  - [ ] Graceful completing process
-  - [ ] Force fail process
-  - [ ] Dead end
+  - [x] Graceful completing process
+  - [x] Force fail process
+  - [x] Dead end
   - [ ] Conditional complete process with checking queue emptiness
 - [ ] Commands
   - [ ] AnyOfCompletion and AllOfCompletion waitingType
@@ -67,8 +67,11 @@ See [contribution](./CONTRIBUTING.md)
   - [ ] InitialUpsert
   - [ ] Multi-tables
 - [ ] RPC
+  - [ ] Basic
+  - [ ] Persistence
+  - [ ] Communication
 - [ ] API error handling for canceled, failed, timeout, terminated
-- [ ] StopProcessExecution API
+- [x] StopProcessExecution API
 - [ ] WaitForStateCompletion API
 - [ ] ResetStateExecution for operation
 - [x] DescribeProcessExecution API

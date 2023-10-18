@@ -29,9 +29,10 @@ const PathDescribeProcessExecution = "/api/v1/xdb/service/process-execution/desc
 const PathStopProcessExecution = "/api/v1/xdb/service/process-execution/stop"
 
 type defaultSever struct {
-	rootCtx    context.Context
-	cfg        config.Config
-	logger     log.Logger
+	rootCtx context.Context
+	cfg     config.Config
+	logger  log.Logger
+	
 	engine     *gin.Engine
 	httpServer *http.Server
 }
