@@ -16,6 +16,7 @@ package engine
 import (
 	"container/heap"
 	"context"
+	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"math"
 	"math/rand"
@@ -34,6 +35,9 @@ type timerTaskQueueImpl struct {
 	rootCtx context.Context
 	cfg     config.Config
 
+	// Note that differently from worker task, this timer queue doesn't do batch deletion for "committing".
+	// It relies on the processor to delete the task during processing.
+	// Therefore, the timer queue will move on once handling off the task to processor.
 	processor TimerTaskProcessor
 
 	// the timer for next preload (by interval duration)
@@ -56,17 +60,6 @@ type timerTaskQueueImpl struct {
 	// It is using heap for perf because there could be new timers coming later
 	// The timer will be popped out when it is fired, and sent to the processor.
 	remainingToFireTimersHeap TimerTaskPriorityQueue
-
-	// this tracks the fired timer that are waiting for completed by processor.
-	// The key is the timer sequence. When all timers are completed and no timers in remainingToFireTimersHeap,
-	// it will trigger the next preload when the nextPreloadTimer fires
-	firedToCompleteTimerSequenceMap map[int64]struct{}
-
-	// tasksCompletionChan is the channel to receive completed tasks from processor.
-	// Receiving the completion signal so that it can remove the timer from firedToCompleteTimerSequenceMap
-	// Note that differently from worker task, this timer queue doesn't do batch deletion for "committing".
-	// It relies on the processor to delete the task during processing.
-	tasksCompletionChan chan persistence.TimerTask
 
 	// the channel to receive trigger of polling for newly created timers.
 	// The queue will check if the new timers are within the currentMaxLoadedTaskTimestamp, and if so,
@@ -99,11 +92,9 @@ func NewTimerTaskQueueImpl(
 		currMaxLoadedTaskSequence: 0,
 		currWindowTimestamp:       0,
 
-		remainingToFireTimersHeap:       nil,
-		firedToCompleteTimerSequenceMap: make(map[int64]struct{}),
-		tasksCompletionChan:             make(chan persistence.TimerTask, qCfg.ProcessorBufferSize),
-		triggeredPollingChan:            make(chan xdbapi.NotifyTimerTasksRequest, qCfg.TriggerNotificationBufferSize),
-		currentNotifyRequests:           nil,
+		remainingToFireTimersHeap: nil,
+		triggeredPollingChan:      make(chan xdbapi.NotifyTimerTasksRequest, qCfg.TriggerNotificationBufferSize),
+		currentNotifyRequests:     nil,
 	}
 }
 
@@ -124,7 +115,7 @@ func (w *timerTaskQueueImpl) TriggerPollingTasks(req xdbapi.NotifyTimerTasksRequ
 }
 
 func (w *timerTaskQueueImpl) Start() error {
-	w.processor.AddTimerTaskQueue(w.shardId, w.tasksCompletionChan)
+	w.processor.AddTimerTaskQueue(w.shardId)
 
 	w.nextPreloadTimer.Update(time.Now()) // fire immediately to make the first poll
 
@@ -132,17 +123,13 @@ func (w *timerTaskQueueImpl) Start() error {
 		for {
 			select {
 			case <-w.nextPreloadTimer.FireChan():
-				if w.shouldLoadNextBatch() {
+				if w.shouldLoadNextWindowBatch() {
 					w.loadAndDispatchAndPrepareNext()
 				}
 			case <-w.nextFiringTimer.FireChan():
 				w.sendAllFiredTimerTasksToProcessor()
-			case task, ok := <-w.tasksCompletionChan:
-				if ok {
-					delete(w.firedToCompleteTimerSequenceMap, *task.TaskSequence)
-					if w.shouldLoadNextBatch() {
-						w.loadAndDispatchAndPrepareNext()
-					}
+				if w.shouldLoadNextWindowBatch() {
+					w.loadAndDispatchAndPrepareNext()
 				}
 			case req, ok := <-w.triggeredPollingChan:
 				if ok {
@@ -238,12 +225,13 @@ func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerT
 	w.logger.Debug("notify is received and drained, current min:", tag.Value(minTime), tag.Value(minTimestamp))
 }
 
-func (w *timerTaskQueueImpl) shouldLoadNextBatch() bool {
-	if (!w.nextPreloadTimer.IsActive() && // this means the preload timer has fired
-		len(w.remainingToFireTimersHeap) == 0) && // this means all the timer tasks in the heap have been fired and sent to processor
-		len(w.firedToCompleteTimerSequenceMap) == 0 { // this means all the fired timers have been completed
+func (w *timerTaskQueueImpl) shouldLoadNextWindowBatch() bool {
+	if !w.nextPreloadTimer.IsActive() && // this means the preload timer has fired
+		len(w.remainingToFireTimersHeap) == 0 { // this means all the timer tasks in the heap have been fired and sent to processor
 		return true
 	}
+	w.logger.Debug(fmt.Sprintf("shouldLoadNextWindowBatch is false, %v, %v",
+		w.nextPreloadTimer.IsActive(), len(w.remainingToFireTimersHeap)))
 	return false
 }
 

@@ -71,6 +71,6 @@ type TimerTaskProcessor interface {
 	GetTasksToProcessChan() chan<- persistence.TimerTask
 
 	AddTimerTaskQueue(
-		shardId int32, tasksToCommitChan chan<- persistence.TimerTask,
+		shardId int32,
 	) (alreadyExisted bool)
 }
