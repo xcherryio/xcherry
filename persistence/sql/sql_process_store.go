@@ -471,20 +471,15 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		procExecRow.Status = persistence.ProcessExecutionStatusFailed
 	}
 
-	// early stop when there are no pending tasks
-	if len(pendingExecutionMap) == 0 {
-		return &persistence.StopProcessResponse{
-			NotExists: false,
-		}, nil
-	}
-
-	// handle xdb_sys_async_state_executions
-	// find all related rows with the processExecutionId, and
-	// modify the wait_until/execute status from running to aborted
-	err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
-	if err != nil {
-		p.logger.Error(err.Error())
-		return nil, err
+	if len(pendingExecutionMap) != 0 {
+		// handle xdb_sys_async_state_executions
+		// find all related rows with the processExecutionId, and
+		// modify the wait_until/execute status from running to aborted
+		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
+		if err != nil {
+			p.logger.Error(err.Error())
+			return nil, err
+		}
 	}
 
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
