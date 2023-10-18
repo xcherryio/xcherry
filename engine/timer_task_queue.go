@@ -46,11 +46,11 @@ type timerTaskQueueImpl struct {
 	// tracks the max task sequence that has been loaded
 	// so that the triggered polling can start from the next sequence
 	currMaxLoadedTaskSequence int64
-	// similarly, this tracks the max task timestamp that has been loaded
-	// so that the triggerred polling can skip the polling if the new tasks
-	// to poll are beyond the max timestamp -- because the next preload will
-	// poll it anyway.
-	currMaxLoadedTaskTimestamp int64
+	// similarly, this tracks the timeframe that the current preload has loaded
+	// so that the triggerred polling can skip the notifications if the new tasks
+	// to poll are beyond the timestamp -- because the next preload will
+	// poll them anyway.
+	currWindowTimestamp int64
 
 	// the timers from the current preload, sorted by fire time
 	// It is using heap for perf because there could be new timers coming later
@@ -96,8 +96,8 @@ func NewTimerTaskQueueImpl(
 		nextFiringTimer:  NewLocalTimerGate(logger),
 		triggerPollTimer: NewLocalTimerGate(logger),
 
-		currMaxLoadedTaskSequence:  0,
-		currMaxLoadedTaskTimestamp: 0,
+		currMaxLoadedTaskSequence: 0,
+		currWindowTimestamp:       0,
 
 		remainingToFireTimersHeap:       nil,
 		firedToCompleteTimerSequenceMap: make(map[int64]struct{}),
@@ -202,11 +202,11 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 		}
 
 		w.nextPreloadTimer.Update(maxWindowTime)
-		w.currMaxLoadedTaskTimestamp = maxWindowTime.Unix()
+		w.currWindowTimestamp = maxWindowTime.Unix()
 		w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
 	}
-	w.logger.Debug("load and dispatch timer tasks succeeded with new currMaxLoadedTaskTimestamp",
-		tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp))
+	w.logger.Debug("load and dispatch timer tasks succeeded with new currWindowTimestamp",
+		tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currWindowTimestamp))
 }
 
 func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
@@ -289,7 +289,7 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 	} else {
 		if len(resp.Tasks) > 0 {
 			// update the max loaded sequence so that next time it won't load the same tasks
-			// currMaxLoadedTaskTimestamp is not updated because the new tasks won't have a bigger timestamp
+			// currWindowTimestamp is not updated because the new tasks won't have a bigger timestamp
 			w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
 
 			// add the new tasks into the heap
@@ -314,14 +314,14 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 func (w *timerTaskQueueImpl) filterNotifyRequest(req xdbapi.NotifyTimerTasksRequest, minTimestampToUpdate *int64) *xdbapi.NotifyTimerTasksRequest {
 	var filteredFireTimestamps []int64
 	for _, ts := range req.FireTimestamps {
-		if ts <= w.currMaxLoadedTaskTimestamp {
+		if ts <= w.currWindowTimestamp {
 			filteredFireTimestamps = append(filteredFireTimestamps, ts)
 			if ts < *minTimestampToUpdate {
 				*minTimestampToUpdate = ts
 			}
 		} else {
 			w.logger.Debug("task fire timestamp is not within the current preload time window, skip",
-				tag.UnixTimestamp(w.currMaxLoadedTaskTimestamp), tag.UnixTimestamp(ts))
+				tag.UnixTimestamp(w.currWindowTimestamp), tag.UnixTimestamp(ts))
 		}
 	}
 	if len(filteredFireTimestamps) == 0 {
