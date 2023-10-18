@@ -30,11 +30,9 @@ type timerTaskConcurrentProcessor struct {
 	taskToProcessChan chan persistence.TimerTask
 	// for quickly checking if the shardId is being processed
 	currentShards map[int32]bool
-	// shardId to the channel
-	taskToCommitChans map[int32]chan<- persistence.TimerTask
-	taskNotifier      TaskNotifier
-	store             persistence.ProcessStore
-	logger            log.Logger
+	taskNotifier  TaskNotifier
+	store         persistence.ProcessStore
+	logger        log.Logger
 }
 
 func NewTimerTaskConcurrentProcessor(
@@ -47,7 +45,6 @@ func NewTimerTaskConcurrentProcessor(
 		cfg:               cfg,
 		taskToProcessChan: make(chan persistence.TimerTask, bufferSize),
 		currentShards:     map[int32]bool{},
-		taskToCommitChans: make(map[int32]chan<- persistence.TimerTask),
 		taskNotifier:      notifier,
 		store:             store,
 		logger:            logger,
@@ -62,11 +59,10 @@ func (w *timerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistenc
 }
 
 func (w *timerTaskConcurrentProcessor) AddTimerTaskQueue(
-	shardId int32, tasksToCommitChan chan<- persistence.TimerTask,
+	shardId int32,
 ) (alreadyExisted bool) {
 	exists := w.currentShards[shardId]
 	w.currentShards[shardId] = true
-	w.taskToCommitChans[shardId] = tasksToCommitChan
 	return exists
 }
 
@@ -91,7 +87,6 @@ func (w *timerTaskConcurrentProcessor) Start() error {
 					err := w.processTimerTask(task)
 
 					if w.currentShards[task.ShardId] { // check again
-						commitChan := w.taskToCommitChans[task.ShardId]
 						if err != nil {
 							// put it back to the queue for immediate retry
 							// Note that if the error is because of invoking worker APIs, it will be sent to
@@ -99,8 +94,6 @@ func (w *timerTaskConcurrentProcessor) Start() error {
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
 							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
-						} else {
-							commitChan <- task
 						}
 					}
 				}
