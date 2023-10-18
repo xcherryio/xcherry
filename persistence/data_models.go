@@ -117,7 +117,7 @@ type (
 		MaxSequenceInclusive int64
 		// indicates if the response is full page or not
 		// only applicable for request with pageSize
-		FullPage *bool
+		FullPage bool
 	}
 
 	GetTimerTasksForTimestampsRequest struct {

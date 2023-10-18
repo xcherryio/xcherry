@@ -177,7 +177,7 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 		w.nextPreloadTimer.Update(w.getNextPollTime(0, qCfg.IntervalJitter))
 	} else {
 		if len(resp.Tasks) > 0 {
-			if *resp.FullPage {
+			if resp.FullPage {
 				// there are a full page of timers, the server is busy,
 				//truncate the window so that we can load next page earlier
 				maxWindowTime = time.Unix(resp.MaxFireTimestampSecondsInclusive, 0)

@@ -65,9 +65,7 @@ func createGetTimerTaskResponse(
 	}
 	if reqPageSize != nil {
 		if len(dbTimerTasks) == int(*reqPageSize) {
-			resp.FullPage = ptr.Any(true)
-		} else {
-			resp.FullPage = ptr.Any(false)
+			resp.FullPage = true
 		}
 	}
 	return resp, nil
