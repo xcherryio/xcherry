@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
 	github.com/xdblab/xdb-apis v0.0.2-0.20231016224139-8bfd70634a5f
-	github.com/xdblab/xdb-golang-sdk v0.0.0-20231019190843-39807e1e76a5
+	github.com/xdblab/xdb-golang-sdk v0.0.0-20231019200233-608dbd84f405
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
