@@ -14,11 +14,12 @@
 package integTests
 
 import (
+	"testing"
+
 	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
 	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
 	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
 	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
-	"testing"
 )
 
 func TestIOProcess(t *testing.T) {
@@ -56,7 +57,6 @@ func TestProcessIdReusePolicyTerminateIfRunning(t *testing.T) {
 	basic.TestProcessIdReusePolicyTerminateIfRunning(t, client)
 }
 
-// TODO fix deadlock issue
-//func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
-//	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t, client)
-//}
+func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
+	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t, client)
+}

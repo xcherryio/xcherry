@@ -269,16 +269,10 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		return nil, err
 	}
 
-	// lock process execution row first
-	_, err = tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecution.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
-
 	// if it is still running, terminate it and start a new process
 	// otherwise, start a new process
 	if found {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
+		processExecutionRowForUpdate, err := tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			return nil, err
 		}
