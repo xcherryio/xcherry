@@ -269,6 +269,12 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		return nil, err
 	}
 
+	// lock process execution row first
+	_, err = tx.SelectProcessExecutionForUpdate(ctx, latestProcessExecution.ProcessExecutionId)
+	if err != nil {
+		return nil, err
+	}
+
 	// if it is still running, terminate it and start a new process
 	// otherwise, start a new process
 	if found {
@@ -459,7 +465,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	// handle xdb_sys_process_executions
 	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -467,7 +472,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 
 	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -658,7 +662,13 @@ func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
 		LastFailure:        nil,
 	}
 
-	err := tx.UpdateAsyncStateExecution(ctx, stateRow)
+	// lock process execution row first
+	_, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.UpdateAsyncStateExecution(ctx, stateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
 			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
@@ -710,6 +720,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewWorkerTask := false
 
+	// lock process execution row first
+	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 1: update state info
 	currStateRow := extensions.AsyncStateExecutionRowForUpdate{
 		ProcessExecutionId: request.ProcessExecutionId,
@@ -721,7 +737,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		LastFailure:        nil,
 	}
 
-	err := tx.UpdateAsyncStateExecution(ctx, currStateRow)
+	err = tx.UpdateAsyncStateExecution(ctx, currStateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
 			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
@@ -733,11 +749,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// at this point, it's either going to next states or closing the process
 	// either will require to do transaction on process execution row
-	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
-
 	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
