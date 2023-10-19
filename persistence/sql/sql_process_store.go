@@ -656,13 +656,7 @@ func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
 		LastFailure:        nil,
 	}
 
-	// lock process execution row first
-	_, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
-
-	err = tx.UpdateAsyncStateExecution(ctx, stateRow)
+	err := tx.UpdateAsyncStateExecution(ctx, stateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
 			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
