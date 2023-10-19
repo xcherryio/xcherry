@@ -22,7 +22,9 @@ import (
 )
 
 var registry = xdb.NewRegistry()
-var client = xdb.NewClient(registry, nil)
+
+var client = xdb.NewClient(registry, createTestDefaultClientOptions())
+
 var workerService = xdb.NewWorkerService(registry, nil)
 
 func init() {
@@ -38,4 +40,10 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func createTestDefaultClientOptions() *xdb.ClientOptions {
+	opts := xdb.GetLocalDefaultClientOptions()
+	opts.EnabledDebugLogging = true
+	return opts
 }
