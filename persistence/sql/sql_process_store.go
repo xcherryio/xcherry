@@ -587,7 +587,7 @@ func (p sqlProcessStoreImpl) DeleteWorkerTasks(
 func (p sqlProcessStoreImpl) PrepareStateExecution(
 	ctx context.Context, request persistence.PrepareStateExecutionRequest,
 ) (*persistence.PrepareStateExecutionResponse, error) {
-	stateRow, err := p.session.SelectAsyncStateExecutionForUpdate(
+	stateRow, err := p.session.SelectAsyncStateExecution(
 		ctx, extensions.AsyncStateExecutionSelectFilter{
 			ProcessExecutionId: request.ProcessExecutionId,
 			StateId:            request.StateId,

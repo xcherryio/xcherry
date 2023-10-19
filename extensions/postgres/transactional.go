@@ -90,20 +90,6 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-func (d dbTx) SelectAsyncStateExecutionForUpdate(
-	ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter,
-) (*extensions.AsyncStateExecutionRow, error) {
-	var row extensions.AsyncStateExecutionRow
-	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
-	err := d.tx.GetContext(
-		ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString,
-		filter.StateId, filter.StateIdSequence)
-	row.ProcessExecutionId = filter.ProcessExecutionId
-	row.StateId = filter.StateId
-	row.StateIdSequence = filter.StateIdSequence
-	return &row, err
-}
-
 const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
 	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, execute_status, info, input) VALUES
 	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :execute_status, :info, :input)`
