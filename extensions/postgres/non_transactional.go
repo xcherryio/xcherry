@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+
 	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
 )
@@ -36,16 +37,16 @@ func (d dbSession) SelectLatestProcessExecution(
 	return &row, err
 }
 
-const selectAsyncStateExecutionForUpdateQuery = `SELECT 
+const selectAsyncStateExecutionQuery = `SELECT 
     wait_until_status, execute_status, version as previous_version, info, input, last_failure
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
 
-func (d dbSession) SelectAsyncStateExecutionForUpdate(
+func (d dbSession) SelectAsyncStateExecution(
 	ctx context.Context, filter extensions.AsyncStateExecutionSelectFilter,
 ) (*extensions.AsyncStateExecutionRow, error) {
 	var row extensions.AsyncStateExecutionRow
 	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
-	err := d.db.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
+	err := d.db.GetContext(ctx, &row, selectAsyncStateExecutionQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
 	row.ProcessExecutionId = filter.ProcessExecutionId
 	row.StateId = filter.StateId
 	row.StateIdSequence = filter.StateIdSequence
