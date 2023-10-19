@@ -17,6 +17,7 @@ import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/xdblab/xdb/common/log"
@@ -164,7 +165,24 @@ func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 
 func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
-		// TODO optimize by combining all pages into single query (as long as it won't exceed certain limit)
+		// merge pages, e.g.,
+		// [1, 2], [3, 4], [7, 8] -> [1, 4], [7, 8]
+		sort.Slice(w.completedPages, func(i, j int) bool {
+			return w.completedPages[i].minTaskSequence < w.completedPages[j].minTaskSequence
+		})
+		var pages []*workerTaskPage
+		for _, page := range w.completedPages {
+			if len(pages) == 0 || pages[len(pages)-1].maxTaskSequence+1 < page.minTaskSequence {
+				pages = append(pages, page)
+			} else {
+				if pages[len(pages)-1].maxTaskSequence < page.maxTaskSequence {
+					pages[len(pages)-1].maxTaskSequence = page.maxTaskSequence
+				}
+			}
+		}
+
+		w.completedPages = pages
+
 		for idx, page := range w.completedPages {
 			req := persistence.DeleteWorkerTasksRequest{
 				ShardId:                  w.shardId,
