@@ -57,6 +57,10 @@ func TestProcessIdReusePolicyTerminateIfRunning(t *testing.T) {
 	basic.TestProcessIdReusePolicyTerminateIfRunning(t, client)
 }
 
-func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
-	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t, client)
+func TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase1(t *testing.T) {
+	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase1(t, client)
+}
+
+func TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase2(t *testing.T) {
+	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase2(t, client)
 }
