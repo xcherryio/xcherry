@@ -15,7 +15,7 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 # How to use 
 
 ### Option 1: brew install
-TODO: brew install xdb
+TODO: brew install xdb binaries
 
 
 ### Option 2: use docker-compose of xdb to connect with your own database

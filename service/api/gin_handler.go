@@ -46,9 +46,14 @@ func (h *ginHandler) StartProcess(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
+	var errResp *ErrorWithStatus
+	var resp *xdbapi.ProcessExecutionStartResponse
 	h.logger.Debug("received StartProcess API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded StartProcess API request", tag.Value(h.toJson(resp)), tag.Value(h.toJson(errResp)))
+	}()
 
-	resp, errResp := h.svc.StartProcess(c.Request.Context(), req)
+	resp, errResp = h.svc.StartProcess(c.Request.Context(), req)
 
 	if errResp != nil {
 		c.JSON(errResp.StatusCode, errResp.Error)
@@ -63,9 +68,13 @@ func (h *ginHandler) StopProcess(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
+	var err *ErrorWithStatus
 	h.logger.Debug("received StopProcess API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded StopProcess API request", tag.Value(h.toJson(err)))
+	}()
 
-	err := h.svc.StopProcess(c.Request.Context(), req)
+	err = h.svc.StopProcess(c.Request.Context(), req)
 
 	if err != nil {
 		c.JSON(err.StatusCode, err.Error)
@@ -81,9 +90,15 @@ func (h *ginHandler) DescribeProcess(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
-	h.logger.Debug("received DescribeProcess API request", tag.Value(h.toJson(req)))
+	var resp *xdbapi.ProcessExecutionDescribeResponse
+	var errResp *ErrorWithStatus
 
-	resp, errResp := h.svc.DescribeLatestProcess(c.Request.Context(), req)
+	h.logger.Debug("received DescribeProcess API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded DescribeProcess API request", tag.Value(h.toJson(resp)), tag.Value(h.toJson(errResp)))
+	}()
+
+	resp, errResp = h.svc.DescribeLatestProcess(c.Request.Context(), req)
 
 	if errResp != nil {
 		c.JSON(errResp.StatusCode, errResp.Error)
