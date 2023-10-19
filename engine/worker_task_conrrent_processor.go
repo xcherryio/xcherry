@@ -183,9 +183,7 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 		defer httpResp.Body.Close()
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, err := w.composeHttpError(err, httpResp)
-		w.logger.Info("state waitUntil API return error", tag.Error(err))
-		// TODO add a new field in async_state_execution to record the current failure info for debugging
+		status, details, err := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -268,9 +266,7 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 		err = checkDecision(resp.StateDecision)
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, err := w.composeHttpError(err, httpResp)
-		w.logger.Info("state execute API return error", tag.Error(err))
-		// TODO add a new field in async_state_execution to record the current failure info for debugging
+		status, details, err := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -391,7 +387,10 @@ func (w *workerTaskConcurrentProcessor) checkResponseAndError(err error, httpRes
 	return false
 }
 
-func (w *workerTaskConcurrentProcessor) composeHttpError(err error, httpResp *http.Response) (int32, string, error) {
+func (w *workerTaskConcurrentProcessor) composeHttpError(
+	err error, httpResp *http.Response,
+	info persistence.AsyncStateExecutionInfoJson, task persistence.WorkerTask,
+) (int32, string, error) {
 	responseBody := "None"
 	var statusCode int32
 	if httpResp != nil {
@@ -409,6 +408,15 @@ func (w *workerTaskConcurrentProcessor) composeHttpError(err error, httpResp *ht
 	if len(details) > maxDetailSize {
 		details = details[:maxDetailSize] + "...(truncated)"
 	}
+
+	w.logger.Info(task.TaskType.String()+" API return error",
+		tag.StatusCode(int(statusCode)),
+		tag.Namespace(info.Namespace),
+		tag.ProcessType(info.ProcessType),
+		tag.ProcessId(info.ProcessId),
+		tag.ProcessExecutionId(task.ProcessExecutionId.String()),
+		tag.StateExecutionId(task.GetStateExecutionId()),
+	)
 
 	return statusCode, details, fmt.Errorf("statusCode: %v, errMsg: %w, responseBody: %v", statusCode, err, responseBody)
 }
