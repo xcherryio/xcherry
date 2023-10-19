@@ -165,23 +165,7 @@ func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 
 func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
-		// merge pages, e.g.,
-		// [1, 2], [3, 4], [7, 8] -> [1, 4], [7, 8]
-		sort.Slice(w.completedPages, func(i, j int) bool {
-			return w.completedPages[i].minTaskSequence < w.completedPages[j].minTaskSequence
-		})
-		var pages []*workerTaskPage
-		for _, page := range w.completedPages {
-			if len(pages) == 0 || pages[len(pages)-1].maxTaskSequence+1 < page.minTaskSequence {
-				pages = append(pages, page)
-			} else {
-				if pages[len(pages)-1].maxTaskSequence < page.maxTaskSequence {
-					pages[len(pages)-1].maxTaskSequence = page.maxTaskSequence
-				}
-			}
-		}
-
-		w.completedPages = pages
+		w.completedPages = mergeWorkerTaskPages(w.completedPages)
 
 		for idx, page := range w.completedPages {
 			req := persistence.DeleteWorkerTasksRequest{
@@ -206,6 +190,31 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 		w.logger.Debug("no worker tasks to commit/delete")
 	}
 	return nil
+}
+
+func mergeWorkerTaskPages(workTaskPages []*workerTaskPage) []*workerTaskPage {
+	// merge pages, e.g.,
+	// [1, 2], [3, 4], [7, 8] -> [1, 4], [7, 8]
+	sort.Slice(workTaskPages, func(i, j int) bool {
+		return workTaskPages[i].minTaskSequence < workTaskPages[j].minTaskSequence
+	})
+
+	var pages []*workerTaskPage
+	for _, page := range workTaskPages {
+		if len(pages) == 0 || pages[len(pages)-1].maxTaskSequence+1 < page.minTaskSequence {
+			pages = append(pages, page)
+		} else {
+			if pages[len(pages)-1].maxTaskSequence < page.maxTaskSequence {
+				page = &workerTaskPage{
+					minTaskSequence: pages[len(pages)-1].minTaskSequence,
+					maxTaskSequence: page.maxTaskSequence,
+				}
+				pages[len(pages)-1] = page
+			}
+		}
+	}
+
+	return pages
 }
 
 func (w *workerTaskQueueImpl) receiveCompletedTask(task persistence.WorkerTask) {
