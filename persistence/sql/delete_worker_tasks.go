@@ -14,31 +14,18 @@
 package sql
 
 import (
-	"database/sql"
+	"context"
 
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
 )
 
-type sqlProcessStoreImpl struct {
-	session extensions.SQLDBSession
-	logger  log.Logger
-}
-
-var defaultTxOpts *sql.TxOptions = &sql.TxOptions{
-	Isolation: sql.LevelReadCommitted,
-}
-
-func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
-	session, err := extensions.NewSQLSession(&sqlConfig)
-	return &sqlProcessStoreImpl{
-		session: session,
-		logger:  logger,
-	}, err
-}
-
-func (p sqlProcessStoreImpl) Close() error {
-	return p.session.Close()
+func (p sqlProcessStoreImpl) DeleteWorkerTasks(
+	ctx context.Context, request persistence.DeleteWorkerTasksRequest,
+) error {
+	return p.session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
+		ShardId:                  request.ShardId,
+		MinTaskSequenceInclusive: request.MinTaskSequenceInclusive,
+		MaxTaskSequenceInclusive: request.MaxTaskSequenceInclusive,
+	})
 }

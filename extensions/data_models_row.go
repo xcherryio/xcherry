@@ -50,7 +50,6 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		IsCurrent                  bool
 		Status                     persistence.ProcessExecutionStatus
 		HistoryEventIdSequence     int32
 		StateExecutionSequenceMaps types.JSONText
@@ -62,7 +61,6 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		IsCurrent                  bool
 		Status                     persistence.ProcessExecutionStatus
 		HistoryEventIdSequence     int32
 		StateExecutionSequenceMaps types.JSONText

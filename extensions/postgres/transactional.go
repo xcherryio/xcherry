@@ -64,8 +64,8 @@ func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.L
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
-	(namespace, id, process_id, is_current, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, info) VALUES
-	(:namespace, :process_execution_id_string, :process_id, :is_current, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
+	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, info) VALUES
+	(:namespace, :process_execution_id_string, :process_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
 	 :state_execution_sequence_maps, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
@@ -76,7 +76,6 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 }
 
 const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
-is_current = :is_current, 
 status = :status,
 history_event_id_sequence= :history_event_id_sequence,
 state_execution_sequence_maps= :state_execution_sequence_maps,
@@ -153,7 +152,7 @@ func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRow
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
@@ -165,7 +164,7 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 }
 
 const selectProcessExecutionQuery = `SELECT 
-    id as process_execution_id, is_current, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 `
 
 func (d dbTx) SelectProcessExecution(

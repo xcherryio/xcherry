@@ -14,31 +14,27 @@
 package sql
 
 import (
-	"database/sql"
+	"context"
 
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
 )
 
-type sqlProcessStoreImpl struct {
-	session extensions.SQLDBSession
-	logger  log.Logger
-}
-
-var defaultTxOpts *sql.TxOptions = &sql.TxOptions{
-	Isolation: sql.LevelReadCommitted,
-}
-
-func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
-	session, err := extensions.NewSQLSession(&sqlConfig)
-	return &sqlProcessStoreImpl{
-		session: session,
-		logger:  logger,
-	}, err
-}
-
-func (p sqlProcessStoreImpl) Close() error {
-	return p.session.Close()
+func (p sqlProcessStoreImpl) GetTimerTasksForTimestamps(
+	ctx context.Context, request persistence.GetTimerTasksForTimestampsRequest,
+) (*persistence.GetTimerTasksResponse, error) {
+	var ts []int64
+	for _, req := range request.DetailedRequests {
+		ts = append(ts, req.FireTimestamps...)
+	}
+	dbTimerTasks, err := p.session.SelectTimerTasksForTimestamps(
+		ctx, extensions.TimerTaskSelectByTimestampsFilter{
+			ShardId:                  request.ShardId,
+			FireTimeUnixSeconds:      ts,
+			MinTaskSequenceInclusive: request.MinSequenceInclusive,
+		})
+	if err != nil {
+		return nil, err
+	}
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, nil)
 }
