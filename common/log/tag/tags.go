@@ -106,7 +106,7 @@ func ProcessType(pt string) Tag {
 }
 
 func Namespace(ns string) Tag {
-	return newStringTag("processType", ns)
+	return newStringTag("namespace", ns)
 }
 
 func ProcessExecutionId(id string) Tag {
