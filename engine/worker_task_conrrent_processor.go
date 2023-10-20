@@ -410,6 +410,7 @@ func (w *workerTaskConcurrentProcessor) composeHttpError(
 	}
 
 	w.logger.Info(task.TaskType.String()+" API return error",
+		tag.Error(err),
 		tag.StatusCode(int(statusCode)),
 		tag.Namespace(info.Namespace),
 		tag.ProcessType(info.ProcessType),
