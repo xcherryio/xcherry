@@ -14,31 +14,23 @@
 package sql
 
 import (
-	"database/sql"
+	"context"
 
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
 )
 
-type sqlProcessStoreImpl struct {
-	session extensions.SQLDBSession
-	logger  log.Logger
-}
-
-var defaultTxOpts *sql.TxOptions = &sql.TxOptions{
-	Isolation: sql.LevelReadCommitted,
-}
-
-func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.ProcessStore, error) {
-	session, err := extensions.NewSQLSession(&sqlConfig)
-	return &sqlProcessStoreImpl{
-		session: session,
-		logger:  logger,
-	}, err
-}
-
-func (p sqlProcessStoreImpl) Close() error {
-	return p.session.Close()
+func (p sqlProcessStoreImpl) GetTimerTasksUpToTimestamp(
+	ctx context.Context, request persistence.GetTimerTasksRequest,
+) (*persistence.GetTimerTasksResponse, error) {
+	dbTimerTasks, err := p.session.BatchSelectTimerTasks(
+		ctx, extensions.TimerTaskRangeSelectFilter{
+			ShardId:                         request.ShardId,
+			MaxFireTimeUnixSecondsInclusive: request.MaxFireTimestampSecondsInclusive,
+			PageSize:                        request.PageSize,
+		})
+	if err != nil {
+		return nil, err
+	}
+	return createGetTimerTaskResponse(request.ShardId, dbTimerTasks, &request.PageSize)
 }
