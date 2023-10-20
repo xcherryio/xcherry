@@ -65,8 +65,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	procExecRow.IsCurrent = false
-
 	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err

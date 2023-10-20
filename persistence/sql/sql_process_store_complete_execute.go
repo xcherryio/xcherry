@@ -148,13 +148,11 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
 			prcRow.Status = persistence.ProcessExecutionStatusCompleted
-			prcRow.IsCurrent = false
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 		case xdbapi.FORCE_FAIL_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
 			prcRow.Status = persistence.ProcessExecutionStatusFailed
-			prcRow.IsCurrent = false
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 		case xdbapi.DEAD_END:
 			// do nothing
@@ -163,7 +161,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	if toGracefullyComplete {
 		prcRow.Status = persistence.ProcessExecutionStatusCompleted
-		prcRow.IsCurrent = false
 	}
 
 	if toAbortRunningAsyncStates {

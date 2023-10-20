@@ -227,7 +227,6 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
 			err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
 				ProcessExecutionId:         processExecutionRowForUpdate.ProcessExecutionId,
-				IsCurrent:                  false,
 				Status:                     persistence.ProcessExecutionStatusTerminated,
 				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
@@ -372,7 +371,6 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId: processExecutionId,
 
-		IsCurrent:                  true,
 		Status:                     persistence.ProcessExecutionStatusRunning,
 		HistoryEventIdSequence:     0,
 		StateExecutionSequenceMaps: sequenceMapsBytes,

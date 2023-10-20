@@ -10,7 +10,6 @@ CREATE TABLE xdb_sys_process_executions(
     id uuid NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     --
-    is_current BOOLEAN NOT NULL DEFAULT true, -- TODO remove it https://github.com/xdblab/xdb/issues/48 and related code
     status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:terminated
     start_time TIMESTAMP NOT NULL,
     timeout_seconds INTEGER,
