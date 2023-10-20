@@ -170,7 +170,6 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	if found {
 		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
@@ -474,7 +473,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 	procExecRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -485,7 +483,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -495,7 +492,6 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		// modify the wait_until/execute status from running to aborted
 		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)
 		if err != nil {
-			p.logger.Error(err.Error())
 			return nil, err
 		}
 	}
@@ -515,13 +511,11 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 				NotExists: true,
 			}, nil
 		}
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
 	info, err := persistence.BytesToProcessExecutionInfo(row.Info)
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 
@@ -594,7 +588,6 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 			StateIdSequence:    request.StateIdSequence,
 		})
 	if err != nil {
-		p.logger.Error(err.Error())
 		return nil, err
 	}
 	info, err := persistence.BytesToAsyncStateExecutionInfo(stateRow.Info)

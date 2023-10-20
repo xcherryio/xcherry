@@ -97,6 +97,26 @@ func Message(msg string) Tag {
 	return newStringTag("message", msg)
 }
 
+func ProcessId(id string) Tag {
+	return newStringTag("processId", id)
+}
+
+func ProcessType(pt string) Tag {
+	return newStringTag("processType", pt)
+}
+
+func Namespace(ns string) Tag {
+	return newStringTag("namespace", ns)
+}
+
+func ProcessExecutionId(id string) Tag {
+	return newStringTag("processExecutionId", id)
+}
+
+func StateExecutionId(id string) Tag {
+	return newStringTag("stateExecutionId", id)
+}
+
 func Shard(shardId int32) Tag {
 	return newInt64("shard", int64(shardId))
 }
