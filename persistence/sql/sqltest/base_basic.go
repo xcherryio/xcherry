@@ -25,7 +25,7 @@ import (
 )
 
 func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
-	err := store.CleanUpImmediateTasksForTest(context.Background(), persistence.DefaultShardId)
+	err := store.CleanUpTasksForTest(context.Background(), persistence.DefaultShardId)
 	ass.Nil(err)
 }
 

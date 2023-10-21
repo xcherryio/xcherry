@@ -92,7 +92,7 @@ func (w *timerTaskConcurrentProcessor) Start() error {
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
-							w.logger.Warn("failed to process immediate task due to internal error, put back to queue for immediate retry", tag.Error(err))
+							w.logger.Warn("failed to process timer task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
 						}
 					}
