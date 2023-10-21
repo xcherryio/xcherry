@@ -60,7 +60,8 @@ type transactionalCRUD interface {
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
-	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
+	UpdateAsyncStateExecutionWithoutCommands(ctx context.Context, row AsyncStateExecutionRowForUpdateWithoutCommands) error
+	UpdateAsyncStateExecutionCommands(ctx context.Context, row AsyncStateExecutionRowForUpdateCommands) error
 	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertImmediateTask(ctx context.Context, row ImmediateTaskRowForInsert) error
 	InsertTimerTask(ctx context.Context, row TimerTaskRowForInsert) error

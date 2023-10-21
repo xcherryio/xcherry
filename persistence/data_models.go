@@ -187,16 +187,17 @@ type (
 		LastFailure *StateExecutionFailureJson
 	}
 
-	CompleteWaitUntilExecutionRequest struct {
+	ProcessWaitUntilExecutionRequest struct {
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare        PrepareStateExecutionResponse
-		CommandRequest xdbapi.CommandRequest
-		TaskShardId    int32
+		Prepare             PrepareStateExecutionResponse
+		CommandRequest      xdbapi.CommandRequest
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		TaskShardId         int32
 	}
 
-	CompleteWaitUntilExecutionResponse struct {
+	ProcessWaitUntilExecutionResponse struct {
 		HasNewImmediateTask bool
 	}
 
@@ -204,9 +205,10 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare       PrepareStateExecutionResponse
-		StateDecision xdbapi.StateDecision
-		TaskShardId   int32
+		Prepare             PrepareStateExecutionResponse
+		StateDecision       xdbapi.StateDecision
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		TaskShardId         int32
 	}
 
 	CompleteExecuteExecutionResponse struct {

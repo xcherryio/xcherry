@@ -82,7 +82,7 @@ type (
 		StateIdSequence int32
 	}
 
-	AsyncStateExecutionRowForUpdate struct {
+	AsyncStateExecutionRowForUpdateWithoutCommands struct {
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
@@ -93,6 +93,21 @@ type (
 		ExecuteStatus   persistence.StateExecutionStatus
 		PreviousVersion int32 // for conditional check
 		LastFailure     types.JSONText
+	}
+
+	AsyncStateExecutionRowForUpdateCommands struct {
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+		StateId                  string
+		StateIdSequence          int32
+
+		WaitUntilStatus persistence.StateExecutionStatus
+
+		WaitUntilCommands       types.JSONText
+		WaitUntilCommandResults types.JSONText
+
+		PreviousVersion int32 // for conditional check
 	}
 
 	AsyncStateExecutionRow struct {

@@ -48,13 +48,14 @@ func (e ProcessExecutionStatus) String() string {
 type StateExecutionStatus int32
 
 const (
-	StateExecutionStatusSkipped   StateExecutionStatus = -1
-	StateExecutionStatusUndefined StateExecutionStatus = 0
-	StateExecutionStatusRunning   StateExecutionStatus = 1
-	StateExecutionStatusCompleted StateExecutionStatus = 2
-	StateExecutionStatusFailed    StateExecutionStatus = 3
-	StateExecutionStatusTimeout   StateExecutionStatus = 4
-	StateExecutionStatusAborted   StateExecutionStatus = 5
+	StateExecutionStatusSkipped            StateExecutionStatus = -1
+	StateExecutionStatusUndefined          StateExecutionStatus = 0
+	StateExecutionStatusRunning            StateExecutionStatus = 1
+	StateExecutionStatusCompleted          StateExecutionStatus = 2
+	StateExecutionStatusFailed             StateExecutionStatus = 3
+	StateExecutionStatusTimeout            StateExecutionStatus = 4
+	StateExecutionStatusAborted            StateExecutionStatus = 5
+	StateExecutionStatusWaitingForCommands StateExecutionStatus = 6
 )
 
 func (e StateExecutionStatus) String() string {

@@ -60,7 +60,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	}
 
 	// Step 1: update state info
-	currStateRow := extensions.AsyncStateExecutionRowForUpdate{
+	currStateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
@@ -70,10 +70,10 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		LastFailure:        nil,
 	}
 
-	err = tx.UpdateAsyncStateExecution(ctx, currStateRow)
+	err = tx.UpdateAsyncStateExecutionWithoutCommands(ctx, currStateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
-			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
+			p.logger.Warn("UpdateAsyncStateExecutionWithoutCommands failed at conditional update")
 		}
 		return nil, err
 	}
@@ -133,6 +133,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	// Step 2 - 3:
 	// If the process was previously configured to gracefully complete and there are no states running,
 	// then gracefully complete the process regardless of the thread close type set in this state.
+	// Otherwise, handle the thread close type set in this state.
 
 	toGracefullyComplete := prcRow.WaitToComplete && len(sequenceMaps.PendingExecutionMap) == 0
 
@@ -182,6 +183,17 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	err = tx.UpdateProcessExecution(ctx, *prcRow)
 	if err != nil {
 		return nil, err
+	}
+
+	// Step 3: publish to local queue
+
+	err = p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(request.PublishToLocalQueue) > 0 {
+		hasNewImmediateTask = true
 	}
 
 	return &persistence.CompleteExecuteExecutionResponse{

@@ -99,21 +99,47 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 	return err
 }
 
-const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
-version = :previous_version +1,
+const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xdb_sys_async_state_executions set
+version = :previous_version + 1,
 wait_until_status = :wait_until_status,
 execute_status = :execute_status,
 last_failure = :last_failure     
 WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
   AND state_id_sequence=:state_id_sequence AND version = :previous_version`
 
-func (d dbTx) UpdateAsyncStateExecution(
-	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate,
+func (d dbTx) UpdateAsyncStateExecutionWithoutCommands(
+	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdateWithoutCommands,
 ) error {
 	// ignore static info because they are not changing
 	// TODO how to make that clear? maybe rename the method?
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
+	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionWithoutCommandsQuery, row)
+	if err != nil {
+		return err
+	}
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if effected != 1 {
+		return conditionalUpdateFailure
+	}
+	return nil
+}
+
+const updateAsyncStateExecutionCommandsQuery = `UPDATE xdb_sys_async_state_executions set
+version = :previous_version + 1,
+wait_until_status = :wait_until_status,
+wait_until_commands = :wait_until_commands,
+wait_until_command_results = :wait_until_command_results
+WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
+  AND state_id_sequence=:state_id_sequence AND version = :previous_version`
+
+func (d dbTx) UpdateAsyncStateExecutionCommands(
+	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdateCommands,
+) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionCommandsQuery, row)
 	if err != nil {
 		return err
 	}

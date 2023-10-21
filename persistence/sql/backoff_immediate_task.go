@@ -59,7 +59,7 @@ func (p sqlProcessStoreImpl) doBackoffImmediateTaskTx(
 	if err != nil {
 		return err
 	}
-	err = tx.UpdateAsyncStateExecution(ctx, extensions.AsyncStateExecutionRowForUpdate{
+	err = tx.UpdateAsyncStateExecutionWithoutCommands(ctx, extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateId:            task.StateId,
 		StateIdSequence:    task.StateIdSequence,

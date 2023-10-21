@@ -78,3 +78,58 @@ func insertImmediateTask(
 
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }
+
+func (p sqlProcessStoreImpl) publishToLocalQueue(
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) error {
+	for _, message := range messages {
+		dedupId := uuid.ParseUUID(message.GetDedupId())
+		if dedupId == nil {
+			dedupId = uuid.MustNewUUID()
+		}
+
+		// insert a row into xdb_sys_local_queue
+
+		payload, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
+		if err != nil {
+			return err
+		}
+
+		err = tx.InsertLocalQueue(ctx, extensions.LocalQueueRow{
+			ProcessExecutionId: processExecutionId,
+			QueueName:          message.GetQueueName(),
+			DedupId:            dedupId,
+			Payload:            payload,
+		})
+		if err != nil {
+			return err
+		}
+
+		// insert a row into xdb_sys_immediate_tasks
+
+		taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
+			persistence.ImmediateTaskInfoJson{
+				LocalQueueMessageInfo: &persistence.LocalQueueMessageInfoJson{
+					QueueName: message.GetQueueName(),
+					DedupId:   dedupId,
+				},
+			})
+		if err != nil {
+			return err
+		}
+
+		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+			ShardId:  persistence.DefaultShardId,
+			TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessage,
+
+			ProcessExecutionId: processExecutionId,
+			StateId:            "",
+			StateIdSequence:    0,
+			Info:               taskInfoBytes,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

@@ -2,9 +2,7 @@ package sql
 
 import (
 	"context"
-
 	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
 )
@@ -48,54 +46,9 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		return nil, err
 	}
 
-	for _, message := range request.Messages {
-		dedupId := uuid.ParseUUID(message.GetDedupId())
-		if dedupId == nil {
-			dedupId = uuid.MustNewUUID()
-		}
-
-		// insert a row into xdb_sys_local_queue
-
-		payload, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
-		if err != nil {
-			return nil, err
-		}
-
-		err = tx.InsertLocalQueue(ctx, extensions.LocalQueueRow{
-			ProcessExecutionId: curProcExecRow.ProcessExecutionId,
-			QueueName:          message.GetQueueName(),
-			DedupId:            dedupId,
-			Payload:            payload,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		// insert a row into xdb_sys_immediate_tasks
-
-		taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
-			persistence.ImmediateTaskInfoJson{
-				LocalQueueMessageInfo: &persistence.LocalQueueMessageInfoJson{
-					QueueName: message.GetQueueName(),
-					DedupId:   dedupId,
-				},
-			})
-		if err != nil {
-			return nil, err
-		}
-
-		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-			ShardId:  persistence.DefaultShardId,
-			TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessage,
-
-			ProcessExecutionId: curProcExecRow.ProcessExecutionId,
-			StateId:            "",
-			StateIdSequence:    0,
-			Info:               taskInfoBytes,
-		})
-		if err != nil {
-			return nil, err
-		}
+	err = p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, request.Messages)
+	if err != nil {
+		return nil, err
 	}
 
 	return &persistence.PublishToLocalQueueResponse{

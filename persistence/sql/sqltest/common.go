@@ -389,7 +389,7 @@ func completeWaitUntilExecution(
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compWaitResp, err := store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
+	compWaitResp, err := store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,

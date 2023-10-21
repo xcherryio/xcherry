@@ -198,17 +198,16 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		return err
 	}
 
-	commandRequest := resp.GetCommandRequest()
-
-	compResp, err := w.store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
+	compResp, err := w.store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateExecutionId: persistence.StateExecutionId{
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:        prep,
-		CommandRequest: commandRequest,
-		TaskShardId:    task.ShardId,
+		Prepare:             prep,
+		CommandRequest:      resp.GetCommandRequest(),
+		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
+		TaskShardId:         task.ShardId,
 	})
 	if err != nil {
 		return err
@@ -288,9 +287,10 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:       prep,
-		StateDecision: resp.StateDecision,
-		TaskShardId:   task.ShardId,
+		Prepare:             prep,
+		StateDecision:       resp.StateDecision,
+		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
+		TaskShardId:         task.ShardId,
 	})
 	if err != nil {
 		return err

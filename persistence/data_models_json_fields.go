@@ -129,6 +129,26 @@ func BytesToEncodedObject(bytes []byte) (xdbapi.EncodedObject, error) {
 	return obj, err
 }
 
+func FromCommandRequestToBytes(request xdbapi.CommandRequest) ([]byte, error) {
+	return json.Marshal(request)
+}
+
+func BytesToCommandRequest(bytes []byte) (xdbapi.CommandRequest, error) {
+	var request xdbapi.CommandRequest
+	err := json.Unmarshal(bytes, &request)
+	return request, err
+}
+
+func FromCommandResultsToBytes(result xdbapi.CommandResults) ([]byte, error) {
+	return json.Marshal(result)
+}
+
+func BytesToCommandResults(bytes []byte) (xdbapi.CommandResults, error) {
+	var result xdbapi.CommandResults
+	err := json.Unmarshal(bytes, &result)
+	return result, err
+}
+
 type WorkerTaskBackoffInfoJson struct {
 	// CompletedAttempts is the number of attempts that have been completed
 	// for calculating next backoff interval
