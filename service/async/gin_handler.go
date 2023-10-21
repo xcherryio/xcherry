@@ -35,13 +35,13 @@ func newGinHandler(cfg config.Config, svc Service, logger log.Logger) *ginHandle
 	}
 }
 
-func (h *ginHandler) NotifyWorkerTasks(c *gin.Context) {
-	var req xdbapi.NotifyWorkerTasksRequest
+func (h *ginHandler) NotifyImmediateTasks(c *gin.Context) {
+	var req xdbapi.NotifyImmediateTasksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
 	}
-	err := h.svc.NotifyPollingWorkerTask(req)
+	err := h.svc.NotifyPollingImmediateTask(req)
 	if err != nil {
 		invalidRequestForError(c, err)
 		return

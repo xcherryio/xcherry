@@ -29,45 +29,45 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-type workerTaskConcurrentProcessor struct {
+type immediateTaskConcurrentProcessor struct {
 	rootCtx           context.Context
 	cfg               config.Config
-	taskToProcessChan chan persistence.WorkerTask
+	taskToProcessChan chan persistence.ImmediateTask
 	// for quickly checking if the shardId is being processed
 	currentShards map[int32]bool
 	// shardId to the channel
-	taskToCommitChans map[int32]chan<- persistence.WorkerTask
+	taskToCommitChans map[int32]chan<- persistence.ImmediateTask
 	taskNotifier      TaskNotifier
 	store             persistence.ProcessStore
 	logger            log.Logger
 }
 
-func NewWorkerTaskConcurrentProcessor(
+func NewImmediateTaskConcurrentProcessor(
 	ctx context.Context, cfg config.Config, notifier TaskNotifier,
 	store persistence.ProcessStore, logger log.Logger,
-) WorkerTaskProcessor {
-	bufferSize := cfg.AsyncService.WorkerTaskQueue.ProcessorBufferSize
-	return &workerTaskConcurrentProcessor{
+) ImmediateTaskProcessor {
+	bufferSize := cfg.AsyncService.ImmediateTaskQueue.ProcessorBufferSize
+	return &immediateTaskConcurrentProcessor{
 		rootCtx:           ctx,
 		cfg:               cfg,
-		taskToProcessChan: make(chan persistence.WorkerTask, bufferSize),
+		taskToProcessChan: make(chan persistence.ImmediateTask, bufferSize),
 		currentShards:     map[int32]bool{},
-		taskToCommitChans: make(map[int32]chan<- persistence.WorkerTask),
+		taskToCommitChans: make(map[int32]chan<- persistence.ImmediateTask),
 		taskNotifier:      notifier,
 		store:             store,
 		logger:            logger,
 	}
 }
 
-func (w *workerTaskConcurrentProcessor) Stop(context.Context) error {
+func (w *immediateTaskConcurrentProcessor) Stop(context.Context) error {
 	return nil
 }
-func (w *workerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.WorkerTask {
+func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.ImmediateTask {
 	return w.taskToProcessChan
 }
 
-func (w *workerTaskConcurrentProcessor) AddWorkerTaskQueue(
-	shardId int32, tasksToCommitChan chan<- persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
+	shardId int32, tasksToCommitChan chan<- persistence.ImmediateTask,
 ) (alreadyExisted bool) {
 	exists := w.currentShards[shardId]
 	w.currentShards[shardId] = true
@@ -75,8 +75,8 @@ func (w *workerTaskConcurrentProcessor) AddWorkerTaskQueue(
 	return exists
 }
 
-func (w *workerTaskConcurrentProcessor) Start() error {
-	concurrency := w.cfg.AsyncService.WorkerTaskQueue.ProcessorConcurrency
+func (w *immediateTaskConcurrentProcessor) Start() error {
+	concurrency := w.cfg.AsyncService.ImmediateTaskQueue.ProcessorConcurrency
 
 	for i := 0; i < concurrency; i++ {
 		go func() {
@@ -93,7 +93,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 						continue
 					}
 
-					err := w.processWorkerTask(w.rootCtx, task)
+					err := w.processImmediateTask(w.rootCtx, task)
 
 					if w.currentShards[task.ShardId] { // check again
 						commitChan := w.taskToCommitChans[task.ShardId]
@@ -102,7 +102,7 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
-							w.logger.Info("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
+							w.logger.Info("failed to process immediate task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
 						} else {
 							commitChan <- task
@@ -115,11 +115,16 @@ func (w *workerTaskConcurrentProcessor) Start() error {
 	return nil
 }
 
-func (w *workerTaskConcurrentProcessor) processWorkerTask(
-	ctx context.Context, task persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) processImmediateTask(
+	ctx context.Context, task persistence.ImmediateTask,
 ) error {
 
-	w.logger.Debug("start executing worker task", tag.ID(task.GetTaskId()))
+	w.logger.Debug("start executing immediate task", tag.ID(task.GetTaskId()), tag.ImmediateTaskType(task.TaskType.String()))
+
+	if task.TaskType == persistence.ImmediateTaskTypeNewLocalQueueMessage {
+		// TODO
+		return nil
+	}
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -146,7 +151,7 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	} else if prep.ExecuteStatus == persistence.StateExecutionStatusRunning {
 		return w.processExecuteTask(ctx, task, *prep, apiClient)
 	} else {
-		w.logger.Warn("noop for worker task ",
+		w.logger.Warn("noop for immediate task ",
 			tag.ID(tag.AnyToStr(task.TaskSequence)),
 			tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
 				prep.WaitUntilStatus, prep.ExecuteStatus)))
@@ -154,18 +159,18 @@ func (w *workerTaskConcurrentProcessor) processWorkerTask(
 	}
 }
 
-func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
-	ctx context.Context, task persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
+	ctx context.Context, task persistence.ImmediateTask,
 	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
 ) error {
 
 	workerApiCtx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
 	defer cancF()
 
-	if task.WorkerTaskInfo.WorkerTaskBackoffInfo == nil {
-		task.WorkerTaskInfo.WorkerTaskBackoffInfo = createWorkerTaskBackoffInfo()
+	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
+		task.ImmediateTaskInfo.WorkerTaskBackoffInfo = createWorkerTaskBackoffInfo()
 	}
-	task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
+	task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
 
 	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
@@ -208,8 +213,8 @@ func (w *workerTaskConcurrentProcessor) processWaitUntilTask(
 	if err != nil {
 		return err
 	}
-	if compResp.HasNewWorkerTask {
-		w.notifyNewWorkerTask(prep, task)
+	if compResp.HasNewImmediateTask {
+		w.notifyNewImmediateTask(prep, task)
 	}
 	return nil
 }
@@ -221,28 +226,28 @@ func createWorkerTaskBackoffInfo() *persistence.WorkerTaskBackoffInfoJson {
 	}
 }
 
-func createApiContext(prep persistence.PrepareStateExecutionResponse, task persistence.WorkerTask) xdbapi.Context {
+func createApiContext(prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask) xdbapi.Context {
 	return xdbapi.Context{
 		ProcessId:          prep.Info.ProcessId,
 		ProcessExecutionId: task.ProcessExecutionId.String(),
 		StateExecutionId:   ptr.Any(task.StateExecutionId.GetStateExecutionId()),
 
-		Attempt:               ptr.Any(task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts),
-		FirstAttemptTimestamp: ptr.Any(task.WorkerTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds),
+		Attempt:               ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts),
+		FirstAttemptTimestamp: ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds),
 
 		// TODO add processStartTime
 	}
 }
 
-func (w *workerTaskConcurrentProcessor) processExecuteTask(
-	ctx context.Context, task persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) processExecuteTask(
+	ctx context.Context, task persistence.ImmediateTask,
 	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
 ) error {
 
-	if task.WorkerTaskInfo.WorkerTaskBackoffInfo == nil {
-		task.WorkerTaskInfo.WorkerTaskBackoffInfo = createWorkerTaskBackoffInfo()
+	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
+		task.ImmediateTaskInfo.WorkerTaskBackoffInfo = createWorkerTaskBackoffInfo()
 	}
-	task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
+	task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
 
 	ctx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
 	defer cancF()
@@ -290,23 +295,23 @@ func (w *workerTaskConcurrentProcessor) processExecuteTask(
 	if err != nil {
 		return err
 	}
-	if compResp.HasNewWorkerTask {
-		w.notifyNewWorkerTask(prep, task)
+	if compResp.HasNewImmediateTask {
+		w.notifyNewImmediateTask(prep, task)
 	}
 	return nil
 }
 
-func (w *workerTaskConcurrentProcessor) createContextWithTimeout(
-	ctx context.Context, taskType persistence.WorkerTaskType, stateConfig *xdbapi.AsyncStateConfig,
+func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
+	ctx context.Context, taskType persistence.ImmediateTaskType, stateConfig *xdbapi.AsyncStateConfig,
 ) (context.Context, context.CancelFunc) {
-	qCfg := w.cfg.AsyncService.WorkerTaskQueue
+	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 	timeout := qCfg.DefaultAsyncStateAPITimeout
 	if stateConfig != nil {
-		if taskType == persistence.WorkerTaskTypeWaitUntil {
+		if taskType == persistence.ImmediateTaskTypeWaitUntil {
 			if stateConfig.GetWaitUntilApiTimeoutSeconds() > 0 {
 				timeout = time.Duration(stateConfig.GetWaitUntilApiTimeoutSeconds()) * time.Second
 			}
-		} else if taskType == persistence.WorkerTaskTypeExecute {
+		} else if taskType == persistence.ImmediateTaskTypeExecute {
 			if stateConfig.GetExecuteApiTimeoutSeconds() > 0 {
 				timeout = time.Duration(stateConfig.GetExecuteApiTimeoutSeconds()) * time.Second
 			}
@@ -320,10 +325,10 @@ func (w *workerTaskConcurrentProcessor) createContextWithTimeout(
 	return context.WithTimeout(ctx, timeout)
 }
 
-func (w *workerTaskConcurrentProcessor) notifyNewWorkerTask(
-	prep persistence.PrepareStateExecutionResponse, task persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
+	prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask,
 ) {
-	w.taskNotifier.NotifyNewWorkerTasks(xdbapi.NotifyWorkerTasksRequest{
+	w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
 		ShardId:            persistence.DefaultShardId,
 		Namespace:          &prep.Info.Namespace,
 		ProcessId:          &prep.Info.ProcessId,
@@ -331,22 +336,22 @@ func (w *workerTaskConcurrentProcessor) notifyNewWorkerTask(
 	})
 }
 
-func (w *workerTaskConcurrentProcessor) checkRetry(
-	task persistence.WorkerTask, info persistence.AsyncStateExecutionInfoJson,
+func (w *immediateTaskConcurrentProcessor) checkRetry(
+	task persistence.ImmediateTask, info persistence.AsyncStateExecutionInfoJson,
 ) (nextBackoffSeconds int32, shouldRetry bool) {
 	return GetNextBackoff(
-		task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
-		task.WorkerTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
+		task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+		task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
 		info.StateConfig.WaitUntilApiRetryPolicy)
 }
 
-func (w *workerTaskConcurrentProcessor) retryTask(
-	ctx context.Context, task persistence.WorkerTask,
+func (w *immediateTaskConcurrentProcessor) retryTask(
+	ctx context.Context, task persistence.ImmediateTask,
 	prep persistence.PrepareStateExecutionResponse, nextIntervalSecs int32,
 	LastFailureStatus int32, LastFailureDetails string,
 ) error {
 	fireTimeUnixSeconds := time.Now().Unix() + int64(nextIntervalSecs)
-	err := w.store.BackoffWorkerTask(ctx, persistence.BackoffWorkerTaskRequest{
+	err := w.store.BackoffImmediateTask(ctx, persistence.BackoffImmediateTaskRequest{
 		LastFailureStatus:    LastFailureStatus,
 		LastFailureDetails:   LastFailureDetails,
 		Prep:                 prep,
@@ -374,12 +379,12 @@ func checkDecision(decision xdbapi.StateDecision) error {
 	return nil
 }
 
-func (w *workerTaskConcurrentProcessor) checkResponseAndError(err error, httpResp *http.Response) bool {
+func (w *immediateTaskConcurrentProcessor) checkResponseAndError(err error, httpResp *http.Response) bool {
 	status := 0
 	if httpResp != nil {
 		status = httpResp.StatusCode
 	}
-	w.logger.Debug("worker task executed", tag.Error(err), tag.StatusCode(status))
+	w.logger.Debug("immediate task executed", tag.Error(err), tag.StatusCode(status))
 
 	if err != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
 		return true
@@ -387,9 +392,9 @@ func (w *workerTaskConcurrentProcessor) checkResponseAndError(err error, httpRes
 	return false
 }
 
-func (w *workerTaskConcurrentProcessor) composeHttpError(
+func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	err error, httpResp *http.Response,
-	info persistence.AsyncStateExecutionInfoJson, task persistence.WorkerTask,
+	info persistence.AsyncStateExecutionInfoJson, task persistence.ImmediateTask,
 ) (int32, string, error) {
 	responseBody := "None"
 	var statusCode int32
@@ -404,7 +409,7 @@ func (w *workerTaskConcurrentProcessor) composeHttpError(
 	}
 
 	details := fmt.Sprintf("errMsg: %v, responseBody: %v", err, responseBody)
-	maxDetailSize := w.cfg.AsyncService.WorkerTaskQueue.MaxStateAPIFailureDetailSize
+	maxDetailSize := w.cfg.AsyncService.ImmediateTaskQueue.MaxStateAPIFailureDetailSize
 	if len(details) > maxDetailSize {
 		details = details[:maxDetailSize] + "...(truncated)"
 	}

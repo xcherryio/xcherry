@@ -22,13 +22,13 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request persistence.BackoffWorkerTaskRequest) error {
+func (p sqlProcessStoreImpl) BackoffImmediateTask(ctx context.Context, request persistence.BackoffImmediateTaskRequest) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
 	}
 
-	err = p.doBackoffWorkerTaskTx(ctx, tx, request)
+	err = p.doBackoffImmediateTaskTx(ctx, tx, request)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -44,17 +44,17 @@ func (p sqlProcessStoreImpl) BackoffWorkerTask(ctx context.Context, request pers
 	return err
 }
 
-func (p sqlProcessStoreImpl) doBackoffWorkerTaskTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.BackoffWorkerTaskRequest,
+func (p sqlProcessStoreImpl) doBackoffImmediateTaskTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.BackoffImmediateTaskRequest,
 ) error {
 	task := request.Task
 	prep := request.Prep
 
-	if task.WorkerTaskInfo.WorkerTaskBackoffInfo == nil {
+	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
 		return fmt.Errorf("WorkerTaskBackoffInfo cannot be nil")
 	}
 	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
-		request.LastFailureStatus, request.LastFailureDetails, task.WorkerTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts)
+		request.LastFailureStatus, request.LastFailureDetails, task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts)
 
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func (p sqlProcessStoreImpl) doBackoffWorkerTaskTx(
 	if err != nil {
 		return err
 	}
-	timerInfoBytes, err := persistence.CreateTimerTaskInfoBytes(task.WorkerTaskInfo.WorkerTaskBackoffInfo, &task.TaskType)
+	timerInfoBytes, err := persistence.CreateTimerTaskInfoBytes(task.ImmediateTaskInfo.WorkerTaskBackoffInfo, &task.TaskType)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (p sqlProcessStoreImpl) doBackoffWorkerTaskTx(
 	if err != nil {
 		return err
 	}
-	return tx.DeleteWorkerTask(ctx, extensions.WorkerTaskRowDeleteFilter{
+	return tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
 		ShardId:      task.ShardId,
 		TaskSequence: task.GetTaskSequence(),
 		OptionalPartitionKey: &persistence.PartitionKey{

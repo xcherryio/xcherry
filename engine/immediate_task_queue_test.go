@@ -19,36 +19,36 @@ import (
 	"testing"
 )
 
-func TestWorkerTaskPagesEmpty(t *testing.T) {
-	var completedPages []*workerTaskPage
-	pages := mergeWorkerTaskPages(completedPages)
+func TestImmediateTaskPagesEmpty(t *testing.T) {
+	var completedPages []*immediateTaskPage
+	pages := mergeImmediateTaskPages(completedPages)
 
 	assert.Equal(t, 0, len(pages))
 }
 
-func TestWorkerTaskPages(t *testing.T) {
-	var completedPages []*workerTaskPage
+func TestImmediateTaskPages(t *testing.T) {
+	var completedPages []*immediateTaskPage
 	completedPages = append(completedPages,
-		&workerTaskPage{
+		&immediateTaskPage{
 			minTaskSequence: 1,
 			maxTaskSequence: 2,
 		},
-		&workerTaskPage{
+		&immediateTaskPage{
 			minTaskSequence: 7,
 			maxTaskSequence: 8,
 		},
-		&workerTaskPage{
+		&immediateTaskPage{
 			minTaskSequence: 3,
 			maxTaskSequence: 4,
 		})
-	pages := mergeWorkerTaskPages(completedPages)
+	pages := mergeImmediateTaskPages(completedPages)
 
 	assert.Equal(t, 2, len(pages))
-	assert.Equal(t, &workerTaskPage{
+	assert.Equal(t, &immediateTaskPage{
 		minTaskSequence: 1,
 		maxTaskSequence: 4,
 	}, pages[0])
-	assert.Equal(t, &workerTaskPage{
+	assert.Equal(t, &immediateTaskPage{
 		minTaskSequence: 7,
 		maxTaskSequence: 8,
 	}, pages[1])

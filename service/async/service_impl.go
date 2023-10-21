@@ -30,8 +30,8 @@ type asyncService struct {
 
 	taskNotifier engine.TaskNotifier
 
-	workerTaskQueue     engine.WorkerTaskQueue
-	workerTaskProcessor engine.WorkerTaskProcessor
+	immediateTaskQueue     engine.ImmediateTaskQueue
+	immediateTaskProcessor engine.ImmediateTaskProcessor
 
 	timerTaskQueue     engine.TimerTaskQueue
 	timerTaskProcessor engine.TimerTaskProcessor
@@ -45,24 +45,24 @@ func NewAsyncServiceImpl(
 ) Service {
 	notifier := newTaskNotifierImpl()
 
-	workerTaskProcessor := engine.NewWorkerTaskConcurrentProcessor(rootCtx, cfg, notifier, store, logger)
+	immediateTaskProcessor := engine.NewImmediateTaskConcurrentProcessor(rootCtx, cfg, notifier, store, logger)
 	timerTaskProcessor := engine.NewTimerTaskConcurrentProcessor(rootCtx, cfg, notifier, store, logger)
 
 	// TODO for config.AsyncServiceModeConsistentHashingCluster
-	// the worker queue will be created/added/managed dynamically
+	// the queues will be created/added/managed dynamically
 
-	workerTaskQueue := engine.NewWorkerTaskQueueImpl(
-		rootCtx, persistence.DefaultShardId, cfg, store, workerTaskProcessor, logger)
+	immediateTaskQueue := engine.NewImmediateTaskQueueImpl(
+		rootCtx, persistence.DefaultShardId, cfg, store, immediateTaskProcessor, logger)
 
 	timerTaskQueue := engine.NewTimerTaskQueueImpl(
 		rootCtx, persistence.DefaultShardId, cfg, store, timerTaskProcessor, logger)
 
-	notifier.AddWorkerTaskQueue(persistence.DefaultShardId, workerTaskQueue)
+	notifier.AddImmediateTaskQueue(persistence.DefaultShardId, immediateTaskQueue)
 	notifier.AddTimerTaskQueue(persistence.DefaultShardId, timerTaskQueue)
 
 	return &asyncService{
-		workerTaskQueue:     workerTaskQueue,
-		workerTaskProcessor: workerTaskProcessor,
+		immediateTaskQueue:     immediateTaskQueue,
+		immediateTaskProcessor: immediateTaskProcessor,
 
 		timerTaskQueue:     timerTaskQueue,
 		timerTaskProcessor: timerTaskProcessor,
@@ -76,9 +76,9 @@ func NewAsyncServiceImpl(
 }
 
 func (a asyncService) Start() error {
-	err := a.workerTaskProcessor.Start()
+	err := a.immediateTaskProcessor.Start()
 	if err != nil {
-		a.logger.Error("fail to start worker task processor", tag.Error(err))
+		a.logger.Error("fail to start immediate task processor", tag.Error(err))
 		return err
 	}
 	err = a.timerTaskProcessor.Start()
@@ -86,9 +86,9 @@ func (a asyncService) Start() error {
 		a.logger.Error("fail to start timer task processor", tag.Error(err))
 		return err
 	}
-	err = a.workerTaskQueue.Start()
+	err = a.immediateTaskQueue.Start()
 	if err != nil {
-		a.logger.Error("fail to start worker task queue", tag.Error(err))
+		a.logger.Error("fail to start immediate task queue", tag.Error(err))
 	}
 	err = a.timerTaskQueue.Start()
 	if err != nil {
@@ -97,11 +97,11 @@ func (a asyncService) Start() error {
 	return nil
 }
 
-func (a asyncService) NotifyPollingWorkerTask(req xdbapi.NotifyWorkerTasksRequest) error {
+func (a asyncService) NotifyPollingImmediateTask(req xdbapi.NotifyImmediateTasksRequest) error {
 	if req.ShardId != persistence.DefaultShardId {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}
-	a.workerTaskQueue.TriggerPollingTasks(req)
+	a.immediateTaskQueue.TriggerPollingTasks(req)
 	return nil
 }
 
@@ -114,8 +114,8 @@ func (a asyncService) NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest)
 }
 
 func (a asyncService) Stop(ctx context.Context) error {
-	err1 := a.workerTaskQueue.Stop(ctx)
-	err2 := a.workerTaskProcessor.Stop(ctx)
+	err1 := a.immediateTaskQueue.Stop(ctx)
+	err2 := a.immediateTaskProcessor.Stop(ctx)
 	err3 := a.timerTaskQueue.Stop(ctx)
 	err4 := a.timerTaskProcessor.Stop(ctx)
 

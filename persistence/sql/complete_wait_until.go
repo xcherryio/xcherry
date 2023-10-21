@@ -72,9 +72,9 @@ func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
 		}
 		return nil, err
 	}
-	err = tx.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
+	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
 		ShardId:            request.TaskShardId,
-		TaskType:           persistence.WorkerTaskTypeExecute,
+		TaskType:           persistence.ImmediateTaskTypeExecute,
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
@@ -83,6 +83,6 @@ func (p sqlProcessStoreImpl) doCompleteWaitUntilExecutionTx(
 		return nil, err
 	}
 	return &persistence.CompleteWaitUntilExecutionResponse{
-		HasNewWorkerTask: true,
+		HasNewImmediateTask: true,
 	}, nil
 }

@@ -35,7 +35,7 @@ type timerTaskQueueImpl struct {
 	rootCtx context.Context
 	cfg     config.Config
 
-	// Note that differently from worker task, this timer queue doesn't do batch deletion for "committing".
+	// Note that differently from immediate task, this timer queue doesn't do batch deletion for "committing".
 	// It relies on the processor to delete the task during processing.
 	// Therefore, the timer queue will move on once handling off the task to processor.
 	processor TimerTaskProcessor

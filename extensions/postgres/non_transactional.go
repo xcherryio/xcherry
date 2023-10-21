@@ -53,25 +53,25 @@ func (d dbSession) SelectAsyncStateExecution(
 	return &row, err
 }
 
-const batchSelectWorkerTasksOfFirstPageQuery = `SELECT 
+const batchSelectImmediateTasksQuery = `SELECT 
     shard_id, task_sequence, process_execution_id, state_id, state_id_sequence, task_type, info
-	FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence>= $2 ORDER BY task_sequence ASC LIMIT $3`
+	FROM xdb_sys_immediate_tasks WHERE shard_id = $1 AND task_sequence>= $2 ORDER BY task_sequence ASC LIMIT $3`
 
-func (d dbSession) BatchSelectWorkerTasks(
+func (d dbSession) BatchSelectImmediateTasks(
 	ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32,
-) ([]extensions.WorkerTaskRow, error) {
-	var rows []extensions.WorkerTaskRow
-	err := d.db.SelectContext(ctx, &rows, batchSelectWorkerTasksOfFirstPageQuery, shardId, startSequenceInclusive, pageSize)
+) ([]extensions.ImmediateTaskRow, error) {
+	var rows []extensions.ImmediateTaskRow
+	err := d.db.SelectContext(ctx, &rows, batchSelectImmediateTasksQuery, shardId, startSequenceInclusive, pageSize)
 	return rows, err
 }
 
-const batchDeleteWorkerTaskQuery = `DELETE 
-	FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence>= $2 AND task_sequence <= $3`
+const batchDeleteImmediateTaskQuery = `DELETE 
+	FROM xdb_sys_immediate_tasks WHERE shard_id = $1 AND task_sequence>= $2 AND task_sequence <= $3`
 
-func (d dbSession) BatchDeleteWorkerTask(
-	ctx context.Context, filter extensions.WorkerTaskRangeDeleteFilter,
+func (d dbSession) BatchDeleteImmediateTask(
+	ctx context.Context, filter extensions.ImmediateTaskRangeDeleteFilter,
 ) error {
-	_, err := d.db.ExecContext(ctx, batchDeleteWorkerTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
+	_, err := d.db.ExecContext(ctx, batchDeleteImmediateTaskQuery, filter.ShardId, filter.MinTaskSequenceInclusive, filter.MaxTaskSequenceInclusive)
 	return err
 }
 
@@ -104,7 +104,7 @@ func (d dbSession) SelectTimerTasksForTimestamps(ctx context.Context, filter ext
 }
 
 func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error {
-	_, err := d.db.ExecContext(ctx, `DELETE FROM xdb_sys_worker_tasks WHERE shard_id = $1`, shardId)
+	_, err := d.db.ExecContext(ctx, `DELETE FROM xdb_sys_immediate_tasks WHERE shard_id = $1`, shardId)
 	if err != nil {
 		return err
 	}

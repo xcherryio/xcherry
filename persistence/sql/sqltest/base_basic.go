@@ -45,13 +45,13 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task := immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -62,13 +62,13 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
 
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -94,14 +94,14 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Complete 'Execute' execution.
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
-	task = workerTasks[1]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	task = immediateTasks[1]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -211,13 +211,13 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task := immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -228,13 +228,13 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
 
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -260,14 +260,14 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 	// Complete 'Execute' execution.
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
-	task = workerTasks[1]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	task = immediateTasks[1]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -308,13 +308,13 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task := immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -325,13 +325,13 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
 
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -357,14 +357,14 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 	// Complete 'Execute' execution.
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
-	task = workerTasks[1]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	task = immediateTasks[1]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -399,11 +399,11 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task := immediateTasks[0]
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -414,13 +414,13 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
 
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -445,14 +445,14 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 	// Complete 'Execute' execution.
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
-	task = workerTasks[1]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	task = immediateTasks[1]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -484,11 +484,11 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task := workerTasks[0]
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task := immediateTasks[0]
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -499,13 +499,13 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
 
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 1)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
@@ -530,14 +530,14 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	// Complete 'Execute' execution.
 	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, workerTasks = checkAndGetWorkerTasks(ctx, ass, store, 2)
-	task = workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId2+"-1")
-	task = workerTasks[1]
-	verifyWorkerTaskNoInfo(ass, task, persistence.WorkerTaskTypeExecute, stateId1+"-2")
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	task = immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	task = immediateTasks[1]
+	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)

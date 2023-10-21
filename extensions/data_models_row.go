@@ -112,9 +112,9 @@ type (
 		Info  types.JSONText
 	}
 
-	WorkerTaskRowForInsert struct {
+	ImmediateTaskRowForInsert struct {
 		ShardId  int32
-		TaskType persistence.WorkerTaskType
+		TaskType persistence.ImmediateTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -125,11 +125,11 @@ type (
 		Info types.JSONText
 	}
 
-	WorkerTaskRow struct {
+	ImmediateTaskRow struct {
 		ShardId      int32
 		TaskSequence int64
 
-		TaskType persistence.WorkerTaskType
+		TaskType persistence.ImmediateTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -140,14 +140,14 @@ type (
 		Info types.JSONText
 	}
 
-	WorkerTaskRowDeleteFilter struct {
+	ImmediateTaskRowDeleteFilter struct {
 		ShardId      int32
 		TaskSequence int64
 
 		OptionalPartitionKey *persistence.PartitionKey
 	}
 
-	WorkerTaskRangeDeleteFilter struct {
+	ImmediateTaskRangeDeleteFilter struct {
 		ShardId int32
 
 		MinTaskSequenceInclusive int64

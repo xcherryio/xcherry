@@ -67,7 +67,7 @@ func (w *timerTaskConcurrentProcessor) AddTimerTaskQueue(
 }
 
 func (w *timerTaskConcurrentProcessor) Start() error {
-	concurrency := w.cfg.AsyncService.WorkerTaskQueue.ProcessorConcurrency
+	concurrency := w.cfg.AsyncService.ImmediateTaskQueue.ProcessorConcurrency
 
 	for i := 0; i < concurrency; i++ {
 		go func() {
@@ -92,7 +92,7 @@ func (w *timerTaskConcurrentProcessor) Start() error {
 							// Note that if the error is because of invoking worker APIs, it will be sent to
 							// timer task instead
 							// TODO add a counter to a task, and when exceeding certain limit, put the task into a different channel to process "slowly"
-							w.logger.Warn("failed to process worker task due to internal error, put back to queue for immediate retry", tag.Error(err))
+							w.logger.Warn("failed to process timer task due to internal error, put back to queue for immediate retry", tag.Error(err))
 							w.taskToProcessChan <- task
 						}
 					}
@@ -124,13 +124,13 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
 	task persistence.TimerTask,
 ) error {
-	err := w.store.ConvertTimerTaskToWorkerTask(w.rootCtx, persistence.ConvertTimerTaskToWorkerTaskRequest{
+	err := w.store.ConvertTimerTaskToImmediateTask(w.rootCtx, persistence.ConvertTimerTaskToImmediateTaskRequest{
 		Task: task,
 	})
 	if err != nil {
 		return err
 	}
-	notiReq := xdbapi.NotifyWorkerTasksRequest{
+	notiReq := xdbapi.NotifyImmediateTasksRequest{
 		ShardId:            task.ShardId,
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 	}
@@ -138,6 +138,6 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
 		notiReq.ProcessId = &task.OptionalPartitionKey.ProcessId
 		notiReq.Namespace = &task.OptionalPartitionKey.Namespace
 	}
-	w.taskNotifier.NotifyNewWorkerTasks(notiReq)
+	w.taskNotifier.NotifyNewImmediateTasks(notiReq)
 	return nil
 }

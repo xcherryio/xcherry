@@ -55,8 +55,8 @@ type (
 	AsyncServiceConfig struct {
 		// Mode is the mode of async service. Currently only standalone mode is supported
 		Mode AsyncServiceMode `yaml:"mode"`
-		// WorkerTaskQueue is the config for worker task queue
-		WorkerTaskQueue WorkerTaskQueueConfig `yaml:"workerTaskQueue"`
+		// ImmediateTaskQueue is the config for immediate task queue
+		ImmediateTaskQueue ImmediateTaskQueueConfig `yaml:"immediateTaskQueue"`
 		// TimerTaskQueue is the config for timer task queue
 		TimerTaskQueue TimerTaskQueueConfig `yaml:"timerTaskQueue"`
 		// InternalHttpServer is the config for starting a http.Server
@@ -93,7 +93,7 @@ type (
 		MaxHeaderBytes    int           `yaml:"maxHeaderBytes"`
 	}
 
-	WorkerTaskQueueConfig struct {
+	ImmediateTaskQueueConfig struct {
 		// MaxPollInterval is the maximum interval that the poller will wait between
 		// polls. The poller will always poll immediately when receives a notification that there are new tasks.
 		// But there is no atomicity/transaction guarantee for the notification.
@@ -120,7 +120,7 @@ type (
 		// Note that a processor is shared by all task queues in the async service instance.
 		// If not specified then the default value of 1000 is used.
 		ProcessorBufferSize int `yaml:"processorBufferSize"`
-		// PollPageSize is the page size used by the poller to fetch worker tasks from the database.
+		// PollPageSize is the page size used by the poller to fetch tasks from the database.
 		// If not specified then the default value of 1000 is used.
 		PollPageSize int32 `yaml:"pollPageSize"`
 		// MaxAsyncStateAPITimeout is the maximum timeout for async state APIs(waitUntil/execute)
@@ -144,7 +144,7 @@ type (
 		// to complete, AND this lookahead duration passed, before making next preload.
 		// During the duration, any new timers created that need to fire within the duration, will rely
 		// on the "notifier" to trigger loading the new timers.
-		// However, similar to WorkerTaskQueue, there is no atomicity/transaction guarantee for the notification.
+		// However, similar to ImmediateTaskQueue, there is no atomicity/transaction guarantee for the notification.
 		// If missing the notification, the new timers will be loaded in the next preload( meaning that the timer
 		// firing could be delayed up to MaxTimerPreloadLookAhead in worst case).
 		// Also note that this duration being too large could lead to too many triggers of polling from notifications,
@@ -226,33 +226,33 @@ func (c *Config) ValidateAndSetDefaults() error {
 	if c.AsyncService.Mode != AsyncServiceModeStandalone {
 		return fmt.Errorf("currently only standalone mode is supported")
 	}
-	workerTaskQConfig := &c.AsyncService.WorkerTaskQueue
-	if workerTaskQConfig.MaxPollInterval == 0 {
-		workerTaskQConfig.MaxPollInterval = time.Minute
+	immediateTaskQConfig := &c.AsyncService.ImmediateTaskQueue
+	if immediateTaskQConfig.MaxPollInterval == 0 {
+		immediateTaskQConfig.MaxPollInterval = time.Minute
 	}
-	if workerTaskQConfig.CommitInterval == 0 {
-		workerTaskQConfig.CommitInterval = time.Minute
+	if immediateTaskQConfig.CommitInterval == 0 {
+		immediateTaskQConfig.CommitInterval = time.Minute
 	}
-	if workerTaskQConfig.IntervalJitter == 0 {
-		workerTaskQConfig.IntervalJitter = time.Second * 5
+	if immediateTaskQConfig.IntervalJitter == 0 {
+		immediateTaskQConfig.IntervalJitter = time.Second * 5
 	}
-	if workerTaskQConfig.ProcessorConcurrency == 0 {
-		workerTaskQConfig.ProcessorConcurrency = 10
+	if immediateTaskQConfig.ProcessorConcurrency == 0 {
+		immediateTaskQConfig.ProcessorConcurrency = 10
 	}
-	if workerTaskQConfig.ProcessorBufferSize == 0 {
-		workerTaskQConfig.ProcessorBufferSize = 1000
+	if immediateTaskQConfig.ProcessorBufferSize == 0 {
+		immediateTaskQConfig.ProcessorBufferSize = 1000
 	}
-	if workerTaskQConfig.PollPageSize == 0 {
-		workerTaskQConfig.PollPageSize = 1000
+	if immediateTaskQConfig.PollPageSize == 0 {
+		immediateTaskQConfig.PollPageSize = 1000
 	}
-	if workerTaskQConfig.MaxAsyncStateAPITimeout == 0 {
-		workerTaskQConfig.MaxAsyncStateAPITimeout = 60 * time.Second
+	if immediateTaskQConfig.MaxAsyncStateAPITimeout == 0 {
+		immediateTaskQConfig.MaxAsyncStateAPITimeout = 60 * time.Second
 	}
-	if workerTaskQConfig.DefaultAsyncStateAPITimeout == 0 {
-		workerTaskQConfig.DefaultAsyncStateAPITimeout = 10 * time.Second
+	if immediateTaskQConfig.DefaultAsyncStateAPITimeout == 0 {
+		immediateTaskQConfig.DefaultAsyncStateAPITimeout = 10 * time.Second
 	}
-	if workerTaskQConfig.MaxStateAPIFailureDetailSize == 0 {
-		workerTaskQConfig.MaxStateAPIFailureDetailSize = 1000
+	if immediateTaskQConfig.MaxStateAPIFailureDetailSize == 0 {
+		immediateTaskQConfig.MaxStateAPIFailureDetailSize = 1000
 	}
 	timerTaskQConfig := &c.AsyncService.TimerTaskQueue
 	if timerTaskQConfig.MaxTimerPreloadLookAhead == 0 {

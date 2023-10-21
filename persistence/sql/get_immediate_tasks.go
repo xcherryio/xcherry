@@ -20,21 +20,21 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) GetWorkerTasks(
-	ctx context.Context, request persistence.GetWorkerTasksRequest,
-) (*persistence.GetWorkerTasksResponse, error) {
-	workerTasks, err := p.session.BatchSelectWorkerTasks(
+func (p sqlProcessStoreImpl) GetImmediateTasks(
+	ctx context.Context, request persistence.GetImmediateTasksRequest,
+) (*persistence.GetImmediateTasksResponse, error) {
+	immediateTasks, err := p.session.BatchSelectImmediateTasks(
 		ctx, request.ShardId, request.StartSequenceInclusive, request.PageSize)
 	if err != nil {
 		return nil, err
 	}
-	var tasks []persistence.WorkerTask
-	for _, t := range workerTasks {
-		info, err := persistence.BytesToWorkerTaskInfo(t.Info)
+	var tasks []persistence.ImmediateTask
+	for _, t := range immediateTasks {
+		info, err := persistence.BytesToImmediateTaskInfo(t.Info)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, persistence.WorkerTask{
+		tasks = append(tasks, persistence.ImmediateTask{
 			ShardId:            request.ShardId,
 			TaskSequence:       ptr.Any(t.TaskSequence),
 			TaskType:           t.TaskType,
@@ -43,15 +43,15 @@ func (p sqlProcessStoreImpl) GetWorkerTasks(
 				StateId:         t.StateId,
 				StateIdSequence: t.StateIdSequence,
 			},
-			WorkerTaskInfo: info,
+			ImmediateTaskInfo: info,
 		})
 	}
-	resp := &persistence.GetWorkerTasksResponse{
+	resp := &persistence.GetImmediateTasksResponse{
 		Tasks: tasks,
 	}
-	if len(workerTasks) > 0 {
-		firstTask := workerTasks[0]
-		lastTask := workerTasks[len(workerTasks)-1]
+	if len(immediateTasks) > 0 {
+		firstTask := immediateTasks[0]
+		lastTask := immediateTasks[len(immediateTasks)-1]
 		resp.MinSequenceInclusive = firstTask.TaskSequence
 		resp.MaxSequenceInclusive = lastTask.TaskSequence
 	}

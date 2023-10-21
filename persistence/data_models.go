@@ -26,9 +26,9 @@ type (
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId uuid.UUID
-		AlreadyStarted     bool
-		HasNewWorkerTask   bool
+		ProcessExecutionId  uuid.UUID
+		AlreadyStarted      bool
+		HasNewImmediateTask bool
 	}
 
 	StopProcessRequest struct {
@@ -51,51 +51,51 @@ type (
 		NotExists bool
 	}
 
-	GetWorkerTasksRequest struct {
+	GetImmediateTasksRequest struct {
 		ShardId                int32
 		StartSequenceInclusive int64
 		PageSize               int32
 	}
 
-	GetWorkerTasksResponse struct {
-		Tasks []WorkerTask
+	GetImmediateTasksResponse struct {
+		Tasks []ImmediateTask
 		// MinSequenceInclusive is the sequence of first task in the order
 		MinSequenceInclusive int64
 		// MinSequenceInclusive is the sequence of last task in the order
 		MaxSequenceInclusive int64
 	}
 
-	DeleteWorkerTasksRequest struct {
+	DeleteImmediateTasksRequest struct {
 		ShardId int32
 
 		MinTaskSequenceInclusive int64
 		MaxTaskSequenceInclusive int64
 	}
 
-	BackoffWorkerTaskRequest struct {
+	BackoffImmediateTaskRequest struct {
 		LastFailureStatus    int32
 		LastFailureDetails   string
 		Prep                 PrepareStateExecutionResponse
-		Task                 WorkerTask
+		Task                 ImmediateTask
 		FireTimestampSeconds int64
 	}
 
-	ConvertTimerTaskToWorkerTaskRequest struct {
+	ConvertTimerTaskToImmediateTaskRequest struct {
 		Task TimerTask
 	}
 
-	WorkerTask struct {
+	ImmediateTask struct {
 		ShardId int32
 		// TaskSequence represents the increasing order in the queue of the shard
 		// It should be empty when inserting, because the persistence/database will
 		// generate the value automatically
 		TaskSequence *int64
 
-		TaskType WorkerTaskType
+		TaskType ImmediateTaskType
 
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
-		WorkerTaskInfo WorkerTaskInfoJson
+		ImmediateTaskInfo ImmediateTaskInfoJson
 
 		// only needed for distributed database that doesn't support global secondary index
 		OptionalPartitionKey *PartitionKey
@@ -197,7 +197,7 @@ type (
 	}
 
 	CompleteWaitUntilExecutionResponse struct {
-		HasNewWorkerTask bool
+		HasNewImmediateTask bool
 	}
 
 	CompleteExecuteExecutionRequest struct {
@@ -210,11 +210,11 @@ type (
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		HasNewWorkerTask bool
+		HasNewImmediateTask bool
 	}
 )
 
-func (t WorkerTask) GetTaskSequence() int64 {
+func (t ImmediateTask) GetTaskSequence() int64 {
 	if t.TaskSequence == nil {
 		// this shouldn't happen!
 		return -1
@@ -222,7 +222,7 @@ func (t WorkerTask) GetTaskSequence() int64 {
 	return *t.TaskSequence
 }
 
-func (t WorkerTask) GetTaskId() string {
+func (t ImmediateTask) GetTaskId() string {
 	if t.TaskSequence == nil {
 		return "<WRONG ID, TaskSequence IS EMPTY>"
 	}

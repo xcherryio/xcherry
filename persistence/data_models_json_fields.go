@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xdblab/xdb/common/uuid"
 	"time"
 )
 
@@ -137,23 +138,31 @@ type WorkerTaskBackoffInfoJson struct {
 	FirstAttemptTimestampSeconds int64 `json:"firstAttemptTimestampSeconds"`
 }
 
-type WorkerTaskInfoJson struct {
-	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
+type LocalQueueMessageInfoJson struct {
+	QueueName string    `json:"queueName"`
+	DedupId   uuid.UUID `json:"dedupId"`
 }
 
-func BytesToWorkerTaskInfo(bytes []byte) (WorkerTaskInfoJson, error) {
-	var obj WorkerTaskInfoJson
+type ImmediateTaskInfoJson struct {
+	// used when the `task_type` is waitUntil or execute
+	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
+	// used when the `task_type` is localQueueMessage
+	LocalQueueMessageInfo *LocalQueueMessageInfoJson `json:"localQueueMessageInfo"`
+}
+
+func BytesToImmediateTaskInfo(bytes []byte) (ImmediateTaskInfoJson, error) {
+	var obj ImmediateTaskInfoJson
 	err := json.Unmarshal(bytes, &obj)
 	return obj, err
 }
 
-func FromWorkerTaskInfoIntoBytes(obj WorkerTaskInfoJson) ([]byte, error) {
+func FromImmediateTaskInfoIntoBytes(obj ImmediateTaskInfoJson) ([]byte, error) {
 	return json.Marshal(obj)
 }
 
 type TimerTaskInfoJson struct {
 	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
-	WorkerTaskType        *WorkerTaskType            `json:"workerTaskType"`
+	WorkerTaskType        *ImmediateTaskType         `json:"workerTaskType"`
 }
 
 func BytesToTimerTaskInfo(bytes []byte) (TimerTaskInfoJson, error) {
@@ -162,7 +171,7 @@ func BytesToTimerTaskInfo(bytes []byte) (TimerTaskInfoJson, error) {
 	return obj, err
 }
 
-func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *WorkerTaskType) ([]byte, error) {
+func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *ImmediateTaskType) ([]byte, error) {
 	obj := TimerTaskInfoJson{
 		WorkerTaskBackoffInfo: backoff,
 		WorkerTaskType:        taskType,

@@ -56,8 +56,8 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
-	if resp.HasNewWorkerTask {
-		s.notifyRemoteWorkerTaskAsync(ctx, xdbapi.NotifyWorkerTasksRequest{
+	if resp.HasNewImmediateTask {
+		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
@@ -109,7 +109,7 @@ func (s serviceImpl) DescribeLatestProcess(
 	return resp.Response, nil
 }
 
-func (s serviceImpl) notifyRemoteWorkerTaskAsync(_ context.Context, req xdbapi.NotifyWorkerTasksRequest) {
+func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbapi.NotifyImmediateTasksRequest) {
 	// execute in the background as best effort
 	go func() {
 
@@ -124,13 +124,13 @@ func (s serviceImpl) notifyRemoteWorkerTaskAsync(_ context.Context, req xdbapi.N
 			},
 		})
 
-		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyWorkerTasksPost(ctx)
-		httpResp, err := request.NotifyWorkerTasksRequest(req).Execute()
+		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyImmediateTasksPost(ctx)
+		httpResp, err := request.NotifyImmediateTasksRequest(req).Execute()
 		if httpResp != nil {
 			defer httpResp.Body.Close()
 		}
 		if err != nil {
-			s.logger.Error("failed to notify remote worker task", tag.Error(err))
+			s.logger.Error("failed to notify remote immediate task", tag.Error(err))
 			// TODO add backoff and retry
 			return
 		}

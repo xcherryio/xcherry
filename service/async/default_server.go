@@ -25,7 +25,7 @@ import (
 	"net/http"
 )
 
-const PathNotifyWorkerTasks = "/internal/api/v1/xdb/notify-worker-tasks"
+const PathNotifyImmediateTasks = "/internal/api/v1/xdb/notify-immediate-tasks"
 const PathNotifyTimerTasks = "/internal/api/v1/xdb/notify-timer-tasks"
 
 type defaultSever struct {
@@ -47,7 +47,7 @@ func NewDefaultAPIServerWithGin(
 
 	handler := newGinHandler(cfg, svc, logger)
 
-	engine.POST(PathNotifyWorkerTasks, handler.NotifyWorkerTasks)
+	engine.POST(PathNotifyImmediateTasks, handler.NotifyImmediateTasks)
 	engine.POST(PathNotifyTimerTasks, handler.NotifyTimerTasks)
 
 	svrCfg := cfg.AsyncService.InternalHttpServer

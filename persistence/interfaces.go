@@ -26,14 +26,14 @@ type (
 		StopProcess(ctx context.Context, request StopProcessRequest) (*StopProcessResponse, error)
 		DescribeLatestProcess(ctx context.Context, request DescribeLatestProcessRequest) (*DescribeLatestProcessResponse, error)
 
-		GetWorkerTasks(ctx context.Context, request GetWorkerTasksRequest) (*GetWorkerTasksResponse, error)
-		DeleteWorkerTasks(ctx context.Context, request DeleteWorkerTasksRequest) error
-		BackoffWorkerTask(ctx context.Context, request BackoffWorkerTaskRequest) error
+		GetImmediateTasks(ctx context.Context, request GetImmediateTasksRequest) (*GetImmediateTasksResponse, error)
+		DeleteImmediateTasks(ctx context.Context, request DeleteImmediateTasksRequest) error
+		BackoffImmediateTask(ctx context.Context, request BackoffImmediateTaskRequest) error
 		CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
 		GetTimerTasksUpToTimestamp(ctx context.Context, request GetTimerTasksRequest) (*GetTimerTasksResponse, error)
 		GetTimerTasksForTimestamps(ctx context.Context, request GetTimerTasksForTimestampsRequest) (*GetTimerTasksResponse, error)
-		ConvertTimerTaskToWorkerTask(ctx context.Context, request ConvertTimerTaskToWorkerTaskRequest) error
+		ConvertTimerTaskToImmediateTask(ctx context.Context, request ConvertTimerTaskToImmediateTaskRequest) error
 
 		PrepareStateExecution(ctx context.Context, request PrepareStateExecutionRequest) (*PrepareStateExecutionResponse, error)
 		CompleteWaitUntilExecution(ctx context.Context, request CompleteWaitUntilExecutionRequest) (*CompleteWaitUntilExecutionResponse, error)
