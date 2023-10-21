@@ -21,10 +21,10 @@ import (
 )
 
 const selectLatestExecutionQuery = `SELECT
-	ce.process_execution_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
-	FROM xdb_sys_latest_process_executions ce
-	INNER JOIN xdb_sys_process_executions e ON e.process_id = ce.process_id AND e.id = ce.process_execution_id
-	WHERE ce.namespace = $1 AND ce.process_id = $2`
+	le.process_execution_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
+	FROM xdb_sys_latest_process_executions le
+	INNER JOIN xdb_sys_process_executions e ON e.process_id = le.process_id AND e.id = le.process_execution_id
+	WHERE le.namespace = $1 AND le.process_id = $2`
 
 func (d dbSession) SelectLatestProcessExecution(
 	ctx context.Context, namespace, processId string,

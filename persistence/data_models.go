@@ -212,6 +212,18 @@ type (
 	CompleteExecuteExecutionResponse struct {
 		HasNewImmediateTask bool
 	}
+
+	PublishToLocalQueueRequest struct {
+		Namespace string
+		ProcessId string
+		Messages  []xdbapi.LocalQueueMessage
+	}
+
+	PublishToLocalQueueResponse struct {
+		ProcessExecutionId  uuid.UUID
+		HasNewImmediateTask bool
+		NotExists           bool
+	}
 )
 
 func (t ImmediateTask) GetTaskSequence() int64 {

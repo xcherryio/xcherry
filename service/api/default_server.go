@@ -27,12 +27,13 @@ import (
 const PathStartProcessExecution = "/api/v1/xdb/service/process-execution/start"
 const PathDescribeProcessExecution = "/api/v1/xdb/service/process-execution/describe"
 const PathStopProcessExecution = "/api/v1/xdb/service/process-execution/stop"
+const PathPublishToLocalQueue = "/api/v1/xdb/service/process-execution/publish-to-local-queue"
 
 type defaultSever struct {
 	rootCtx context.Context
 	cfg     config.Config
 	logger  log.Logger
-	
+
 	engine     *gin.Engine
 	httpServer *http.Server
 }
@@ -47,6 +48,7 @@ func NewDefaultAPIServerWithGin(
 	engine.POST(PathStartProcessExecution, handler.StartProcess)
 	engine.POST(PathDescribeProcessExecution, handler.DescribeProcess)
 	engine.POST(PathStopProcessExecution, handler.StopProcess)
+	engine.POST(PathPublishToLocalQueue, handler.PublishToLocalQueue)
 
 	svrCfg := cfg.ApiService.HttpServer
 	httpServer := &http.Server{

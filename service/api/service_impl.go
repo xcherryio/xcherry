@@ -88,11 +88,6 @@ func (s serviceImpl) StopProcess(
 	return nil
 }
 
-func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
-	s.logger.Error("unknown error on operation", tag.Error(err))
-	return NewErrorWithStatus(500, err.Error())
-}
-
 func (s serviceImpl) DescribeLatestProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
 ) (response *xdbapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
@@ -107,6 +102,32 @@ func (s serviceImpl) DescribeLatestProcess(
 		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 	return resp.Response, nil
+}
+
+func (s serviceImpl) PublishToLocalQueue(ctx context.Context, request xdbapi.PublishToLocalQueueRequest) *ErrorWithStatus {
+	resp, err := s.store.PublishToLocalQueue(ctx, persistence.PublishToLocalQueueRequest{
+		Namespace: request.GetNamespace(),
+		ProcessId: request.GetProcessId(),
+		Messages:  request.GetMessages(),
+	})
+	if err != nil {
+		return s.handleUnknownError(err)
+	}
+
+	if resp.NotExists {
+		return NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
+	}
+
+	if resp.HasNewImmediateTask {
+		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            persistence.DefaultShardId,
+			Namespace:          &request.Namespace,
+			ProcessId:          &request.ProcessId,
+			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
+		})
+	}
+
+	return nil
 }
 
 func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbapi.NotifyImmediateTasksRequest) {
@@ -135,4 +156,9 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbap
 			return
 		}
 	}()
+}
+
+func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
+	s.logger.Error("unknown error on operation", tag.Error(err))
+	return NewErrorWithStatus(500, err.Error())
 }

@@ -205,4 +205,18 @@ type (
 		FireTimeUnixSeconds      []int64
 		MinTaskSequenceInclusive int64
 	}
+
+	LocalQueueRow struct {
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+
+		QueueName string
+
+		DedupId uuid.UUID
+		// See the top of the file for why we need this field
+		DedupIdString string
+
+		Payload types.JSONText
+	}
 )

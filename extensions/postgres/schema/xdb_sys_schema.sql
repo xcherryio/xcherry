@@ -65,3 +65,11 @@ CREATE TABLE xdb_sys_timer_tasks(
     info jsonb ,
     PRIMARY KEY (shard_id, fire_time_unix_seconds, task_sequence)    
 );
+
+CREATE TABLE xdb_sys_local_queue(
+    process_execution_id uuid,
+    queue_name VARCHAR(255),
+    dedup_id uuid,
+    payload jsonb,
+    PRIMARY KEY (process_execution_id, queue_name, dedup_id)
+);

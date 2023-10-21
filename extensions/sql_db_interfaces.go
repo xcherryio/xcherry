@@ -67,6 +67,8 @@ type transactionalCRUD interface {
 
 	DeleteImmediateTask(ctx context.Context, filter ImmediateTaskRowDeleteFilter) error
 	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
+
+	InsertLocalQueue(ctx context.Context, row LocalQueueRow) error
 }
 
 type nonTransactionalCRUD interface {

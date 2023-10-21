@@ -200,3 +200,15 @@ func (d dbTx) DeleteTimerTask(ctx context.Context, filter extensions.TimerTaskRo
 	_, err := d.tx.ExecContext(ctx, deleteSingleTimerTaskQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.TaskSequence)
 	return err
 }
+
+const insertLocalQueueQuery = `INSERT INTO xdb_sys_local_queue
+	(process_execution_id, queue_name, dedup_id, payload) VALUES 
+   	(:process_execution_id_string, :queue_name, :dedup_id_string, :payload)
+`
+
+func (d dbTx) InsertLocalQueue(ctx context.Context, row extensions.LocalQueueRow) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	row.DedupIdString = row.DedupId.String()
+	_, err := d.tx.NamedExecContext(ctx, insertLocalQueueQuery, row)
+	return err
+}
