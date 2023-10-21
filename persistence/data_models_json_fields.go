@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xdblab/xdb/common/uuid"
 	"time"
 )
 
@@ -137,11 +138,16 @@ type WorkerTaskBackoffInfoJson struct {
 	FirstAttemptTimestampSeconds int64 `json:"firstAttemptTimestampSeconds"`
 }
 
+type LocalQueueMessageInfoJson struct {
+	QueueName string    `json:"queueName"`
+	DedupId   uuid.UUID `json:"dedupId"`
+}
+
 type ImmediateTaskInfoJson struct {
 	// used when the `task_type` is waitUntil or execute
 	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
 	// used when the `task_type` is localQueueMessage
-	LocalQueueMessagePayload *xdbapi.EncodedObject `json:"localQueueMessagePayload"`
+	LocalQueueMessageInfo *LocalQueueMessageInfoJson `json:"localQueueMessageInfo"`
 }
 
 func BytesToImmediateTaskInfo(bytes []byte) (ImmediateTaskInfoJson, error) {

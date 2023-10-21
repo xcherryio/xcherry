@@ -108,6 +108,6 @@ func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, `DELETE FROM xdb_sys_immediate_tasks WHERE shard_id = $1`, shardId)
+	_, err = d.db.ExecContext(ctx, `DELETE FROM xdb_sys_timer_tasks WHERE shard_id = $1`, shardId)
 	return err
 }

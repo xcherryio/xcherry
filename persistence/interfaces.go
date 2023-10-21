@@ -29,7 +29,7 @@ type (
 		GetImmediateTasks(ctx context.Context, request GetImmediateTasksRequest) (*GetImmediateTasksResponse, error)
 		DeleteImmediateTasks(ctx context.Context, request DeleteImmediateTasksRequest) error
 		BackoffImmediateTask(ctx context.Context, request BackoffImmediateTaskRequest) error
-		CleanUpImmediateTasksForTest(ctx context.Context, shardId int32) error
+		CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
 		GetTimerTasksUpToTimestamp(ctx context.Context, request GetTimerTasksRequest) (*GetTimerTasksResponse, error)
 		GetTimerTasksForTimestamps(ctx context.Context, request GetTimerTasksForTimestampsRequest) (*GetTimerTasksResponse, error)
