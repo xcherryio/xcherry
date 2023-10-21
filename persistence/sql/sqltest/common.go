@@ -54,7 +54,7 @@ func startProcess(
 
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
-	ass.True(startResp.HasNewWorkerTask)
+	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
 }
@@ -85,7 +85,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
-	ass.True(startResp.HasNewWorkerTask)
+	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
 }
@@ -102,7 +102,7 @@ func startProcessWithTerminateIfRunningPolicy(
 
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
-	ass.True(startResp.HasNewWorkerTask)
+	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
 }
@@ -119,7 +119,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 
 	ass.Nil(err)
 	ass.False(startResp.AlreadyStarted)
-	ass.True(startResp.HasNewWorkerTask)
+	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
 }
@@ -234,7 +234,7 @@ func retryStartProcessForFailure(
 	})
 	ass.Nil(err)
 	ass.True(startResp2.AlreadyStarted)
-	ass.False(startResp2.HasNewWorkerTask)
+	ass.False(startResp2.HasNewImmediateTask)
 }
 
 func describeProcess(
@@ -261,10 +261,10 @@ func describeProcess(
 	ass.Equal(processStatus, descResp.Response.GetStatus())
 }
 
-func checkAndGetWorkerTasks(
+func checkAndGetImmediateTasks(
 	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
-) (int64, int64, []persistence.WorkerTask) {
-	getTasksResp, err := store.GetWorkerTasks(ctx, persistence.GetWorkerTasksRequest{
+) (int64, int64, []persistence.ImmediateTask) {
+	getTasksResp, err := store.GetImmediateTasks(ctx, persistence.GetImmediateTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
@@ -306,24 +306,24 @@ func getAndCheckTimerTasksUpForTimestamps(
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
 }
 
-func verifyWorkerTaskNoInfo(
-	ass *assert.Assertions, task persistence.WorkerTask,
-	taskType persistence.WorkerTaskType, stateExeId string,
+func verifyImmediateTaskNoInfo(
+	ass *assert.Assertions, task persistence.ImmediateTask,
+	taskType persistence.ImmediateTaskType, stateExeId string,
 ) {
-	verifyWorkerTask(ass, task, taskType, stateExeId, persistence.WorkerTaskInfoJson{})
+	verifyImmediateTask(ass, task, taskType, stateExeId, persistence.ImmediateTaskInfoJson{})
 }
 
-func verifyWorkerTask(
-	ass *assert.Assertions, task persistence.WorkerTask,
-	taskType persistence.WorkerTaskType, stateExeId string,
-	info persistence.WorkerTaskInfoJson,
+func verifyImmediateTask(
+	ass *assert.Assertions, task persistence.ImmediateTask,
+	taskType persistence.ImmediateTaskType, stateExeId string,
+	info persistence.ImmediateTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
 	ass.Equal(taskType, task.TaskType)
 	ass.Equal(stateExeId, task.GetStateExecutionId())
 	ass.True(task.TaskSequence != nil)
-	ass.Equal(info, task.WorkerTaskInfo)
+	ass.Equal(info, task.ImmediateTaskInfo)
 }
 
 func verifyTimerTask(
@@ -339,16 +339,16 @@ func verifyTimerTask(
 	ass.Equal(taskInfo, task.TimerTaskInfo)
 }
 
-func deleteAndVerifyWorkerTasksDeleted(
+func deleteAndVerifyImmediateTasksDeleted(
 	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, minSeq, maxSeq int64,
 ) {
-	err := store.DeleteWorkerTasks(ctx, persistence.DeleteWorkerTasksRequest{
+	err := store.DeleteImmediateTasks(ctx, persistence.DeleteImmediateTasksRequest{
 		ShardId:                  persistence.DefaultShardId,
 		MinTaskSequenceInclusive: minSeq,
 		MaxTaskSequenceInclusive: maxSeq,
 	})
 	ass.Nil(err)
-	checkAndGetWorkerTasks(ctx, ass, store, 0) // Expect no tasks
+	checkAndGetImmediateTasks(ctx, ass, store, 0) // Expect no tasks
 }
 
 func prepareStateExecution(
@@ -383,11 +383,11 @@ func verifyStateExecution(
 
 func completeWaitUntilExecution(
 	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, workerTask persistence.WorkerTask, prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
 ) {
 	stateExeId := persistence.StateExecutionId{
-		StateId:         workerTask.StateId,
-		StateIdSequence: workerTask.StateIdSequence,
+		StateId:         immediateTask.StateId,
+		StateIdSequence: immediateTask.StateIdSequence,
 	}
 	compWaitResp, err := store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
 		ProcessExecutionId: prcExeId,
@@ -399,17 +399,17 @@ func completeWaitUntilExecution(
 		TaskShardId: persistence.DefaultShardId,
 	})
 	ass.Nil(err)
-	ass.True(compWaitResp.HasNewWorkerTask)
+	ass.True(compWaitResp.HasNewImmediateTask)
 }
 
 func completeExecuteExecution(
 	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, workerTask persistence.WorkerTask, prep *persistence.PrepareStateExecutionResponse,
-	stateDecision xdbapi.StateDecision, hasNewWorkerTask bool,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
+	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
 ) {
 	stateExeId := persistence.StateExecutionId{
-		StateId:         workerTask.StateId,
-		StateIdSequence: workerTask.StateIdSequence,
+		StateId:         immediateTask.StateId,
+		StateIdSequence: immediateTask.StateIdSequence,
 	}
 	compWaitResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
 		ProcessExecutionId: prcExeId,
@@ -419,5 +419,5 @@ func completeExecuteExecution(
 		TaskShardId:        persistence.DefaultShardId,
 	})
 	ass.Nil(err)
-	ass.Equal(hasNewWorkerTask, compWaitResp.HasNewWorkerTask)
+	ass.Equal(hasNewImmediateTask, compWaitResp.HasNewImmediateTask)
 }

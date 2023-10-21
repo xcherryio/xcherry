@@ -20,10 +20,10 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) DeleteWorkerTasks(
-	ctx context.Context, request persistence.DeleteWorkerTasksRequest,
+func (p sqlProcessStoreImpl) DeleteImmediateTasks(
+	ctx context.Context, request persistence.DeleteImmediateTasksRequest,
 ) error {
-	return p.session.BatchDeleteWorkerTask(ctx, extensions.WorkerTaskRangeDeleteFilter{
+	return p.session.BatchDeleteImmediateTask(ctx, extensions.ImmediateTaskRangeDeleteFilter{
 		ShardId:                  request.ShardId,
 		MinTaskSequenceInclusive: request.MinTaskSequenceInclusive,
 		MaxTaskSequenceInclusive: request.MaxTaskSequenceInclusive,

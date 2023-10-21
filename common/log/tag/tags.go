@@ -148,3 +148,7 @@ func Key(v string) Tag {
 func DefaultValue(v interface{}) Tag {
 	return newObjectTag("default-value", v)
 }
+
+func ImmediateTaskType(v string) Tag {
+	return newStringTag("ImmediateTaskType", v)
+}

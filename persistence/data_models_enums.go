@@ -78,19 +78,22 @@ func (e StateExecutionStatus) String() string {
 	}
 }
 
-type WorkerTaskType int32
+type ImmediateTaskType int32
 
 const (
-	WorkerTaskTypeWaitUntil WorkerTaskType = 1
-	WorkerTaskTypeExecute   WorkerTaskType = 2
+	ImmediateTaskTypeWaitUntil            ImmediateTaskType = 1
+	ImmediateTaskTypeExecute              ImmediateTaskType = 2
+	ImmediateTaskTypeNewLocalQueueMessage ImmediateTaskType = 3
 )
 
-func (e WorkerTaskType) String() string {
+func (e ImmediateTaskType) String() string {
 	switch e {
-	case WorkerTaskTypeWaitUntil:
+	case ImmediateTaskTypeWaitUntil:
 		return "WaitUntil"
-	case WorkerTaskTypeExecute:
+	case ImmediateTaskTypeExecute:
 		return "Execute"
+	case ImmediateTaskTypeNewLocalQueueMessage:
+		return "NewLocalQueueMessage"
 	default:
 		panic("this is not supported")
 	}

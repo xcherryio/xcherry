@@ -36,15 +36,20 @@ CREATE TABLE xdb_sys_async_state_executions(
    PRIMARY KEY (process_execution_id, state_id, state_id_sequence)
 );
 
-CREATE TABLE xdb_sys_worker_tasks(
+CREATE TABLE xdb_sys_immediate_tasks(
     shard_id INTEGER NOT NULL, -- for sharding xdb-local-mq
     task_sequence bigserial,   
     --
-    task_type SMALLINT NOT NULL, -- 1: waitUntil 2: execute
-    process_execution_id uuid, -- for looking up xdb_sys_async_state_executions
+    task_type SMALLINT NOT NULL, -- 1: waitUntil 2: execute 3: localQueueMessage
+    process_execution_id uuid,
+    -- if the `task_type` is localQueueMessage, the value of state_id is "".
     state_id VARCHAR(255), -- for looking up xdb_sys_async_state_executions
+    -- if the `task_type` is localQueueMessage, the value of state_id_sequence is 0.
     state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
-    info jsonb ,
+    -- the info represents various information depending on the `task_type`:
+    -- if the `task_type` is waitUntil or execute, the value corresponds to the state execution information.
+    -- if the `task_type` is localQueueMessage, the value corresponds to the message information.
+    info jsonb,
     PRIMARY KEY (shard_id, task_sequence)
 );
 

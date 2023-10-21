@@ -26,43 +26,43 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-type workerTaskQueueImpl struct {
+type immediateTaskQueueImpl struct {
 	shardId int32
 	store   persistence.ProcessStore
 	logger  log.Logger
 	rootCtx context.Context
 	cfg     config.Config
 
-	processor WorkerTaskProcessor
+	processor ImmediateTaskProcessor
 
-	// timers for polling worker tasks and dispatch to processor
+	// timers for polling immediate tasks and dispatch to processor
 	pollTimer TimerGate
-	// timers for committing(deleting) completed worker tasks
+	// timers for committing(deleting) completed immediate tasks
 	commitTimer TimerGate
 
 	// tasksToCommitChan is the channel to receive completed tasks from processor
-	tasksToCommitChan chan persistence.WorkerTask
-	// currentReadCursor is the starting sequenceId(inclusive) to read next worker tasks
+	tasksToCommitChan chan persistence.ImmediateTask
+	// currentReadCursor is the starting sequenceId(inclusive) to read next immediate tasks
 	currentReadCursor int64
 	// pendingTaskSequenceToPage is the mapping from task sequence to page
-	pendingTaskSequenceToPage map[int64]*workerTaskPage
+	pendingTaskSequenceToPage map[int64]*immediateTaskPage
 	// completedPages is the pages that are ready to be committed
-	completedPages []*workerTaskPage
+	completedPages []*immediateTaskPage
 }
 
-type workerTaskPage struct {
+type immediateTaskPage struct {
 	minTaskSequence int64
 	maxTaskSequence int64
 	pendingCount    int
 }
 
-func NewWorkerTaskQueueImpl(
+func NewImmediateTaskQueueImpl(
 	rootCtx context.Context, shardId int32, cfg config.Config, store persistence.ProcessStore,
-	processor WorkerTaskProcessor, logger log.Logger,
-) WorkerTaskQueue {
-	qCfg := cfg.AsyncService.WorkerTaskQueue
+	processor ImmediateTaskProcessor, logger log.Logger,
+) ImmediateTaskQueue {
+	qCfg := cfg.AsyncService.ImmediateTaskQueue
 
-	return &workerTaskQueueImpl{
+	return &immediateTaskQueueImpl{
 		shardId: shardId,
 		store:   store,
 		logger:  logger.WithTags(tag.Shard(shardId)),
@@ -72,13 +72,13 @@ func NewWorkerTaskQueueImpl(
 		pollTimer:                 NewLocalTimerGate(logger),
 		commitTimer:               NewLocalTimerGate(logger),
 		processor:                 processor,
-		tasksToCommitChan:         make(chan persistence.WorkerTask, qCfg.ProcessorBufferSize),
+		tasksToCommitChan:         make(chan persistence.ImmediateTask, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
-		pendingTaskSequenceToPage: make(map[int64]*workerTaskPage),
+		pendingTaskSequenceToPage: make(map[int64]*immediateTaskPage),
 	}
 }
 
-func (w *workerTaskQueueImpl) Stop(ctx context.Context) error {
+func (w *immediateTaskQueueImpl) Stop(ctx context.Context) error {
 	// close timer to prevent goroutine leakage
 	w.pollTimer.Close()
 	w.commitTimer.Close()
@@ -87,14 +87,14 @@ func (w *workerTaskQueueImpl) Stop(ctx context.Context) error {
 	return w.commitCompletedPages(ctx)
 }
 
-func (w *workerTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyWorkerTasksRequest) {
+func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyImmediateTasksRequest) {
 	w.pollTimer.Update(time.Now())
 }
 
-func (w *workerTaskQueueImpl) Start() error {
-	qCfg := w.cfg.AsyncService.WorkerTaskQueue
+func (w *immediateTaskQueueImpl) Start() error {
+	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 
-	w.processor.AddWorkerTaskQueue(w.shardId, w.tasksToCommitChan)
+	w.processor.AddImmediateTaskQueue(w.shardId, w.tasksToCommitChan)
 
 	// fire immediately to make the first poll for the first page
 	w.pollTimer.Update(time.Now())
@@ -122,30 +122,30 @@ func (w *workerTaskQueueImpl) Start() error {
 	return nil
 }
 
-func (w *workerTaskQueueImpl) getNextPollTime(interval, jitter time.Duration) time.Time {
+func (w *immediateTaskQueueImpl) getNextPollTime(interval, jitter time.Duration) time.Time {
 	jitterD := time.Duration(rand.Int63n(int64(jitter)))
 	return time.Now().Add(interval).Add(jitterD)
 }
 
-func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
-	qCfg := w.cfg.AsyncService.WorkerTaskQueue
+func (w *immediateTaskQueueImpl) pollAndDispatchAndPrepareNext() {
+	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 
-	resp, err := w.store.GetWorkerTasks(
-		w.rootCtx, persistence.GetWorkerTasksRequest{
+	resp, err := w.store.GetImmediateTasks(
+		w.rootCtx, persistence.GetImmediateTasksRequest{
 			ShardId:                w.shardId,
 			StartSequenceInclusive: w.currentReadCursor,
 			PageSize:               qCfg.PollPageSize,
 		})
 
 	if err != nil {
-		w.logger.Error("failed at polling worker task", tag.Error(err))
+		w.logger.Error("failed at polling immediate tasks", tag.Error(err))
 		// schedule an earlier next poll
 		w.pollTimer.Update(w.getNextPollTime(0, qCfg.IntervalJitter))
 	} else {
 		if len(resp.Tasks) > 0 {
 			w.currentReadCursor = resp.MaxSequenceInclusive + 1
 
-			page := &workerTaskPage{
+			page := &immediateTaskPage{
 				minTaskSequence: resp.MinSequenceInclusive,
 				maxTaskSequence: resp.MaxSequenceInclusive,
 				pendingCount:    len(resp.Tasks),
@@ -163,21 +163,21 @@ func (w *workerTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 	}
 }
 
-func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
+func (w *immediateTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 	if len(w.completedPages) > 0 {
-		w.completedPages = mergeWorkerTaskPages(w.completedPages)
+		w.completedPages = mergeImmediateTaskPages(w.completedPages)
 
 		for idx, page := range w.completedPages {
-			req := persistence.DeleteWorkerTasksRequest{
+			req := persistence.DeleteImmediateTasksRequest{
 				ShardId:                  w.shardId,
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
 			}
-			w.logger.Debug("completing worker task page", tag.Value(req))
+			w.logger.Debug("completing immediate task page", tag.Value(req))
 
-			err := w.store.DeleteWorkerTasks(ctx, req)
+			err := w.store.DeleteImmediateTasks(ctx, req)
 			if err != nil {
-				w.logger.Error("failed at deleting completed worker tasks", tag.Error(err))
+				w.logger.Error("failed at deleting completed immediate tasks", tag.Error(err))
 				// fix the completed pages -- current page to the end
 				// return and wait for next time
 				w.completedPages = w.completedPages[idx:]
@@ -187,25 +187,25 @@ func (w *workerTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
 		// reset to empty
 		w.completedPages = nil
 	} else {
-		w.logger.Debug("no worker tasks to commit/delete")
+		w.logger.Debug("no immediate tasks to commit/delete")
 	}
 	return nil
 }
 
-func mergeWorkerTaskPages(workTaskPages []*workerTaskPage) []*workerTaskPage {
+func mergeImmediateTaskPages(workTaskPages []*immediateTaskPage) []*immediateTaskPage {
 	// merge pages, e.g.,
 	// [1, 2], [3, 4], [7, 8] -> [1, 4], [7, 8]
 	sort.Slice(workTaskPages, func(i, j int) bool {
 		return workTaskPages[i].minTaskSequence < workTaskPages[j].minTaskSequence
 	})
 
-	var pages []*workerTaskPage
+	var pages []*immediateTaskPage
 	for _, page := range workTaskPages {
 		if len(pages) == 0 || pages[len(pages)-1].maxTaskSequence+1 < page.minTaskSequence {
 			pages = append(pages, page)
 		} else {
 			if pages[len(pages)-1].maxTaskSequence < page.maxTaskSequence {
-				page = &workerTaskPage{
+				page = &immediateTaskPage{
 					minTaskSequence: pages[len(pages)-1].minTaskSequence,
 					maxTaskSequence: page.maxTaskSequence,
 				}
@@ -217,7 +217,7 @@ func mergeWorkerTaskPages(workTaskPages []*workerTaskPage) []*workerTaskPage {
 	return pages
 }
 
-func (w *workerTaskQueueImpl) receiveCompletedTask(task persistence.WorkerTask) {
+func (w *immediateTaskQueueImpl) receiveCompletedTask(task persistence.ImmediateTask) {
 	page := w.pendingTaskSequenceToPage[*task.TaskSequence]
 	delete(w.pendingTaskSequenceToPage, *task.TaskSequence)
 

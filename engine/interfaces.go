@@ -19,7 +19,7 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-// TaskNotifier is to notify the poller(taskQueue) that there is a/some new worker/timer tasks
+// TaskNotifier is to notify the poller(taskQueue) that there is a/some new immediate/timer tasks
 // so that poller can poll the specific process execution.
 // This is needed because adding a new task and polling tasks are in different threads.
 // Note that this is not guaranteed to be atomic. The notification is "best effort".
@@ -29,21 +29,21 @@ import (
 // the task notifier pass in detailed information about process execution so that
 // the taskQueue(poller) can just poll the task from specific partition.
 type TaskNotifier interface {
-	AddWorkerTaskQueue(shardId int32, queue WorkerTaskQueue)
+	AddImmediateTaskQueue(shardId int32, queue ImmediateTaskQueue)
 	AddTimerTaskQueue(shardId int32, queue TimerTaskQueue)
-	NotifyNewWorkerTasks(request xdbapi.NotifyWorkerTasksRequest)
+	NotifyNewImmediateTasks(request xdbapi.NotifyImmediateTasksRequest)
 	NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRequest)
 }
 
-// WorkerTaskQueue is the queue for worker tasks
-type WorkerTaskQueue interface {
+// ImmediateTaskQueue is the queue for immediate tasks
+type ImmediateTaskQueue interface {
 	Start() error
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
-	TriggerPollingTasks(request xdbapi.NotifyWorkerTasksRequest)
+	TriggerPollingTasks(request xdbapi.NotifyImmediateTasksRequest)
 	Stop(ctx context.Context) error
 }
 
-// TimerTaskQueue is the queue for worker tasks
+// TimerTaskQueue is the queue for timer tasks
 type TimerTaskQueue interface {
 	Start() error
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
@@ -51,15 +51,15 @@ type TimerTaskQueue interface {
 	Stop(ctx context.Context) error
 }
 
-type WorkerTaskProcessor interface {
+type ImmediateTaskProcessor interface {
 	Start() error
 	Stop(context.Context) error
 
 	// GetTasksToProcessChan exposed a channel for the queue to send tasks to processor
-	GetTasksToProcessChan() chan<- persistence.WorkerTask
+	GetTasksToProcessChan() chan<- persistence.ImmediateTask
 
-	AddWorkerTaskQueue(
-		shardId int32, tasksToCommitChan chan<- persistence.WorkerTask,
+	AddImmediateTaskQueue(
+		shardId int32, tasksToCommitChan chan<- persistence.ImmediateTask,
 	) (alreadyExisted bool)
 }
 

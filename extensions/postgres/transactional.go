@@ -141,13 +141,13 @@ func (d dbTx) BatchUpdateAsyncStateExecutionsToAbortRunning(
 	return err
 }
 
-const insertWorkerTaskQuery = `INSERT INTO xdb_sys_worker_tasks
+const insertImmediateTaskQuery = `INSERT INTO xdb_sys_immediate_tasks
 	(shard_id, process_execution_id, state_id, state_id_sequence, task_type, info) VALUES
 	(:shard_id, :process_execution_id_string, :state_id, :state_id_sequence, :task_type, :info)`
 
-func (d dbTx) InsertWorkerTask(ctx context.Context, row extensions.WorkerTaskRowForInsert) error {
+func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateTaskRowForInsert) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	_, err := d.tx.NamedExecContext(ctx, insertWorkerTaskQuery, row)
+	_, err := d.tx.NamedExecContext(ctx, insertImmediateTaskQuery, row)
 	return err
 }
 
@@ -185,11 +185,11 @@ func (d dbTx) InsertTimerTask(ctx context.Context, row extensions.TimerTaskRowFo
 	return err
 }
 
-const deleteSingleWorkerTaskQuery = `DELETE 
-	FROM xdb_sys_worker_tasks WHERE shard_id = $1 AND task_sequence= $2`
+const deleteSingleImmediateTaskQuery = `DELETE 
+	FROM xdb_sys_immediate_tasks WHERE shard_id = $1 AND task_sequence= $2`
 
-func (d dbTx) DeleteWorkerTask(ctx context.Context, filter extensions.WorkerTaskRowDeleteFilter) error {
-	_, err := d.tx.ExecContext(ctx, deleteSingleWorkerTaskQuery, filter.ShardId, filter.TaskSequence)
+func (d dbTx) DeleteImmediateTask(ctx context.Context, filter extensions.ImmediateTaskRowDeleteFilter) error {
+	_, err := d.tx.ExecContext(ctx, deleteSingleImmediateTaskQuery, filter.ShardId, filter.TaskSequence)
 	return err
 }
 

@@ -26,7 +26,7 @@ type Server interface {
 
 type Service interface {
 	Start() error
-	NotifyPollingWorkerTask(req xdbapi.NotifyWorkerTasksRequest) error
+	NotifyPollingImmediateTask(req xdbapi.NotifyImmediateTasksRequest) error
 	NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest) error
 	Stop(ctx context.Context) error
 }

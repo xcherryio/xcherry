@@ -19,19 +19,19 @@ import (
 )
 
 type taskNotifierImpl struct {
-	shardIdToWorkerTaskQueue map[int32]engine.WorkerTaskQueue
-	shardIdToTimerTaskQueue  map[int32]engine.TimerTaskQueue
+	shardIdToImmediateTaskQueue map[int32]engine.ImmediateTaskQueue
+	shardIdToTimerTaskQueue     map[int32]engine.TimerTaskQueue
 }
 
 func newTaskNotifierImpl() engine.TaskNotifier {
 	return &taskNotifierImpl{
-		shardIdToWorkerTaskQueue: make(map[int32]engine.WorkerTaskQueue),
-		shardIdToTimerTaskQueue:  make(map[int32]engine.TimerTaskQueue),
+		shardIdToImmediateTaskQueue: make(map[int32]engine.ImmediateTaskQueue),
+		shardIdToTimerTaskQueue:     make(map[int32]engine.TimerTaskQueue),
 	}
 }
 
-func (t *taskNotifierImpl) NotifyNewWorkerTasks(request xdbapi.NotifyWorkerTasksRequest) {
-	queue, ok := t.shardIdToWorkerTaskQueue[request.ShardId]
+func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xdbapi.NotifyImmediateTasksRequest) {
+	queue, ok := t.shardIdToImmediateTaskQueue[request.ShardId]
 	if !ok {
 		panic("the shard is not registered")
 	}
@@ -46,12 +46,12 @@ func (t *taskNotifierImpl) NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRe
 	queue.TriggerPollingTasks(request)
 }
 
-func (t *taskNotifierImpl) AddWorkerTaskQueue(shardId int32, queue engine.WorkerTaskQueue) {
-	_, ok := t.shardIdToWorkerTaskQueue[shardId]
+func (t *taskNotifierImpl) AddImmediateTaskQueue(shardId int32, queue engine.ImmediateTaskQueue) {
+	_, ok := t.shardIdToImmediateTaskQueue[shardId]
 	if ok {
 		panic("the shard is already registered")
 	}
-	t.shardIdToWorkerTaskQueue[shardId] = queue
+	t.shardIdToImmediateTaskQueue[shardId] = queue
 }
 
 func (t *taskNotifierImpl) AddTimerTaskQueue(shardId int32, queue engine.TimerTaskQueue) {

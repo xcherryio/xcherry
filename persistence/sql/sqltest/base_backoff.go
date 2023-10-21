@@ -33,7 +33,7 @@ func SQLBackoffTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	verifyTimerTask(ass, timerTasks1[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
 		persistence.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo1,
-			WorkerTaskType:        ptr.Any(persistence.WorkerTaskTypeWaitUntil)})
+			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
 	fireTime2, backoffInfo2 := startProcessAndBackoffWorkerTask(ass, store, "test-ns-2", firstAttmpTs)
 
@@ -45,15 +45,15 @@ func SQLBackoffTest(ass *assert.Assertions, store persistence.ProcessStore) {
 	verifyTimerTask(ass, timerTasks2[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
 		persistence.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo2,
-			WorkerTaskType:        ptr.Any(persistence.WorkerTaskTypeWaitUntil)})
+			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
-	err := store.ConvertTimerTaskToWorkerTask(ctx, persistence.ConvertTimerTaskToWorkerTaskRequest{
+	err := store.ConvertTimerTaskToImmediateTask(ctx, persistence.ConvertTimerTaskToImmediateTaskRequest{
 		Task: timerTasks1[0],
 	})
 	ass.Nil(err)
 
-	_, _, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	verifyWorkerTask(ass, workerTasks[0], persistence.WorkerTaskTypeWaitUntil, stateId1+"-1", persistence.WorkerTaskInfoJson{
+	_, _, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	verifyImmediateTask(ass, immediateTasks[0], persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1", persistence.ImmediateTaskInfoJson{
 		WorkerTaskBackoffInfo: &persistence.WorkerTaskBackoffInfoJson{
 			CompletedAttempts:            1,
 			FirstAttemptTimestampSeconds: firstAttmpTs,
@@ -72,16 +72,16 @@ func startProcessAndBackoffWorkerTask(
 	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
 
 	// Test waitUntil API execution
-	// Check initial worker tasks.
-	minSeq, maxSeq, workerTasks := checkAndGetWorkerTasks(ctx, ass, store, 1)
-	workerTask := workerTasks[0]
-	verifyWorkerTaskNoInfo(ass, workerTask, persistence.WorkerTaskTypeWaitUntil, stateId1+"-1")
+	// Check initial immediate tasks.
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	immediateTask := immediateTasks[0]
+	verifyImmediateTaskNoInfo(ass, immediateTask, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
-	// Delete and verify worker tasks are deleted.
-	deleteAndVerifyWorkerTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	// Delete and verify immediate tasks are deleted.
+	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, workerTask.StateId, workerTask.StateIdSequence)
+	prep := prepareStateExecution(ctx, ass, store, prcExeId, immediateTask.StateId, immediateTask.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input,
 		persistence.StateExecutionStatusRunning,
 		persistence.StateExecutionStatusUndefined)
@@ -90,15 +90,15 @@ func startProcessAndBackoffWorkerTask(
 		CompletedAttempts:            int32(1),
 		FirstAttemptTimestampSeconds: firstAttemptTimestampSeconds,
 	}
-	workerTask.WorkerTaskInfo.WorkerTaskBackoffInfo = backoffInfo
+	immediateTask.ImmediateTaskInfo.WorkerTaskBackoffInfo = backoffInfo
 
 	fireTime := time.Now().Add(time.Second * 10).Unix()
-	err := store.BackoffWorkerTask(ctx, persistence.BackoffWorkerTaskRequest{
+	err := store.BackoffImmediateTask(ctx, persistence.BackoffImmediateTaskRequest{
 		LastFailureStatus:    401,
 		LastFailureDetails:   "test-failure-details",
 		Prep:                 *prep,
 		FireTimestampSeconds: fireTime,
-		Task:                 workerTask,
+		Task:                 immediateTask,
 	})
 	ass.Nil(err)
 	return fireTime, backoffInfo

@@ -62,10 +62,10 @@ type transactionalCRUD interface {
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
 	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
-	InsertWorkerTask(ctx context.Context, row WorkerTaskRowForInsert) error
+	InsertImmediateTask(ctx context.Context, row ImmediateTaskRowForInsert) error
 	InsertTimerTask(ctx context.Context, row TimerTaskRowForInsert) error
 
-	DeleteWorkerTask(ctx context.Context, filter WorkerTaskRowDeleteFilter) error
+	DeleteImmediateTask(ctx context.Context, filter ImmediateTaskRowDeleteFilter) error
 	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
 }
 
@@ -74,8 +74,8 @@ type nonTransactionalCRUD interface {
 
 	SelectAsyncStateExecution(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
 
-	BatchSelectWorkerTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]WorkerTaskRow, error)
-	BatchDeleteWorkerTask(ctx context.Context, filter WorkerTaskRangeDeleteFilter) error
+	BatchSelectImmediateTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]ImmediateTaskRow, error)
+	BatchDeleteImmediateTask(ctx context.Context, filter ImmediateTaskRangeDeleteFilter) error
 
 	BatchSelectTimerTasks(ctx context.Context, filter TimerTaskRangeSelectFilter) ([]TimerTaskRow, error)
 	SelectTimerTasksForTimestamps(ctx context.Context, filter TimerTaskSelectByTimestampsFilter) ([]TimerTaskRow, error)

@@ -51,7 +51,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteExecuteExecutionRequest,
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
-	hasNewWorkerTask := false
+	hasNewImmediateTask := false
 
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -98,7 +98,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	// Step 2 - 2: add next states to PendingExecutionMap
 
 	if len(request.StateDecision.GetNextStates()) > 0 {
-		hasNewWorkerTask = true
+		hasNewImmediateTask = true
 
 		// reuse the info from last state execution as it won't change
 		stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
@@ -123,7 +123,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 				return nil, err
 			}
 
-			err = insertWorkerTask(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, request.TaskShardId)
+			err = insertImmediateTask(ctx, tx, prcExeId, stateId, stateIdSeq, stateConfig, request.TaskShardId)
 			if err != nil {
 				return nil, err
 			}
@@ -185,6 +185,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	}
 
 	return &persistence.CompleteExecuteExecutionResponse{
-		HasNewWorkerTask: hasNewWorkerTask,
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

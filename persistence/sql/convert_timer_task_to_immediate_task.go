@@ -21,15 +21,15 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) ConvertTimerTaskToWorkerTask(
-	ctx context.Context, request persistence.ConvertTimerTaskToWorkerTaskRequest,
+func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
+	ctx context.Context, request persistence.ConvertTimerTaskToImmediateTaskRequest,
 ) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
 	}
 
-	err = p.doConvertTimerTaskToWorkerTaskTx(ctx, tx, request)
+	err = p.doConvertTimerTaskToImmediateTaskTx(ctx, tx, request)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -46,20 +46,20 @@ func (p sqlProcessStoreImpl) ConvertTimerTaskToWorkerTask(
 
 }
 
-func (p sqlProcessStoreImpl) doConvertTimerTaskToWorkerTaskTx(
+func (p sqlProcessStoreImpl) doConvertTimerTaskToImmediateTaskTx(
 	ctx context.Context, tx extensions.SQLTransaction,
-	request persistence.ConvertTimerTaskToWorkerTaskRequest,
+	request persistence.ConvertTimerTaskToImmediateTaskRequest,
 ) error {
 	currentTask := request.Task
 	timerInfo := currentTask.TimerTaskInfo
-	taskInfoBytes, err := persistence.FromWorkerTaskInfoIntoBytes(persistence.WorkerTaskInfoJson{
+	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(persistence.ImmediateTaskInfoJson{
 		WorkerTaskBackoffInfo: timerInfo.WorkerTaskBackoffInfo,
 	})
 	if err != nil {
 		return err
 	}
 
-	err = tx.InsertWorkerTask(ctx, extensions.WorkerTaskRowForInsert{
+	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
 		ShardId:            currentTask.ShardId,
 		TaskType:           *timerInfo.WorkerTaskType,
 		ProcessExecutionId: currentTask.ProcessExecutionId,

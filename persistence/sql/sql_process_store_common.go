@@ -55,7 +55,7 @@ func insertAsyncStateExecution(
 	return tx.InsertAsyncStateExecution(ctx, stateRow)
 }
 
-func insertWorkerTask(
+func insertImmediateTask(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	processExecutionId uuid.UUID,
@@ -64,17 +64,17 @@ func insertWorkerTask(
 	stateConfig *xdbapi.AsyncStateConfig,
 	shardId int32,
 ) error {
-	workerTaskRow := extensions.WorkerTaskRowForInsert{
+	immediateTaskRow := extensions.ImmediateTaskRowForInsert{
 		ShardId:            shardId,
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 	}
 	if stateConfig.GetSkipWaitUntil() {
-		workerTaskRow.TaskType = persistence.WorkerTaskTypeExecute
+		immediateTaskRow.TaskType = persistence.ImmediateTaskTypeExecute
 	} else {
-		workerTaskRow.TaskType = persistence.WorkerTaskTypeWaitUntil
+		immediateTaskRow.TaskType = persistence.ImmediateTaskTypeWaitUntil
 	}
 
-	return tx.InsertWorkerTask(ctx, workerTaskRow)
+	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }

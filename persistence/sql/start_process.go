@@ -90,15 +90,15 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 		}, nil
 	}
 
-	hasNewWorkerTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
 	if err != nil {
 		return nil, err
 	}
 
 	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
+		ProcessExecutionId:  prcExeId,
+		AlreadyStarted:      false,
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }
 
@@ -126,27 +126,27 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 			}, nil
 		}
 
-		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		hasNewImmediateTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
 		if err != nil {
 			return nil, err
 		}
 
 		return &persistence.StartProcessResponse{
-			ProcessExecutionId: prcExeId,
-			AlreadyStarted:     false,
-			HasNewWorkerTask:   hasNewWorkerTask,
+			ProcessExecutionId:  prcExeId,
+			AlreadyStarted:      false,
+			HasNewImmediateTask: hasNewImmediateTask,
 		}, nil
 	}
 
-	hasNewWorkerTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
 	if err != nil {
 		return nil, err
 	}
 
 	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
+		ProcessExecutionId:  prcExeId,
+		AlreadyStarted:      false,
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }
 
@@ -181,28 +181,28 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 			}, nil
 		}
 
-		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		hasNewImmediateTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
 		if err != nil {
 			return nil, err
 		}
 
 		return &persistence.StartProcessResponse{
-			ProcessExecutionId: prcExeId,
-			AlreadyStarted:     false,
-			HasNewWorkerTask:   hasNewWorkerTask,
+			ProcessExecutionId:  prcExeId,
+			AlreadyStarted:      false,
+			HasNewImmediateTask: hasNewImmediateTask,
 		}, nil
 	}
 
 	// if there is no previous run with the process id, start a new process
-	hasNewWorkerTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
 	if err != nil {
 		return nil, err
 	}
 
 	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
+		ProcessExecutionId:  prcExeId,
+		AlreadyStarted:      false,
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }
 
@@ -237,7 +237,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		}
 
 		// update the latest process execution and start a new process
-		hasNewWorkerTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		hasNewImmediateTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -249,22 +249,22 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		}
 
 		return &persistence.StartProcessResponse{
-			ProcessExecutionId: prcExeId,
-			AlreadyStarted:     false,
-			HasNewWorkerTask:   hasNewWorkerTask,
+			ProcessExecutionId:  prcExeId,
+			AlreadyStarted:      false,
+			HasNewImmediateTask: hasNewImmediateTask,
 		}, nil
 	}
 
 	// if there is no previous run with the process id, start a new process
-	hasNewWorkerTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
 	if err != nil {
 		return nil, err
 	}
 
 	return &persistence.StartProcessResponse{
-		ProcessExecutionId: prcExeId,
-		AlreadyStarted:     false,
-		HasNewWorkerTask:   hasNewWorkerTask,
+		ProcessExecutionId:  prcExeId,
+		AlreadyStarted:      false,
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }
 
@@ -274,21 +274,21 @@ func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 	request persistence.StartProcessRequest,
 ) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
-	hasNewWorkerTask := false
+	hasNewImmediateTask := false
 	err := tx.InsertLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
 		Namespace:          request.Request.Namespace,
 		ProcessId:          request.Request.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
 	if err != nil {
-		return hasNewWorkerTask, prcExeId, err
+		return hasNewImmediateTask, prcExeId, err
 	}
 
-	hasNewWorkerTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
+	hasNewImmediateTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
 	if err != nil {
-		return hasNewWorkerTask, prcExeId, err
+		return hasNewImmediateTask, prcExeId, err
 	}
-	return hasNewWorkerTask, prcExeId, nil
+	return hasNewImmediateTask, prcExeId, nil
 }
 
 func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
@@ -297,22 +297,22 @@ func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
 	request persistence.StartProcessRequest,
 ) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
-	hasNewWorkerTask := false
+	hasNewImmediateTask := false
 	err := tx.UpdateLatestProcessExecution(ctx, extensions.LatestProcessExecutionRow{
 		Namespace:          request.Request.Namespace,
 		ProcessId:          request.Request.ProcessId,
 		ProcessExecutionId: prcExeId,
 	})
 	if err != nil {
-		return hasNewWorkerTask, prcExeId, err
+		return hasNewImmediateTask, prcExeId, err
 	}
 
-	hasNewWorkerTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
+	hasNewImmediateTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
 	if err != nil {
-		return hasNewWorkerTask, prcExeId, err
+		return hasNewImmediateTask, prcExeId, err
 	}
 
-	return hasNewWorkerTask, prcExeId, nil
+	return hasNewImmediateTask, prcExeId, nil
 }
 
 func (p sqlProcessStoreImpl) insertProcessExecution(
@@ -322,7 +322,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	processExecutionId uuid.UUID,
 ) (bool, error) {
 	req := request.Request
-	hasNewWorkerTask := false
+	hasNewImmediateTask := false
 
 	timeoutSeconds := int32(0)
 	if sc, ok := req.GetProcessStartConfigOk(); ok {
@@ -331,7 +331,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 
 	processExeInfoBytes, err := persistence.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
-		return hasNewWorkerTask, err
+		return hasNewImmediateTask, err
 	}
 
 	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
@@ -342,30 +342,30 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 
 		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
-			return hasNewWorkerTask, err
+			return hasNewImmediateTask, err
 		}
 
 		stateInfoBytes, err := persistence.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
-			return hasNewWorkerTask, err
+			return hasNewImmediateTask, err
 		}
 
 		err = insertAsyncStateExecution(ctx, tx, processExecutionId, stateId, stateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
 		if err != nil {
-			return hasNewWorkerTask, err
+			return hasNewImmediateTask, err
 		}
 
-		err = insertWorkerTask(ctx, tx, processExecutionId, stateId, 1, stateConfig, request.NewTaskShardId)
+		err = insertImmediateTask(ctx, tx, processExecutionId, stateId, 1, stateConfig, request.NewTaskShardId)
 		if err != nil {
-			return hasNewWorkerTask, err
+			return hasNewImmediateTask, err
 		}
 
-		hasNewWorkerTask = true
+		hasNewImmediateTask = true
 	}
 
 	sequenceMapsBytes, err := sequenceMaps.ToBytes()
 	if err != nil {
-		return hasNewWorkerTask, err
+		return hasNewImmediateTask, err
 	}
 
 	row := extensions.ProcessExecutionRow{
@@ -384,5 +384,5 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	}
 
 	err = tx.InsertProcessExecution(ctx, row)
-	return hasNewWorkerTask, err
+	return hasNewImmediateTask, err
 }
