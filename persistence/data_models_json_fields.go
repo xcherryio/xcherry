@@ -91,6 +91,46 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 	return nil
 }
 
+type StateExecutionIdWaitingQueueCount struct {
+	StateExecutionId StateExecutionId
+	Count            int32
+}
+
+type StateExecutionWaitingQueuesJson struct {
+	// [queueName] -> [(StateExecutionIdWaitingQueueCount, ...)]
+	WaitingQueueMap map[string][]StateExecutionIdWaitingQueueCount `json:"waitingQueueMap"`
+}
+
+func NewStateExecutionWaitingQueues() StateExecutionWaitingQueuesJson {
+	return StateExecutionWaitingQueuesJson{
+		WaitingQueueMap: map[string][]StateExecutionIdWaitingQueueCount{},
+	}
+}
+
+func (s *StateExecutionWaitingQueuesJson) ToBytes() ([]byte, error) {
+	return json.Marshal(s)
+}
+
+func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitingQueuesJson, error) {
+	var queueMap StateExecutionWaitingQueuesJson
+	err := json.Unmarshal(bytes, &queueMap)
+	return queueMap, err
+}
+
+func (s *StateExecutionWaitingQueuesJson) Add(stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
+	arr, ok := s.WaitingQueueMap[command.GetQueueName()]
+	if !ok {
+		arr = []StateExecutionIdWaitingQueueCount{}
+	}
+
+	arr = append(arr, StateExecutionIdWaitingQueueCount{
+		StateExecutionId: stateExecutionId,
+		Count:            command.GetCount(),
+	})
+
+	s.WaitingQueueMap[command.GetQueueName()] = arr
+}
+
 type AsyncStateExecutionInfoJson struct {
 	Namespace   string                   `json:"namespace"`
 	ProcessId   string                   `json:"processId"`

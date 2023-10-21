@@ -130,6 +130,36 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		PreviousVersion:         request.Prepare.PreviousVersion,
 	}
 
+	localQueueCommands := request.CommandRequest.GetLocalQueueCommands()
+
+	// lock and handle process execution row first
+	if len(localQueueCommands) > 0 {
+		prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
+		if err != nil {
+			return err
+		}
+
+		waitingQueues, err := persistence.NewStateExecutionWaitingQueuesFromBytes(prcRow.StateExecutionWaitingQueues)
+		if err != nil {
+			return err
+		}
+
+		for _, localQueueCommand := range localQueueCommands {
+			waitingQueues.Add(request.StateExecutionId, localQueueCommand)
+		}
+
+		prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
+		if err != nil {
+			return err
+		}
+
+		err = tx.UpdateProcessExecution(ctx, *prcRow)
+		if err != nil {
+			return err
+		}
+	}
+
+	// update async state execution
 	err = tx.UpdateAsyncStateExecutionCommands(ctx, stateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {

@@ -50,10 +50,13 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                     persistence.ProcessExecutionStatus
-		HistoryEventIdSequence     int32
-		StateExecutionSequenceMaps types.JSONText
-		WaitToComplete             bool
+		Status                 persistence.ProcessExecutionStatus
+		HistoryEventIdSequence int32
+
+		StateExecutionSequenceMaps  types.JSONText
+		StateExecutionWaitingQueues types.JSONText
+
+		WaitToComplete bool
 	}
 
 	ProcessExecutionRow struct {
@@ -61,9 +64,11 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                     persistence.ProcessExecutionStatus
-		HistoryEventIdSequence     int32
-		StateExecutionSequenceMaps types.JSONText
+		Status                 persistence.ProcessExecutionStatus
+		HistoryEventIdSequence int32
+
+		StateExecutionSequenceMaps  types.JSONText
+		StateExecutionWaitingQueues types.JSONText
 
 		Namespace string
 
