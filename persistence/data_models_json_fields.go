@@ -19,6 +19,7 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
+	"sort"
 	"time"
 )
 
@@ -91,19 +92,17 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 	return nil
 }
 
-type StateExecutionIdWaitingQueueCount struct {
-	StateExecutionId StateExecutionId
-	Count            int32
-}
-
 type StateExecutionWaitingQueuesJson struct {
-	// [queueName] -> [(StateExecutionIdWaitingQueueCount, ...)]
-	WaitingQueueMap map[string][]StateExecutionIdWaitingQueueCount `json:"waitingQueueMap"`
+	// { queue_1: {(state_1, state_1_seq): waiting_count, (state_2, state_2_seq): waiting_count, ...} }
+	QueueToStatesMap map[string]map[string]int `json:"queueToStatesMap"`
+	// { (state_1, state_1_seq): total_waiting_count, (state_2, state_2_seq): total_waiting_count, ...} }
+	StateToQueueCountMap map[string]int `json:"stateToQueueCountMap"`
 }
 
 func NewStateExecutionWaitingQueues() StateExecutionWaitingQueuesJson {
 	return StateExecutionWaitingQueuesJson{
-		WaitingQueueMap: map[string][]StateExecutionIdWaitingQueueCount{},
+		QueueToStatesMap:     map[string]map[string]int{},
+		StateToQueueCountMap: map[string]int{},
 	}
 }
 
@@ -117,18 +116,83 @@ func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitin
 	return queueMap, err
 }
 
-func (s *StateExecutionWaitingQueuesJson) Add(stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
-	arr, ok := s.WaitingQueueMap[command.GetQueueName()]
-	if !ok {
-		arr = []StateExecutionIdWaitingQueueCount{}
+func (s *StateExecutionWaitingQueuesJson) Add(stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand, anyOfCompletion bool) {
+	count := command.GetCount()
+	if count == 0 {
+		count = 1
 	}
 
-	arr = append(arr, StateExecutionIdWaitingQueueCount{
-		StateExecutionId: stateExecutionId,
-		Count:            command.GetCount(),
+	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
+
+	m, ok := s.QueueToStatesMap[command.GetQueueName()]
+	if !ok {
+		m = map[string]int{}
+	}
+
+	if anyOfCompletion {
+		m[stateExecutionIdKey] = 1
+	} else {
+		m[stateExecutionIdKey] += int(count)
+	}
+	s.QueueToStatesMap[command.GetQueueName()] = m
+
+	if anyOfCompletion {
+		s.StateToQueueCountMap[stateExecutionIdKey] = 1
+	} else {
+		s.StateToQueueCountMap[stateExecutionIdKey] += int(count)
+	}
+}
+
+// Consume return assigned StateExecutionId and a boolean indicating whether the assigned StateExecutionId has finished waiting
+func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessage) (*StateExecutionId, bool) {
+	m, ok := s.QueueToStatesMap[message.GetQueueName()]
+	if !ok {
+		return nil, false
+	}
+
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+
+	sort.Slice(keys, func(i, j int) bool {
+		return m[keys[i]] < m[keys[j]] || (m[keys[i]] == m[keys[j]] && s.StateToQueueCountMap[keys[i]] < s.StateToQueueCountMap[keys[j]])
 	})
 
-	s.WaitingQueueMap[command.GetQueueName()] = arr
+	assignedStateExecutionIdString := keys[0]
+	hasFinishedWaiting := false
+
+	stateExecutionId, err := NewStateExecutionIdFromString(assignedStateExecutionIdString)
+	if err != nil {
+		return nil, false
+	}
+
+	m[assignedStateExecutionIdString] -= 1
+	if m[assignedStateExecutionIdString] == 0 {
+		delete(m, assignedStateExecutionIdString)
+	}
+	s.QueueToStatesMap[message.GetQueueName()] = m
+	if len(s.QueueToStatesMap[message.GetQueueName()]) == 0 {
+		delete(s.QueueToStatesMap, message.GetQueueName())
+	}
+
+	s.StateToQueueCountMap[assignedStateExecutionIdString] -= 1
+	hasFinishedWaiting = s.StateToQueueCountMap[assignedStateExecutionIdString] == 0
+
+	if hasFinishedWaiting {
+		s.CleanupForCompletion(assignedStateExecutionIdString)
+	}
+
+	return stateExecutionId, hasFinishedWaiting
+}
+
+func (s *StateExecutionWaitingQueuesJson) CleanupForCompletion(stateExecutionIdString string) {
+	delete(s.StateToQueueCountMap, stateExecutionIdString)
+
+	// if the completion type is ANY_OF_COMPLETION, delete the stateExecutionId from each queue map
+	for k := range s.QueueToStatesMap {
+		delete(s.QueueToStatesMap[k], stateExecutionIdString)
+	}
 }
 
 type AsyncStateExecutionInfoJson struct {

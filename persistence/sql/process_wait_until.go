@@ -145,7 +145,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 
 		for _, localQueueCommand := range localQueueCommands {
-			waitingQueues.Add(request.StateExecutionId, localQueueCommand)
+			waitingQueues.Add(request.StateExecutionId, localQueueCommand, request.CommandRequest.GetWaitingType() == xdbapi.ANY_OF_COMPLETION)
 		}
 
 		prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()

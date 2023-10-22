@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
+	"strconv"
+	"strings"
 )
 
 type (
@@ -245,4 +247,19 @@ func (t ImmediateTask) GetTaskId() string {
 
 func (s StateExecutionId) GetStateExecutionId() string {
 	return fmt.Sprintf("%v-%v", s.StateId, s.StateIdSequence)
+}
+
+func NewStateExecutionIdFromString(s string) (*StateExecutionId, error) {
+	lastHyphenIndex := strings.LastIndex(s, "-")
+	if lastHyphenIndex == -1 {
+		return nil, fmt.Errorf("invalid format: %s", s)
+	}
+
+	stateId := s[:lastHyphenIndex]
+	stateIdSequence, err := strconv.ParseInt(s[lastHyphenIndex+1:], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StateExecutionId{StateId: stateId, StateIdSequence: int32(stateIdSequence)}, nil
 }
