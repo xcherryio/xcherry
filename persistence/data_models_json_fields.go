@@ -263,8 +263,9 @@ type WorkerTaskBackoffInfoJson struct {
 }
 
 type LocalQueueMessageInfoJson struct {
-	QueueName string    `json:"queueName"`
-	DedupId   uuid.UUID `json:"dedupId"`
+	QueueName string               `json:"queueName"`
+	DedupId   uuid.UUID            `json:"dedupId"`
+	Payload   xdbapi.EncodedObject `json:"payload"`
 }
 
 type ImmediateTaskInfoJson struct {

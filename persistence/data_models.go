@@ -203,6 +203,13 @@ type (
 		HasNewImmediateTask bool
 	}
 
+	CompleteWaitUntilExecutionRequest struct {
+		TaskShardId        int32
+		ProcessExecutionId uuid.UUID
+		StateExecutionId
+		PreviousVersion int32
+	}
+
 	CompleteExecuteExecutionRequest struct {
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
@@ -227,6 +234,17 @@ type (
 		ProcessExecutionId  uuid.UUID
 		HasNewImmediateTask bool
 		NotExists           bool
+	}
+
+	ProcessLocalQueueMessageRequest struct {
+		TaskShardId  int32
+		TaskSequence int64
+
+		ProcessExecutionId uuid.UUID
+
+		QueueName string
+		DedupId   uuid.UUID
+		Payload   xdbapi.EncodedObject
 	}
 )
 

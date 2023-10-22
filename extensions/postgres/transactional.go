@@ -101,6 +101,50 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 	return err
 }
 
+const selectAsyncStateExecutionForUpdateQuery = `SELECT 
+    wait_until_status, execute_status, version as previous_version, wait_until_commands, wait_until_command_results, last_failure
+	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3
+`
+
+func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context,
+	filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
+	var row extensions.AsyncStateExecutionRowForUpdate
+	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
+	err := d.tx.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
+	row.ProcessExecutionId = filter.ProcessExecutionId
+	row.StateId = filter.StateId
+	row.StateIdSequence = filter.StateIdSequence
+	return &row, err
+}
+
+const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
+version = :previous_version + 1,
+wait_until_status = :wait_until_status,
+execute_status = :execute_status,
+wait_until_commands = :wait_until_commands,
+wait_until_command_results = :wait_until_command_results,
+last_failure = :last_failure     
+WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
+  AND state_id_sequence=:state_id_sequence AND version = :previous_version`
+
+func (d dbTx) UpdateAsyncStateExecution(
+	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate,
+) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
+	if err != nil {
+		return err
+	}
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if effected != 1 {
+		return conditionalUpdateFailure
+	}
+	return nil
+}
+
 const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xdb_sys_async_state_executions set
 version = :previous_version + 1,
 wait_until_status = :wait_until_status,

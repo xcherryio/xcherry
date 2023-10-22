@@ -52,7 +52,12 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 
 	if request.CommandRequest.GetWaitingType() == xdbapi.EMPTY_COMMAND {
 		hasNewImmediateTask = true
-		err := p.completeWaitUntilExecution(ctx, tx, request)
+		err := p.CompleteWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
+			TaskShardId:        request.TaskShardId,
+			ProcessExecutionId: request.ProcessExecutionId,
+			StateExecutionId:   request.StateExecutionId,
+			PreviousVersion:    request.Prepare.PreviousVersion,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -77,8 +82,8 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 	}, nil
 }
 
-func (p sqlProcessStoreImpl) completeWaitUntilExecution(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
+func (p sqlProcessStoreImpl) CompleteWaitUntilExecution(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteWaitUntilExecutionRequest,
 ) error {
 	stateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: request.ProcessExecutionId,
@@ -86,7 +91,7 @@ func (p sqlProcessStoreImpl) completeWaitUntilExecution(
 		StateIdSequence:    request.StateIdSequence,
 		WaitUntilStatus:    persistence.StateExecutionStatusCompleted,
 		ExecuteStatus:      persistence.StateExecutionStatusRunning,
-		PreviousVersion:    request.Prepare.PreviousVersion,
+		PreviousVersion:    request.PreviousVersion,
 		LastFailure:        nil,
 	}
 

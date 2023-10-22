@@ -122,6 +122,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 				LocalQueueMessageInfo: &persistence.LocalQueueMessageInfoJson{
 					QueueName: message.GetQueueName(),
 					DedupId:   dedupId,
+					Payload:   message.GetPayload(),
 				},
 			})
 		if err != nil {
