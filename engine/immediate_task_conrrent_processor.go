@@ -122,8 +122,7 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 	w.logger.Debug("start executing immediate task", tag.ID(task.GetTaskId()), tag.ImmediateTaskType(task.TaskType.String()))
 
 	if task.TaskType == persistence.ImmediateTaskTypeNewLocalQueueMessage {
-		// TODO
-		return nil
+		return w.processLocalQueueMessageTask(ctx, task)
 	}
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
@@ -425,4 +424,10 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	)
 
 	return statusCode, details, fmt.Errorf("statusCode: %v, errMsg: %w, responseBody: %v", statusCode, err, responseBody)
+}
+
+func (w *immediateTaskConcurrentProcessor) processLocalQueueMessageTask(
+	ctx context.Context, task persistence.ImmediateTask,
+) error {
+	return nil
 }

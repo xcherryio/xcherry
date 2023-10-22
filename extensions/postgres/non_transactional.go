@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
@@ -110,4 +111,15 @@ func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error
 	}
 	_, err = d.db.ExecContext(ctx, `DELETE FROM xdb_sys_timer_tasks WHERE shard_id = $1`, shardId)
 	return err
+}
+
+const selectLocalQueueQuery = `SELECT
+	process_execution_id, queue_name, dedup_id, payload
+	FROM xdb_sys_local_queue WHERE process_execution_id=$1 AND queue_name=$2 AND dedup_id=$3
+`
+
+func (d dbSession) SelectLocalQueue(ctx context.Context, processExecutionId uuid.UUID, queueName string, dedupId uuid.UUID) (*extensions.LocalQueueRow, error) {
+	var row extensions.LocalQueueRow
+	err := d.db.GetContext(ctx, &row, selectLocalQueueQuery, processExecutionId.String(), queueName, dedupId.String())
+	return &row, err
 }

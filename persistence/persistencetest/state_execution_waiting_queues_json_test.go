@@ -40,7 +40,7 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 	})
 
 	// The new data should be:
-	//	state_3, 1: (q2: 1)
+	//	state_3-a, 1: (q2: 1)
 	assert.True(t, hasFinishedWaiting)
 	assert.True(t, hasFinishedWaiting2)
 	if completedStateExecutionId.StateIdSequence == 1 {
@@ -63,9 +63,9 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 		QueueName: "q2",
 	})
 	// The new data should be empty.
-	// Return state_3, 1 as completed
+	// Return state_3-a, 1 as completed
 	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_3", StateIdSequence: 1,
+		StateId: "state_3-a", StateIdSequence: 1,
 	}, *completedStateExecutionId)
 	assert.True(t, hasFinishedWaiting)
 
@@ -134,7 +134,7 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 //
 //	state_1, 1: (q1, 1), (q2, 1)
 //	state_1, 2: (q1, 1)
-//	state_3, 1: (q2: 1)
+//	state_3-a, 1: (q2: 1)
 func prepareDataForAnyOfCompletion(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
 	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
@@ -155,7 +155,7 @@ func prepareDataForAnyOfCompletion(stateExecutionWaitingQueues persistence.State
 	}, true)
 
 	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
-		StateId: "state_3", StateIdSequence: 1,
+		StateId: "state_3-a", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2",
 	}, true)

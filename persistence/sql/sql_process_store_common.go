@@ -15,6 +15,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
@@ -85,6 +86,16 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 		dedupId := uuid.ParseUUID(message.GetDedupId())
 		if dedupId == nil {
 			dedupId = uuid.MustNewUUID()
+		} else {
+			// need to check if this message has been published before
+			existingMessage, err := p.session.SelectLocalQueue(ctx, processExecutionId, message.GetQueueName(), dedupId)
+			if err == nil {
+				p.logger.Warn(fmt.Sprintf("trying to publish an existing message: %v", existingMessage))
+				continue
+			}
+			if !p.session.IsNotFoundError(err) {
+				return err
+			}
 		}
 
 		// insert a row into xdb_sys_local_queue
