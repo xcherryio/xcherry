@@ -111,9 +111,9 @@ func (s *StateExecutionWaitingQueuesJson) ToBytes() ([]byte, error) {
 }
 
 func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitingQueuesJson, error) {
-	var queueMap StateExecutionWaitingQueuesJson
-	err := json.Unmarshal(bytes, &queueMap)
-	return queueMap, err
+	var waitingQueuesJson StateExecutionWaitingQueuesJson
+	err := json.Unmarshal(bytes, &waitingQueuesJson)
+	return waitingQueuesJson, err
 }
 
 func (s *StateExecutionWaitingQueuesJson) Add(stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand, anyOfCompletion bool) {
@@ -155,6 +155,16 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessa
 		keys = append(keys, key)
 	}
 
+	// E.g., given m as:
+	//	state_1, 1: (q1, 1), (q2, 2)
+	//	state_1, 2: (q1, 2)
+	//	state_3, 1: (q1: 1)
+	// If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and the m becomes:
+	//	state_1, 1: (q1, 1), (q2, 2)
+	//	state_1, 2: (q1, 2)
+	// If receiving the queue `q1` again, then state_1, 1 will consume the queue `q1`, and the m becomes:
+	//	state_1, 1: (q2, 2)
+	//	state_1, 2: (q1, 2)
 	sort.Slice(keys, func(i, j int) bool {
 		return m[keys[i]] < m[keys[j]] || (m[keys[i]] == m[keys[j]] && s.StateToQueueCountMap[keys[i]] < s.StateToQueueCountMap[keys[j]])
 	})

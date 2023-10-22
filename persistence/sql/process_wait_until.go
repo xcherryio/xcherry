@@ -125,14 +125,21 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		return err
 	}
 
-	stateRow := extensions.AsyncStateExecutionRowForUpdateCommands{
-		ProcessExecutionId:      request.ProcessExecutionId,
-		StateId:                 request.StateId,
-		StateIdSequence:         request.StateIdSequence,
-		WaitUntilStatus:         persistence.StateExecutionStatusWaitingForCommands,
+	stateRow := extensions.AsyncStateExecutionRowForUpdate{
+		ProcessExecutionId: request.ProcessExecutionId,
+
+		StateId:         request.StateId,
+		StateIdSequence: request.StateIdSequence,
+
+		WaitUntilStatus: persistence.StateExecutionStatusWaitingForCommands,
+		ExecuteStatus:   persistence.StateExecutionStatusUndefined,
+
 		WaitUntilCommands:       commandRequestBytes,
 		WaitUntilCommandResults: commandResultsBytes,
-		PreviousVersion:         request.Prepare.PreviousVersion,
+
+		LastFailure: nil,
+
+		PreviousVersion: request.Prepare.PreviousVersion,
 	}
 
 	localQueueCommands := request.CommandRequest.GetLocalQueueCommands()
@@ -165,10 +172,10 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	}
 
 	// update async state execution
-	err = tx.UpdateAsyncStateExecutionCommands(ctx, stateRow)
+	err = tx.UpdateAsyncStateExecution(ctx, stateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
-			p.logger.Warn("UpdateAsyncStateExecutionCommands failed at conditional update")
+			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
 		}
 		return err
 	}

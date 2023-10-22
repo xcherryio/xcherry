@@ -76,23 +76,6 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return err
 	}
 
-	if hasFinishedWaiting {
-		sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
-		if err != nil {
-			return err
-		}
-
-		err = sequenceMaps.CompleteNewStateExecution(assignedStateExecutionId.StateId, int(assignedStateExecutionId.StateIdSequence))
-		if err != nil {
-			return err
-		}
-
-		prcRow.StateExecutionSequenceMaps, err = sequenceMaps.ToBytes()
-		if err != nil {
-			return err
-		}
-	}
-
 	err = tx.UpdateProcessExecution(ctx, *prcRow)
 	if err != nil {
 		return err
@@ -100,10 +83,9 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// Step 2: update state execution row
 	stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
-		ProcessExecutionId:       prcRow.ProcessExecutionId,
-		ProcessExecutionIdString: prcRow.ProcessExecutionId.String(),
-		StateId:                  assignedStateExecutionId.StateId,
-		StateIdSequence:          assignedStateExecutionId.StateIdSequence,
+		ProcessExecutionId: prcRow.ProcessExecutionId,
+		StateId:            assignedStateExecutionId.StateId,
+		StateIdSequence:    assignedStateExecutionId.StateIdSequence,
 	})
 	if err != nil {
 		return err
