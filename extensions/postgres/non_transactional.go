@@ -39,7 +39,7 @@ func (d dbSession) SelectLatestProcessExecution(
 }
 
 const selectAsyncStateExecutionQuery = `SELECT 
-    status, version as previous_version, info, input, last_failure
+    status, wait_until_command_results, version as previous_version, info, input, last_failure
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
 
 func (d dbSession) SelectAsyncStateExecution(

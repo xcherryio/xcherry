@@ -127,7 +127,10 @@ type (
 		StateId                  string
 		StateIdSequence          int32
 
-		Status          persistence.StateExecutionStatus
+		Status persistence.StateExecutionStatus
+
+		WaitUntilCommandResults types.JSONText
+
 		PreviousVersion int32 // for conditional check
 
 		LastFailure types.JSONText

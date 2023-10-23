@@ -33,11 +33,18 @@ func insertAsyncStateExecution(
 	stateInput []byte,
 	stateInfo []byte,
 ) error {
+	commandResultsBytes, err := persistence.FromCommandResultsToBytes(xdbapi.CommandResults{})
+	if err != nil {
+		return err
+	}
+
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
+
+		WaitUntilCommandResults: commandResultsBytes,
 
 		LastFailure:     nil,
 		PreviousVersion: 1,

@@ -259,6 +259,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 				Encoding: prep.Input.Encoding,
 				Data:     prep.Input.Data,
 			},
+			CommandResults: &prep.WaitUntilCommandResults,
 		},
 	).Execute()
 	if httpResp != nil {
@@ -428,7 +429,7 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 	ctx context.Context, task persistence.ImmediateTask,
 ) error {
-	return w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
+	resp, err := w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
 		TaskShardId:  task.ShardId,
 		TaskSequence: task.GetTaskSequence(),
 
@@ -436,4 +437,13 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 
 		Messages: task.ImmediateTaskInfo.LocalQueueMessageInfo,
 	})
+	if err != nil {
+		return err
+	}
+
+	// TODO: need a better way to define the NotifyNewImmediateTasks method
+	if resp.HasNewImmediateTask {
+		w.taskNotifier.NotifyNewImmediateTasksNoRequest(task.ShardId)
+	}
+	return nil
 }

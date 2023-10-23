@@ -191,18 +191,21 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 	hasFinishedWaiting = s.StateToQueueCountMap[assignedStateExecutionIdString] == 0
 
 	if hasFinishedWaiting {
-		s.CleanupForCompletion(assignedStateExecutionIdString)
+		s.cleanupForCompletion(assignedStateExecutionIdString)
 	}
 
 	return &assignedStateExecutionIdString, hasFinishedWaiting
 }
 
-func (s *StateExecutionWaitingQueuesJson) CleanupForCompletion(stateExecutionIdString string) {
+func (s *StateExecutionWaitingQueuesJson) cleanupForCompletion(stateExecutionIdString string) {
 	delete(s.StateToQueueCountMap, stateExecutionIdString)
 
 	// if the completion type is ANY_OF_COMPLETION, delete the stateExecutionId from each queue map
 	for k := range s.QueueToStatesMap {
 		delete(s.QueueToStatesMap[k], stateExecutionIdString)
+		if len(s.QueueToStatesMap[k]) == 0 {
+			delete(s.QueueToStatesMap, k)
+		}
 	}
 }
 

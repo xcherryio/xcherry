@@ -179,7 +179,8 @@ type (
 	}
 
 	PrepareStateExecutionResponse struct {
-		Status StateExecutionStatus
+		Status                  StateExecutionStatus
+		WaitUntilCommandResults xdbapi.CommandResults
 
 		// PreviousVersion is for conditional check in the future transactional update
 		PreviousVersion int32
@@ -244,6 +245,10 @@ type (
 		ProcessExecutionId uuid.UUID
 
 		Messages []LocalQueueMessageInfoJson
+	}
+
+	ProcessLocalQueueMessagesResponse struct {
+		HasNewImmediateTask bool
 	}
 )
 

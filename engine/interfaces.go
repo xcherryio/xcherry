@@ -32,6 +32,7 @@ type TaskNotifier interface {
 	AddImmediateTaskQueue(shardId int32, queue ImmediateTaskQueue)
 	AddTimerTaskQueue(shardId int32, queue TimerTaskQueue)
 	NotifyNewImmediateTasks(request xdbapi.NotifyImmediateTasksRequest)
+	NotifyNewImmediateTasksNoRequest(shardId int32)
 	NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRequest)
 }
 

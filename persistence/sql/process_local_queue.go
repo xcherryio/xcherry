@@ -23,13 +23,13 @@ import (
 
 func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 	ctx context.Context, request persistence.ProcessLocalQueueMessagesRequest,
-) error {
+) (*persistence.ProcessLocalQueueMessagesResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = p.doProcessLocalQueueMessageTx(ctx, tx, request)
+	resp, err := p.doProcessLocalQueueMessageTx(ctx, tx, request)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -39,27 +39,27 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 		err = tx.Commit()
 		if err != nil {
 			p.logger.Error("error on committing transaction", tag.Error(err))
-			return err
+			return nil, err
 		}
 	}
-	return err
+	return resp, err
 }
 
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
-) error {
+) (*persistence.ProcessLocalQueueMessagesResponse, error) {
 	assignedStateExecutionIdToMessagesMap := map[string][]persistence.LocalQueueMessageInfoJson{}
 	finishedStateExecutionIdToPreviousVersionMap := map[string]int32{}
 
 	// Step 1: update process execution row
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	waitingQueues, err := persistence.NewStateExecutionWaitingQueuesFromBytes(prcRow.StateExecutionWaitingQueues)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// merge waitingQueues.UnconsumedMessages into request.Messages to consume
@@ -69,7 +69,6 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	for _, message := range messages {
 		assignedStateExecutionIdString, hasFinishedWaiting := waitingQueues.Consume(message)
 
-		// early stop if no state can consume the message
 		if assignedStateExecutionIdString == nil {
 			continue
 		}
@@ -88,19 +87,19 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = tx.UpdateProcessExecution(ctx, *prcRow)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Step 2: update state execution rows for assignedStateExecutionIdToMessagesMap
 	for assignedStateExecutionIdString, messages := range assignedStateExecutionIdToMessagesMap {
 		stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
@@ -109,12 +108,12 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			StateIdSequence:    stateExecutionId.StateIdSequence,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, message := range messages {
@@ -129,12 +128,12 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 		stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		err = tx.UpdateAsyncStateExecution(ctx, *stateRow)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		_, ok := finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString]
@@ -149,7 +148,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	for stateExecutionIdString, previousVersion := range finishedStateExecutionIdToPreviousVersionMap {
 		stateExecutionId, err := persistence.NewStateExecutionIdFromString(stateExecutionIdString)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		err = p.CompleteWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
@@ -159,7 +158,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			PreviousVersion:    previousVersion + 1,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -170,9 +169,11 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			TaskSequence: request.TaskSequence,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return &persistence.ProcessLocalQueueMessagesResponse{
+		HasNewImmediateTask: len(finishedStateExecutionIdToPreviousVersionMap) > 0,
+	}, nil
 }
