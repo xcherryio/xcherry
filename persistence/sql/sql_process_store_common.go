@@ -97,13 +97,14 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 		// dealing with user-customized dedupId
 		if message.GetDedupId() != "" {
-			dedupId, err := uuid.ParseUUID(message.GetDedupId())
+			dedupId2, err := uuid.ParseUUID(message.GetDedupId())
 			if err != nil {
 				return err
 			}
 
 			// need to check if this message has been published before
-			existingMessage, err := p.session.SelectLocalQueue(ctx, processExecutionId, message.GetQueueName(), dedupId)
+			existingMessage, err := p.session.SelectLocalQueue(ctx, processExecutionId, message.GetQueueName(), dedupId2)
+
 			if err == nil {
 				p.logger.Warn(fmt.Sprintf("trying to publish an existing message: %v", existingMessage))
 				continue
@@ -111,6 +112,8 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			if !p.session.IsNotFoundError(err) {
 				return err
 			}
+
+			dedupId = dedupId2
 		}
 
 		// insert a row into xdb_sys_local_queue

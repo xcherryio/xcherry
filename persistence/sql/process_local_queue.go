@@ -63,7 +63,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	}
 
 	// merge waitingQueues.UnconsumedMessages into request.Messages to consume
-	messages := append(request.Messages, waitingQueues.UnconsumedMessages...)
+	messages := append(waitingQueues.UnconsumedMessages, request.Messages...)
 	waitingQueues.ClearUnconsumedMessages()
 
 	for _, message := range messages {
