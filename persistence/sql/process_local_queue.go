@@ -21,8 +21,8 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) ProcessLocalQueueMessage(
-	ctx context.Context, request persistence.ProcessLocalQueueMessageRequest,
+func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
+	ctx context.Context, request persistence.ProcessLocalQueueMessagesRequest,
 ) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
@@ -46,8 +46,11 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessage(
 }
 
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessageRequest,
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
 ) error {
+	assignedStateExecutionIdToMessagesMap := map[string][]persistence.LocalQueueMessageInfoJson{}
+	finishedStateExecutionIdToPreviousVersionMap := map[string]int32{}
+
 	// Step 1: update process execution row
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
@@ -59,16 +62,30 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return err
 	}
 
-	dedupIdString := request.DedupId.String()
-	assignedStateExecutionId, hasFinishedWaiting := waitingQueues.Consume(xdbapi.LocalQueueMessage{
-		QueueName: request.QueueName,
-		DedupId:   &dedupIdString,
-		Payload:   &request.Payload,
-	})
+	for _, message := range request.Messages {
+		dedupIdString := message.DedupId.String()
+		assignedStateExecutionIdString, hasFinishedWaiting := waitingQueues.Consume(xdbapi.LocalQueueMessage{
+			QueueName: message.QueueName,
+			DedupId:   &dedupIdString,
+			Payload:   &message.Payload,
+		})
 
-	// early stop if no state can consume the message
-	if assignedStateExecutionId == nil {
-		return nil
+		// TODO: store unconsumed messages
+		// early stop if no state can consume the message
+		if assignedStateExecutionIdString == nil {
+			continue
+		}
+
+		consumedMessages, ok := assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString]
+		if !ok {
+			consumedMessages = []persistence.LocalQueueMessageInfoJson{}
+		}
+		consumedMessages = append(consumedMessages, message)
+		assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString] = consumedMessages
+
+		if hasFinishedWaiting {
+			finishedStateExecutionIdToPreviousVersionMap[*assignedStateExecutionIdString] = 0
+		}
 	}
 
 	prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
@@ -81,35 +98,51 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return err
 	}
 
-	// Step 2: update state execution row
-	stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
-		ProcessExecutionId: prcRow.ProcessExecutionId,
-		StateId:            assignedStateExecutionId.StateId,
-		StateIdSequence:    assignedStateExecutionId.StateIdSequence,
-	})
-	if err != nil {
-		return err
-	}
+	// Step 2: update state execution rows for assignedStateExecutionIdToMessagesMap
+	for assignedStateExecutionIdString, messages := range assignedStateExecutionIdToMessagesMap {
+		stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
+		if err != nil {
+			return err
+		}
 
-	commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
-	if err != nil {
-		return err
-	}
+		stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
+			ProcessExecutionId: prcRow.ProcessExecutionId,
+			StateId:            stateExecutionId.StateId,
+			StateIdSequence:    stateExecutionId.StateIdSequence,
+		})
+		if err != nil {
+			return err
+		}
 
-	commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
-		QueueName: request.QueueName,
-		DedupId:   &dedupIdString,
-		Payload:   &request.Payload,
-	})
+		commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
+		if err != nil {
+			return err
+		}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
-	if err != nil {
-		return err
-	}
+		for _, message := range messages {
+			dedupIdString := message.DedupId.String()
+			payload := message.Payload
+			commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
+				QueueName: message.QueueName,
+				DedupId:   &dedupIdString,
+				Payload:   &payload,
+			})
+		}
 
-	err = tx.UpdateAsyncStateExecution(ctx, *stateRow)
-	if err != nil {
-		return err
+		stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
+		if err != nil {
+			return err
+		}
+
+		err = tx.UpdateAsyncStateExecution(ctx, *stateRow)
+		if err != nil {
+			return err
+		}
+
+		_, ok := finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString]
+		if ok {
+			finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
+		}
 	}
 
 	// will handle the completion logic in CompleteWaitUntilExecution later.
@@ -123,15 +156,23 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return err
 	}
 
-	// Step 4: handle finished wait_until task
-	if !hasFinishedWaiting {
-		return nil
+	// Step 4: handle finished wait_until task for finishedStateExecutionIdToPreviousVersionMap
+	for stateExecutionIdString, previousVersion := range finishedStateExecutionIdToPreviousVersionMap {
+		stateExecutionId, err := persistence.NewStateExecutionIdFromString(stateExecutionIdString)
+		if err != nil {
+			return err
+		}
+
+		err = p.CompleteWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
+			TaskShardId:        request.TaskShardId,
+			ProcessExecutionId: request.ProcessExecutionId,
+			StateExecutionId:   *stateExecutionId,
+			PreviousVersion:    previousVersion + 1,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
-	return p.CompleteWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
-		TaskShardId:        request.TaskShardId,
-		ProcessExecutionId: request.ProcessExecutionId,
-		StateExecutionId:   *assignedStateExecutionId,
-		PreviousVersion:    stateRow.PreviousVersion + 1,
-	})
+	return nil
 }

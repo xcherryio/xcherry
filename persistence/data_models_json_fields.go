@@ -144,8 +144,8 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecuti
 	}
 }
 
-// Consume return assigned StateExecutionId and a boolean indicating whether the assigned StateExecutionId has finished waiting
-func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessage) (*StateExecutionId, bool) {
+// Consume return assigned StateExecutionId string and a boolean indicating whether the assigned StateExecutionId has finished waiting
+func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessage) (*string, bool) {
 	m, ok := s.QueueToStatesMap[message.GetQueueName()]
 	if !ok {
 		return nil, false
@@ -173,11 +173,6 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessa
 	assignedStateExecutionIdString := keys[0]
 	hasFinishedWaiting := false
 
-	stateExecutionId, err := NewStateExecutionIdFromString(assignedStateExecutionIdString)
-	if err != nil {
-		return nil, false
-	}
-
 	m[assignedStateExecutionIdString] -= 1
 	if m[assignedStateExecutionIdString] == 0 {
 		delete(m, assignedStateExecutionIdString)
@@ -194,7 +189,7 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessa
 		s.CleanupForCompletion(assignedStateExecutionIdString)
 	}
 
-	return stateExecutionId, hasFinishedWaiting
+	return &assignedStateExecutionIdString, hasFinishedWaiting
 }
 
 func (s *StateExecutionWaitingQueuesJson) CleanupForCompletion(stateExecutionIdString string) {
@@ -283,7 +278,7 @@ type ImmediateTaskInfoJson struct {
 	// used when the `task_type` is waitUntil or execute
 	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
 	// used when the `task_type` is localQueueMessage
-	LocalQueueMessageInfo *LocalQueueMessageInfoJson `json:"localQueueMessageInfo"`
+	LocalQueueMessageInfo []LocalQueueMessageInfoJson `json:"localQueueMessageInfo"`
 }
 
 func BytesToImmediateTaskInfo(bytes []byte) (ImmediateTaskInfoJson, error) {

@@ -78,8 +78,13 @@ func insertImmediateTask(
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }
 
+// publishToLocalQueue will insert len(valid_messages) rows into xdb_sys_local_queue,
+// and insert only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages
 func (p sqlProcessStoreImpl) publishToLocalQueue(
 	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) error {
+
+	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
+
 	for _, message := range messages {
 		dedupId := uuid.MustNewUUID()
 
@@ -118,32 +123,38 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			return err
 		}
 
-		// insert a row into xdb_sys_immediate_tasks
-
-		taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
-			persistence.ImmediateTaskInfoJson{
-				LocalQueueMessageInfo: &persistence.LocalQueueMessageInfoJson{
-					QueueName: message.GetQueueName(),
-					DedupId:   dedupId,
-					Payload:   message.GetPayload(),
-				},
-			})
-		if err != nil {
-			return err
-		}
-
-		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-			ShardId:  persistence.DefaultShardId,
-			TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessage,
-
-			ProcessExecutionId: processExecutionId,
-			StateId:            "",
-			StateIdSequence:    0,
-			Info:               taskInfoBytes,
+		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
+			QueueName: message.GetQueueName(),
+			DedupId:   dedupId,
+			Payload:   message.GetPayload(),
 		})
-		if err != nil {
-			return err
-		}
+	}
+
+	// insert a row into xdb_sys_immediate_tasks
+
+	if len(localQueueMessageInfo) == 0 {
+		return nil
+	}
+
+	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
+		persistence.ImmediateTaskInfoJson{
+			LocalQueueMessageInfo: localQueueMessageInfo,
+		})
+	if err != nil {
+		return err
+	}
+
+	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+		ShardId:  persistence.DefaultShardId,
+		TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessages,
+
+		ProcessExecutionId: processExecutionId,
+		StateId:            "",
+		StateIdSequence:    0,
+		Info:               taskInfoBytes,
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil

@@ -81,9 +81,9 @@ func (e StateExecutionStatus) String() string {
 type ImmediateTaskType int32
 
 const (
-	ImmediateTaskTypeWaitUntil            ImmediateTaskType = 1
-	ImmediateTaskTypeExecute              ImmediateTaskType = 2
-	ImmediateTaskTypeNewLocalQueueMessage ImmediateTaskType = 3
+	ImmediateTaskTypeWaitUntil             ImmediateTaskType = 1
+	ImmediateTaskTypeExecute               ImmediateTaskType = 2
+	ImmediateTaskTypeNewLocalQueueMessages ImmediateTaskType = 3
 )
 
 func (e ImmediateTaskType) String() string {
@@ -92,8 +92,8 @@ func (e ImmediateTaskType) String() string {
 		return "WaitUntil"
 	case ImmediateTaskTypeExecute:
 		return "Execute"
-	case ImmediateTaskTypeNewLocalQueueMessage:
-		return "NewLocalQueueMessage"
+	case ImmediateTaskTypeNewLocalQueueMessages:
+		return "NewLocalQueueMessages"
 	default:
 		panic("this is not supported")
 	}

@@ -236,15 +236,13 @@ type (
 		NotExists           bool
 	}
 
-	ProcessLocalQueueMessageRequest struct {
+	ProcessLocalQueueMessagesRequest struct {
 		TaskShardId  int32
 		TaskSequence int64
 
 		ProcessExecutionId uuid.UUID
 
-		QueueName string
-		DedupId   uuid.UUID
-		Payload   xdbapi.EncodedObject
+		Messages []LocalQueueMessageInfoJson
 	}
 )
 

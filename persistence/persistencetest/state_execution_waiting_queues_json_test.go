@@ -26,16 +26,16 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 	prepareDataForAnyOfCompletion(stateExecutionWaitingQueues)
 
 	// Consume a non-existent queue
-	completedStateExecutionId, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q3",
 	})
-	assert.Nil(t, completedStateExecutionId)
+	assert.Nil(t, completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
-	completedStateExecutionId2, hasFinishedWaiting2 := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString2, hasFinishedWaiting2 := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
 
@@ -43,30 +43,18 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 	//	state_3-a, 1: (q2: 1)
 	assert.True(t, hasFinishedWaiting)
 	assert.True(t, hasFinishedWaiting2)
-	if completedStateExecutionId.StateIdSequence == 1 {
-		assert.Equal(t, persistence.StateExecutionId{
-			StateId: "state_1", StateIdSequence: 1,
-		}, *completedStateExecutionId)
-		assert.Equal(t, persistence.StateExecutionId{
-			StateId: "state_1", StateIdSequence: 2,
-		}, *completedStateExecutionId2)
+	if *completedStateExecutionIdString == "state_1-1" {
+		assert.Equal(t, "state_1-2", *completedStateExecutionIdString2)
 	} else {
-		assert.Equal(t, persistence.StateExecutionId{
-			StateId: "state_1", StateIdSequence: 2,
-		}, *completedStateExecutionId)
-		assert.Equal(t, persistence.StateExecutionId{
-			StateId: "state_1", StateIdSequence: 1,
-		}, *completedStateExecutionId2)
+		assert.Equal(t, "state_1-1", *completedStateExecutionIdString2)
 	}
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q2",
 	})
 	// The new data should be empty.
 	// Return state_3-a, 1 as completed
-	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_3-a", StateIdSequence: 1,
-	}, *completedStateExecutionId)
+	assert.Equal(t, "state_3-a-1", *completedStateExecutionIdString)
 	assert.True(t, hasFinishedWaiting)
 
 }
@@ -76,57 +64,49 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 	prepareDataForAllOfCompletion(stateExecutionWaitingQueues)
 
 	// Consume a non-existent queue
-	completedStateExecutionId, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q3",
 	})
-	assert.Nil(t, completedStateExecutionId)
+	assert.Nil(t, completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
 	// The new data should be:
 	//	state_1, 1: (q1, 1), (q2, 2)
 	//	state_1, 2: (q1, 2)
 	// return (state_3, 1), true
-	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_3", StateIdSequence: 1,
-	}, *completedStateExecutionId)
+	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
 	assert.True(t, hasFinishedWaiting)
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
 	// The new data should be:
 	//	state_1, 1: (q2, 2)
 	//	state_1, 2: (q1, 2)
 	// return (state_1, 1), false
-	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 1,
-	}, *completedStateExecutionId)
+	assert.Equal(t, "state_1-1", *completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
 	// The new data should be:
 	//	state_1, 1: (q2, 2)
 	//	state_1, 2: (q1, 1)
 	// return (state_1, 2), false
-	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 2,
-	}, *completedStateExecutionId)
+	assert.Equal(t, "state_1-2", *completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionId, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
 		QueueName: "q1",
 	})
 	// The new data should be:
 	//	state_1, 1: (q2, 2)
 	// return (state_1, 2), true
-	assert.Equal(t, persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 2,
-	}, *completedStateExecutionId)
+	assert.Equal(t, "state_1-2", *completedStateExecutionIdString)
 	assert.True(t, hasFinishedWaiting)
 }
 
