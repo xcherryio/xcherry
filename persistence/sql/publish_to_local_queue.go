@@ -67,7 +67,7 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 
 	return &persistence.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
-		HasNewImmediateTask: len(request.Messages) > 0,
+		HasNewImmediateTask: true,
 		NotExists:           false,
 	}, nil
 }

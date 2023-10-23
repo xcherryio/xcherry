@@ -116,7 +116,8 @@ func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitin
 	return waitingQueuesJson, err
 }
 
-func (s *StateExecutionWaitingQueuesJson) Add(stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand, anyOfCompletion bool) {
+func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecution(
+	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand, anyOfCompletion bool) {
 	count := command.GetCount()
 	if count == 0 {
 		count = 1

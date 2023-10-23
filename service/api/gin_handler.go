@@ -115,6 +115,11 @@ func (h *ginHandler) PublishToLocalQueue(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
+	if len(req.GetMessages()) == 0 {
+		invalidRequestSchema(c)
+		return
+	}
+
 	var err *ErrorWithStatus
 	h.logger.Debug("received PublishToLocalQueue API request", tag.Value(h.toJson(req)))
 	defer func() {

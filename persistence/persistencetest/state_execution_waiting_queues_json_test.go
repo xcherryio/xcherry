@@ -136,25 +136,25 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 //	state_1, 2: (q1, 1)
 //	state_3-a, 1: (q2: 1)
 func prepareDataForAnyOfCompletion(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1",
 	}, true)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(2)),
 	}, true)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(2)),
 	}, true)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_3-a", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2",
@@ -167,25 +167,25 @@ func prepareDataForAnyOfCompletion(stateExecutionWaitingQueues persistence.State
 //	state_1, 2: (q1, 2)
 //	state_3, 1: (q1: 1)
 func prepareDataForAllOfCompletion(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1",
 	}, false)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(2)),
 	}, false)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(2)),
 	}, false)
 
-	stateExecutionWaitingQueues.Add(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1",

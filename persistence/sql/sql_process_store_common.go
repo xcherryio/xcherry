@@ -83,10 +83,15 @@ func insertImmediateTask(
 func (p sqlProcessStoreImpl) publishToLocalQueue(
 	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) error {
 	for _, message := range messages {
-		dedupId := uuid.ParseUUID(message.GetDedupId())
-		if dedupId == nil {
-			dedupId = uuid.MustNewUUID()
-		} else {
+		dedupId := uuid.MustNewUUID()
+
+		// dealing with user-customized dedupId
+		if message.GetDedupId() != "" {
+			dedupId, err := uuid.ParseUUID(message.GetDedupId())
+			if err != nil {
+				return err
+			}
+
 			// need to check if this message has been published before
 			existingMessage, err := p.session.SelectLocalQueue(ctx, processExecutionId, message.GetQueueName(), dedupId)
 			if err == nil {
