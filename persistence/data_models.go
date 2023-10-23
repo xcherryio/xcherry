@@ -237,7 +237,8 @@ type (
 	}
 
 	ProcessLocalQueueMessagesRequest struct {
-		TaskShardId  int32
+		TaskShardId int32
+		// If TaskSequence is 0, skip deleting the immediate task row
 		TaskSequence int64
 
 		ProcessExecutionId uuid.UUID

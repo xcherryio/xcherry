@@ -26,16 +26,16 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 	prepareDataForAnyOfCompletion(stateExecutionWaitingQueues)
 
 	// Consume a non-existent queue
-	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q3",
 	})
 	assert.Nil(t, completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
-	completedStateExecutionIdString2, hasFinishedWaiting2 := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString2, hasFinishedWaiting2 := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
 
@@ -49,7 +49,7 @@ func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
 		assert.Equal(t, "state_1-1", *completedStateExecutionIdString2)
 	}
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2",
 	})
 	// The new data should be empty.
@@ -64,13 +64,13 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 	prepareDataForAllOfCompletion(stateExecutionWaitingQueues)
 
 	// Consume a non-existent queue
-	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q3",
 	})
 	assert.Nil(t, completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
 	// The new data should be:
@@ -80,7 +80,7 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
 	assert.True(t, hasFinishedWaiting)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
 	// The new data should be:
@@ -90,7 +90,7 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 	assert.Equal(t, "state_1-1", *completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
 	// The new data should be:
@@ -100,7 +100,7 @@ func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
 	assert.Equal(t, "state_1-2", *completedStateExecutionIdString)
 	assert.False(t, hasFinishedWaiting)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(xdbapi.LocalQueueMessage{
+	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1",
 	})
 	// The new data should be:

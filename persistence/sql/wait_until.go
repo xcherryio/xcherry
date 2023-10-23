@@ -142,7 +142,10 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 
 	localQueueCommands := request.CommandRequest.GetLocalQueueCommands()
 
-	// lock and handle process execution row first
+	// to consume unconsumed messages when this state has localQueueCommands AND there are unconsumed messages in the waitingQueue
+	toConsumeUnconsumedMessages := false
+
+	// Step 1: lock and handle process execution row first
 	if len(localQueueCommands) > 0 {
 		prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 		if err != nil {
@@ -159,6 +162,8 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 				request.CommandRequest.GetWaitingType() == xdbapi.ANY_OF_COMPLETION)
 		}
 
+		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedMessages) > 0
+
 		prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
 		if err != nil {
 			return err
@@ -170,13 +175,28 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 	}
 
-	// update async state execution
+	// Step 2: update async state execution
 	err = tx.UpdateAsyncStateExecution(ctx, stateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
 			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
 		}
 		return err
+	}
+
+	// Step 3: consume unconsumed messages
+	if toConsumeUnconsumedMessages {
+		err = p.doProcessLocalQueueMessageTx(ctx, tx, persistence.ProcessLocalQueueMessagesRequest{
+			TaskShardId:  request.TaskShardId,
+			TaskSequence: 0,
+
+			ProcessExecutionId: request.ProcessExecutionId,
+
+			Messages: []persistence.LocalQueueMessageInfoJson{},
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

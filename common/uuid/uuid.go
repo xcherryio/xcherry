@@ -62,6 +62,7 @@ func MustParsePtrUUID(s *string) UUID {
 	return MustParseUUID(*s)
 }
 
+// ParseUUID decodes s into a UUID or returns an error.
 func ParseUUID(s string) (UUID, error) {
 	parsed, err := uuid.Parse(s)
 	if err != nil {

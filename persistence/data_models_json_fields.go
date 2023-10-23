@@ -97,12 +97,15 @@ type StateExecutionWaitingQueuesJson struct {
 	QueueToStatesMap map[string]map[string]int `json:"queueToStatesMap"`
 	// { (state_1, state_1_seq): total_waiting_count, (state_2, state_2_seq): total_waiting_count, ...} }
 	StateToQueueCountMap map[string]int `json:"stateToQueueCountMap"`
+	// [ message_1, message_2, ... ]
+	UnconsumedMessages []LocalQueueMessageInfoJson `json:"unconsumedMessages"`
 }
 
 func NewStateExecutionWaitingQueues() StateExecutionWaitingQueuesJson {
 	return StateExecutionWaitingQueuesJson{
 		QueueToStatesMap:     map[string]map[string]int{},
 		StateToQueueCountMap: map[string]int{},
+		UnconsumedMessages:   []LocalQueueMessageInfoJson{},
 	}
 }
 
@@ -145,9 +148,11 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecuti
 }
 
 // Consume return assigned StateExecutionId string and a boolean indicating whether the assigned StateExecutionId has finished waiting
-func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessage) (*string, bool) {
-	m, ok := s.QueueToStatesMap[message.GetQueueName()]
+func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, bool) {
+	m, ok := s.QueueToStatesMap[message.QueueName]
 	if !ok {
+		// no states have started waiting for this queue
+		s.UnconsumedMessages = append(s.UnconsumedMessages, message)
 		return nil, false
 	}
 
@@ -177,9 +182,9 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message xdbapi.LocalQueueMessa
 	if m[assignedStateExecutionIdString] == 0 {
 		delete(m, assignedStateExecutionIdString)
 	}
-	s.QueueToStatesMap[message.GetQueueName()] = m
-	if len(s.QueueToStatesMap[message.GetQueueName()]) == 0 {
-		delete(s.QueueToStatesMap, message.GetQueueName())
+	s.QueueToStatesMap[message.QueueName] = m
+	if len(s.QueueToStatesMap[message.QueueName]) == 0 {
+		delete(s.QueueToStatesMap, message.QueueName)
 	}
 
 	s.StateToQueueCountMap[assignedStateExecutionIdString] -= 1
@@ -199,6 +204,10 @@ func (s *StateExecutionWaitingQueuesJson) CleanupForCompletion(stateExecutionIdS
 	for k := range s.QueueToStatesMap {
 		delete(s.QueueToStatesMap[k], stateExecutionIdString)
 	}
+}
+
+func (s *StateExecutionWaitingQueuesJson) ClearUnconsumedMessages() {
+	s.UnconsumedMessages = []LocalQueueMessageInfoJson{}
 }
 
 type AsyncStateExecutionInfoJson struct {

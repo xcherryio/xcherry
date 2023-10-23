@@ -62,15 +62,13 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return err
 	}
 
-	for _, message := range request.Messages {
-		dedupIdString := message.DedupId.String()
-		assignedStateExecutionIdString, hasFinishedWaiting := waitingQueues.Consume(xdbapi.LocalQueueMessage{
-			QueueName: message.QueueName,
-			DedupId:   &dedupIdString,
-			Payload:   &message.Payload,
-		})
+	// merge waitingQueues.UnconsumedMessages into request.Messages to consume
+	messages := append(request.Messages, waitingQueues.UnconsumedMessages...)
+	waitingQueues.ClearUnconsumedMessages()
 
-		// TODO: store unconsumed messages
+	for _, message := range messages {
+		assignedStateExecutionIdString, hasFinishedWaiting := waitingQueues.Consume(message)
+
 		// early stop if no state can consume the message
 		if assignedStateExecutionIdString == nil {
 			continue
@@ -147,16 +145,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// will handle the completion logic in CompleteWaitUntilExecution later.
 
-	// Step 3: delete the task row
-	err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
-		ShardId:      request.TaskShardId,
-		TaskSequence: request.TaskSequence,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 4: handle finished wait_until task for finishedStateExecutionIdToPreviousVersionMap
+	// Step 3: handle finished wait_until task for finishedStateExecutionIdToPreviousVersionMap
 	for stateExecutionIdString, previousVersion := range finishedStateExecutionIdToPreviousVersionMap {
 		stateExecutionId, err := persistence.NewStateExecutionIdFromString(stateExecutionIdString)
 		if err != nil {
@@ -168,6 +157,17 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			ProcessExecutionId: request.ProcessExecutionId,
 			StateExecutionId:   *stateExecutionId,
 			PreviousVersion:    previousVersion + 1,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// Step 4: delete the task row
+	if request.TaskSequence > 0 {
+		err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
+			ShardId:      request.TaskShardId,
+			TaskSequence: request.TaskSequence,
 		})
 		if err != nil {
 			return err
