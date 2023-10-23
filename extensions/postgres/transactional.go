@@ -92,8 +92,8 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 }
 
 const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
-	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, execute_status, info, input) VALUES
-	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :execute_status, :info, :input)`
+	(process_execution_id, state_id, state_id_sequence, version, status, info, input) VALUES
+	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :status, :info, :input)`
 
 func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
@@ -102,7 +102,7 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 }
 
 const selectAsyncStateExecutionForUpdateQuery = `SELECT 
-    wait_until_status, execute_status, version as previous_version, wait_until_commands, wait_until_command_results, last_failure
+    status, version as previous_version, wait_until_commands, wait_until_command_results, last_failure
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3 FOR UPDATE
 `
 
@@ -119,8 +119,7 @@ func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context,
 
 const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
 version = :previous_version + 1,
-wait_until_status = :wait_until_status,
-execute_status = :execute_status,
+status = :status,
 wait_until_commands = :wait_until_commands,
 wait_until_command_results = :wait_until_command_results,
 last_failure = :last_failure     
@@ -147,8 +146,7 @@ func (d dbTx) UpdateAsyncStateExecution(
 
 const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xdb_sys_async_state_executions set
 version = :previous_version + 1,
-wait_until_status = :wait_until_status,
-execute_status = :execute_status,
+status = :status,
 last_failure = :last_failure     
 WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
   AND state_id_sequence=:state_id_sequence AND version = :previous_version`
@@ -174,9 +172,8 @@ func (d dbTx) UpdateAsyncStateExecutionWithoutCommands(
 }
 
 const batchUpdateAsyncStateExecutionsToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions SET
-version = CASE WHEN wait_until_status=1 OR execute_status=1 THEN version+1 ELSE version END,
-wait_until_status = CASE WHEN wait_until_status=1 THEN 5 ELSE wait_until_status END,
-execute_status = CASE WHEN execute_status=1 THEN 5 ELSE execute_status END
+version = CASE WHEN status<4 THEN version+1 ELSE version END,
+status = CASE WHEN status<4 THEN 7 ELSE status END
 WHERE process_execution_id=$1
 `
 

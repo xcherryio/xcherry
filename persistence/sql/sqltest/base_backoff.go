@@ -82,9 +82,7 @@ func startProcessAndBackoffWorkerTask(
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, immediateTask.StateId, immediateTask.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	backoffInfo := &persistence.WorkerTaskBackoffInfoJson{
 		CompletedAttempts:            int32(1),

@@ -46,11 +46,9 @@ func insertAsyncStateExecution(
 	}
 
 	if stateConfig.GetSkipWaitUntil() {
-		stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
-		stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
+		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
 	} else {
-		stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
-		stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
+		stateRow.Status = persistence.StateExecutionStatusWaitUntilRunning
 	}
 
 	return tx.InsertAsyncStateExecution(ctx, stateRow)

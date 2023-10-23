@@ -95,8 +95,7 @@ type (
 		StateId         string
 		StateIdSequence int32
 
-		WaitUntilStatus persistence.StateExecutionStatus
-		ExecuteStatus   persistence.StateExecutionStatus
+		Status persistence.StateExecutionStatus
 
 		WaitUntilCommands       types.JSONText
 		WaitUntilCommandResults types.JSONText
@@ -114,8 +113,7 @@ type (
 		StateId         string
 		StateIdSequence int32
 
-		WaitUntilStatus persistence.StateExecutionStatus
-		ExecuteStatus   persistence.StateExecutionStatus
+		Status persistence.StateExecutionStatus
 
 		LastFailure types.JSONText
 
@@ -129,8 +127,7 @@ type (
 		StateId                  string
 		StateIdSequence          int32
 
-		WaitUntilStatus persistence.StateExecutionStatus
-		ExecuteStatus   persistence.StateExecutionStatus
+		Status          persistence.StateExecutionStatus
 		PreviousVersion int32 // for conditional check
 
 		LastFailure types.JSONText

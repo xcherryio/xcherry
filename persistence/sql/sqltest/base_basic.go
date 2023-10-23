@@ -55,9 +55,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
@@ -72,9 +70,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -105,9 +101,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
@@ -117,9 +111,7 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusAborted)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
 }
 
@@ -221,9 +213,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
@@ -238,9 +228,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -271,9 +259,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
@@ -283,9 +269,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusAborted)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
 
 	// try to start with disallow_reuse policy, and verify it's returning already started
@@ -318,9 +302,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
@@ -335,9 +317,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -368,9 +348,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
@@ -380,9 +358,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusAborted)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
 
 	// start with allow if no running,
@@ -407,9 +383,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
@@ -424,9 +398,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -456,9 +428,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.GRACEFUL_COMPLETE_PROCESS,
@@ -468,9 +438,7 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 
 	// Verify both stateId2 and process are still running
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
 }
 
@@ -492,9 +460,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusRunning,
-		persistence.StateExecutionStatusUndefined)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
@@ -509,9 +475,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input,
-		persistence.StateExecutionStatusCompleted,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -541,9 +505,7 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusRunning)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_FAIL_PROCESS,
@@ -553,8 +515,6 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 
 	// Verify stateId2 was aborted and process has failed
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(),
-		persistence.StateExecutionStatusSkipped,
-		persistence.StateExecutionStatusAborted)
+	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.FAILED)
 }

@@ -179,8 +179,8 @@ type (
 	}
 
 	PrepareStateExecutionResponse struct {
-		WaitUntilStatus StateExecutionStatus
-		ExecuteStatus   StateExecutionStatus
+		Status StateExecutionStatus
+
 		// PreviousVersion is for conditional check in the future transactional update
 		PreviousVersion int32
 

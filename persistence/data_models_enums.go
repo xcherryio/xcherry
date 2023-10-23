@@ -48,22 +48,23 @@ func (e ProcessExecutionStatus) String() string {
 type StateExecutionStatus int32
 
 const (
-	StateExecutionStatusSkipped            StateExecutionStatus = -1
-	StateExecutionStatusUndefined          StateExecutionStatus = 0
-	StateExecutionStatusRunning            StateExecutionStatus = 1
-	StateExecutionStatusCompleted          StateExecutionStatus = 2
-	StateExecutionStatusFailed             StateExecutionStatus = 3
-	StateExecutionStatusTimeout            StateExecutionStatus = 4
-	StateExecutionStatusAborted            StateExecutionStatus = 5
-	StateExecutionStatusWaitingForCommands StateExecutionStatus = 6
+	StateExecutionStatusWaitUntilRunning StateExecutionStatus = 1
+	StateExecutionStatusWaitUntilWaiting StateExecutionStatus = 2
+	StateExecutionStatusExecuteRunning   StateExecutionStatus = 3
+	StateExecutionStatusCompleted        StateExecutionStatus = 4
+	StateExecutionStatusFailed           StateExecutionStatus = 5
+	StateExecutionStatusTimeout          StateExecutionStatus = 6
+	StateExecutionStatusAborted          StateExecutionStatus = 7
 )
 
 func (e StateExecutionStatus) String() string {
 	switch e {
-	case StateExecutionStatusSkipped:
-		return "Skipped"
-	case StateExecutionStatusRunning:
-		return "Running"
+	case StateExecutionStatusWaitUntilRunning:
+		return "WaitUntilRunning"
+	case StateExecutionStatusWaitUntilWaiting:
+		return "WaitUntilWaiting"
+	case StateExecutionStatusExecuteRunning:
+		return "ExecuteRunning"
 	case StateExecutionStatusCompleted:
 		return "Completed"
 	case StateExecutionStatusFailed:
@@ -72,8 +73,6 @@ func (e StateExecutionStatus) String() string {
 		return "Timeout"
 	case StateExecutionStatusAborted:
 		return "Aborted"
-	case StateExecutionStatusUndefined:
-		return "Undefined"
 	default:
 		panic("this is not supported")
 	}

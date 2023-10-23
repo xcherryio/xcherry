@@ -63,8 +63,7 @@ func (p sqlProcessStoreImpl) doBackoffImmediateTaskTx(
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateId:            task.StateId,
 		StateIdSequence:    task.StateIdSequence,
-		WaitUntilStatus:    prep.WaitUntilStatus,
-		ExecuteStatus:      prep.ExecuteStatus,
+		Status:             prep.Status,
 		PreviousVersion:    prep.PreviousVersion,
 		LastFailure:        failureBytes,
 	})

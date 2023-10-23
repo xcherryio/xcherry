@@ -145,15 +145,14 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 		},
 	})
 
-	if prep.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+	if prep.Status == persistence.StateExecutionStatusWaitUntilRunning {
 		return w.processWaitUntilTask(ctx, task, *prep, apiClient)
-	} else if prep.ExecuteStatus == persistence.StateExecutionStatusRunning {
+	} else if prep.Status == persistence.StateExecutionStatusExecuteRunning {
 		return w.processExecuteTask(ctx, task, *prep, apiClient)
 	} else {
 		w.logger.Warn("noop for immediate task ",
 			tag.ID(tag.AnyToStr(task.TaskSequence)),
-			tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
-				prep.WaitUntilStatus, prep.ExecuteStatus)))
+			tag.Value(fmt.Sprintf("status %v", prep.Status)))
 		return nil
 	}
 }

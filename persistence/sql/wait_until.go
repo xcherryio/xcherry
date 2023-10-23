@@ -89,8 +89,7 @@ func (p sqlProcessStoreImpl) CompleteWaitUntilExecution(
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
-		WaitUntilStatus:    persistence.StateExecutionStatusCompleted,
-		ExecuteStatus:      persistence.StateExecutionStatusRunning,
+		Status:             persistence.StateExecutionStatusExecuteRunning,
 		PreviousVersion:    request.PreviousVersion,
 		LastFailure:        nil,
 	}
@@ -131,8 +130,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		StateId:         request.StateId,
 		StateIdSequence: request.StateIdSequence,
 
-		WaitUntilStatus: persistence.StateExecutionStatusWaitingForCommands,
-		ExecuteStatus:   persistence.StateExecutionStatusUndefined,
+		Status: persistence.StateExecutionStatusWaitUntilWaiting,
 
 		WaitUntilCommands:       commandRequestBytes,
 		WaitUntilCommandResults: commandResultsBytes,

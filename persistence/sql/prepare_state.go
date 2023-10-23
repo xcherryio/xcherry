@@ -41,8 +41,7 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 		return nil, err
 	}
 	return &persistence.PrepareStateExecutionResponse{
-		WaitUntilStatus: stateRow.WaitUntilStatus,
-		ExecuteStatus:   stateRow.ExecuteStatus,
+		Status:          stateRow.Status,
 		PreviousVersion: stateRow.PreviousVersion,
 		Info:            info,
 		Input:           input,

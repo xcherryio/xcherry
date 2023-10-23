@@ -64,8 +64,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
-		WaitUntilStatus:    request.Prepare.WaitUntilStatus,
-		ExecuteStatus:      persistence.StateExecutionStatusCompleted,
+		Status:             persistence.StateExecutionStatusCompleted,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 		LastFailure:        nil,
 	}
