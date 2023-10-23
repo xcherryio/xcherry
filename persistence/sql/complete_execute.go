@@ -186,12 +186,11 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// Step 3: publish to local queue
 
-	err = p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
+	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(request.PublishToLocalQueue) > 0 {
+	if hasNewImmediateTask2 {
 		hasNewImmediateTask = true
 	}
 

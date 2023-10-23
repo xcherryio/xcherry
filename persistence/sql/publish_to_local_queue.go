@@ -60,14 +60,14 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		return nil, err
 	}
 
-	err = p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, request.Messages)
+	hasNewImmediateTask, err := p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, request.Messages)
 	if err != nil {
 		return nil, err
 	}
 
 	return &persistence.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
-		HasNewImmediateTask: true,
+		HasNewImmediateTask: hasNewImmediateTask,
 		NotExists:           false,
 	}, nil
 }

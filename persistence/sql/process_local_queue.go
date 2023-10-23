@@ -63,6 +63,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	}
 
 	// merge waitingQueues.UnconsumedMessages into request.Messages to consume
+	// waitingQueues.UnconsumedMessages need to be first to ensure the consumption order
 	messages := append(waitingQueues.UnconsumedMessages, request.Messages...)
 	waitingQueues.ClearUnconsumedMessages()
 
@@ -141,8 +142,6 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
 		}
 	}
-
-	// will handle the completion logic in CompleteWaitUntilExecution later.
 
 	// Step 3: handle finished wait_until task for finishedStateExecutionIdToPreviousVersionMap
 	for stateExecutionIdString, previousVersion := range finishedStateExecutionIdToPreviousVersionMap {

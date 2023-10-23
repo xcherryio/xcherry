@@ -85,10 +85,11 @@ func insertImmediateTask(
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }
 
-// publishToLocalQueue will insert len(valid_messages) rows into xdb_sys_local_queue,
-// and insert only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages
+// publishToLocalQueue inserts len(valid_messages) rows into xdb_sys_local_queue,
+// and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
+// publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
-	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) error {
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) (bool, error) {
 
 	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
 
@@ -99,7 +100,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 		if message.GetDedupId() != "" {
 			dedupId2, err := uuid.ParseUUID(message.GetDedupId())
 			if err != nil {
-				return err
+				return false, err
 			}
 
 			// need to check if this message has been published before
@@ -110,7 +111,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 				continue
 			}
 			if !p.session.IsNotFoundError(err) {
-				return err
+				return false, err
 			}
 
 			dedupId = dedupId2
@@ -120,7 +121,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 		payload, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		err = tx.InsertLocalQueue(ctx, extensions.LocalQueueRow{
@@ -130,7 +131,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			Payload:            payload,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
@@ -143,7 +144,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 	// insert a row into xdb_sys_immediate_tasks
 
 	if len(localQueueMessageInfo) == 0 {
-		return nil
+		return false, nil
 	}
 
 	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
@@ -151,7 +152,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			LocalQueueMessageInfo: localQueueMessageInfo,
 		})
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
@@ -164,8 +165,8 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 		Info:               taskInfoBytes,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return true, nil
 }
