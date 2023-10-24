@@ -17,157 +17,330 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/persistence"
 	"testing"
 )
 
-func TestStateExecutionWaitingQueuesJsonAnyOfCompletion(t *testing.T) {
+func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
+	uuid_q1_1 := uuid.MustNewUUID()
+	uuid_q1_2 := uuid.MustNewUUID()
+	uuid_q2_1 := uuid.MustNewUUID()
+	uuid_q2_2 := uuid.MustNewUUID()
+
 	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
-	prepareDataForAnyOfCompletion(stateExecutionWaitingQueues)
+	prepareDataForConsume(stateExecutionWaitingQueues)
 
-	// Consume a non-existent queue
-	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q3",
-	})
-	assert.Nil(t, completedStateExecutionIdString)
-	assert.False(t, hasFinishedWaiting)
+	// Data:
+	//	state_1, 1: (q1, 2),
+	//	state_1, 2: (q2, 3),
+	//	state_3, 1: (q1: 1), (q2, 2)
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
-	})
-	completedStateExecutionIdString2, hasFinishedWaiting2 := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
-	})
-
-	// The new data should be:
-	//	state_3-a, 1: (q2: 1)
-	assert.True(t, hasFinishedWaiting)
-	assert.True(t, hasFinishedWaiting2)
-	if *completedStateExecutionIdString == "state_1-1" {
-		assert.Equal(t, "state_1-2", *completedStateExecutionIdString2)
-	} else {
-		assert.Equal(t, "state_1-1", *completedStateExecutionIdString2)
-	}
-
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q2",
-	})
-	// The new data should be empty.
-	// Return state_3-a, 1 as completed
-	assert.Equal(t, "state_3-a-1", *completedStateExecutionIdString)
-	assert.True(t, hasFinishedWaiting)
-
-}
-
-func TestStateExecutionWaitingQueuesJsonAllOfCompletion(t *testing.T) {
-	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
-	prepareDataForAllOfCompletion(stateExecutionWaitingQueues)
-
-	// Consume a non-existent queue
-	completedStateExecutionIdString, hasFinishedWaiting := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q3",
-	})
-	assert.Nil(t, completedStateExecutionIdString)
-	assert.False(t, hasFinishedWaiting)
-
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
+	completedStateExecutionIdString, dedupIds := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q1", DedupId: uuid_q1_1,
 	})
 	// The new data should be:
-	//	state_1, 1: (q1, 1), (q2, 2)
-	//	state_1, 2: (q1, 2)
-	// return (state_3, 1), true
+	//	state_1, 1: (q1, 2),
+	//	state_1, 2: (q2, 3),
+	//	state_3, 1: (q2, 2)
 	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
-	assert.True(t, hasFinishedWaiting)
+	assert.Equal(t, []uuid.UUID{uuid_q1_1}, dedupIds)
+	assert.Equal(t, 0, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
 
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
+	completedStateExecutionIdString, dedupIds = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q2", DedupId: uuid_q2_1,
+	})
+	// The data does not change:
+	//	state_1, 1: (q1, 2),
+	//	state_1, 2: (q2, 3),
+	//	state_3, 1: (q2, 2)
+	assert.Nil(t, completedStateExecutionIdString)
+	assert.Equal(t, []uuid.UUID{}, dedupIds)
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q2_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
+
+	completedStateExecutionIdString, dedupIds = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q1", DedupId: uuid_q1_2,
+	})
+	// The data does not change:
+	//	state_1, 1: (q1, 2),
+	//	state_1, 2: (q2, 3),
+	//	state_3, 1: (q2, 2)
+	assert.Nil(t, completedStateExecutionIdString)
+	assert.Equal(t, []uuid.UUID{}, dedupIds)
+	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, []uuid.UUID{uuid_q2_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
+
+	completedStateExecutionIdString, dedupIds = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q2", DedupId: uuid_q2_2,
 	})
 	// The new data should be:
-	//	state_1, 1: (q2, 2)
-	//	state_1, 2: (q1, 2)
-	// return (state_1, 1), false
-	assert.Equal(t, "state_1-1", *completedStateExecutionIdString)
-	assert.False(t, hasFinishedWaiting)
-
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
-	})
-	// The new data should be:
-	//	state_1, 1: (q2, 2)
-	//	state_1, 2: (q1, 1)
-	// return (state_1, 2), false
-	assert.Equal(t, "state_1-2", *completedStateExecutionIdString)
-	assert.False(t, hasFinishedWaiting)
-
-	completedStateExecutionIdString, hasFinishedWaiting = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
-		QueueName: "q1",
-	})
-	// The new data should be:
-	//	state_1, 1: (q2, 2)
-	// return (state_1, 2), true
-	assert.Equal(t, "state_1-2", *completedStateExecutionIdString)
-	assert.True(t, hasFinishedWaiting)
+	//	state_1, 1: (q1, 2),
+	//	state_1, 2: (q2, 3),
+	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
+	assert.Equal(t, []uuid.UUID{uuid_q2_1, uuid_q2_2}, dedupIds)
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 }
 
-// Return:
-//
-//	state_1, 1: (q1, 1), (q2, 1)
-//	state_1, 2: (q1, 1)
-//	state_3-a, 1: (q2: 1)
-func prepareDataForAnyOfCompletion(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+func TestStateExecutionWaitingQueuesJsonConsumeFor_All_consumed(t *testing.T) {
+	uuids := []uuid.UUID{}
+	uuid_q1_1 := uuid.MustNewUUID()
+	uuid_q1_2 := uuid.MustNewUUID()
+	uuid_q2_1 := uuid.MustNewUUID()
+	uuid_q2_2 := uuid.MustNewUUID()
+	uuid_q3_1 := uuid.MustNewUUID()
+	uuids = append(uuids, uuid_q1_1)
+	uuids = append(uuids, uuid_q1_2)
+	uuids = append(uuids, uuid_q2_1)
+	uuids = append(uuids, uuid_q2_2)
+	uuids = append(uuids, uuid_q3_1)
+
+	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
+	prepareDataForConsumeFor(stateExecutionWaitingQueues, uuids)
+
+	// Return UnconsumedMessageQueueCountMap as:
+	//
+	// (q1, 2), (q2, 2), (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as:
+	//
+	// (q1, 1), (q2, 2)
+
+	canComplete, dedupIds := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.LocalQueueCommand{
-		QueueName: "q1",
 	}, true)
+
+	// The new UnconsumedMessageQueueCountMap should be:
+	//
+	// (q1, 1) (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] was deleted.
+
+	assert.Equal(t, true, canComplete)
+	assert.Equal(t, []uuid.UUID{uuid_q1_1, uuid_q2_1, uuid_q2_2}, dedupIds)
+	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
+	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+}
+
+func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing.T) {
+	uuids := []uuid.UUID{}
+	uuid_q1_1 := uuid.MustNewUUID()
+	uuid_q1_2 := uuid.MustNewUUID()
+	uuid_q2_1 := uuid.MustNewUUID()
+	uuid_q2_2 := uuid.MustNewUUID()
+	uuid_q3_1 := uuid.MustNewUUID()
+	uuids = append(uuids, uuid_q1_1)
+	uuids = append(uuids, uuid_q1_2)
+	uuids = append(uuids, uuid_q2_1)
+	uuids = append(uuids, uuid_q2_2)
+	uuids = append(uuids, uuid_q3_1)
+
+	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
+	prepareDataForConsumeFor(stateExecutionWaitingQueues, uuids)
 
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
-		QueueName: "q2", Count: ptr.Any(int32(2)),
+		QueueName: "q3", Count: ptr.Any(int32(2)),
+	})
+
+	// Return UnconsumedMessageQueueCountMap as:
+	//
+	// (q1, 2), (q2, 2), (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as:
+	//
+	// (q1, 1), (q2, 2), (q3, 2)
+
+	canComplete, dedupIds := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
 	}, true)
 
+	// The new UnconsumedMessageQueueCountMap should be:
+	//
+	// (q1, 1), (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as:
+	//
+	// (q3, 2)
+
+	assert.Equal(t, false, canComplete)
+	assert.Equal(t, []uuid.UUID{uuid_q1_1, uuid_q2_1, uuid_q2_2}, dedupIds)
+	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap))
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"]))
+	assert.Equal(t, xdbapi.LocalQueueCommand{
+		QueueName: "q3",
+		Count:     xdbapi.PtrInt32(2),
+	}, stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"][0])
+}
+
+func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
+	uuids := []uuid.UUID{}
+	uuid_q1_1 := uuid.MustNewUUID()
+	uuid_q1_2 := uuid.MustNewUUID()
+	uuid_q2_1 := uuid.MustNewUUID()
+	uuid_q2_2 := uuid.MustNewUUID()
+	uuid_q3_1 := uuid.MustNewUUID()
+	uuids = append(uuids, uuid_q1_1)
+	uuids = append(uuids, uuid_q1_2)
+	uuids = append(uuids, uuid_q2_1)
+	uuids = append(uuids, uuid_q2_2)
+	uuids = append(uuids, uuid_q3_1)
+
+	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
+	prepareDataForConsumeFor(stateExecutionWaitingQueues, uuids)
+
+	// Return UnconsumedMessageQueueCountMap as:
+	//
+	// (q1, 2), (q2, 2), (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as:
+	//
+	// (q1, 1), (q2, 2)
+
+	canComplete, dedupIds := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, false)
+
+	// The new UnconsumedMessageQueueCountMap should be:
+	//
+	// (q1, 1), (q2, 2), (q3, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as deleted.
+
+	assert.Equal(t, true, canComplete)
+	assert.Equal(t, []uuid.UUID{uuid_q1_1}, dedupIds)
+	assert.Equal(t, 3, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, []uuid.UUID{uuid_q2_1, uuid_q2_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
+	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
+	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+}
+
+func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T) {
+	uuid_q1_1 := uuid.MustNewUUID()
+
+	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
+
+	completedStateExecutionIdString, dedupIds := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q1", DedupId: uuid_q1_1,
+	})
+	assert.Nil(t, completedStateExecutionIdString)
+	assert.Equal(t, []uuid.UUID{}, dedupIds)
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 2,
+		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(2)),
-	}, true)
-
+	})
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
-		StateId: "state_3-a", StateIdSequence: 1,
+		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
+		QueueName: "q2", Count: ptr.Any(int32(1)),
+	})
+
+	// Return UnconsumedMessageQueueCountMap as:
+	//
+	// (q1, 1)
+	//
+	// and StateToCommandsMap["state_1-1"] as:
+	//
+	// (q1, 2), (q2, 1)
+
+	canComplete, dedupIds := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, false)
+
+	assert.Equal(t, false, canComplete)
+	assert.Equal(t, []uuid.UUID{}, dedupIds)
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Equal(t, []uuid.UUID{uuid_q1_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
+	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap))
+	assert.Equal(t, 2, len(stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"]))
+	assert.Equal(t, xdbapi.LocalQueueCommand{
+		QueueName: "q1",
+		Count:     xdbapi.PtrInt32(2),
+	}, stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"][0])
+	assert.Equal(t, xdbapi.LocalQueueCommand{
 		QueueName: "q2",
-	}, true)
+		Count:     xdbapi.PtrInt32(1),
+	}, stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"][1])
 }
 
 // Return:
 //
-//	state_1, 1: (q1, 1), (q2, 2)
-//	state_1, 2: (q1, 2)
-//	state_3, 1: (q1: 1)
-func prepareDataForAllOfCompletion(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
+//	state_1, 1: (q1, 2),
+//	state_1, 2: (q2, 3),
+//	state_3, 1: (q1: 1), (q2, 2)
+func prepareDataForConsume(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
-		QueueName: "q1",
-	}, false)
-
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.LocalQueueCommand{
-		QueueName: "q2", Count: ptr.Any(int32(2)),
-	}, false)
+		QueueName: "q1", Count: ptr.Any(int32(2)),
+	})
 
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
 	}, xdbapi.LocalQueueCommand{
-		QueueName: "q1", Count: ptr.Any(int32(2)),
-	}, false)
+		QueueName: "q2", Count: ptr.Any(int32(3)),
+	})
 
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1",
-	}, false)
+	})
+
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+		StateId: "state_3", StateIdSequence: 1,
+	}, xdbapi.LocalQueueCommand{
+		QueueName: "q2", Count: ptr.Any(int32(2)),
+	})
+}
+
+// Return UnconsumedMessageQueueCountMap as:
+//
+// (q1, 2), (q2, 2), (q3, 1)
+//
+// and StateToCommandsMap["state_1-1"] as:
+//
+// (q1, 1), (q2, 2)
+func prepareDataForConsumeFor(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson, dedupIds []uuid.UUID) {
+	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q1", DedupId: dedupIds[0],
+	})
+	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q1", DedupId: dedupIds[1],
+	})
+	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q2", DedupId: dedupIds[2],
+	})
+	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q2", DedupId: dedupIds[3],
+	})
+	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+		QueueName: "q3", DedupId: dedupIds[4],
+	})
+
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, xdbapi.LocalQueueCommand{
+		QueueName: "q1", Count: ptr.Any(int32(1)),
+	})
+
+	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, xdbapi.LocalQueueCommand{
+		QueueName: "q2", Count: ptr.Any(int32(2)),
+	})
 }

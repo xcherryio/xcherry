@@ -130,11 +130,10 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 
 		for _, localQueueCommand := range request.CommandRequest.GetLocalQueueCommands() {
-			waitingQueues.AddNewLocalQueueCommandForStateExecution(request.StateExecutionId, localQueueCommand,
-				request.CommandRequest.GetWaitingType() == xdbapi.ANY_OF_COMPLETION)
+			waitingQueues.AddNewLocalQueueCommandForStateExecution(request.StateExecutionId, localQueueCommand)
 		}
 
-		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedMessages) > 0
+		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedMessageQueueDedupIdsMap) > 0
 
 		prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
 		if err != nil {
@@ -194,6 +193,9 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 			ProcessExecutionId: request.ProcessExecutionId,
 
 			Messages: []persistence.LocalQueueMessageInfoJson{},
+
+			StateExecutionId:   request.StateExecutionId,
+			CommandWaitingType: request.CommandRequest.GetWaitingType(),
 		})
 		if err != nil {
 			return nil, err

@@ -86,7 +86,7 @@ type nonTransactionalCRUD interface {
 
 	CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
-	SelectLocalQueue(ctx context.Context, processExecutionId uuid.UUID, queueName string, dedupId uuid.UUID) (*LocalQueueRow, error)
+	SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) ([]LocalQueueRow, error)
 }
 
 type ErrorChecker interface {

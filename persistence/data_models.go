@@ -239,12 +239,16 @@ type (
 
 	ProcessLocalQueueMessagesRequest struct {
 		TaskShardId int32
-		// If TaskSequence is 0, skip deleting the immediate task row
+		// If TaskSequence is 0, skip deleting the immediate task row, and try to consume unconsumed messages for StateExecutionId
 		TaskSequence int64
 
 		ProcessExecutionId uuid.UUID
 
 		Messages []LocalQueueMessageInfoJson
+
+		// the following fields will only be used when TaskSequence is 0
+		StateExecutionId   StateExecutionId
+		CommandWaitingType xdbapi.CommandWaitingType
 	}
 
 	ProcessLocalQueueMessagesResponse struct {

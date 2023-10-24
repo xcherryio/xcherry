@@ -19,7 +19,6 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
-	"sort"
 	"time"
 )
 
@@ -93,19 +92,16 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 }
 
 type StateExecutionWaitingQueuesJson struct {
-	// { queue_1: {(state_1, state_1_seq): waiting_count, (state_2, state_2_seq): waiting_count, ...} }
-	QueueToStatesMap map[string]map[string]int `json:"queueToStatesMap"`
-	// { (state_1, state_1_seq): total_waiting_count, (state_2, state_2_seq): total_waiting_count, ...} }
-	StateToQueueCountMap map[string]int `json:"stateToQueueCountMap"`
-	// [ message_1, message_2, ... ]
-	UnconsumedMessages []LocalQueueMessageInfoJson `json:"unconsumedMessages"`
+	// { state_execution_id_1: [ (queue_name_1, count_1), (queue_name_2, count_2), ... } ... }
+	StateToCommandsMap map[string][]xdbapi.LocalQueueCommand `json:"stateToCommandsMap"`
+	// { queue_name_1: [dedupId_1, dedupId_2, ...], queue_name_2: [dedup_id, ...], ... }
+	UnconsumedMessageQueueDedupIdsMap map[string][]uuid.UUID `json:"unconsumedMap"`
 }
 
 func NewStateExecutionWaitingQueues() StateExecutionWaitingQueuesJson {
 	return StateExecutionWaitingQueuesJson{
-		QueueToStatesMap:     map[string]map[string]int{},
-		StateToQueueCountMap: map[string]int{},
-		UnconsumedMessages:   []LocalQueueMessageInfoJson{},
+		StateToCommandsMap:                map[string][]xdbapi.LocalQueueCommand{},
+		UnconsumedMessageQueueDedupIdsMap: map[string][]uuid.UUID{},
 	}
 }
 
@@ -120,97 +116,137 @@ func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitin
 }
 
 func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecution(
-	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand, anyOfCompletion bool) {
-	count := command.GetCount()
-	if count == 0 {
-		count = 1
+	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
+	if command.GetCount() == 0 {
+		command.Count = xdbapi.PtrInt32(1)
 	}
 
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
-	m, ok := s.QueueToStatesMap[command.GetQueueName()]
-	if !ok {
-		m = map[string]int{}
-	}
-
-	if anyOfCompletion {
-		m[stateExecutionIdKey] = 1
-	} else {
-		m[stateExecutionIdKey] += int(count)
-	}
-	s.QueueToStatesMap[command.GetQueueName()] = m
-
-	if anyOfCompletion {
-		s.StateToQueueCountMap[stateExecutionIdKey] = 1
-	} else {
-		s.StateToQueueCountMap[stateExecutionIdKey] += int(count)
-	}
+	s.StateToCommandsMap[stateExecutionIdKey] = append(s.StateToCommandsMap[stateExecutionIdKey], command)
 }
 
-// Consume return assigned StateExecutionId string and a boolean indicating whether the assigned StateExecutionId has finished waiting
-func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, bool) {
-	m, ok := s.QueueToStatesMap[message.QueueName]
-	if !ok {
-		// no states have started waiting for this queue
-		s.UnconsumedMessages = append(s.UnconsumedMessages, message)
-		return nil, false
-	}
+// Consume return (StateExecutionId string, dedupIds) where the StateExecutionId consumes messages of these dudupIds.
+//
+// E.g., given StateToCommandsMap as:
+//
+//	state_1, 1: (q1, 2),
+//	state_1, 2: (q2, 3),
+//	state_3, 1: (q1: 1), (q2, 2)
+//
+// If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and StateToCommandsMap becomes:
+//
+//	state_1, 1: (q1, 2),
+//	state_1, 2: (q2, 3),
+//	state_3, 1: (q2, 2)
+//
+// If receiving the queue `q2` for twice, then state_3, 1 will consume the two queue `q2`, and StateToCommandsMap becomes:
+//
+//	state_1, 1: (q1, 2),
+//	state_1, 2: (q2, 3),
+func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, []uuid.UUID) {
+	s.UnconsumedMessageQueueDedupIdsMap[message.QueueName] = append(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName], message.DedupId)
 
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
+	for stateExecutionIdKey, commands := range s.StateToCommandsMap {
+		for i, command := range commands {
+			if command.GetQueueName() != message.QueueName || int(command.GetCount()) > len(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName]) {
+				continue
+			}
 
-	// E.g., given m as:
-	//	state_1, 1: (q1, 1), (q2, 2)
-	//	state_1, 2: (q1, 2)
-	//	state_3, 1: (q1: 1)
-	// If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and the m becomes:
-	//	state_1, 1: (q1, 1), (q2, 2)
-	//	state_1, 2: (q1, 2)
-	// If receiving the queue `q1` again, then state_1, 1 will consume the queue `q1`, and the m becomes:
-	//	state_1, 1: (q2, 2)
-	//	state_1, 2: (q1, 2)
-	sort.Slice(keys, func(i, j int) bool {
-		return m[keys[i]] < m[keys[j]] || (m[keys[i]] == m[keys[j]] && s.StateToQueueCountMap[keys[i]] < s.StateToQueueCountMap[keys[j]])
-	})
+			consumedDedupIds := s.UnconsumedMessageQueueDedupIdsMap[message.QueueName][:int(command.GetCount())]
 
-	assignedStateExecutionIdString := keys[0]
-	hasFinishedWaiting := false
+			s.UnconsumedMessageQueueDedupIdsMap[message.QueueName] =
+				s.UnconsumedMessageQueueDedupIdsMap[message.QueueName][int(command.GetCount()):]
+			if len(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName]) == 0 {
+				delete(s.UnconsumedMessageQueueDedupIdsMap, message.QueueName)
+			}
 
-	m[assignedStateExecutionIdString] -= 1
-	if m[assignedStateExecutionIdString] == 0 {
-		delete(m, assignedStateExecutionIdString)
-	}
-	s.QueueToStatesMap[message.QueueName] = m
-	if len(s.QueueToStatesMap[message.QueueName]) == 0 {
-		delete(s.QueueToStatesMap, message.QueueName)
-	}
+			s.StateToCommandsMap[stateExecutionIdKey] = append(s.StateToCommandsMap[stateExecutionIdKey][:i],
+				s.StateToCommandsMap[stateExecutionIdKey][i+1:]...)
+			if len(s.StateToCommandsMap[stateExecutionIdKey]) == 0 {
+				delete(s.StateToCommandsMap, stateExecutionIdKey)
+			}
 
-	s.StateToQueueCountMap[assignedStateExecutionIdString] -= 1
-	hasFinishedWaiting = s.StateToQueueCountMap[assignedStateExecutionIdString] == 0
-
-	if hasFinishedWaiting {
-		s.cleanupForCompletion(assignedStateExecutionIdString)
-	}
-
-	return &assignedStateExecutionIdString, hasFinishedWaiting
-}
-
-func (s *StateExecutionWaitingQueuesJson) cleanupForCompletion(stateExecutionIdString string) {
-	delete(s.StateToQueueCountMap, stateExecutionIdString)
-
-	// if the completion type is ANY_OF_COMPLETION, delete the stateExecutionId from each queue map
-	for k := range s.QueueToStatesMap {
-		delete(s.QueueToStatesMap[k], stateExecutionIdString)
-		if len(s.QueueToStatesMap[k]) == 0 {
-			delete(s.QueueToStatesMap, k)
+			return &stateExecutionIdKey, consumedDedupIds
 		}
 	}
+
+	return nil, []uuid.UUID{}
 }
 
-func (s *StateExecutionWaitingQueuesJson) ClearUnconsumedMessages() {
-	s.UnconsumedMessages = []LocalQueueMessageInfoJson{}
+// ConsumeFor return a bool indicating if the stateExecutionId can complete the local queue commands, and an array of all the consumed dedupIds.
+//
+// E.g., given UnconsumedMessageQueueCountMap as:
+//
+// (q1, 2), (q2, 2), (q3, 1)
+//
+// and StateToCommandsMap[stateExecutionId] as:
+//
+// (q1, 1), (q2, 2)
+//
+// and isAllOfCompletion as true. Then after ConsumeFor, the UnconsumedMessageQueueCountMap becomes:
+//
+// (q1, 1), (q3, 1)
+//
+// and returns:
+//
+// (true, [q1_dedup_id_1, q2_dedup_id_1, q2_dedup_id_2])
+func (s *StateExecutionWaitingQueuesJson) ConsumeFor(stateExecutionId StateExecutionId, isAllOfCompletion bool) (bool, []uuid.UUID) {
+	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
+
+	remainingCommands := []xdbapi.LocalQueueCommand{}
+	consumedDedupIds := []uuid.UUID{}
+
+	idx := 0
+
+	for i, command := range s.StateToCommandsMap[stateExecutionIdKey] {
+		idx = i
+
+		dedupIds, ok := s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()]
+
+		if !ok || int(command.GetCount()) > len(dedupIds) {
+			remainingCommands = append(remainingCommands, command)
+			continue
+		}
+
+		consumedDedupIds = append(consumedDedupIds, s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()][:int(command.GetCount())]...)
+
+		s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()] = s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()][int(command.GetCount()):]
+
+		if len(s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()]) == 0 {
+			delete(s.UnconsumedMessageQueueDedupIdsMap, command.GetQueueName())
+		}
+
+		if !isAllOfCompletion {
+			break
+		}
+	}
+
+	if idx < len(s.StateToCommandsMap[stateExecutionIdKey]) {
+		remainingCommands = append(remainingCommands, s.StateToCommandsMap[stateExecutionIdKey][idx+1:]...)
+	}
+
+	if len(remainingCommands) == len(s.StateToCommandsMap[stateExecutionIdKey]) {
+		return false, consumedDedupIds
+	}
+
+	s.StateToCommandsMap[stateExecutionIdKey] = remainingCommands
+	if len(s.StateToCommandsMap[stateExecutionIdKey]) == 0 {
+		delete(s.StateToCommandsMap, stateExecutionIdKey)
+	}
+
+	if !isAllOfCompletion {
+		s.CleanupFor(stateExecutionId)
+		return true, consumedDedupIds
+	}
+
+	return len(remainingCommands) == 0, consumedDedupIds
+}
+
+func (s *StateExecutionWaitingQueuesJson) CleanupFor(stateExecutionId StateExecutionId) {
+	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
+
+	delete(s.StateToCommandsMap, stateExecutionIdKey)
 }
 
 type AsyncStateExecutionInfoJson struct {
@@ -281,9 +317,8 @@ type WorkerTaskBackoffInfoJson struct {
 }
 
 type LocalQueueMessageInfoJson struct {
-	QueueName string               `json:"queueName"`
-	DedupId   uuid.UUID            `json:"dedupId"`
-	Payload   xdbapi.EncodedObject `json:"payload"`
+	QueueName string    `json:"queueName"`
+	DedupId   uuid.UUID `json:"dedupId"`
 }
 
 type ImmediateTaskInfoJson struct {

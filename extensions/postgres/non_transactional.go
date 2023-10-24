@@ -113,13 +113,23 @@ func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error
 	return err
 }
 
-const selectLocalQueueQuery = `SELECT
+const selectLocalQueueMessagesQuery = `SELECT
 	process_execution_id, queue_name, dedup_id, payload
-	FROM xdb_sys_local_queue WHERE process_execution_id=$1 AND queue_name=$2 AND dedup_id=$3
+	FROM xdb_sys_local_queue WHERE process_execution_id = ? AND dedup_id IN (?)
 `
 
-func (d dbSession) SelectLocalQueue(ctx context.Context, processExecutionId uuid.UUID, queueName string, dedupId uuid.UUID) (*extensions.LocalQueueRow, error) {
-	var row extensions.LocalQueueRow
-	err := d.db.GetContext(ctx, &row, selectLocalQueueQuery, processExecutionId.String(), queueName, dedupId.String())
-	return &row, err
+func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) ([]extensions.LocalQueueRow, error) {
+	dedupIdStrings := []string{}
+	for _, dedupId := range dedupIds {
+		dedupIdStrings = append(dedupIdStrings, dedupId.String())
+	}
+
+	var rows []extensions.LocalQueueRow
+	query, args, err := sqlx.In(selectLocalQueueMessagesQuery, processExecutionId.String(), dedupIdStrings)
+	if err != nil {
+		return nil, err
+	}
+	query = d.db.Rebind(query)
+	err = d.db.SelectContext(ctx, &rows, query, args...)
+	return rows, err
 }

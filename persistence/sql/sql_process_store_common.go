@@ -102,18 +102,6 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			if err != nil {
 				return false, err
 			}
-
-			// need to check if this message has been published before
-			existingMessage, err := p.session.SelectLocalQueue(ctx, processExecutionId, message.GetQueueName(), dedupId2)
-
-			if err == nil {
-				p.logger.Warn(fmt.Sprintf("trying to publish an existing message: %v", existingMessage))
-				continue
-			}
-			if !p.session.IsNotFoundError(err) {
-				return false, err
-			}
-
 			dedupId = dedupId2
 		}
 
@@ -131,13 +119,16 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			Payload:            payload,
 		})
 		if err != nil {
+			if p.session.IsDupEntryError(err) {
+				p.logger.Warn(fmt.Sprintf("trying to publish an existing dedupId: %v", dedupId))
+				continue
+			}
 			return false, err
 		}
 
 		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
 			QueueName: message.GetQueueName(),
 			DedupId:   dedupId,
-			Payload:   message.GetPayload(),
 		})
 	}
 
