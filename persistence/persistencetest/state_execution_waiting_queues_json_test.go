@@ -215,7 +215,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 	//
 	// and StateToCommandsMap["state_1-1"] as deleted.
 
-	assert.Equal(t, true, canComplete)
+	assert.True(t, canComplete)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1}, dedupIds)
 	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 3)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
