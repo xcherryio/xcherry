@@ -63,6 +63,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return nil, err
 	}
 
+	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
 		_, consumedDedupIds := waitingQueues.ConsumeFor(request.StateExecutionId, request.CommandWaitingType == xdbapi.ALL_OF_COMPLETION)
 		assignedStateExecutionIdToMessageDedupIdsMap[request.StateExecutionId.GetStateExecutionId()] = consumedDedupIds
@@ -192,7 +193,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 }
 
 func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Context, processExecutionId uuid.UUID,
-	assignedStateExecutionIdToMessageDedupIdsMap map[string][]uuid.UUID) (map[string]extensions.LocalQueueRow, error) {
+	assignedStateExecutionIdToMessageDedupIdsMap map[string][]uuid.UUID) (map[string]extensions.LocalQueueMessageRow, error) {
 
 	var allConsumedDedupIds []uuid.UUID
 	for _, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
@@ -201,10 +202,10 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 
 	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIds)
 	if err != nil {
-		return map[string]extensions.LocalQueueRow{}, err
+		return map[string]extensions.LocalQueueMessageRow{}, err
 	}
 
-	dedupIdToLocalQueueMessageMap := map[string]extensions.LocalQueueRow{}
+	dedupIdToLocalQueueMessageMap := map[string]extensions.LocalQueueMessageRow{}
 	for _, message := range allConsumedLocalQueueMessages {
 		dedupIdToLocalQueueMessageMap[message.DedupId.String()] = message
 	}

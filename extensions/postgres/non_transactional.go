@@ -118,13 +118,14 @@ const selectLocalQueueMessagesQuery = `SELECT
 	FROM xdb_sys_local_queue WHERE process_execution_id = ? AND dedup_id IN (?)
 `
 
-func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) ([]extensions.LocalQueueRow, error) {
+func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) (
+	[]extensions.LocalQueueMessageRow, error) {
 	var dedupIdStrings []string
 	for _, dedupId := range dedupIds {
 		dedupIdStrings = append(dedupIdStrings, dedupId.String())
 	}
 
-	var rows []extensions.LocalQueueRow
+	var rows []extensions.LocalQueueMessageRow
 	query, args, err := sqlx.In(selectLocalQueueMessagesQuery, processExecutionId.String(), dedupIdStrings)
 	if err != nil {
 		return nil, err

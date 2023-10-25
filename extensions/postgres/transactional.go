@@ -249,7 +249,7 @@ const insertLocalQueueQuery = `INSERT INTO xdb_sys_local_queue
    	(:process_execution_id_string, :queue_name, :dedup_id_string, :payload)
 `
 
-func (d dbTx) InsertLocalQueue(ctx context.Context, row extensions.LocalQueueRow) error {
+func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQueueMessageRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	row.DedupIdString = row.DedupId.String()
 	_, err := d.tx.NamedExecContext(ctx, insertLocalQueueQuery, row)

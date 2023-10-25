@@ -92,7 +92,7 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 }
 
 type StateExecutionWaitingQueuesJson struct {
-	// { state_execution_id_1: [ (queue_name_1, count_1), (queue_name_2, count_2), ... } ... }
+	// { state_execution_id_1: [ (queue_name_1, count_1), (queue_name_2, count_2), ... ], ... }
 	StateToCommandsMap map[string][]xdbapi.LocalQueueCommand `json:"stateToCommandsMap"`
 	// { queue_name_1: [dedupId_1, dedupId_2, ...], queue_name_2: [dedup_id, ...], ... }
 	UnconsumedMessageQueueDedupIdsMap map[string][]uuid.UUID `json:"unconsumedMap"`

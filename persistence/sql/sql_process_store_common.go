@@ -112,7 +112,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			return false, err
 		}
 
-		err = tx.InsertLocalQueue(ctx, extensions.LocalQueueRow{
+		err = tx.InsertLocalQueueMessage(ctx, extensions.LocalQueueMessageRow{
 			ProcessExecutionId: processExecutionId,
 			QueueName:          message.GetQueueName(),
 			DedupId:            dedupId,
