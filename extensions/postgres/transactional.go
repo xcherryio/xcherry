@@ -247,11 +247,23 @@ func (d dbTx) DeleteTimerTask(ctx context.Context, filter extensions.TimerTaskRo
 const insertLocalQueueQuery = `INSERT INTO xdb_sys_local_queue
 	(process_execution_id, queue_name, dedup_id, payload) VALUES 
    	(:process_execution_id_string, :queue_name, :dedup_id_string, :payload)
+	ON CONFLICT (process_execution_id, dedup_id) DO NOTHING
 `
 
 func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQueueMessageRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	row.DedupIdString = row.DedupId.String()
-	_, err := d.tx.NamedExecContext(ctx, insertLocalQueueQuery, row)
+	result, err := d.tx.NamedExecContext(ctx, insertLocalQueueQuery, row)
+	if err != nil {
+		return err
+	}
+
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if effected != 1 {
+		return conditionalUpdateFailure
+	}
 	return err
 }

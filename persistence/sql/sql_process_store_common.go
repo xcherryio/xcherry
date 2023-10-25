@@ -16,7 +16,6 @@ package sql
 import (
 	"context"
 	"fmt"
-
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
@@ -119,7 +118,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			Payload:            payload,
 		})
 		if err != nil {
-			if p.session.IsDupEntryError(err) {
+			if p.session.IsConditionalUpdateFailure(err) {
 				p.logger.Warn(fmt.Sprintf("trying to publish an existing dedupId: %v", dedupId))
 				continue
 			}

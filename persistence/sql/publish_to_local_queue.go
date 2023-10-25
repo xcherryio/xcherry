@@ -35,7 +35,7 @@ func (p sqlProcessStoreImpl) PublishToLocalQueue(ctx context.Context, request pe
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
 		}
-	} else if resp.HasNewImmediateTask { // if there is no NewImmediateTask, it means there is nothing to commit in the transaction
+	} else {
 		err = tx.Commit()
 		if err != nil {
 			p.logger.Error("error on committing transaction", tag.Error(err))
