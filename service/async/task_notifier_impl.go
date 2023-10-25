@@ -38,14 +38,6 @@ func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xdbapi.NotifyImmediat
 	queue.TriggerPollingTasks(request)
 }
 
-func (t *taskNotifierImpl) NotifyNewImmediateTasksNoRequest(shardId int32) {
-	queue, ok := t.shardIdToImmediateTaskQueue[shardId]
-	if !ok {
-		panic("the shard is not registered")
-	}
-	queue.TriggerPollingTasks(xdbapi.NotifyImmediateTasksRequest{})
-}
-
 func (t *taskNotifierImpl) NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRequest) {
 	queue, ok := t.shardIdToTimerTaskQueue[request.ShardId]
 	if !ok {

@@ -119,7 +119,7 @@ const selectLocalQueueMessagesQuery = `SELECT
 `
 
 func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) ([]extensions.LocalQueueRow, error) {
-	dedupIdStrings := []string{}
+	var dedupIdStrings []string
 	for _, dedupId := range dedupIds {
 		dedupIdStrings = append(dedupIdStrings, dedupId.String())
 	}

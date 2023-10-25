@@ -146,8 +146,9 @@ type (
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
-		StateId                  string
-		StateIdSequence          int32
+		// StateId and StateIdSequence will be "" and 0 when TaskType is persistence.ImmediateTaskTypeNewLocalQueueMessages
+		StateId         string
+		StateIdSequence int32
 
 		Info types.JSONText
 	}

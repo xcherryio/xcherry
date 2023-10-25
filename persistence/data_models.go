@@ -253,6 +253,7 @@ type (
 
 	ProcessLocalQueueMessagesResponse struct {
 		HasNewImmediateTask bool
+		ProcessExecutionId  uuid.UUID
 	}
 )
 

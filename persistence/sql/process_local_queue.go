@@ -111,7 +111,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		}
 
 		for _, dedupId := range dedupIds {
-			message, ok := dedupIdToLocalQueueMessageMap[string(dedupId)]
+			message, ok := dedupIdToLocalQueueMessageMap[dedupId.String()]
 			if !ok {
 				continue
 			}
@@ -187,13 +187,14 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	return &persistence.ProcessLocalQueueMessagesResponse{
 		HasNewImmediateTask: len(finishedStateExecutionIdToPreviousVersionMap) > 0,
+		ProcessExecutionId:  prcRow.ProcessExecutionId,
 	}, nil
 }
 
 func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Context, processExecutionId uuid.UUID,
 	assignedStateExecutionIdToMessageDedupIdsMap map[string][]uuid.UUID) (map[string]extensions.LocalQueueRow, error) {
 
-	allConsumedDedupIds := []uuid.UUID{}
+	var allConsumedDedupIds []uuid.UUID
 	for _, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
 		allConsumedDedupIds = append(allConsumedDedupIds, dedupIds...)
 	}
@@ -205,7 +206,7 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 
 	dedupIdToLocalQueueMessageMap := map[string]extensions.LocalQueueRow{}
 	for _, message := range allConsumedLocalQueueMessages {
-		dedupIdToLocalQueueMessageMap[string(message.DedupId)] = message
+		dedupIdToLocalQueueMessageMap[message.DedupId.String()] = message
 	}
 
 	return dedupIdToLocalQueueMessageMap, nil

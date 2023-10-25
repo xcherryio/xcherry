@@ -66,7 +66,9 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 		if err != nil {
 			return nil, err
 		}
-		hasNewImmediateTask = resp.HasNewImmediateTask
+		if resp.HasNewImmediateTask {
+			hasNewImmediateTask = true
+		}
 	}
 
 	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
@@ -200,7 +202,9 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		if err != nil {
 			return nil, err
 		}
-		hasNewImmediateTask = resp.HasNewImmediateTask
+		if resp.HasNewImmediateTask {
+			hasNewImmediateTask = true
+		}
 	}
 
 	return &persistence.ProcessWaitUntilExecutionResponse{

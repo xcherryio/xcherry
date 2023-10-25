@@ -443,7 +443,11 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 
 	// TODO: need a better way to define the NotifyNewImmediateTasks method
 	if resp.HasNewImmediateTask {
-		w.taskNotifier.NotifyNewImmediateTasksNoRequest(task.ShardId)
+		processExecutionIdString := resp.ProcessExecutionId.String()
+		w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            persistence.DefaultShardId,
+			ProcessExecutionId: &processExecutionIdString,
+		})
 	}
 	return nil
 }
