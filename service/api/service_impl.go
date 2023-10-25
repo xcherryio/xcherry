@@ -145,7 +145,7 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbap
 			},
 		})
 
-		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyImmediateTasksPost(ctx)
+		request := apiClient.DefaultApi.InternalApiV1XdbNotifyImmediateTasksPost(ctx)
 		httpResp, err := request.NotifyImmediateTasksRequest(req).Execute()
 		if httpResp != nil {
 			defer httpResp.Body.Close()

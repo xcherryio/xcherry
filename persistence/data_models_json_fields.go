@@ -16,10 +16,11 @@ package persistence
 import (
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
-	"time"
 )
 
 type ProcessExecutionInfoJson struct {
