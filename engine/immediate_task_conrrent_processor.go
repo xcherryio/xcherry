@@ -197,7 +197,6 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		if errRecover != nil {
 			return errRecover
 		}
-		// TODO otherwise we should fail the state and process execution if the backoff is exhausted, unless using a recovery policy
 		return err
 	}
 
@@ -258,8 +257,8 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 			SourceFailedStateApi:   stateApiType,
 			Prepare:                prep,
 			DestinationStateId:     *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
-			DestinationStateConfig: &(*prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateConfig),
-			DestinationStateInput:  *&xdbapi.EncodedObject{},
+			DestinationStateConfig: prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateConfig,
+			DestinationStateInput:  prep.Input,
 		})
 	default:
 		return fmt.Errorf("unknown state failure recovery policy %v", stateRecoveryPolicy.Policy)
