@@ -50,9 +50,9 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
 ) (*persistence.ProcessLocalQueueMessagesResponse, error) {
 	assignedStateExecutionIdToMessagesMap := map[string][]persistence.InternalLocalQueueMessage{}
-	finishedStateExecutionIdToPreviousVersionMap := map[string]int32{}
+	waitUntilCompletedStateExecutionIdToPreviousVersionMap := map[string]int32{}
 
-	// Step 1: update process execution row, but cannot submit at this step
+	// Step 1: update process execution row, but do not submit at this step
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
-		_, consumedMessages := waitingQueues.CheckCanCompleteLocalQueueWaiting(request.StateExecutionId, xdbapi.ALL_OF_COMPLETION)
+		_, consumedMessages := waitingQueues.CheckCanCompleteLocalQueueWaiting(request.StateExecutionId, request.CommandWaitingType)
 		if len(consumedMessages) > 0 {
 			assignedStateExecutionIdToMessagesMap[request.StateExecutionId.GetStateExecutionId()] = consumedMessages
 		}
@@ -82,7 +82,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			append(assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString], consumedMessages...)
 	}
 
-	// Step 2: update state execution rows for assignedStateExecutionIdToMessageDedupIdsMap
+	// Step 2: update assigned state execution rows
 	if len(assignedStateExecutionIdToMessagesMap) > 0 {
 		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessagesMap)
 		if err != nil {
@@ -143,9 +143,9 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 				return nil, err
 			}
 
-			if p.hasFinishedWaitUntilWaiting(commandRequest, commandResults) {
+			if p.hasCompletedWaitUntilWaiting(commandRequest, commandResults) {
 				waitingQueues.CleanupFor(*stateExecutionId)
-				finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
+				waitUntilCompletedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
 			}
 		}
 	}
@@ -161,8 +161,8 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return nil, err
 	}
 
-	// Step 3: handle finished wait_until task for finishedStateExecutionIdToPreviousVersionMap
-	for stateExecutionIdString, previousVersion := range finishedStateExecutionIdToPreviousVersionMap {
+	// Step 3: handle wait_until tasks that have completed waiting
+	for stateExecutionIdString, previousVersion := range waitUntilCompletedStateExecutionIdToPreviousVersionMap {
 		stateExecutionId, err := persistence.NewStateExecutionIdFromString(stateExecutionIdString)
 		if err != nil {
 			return nil, err
@@ -191,7 +191,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	}
 
 	return &persistence.ProcessLocalQueueMessagesResponse{
-		HasNewImmediateTask: len(finishedStateExecutionIdToPreviousVersionMap) > 0,
+		HasNewImmediateTask: len(waitUntilCompletedStateExecutionIdToPreviousVersionMap) > 0,
 		ProcessExecutionId:  prcRow.ProcessExecutionId,
 	}, nil
 }
@@ -209,7 +209,7 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 
 	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIdStrings)
 	if err != nil {
-		return map[string]extensions.LocalQueueMessageRow{}, err
+		return nil, err
 	}
 
 	dedupIdToLocalQueueMessageMap := map[string]extensions.LocalQueueMessageRow{}
@@ -220,7 +220,7 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 	return dedupIdToLocalQueueMessageMap, nil
 }
 
-func (p sqlProcessStoreImpl) hasFinishedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults xdbapi.CommandResults) bool {
+func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults xdbapi.CommandResults) bool {
 	// TODO: currently, only consider the local queue results
 
 	localQueueToMessageCountMap := map[string]int{}

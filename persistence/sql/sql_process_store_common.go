@@ -105,7 +105,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 		// insert a row into xdb_sys_local_queue_messages
 
-		payload, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
+		payloadBytes, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
 		if err != nil {
 			return false, err
 		}
@@ -114,7 +114,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			ProcessExecutionId: processExecutionId,
 			QueueName:          message.GetQueueName(),
 			DedupId:            dedupId,
-			Payload:            payload,
+			Payload:            payloadBytes,
 		})
 		if err != nil {
 			return false, err

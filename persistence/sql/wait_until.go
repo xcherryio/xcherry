@@ -132,7 +132,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 
 		for _, localQueueCommand := range request.CommandRequest.GetLocalQueueCommands() {
-			waitingQueues.AddNewLocalQueueCommandForStateExecution(request.StateExecutionId, localQueueCommand)
+			waitingQueues.AddNewLocalQueueCommand(request.StateExecutionId, localQueueCommand)
 		}
 
 		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedLocalQueueMessages) > 0

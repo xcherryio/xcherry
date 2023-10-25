@@ -120,7 +120,7 @@ func NewStateExecutionWaitingQueuesFromBytes(bytes []byte) (StateExecutionWaitin
 	return waitingQueuesJson, err
 }
 
-func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecution(
+func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommand(
 	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
 	if command.GetCount() == 0 {
 		command.Count = xdbapi.PtrInt32(1)
@@ -131,7 +131,7 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecuti
 	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey], command)
 }
 
-// Consume return (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
+// Consume returns (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
 //
 // E.g., given StateToLocalQueueCommandsMap as:
 //
@@ -183,29 +183,28 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 	return "", nil
 }
 
-// CheckCanCompleteLocalQueueWaiting return a bool indicating if the stateExecutionId can complete the local queue commands,
-// and an array of all the consumed internal messages.
+// CheckCanCompleteLocalQueueWaiting returns a bool indicating if the stateExecutionId can complete the local queue commands waiting,
+// and an array of all the consumed messages.
 //
-// E.g., given UnconsumedMessageQueueCountMap as:
+// E.g., given UnconsumedLocalQueueMessages as:
 //
-// (q1, 2), (q2, 2), (q3, 1)
+// q1: [id_1_1, id_1_2], q2: [id_2_1, id_2_2], q3: [id_3_1]
 //
 // and StateToLocalQueueCommandsMap[stateExecutionId] as:
 //
 // (q1, 1), (q2, 2)
 //
-// and isAllOfCompletion as true. Then after CheckCanCompleteLocalQueueWaiting, the UnconsumedMessageQueueCountMap becomes:
+// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after CheckCanCompleteLocalQueueWaiting,
+// the UnconsumedLocalQueueMessages becomes:
 //
-// (q1, 1), (q3, 1)
+// q1: [id_1_2], q3: [id_3_1]
 //
 // and returns:
 //
-// (true, [(q1_dedup_id_1, false), (q2_dedup_id_1, false), (q2_dedup_id_2, false)])
+// (true, [(id_1_1, false), (id_2_1, false), (id_2_2, false)])
 func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stateExecutionId StateExecutionId,
 	commandWaitingType xdbapi.CommandWaitingType) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
-
-	isAllOfCompletion := xdbapi.ALL_OF_COMPLETION == commandWaitingType
 
 	var remainingCommands []xdbapi.LocalQueueCommand
 	var consumedMessages []InternalLocalQueueMessage
@@ -215,9 +214,9 @@ func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stat
 	for i, command := range s.StateToLocalQueueCommandsMap[stateExecutionIdKey] {
 		idx = i
 
-		dedupIds, ok := s.UnconsumedLocalQueueMessages[command.GetQueueName()]
+		messages, ok := s.UnconsumedLocalQueueMessages[command.GetQueueName()]
 
-		if !ok || int(command.GetCount()) > len(dedupIds) {
+		if !ok || int(command.GetCount()) > len(messages) {
 			remainingCommands = append(remainingCommands, command)
 			continue
 		}
@@ -225,12 +224,11 @@ func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stat
 		consumedMessages = append(consumedMessages, s.UnconsumedLocalQueueMessages[command.GetQueueName()][:int(command.GetCount())]...)
 
 		s.UnconsumedLocalQueueMessages[command.GetQueueName()] = s.UnconsumedLocalQueueMessages[command.GetQueueName()][int(command.GetCount()):]
-
 		if len(s.UnconsumedLocalQueueMessages[command.GetQueueName()]) == 0 {
 			delete(s.UnconsumedLocalQueueMessages, command.GetQueueName())
 		}
 
-		if !isAllOfCompletion {
+		if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
 			break
 		}
 	}
@@ -248,7 +246,7 @@ func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stat
 		delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 	}
 
-	if !isAllOfCompletion {
+	if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
 		s.CleanupFor(stateExecutionId)
 		return true, consumedMessages
 	}
@@ -258,7 +256,6 @@ func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stat
 
 func (s *StateExecutionWaitingQueuesJson) CleanupFor(stateExecutionId StateExecutionId) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
-
 	delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 }
 

@@ -166,7 +166,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing
 	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
 	prepareDataForConsumeFor(stateExecutionWaitingQueues, uuids)
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q3", Count: ptr.Any(int32(2)),
@@ -284,12 +284,12 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 	}}, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages["q1"])
 	assert.Empty(t, stateExecutionWaitingQueues.StateToLocalQueueCommandsMap)
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(2)),
 	})
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(1)),
@@ -331,25 +331,25 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 //	state_1, 2: (q2, 3),
 //	state_3, 1: (q1: 1), (q2, 2)
 func prepareDataForConsume(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson) {
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(2)),
 	})
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(3)),
 	})
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1",
 	})
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(2)),
@@ -380,13 +380,13 @@ func prepareDataForConsumeFor(stateExecutionWaitingQueues persistence.StateExecu
 		QueueName: "q3", DedupId: dedupIds[4],
 	})
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q1", Count: ptr.Any(int32(1)),
 	})
 
-	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
+	stateExecutionWaitingQueues.AddNewLocalQueueCommand(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.LocalQueueCommand{
 		QueueName: "q2", Count: ptr.Any(int32(2)),
