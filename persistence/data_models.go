@@ -234,7 +234,7 @@ type (
 	PublishToLocalQueueResponse struct {
 		ProcessExecutionId  uuid.UUID
 		HasNewImmediateTask bool
-		NotExists           bool
+		ProcessNotExists    bool
 	}
 
 	ProcessLocalQueueMessagesRequest struct {

@@ -70,7 +70,7 @@ type transactionalCRUD interface {
 	DeleteImmediateTask(ctx context.Context, filter ImmediateTaskRowDeleteFilter) error
 	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
 
-	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) error
+	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
 }
 
 type nonTransactionalCRUD interface {
@@ -86,7 +86,7 @@ type nonTransactionalCRUD interface {
 
 	CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
-	SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) ([]LocalQueueMessageRow, error)
+	SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) ([]LocalQueueMessageRow, error)
 }
 
 type ErrorChecker interface {

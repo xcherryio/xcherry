@@ -114,7 +114,7 @@ func (s serviceImpl) PublishToLocalQueue(ctx context.Context, request xdbapi.Pub
 		return s.handleUnknownError(err)
 	}
 
-	if resp.NotExists {
+	if resp.ProcessNotExists {
 		return NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 

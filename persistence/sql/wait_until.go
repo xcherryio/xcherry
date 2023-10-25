@@ -135,7 +135,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 			waitingQueues.AddNewLocalQueueCommandForStateExecution(request.StateExecutionId, localQueueCommand)
 		}
 
-		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedMessageQueueDedupIdsMap) > 0
+		toConsumeUnconsumedMessages = len(waitingQueues.UnconsumedLocalQueueMessages) > 0
 
 		prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
 		if err != nil {

@@ -66,7 +66,7 @@ CREATE TABLE xdb_sys_timer_tasks(
     PRIMARY KEY (shard_id, fire_time_unix_seconds, task_sequence)    
 );
 
-CREATE TABLE xdb_sys_local_queue(
+CREATE TABLE xdb_sys_local_queue_messages(
     process_execution_id uuid,
     dedup_id uuid,
     queue_name VARCHAR(31),

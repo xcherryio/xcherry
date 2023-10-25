@@ -54,7 +54,7 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		if p.session.IsNotFoundError(err) {
 			// early stop when there is no such process running
 			return &persistence.PublishToLocalQueueResponse{
-				NotExists: true,
+				ProcessNotExists: true,
 			}, nil
 		}
 		return nil, err
@@ -68,6 +68,6 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 	return &persistence.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
 		HasNewImmediateTask: hasNewImmediateTask,
-		NotExists:           false,
+		ProcessNotExists:    false,
 	}, nil
 }

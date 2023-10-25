@@ -91,17 +91,22 @@ func (s *StateExecutionSequenceMapsJson) CompleteNewStateExecution(stateId strin
 	return nil
 }
 
+type InternalLocalQueueMessage struct {
+	DedupId string
+	IsFull  bool // only false for now until we support including payload
+}
+
 type StateExecutionWaitingQueuesJson struct {
 	// { state_execution_id_1: [ (queue_name_1, count_1), (queue_name_2, count_2), ... ], ... }
-	StateToCommandsMap map[string][]xdbapi.LocalQueueCommand `json:"stateToCommandsMap"`
+	StateToLocalQueueCommandsMap map[string][]xdbapi.LocalQueueCommand `json:"stateToLocalQueueCommandsMap"`
 	// { queue_name_1: [dedupId_1, dedupId_2, ...], queue_name_2: [dedup_id, ...], ... }
-	UnconsumedMessageQueueDedupIdsMap map[string][]uuid.UUID `json:"unconsumedMap"`
+	UnconsumedLocalQueueMessages map[string][]InternalLocalQueueMessage `json:"unconsumedLocalQueueMessages"`
 }
 
 func NewStateExecutionWaitingQueues() StateExecutionWaitingQueuesJson {
 	return StateExecutionWaitingQueuesJson{
-		StateToCommandsMap:                map[string][]xdbapi.LocalQueueCommand{},
-		UnconsumedMessageQueueDedupIdsMap: map[string][]uuid.UUID{},
+		StateToLocalQueueCommandsMap: map[string][]xdbapi.LocalQueueCommand{},
+		UnconsumedLocalQueueMessages: map[string][]InternalLocalQueueMessage{},
 	}
 }
 
@@ -123,64 +128,67 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecuti
 
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
-	s.StateToCommandsMap[stateExecutionIdKey] = append(s.StateToCommandsMap[stateExecutionIdKey], command)
+	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey], command)
 }
 
-// Consume return (StateExecutionId string, dedupIds) where the StateExecutionId consumes messages of these dudupIds.
+// Consume return (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
 //
-// E.g., given StateToCommandsMap as:
+// E.g., given StateToLocalQueueCommandsMap as:
 //
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
 //	state_3, 1: (q1: 1), (q2, 2)
 //
-// If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and StateToCommandsMap becomes:
+// If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and StateToLocalQueueCommandsMap becomes:
 //
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
 //	state_3, 1: (q2, 2)
 //
-// If receiving the queue `q2` for twice, then state_3, 1 will consume the two queue `q2`, and StateToCommandsMap becomes:
+// If receiving the queue `q2` for twice, then state_3, 1 will consume the two queue `q2`, and StateToLocalQueueCommandsMap becomes:
 //
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
-func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, []uuid.UUID) {
-	s.UnconsumedMessageQueueDedupIdsMap[message.QueueName] = append(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName], message.DedupId)
+func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, []InternalLocalQueueMessage) {
+	s.UnconsumedLocalQueueMessages[message.QueueName] = append(
+		s.UnconsumedLocalQueueMessages[message.QueueName], InternalLocalQueueMessage{
+			DedupId: message.DedupId.String(), IsFull: false,
+		})
 
-	for stateExecutionIdKey, commands := range s.StateToCommandsMap {
+	for stateExecutionIdKey, commands := range s.StateToLocalQueueCommandsMap {
 		for i, command := range commands {
-			if command.GetQueueName() != message.QueueName || int(command.GetCount()) > len(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName]) {
+			if command.GetQueueName() != message.QueueName || int(command.GetCount()) > len(s.UnconsumedLocalQueueMessages[message.QueueName]) {
 				continue
 			}
 
-			consumedDedupIds := s.UnconsumedMessageQueueDedupIdsMap[message.QueueName][:int(command.GetCount())]
+			consumedInternalLocalQueueMessages := s.UnconsumedLocalQueueMessages[message.QueueName][:int(command.GetCount())]
 
-			s.UnconsumedMessageQueueDedupIdsMap[message.QueueName] =
-				s.UnconsumedMessageQueueDedupIdsMap[message.QueueName][int(command.GetCount()):]
-			if len(s.UnconsumedMessageQueueDedupIdsMap[message.QueueName]) == 0 {
-				delete(s.UnconsumedMessageQueueDedupIdsMap, message.QueueName)
+			s.UnconsumedLocalQueueMessages[message.QueueName] =
+				s.UnconsumedLocalQueueMessages[message.QueueName][int(command.GetCount()):]
+			if len(s.UnconsumedLocalQueueMessages[message.QueueName]) == 0 {
+				delete(s.UnconsumedLocalQueueMessages, message.QueueName)
 			}
 
-			s.StateToCommandsMap[stateExecutionIdKey] = append(s.StateToCommandsMap[stateExecutionIdKey][:i],
-				s.StateToCommandsMap[stateExecutionIdKey][i+1:]...)
-			if len(s.StateToCommandsMap[stateExecutionIdKey]) == 0 {
-				delete(s.StateToCommandsMap, stateExecutionIdKey)
+			s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey][:i],
+				s.StateToLocalQueueCommandsMap[stateExecutionIdKey][i+1:]...)
+			if len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) == 0 {
+				delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 			}
 
-			return &stateExecutionIdKey, consumedDedupIds
+			return &stateExecutionIdKey, consumedInternalLocalQueueMessages
 		}
 	}
 
-	return nil, []uuid.UUID{}
+	return nil, []InternalLocalQueueMessage{}
 }
 
-// ConsumeFor return a bool indicating if the stateExecutionId can complete the local queue commands, and an array of all the consumed dedupIds.
+// ConsumeFor return a bool indicating if the stateExecutionId can complete the local queue commands, and an array of all the consumed internal messages.
 //
 // E.g., given UnconsumedMessageQueueCountMap as:
 //
 // (q1, 2), (q2, 2), (q3, 1)
 //
-// and StateToCommandsMap[stateExecutionId] as:
+// and StateToLocalQueueCommandsMap[stateExecutionId] as:
 //
 // (q1, 1), (q2, 2)
 //
@@ -190,31 +198,31 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 //
 // and returns:
 //
-// (true, [q1_dedup_id_1, q2_dedup_id_1, q2_dedup_id_2])
-func (s *StateExecutionWaitingQueuesJson) ConsumeFor(stateExecutionId StateExecutionId, isAllOfCompletion bool) (bool, []uuid.UUID) {
+// (true, [(q1_dedup_id_1, false), (q2_dedup_id_1, false), (q2_dedup_id_2, false)])
+func (s *StateExecutionWaitingQueuesJson) ConsumeFor(stateExecutionId StateExecutionId, isAllOfCompletion bool) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
 	remainingCommands := []xdbapi.LocalQueueCommand{}
-	consumedDedupIds := []uuid.UUID{}
+	consumedMessages := []InternalLocalQueueMessage{}
 
 	idx := 0
 
-	for i, command := range s.StateToCommandsMap[stateExecutionIdKey] {
+	for i, command := range s.StateToLocalQueueCommandsMap[stateExecutionIdKey] {
 		idx = i
 
-		dedupIds, ok := s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()]
+		dedupIds, ok := s.UnconsumedLocalQueueMessages[command.GetQueueName()]
 
 		if !ok || int(command.GetCount()) > len(dedupIds) {
 			remainingCommands = append(remainingCommands, command)
 			continue
 		}
 
-		consumedDedupIds = append(consumedDedupIds, s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()][:int(command.GetCount())]...)
+		consumedMessages = append(consumedMessages, s.UnconsumedLocalQueueMessages[command.GetQueueName()][:int(command.GetCount())]...)
 
-		s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()] = s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()][int(command.GetCount()):]
+		s.UnconsumedLocalQueueMessages[command.GetQueueName()] = s.UnconsumedLocalQueueMessages[command.GetQueueName()][int(command.GetCount()):]
 
-		if len(s.UnconsumedMessageQueueDedupIdsMap[command.GetQueueName()]) == 0 {
-			delete(s.UnconsumedMessageQueueDedupIdsMap, command.GetQueueName())
+		if len(s.UnconsumedLocalQueueMessages[command.GetQueueName()]) == 0 {
+			delete(s.UnconsumedLocalQueueMessages, command.GetQueueName())
 		}
 
 		if !isAllOfCompletion {
@@ -222,31 +230,31 @@ func (s *StateExecutionWaitingQueuesJson) ConsumeFor(stateExecutionId StateExecu
 		}
 	}
 
-	if idx < len(s.StateToCommandsMap[stateExecutionIdKey]) {
-		remainingCommands = append(remainingCommands, s.StateToCommandsMap[stateExecutionIdKey][idx+1:]...)
+	if idx < len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
+		remainingCommands = append(remainingCommands, s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx+1:]...)
 	}
 
-	if len(remainingCommands) == len(s.StateToCommandsMap[stateExecutionIdKey]) {
-		return false, consumedDedupIds
+	if len(remainingCommands) == len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
+		return false, consumedMessages
 	}
 
-	s.StateToCommandsMap[stateExecutionIdKey] = remainingCommands
-	if len(s.StateToCommandsMap[stateExecutionIdKey]) == 0 {
-		delete(s.StateToCommandsMap, stateExecutionIdKey)
+	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = remainingCommands
+	if len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) == 0 {
+		delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 	}
 
 	if !isAllOfCompletion {
 		s.CleanupFor(stateExecutionId)
-		return true, consumedDedupIds
+		return true, consumedMessages
 	}
 
-	return len(remainingCommands) == 0, consumedDedupIds
+	return len(remainingCommands) == 0, consumedMessages
 }
 
 func (s *StateExecutionWaitingQueuesJson) CleanupFor(stateExecutionId StateExecutionId) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
-	delete(s.StateToCommandsMap, stateExecutionIdKey)
+	delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 }
 
 type AsyncStateExecutionInfoJson struct {

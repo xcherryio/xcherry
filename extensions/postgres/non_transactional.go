@@ -115,16 +115,11 @@ func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
 const selectLocalQueueMessagesQuery = `SELECT
 	process_execution_id, queue_name, dedup_id, payload
-	FROM xdb_sys_local_queue WHERE process_execution_id = ? AND dedup_id IN (?)
+	FROM xdb_sys_local_queue_messages WHERE process_execution_id = ? AND dedup_id IN (?)
 `
 
-func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIds []uuid.UUID) (
+func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) (
 	[]extensions.LocalQueueMessageRow, error) {
-	var dedupIdStrings []string
-	for _, dedupId := range dedupIds {
-		dedupIdStrings = append(dedupIdStrings, dedupId.String())
-	}
-
 	var rows []extensions.LocalQueueMessageRow
 	query, args, err := sqlx.In(selectLocalQueueMessagesQuery, processExecutionId.String(), dedupIdStrings)
 	if err != nil {

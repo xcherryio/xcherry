@@ -49,7 +49,7 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
 ) (*persistence.ProcessLocalQueueMessagesResponse, error) {
-	assignedStateExecutionIdToMessageDedupIdsMap := map[string][]uuid.UUID{}
+	assignedStateExecutionIdToMessagesMap := map[string][]persistence.InternalLocalQueueMessage{}
 	finishedStateExecutionIdToPreviousVersionMap := map[string]int32{}
 
 	// Step 1: update process execution row, but cannot submit at this step
@@ -65,31 +65,31 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
-		_, consumedDedupIds := waitingQueues.ConsumeFor(request.StateExecutionId, request.CommandWaitingType == xdbapi.ALL_OF_COMPLETION)
-		if len(consumedDedupIds) > 0 {
-			assignedStateExecutionIdToMessageDedupIdsMap[request.StateExecutionId.GetStateExecutionId()] = consumedDedupIds
+		_, consumedMessages := waitingQueues.ConsumeFor(request.StateExecutionId, request.CommandWaitingType == xdbapi.ALL_OF_COMPLETION)
+		if len(consumedMessages) > 0 {
+			assignedStateExecutionIdToMessagesMap[request.StateExecutionId.GetStateExecutionId()] = consumedMessages
 		}
 	}
 
 	for _, message := range request.Messages {
-		assignedStateExecutionIdString, dedupIds := waitingQueues.Consume(message)
+		assignedStateExecutionIdString, consumedMessages := waitingQueues.Consume(message)
 
 		if assignedStateExecutionIdString == nil {
 			continue
 		}
 
-		assignedStateExecutionIdToMessageDedupIdsMap[*assignedStateExecutionIdString] =
-			append(assignedStateExecutionIdToMessageDedupIdsMap[*assignedStateExecutionIdString], dedupIds...)
+		assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString] =
+			append(assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString], consumedMessages...)
 	}
 
 	// Step 2: update state execution rows for assignedStateExecutionIdToMessageDedupIdsMap
-	if len(assignedStateExecutionIdToMessageDedupIdsMap) > 0 {
-		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessageDedupIdsMap)
+	if len(assignedStateExecutionIdToMessagesMap) > 0 {
+		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessagesMap)
 		if err != nil {
 			return nil, err
 		}
 
-		for assignedStateExecutionIdString, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
+		for assignedStateExecutionIdString, consumedMessages := range assignedStateExecutionIdToMessagesMap {
 			stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
 			if err != nil {
 				return nil, err
@@ -114,8 +114,8 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 				return nil, err
 			}
 
-			for _, dedupId := range dedupIds {
-				message, ok := dedupIdToLocalQueueMessageMap[dedupId.String()]
+			for _, consumedMessage := range consumedMessages {
+				message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
 				if !ok {
 					continue
 				}
@@ -197,14 +197,17 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 }
 
 func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Context, processExecutionId uuid.UUID,
-	assignedStateExecutionIdToMessageDedupIdsMap map[string][]uuid.UUID) (map[string]extensions.LocalQueueMessageRow, error) {
+	assignedStateExecutionIdToMessagesMap map[string][]persistence.InternalLocalQueueMessage,
+) (map[string]extensions.LocalQueueMessageRow, error) {
 
-	var allConsumedDedupIds []uuid.UUID
-	for _, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
-		allConsumedDedupIds = append(allConsumedDedupIds, dedupIds...)
+	var allConsumedDedupIdStrings []string
+	for _, consumedMessages := range assignedStateExecutionIdToMessagesMap {
+		for _, consumedMessage := range consumedMessages {
+			allConsumedDedupIdStrings = append(allConsumedDedupIdStrings, consumedMessage.DedupId)
+		}
 	}
 
-	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIds)
+	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIdStrings)
 	if err != nil {
 		return map[string]extensions.LocalQueueMessageRow{}, err
 	}

@@ -15,7 +15,6 @@ package sql
 
 import (
 	"context"
-	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
@@ -84,7 +83,7 @@ func insertImmediateTask(
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }
 
-// publishToLocalQueue inserts len(valid_messages) rows into xdb_sys_local_queue,
+// publishToLocalQueue inserts len(valid_messages) rows into xdb_sys_local_queue_messages,
 // and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
 // publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
@@ -104,25 +103,24 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			dedupId = dedupId2
 		}
 
-		// insert a row into xdb_sys_local_queue
+		// insert a row into xdb_sys_local_queue_messages
 
 		payload, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
 		if err != nil {
 			return false, err
 		}
 
-		err = tx.InsertLocalQueueMessage(ctx, extensions.LocalQueueMessageRow{
+		insertSuccessfully, err := tx.InsertLocalQueueMessage(ctx, extensions.LocalQueueMessageRow{
 			ProcessExecutionId: processExecutionId,
 			QueueName:          message.GetQueueName(),
 			DedupId:            dedupId,
 			Payload:            payload,
 		})
 		if err != nil {
-			if p.session.IsConditionalUpdateFailure(err) {
-				p.logger.Warn(fmt.Sprintf("trying to publish an existing dedupId: %v", dedupId))
-				continue
-			}
 			return false, err
+		}
+		if !insertSuccessfully {
+			continue
 		}
 
 		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
