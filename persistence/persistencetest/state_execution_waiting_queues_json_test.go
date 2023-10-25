@@ -43,7 +43,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 1: (q1, 2),
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q2, 2)
-	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
+	assert.Equal(t, "state_3-1", completedStateExecutionIdString)
 	assert.Equal(t, []persistence.InternalLocalQueueMessage{{
 		DedupId: uuid_q1_1.String(), IsFull: false,
 	}}, consumedMessages)
@@ -56,7 +56,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 1: (q1, 2),
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q2, 2)
-	assert.Nil(t, completedStateExecutionIdString)
+	assert.Empty(t, completedStateExecutionIdString)
 	assert.Empty(t, consumedMessages)
 	assert.Len(t, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages, 1)
 	assert.Equal(t, []persistence.InternalLocalQueueMessage{{
@@ -70,7 +70,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 1: (q1, 2),
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q2, 2)
-	assert.Nil(t, completedStateExecutionIdString)
+	assert.Empty(t, completedStateExecutionIdString)
 	assert.Empty(t, consumedMessages)
 	assert.Len(t, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages, 2)
 	assert.Equal(t, []persistence.InternalLocalQueueMessage{{
@@ -86,7 +86,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	// The new data should be:
 	//	state_1, 1: (q1, 2),
 	//	state_1, 2: (q2, 3),
-	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
+	assert.Equal(t, "state_3-1", completedStateExecutionIdString)
 	assert.Equal(t, []persistence.InternalLocalQueueMessage{{
 		DedupId: uuid_q2_1.String(), IsFull: false,
 	}, {
@@ -122,9 +122,9 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_consumed(t *testing.T) {
 	//
 	// (q1, 1), (q2, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, true)
+	}, xdbapi.ALL_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -180,9 +180,9 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing
 	//
 	// (q1, 1), (q2, 2), (q3, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, true)
+	}, xdbapi.ALL_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -239,9 +239,9 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 	//
 	// (q1, 1), (q2, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, false)
+	}, xdbapi.ANY_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -276,7 +276,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 	completedStateExecutionIdString, consumedMessages := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: uuid_q1_1,
 	})
-	assert.Nil(t, completedStateExecutionIdString)
+	assert.Empty(t, completedStateExecutionIdString)
 	assert.Empty(t, consumedMessages)
 	assert.Len(t, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages, 1)
 	assert.Equal(t, []persistence.InternalLocalQueueMessage{{
@@ -303,9 +303,9 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 	//
 	// (q1, 2), (q2, 1)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeFor(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, false)
+	}, xdbapi.ANY_OF_COMPLETION)
 
 	assert.False(t, canComplete)
 	assert.Empty(t, consumedMessages)

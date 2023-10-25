@@ -65,7 +65,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
-		_, consumedMessages := waitingQueues.ConsumeFor(request.StateExecutionId, request.CommandWaitingType == xdbapi.ALL_OF_COMPLETION)
+		_, consumedMessages := waitingQueues.CheckCanCompleteLocalQueueWaiting(request.StateExecutionId, xdbapi.ALL_OF_COMPLETION)
 		if len(consumedMessages) > 0 {
 			assignedStateExecutionIdToMessagesMap[request.StateExecutionId.GetStateExecutionId()] = consumedMessages
 		}
@@ -74,12 +74,12 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	for _, message := range request.Messages {
 		assignedStateExecutionIdString, consumedMessages := waitingQueues.Consume(message)
 
-		if assignedStateExecutionIdString == nil {
+		if assignedStateExecutionIdString == "" {
 			continue
 		}
 
-		assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString] =
-			append(assignedStateExecutionIdToMessagesMap[*assignedStateExecutionIdString], consumedMessages...)
+		assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] =
+			append(assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString], consumedMessages...)
 	}
 
 	// Step 2: update state execution rows for assignedStateExecutionIdToMessageDedupIdsMap

@@ -149,7 +149,7 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommandForStateExecuti
 //
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
-func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (*string, []InternalLocalQueueMessage) {
+func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (string, []InternalLocalQueueMessage) {
 	s.UnconsumedLocalQueueMessages[message.QueueName] = append(
 		s.UnconsumedLocalQueueMessages[message.QueueName], InternalLocalQueueMessage{
 			DedupId: message.DedupId.String(), IsFull: false,
@@ -161,6 +161,7 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 				continue
 			}
 
+			// the method will return results immediately, so handling the manipulation directly here
 			consumedInternalLocalQueueMessages := s.UnconsumedLocalQueueMessages[message.QueueName][:int(command.GetCount())]
 
 			s.UnconsumedLocalQueueMessages[message.QueueName] =
@@ -175,14 +176,15 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 				delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 			}
 
-			return &stateExecutionIdKey, consumedInternalLocalQueueMessages
+			return stateExecutionIdKey, consumedInternalLocalQueueMessages
 		}
 	}
 
-	return nil, []InternalLocalQueueMessage{}
+	return "", nil
 }
 
-// ConsumeFor return a bool indicating if the stateExecutionId can complete the local queue commands, and an array of all the consumed internal messages.
+// CheckCanCompleteLocalQueueWaiting return a bool indicating if the stateExecutionId can complete the local queue commands,
+// and an array of all the consumed internal messages.
 //
 // E.g., given UnconsumedMessageQueueCountMap as:
 //
@@ -192,18 +194,21 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 //
 // (q1, 1), (q2, 2)
 //
-// and isAllOfCompletion as true. Then after ConsumeFor, the UnconsumedMessageQueueCountMap becomes:
+// and isAllOfCompletion as true. Then after CheckCanCompleteLocalQueueWaiting, the UnconsumedMessageQueueCountMap becomes:
 //
 // (q1, 1), (q3, 1)
 //
 // and returns:
 //
 // (true, [(q1_dedup_id_1, false), (q2_dedup_id_1, false), (q2_dedup_id_2, false)])
-func (s *StateExecutionWaitingQueuesJson) ConsumeFor(stateExecutionId StateExecutionId, isAllOfCompletion bool) (bool, []InternalLocalQueueMessage) {
+func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stateExecutionId StateExecutionId,
+	commandWaitingType xdbapi.CommandWaitingType) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
-	remainingCommands := []xdbapi.LocalQueueCommand{}
-	consumedMessages := []InternalLocalQueueMessage{}
+	isAllOfCompletion := xdbapi.ALL_OF_COMPLETION == commandWaitingType
+
+	var remainingCommands []xdbapi.LocalQueueCommand
+	var consumedMessages []InternalLocalQueueMessage
 
 	idx := 0
 
@@ -370,16 +375,6 @@ type StateExecutionFailureJson struct {
 	Details              *string `json:"details"`
 	CompletedAttempts    *int32  `json:"completedAttempts"`
 	LastAttemptTimestamp *int64  `json:"lastAttemptTimestamp"`
-}
-
-func BytesToStateExecutionFailure(bytes []byte) (StateExecutionFailureJson, error) {
-	var obj StateExecutionFailureJson
-	if len(bytes) == 0 {
-		return obj, nil
-	}
-
-	err := json.Unmarshal(bytes, &obj)
-	return obj, err
 }
 
 func CreateStateExecutionFailureBytesForBackoff(status int32, details string, completedAttempts int32) ([]byte, error) {

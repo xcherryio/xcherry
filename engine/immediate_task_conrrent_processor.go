@@ -441,11 +441,10 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 		return err
 	}
 
-	// TODO: need a better way to define the NotifyNewImmediateTasks method
 	if resp.HasNewImmediateTask {
-		processExecutionIdString := resp.ProcessExecutionId.String()
+		processExecutionIdString := task.ProcessExecutionId.String()
 		w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            task.ShardId,
 			ProcessExecutionId: &processExecutionIdString,
 		})
 	}
