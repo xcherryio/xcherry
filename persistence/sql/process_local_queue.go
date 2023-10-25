@@ -66,7 +66,9 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
 		_, consumedDedupIds := waitingQueues.ConsumeFor(request.StateExecutionId, request.CommandWaitingType == xdbapi.ALL_OF_COMPLETION)
-		assignedStateExecutionIdToMessageDedupIdsMap[request.StateExecutionId.GetStateExecutionId()] = consumedDedupIds
+		if len(consumedDedupIds) > 0 {
+			assignedStateExecutionIdToMessageDedupIdsMap[request.StateExecutionId.GetStateExecutionId()] = consumedDedupIds
+		}
 	}
 
 	for _, message := range request.Messages {
@@ -81,68 +83,70 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 	}
 
 	// Step 2: update state execution rows for assignedStateExecutionIdToMessageDedupIdsMap
-	dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessageDedupIdsMap)
-	if err != nil {
-		return nil, err
-	}
-
-	for assignedStateExecutionIdString, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
-		stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
+	if len(assignedStateExecutionIdToMessageDedupIdsMap) > 0 {
+		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessageDedupIdsMap)
 		if err != nil {
 			return nil, err
 		}
 
-		stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
-			ProcessExecutionId: prcRow.ProcessExecutionId,
-			StateId:            stateExecutionId.StateId,
-			StateIdSequence:    stateExecutionId.StateIdSequence,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
-		if err != nil {
-			return nil, err
-		}
-
-		commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, dedupId := range dedupIds {
-			message, ok := dedupIdToLocalQueueMessageMap[dedupId.String()]
-			if !ok {
-				continue
-			}
-
-			dedupIdString := message.DedupId.String()
-			payload, err := persistence.BytesToEncodedObject(message.Payload)
+		for assignedStateExecutionIdString, dedupIds := range assignedStateExecutionIdToMessageDedupIdsMap {
+			stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
 			if err != nil {
 				return nil, err
 			}
 
-			commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
-				QueueName: message.QueueName,
-				DedupId:   &dedupIdString,
-				Payload:   &payload,
+			stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
+				ProcessExecutionId: prcRow.ProcessExecutionId,
+				StateId:            stateExecutionId.StateId,
+				StateIdSequence:    stateExecutionId.StateIdSequence,
 			})
-		}
+			if err != nil {
+				return nil, err
+			}
 
-		stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
-		if err != nil {
-			return nil, err
-		}
+			commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
+			if err != nil {
+				return nil, err
+			}
 
-		err = tx.UpdateAsyncStateExecution(ctx, *stateRow)
-		if err != nil {
-			return nil, err
-		}
+			commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+			if err != nil {
+				return nil, err
+			}
 
-		if p.hasFinishedWaitUntilWaiting(commandRequest, commandResults) {
-			waitingQueues.CleanupFor(*stateExecutionId)
-			finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
+			for _, dedupId := range dedupIds {
+				message, ok := dedupIdToLocalQueueMessageMap[dedupId.String()]
+				if !ok {
+					continue
+				}
+
+				dedupIdString := message.DedupId.String()
+				payload, err := persistence.BytesToEncodedObject(message.Payload)
+				if err != nil {
+					return nil, err
+				}
+
+				commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
+					QueueName: message.QueueName,
+					DedupId:   &dedupIdString,
+					Payload:   &payload,
+				})
+			}
+
+			stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
+			if err != nil {
+				return nil, err
+			}
+
+			err = tx.UpdateAsyncStateExecution(ctx, *stateRow)
+			if err != nil {
+				return nil, err
+			}
+
+			if p.hasFinishedWaitUntilWaiting(commandRequest, commandResults) {
+				waitingQueues.CleanupFor(*stateExecutionId)
+				finishedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
+			}
 		}
 	}
 
