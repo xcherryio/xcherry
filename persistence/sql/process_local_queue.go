@@ -240,6 +240,8 @@ func (p sqlProcessStoreImpl) hasFinishedWaitUntilWaiting(commandRequest xdbapi.C
 			}
 		}
 		return true
+	case xdbapi.EMPTY_COMMAND:
+		return true
 	default:
 		return true
 	}

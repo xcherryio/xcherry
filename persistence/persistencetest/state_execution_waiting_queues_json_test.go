@@ -45,7 +45,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_3, 1: (q2, 2)
 	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1}, dedupIds)
-	assert.Equal(t, 0, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Empty(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap)
 
 	completedStateExecutionIdString, dedupIds = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2", DedupId: uuid_q2_1,
@@ -55,8 +55,8 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q2, 2)
 	assert.Nil(t, completedStateExecutionIdString)
-	assert.Equal(t, []uuid.UUID{}, dedupIds)
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Empty(t, dedupIds)
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 1)
 	assert.Equal(t, []uuid.UUID{uuid_q2_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
 
 	completedStateExecutionIdString, dedupIds = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
@@ -67,8 +67,8 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q2, 2)
 	assert.Nil(t, completedStateExecutionIdString)
-	assert.Equal(t, []uuid.UUID{}, dedupIds)
-	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Empty(t, dedupIds)
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 2)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 	assert.Equal(t, []uuid.UUID{uuid_q2_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
 
@@ -80,7 +80,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 2: (q2, 3),
 	assert.Equal(t, "state_3-1", *completedStateExecutionIdString)
 	assert.Equal(t, []uuid.UUID{uuid_q2_1, uuid_q2_2}, dedupIds)
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 1)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 }
 
@@ -118,12 +118,12 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_consumed(t *testing.T) {
 	//
 	// and StateToCommandsMap["state_1-1"] was deleted.
 
-	assert.Equal(t, true, canComplete)
+	assert.True(t, canComplete)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1, uuid_q2_1, uuid_q2_2}, dedupIds)
-	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 2)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
-	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+	assert.Empty(t, stateExecutionWaitingQueues.StateToCommandsMap)
 }
 
 func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing.T) {
@@ -168,13 +168,13 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing
 	//
 	// (q3, 2)
 
-	assert.Equal(t, false, canComplete)
+	assert.False(t, canComplete)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1, uuid_q2_1, uuid_q2_2}, dedupIds)
-	assert.Equal(t, 2, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 2)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap))
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"]))
+	assert.Len(t, stateExecutionWaitingQueues.StateToCommandsMap, 1)
+	assert.Len(t, stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"], 1)
 	assert.Equal(t, xdbapi.LocalQueueCommand{
 		QueueName: "q3",
 		Count:     xdbapi.PtrInt32(2),
@@ -217,11 +217,11 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 
 	assert.Equal(t, true, canComplete)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1}, dedupIds)
-	assert.Equal(t, 3, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 3)
 	assert.Equal(t, []uuid.UUID{uuid_q1_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
 	assert.Equal(t, []uuid.UUID{uuid_q2_1, uuid_q2_2}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q2"])
 	assert.Equal(t, []uuid.UUID{uuid_q3_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q3"])
-	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+	assert.Empty(t, stateExecutionWaitingQueues.StateToCommandsMap)
 }
 
 func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T) {
@@ -233,10 +233,10 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 		QueueName: "q1", DedupId: uuid_q1_1,
 	})
 	assert.Nil(t, completedStateExecutionIdString)
-	assert.Equal(t, []uuid.UUID{}, dedupIds)
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.Empty(t, dedupIds)
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 1)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
-	assert.Equal(t, 0, len(stateExecutionWaitingQueues.StateToCommandsMap))
+	assert.Empty(t, stateExecutionWaitingQueues.StateToCommandsMap)
 
 	stateExecutionWaitingQueues.AddNewLocalQueueCommandForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
@@ -261,12 +261,12 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 		StateId: "state_1", StateIdSequence: 1,
 	}, false)
 
-	assert.Equal(t, false, canComplete)
-	assert.Equal(t, []uuid.UUID{}, dedupIds)
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap))
+	assert.False(t, canComplete)
+	assert.Empty(t, dedupIds)
+	assert.Len(t, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap, 1)
 	assert.Equal(t, []uuid.UUID{uuid_q1_1}, stateExecutionWaitingQueues.UnconsumedMessageQueueDedupIdsMap["q1"])
-	assert.Equal(t, 1, len(stateExecutionWaitingQueues.StateToCommandsMap))
-	assert.Equal(t, 2, len(stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"]))
+	assert.Len(t, stateExecutionWaitingQueues.StateToCommandsMap, 1)
+	assert.Len(t, stateExecutionWaitingQueues.StateToCommandsMap["state_1-1"], 2)
 	assert.Equal(t, xdbapi.LocalQueueCommand{
 		QueueName: "q1",
 		Count:     xdbapi.PtrInt32(2),
