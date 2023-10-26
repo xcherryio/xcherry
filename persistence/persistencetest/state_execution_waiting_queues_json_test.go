@@ -36,7 +36,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	//	state_1, 2: (q2, 3),
 	//	state_3, 1: (q1: 1), (q2, 2)
 
-	completedStateExecutionIdString, consumedMessages := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	completedStateExecutionIdString, consumedMessages := stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: uuid_q1_1,
 	})
 	// The new data should be:
@@ -49,7 +49,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 	}}, consumedMessages)
 	assert.Empty(t, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages)
 
-	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2", DedupId: uuid_q2_1,
 	})
 	// The data does not change:
@@ -63,7 +63,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 		DedupId: uuid_q2_1.String(), IsFull: false,
 	}}, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages["q2"])
 
-	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: uuid_q1_2,
 	})
 	// The data does not change:
@@ -80,7 +80,7 @@ func TestStateExecutionWaitingQueuesJsonConsume(t *testing.T) {
 		DedupId: uuid_q2_1.String(), IsFull: false,
 	}}, stateExecutionWaitingQueues.UnconsumedLocalQueueMessages["q2"])
 
-	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	completedStateExecutionIdString, consumedMessages = stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2", DedupId: uuid_q2_2,
 	})
 	// The new data should be:
@@ -122,7 +122,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_consumed(t *testing.T) {
 	//
 	// (q1, 1), (q2, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ALL_OF_COMPLETION)
 
@@ -180,7 +180,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_All_notAllConsumed(t *testing
 	//
 	// (q1, 1), (q2, 2), (q3, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ALL_OF_COMPLETION)
 
@@ -239,7 +239,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 	//
 	// (q1, 1), (q2, 2)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ANY_OF_COMPLETION)
 
@@ -273,7 +273,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 
 	stateExecutionWaitingQueues := persistence.NewStateExecutionWaitingQueues()
 
-	completedStateExecutionIdString, consumedMessages := stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	completedStateExecutionIdString, consumedMessages := stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: uuid_q1_1,
 	})
 	assert.Empty(t, completedStateExecutionIdString)
@@ -303,7 +303,7 @@ func TestStateExecutionWaitingQueuesJsonConsumeFor_Any_notConsumed(t *testing.T)
 	//
 	// (q1, 2), (q2, 1)
 
-	canComplete, consumedMessages := stateExecutionWaitingQueues.CheckCanCompleteLocalQueueWaiting(persistence.StateExecutionId{
+	canComplete, consumedMessages := stateExecutionWaitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ANY_OF_COMPLETION)
 
@@ -364,19 +364,19 @@ func prepareDataForConsume(stateExecutionWaitingQueues persistence.StateExecutio
 //
 // (q1, 1), (q2, 2)
 func prepareDataForConsumeFor(stateExecutionWaitingQueues persistence.StateExecutionWaitingQueuesJson, dedupIds []uuid.UUID) {
-	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: dedupIds[0],
 	})
-	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: dedupIds[1],
 	})
-	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2", DedupId: dedupIds[2],
 	})
-	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q2", DedupId: dedupIds[3],
 	})
-	stateExecutionWaitingQueues.Consume(persistence.LocalQueueMessageInfoJson{
+	stateExecutionWaitingQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q3", DedupId: dedupIds[4],
 	})
 

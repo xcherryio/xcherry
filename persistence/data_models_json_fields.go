@@ -131,7 +131,7 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommand(
 	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey], command)
 }
 
-// Consume returns (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
+// AddMessageAndTryConsume returns (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
 //
 // E.g., given StateToLocalQueueCommandsMap as:
 //
@@ -149,7 +149,7 @@ func (s *StateExecutionWaitingQueuesJson) AddNewLocalQueueCommand(
 //
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
-func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJson) (string, []InternalLocalQueueMessage) {
+func (s *StateExecutionWaitingQueuesJson) AddMessageAndTryConsume(message LocalQueueMessageInfoJson) (string, []InternalLocalQueueMessage) {
 	s.UnconsumedLocalQueueMessages[message.QueueName] = append(
 		s.UnconsumedLocalQueueMessages[message.QueueName], InternalLocalQueueMessage{
 			DedupId: message.DedupId.String(), IsFull: false,
@@ -183,7 +183,7 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 	return "", nil
 }
 
-// CheckCanCompleteLocalQueueWaiting returns a bool indicating if the stateExecutionId can complete the local queue commands waiting,
+// ConsumeWithCheckingLocalQueueWaitingComplete returns a bool indicating if the stateExecutionId can complete the local queue commands waiting,
 // and an array of all the consumed messages.
 //
 // E.g., given UnconsumedLocalQueueMessages as:
@@ -194,7 +194,7 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 //
 // (q1, 1), (q2, 2)
 //
-// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after CheckCanCompleteLocalQueueWaiting,
+// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after ConsumeWithCheckingLocalQueueWaitingComplete,
 // the UnconsumedLocalQueueMessages becomes:
 //
 // q1: [id_1_2], q3: [id_3_1]
@@ -202,7 +202,7 @@ func (s *StateExecutionWaitingQueuesJson) Consume(message LocalQueueMessageInfoJ
 // and returns:
 //
 // (true, [(id_1_1, false), (id_2_1, false), (id_2_2, false)])
-func (s *StateExecutionWaitingQueuesJson) CheckCanCompleteLocalQueueWaiting(stateExecutionId StateExecutionId,
+func (s *StateExecutionWaitingQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(stateExecutionId StateExecutionId,
 	commandWaitingType xdbapi.CommandWaitingType) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 

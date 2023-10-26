@@ -65,14 +65,14 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 
 	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
 	if request.TaskSequence == 0 {
-		_, consumedMessages := waitingQueues.CheckCanCompleteLocalQueueWaiting(request.StateExecutionId, request.CommandWaitingType)
+		_, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(request.StateExecutionId, request.CommandWaitingType)
 		if len(consumedMessages) > 0 {
 			assignedStateExecutionIdToMessagesMap[request.StateExecutionId.GetStateExecutionId()] = consumedMessages
 		}
 	}
 
 	for _, message := range request.Messages {
-		assignedStateExecutionIdString, consumedMessages := waitingQueues.Consume(message)
+		assignedStateExecutionIdString, consumedMessages := waitingQueues.AddMessageAndTryConsume(message)
 
 		if assignedStateExecutionIdString == "" {
 			continue
