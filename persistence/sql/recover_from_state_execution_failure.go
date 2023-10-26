@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
@@ -66,24 +65,17 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	if err != nil {
 		return err
 	}
-	var currStateRow extensions.AsyncStateExecutionRowForUpdate
-	currStateRow = extensions.AsyncStateExecutionRowForUpdate{
+	var currStateRow extensions.AsyncStateExecutionRowForUpdateWithoutCommands
+	currStateRow = extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.SourceStateExecutionId.StateId,
 		StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
+		Status:             persistence.StateExecutionStatusFailed,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 		LastFailure:        failureBytes,
 	}
 
-	if request.SourceFailedStateApi == xdbapi.WAIT_UNTIL_API {
-		currStateRow.WaitUntilStatus = persistence.StateExecutionStatusFailed
-		currStateRow.ExecuteStatus = persistence.StateExecutionStatusFailed
-	} else if request.SourceFailedStateApi == xdbapi.EXECUTE_API {
-		currStateRow.WaitUntilStatus = persistence.StateExecutionStatusCompleted
-		currStateRow.ExecuteStatus = persistence.StateExecutionStatusFailed
-	}
-
-	err = tx.UpdateAsyncStateExecution(ctx, currStateRow)
+	err = tx.UpdateAsyncStateExecutionWithoutCommands(ctx, currStateRow)
 	if err != nil {
 		if p.session.IsConditionalUpdateFailure(err) {
 			p.logger.Warn("UpdateAsyncStateExecution failed at conditional update")
