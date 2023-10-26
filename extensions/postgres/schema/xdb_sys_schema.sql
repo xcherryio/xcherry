@@ -15,6 +15,7 @@ CREATE TABLE xdb_sys_process_executions(
     timeout_seconds INTEGER,
     history_event_id_sequence INTEGER,
     state_execution_sequence_maps jsonb NOT NULL , -- some maps from stateId and sequence number
+    state_execution_waiting_queues jsonb, -- some maps to quickly consume received local queue messages
     wait_to_complete BOOLEAN NOT NULL DEFAULT false, -- if set to true, the process will be gracefully completed when there is no running state
     info jsonb , -- workerURL, processType, etc
     PRIMARY KEY (id)
@@ -26,8 +27,7 @@ CREATE TABLE xdb_sys_async_state_executions(
    state_id_sequence INTEGER NOT NULL,
    --
    version INTEGER NOT NULL , -- for conditional update to avoid locking
-   wait_until_status SMALLINT NOT NULL, -- -1: skipped/0:undefined/1:running/2:completed/3:failed/4:timeout/5:aborted
-   execute_status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:aborted
+   status SMALLINT NOT NULL, -- 1:wait_until running/2:wait_until waiting/3:execute running/4:completed/5:failed/6:timeout/7:aborted
    wait_until_commands jsonb,
    wait_until_command_results jsonb,
    info jsonb ,
@@ -64,4 +64,12 @@ CREATE TABLE xdb_sys_timer_tasks(
     state_id_sequence INTEGER, -- for looking up xdb_sys_async_state_executions
     info jsonb ,
     PRIMARY KEY (shard_id, fire_time_unix_seconds, task_sequence)    
+);
+
+CREATE TABLE xdb_sys_local_queue_messages(
+    process_execution_id uuid,
+    dedup_id uuid,
+    queue_name VARCHAR(31),
+    payload jsonb,
+    PRIMARY KEY (process_execution_id, dedup_id)
 );

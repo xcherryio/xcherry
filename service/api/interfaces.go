@@ -32,4 +32,5 @@ type Service interface {
 	StopProcess(ctx context.Context, request xdbapi.ProcessExecutionStopRequest) *ErrorWithStatus
 	DescribeLatestProcess(ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest) (
 		resp *xdbapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus)
+	PublishToLocalQueue(ctx context.Context, request xdbapi.PublishToLocalQueueRequest) *ErrorWithStatus
 }

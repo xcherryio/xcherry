@@ -62,6 +62,16 @@ func MustParsePtrUUID(s *string) UUID {
 	return MustParseUUID(*s)
 }
 
+// ParseUUID decodes s into a UUID or returns an error.
+func ParseUUID(s string) (UUID, error) {
+	parsed, err := uuid.Parse(s)
+	if err != nil {
+		return nil, err
+	}
+
+	return parsed[:], nil
+}
+
 // UUIDPtr simply returns a pointer for the given value type
 func UUIDPtr(u UUID) *UUID {
 	return &u

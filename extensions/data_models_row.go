@@ -50,10 +50,13 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                     persistence.ProcessExecutionStatus
-		HistoryEventIdSequence     int32
-		StateExecutionSequenceMaps types.JSONText
-		WaitToComplete             bool
+		Status                 persistence.ProcessExecutionStatus
+		HistoryEventIdSequence int32
+
+		StateExecutionSequenceMaps  types.JSONText
+		StateExecutionWaitingQueues types.JSONText
+
+		WaitToComplete bool
 	}
 
 	ProcessExecutionRow struct {
@@ -61,9 +64,11 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                     persistence.ProcessExecutionStatus
-		HistoryEventIdSequence     int32
-		StateExecutionSequenceMaps types.JSONText
+		Status                 persistence.ProcessExecutionStatus
+		HistoryEventIdSequence int32
+
+		StateExecutionSequenceMaps  types.JSONText
+		StateExecutionWaitingQueues types.JSONText
 
 		Namespace string
 
@@ -86,13 +91,33 @@ type (
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
-		StateId                  string
-		StateIdSequence          int32
 
-		WaitUntilStatus persistence.StateExecutionStatus
-		ExecuteStatus   persistence.StateExecutionStatus
+		StateId         string
+		StateIdSequence int32
+
+		Status persistence.StateExecutionStatus
+
+		WaitUntilCommands       types.JSONText
+		WaitUntilCommandResults types.JSONText
+
+		LastFailure types.JSONText
+
 		PreviousVersion int32 // for conditional check
-		LastFailure     types.JSONText
+	}
+
+	AsyncStateExecutionRowForUpdateWithoutCommands struct {
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+
+		StateId         string
+		StateIdSequence int32
+
+		Status persistence.StateExecutionStatus
+
+		LastFailure types.JSONText
+
+		PreviousVersion int32 // for conditional check
 	}
 
 	AsyncStateExecutionRow struct {
@@ -102,8 +127,10 @@ type (
 		StateId                  string
 		StateIdSequence          int32
 
-		WaitUntilStatus persistence.StateExecutionStatus
-		ExecuteStatus   persistence.StateExecutionStatus
+		Status persistence.StateExecutionStatus
+
+		WaitUntilCommandResults types.JSONText
+
 		PreviousVersion int32 // for conditional check
 
 		LastFailure types.JSONText
@@ -119,8 +146,9 @@ type (
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
-		StateId                  string
-		StateIdSequence          int32
+		// StateId and StateIdSequence will be "" and 0 when TaskType is persistence.ImmediateTaskTypeNewLocalQueueMessages
+		StateId         string
+		StateIdSequence int32
 
 		Info types.JSONText
 	}
@@ -204,5 +232,19 @@ type (
 
 		FireTimeUnixSeconds      []int64
 		MinTaskSequenceInclusive int64
+	}
+
+	LocalQueueMessageRow struct {
+		ProcessExecutionId uuid.UUID
+		// See the top of the file for why we need this field
+		ProcessExecutionIdString string
+
+		QueueName string
+
+		DedupId uuid.UUID
+		// See the top of the file for why we need this field
+		DedupIdString string
+
+		Payload types.JSONText
 	}
 )

@@ -109,6 +109,33 @@ func (h *ginHandler) DescribeProcess(c *gin.Context) {
 	return
 }
 
+func (h *ginHandler) PublishToLocalQueue(c *gin.Context) {
+	var req xdbapi.PublishToLocalQueueRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+	if len(req.GetMessages()) == 0 {
+		invalidRequestSchema(c)
+		return
+	}
+
+	var err *ErrorWithStatus
+	h.logger.Debug("received PublishToLocalQueue API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded PublishToLocalQueue API request", tag.Value(h.toJson(err)))
+	}()
+
+	err = h.svc.PublishToLocalQueue(c.Request.Context(), req)
+
+	if err != nil {
+		c.JSON(err.StatusCode, err.Error)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct{}{})
+}
+
 func (h *ginHandler) toJson(req any) string {
 	str, err := json.Marshal(req)
 	if err != nil {

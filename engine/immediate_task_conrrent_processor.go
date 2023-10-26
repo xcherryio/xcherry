@@ -121,9 +121,8 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 
 	w.logger.Debug("start executing immediate task", tag.ID(task.GetTaskId()), tag.ImmediateTaskType(task.TaskType.String()))
 
-	if task.TaskType == persistence.ImmediateTaskTypeNewLocalQueueMessage {
-		// TODO
-		return nil
+	if task.TaskType == persistence.ImmediateTaskTypeNewLocalQueueMessages {
+		return w.processLocalQueueMessagesTask(ctx, task)
 	}
 
 	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
@@ -146,15 +145,14 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 		},
 	})
 
-	if prep.WaitUntilStatus == persistence.StateExecutionStatusRunning {
+	if prep.Status == persistence.StateExecutionStatusWaitUntilRunning {
 		return w.processWaitUntilTask(ctx, task, *prep, apiClient)
-	} else if prep.ExecuteStatus == persistence.StateExecutionStatusRunning {
+	} else if prep.Status == persistence.StateExecutionStatusExecuteRunning {
 		return w.processExecuteTask(ctx, task, *prep, apiClient)
 	} else {
 		w.logger.Warn("noop for immediate task ",
 			tag.ID(tag.AnyToStr(task.TaskSequence)),
-			tag.Value(fmt.Sprintf("waitUntilStatus %v, executeStatus %v",
-				prep.WaitUntilStatus, prep.ExecuteStatus)))
+			tag.Value(fmt.Sprintf("status %v", prep.Status)))
 		return nil
 	}
 }
@@ -198,17 +196,16 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		return err
 	}
 
-	commandRequest := resp.GetCommandRequest()
-
-	compResp, err := w.store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
+	compResp, err := w.store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateExecutionId: persistence.StateExecutionId{
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:        prep,
-		CommandRequest: commandRequest,
-		TaskShardId:    task.ShardId,
+		Prepare:             prep,
+		CommandRequest:      resp.GetCommandRequest(),
+		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
+		TaskShardId:         task.ShardId,
 	})
 	if err != nil {
 		return err
@@ -262,6 +259,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 				Encoding: prep.Input.Encoding,
 				Data:     prep.Input.Data,
 			},
+			CommandResults: &prep.WaitUntilCommandResults,
 		},
 	).Execute()
 	if httpResp != nil {
@@ -288,9 +286,10 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:       prep,
-		StateDecision: resp.StateDecision,
-		TaskShardId:   task.ShardId,
+		Prepare:             prep,
+		StateDecision:       resp.StateDecision,
+		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
+		TaskShardId:         task.ShardId,
 	})
 	if err != nil {
 		return err
@@ -425,4 +424,29 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	)
 
 	return statusCode, details, fmt.Errorf("statusCode: %v, errMsg: %w, responseBody: %v", statusCode, err, responseBody)
+}
+
+func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
+	ctx context.Context, task persistence.ImmediateTask,
+) error {
+	resp, err := w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
+		TaskShardId:  task.ShardId,
+		TaskSequence: task.GetTaskSequence(),
+
+		ProcessExecutionId: task.ProcessExecutionId,
+
+		Messages: task.ImmediateTaskInfo.LocalQueueMessageInfo,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp.HasNewImmediateTask {
+		processExecutionIdString := task.ProcessExecutionId.String()
+		w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            task.ShardId,
+			ProcessExecutionId: &processExecutionIdString,
+		})
+	}
+	return nil
 }

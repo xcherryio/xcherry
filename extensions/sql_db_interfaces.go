@@ -60,13 +60,17 @@ type transactionalCRUD interface {
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
+	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
+	UpdateAsyncStateExecutionWithoutCommands(ctx context.Context, row AsyncStateExecutionRowForUpdateWithoutCommands) error
 	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertImmediateTask(ctx context.Context, row ImmediateTaskRowForInsert) error
 	InsertTimerTask(ctx context.Context, row TimerTaskRowForInsert) error
 
 	DeleteImmediateTask(ctx context.Context, filter ImmediateTaskRowDeleteFilter) error
 	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
+
+	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
 }
 
 type nonTransactionalCRUD interface {
@@ -81,6 +85,8 @@ type nonTransactionalCRUD interface {
 	SelectTimerTasksForTimestamps(ctx context.Context, filter TimerTaskSelectByTimestampsFilter) ([]TimerTaskRow, error)
 
 	CleanUpTasksForTest(ctx context.Context, shardId int32) error
+
+	SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) ([]LocalQueueMessageRow, error)
 }
 
 type ErrorChecker interface {

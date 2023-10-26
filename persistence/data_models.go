@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
+	"strconv"
+	"strings"
 )
 
 type (
@@ -177,8 +179,9 @@ type (
 	}
 
 	PrepareStateExecutionResponse struct {
-		WaitUntilStatus StateExecutionStatus
-		ExecuteStatus   StateExecutionStatus
+		Status                  StateExecutionStatus
+		WaitUntilCommandResults xdbapi.CommandResults
+
 		// PreviousVersion is for conditional check in the future transactional update
 		PreviousVersion int32
 
@@ -187,30 +190,72 @@ type (
 		LastFailure *StateExecutionFailureJson
 	}
 
-	CompleteWaitUntilExecutionRequest struct {
+	ProcessWaitUntilExecutionRequest struct {
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare        PrepareStateExecutionResponse
-		CommandRequest xdbapi.CommandRequest
-		TaskShardId    int32
+		Prepare             PrepareStateExecutionResponse
+		CommandRequest      xdbapi.CommandRequest
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		TaskShardId         int32
 	}
 
-	CompleteWaitUntilExecutionResponse struct {
+	ProcessWaitUntilExecutionResponse struct {
 		HasNewImmediateTask bool
+	}
+
+	CompleteWaitUntilExecutionRequest struct {
+		TaskShardId        int32
+		ProcessExecutionId uuid.UUID
+		StateExecutionId
+		PreviousVersion int32
 	}
 
 	CompleteExecuteExecutionRequest struct {
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare       PrepareStateExecutionResponse
-		StateDecision xdbapi.StateDecision
-		TaskShardId   int32
+		Prepare             PrepareStateExecutionResponse
+		StateDecision       xdbapi.StateDecision
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		TaskShardId         int32
 	}
 
 	CompleteExecuteExecutionResponse struct {
 		HasNewImmediateTask bool
+	}
+
+	PublishToLocalQueueRequest struct {
+		Namespace string
+		ProcessId string
+		Messages  []xdbapi.LocalQueueMessage
+	}
+
+	PublishToLocalQueueResponse struct {
+		ProcessExecutionId  uuid.UUID
+		HasNewImmediateTask bool
+		ProcessNotExists    bool
+	}
+
+	ProcessLocalQueueMessagesRequest struct {
+		TaskShardId int32
+		// if TaskSequence is 0, it means this request was sent to consume unconsumed messages for a new state,
+		// so there is no specific ImmediateTask associated with this request.
+		TaskSequence int64
+
+		ProcessExecutionId uuid.UUID
+
+		// being empty if TaskSequence is 0
+		Messages []LocalQueueMessageInfoJson
+
+		// the following fields will only be used when TaskSequence is 0 to determine the new state
+		StateExecutionId   StateExecutionId
+		CommandWaitingType xdbapi.CommandWaitingType
+	}
+
+	ProcessLocalQueueMessagesResponse struct {
+		HasNewImmediateTask bool
+		ProcessExecutionId  uuid.UUID
 	}
 )
 
@@ -231,4 +276,19 @@ func (t ImmediateTask) GetTaskId() string {
 
 func (s StateExecutionId) GetStateExecutionId() string {
 	return fmt.Sprintf("%v-%v", s.StateId, s.StateIdSequence)
+}
+
+func NewStateExecutionIdFromString(s string) (*StateExecutionId, error) {
+	lastHyphenIndex := strings.LastIndex(s, "-")
+	if lastHyphenIndex == -1 {
+		return nil, fmt.Errorf("invalid format: %s", s)
+	}
+
+	stateId := s[:lastHyphenIndex]
+	stateIdSequence, err := strconv.ParseInt(s[lastHyphenIndex+1:], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StateExecutionId{StateId: stateId, StateIdSequence: int32(stateIdSequence)}, nil
 }

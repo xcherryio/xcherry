@@ -15,7 +15,6 @@ package sql
 
 import (
 	"context"
-
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
@@ -32,11 +31,18 @@ func insertAsyncStateExecution(
 	stateInput []byte,
 	stateInfo []byte,
 ) error {
+	commandResultsBytes, err := persistence.FromCommandResultsToBytes(xdbapi.CommandResults{})
+	if err != nil {
+		return err
+	}
+
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
+
+		WaitUntilCommandResults: commandResultsBytes,
 
 		LastFailure:     nil,
 		PreviousVersion: 1,
@@ -45,11 +51,9 @@ func insertAsyncStateExecution(
 	}
 
 	if stateConfig.GetSkipWaitUntil() {
-		stateRow.WaitUntilStatus = persistence.StateExecutionStatusSkipped
-		stateRow.ExecuteStatus = persistence.StateExecutionStatusRunning
+		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
 	} else {
-		stateRow.WaitUntilStatus = persistence.StateExecutionStatusRunning
-		stateRow.ExecuteStatus = persistence.StateExecutionStatusUndefined
+		stateRow.Status = persistence.StateExecutionStatusWaitUntilRunning
 	}
 
 	return tx.InsertAsyncStateExecution(ctx, stateRow)
@@ -77,4 +81,80 @@ func insertImmediateTask(
 	}
 
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
+}
+
+// publishToLocalQueue inserts len(valid_messages) rows into xdb_sys_local_queue_messages,
+// and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
+// publishToLocalQueue returns (HasNewImmediateTask, error).
+func (p sqlProcessStoreImpl) publishToLocalQueue(
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) (bool, error) {
+
+	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
+
+	for _, message := range messages {
+		dedupId := uuid.MustNewUUID()
+
+		// dealing with user-customized dedupId
+		if message.GetDedupId() != "" {
+			dedupId2, err := uuid.ParseUUID(message.GetDedupId())
+			if err != nil {
+				return false, err
+			}
+			dedupId = dedupId2
+		}
+
+		// insert a row into xdb_sys_local_queue_messages
+
+		payloadBytes, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
+		if err != nil {
+			return false, err
+		}
+
+		insertSuccessfully, err := tx.InsertLocalQueueMessage(ctx, extensions.LocalQueueMessageRow{
+			ProcessExecutionId: processExecutionId,
+			QueueName:          message.GetQueueName(),
+			DedupId:            dedupId,
+			Payload:            payloadBytes,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !insertSuccessfully {
+			continue
+		}
+
+		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
+			QueueName: message.GetQueueName(),
+			DedupId:   dedupId,
+		})
+	}
+
+	// insert a row into xdb_sys_immediate_tasks
+
+	if len(localQueueMessageInfo) == 0 {
+		return false, nil
+	}
+
+	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
+		persistence.ImmediateTaskInfoJson{
+			LocalQueueMessageInfo: localQueueMessageInfo,
+		})
+	if err != nil {
+		return false, err
+	}
+
+	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+		ShardId:  persistence.DefaultShardId,
+		TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessages,
+
+		ProcessExecutionId: processExecutionId,
+		StateId:            "",
+		StateIdSequence:    0,
+		Info:               taskInfoBytes,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }

@@ -36,7 +36,10 @@ type (
 		ConvertTimerTaskToImmediateTask(ctx context.Context, request ConvertTimerTaskToImmediateTaskRequest) error
 
 		PrepareStateExecution(ctx context.Context, request PrepareStateExecutionRequest) (*PrepareStateExecutionResponse, error)
-		CompleteWaitUntilExecution(ctx context.Context, request CompleteWaitUntilExecutionRequest) (*CompleteWaitUntilExecutionResponse, error)
+		ProcessWaitUntilExecution(ctx context.Context, request ProcessWaitUntilExecutionRequest) (*ProcessWaitUntilExecutionResponse, error)
 		CompleteExecuteExecution(ctx context.Context, request CompleteExecuteExecutionRequest) (*CompleteExecuteExecutionResponse, error)
+
+		PublishToLocalQueue(ctx context.Context, request PublishToLocalQueueRequest) (*PublishToLocalQueueResponse, error)
+		ProcessLocalQueueMessages(ctx context.Context, request ProcessLocalQueueMessagesRequest) (*ProcessLocalQueueMessagesResponse, error)
 	}
 )

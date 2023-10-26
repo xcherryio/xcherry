@@ -64,9 +64,10 @@ func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.L
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
-	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, info) VALUES
+	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, 
+	 state_execution_waiting_queues, info) VALUES
 	(:namespace, :process_execution_id_string, :process_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
-	 :state_execution_sequence_maps, :info)`
+	 :state_execution_sequence_maps, :state_execution_waiting_queues, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
 	row.StartTime = ToPostgresDateTime(row.StartTime)
@@ -77,8 +78,9 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 
 const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
 status = :status,
-history_event_id_sequence= :history_event_id_sequence,
-state_execution_sequence_maps= :state_execution_sequence_maps,
+history_event_id_sequence = :history_event_id_sequence,
+state_execution_sequence_maps = :state_execution_sequence_maps,
+state_execution_waiting_queues = :state_execution_waiting_queues,
 wait_to_complete = :wait_to_complete
 WHERE id=:process_execution_id_string
 `
@@ -90,8 +92,8 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 }
 
 const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
-	(process_execution_id, state_id, state_id_sequence, version, wait_until_status, execute_status, info, input) VALUES
-	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :wait_until_status, :execute_status, :info, :input)`
+	(process_execution_id, state_id, state_id_sequence, version, status, wait_until_command_results, info, input) VALUES
+	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :status, :wait_until_command_results, :info, :input)`
 
 func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.AsyncStateExecutionRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
@@ -99,10 +101,27 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 	return err
 }
 
+const selectAsyncStateExecutionForUpdateQuery = `SELECT 
+    status, version as previous_version, wait_until_commands, wait_until_command_results, last_failure
+	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3 FOR UPDATE
+`
+
+func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context,
+	filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
+	var row extensions.AsyncStateExecutionRowForUpdate
+	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
+	err := d.tx.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
+	row.ProcessExecutionId = filter.ProcessExecutionId
+	row.StateId = filter.StateId
+	row.StateIdSequence = filter.StateIdSequence
+	return &row, err
+}
+
 const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
-version = :previous_version +1,
-wait_until_status = :wait_until_status,
-execute_status = :execute_status,
+version = :previous_version + 1,
+status = :status,
+wait_until_commands = :wait_until_commands,
+wait_until_command_results = :wait_until_command_results,
 last_failure = :last_failure     
 WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
   AND state_id_sequence=:state_id_sequence AND version = :previous_version`
@@ -110,8 +129,6 @@ WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id
 func (d dbTx) UpdateAsyncStateExecution(
 	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdate,
 ) error {
-	// ignore static info because they are not changing
-	// TODO how to make that clear? maybe rename the method?
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionQuery, row)
 	if err != nil {
@@ -127,10 +144,36 @@ func (d dbTx) UpdateAsyncStateExecution(
 	return nil
 }
 
+const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xdb_sys_async_state_executions set
+version = :previous_version + 1,
+status = :status,
+last_failure = :last_failure     
+WHERE process_execution_id=:process_execution_id_string AND state_id=:state_id 
+  AND state_id_sequence=:state_id_sequence AND version = :previous_version`
+
+func (d dbTx) UpdateAsyncStateExecutionWithoutCommands(
+	ctx context.Context, row extensions.AsyncStateExecutionRowForUpdateWithoutCommands,
+) error {
+	// ignore static info because they are not changing
+	// TODO how to make that clear? maybe rename the method?
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	result, err := d.tx.NamedExecContext(ctx, updateAsyncStateExecutionWithoutCommandsQuery, row)
+	if err != nil {
+		return err
+	}
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if effected != 1 {
+		return conditionalUpdateFailure
+	}
+	return nil
+}
+
 const batchUpdateAsyncStateExecutionsToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions SET
-version = CASE WHEN wait_until_status=1 OR execute_status=1 THEN version+1 ELSE version END,
-wait_until_status = CASE WHEN wait_until_status=1 THEN 5 ELSE wait_until_status END,
-execute_status = CASE WHEN execute_status=1 THEN 5 ELSE execute_status END
+version = CASE WHEN status<4 THEN version+1 ELSE version END,
+status = CASE WHEN status<4 THEN 7 ELSE status END
 WHERE process_execution_id=$1
 `
 
@@ -152,7 +195,7 @@ func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateT
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_waiting_queues, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
@@ -164,7 +207,7 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 }
 
 const selectProcessExecutionQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_waiting_queues, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 `
 
 func (d dbTx) SelectProcessExecution(
@@ -199,4 +242,26 @@ const deleteSingleTimerTaskQuery = `DELETE
 func (d dbTx) DeleteTimerTask(ctx context.Context, filter extensions.TimerTaskRowDeleteFilter) error {
 	_, err := d.tx.ExecContext(ctx, deleteSingleTimerTaskQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.TaskSequence)
 	return err
+}
+
+const insertLocalQueueMessageQuery = `INSERT INTO xdb_sys_local_queue_messages
+	(process_execution_id, queue_name, dedup_id, payload) VALUES 
+   	(:process_execution_id_string, :queue_name, :dedup_id_string, :payload)
+	ON CONFLICT (process_execution_id, dedup_id) DO NOTHING
+`
+
+// InsertLocalQueueMessage returns (insertSuccessfully, error)
+func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQueueMessageRow) (bool, error) {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	row.DedupIdString = row.DedupId.String()
+	result, err := d.tx.NamedExecContext(ctx, insertLocalQueueMessageQuery, row)
+	if err != nil {
+		return false, err
+	}
+
+	effected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return effected == 1, err
 }

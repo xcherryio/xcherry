@@ -15,16 +15,17 @@ package postgres
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
 )
 
 const selectLatestExecutionQuery = `SELECT
-	ce.process_execution_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
-	FROM xdb_sys_latest_process_executions ce
-	INNER JOIN xdb_sys_process_executions e ON e.process_id = ce.process_id AND e.id = ce.process_execution_id
-	WHERE ce.namespace = $1 AND ce.process_id = $2`
+	le.process_execution_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
+	FROM xdb_sys_latest_process_executions le
+	INNER JOIN xdb_sys_process_executions e ON e.process_id = le.process_id AND e.id = le.process_execution_id
+	WHERE le.namespace = $1 AND le.process_id = $2`
 
 func (d dbSession) SelectLatestProcessExecution(
 	ctx context.Context, namespace, processId string,
@@ -38,7 +39,7 @@ func (d dbSession) SelectLatestProcessExecution(
 }
 
 const selectAsyncStateExecutionQuery = `SELECT 
-    wait_until_status, execute_status, version as previous_version, info, input, last_failure
+    status, wait_until_command_results, version as previous_version, info, input, last_failure
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3`
 
 func (d dbSession) SelectAsyncStateExecution(
@@ -110,4 +111,21 @@ func (d dbSession) CleanUpTasksForTest(ctx context.Context, shardId int32) error
 	}
 	_, err = d.db.ExecContext(ctx, `DELETE FROM xdb_sys_timer_tasks WHERE shard_id = $1`, shardId)
 	return err
+}
+
+const selectLocalQueueMessagesQuery = `SELECT
+	process_execution_id, queue_name, dedup_id, payload
+	FROM xdb_sys_local_queue_messages WHERE process_execution_id = ? AND dedup_id IN (?)
+`
+
+func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) (
+	[]extensions.LocalQueueMessageRow, error) {
+	var rows []extensions.LocalQueueMessageRow
+	query, args, err := sqlx.In(selectLocalQueueMessagesQuery, processExecutionId.String(), dedupIdStrings)
+	if err != nil {
+		return nil, err
+	}
+	query = d.db.Rebind(query)
+	err = d.db.SelectContext(ctx, &rows, query, args...)
+	return rows, err
 }

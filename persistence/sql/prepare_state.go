@@ -32,19 +32,27 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 	if err != nil {
 		return nil, err
 	}
+
 	info, err := persistence.BytesToAsyncStateExecutionInfo(stateRow.Info)
 	if err != nil {
 		return nil, err
 	}
+
 	input, err := persistence.BytesToEncodedObject(stateRow.Input)
 	if err != nil {
 		return nil, err
 	}
+
+	commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
+	if err != nil {
+		return nil, err
+	}
+
 	return &persistence.PrepareStateExecutionResponse{
-		WaitUntilStatus: stateRow.WaitUntilStatus,
-		ExecuteStatus:   stateRow.ExecuteStatus,
-		PreviousVersion: stateRow.PreviousVersion,
-		Info:            info,
-		Input:           input,
+		Status:                  stateRow.Status,
+		WaitUntilCommandResults: commandResults,
+		PreviousVersion:         stateRow.PreviousVersion,
+		Info:                    info,
+		Input:                   input,
 	}, nil
 }

@@ -371,14 +371,13 @@ func verifyStateExecution(
 	ass *assert.Assertions,
 	prep *persistence.PrepareStateExecutionResponse,
 	processId string, input xdbapi.EncodedObject,
-	expectedWaitUntilStatus, expectedExecuteStatus persistence.StateExecutionStatus,
+	expectedStatus persistence.StateExecutionStatus,
 ) {
 	ass.Equal(testWorkerUrl, prep.Info.WorkerURL)
 	ass.Equal(testProcessType, prep.Info.ProcessType)
 	ass.Equal(processId, prep.Info.ProcessId)
 	ass.Equal(input, prep.Input)
-	ass.Equal(expectedWaitUntilStatus, prep.WaitUntilStatus)
-	ass.Equal(expectedExecuteStatus, prep.ExecuteStatus)
+	ass.Equal(expectedStatus, prep.Status)
 }
 
 func completeWaitUntilExecution(
@@ -389,7 +388,7 @@ func completeWaitUntilExecution(
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compWaitResp, err := store.CompleteWaitUntilExecution(ctx, persistence.CompleteWaitUntilExecutionRequest{
+	compWaitResp, err := store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
