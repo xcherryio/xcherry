@@ -54,16 +54,19 @@ type (
 		NotExists bool
 	}
 
-	MoveProcessToStateRequest struct {
-		Namespace              string
-		ProcessExecutionId     uuid.UUID
-		Prepare                PrepareStateExecutionResponse
-		SourceStateExecutionId StateExecutionId
-		SourceFailedStateApi   xdbapi.StateApiType
-		DestinationStateId     string
-		DestinationStateConfig *xdbapi.AsyncStateConfig
-		DestinationStateInput  xdbapi.EncodedObject
-		ShardId                int32
+	RecoverFromStateExecutionFailureRequest struct {
+		Namespace                    string
+		ProcessExecutionId           uuid.UUID
+		Prepare                      PrepareStateExecutionResponse
+		SourceStateExecutionId       StateExecutionId
+		SourceFailedStateApi         xdbapi.StateApiType
+		LastFailureStatus            int32
+		LastFailureDetails           string
+		LastFailureCompletedAttempts int32
+		DestinationStateId           string
+		DestinationStateConfig       *xdbapi.AsyncStateConfig
+		DestinationStateInput        xdbapi.EncodedObject
+		ShardId                      int32
 	}
 
 	GetImmediateTasksRequest struct {

@@ -23,15 +23,15 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) MoveProcessToState(
+func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 	ctx context.Context,
-	request persistence.MoveProcessToStateRequest) error {
+	request persistence.RecoverFromStateExecutionFailureRequest) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
 	}
 
-	err = p.doMoveProcessToStateTx(ctx, tx, request)
+	err = p.doRecoverFromStateExecutionFailureTx(ctx, tx, request)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -48,10 +48,10 @@ func (p sqlProcessStoreImpl) MoveProcessToState(
 	return err
 }
 
-func (p sqlProcessStoreImpl) doMoveProcessToStateTx(
+func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.MoveProcessToStateRequest,
+	request persistence.RecoverFromStateExecutionFailureRequest,
 ) error {
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -60,27 +60,27 @@ func (p sqlProcessStoreImpl) doMoveProcessToStateTx(
 	}
 
 	// mark the current state as failed
+	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
+		request.LastFailureStatus, request.LastFailureDetails, request.LastFailureCompletedAttempts)
+
+	if err != nil {
+		return err
+	}
 	var currStateRow extensions.AsyncStateExecutionRowForUpdate
+	currStateRow = extensions.AsyncStateExecutionRowForUpdate{
+		ProcessExecutionId: request.ProcessExecutionId,
+		StateId:            request.SourceStateExecutionId.StateId,
+		StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
+		PreviousVersion:    request.Prepare.PreviousVersion,
+		LastFailure:        failureBytes,
+	}
+
 	if request.SourceFailedStateApi == xdbapi.WAIT_UNTIL_API {
-		currStateRow = extensions.AsyncStateExecutionRowForUpdate{
-			ProcessExecutionId: request.ProcessExecutionId,
-			StateId:            request.SourceStateExecutionId.StateId,
-			StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
-			WaitUntilStatus:    persistence.StateExecutionStatusFailed,
-			ExecuteStatus:      persistence.StateExecutionStatusAborted,
-			PreviousVersion:    request.Prepare.PreviousVersion,
-			LastFailure:        nil,
-		}
+		currStateRow.WaitUntilStatus = persistence.StateExecutionStatusFailed
+		currStateRow.ExecuteStatus = persistence.StateExecutionStatusFailed
 	} else if request.SourceFailedStateApi == xdbapi.EXECUTE_API {
-		currStateRow = extensions.AsyncStateExecutionRowForUpdate{
-			ProcessExecutionId: request.ProcessExecutionId,
-			StateId:            request.SourceStateExecutionId.StateId,
-			StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
-			WaitUntilStatus:    persistence.StateExecutionStatusCompleted,
-			ExecuteStatus:      persistence.StateExecutionStatusFailed,
-			PreviousVersion:    request.Prepare.PreviousVersion,
-			LastFailure:        nil,
-		}
+		currStateRow.WaitUntilStatus = persistence.StateExecutionStatusCompleted
+		currStateRow.ExecuteStatus = persistence.StateExecutionStatusFailed
 	}
 
 	err = tx.UpdateAsyncStateExecution(ctx, currStateRow)

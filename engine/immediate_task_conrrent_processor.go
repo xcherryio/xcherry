@@ -186,18 +186,25 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		defer httpResp.Body.Close()
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, err := w.composeHttpError(err, httpResp, prep.Info, task)
+		status, details, _ := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
 			return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
 		}
 
-		errRecover := w.applyStateFailureRecoveryPolicy(ctx, task, prep, xdbapi.WAIT_UNTIL_API, apiClient)
+		errRecover := w.applyStateFailureRecoveryPolicy(ctx,
+			task,
+			prep,
+			status,
+			details,
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+			xdbapi.WAIT_UNTIL_API,
+			apiClient)
 		if errRecover != nil {
 			return errRecover
 		}
-		return err
+		return nil
 	}
 
 	compResp, err := w.store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
@@ -223,6 +230,9 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx context.Context,
 	task persistence.ImmediateTask,
 	prep persistence.PrepareStateExecutionResponse,
+	status int32,
+	details string,
+	completedAttempts int32,
 	stateApiType xdbapi.StateApiType,
 	apiClient *xdbapi.APIClient) error {
 	stateRecoveryPolicy := xdbapi.AsyncStateConfigStateFailureRecoveryInfo{
@@ -247,18 +257,22 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 			return fmt.Errorf("process does not exist")
 		}
 	case xdbapi.PROCEED_TO_CONFIGURED_STATE:
-		w.store.MoveProcessToState(ctx, persistence.MoveProcessToStateRequest{
+		w.store.RecoverFromStateExecutionFailure(ctx, persistence.RecoverFromStateExecutionFailureRequest{
 			Namespace:          prep.Info.Namespace,
 			ProcessExecutionId: task.ProcessExecutionId,
 			SourceStateExecutionId: persistence.StateExecutionId{
 				StateId:         task.StateId,
 				StateIdSequence: task.StateIdSequence,
 			},
-			SourceFailedStateApi:   stateApiType,
-			Prepare:                prep,
-			DestinationStateId:     *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
-			DestinationStateConfig: prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateConfig,
-			DestinationStateInput:  prep.Input,
+			SourceFailedStateApi:         stateApiType,
+			LastFailureStatus:            status,
+			LastFailureDetails:           details,
+			LastFailureCompletedAttempts: completedAttempts,
+			Prepare:                      prep,
+			DestinationStateId:           *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
+			DestinationStateConfig:       prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateConfig,
+			DestinationStateInput:        prep.Input,
+			ShardId:                      task.ShardId,
 		})
 	default:
 		return fmt.Errorf("unknown state failure recovery policy %v", stateRecoveryPolicy.Policy)
@@ -326,7 +340,14 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		if shouldRetry {
 			return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
 		}
-		errRecover := w.applyStateFailureRecoveryPolicy(ctx, task, prep, xdbapi.EXECUTE_API, apiClient)
+		errRecover := w.applyStateFailureRecoveryPolicy(ctx,
+			task,
+			prep,
+			status,
+			details,
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+			xdbapi.WAIT_UNTIL_API,
+			apiClient)
 		if errRecover != nil {
 			return errRecover
 		}
