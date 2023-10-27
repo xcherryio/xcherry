@@ -96,14 +96,6 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 			request.SourceStateExecutionId.StateId, request.SourceStateExecutionId.StateIdSequence, sequenceMaps, err)
 	}
 
-	// abort other pending states
-	if len(sequenceMaps.PendingExecutionMap) > 0 {
-		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, request.ProcessExecutionId)
-		if err != nil {
-			return err
-		}
-	}
-
 	// start new state execution with state id from request
 	stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
 	if err != nil {

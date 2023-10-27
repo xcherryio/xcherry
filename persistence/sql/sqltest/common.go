@@ -25,8 +25,8 @@ import (
 
 const testProcessType = "test-type"
 const testWorkerUrl = "test-url"
-const stateId1 = "state-1"
-const stateId2 = "state-2"
+const stateId1 = "state1"
+const stateId2 = "state2"
 
 func createTestInput() xdbapi.EncodedObject {
 	return xdbapi.EncodedObject{
@@ -419,4 +419,43 @@ func completeExecuteExecution(
 	})
 	ass.Nil(err)
 	ass.Equal(hasNewImmediateTask, compWaitResp.HasNewImmediateTask)
+}
+
+func recoverFromFailure(
+	ctx context.Context,
+	assert *assert.Assertions,
+	store persistence.ProcessStore,
+	namespace string,
+	prcExeId uuid.UUID,
+	prep persistence.PrepareStateExecutionResponse,
+	sourceStateExecId persistence.StateExecutionId,
+	sourceFailedStateApi xdbapi.StateApiType,
+	destinationStateId string,
+	destiantionStateConfig *xdbapi.AsyncStateConfig,
+	destinationStateInput xdbapi.EncodedObject) {
+	request := persistence.RecoverFromStateExecutionFailureRequest{
+		Namespace:              namespace,
+		ProcessExecutionId:     prcExeId,
+		Prepare:                prep,
+		SourceStateExecutionId: sourceStateExecId,
+		SourceFailedStateApi:   sourceFailedStateApi,
+		DestinationStateId:     destinationStateId,
+		DestinationStateConfig: destiantionStateConfig,
+		DestinationStateInput:  destinationStateInput,
+		ShardId:                persistence.DefaultShardId,
+	}
+
+	err := store.RecoverFromStateExecutionFailure(ctx, request)
+	assert.Nil(err)
+
+	// verify process execution
+	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
+		Namespace: namespace,
+		ProcessId: prep.Info.ProcessId,
+	})
+	assert.Nil(err)
+	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
+
+	// verify state execution
+
 }
