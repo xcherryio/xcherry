@@ -232,7 +232,7 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 	}
 
 	if len(allConsumedDedupIdStrings) == 0 {
-		return nil, nil
+		return map[string]extensions.LocalQueueMessageRow{}, nil
 	}
 
 	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIdStrings)
