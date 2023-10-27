@@ -446,13 +446,13 @@ func recoverFromFailure(
 	}
 
 	err := store.RecoverFromStateExecutionFailure(ctx, request)
-	assert.NoError(err)
+	assert.True(err == nil)
 
 	// verify process execution
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,
 		ProcessId: prep.Info.ProcessId,
 	})
-	assert.NoError(err)
+	assert.True(err == nil)
 	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
 }
