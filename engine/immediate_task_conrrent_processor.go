@@ -170,7 +170,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	}
 	task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
 
-	req := apiClient.DefaultApi.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
+	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
 		xdbapi.AsyncStateWaitUntilRequest{
 			Context:     createApiContext(prep, task),
@@ -315,7 +315,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	ctx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
 	defer cancF()
 
-	req := apiClient.DefaultApi.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
+	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
 	resp, httpResp, err := req.AsyncStateExecuteRequest(
 		xdbapi.AsyncStateExecuteRequest{
 			Context:     createApiContext(prep, task),
