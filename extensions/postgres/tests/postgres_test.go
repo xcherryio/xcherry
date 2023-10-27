@@ -58,5 +58,6 @@ func TestBackoffTimer(t *testing.T) {
 }
 
 func TestStateFailureRecovery(t *testing.T) {
+	sqltest.CleanupEnv(assert.New(t), store)
 	sqltest.SQLStateFailureRecoveryTest(t, assert.New(t), store)
 }
