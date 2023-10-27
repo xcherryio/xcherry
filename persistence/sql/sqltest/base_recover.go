@@ -16,6 +16,7 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func SQLStateFailureRecoveryTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
@@ -100,6 +101,7 @@ func SQLStateFailureRecoveryTest(ass *assert.Assertions, store persistence.Proce
 		persistence.StateExecutionStatusExecuteRunning)
 
 	recoverFromFailure(
+		t,
 		ctx,
 		ass,
 		store,

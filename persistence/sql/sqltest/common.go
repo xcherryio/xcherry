@@ -15,8 +15,10 @@ package sqltest
 
 import (
 	"context"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
@@ -422,6 +424,7 @@ func completeExecuteExecution(
 }
 
 func recoverFromFailure(
+	t *testing.T,
 	ctx context.Context,
 	assert *assert.Assertions,
 	store persistence.ProcessStore,
@@ -446,13 +449,13 @@ func recoverFromFailure(
 	}
 
 	err := store.RecoverFromStateExecutionFailure(ctx, request)
-	assert.Equal(nil, err)
+	require.NoError(t, err)
 
 	// verify process execution
 	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
 		Namespace: namespace,
 		ProcessId: prep.Info.ProcessId,
 	})
-	assert.Equal(nil, err)
+	require.NoError(t, err)
 	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
 }

@@ -58,5 +58,5 @@ func TestBackoffTimer(t *testing.T) {
 }
 
 func TestStateFailureRecovery(t *testing.T) {
-	sqltest.SQLStateFailureRecoveryTest(assert.New(t), store)
+	sqltest.SQLStateFailureRecoveryTest(t, assert.New(t), store)
 }
