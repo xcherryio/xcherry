@@ -237,25 +237,26 @@ type (
 		ProcessNotExists    bool
 	}
 
-	ProcessLocalQueueMessagesRequest struct {
-		TaskShardId int32
-		// if TaskSequence is 0, it means this request was sent to consume unconsumed messages for a new state,
-		// so there is no specific ImmediateTask associated with this request.
+	InternalProcessLocalQueueMessagesRequest struct {
 		TaskSequence int64
-
-		ProcessExecutionId uuid.UUID
-
-		// being empty if TaskSequence is 0
-		Messages []LocalQueueMessageInfoJson
-
-		// the following fields will only be used when TaskSequence is 0 to determine the new state
-		StateExecutionId   StateExecutionId
-		CommandWaitingType xdbapi.CommandWaitingType
+		Messages     []LocalQueueMessageInfoJson
 	}
 
-	ProcessLocalQueueMessagesResponse struct {
+	InternalProcessLocalQueueCommandsAndTryConsumeRequest struct {
+		StateExecutionId StateExecutionId
+		CommandRequest   xdbapi.CommandRequest
+	}
+
+	ProcessLocalQueueCommandsAndMessagesRequest struct {
+		TaskShardId        int32
+		ProcessExecutionId uuid.UUID
+
+		ProcessLocalQueueMessagesRequest              *InternalProcessLocalQueueMessagesRequest
+		ProcessLocalQueueCommandsAndTryConsumeRequest *InternalProcessLocalQueueCommandsAndTryConsumeRequest
+	}
+
+	ProcessLocalQueueCommandsAndMessagesResponse struct {
 		HasNewImmediateTask bool
-		ProcessExecutionId  uuid.UUID
 	}
 )
 

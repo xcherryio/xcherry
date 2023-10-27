@@ -429,13 +429,13 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 	ctx context.Context, task persistence.ImmediateTask,
 ) error {
-	resp, err := w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
-		TaskShardId:  task.ShardId,
-		TaskSequence: task.GetTaskSequence(),
-
+	resp, err := w.store.ProcessLocalQueueCommandsAndMessages(ctx, persistence.ProcessLocalQueueCommandsAndMessagesRequest{
+		TaskShardId:        task.ShardId,
 		ProcessExecutionId: task.ProcessExecutionId,
-
-		Messages: task.ImmediateTaskInfo.LocalQueueMessageInfo,
+		ProcessLocalQueueMessagesRequest: &persistence.InternalProcessLocalQueueMessagesRequest{
+			TaskSequence: task.GetTaskSequence(),
+			Messages:     task.ImmediateTaskInfo.LocalQueueMessageInfo,
+		},
 	})
 	if err != nil {
 		return err

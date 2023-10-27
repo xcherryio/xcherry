@@ -22,15 +22,15 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
-	ctx context.Context, request persistence.ProcessLocalQueueMessagesRequest,
-) (*persistence.ProcessLocalQueueMessagesResponse, error) {
+func (p sqlProcessStoreImpl) ProcessLocalQueueCommandsAndMessages(
+	ctx context.Context, request persistence.ProcessLocalQueueCommandsAndMessagesRequest,
+) (*persistence.ProcessLocalQueueCommandsAndMessagesResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := p.doProcessLocalQueueMessageTx(ctx, tx, request)
+	resp, err := p.doProcessLocalQueueCommandsAndMessagesTx(ctx, tx, request)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -46,13 +46,12 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 	return resp, err
 }
 
-func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
-) (*persistence.ProcessLocalQueueMessagesResponse, error) {
+func (p sqlProcessStoreImpl) doProcessLocalQueueCommandsAndMessagesTx(
+	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueCommandsAndMessagesRequest,
+) (*persistence.ProcessLocalQueueCommandsAndMessagesResponse, error) {
 	assignedStateExecutionIdToMessagesMap := map[string][]persistence.InternalLocalQueueMessage{}
-	waitUntilCompletedStateExecutionIdToPreviousVersionMap := map[string]int32{}
 
-	// Step 1: update process execution row, but do not submit at this step
+	// Step 1: get waitingQueues from the process execution row and update it with commands or messages
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
 		return nil, err
@@ -63,26 +62,39 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return nil, err
 	}
 
-	// TaskSequence == 0 means this method was called to consume unconsumed messages for a newly added state
-	if request.TaskSequence == 0 {
-		_, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(request.StateExecutionId, request.CommandWaitingType)
-		if len(consumedMessages) > 0 {
-			assignedStateExecutionIdToMessagesMap[request.StateExecutionId.GetStateExecutionId()] = consumedMessages
-		}
-	}
+	canNewStateCompleteLocalQueueWaiting := false
+	if request.ProcessLocalQueueCommandsAndTryConsumeRequest != nil {
+		request2 := request.ProcessLocalQueueCommandsAndTryConsumeRequest
 
-	for _, message := range request.Messages {
-		assignedStateExecutionIdString, consumedMessages := waitingQueues.AddMessageAndTryConsume(message)
-
-		if assignedStateExecutionIdString == "" {
-			continue
+		for _, localQueueCommand := range request2.CommandRequest.GetLocalQueueCommands() {
+			waitingQueues.AddNewLocalQueueCommand(request2.StateExecutionId, localQueueCommand)
 		}
 
-		assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] =
-			append(assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString], consumedMessages...)
+		canComplete, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
+			request2.StateExecutionId, request2.CommandRequest.GetWaitingType())
+
+		// put the StateExecutionId into the map no matter there is consumedMessages or not, because we need
+		// to update the state status anyway.
+		assignedStateExecutionIdToMessagesMap[request2.StateExecutionId.GetStateExecutionId()] = consumedMessages
+
+		canNewStateCompleteLocalQueueWaiting = canComplete
+	} else {
+		request2 := request.ProcessLocalQueueMessagesRequest
+		for _, message := range request2.Messages {
+			assignedStateExecutionIdString, consumedMessages := waitingQueues.AddMessageAndTryConsume(message)
+
+			if assignedStateExecutionIdString == "" {
+				continue
+			}
+
+			assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] =
+				append(assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString], consumedMessages...)
+		}
 	}
 
 	// Step 2: update assigned state execution rows
+	hasNewImmediateTask := false
+
 	if len(assignedStateExecutionIdToMessagesMap) > 0 {
 		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, assignedStateExecutionIdToMessagesMap)
 		if err != nil {
@@ -104,14 +116,25 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 				return nil, err
 			}
 
-			commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
-			if err != nil {
-				return nil, err
-			}
+			stateRow.LastFailure = nil
 
-			commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
-			if err != nil {
-				return nil, err
+			var commandRequest xdbapi.CommandRequest
+			var commandResults xdbapi.CommandResults
+
+			if request.ProcessLocalQueueCommandsAndTryConsumeRequest != nil {
+				stateRow.Status = persistence.StateExecutionStatusWaitUntilWaiting
+				commandRequest = request.ProcessLocalQueueCommandsAndTryConsumeRequest.CommandRequest
+				commandResults = xdbapi.CommandResults{}
+			} else {
+				commandRequest, err = persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+				if err != nil {
+					return nil, err
+				}
+
+				commandResults, err = persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			for _, consumedMessage := range consumedMessages {
@@ -133,6 +156,31 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 				})
 			}
 
+			if (request.ProcessLocalQueueCommandsAndTryConsumeRequest != nil && canNewStateCompleteLocalQueueWaiting) ||
+				(request.ProcessLocalQueueMessagesRequest != nil && p.hasCompletedWaitUntilWaiting(commandRequest, commandResults)) {
+				hasNewImmediateTask = true
+
+				waitingQueues.CleanupFor(*stateExecutionId)
+
+				stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+
+				err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+					ShardId:            request.TaskShardId,
+					TaskType:           persistence.ImmediateTaskTypeExecute,
+					ProcessExecutionId: request.ProcessExecutionId,
+					StateId:            stateExecutionId.StateId,
+					StateIdSequence:    stateExecutionId.StateIdSequence,
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			stateRow.WaitUntilCommands, err = persistence.FromCommandRequestToBytes(commandRequest)
+			if err != nil {
+				return nil, err
+			}
+
 			stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
 			if err != nil {
 				return nil, err
@@ -142,15 +190,10 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 			if err != nil {
 				return nil, err
 			}
-
-			if p.hasCompletedWaitUntilWaiting(commandRequest, commandResults) {
-				waitingQueues.CleanupFor(*stateExecutionId)
-				waitUntilCompletedStateExecutionIdToPreviousVersionMap[assignedStateExecutionIdString] = stateRow.PreviousVersion
-			}
 		}
 	}
 
-	// Step 2.5: update process execution row, and submit
+	// Step 3: update process execution row, and submit
 	prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
 	if err != nil {
 		return nil, err
@@ -161,38 +204,19 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessageTx(
 		return nil, err
 	}
 
-	// Step 3: handle wait_until tasks that have completed waiting
-	for stateExecutionIdString, previousVersion := range waitUntilCompletedStateExecutionIdToPreviousVersionMap {
-		stateExecutionId, err := persistence.NewStateExecutionIdFromString(stateExecutionIdString)
-		if err != nil {
-			return nil, err
-		}
-
-		err = p.CompleteWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
-			TaskShardId:        request.TaskShardId,
-			ProcessExecutionId: request.ProcessExecutionId,
-			StateExecutionId:   *stateExecutionId,
-			PreviousVersion:    previousVersion + 1,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// Step 4: delete the task row
-	if request.TaskSequence > 0 {
+	if request.ProcessLocalQueueMessagesRequest != nil {
 		err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
 			ShardId:      request.TaskShardId,
-			TaskSequence: request.TaskSequence,
+			TaskSequence: request.ProcessLocalQueueMessagesRequest.TaskSequence,
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return &persistence.ProcessLocalQueueMessagesResponse{
-		HasNewImmediateTask: len(waitUntilCompletedStateExecutionIdToPreviousVersionMap) > 0,
-		ProcessExecutionId:  prcRow.ProcessExecutionId,
+	return &persistence.ProcessLocalQueueCommandsAndMessagesResponse{
+		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }
 
@@ -205,6 +229,10 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 		for _, consumedMessage := range consumedMessages {
 			allConsumedDedupIdStrings = append(allConsumedDedupIdStrings, consumedMessage.DedupId)
 		}
+	}
+
+	if len(allConsumedDedupIdStrings) == 0 {
+		return nil, nil
 	}
 
 	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIdStrings)
