@@ -61,12 +61,11 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	// mark the current state as failed
 	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
 		request.LastFailureStatus, request.LastFailureDetails, request.LastFailureCompletedAttempts)
-
 	if err != nil {
 		return err
 	}
-	var currStateRow extensions.AsyncStateExecutionRowForUpdateWithoutCommands
-	currStateRow = extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
+
+	currStateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.SourceStateExecutionId.StateId,
 		StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,

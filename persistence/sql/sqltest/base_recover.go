@@ -92,7 +92,12 @@ func SQLStateFailureRecoveryTest(ass *assert.Assertions, store persistence.Proce
 
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"), persistence.StateExecutionStatusExecuteRunning)
+	verifyStateExecution(
+		ass,
+		prep,
+		processId,
+		*xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
+		persistence.StateExecutionStatusExecuteRunning)
 
 	recoverFromFailure(
 		ctx,
@@ -117,5 +122,10 @@ func SQLStateFailureRecoveryTest(ass *assert.Assertions, store persistence.Proce
 	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), persistence.StateExecutionStatusFailed)
 
 	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId1, 2)
-	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"), persistence.StateExecutionStatusExecuteRunning)
+	verifyStateExecution(
+		ass,
+		prep,
+		processId,
+		*xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
+		persistence.StateExecutionStatusExecuteRunning)
 }
