@@ -132,7 +132,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		waitingQueues.AddNewLocalQueueCommand(request.StateExecutionId, localQueueCommand)
 	}
 
-	canComplete, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
+	_, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
 		request.StateExecutionId, request.CommandRequest.GetWaitingType())
 
 	// Step 2: update the state execution row
@@ -167,20 +167,10 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 
 	hasNewImmediateTask := false
 
-	if canComplete {
+	if p.hasCompletedWaitUntilWaiting(request.CommandRequest, commandResults) {
 		hasNewImmediateTask = true
 
-		waitingQueues.CleanupFor(request.StateExecutionId)
-
-		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
-
-		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-			ShardId:            request.TaskShardId,
-			TaskType:           persistence.ImmediateTaskTypeExecute,
-			ProcessExecutionId: request.ProcessExecutionId,
-			StateId:            request.StateId,
-			StateIdSequence:    request.StateIdSequence,
-		})
+		err := p.completeWaitUntilWaiting(ctx, tx, stateRow, &waitingQueues, request.TaskShardId)
 		if err != nil {
 			return nil, err
 		}
