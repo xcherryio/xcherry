@@ -40,7 +40,6 @@ type (
 		CompleteExecuteExecution(ctx context.Context, request CompleteExecuteExecutionRequest) (*CompleteExecuteExecutionResponse, error)
 
 		PublishToLocalQueue(ctx context.Context, request PublishToLocalQueueRequest) (*PublishToLocalQueueResponse, error)
-		ProcessLocalQueueMessages(ctx context.Context, request ProcessLocalQueueMessagesRequest) (
-			*ProcessLocalQueueMessagesResponse, error)
+		ProcessLocalQueueMessages(ctx context.Context, request ProcessLocalQueueMessagesRequest) (*ProcessLocalQueueMessagesResponse, error)
 	}
 )
