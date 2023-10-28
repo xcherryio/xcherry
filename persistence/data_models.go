@@ -237,25 +237,14 @@ type (
 		ProcessNotExists    bool
 	}
 
-	InternalProcessLocalQueueMessagesRequest struct {
-		TaskSequence int64
-		Messages     []LocalQueueMessageInfoJson
-	}
-
-	InternalProcessLocalQueueCommandsAndTryConsumeRequest struct {
-		StateExecutionId StateExecutionId
-		CommandRequest   xdbapi.CommandRequest
-	}
-
-	ProcessLocalQueueCommandsAndMessagesRequest struct {
+	ProcessLocalQueueMessagesRequest struct {
 		TaskShardId        int32
+		TaskSequence       int64
 		ProcessExecutionId uuid.UUID
-
-		ProcessLocalQueueMessagesRequest              *InternalProcessLocalQueueMessagesRequest
-		ProcessLocalQueueCommandsAndTryConsumeRequest *InternalProcessLocalQueueCommandsAndTryConsumeRequest
+		Messages           []LocalQueueMessageInfoJson
 	}
 
-	ProcessLocalQueueCommandsAndMessagesResponse struct {
+	ProcessLocalQueueMessagesResponse struct {
 		HasNewImmediateTask bool
 	}
 )

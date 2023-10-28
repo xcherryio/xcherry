@@ -158,3 +158,30 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 	return true, nil
 }
+
+func (p sqlProcessStoreImpl) updateCommandResultsWithConsumedLocalQueueMessages(
+	commandResults *xdbapi.CommandResults,
+	consumedMessages []persistence.InternalLocalQueueMessage,
+	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow) error {
+
+	for _, consumedMessage := range consumedMessages {
+		message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
+		if !ok {
+			continue
+		}
+
+		dedupIdString := message.DedupId.String()
+		payload, err := persistence.BytesToEncodedObject(message.Payload)
+		if err != nil {
+			return err
+		}
+
+		commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
+			QueueName: message.QueueName,
+			DedupId:   &dedupIdString,
+			Payload:   &payload,
+		})
+	}
+
+	return nil
+}
