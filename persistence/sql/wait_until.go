@@ -160,8 +160,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 
 	commandResults := xdbapi.CommandResults{}
 
-	err = p.updateCommandResultsWithConsumedLocalQueueMessages(
-		&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
+	err = p.updateCommandResultsWithConsumedLocalQueueMessages(&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
 	if err != nil {
 		return nil, err
 	}

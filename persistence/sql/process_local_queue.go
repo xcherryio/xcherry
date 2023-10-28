@@ -114,8 +114,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 				return nil, err
 			}
 
-			err = p.updateCommandResultsWithConsumedLocalQueueMessages(
-				&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
+			err = p.updateCommandResultsWithConsumedLocalQueueMessages(&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
 			if err != nil {
 				return nil, err
 			}
