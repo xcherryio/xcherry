@@ -27,7 +27,7 @@ TODO: brew install xdb binaries
 ### Option 3: use example docker-compose of xdb with a database
 In this case you don't want to connect to your existing database:
 
-* `docker-compose -f ./docker-compose/docker-compose-postgres-example.yaml up`
+* `docker-compose -f ./docker-compose/docker-compose-postgres14-example.yaml up`
   * Will include a PostgresSQL database 
 # Contribution 
 See [contribution](./CONTRIBUTING.md) 

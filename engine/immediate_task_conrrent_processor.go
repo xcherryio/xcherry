@@ -275,6 +275,16 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 		if err != nil {
 			return err
 		}
+		nextImmediateTask := persistence.ImmediateTask{
+			ShardId:            task.ShardId,
+			TaskType:           persistence.ImmediateTaskTypeWaitUntil,
+			ProcessExecutionId: task.ProcessExecutionId,
+			StateExecutionId: persistence.StateExecutionId{
+				StateId:         *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
+				StateIdSequence: 1,
+			},
+		}
+		w.notifyNewImmediateTask(prep, nextImmediateTask)
 	default:
 		return fmt.Errorf("unknown state failure recovery policy %v", stateRecoveryPolicy.Policy)
 	}
@@ -335,7 +345,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		err = checkDecision(resp.StateDecision)
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, err := w.composeHttpError(err, httpResp, prep.Info, task)
+		status, details, _ := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -351,7 +361,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		if errRecover != nil {
 			return errRecover
 		}
-		return err
+		return nil
 	}
 
 	compResp, err := w.store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
