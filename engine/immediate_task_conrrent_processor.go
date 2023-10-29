@@ -430,12 +430,10 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 	ctx context.Context, task persistence.ImmediateTask,
 ) error {
 	resp, err := w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
-		TaskShardId:  task.ShardId,
-		TaskSequence: task.GetTaskSequence(),
-
+		TaskShardId:        task.ShardId,
+		TaskSequence:       task.GetTaskSequence(),
 		ProcessExecutionId: task.ProcessExecutionId,
-
-		Messages: task.ImmediateTaskInfo.LocalQueueMessageInfo,
+		Messages:           task.ImmediateTaskInfo.LocalQueueMessageInfo,
 	})
 	if err != nil {
 		return err

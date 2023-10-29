@@ -53,8 +53,8 @@ type (
 		Status                 persistence.ProcessExecutionStatus
 		HistoryEventIdSequence int32
 
-		StateExecutionSequenceMaps  types.JSONText
-		StateExecutionWaitingQueues types.JSONText
+		StateExecutionSequenceMaps types.JSONText
+		StateExecutionLocalQueues  types.JSONText
 
 		WaitToComplete bool
 	}
@@ -67,8 +67,8 @@ type (
 		Status                 persistence.ProcessExecutionStatus
 		HistoryEventIdSequence int32
 
-		StateExecutionSequenceMaps  types.JSONText
-		StateExecutionWaitingQueues types.JSONText
+		StateExecutionSequenceMaps types.JSONText
+		StateExecutionLocalQueues  types.JSONText
 
 		Namespace string
 

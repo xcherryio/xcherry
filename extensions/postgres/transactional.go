@@ -65,9 +65,9 @@ func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.L
 
 const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
 	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, 
-	 state_execution_waiting_queues, info) VALUES
+	 state_execution_local_queues, info) VALUES
 	(:namespace, :process_execution_id_string, :process_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
-	 :state_execution_sequence_maps, :state_execution_waiting_queues, :info)`
+	 :state_execution_sequence_maps, :state_execution_local_queues, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
 	row.StartTime = ToPostgresDateTime(row.StartTime)
@@ -80,7 +80,7 @@ const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
 status = :status,
 history_event_id_sequence = :history_event_id_sequence,
 state_execution_sequence_maps = :state_execution_sequence_maps,
-state_execution_waiting_queues = :state_execution_waiting_queues,
+state_execution_local_queues = :state_execution_local_queues,
 wait_to_complete = :wait_to_complete
 WHERE id=:process_execution_id_string
 `
@@ -195,7 +195,7 @@ func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateT
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_waiting_queues, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
@@ -207,7 +207,7 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 }
 
 const selectProcessExecutionQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_waiting_queues, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete
 	FROM xdb_sys_process_executions WHERE id=$1 `
 
 func (d dbTx) SelectProcessExecution(

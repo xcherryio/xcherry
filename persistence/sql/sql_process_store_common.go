@@ -158,3 +158,85 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 	return true, nil
 }
+
+func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Context, processExecutionId uuid.UUID,
+	consumedMessages []persistence.InternalLocalQueueMessage,
+) (map[string]extensions.LocalQueueMessageRow, error) {
+	if len(consumedMessages) == 0 {
+		return map[string]extensions.LocalQueueMessageRow{}, nil
+	}
+
+	var allConsumedDedupIdStrings []string
+	for _, consumedMessage := range consumedMessages {
+		allConsumedDedupIdStrings = append(allConsumedDedupIdStrings, consumedMessage.DedupId)
+	}
+
+	allConsumedLocalQueueMessages, err := p.session.SelectLocalQueueMessages(ctx, processExecutionId, allConsumedDedupIdStrings)
+	if err != nil {
+		return nil, err
+	}
+
+	dedupIdToLocalQueueMessageMap := map[string]extensions.LocalQueueMessageRow{}
+	for _, message := range allConsumedLocalQueueMessages {
+		dedupIdToLocalQueueMessageMap[message.DedupId.String()] = message
+	}
+
+	return dedupIdToLocalQueueMessageMap, nil
+}
+
+func (p sqlProcessStoreImpl) updateCommandResultsWithConsumedLocalQueueMessages(
+	commandResults *xdbapi.CommandResults,
+	consumedMessages []persistence.InternalLocalQueueMessage,
+	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow) error {
+
+	for _, consumedMessage := range consumedMessages {
+		message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
+		if !ok {
+			continue
+		}
+
+		dedupIdString := message.DedupId.String()
+		payload, err := persistence.BytesToEncodedObject(message.Payload)
+		if err != nil {
+			return err
+		}
+
+		commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
+			QueueName: message.QueueName,
+			DedupId:   &dedupIdString,
+			Payload:   &payload,
+		})
+	}
+
+	return nil
+}
+
+func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults xdbapi.CommandResults) bool {
+	// TODO: currently, only consider the local queue results
+
+	localQueueToMessageCountMap := map[string]int{}
+	for _, localQueueMessage := range commandResults.LocalQueueResults {
+		localQueueToMessageCountMap[localQueueMessage.QueueName] += 1
+	}
+
+	switch commandRequest.GetWaitingType() {
+	case xdbapi.ANY_OF_COMPLETION:
+		for _, localQueueCommand := range commandRequest.LocalQueueCommands {
+			if localQueueToMessageCountMap[localQueueCommand.QueueName] == int(localQueueCommand.GetCount()) {
+				return true
+			}
+		}
+		return false
+	case xdbapi.ALL_OF_COMPLETION:
+		for _, localQueueCommand := range commandRequest.LocalQueueCommands {
+			if localQueueToMessageCountMap[localQueueCommand.QueueName] < int(localQueueCommand.GetCount()) {
+				return false
+			}
+		}
+		return true
+	case xdbapi.EMPTY_COMMAND:
+		return true
+	default:
+		panic("this is not supported")
+	}
+}

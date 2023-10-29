@@ -226,12 +226,12 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		// mark the process as terminated
 		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
 			err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
-				ProcessExecutionId:          processExecutionRowForUpdate.ProcessExecutionId,
-				Status:                      persistence.ProcessExecutionStatusTerminated,
-				HistoryEventIdSequence:      processExecutionRowForUpdate.HistoryEventIdSequence,
-				StateExecutionSequenceMaps:  processExecutionRowForUpdate.StateExecutionSequenceMaps,
-				StateExecutionWaitingQueues: processExecutionRowForUpdate.StateExecutionWaitingQueues,
-				WaitToComplete:              processExecutionRowForUpdate.WaitToComplete,
+				ProcessExecutionId:         processExecutionRowForUpdate.ProcessExecutionId,
+				Status:                     persistence.ProcessExecutionStatusTerminated,
+				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
+				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
+				StateExecutionLocalQueues:  processExecutionRowForUpdate.StateExecutionLocalQueues,
+				WaitToComplete:             processExecutionRowForUpdate.WaitToComplete,
 			})
 			if err != nil {
 				return nil, err
@@ -370,8 +370,8 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		return hasNewImmediateTask, err
 	}
 
-	waitingQueues := persistence.NewStateExecutionWaitingQueues()
-	waitingQueuesBytes, err := waitingQueues.ToBytes()
+	localQueues := persistence.NewStateExecutionLocalQueues()
+	localQueuesBytes, err := localQueues.ToBytes()
 	if err != nil {
 		return hasNewImmediateTask, err
 	}
@@ -379,12 +379,12 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId: processExecutionId,
 
-		Status:                      persistence.ProcessExecutionStatusRunning,
-		HistoryEventIdSequence:      0,
-		StateExecutionSequenceMaps:  sequenceMapsBytes,
-		StateExecutionWaitingQueues: waitingQueuesBytes,
-		Namespace:                   req.Namespace,
-		ProcessId:                   req.ProcessId,
+		Status:                     persistence.ProcessExecutionStatusRunning,
+		HistoryEventIdSequence:     0,
+		StateExecutionSequenceMaps: sequenceMapsBytes,
+		StateExecutionLocalQueues:  localQueuesBytes,
+		Namespace:                  req.Namespace,
+		ProcessId:                  req.ProcessId,
 
 		StartTime:      time.Now(),
 		TimeoutSeconds: timeoutSeconds,
