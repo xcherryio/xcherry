@@ -30,6 +30,7 @@ var workerService = xdb.NewWorkerService(registry, nil)
 func init() {
 	err := registry.AddProcesses(
 		&basic.IOProcess{},
+		&basic.StateFailureRecoveryTestProcess{},
 		&multi_states.MultiStatesProcess{},
 		&state_decision.GracefulCompleteProcess{},
 		&state_decision.ForceCompleteProcess{},
