@@ -173,7 +173,11 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
 		xdbapi.AsyncStateWaitUntilRequest{
-			Context:     createApiContext(prep, task),
+			Context: createApiContext(
+				prep,
+				task,
+				prep.Info.RecoverFromStateExecutionId,
+				prep.Info.RecoverFromApi),
 			ProcessType: prep.Info.ProcessType,
 			StateId:     task.StateId,
 			StateInput: &xdbapi.EncodedObject{
@@ -193,17 +197,13 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 			return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
 		}
 
-		errRecover := w.applyStateFailureRecoveryPolicy(ctx,
+		return w.applyStateFailureRecoveryPolicy(ctx,
 			task,
 			prep,
 			status,
 			details,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
 			xdbapi.WAIT_UNTIL_API)
-		if errRecover != nil {
-			return errRecover
-		}
-		return nil
 	}
 
 	compResp, err := w.store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
@@ -233,11 +233,11 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 	details string,
 	completedAttempts int32,
 	stateApiType xdbapi.StateApiType) error {
-	stateRecoveryPolicy := xdbapi.AsyncStateConfigStateFailureRecoveryInfo{
+	stateRecoveryPolicy := xdbapi.StateFailureRecoveryOptions{
 		Policy: xdbapi.FAIL_PROCESS_ON_STATE_FAILURE,
 	}
-	if prep.Info.StateConfig != nil && prep.Info.StateConfig.StateFailureRecoveryInfo != nil {
-		stateRecoveryPolicy = *prep.Info.StateConfig.StateFailureRecoveryInfo
+	if prep.Info.StateConfig != nil && prep.Info.StateConfig.StateFailureRecoveryOptions != nil {
+		stateRecoveryPolicy = *prep.Info.StateConfig.StateFailureRecoveryOptions
 	}
 	switch stateRecoveryPolicy.Policy {
 	case xdbapi.FAIL_PROCESS_ON_STATE_FAILURE:
@@ -252,7 +252,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 		}
 		if resp.NotExists {
 			// this should not happen
-			return fmt.Errorf("process does not exist")
+			return fmt.Errorf("process does not exist when stopping process for state failure")
 		}
 	case xdbapi.PROCEED_TO_CONFIGURED_STATE:
 		err := w.store.RecoverFromStateExecutionFailure(ctx, persistence.RecoverFromStateExecutionFailureRequest{
@@ -267,8 +267,8 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 			LastFailureDetails:           details,
 			LastFailureCompletedAttempts: completedAttempts,
 			Prepare:                      prep,
-			DestinationStateId:           *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
-			DestinationStateConfig:       prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateConfig,
+			DestinationStateId:           *prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId,
+			DestinationStateConfig:       prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateConfig,
 			DestinationStateInput:        prep.Input,
 			ShardId:                      task.ShardId,
 		})
@@ -280,7 +280,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 			TaskType:           persistence.ImmediateTaskTypeWaitUntil,
 			ProcessExecutionId: task.ProcessExecutionId,
 			StateExecutionId: persistence.StateExecutionId{
-				StateId:         *prep.Info.StateConfig.StateFailureRecoveryInfo.StateFailureProceedStateId,
+				StateId:         *prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId,
 				StateIdSequence: 1,
 			},
 		}
@@ -299,15 +299,20 @@ func createWorkerTaskBackoffInfo() *persistence.WorkerTaskBackoffInfoJson {
 	}
 }
 
-func createApiContext(prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask) xdbapi.Context {
+func createApiContext(
+	prep persistence.PrepareStateExecutionResponse,
+	task persistence.ImmediateTask,
+	recoverFromStateExecutionId *string,
+	RecoverFromApi *xdbapi.StateApiType) xdbapi.Context {
 	return xdbapi.Context{
 		ProcessId:          prep.Info.ProcessId,
 		ProcessExecutionId: task.ProcessExecutionId.String(),
 		StateExecutionId:   ptr.Any(task.StateExecutionId.GetStateExecutionId()),
 
-		Attempt:               ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts),
-		FirstAttemptTimestamp: ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds),
-
+		Attempt:                     ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts),
+		FirstAttemptTimestamp:       ptr.Any(task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds),
+		RecoverFromStateExecutionId: recoverFromStateExecutionId,
+		RecoverFromApi:              RecoverFromApi,
 		// TODO add processStartTime
 	}
 }
@@ -328,7 +333,11 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
 	resp, httpResp, err := req.AsyncStateExecuteRequest(
 		xdbapi.AsyncStateExecuteRequest{
-			Context:     createApiContext(prep, task),
+			Context: createApiContext(
+				prep,
+				task,
+				prep.Info.RecoverFromStateExecutionId,
+				prep.Info.RecoverFromApi),
 			ProcessType: prep.Info.ProcessType,
 			StateId:     task.StateId,
 			StateInput: &xdbapi.EncodedObject{
@@ -351,17 +360,13 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		if shouldRetry {
 			return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
 		}
-		errRecover := w.applyStateFailureRecoveryPolicy(ctx,
+		return w.applyStateFailureRecoveryPolicy(ctx,
 			task,
 			prep,
 			status,
 			details,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
-			xdbapi.WAIT_UNTIL_API)
-		if errRecover != nil {
-			return errRecover
-		}
-		return nil
+			xdbapi.EXECUTE_API)
 	}
 
 	compResp, err := w.store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{

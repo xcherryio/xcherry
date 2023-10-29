@@ -16,10 +16,11 @@ package persistence
 import (
 	"fmt"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/uuid"
 	"strconv"
 	"strings"
+
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/common/uuid"
 )
 
 type (

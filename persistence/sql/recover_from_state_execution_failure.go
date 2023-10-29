@@ -96,7 +96,10 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	}
 
 	// start new state execution with state id from request
-	stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
+	nextStateInfo := request.Prepare.Info
+	nextStateInfo.RecoverFromStateExecutionId = &request.SourceStateExecutionId.StateId
+	nextStateInfo.RecoverFromApi = &request.SourceFailedStateApi
+	stateInfoBytes, err := persistence.FromAsyncStateExecutionInfoToBytes(nextStateInfo)
 	if err != nil {
 		return err
 	}
@@ -109,7 +112,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	if err != nil {
 		return err
 	}
-	err = insertAsyncStateExecution(ctx, tx, request.ProcessExecutionId, nextStateId, nextStateIdSeq, stateConfig, stateInputBytes, stateInfo)
+	err = insertAsyncStateExecution(ctx, tx, request.ProcessExecutionId, nextStateId, nextStateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
 	if err != nil {
 		return err
 	}

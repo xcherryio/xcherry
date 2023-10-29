@@ -11,7 +11,7 @@ require (
 	github.com/lib/pq v1.2.0
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xdblab/xdb-apis v0.0.2-0.20231027163300-27c0fb180624
+	github.com/xdblab/xdb-apis v0.0.2-0.20231029164900-26f950a709f5
 	github.com/xdblab/xdb-golang-sdk v0.0.0-20231029043436-bf7235a525f3
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0

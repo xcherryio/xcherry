@@ -72,7 +72,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 				StateInput: xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
 				StateConfig: &xdbapi.AsyncStateConfig{
 					SkipWaitUntil: ptr.Any(true),
-					StateFailureRecoveryInfo: &xdbapi.AsyncStateConfigStateFailureRecoveryInfo{
+					StateFailureRecoveryOptions: &xdbapi.StateFailureRecoveryOptions{
 						Policy:                         xdbapi.PROCEED_TO_CONFIGURED_STATE,
 						StateFailureProceedStateId:     ptr.Any(stateId1),
 						StateFailureProceedStateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},

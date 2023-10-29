@@ -261,11 +261,13 @@ func (s *StateExecutionWaitingQueuesJson) CleanupFor(stateExecutionId StateExecu
 }
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace   string                   `json:"namespace"`
-	ProcessId   string                   `json:"processId"`
-	ProcessType string                   `json:"processType"`
-	WorkerURL   string                   `json:"workerURL"`
-	StateConfig *xdbapi.AsyncStateConfig `json:"stateConfig"`
+	Namespace                   string                   `json:"namespace"`
+	ProcessId                   string                   `json:"processId"`
+	ProcessType                 string                   `json:"processType"`
+	WorkerURL                   string                   `json:"workerURL"`
+	StateConfig                 *xdbapi.AsyncStateConfig `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                  `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xdbapi.StateApiType     `json:"recoverFromApi,omitempty"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
