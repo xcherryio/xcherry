@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
+	"github.com/xdblab/xdb-golang-sdk/integTests/failure_recovery"
 	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
 	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
 	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
@@ -65,6 +66,10 @@ func TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase2(t *testing.T) {
 	basic.TestProcessIdReusePolicyAllowIfPreviousExitAbnormallyCase2(t, client)
 }
 
-func TestStateFailureRecovery(t *testing.T) {
-	basic.TestStateFailureRecoveryTestProcess(t, client)
+func TestStateFailureRecoveryExecute(t *testing.T) {
+	failure_recovery.TestStateFailureRecoveryTestExecuteProcess(t, client)
+}
+
+func TestStateFailureRecoveryWaitUntil(t *testing.T) {
+	failure_recovery.TestStateFailureRecoveryTestWaitUntilProcess(t, client)
 }

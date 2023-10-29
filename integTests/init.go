@@ -15,6 +15,7 @@ package integTests
 
 import (
 	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
+	"github.com/xdblab/xdb-golang-sdk/integTests/failure_recovery"
 	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
 	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
 	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
@@ -30,7 +31,8 @@ var workerService = xdb.NewWorkerService(registry, nil)
 func init() {
 	err := registry.AddProcesses(
 		&basic.IOProcess{},
-		&basic.StateFailureRecoveryTestProcess{},
+		&failure_recovery.StateFailureRecoveryTestExecuteProcess{},
+		&failure_recovery.StateFailureRecoveryTestWaitUntilProcess{},
 		&multi_states.MultiStatesProcess{},
 		&state_decision.GracefulCompleteProcess{},
 		&state_decision.ForceCompleteProcess{},
