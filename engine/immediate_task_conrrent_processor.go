@@ -190,7 +190,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		defer httpResp.Body.Close()
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, _ := w.composeHttpError(err, httpResp, prep.Info, task)
+		status, details := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -354,7 +354,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		err = checkDecision(resp.StateDecision)
 	}
 	if w.checkResponseAndError(err, httpResp) {
-		status, details, _ := w.composeHttpError(err, httpResp, prep.Info, task)
+		status, details := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -483,7 +483,7 @@ func (w *immediateTaskConcurrentProcessor) checkResponseAndError(err error, http
 func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	err error, httpResp *http.Response,
 	info persistence.AsyncStateExecutionInfoJson, task persistence.ImmediateTask,
-) (int32, string, error) {
+) (int32, string) {
 	responseBody := "None"
 	var statusCode int32
 	if httpResp != nil {
@@ -512,7 +512,7 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 		tag.StateExecutionId(task.GetStateExecutionId()),
 	)
 
-	return statusCode, details, fmt.Errorf("statusCode: %v, errMsg: %w, responseBody: %v", statusCode, err, responseBody)
+	return statusCode, details
 }
 
 func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
