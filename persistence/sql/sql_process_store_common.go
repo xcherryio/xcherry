@@ -237,24 +237,6 @@ func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.
 	case xdbapi.EMPTY_COMMAND:
 		return true
 	default:
-		return true
+		panic("this is not supported")
 	}
-}
-
-func (p sqlProcessStoreImpl) completeWaitUntilWaiting(ctx context.Context, tx extensions.SQLTransaction,
-	stateRow *extensions.AsyncStateExecutionRowForUpdate, waitingQueues *persistence.StateExecutionWaitingQueuesJson, taskShardId int32) error {
-	waitingQueues.CleanupFor(persistence.StateExecutionId{
-		StateId:         stateRow.StateId,
-		StateIdSequence: stateRow.StateIdSequence,
-	})
-
-	stateRow.Status = persistence.StateExecutionStatusExecuteRunning
-
-	return tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-		ShardId:            taskShardId,
-		TaskType:           persistence.ImmediateTaskTypeExecute,
-		ProcessExecutionId: stateRow.ProcessExecutionId,
-		StateId:            stateRow.StateId,
-		StateIdSequence:    stateRow.StateIdSequence,
-	})
 }

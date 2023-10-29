@@ -49,19 +49,19 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 ) (*persistence.ProcessLocalQueueMessagesResponse, error) {
 	assignedStateExecutionIdToMessagesMap := map[string][]persistence.InternalLocalQueueMessage{}
 
-	// Step 1: get waitingQueues from the process execution row, and update it with messages
+	// Step 1: get localQueues from the process execution row, and update it with messages
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}
 
-	waitingQueues, err := persistence.NewStateExecutionWaitingQueuesFromBytes(prcRow.StateExecutionWaitingQueues)
+	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, message := range request.Messages {
-		assignedStateExecutionIdString, consumedMessages := waitingQueues.AddMessageAndTryConsume(message)
+		assignedStateExecutionIdString, consumedMessages := localQueues.AddMessageAndTryConsume(message)
 
 		if assignedStateExecutionIdString == "" {
 			continue
@@ -120,7 +120,20 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 			if p.hasCompletedWaitUntilWaiting(commandRequest, commandResults) {
 				hasNewImmediateTask = true
 
-				err := p.completeWaitUntilWaiting(ctx, tx, stateRow, &waitingQueues, request.TaskShardId)
+				localQueues.CleanupFor(persistence.StateExecutionId{
+					StateId:         stateRow.StateId,
+					StateIdSequence: stateRow.StateIdSequence,
+				})
+
+				stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+
+				err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+					ShardId:            request.TaskShardId,
+					TaskType:           persistence.ImmediateTaskTypeExecute,
+					ProcessExecutionId: stateRow.ProcessExecutionId,
+					StateId:            stateRow.StateId,
+					StateIdSequence:    stateRow.StateIdSequence,
+				})
 				if err != nil {
 					return nil, err
 				}
@@ -139,7 +152,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 	}
 
 	// Step 3: update process execution row, and submit
-	prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
+	prcRow.StateExecutionLocalQueues, err = localQueues.ToBytes()
 	if err != nil {
 		return nil, err
 	}

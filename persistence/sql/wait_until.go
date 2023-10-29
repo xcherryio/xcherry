@@ -116,23 +116,23 @@ func (p sqlProcessStoreImpl) completeWaitUntilExecution(
 func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
 ) (*persistence.ProcessWaitUntilExecutionResponse, error) {
-	// Step 1: get waitingQueues from the process execution row,
+	// Step 1: get localQueues from the process execution row,
 	// update it with commands, and try to consume for the state execution
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}
 
-	waitingQueues, err := persistence.NewStateExecutionWaitingQueuesFromBytes(prcRow.StateExecutionWaitingQueues)
+	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, localQueueCommand := range request.CommandRequest.GetLocalQueueCommands() {
-		waitingQueues.AddNewLocalQueueCommand(request.StateExecutionId, localQueueCommand)
+		localQueues.AddNewLocalQueueCommand(request.StateExecutionId, localQueueCommand)
 	}
 
-	_, consumedMessages := waitingQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
+	_, consumedMessages := localQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
 		request.StateExecutionId, request.CommandRequest.GetWaitingType())
 
 	// Step 2: update the state execution row
@@ -170,7 +170,20 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	if p.hasCompletedWaitUntilWaiting(request.CommandRequest, commandResults) {
 		hasNewImmediateTask = true
 
-		err := p.completeWaitUntilWaiting(ctx, tx, stateRow, &waitingQueues, request.TaskShardId)
+		localQueues.CleanupFor(persistence.StateExecutionId{
+			StateId:         stateRow.StateId,
+			StateIdSequence: stateRow.StateIdSequence,
+		})
+
+		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+
+		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+			ShardId:            request.TaskShardId,
+			TaskType:           persistence.ImmediateTaskTypeExecute,
+			ProcessExecutionId: stateRow.ProcessExecutionId,
+			StateId:            stateRow.StateId,
+			StateIdSequence:    stateRow.StateIdSequence,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +200,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	}
 
 	// Step 3: update process execution row, and submit
-	prcRow.StateExecutionWaitingQueues, err = waitingQueues.ToBytes()
+	prcRow.StateExecutionLocalQueues, err = localQueues.ToBytes()
 	if err != nil {
 		return nil, err
 	}

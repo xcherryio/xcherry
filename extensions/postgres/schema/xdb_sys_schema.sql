@@ -15,7 +15,7 @@ CREATE TABLE xdb_sys_process_executions(
     timeout_seconds INTEGER,
     history_event_id_sequence INTEGER,
     state_execution_sequence_maps jsonb NOT NULL , -- some maps from stateId and sequence number
-    state_execution_waiting_queues jsonb, -- some maps to quickly consume received local queue messages
+    state_execution_local_queues jsonb, -- some maps to quickly consume received local queue messages
     wait_to_complete BOOLEAN NOT NULL DEFAULT false, -- if set to true, the process will be gracefully completed when there is no running state
     info jsonb , -- workerURL, processType, etc
     PRIMARY KEY (id)
