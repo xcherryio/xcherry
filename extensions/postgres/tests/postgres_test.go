@@ -14,9 +14,10 @@
 package tests
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/persistence/sql/sqltest"
-	"testing"
 )
 
 func TestBasic(t *testing.T) {
@@ -54,4 +55,9 @@ func TestProcessIdReusePolicyDefault(t *testing.T) {
 func TestBackoffTimer(t *testing.T) {
 	sqltest.CleanupEnv(assert.New(t), store)
 	sqltest.SQLBackoffTest(assert.New(t), store)
+}
+
+func TestStateFailureRecovery(t *testing.T) {
+	sqltest.CleanupEnv(assert.New(t), store)
+	sqltest.SQLStateFailureRecoveryTest(t, assert.New(t), store)
 }

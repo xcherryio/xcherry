@@ -15,10 +15,12 @@ package persistence
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/uuid"
+
 	"strconv"
 	"strings"
+
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/common/uuid"
 )
 
 type (
@@ -51,6 +53,21 @@ type (
 	DescribeLatestProcessResponse struct {
 		Response  *xdbapi.ProcessExecutionDescribeResponse
 		NotExists bool
+	}
+
+	RecoverFromStateExecutionFailureRequest struct {
+		Namespace                    string
+		ProcessExecutionId           uuid.UUID
+		Prepare                      PrepareStateExecutionResponse
+		SourceStateExecutionId       StateExecutionId
+		SourceFailedStateApi         xdbapi.StateApiType
+		LastFailureStatus            int32
+		LastFailureDetails           string
+		LastFailureCompletedAttempts int32
+		DestinationStateId           string
+		DestinationStateConfig       *xdbapi.AsyncStateConfig
+		DestinationStateInput        xdbapi.EncodedObject
+		ShardId                      int32
 	}
 
 	GetImmediateTasksRequest struct {

@@ -16,10 +16,11 @@ package persistence
 import (
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
-	"time"
 )
 
 type ProcessExecutionInfoJson struct {
@@ -260,11 +261,13 @@ func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId StateExecuti
 }
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace   string                   `json:"namespace"`
-	ProcessId   string                   `json:"processId"`
-	ProcessType string                   `json:"processType"`
-	WorkerURL   string                   `json:"workerURL"`
-	StateConfig *xdbapi.AsyncStateConfig `json:"stateConfig"`
+	Namespace                   string                   `json:"namespace"`
+	ProcessId                   string                   `json:"processId"`
+	ProcessType                 string                   `json:"processType"`
+	WorkerURL                   string                   `json:"workerURL"`
+	StateConfig                 *xdbapi.AsyncStateConfig `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                  `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xdbapi.StateApiType     `json:"recoverFromApi,omitempty"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
