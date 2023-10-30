@@ -277,12 +277,16 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 		}
 		nextImmediateTask := persistence.ImmediateTask{
 			ShardId:            task.ShardId,
-			TaskType:           persistence.ImmediateTaskTypeWaitUntil,
 			ProcessExecutionId: task.ProcessExecutionId,
 			StateExecutionId: persistence.StateExecutionId{
 				StateId:         *prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId,
 				StateIdSequence: 1,
 			},
+		}
+		if prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateConfig.GetSkipWaitUntil() {
+			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeExecute
+		} else {
+			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeWaitUntil
 		}
 		w.notifyNewImmediateTask(prep, nextImmediateTask)
 	default:
