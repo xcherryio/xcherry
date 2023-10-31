@@ -255,6 +255,11 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 			return fmt.Errorf("process does not exist when stopping process for state failure")
 		}
 	case xdbapi.PROCEED_TO_CONFIGURED_STATE:
+		if prep.Info.StateConfig == nil || prep.Info.StateConfig.StateFailureRecoveryOptions == nil ||
+			prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId == nil {
+			return fmt.Errorf("cannot proceed to configured state because of missing state config")
+		}
+
 		err := w.store.RecoverFromStateExecutionFailure(ctx, persistence.RecoverFromStateExecutionFailureRequest{
 			Namespace:          prep.Info.Namespace,
 			ProcessExecutionId: task.ProcessExecutionId,
@@ -277,12 +282,18 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx c
 		}
 		nextImmediateTask := persistence.ImmediateTask{
 			ShardId:            task.ShardId,
-			TaskType:           persistence.ImmediateTaskTypeWaitUntil,
 			ProcessExecutionId: task.ProcessExecutionId,
 			StateExecutionId: persistence.StateExecutionId{
 				StateId:         *prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId,
 				StateIdSequence: 1,
 			},
+		}
+
+		proceedStateConfig := prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateConfig
+		if proceedStateConfig == nil || !proceedStateConfig.GetSkipWaitUntil() {
+			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeWaitUntil
+		} else {
+			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeExecute
 		}
 		w.notifyNewImmediateTask(prep, nextImmediateTask)
 	default:
