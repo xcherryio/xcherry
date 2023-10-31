@@ -77,3 +77,7 @@ func TestStateFailureRecoveryWaitUntil(t *testing.T) {
 func TestStateFailureRecoveryExecuteNoWaitUntil(t *testing.T) {
 	failure_recovery.TestStateFailureRecoveryTestExecuteNoWaitUntilProcess(t, client)
 }
+
+func TestStateFailureRecoveryExecuteFailedAtStart(t *testing.T) {
+	failure_recovery.TestStateFailureRecoveryTestExecuteFailedAtStartProcess(t, client)
+}

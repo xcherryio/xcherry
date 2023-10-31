@@ -34,6 +34,7 @@ func init() {
 		&failure_recovery.StateFailureRecoveryTestExecuteProcess{},
 		&failure_recovery.StateFailureRecoveryTestWaitUntilProcess{},
 		&failure_recovery.StateFailureRecoveryTestExecuteNoWaitUntilProcess{},
+		&failure_recovery.StateFailureRecoveryTestExecuteFailedAtStartProcess{},
 		&multi_states.MultiStatesProcess{},
 		&state_decision.GracefulCompleteProcess{},
 		&state_decision.ForceCompleteProcess{},
