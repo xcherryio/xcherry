@@ -198,7 +198,8 @@ type (
 	}
 
 	PrepareStateExecutionResponse struct {
-		Status                  StateExecutionStatus
+		Status StateExecutionStatus
+		// only applicable for state execute API
 		WaitUntilCommandResults xdbapi.CommandResults
 
 		// PreviousVersion is for conditional check in the future transactional update
@@ -265,6 +266,15 @@ type (
 
 	ProcessLocalQueueMessagesResponse struct {
 		HasNewImmediateTask bool
+	}
+
+	LoadGlobalAttributesRequest struct {
+		TableConfig   InternalGlobalAttributeConfig
+		TableRequests xdbapi.LoadGlobalAttributesRequest
+	}
+
+	LoadGlobalAttributesResponse struct {
+		TableResponses xdbapi.LoadGlobalAttributeResponse
 	}
 )
 

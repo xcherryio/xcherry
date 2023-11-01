@@ -24,26 +24,31 @@ import (
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType      string                         `json:"processType"`
-	WorkerURL        string                         `json:"workerURL"`
-	GlobalAttributes *InternalGlobalAttributeConfig `json:"globalAttributes"`
+	ProcessType           string                         `json:"processType"`
+	WorkerURL             string                         `json:"workerURL"`
+	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
 	info := ProcessExecutionInfoJson{
-		ProcessType: req.GetProcessType(),
-		WorkerURL:   req.GetWorkerUrl(),
+		ProcessType:           req.GetProcessType(),
+		WorkerURL:             req.GetWorkerUrl(),
+		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
 	}
+	return json.Marshal(info)
+}
+
+func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
 		primaryKeys := map[string]xdbapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
-		info.GlobalAttributes = &InternalGlobalAttributeConfig{
+		return &InternalGlobalAttributeConfig{
 			TablePrimaryKeys: primaryKeys,
 		}
 	}
-	return json.Marshal(info)
+	return nil
 }
 
 func BytesToProcessExecutionInfo(bytes []byte) (ProcessExecutionInfoJson, error) {
@@ -275,26 +280,40 @@ func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId StateExecuti
 }
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace                   string                   `json:"namespace"`
-	ProcessId                   string                   `json:"processId"`
-	ProcessType                 string                   `json:"processType"`
-	WorkerURL                   string                   `json:"workerURL"`
-	StateConfig                 *xdbapi.AsyncStateConfig `json:"stateConfig"`
-	RecoverFromStateExecutionId *string                  `json:"recoverFromStateExecutionId,omitempty"`
-	RecoverFromApi              *xdbapi.StateApiType     `json:"recoverFromApi,omitempty"`
+	Namespace                   string                         `json:"namespace"`
+	ProcessId                   string                         `json:"processId"`
+	ProcessType                 string                         `json:"processType"`
+	WorkerURL                   string                         `json:"workerURL"`
+	StateConfig                 *xdbapi.AsyncStateConfig       `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xdbapi.StateApiType           `json:"recoverFromApi,omitempty"`
+	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
+
 	return json.Marshal(AsyncStateExecutionInfoJson{
-		Namespace:   req.Namespace,
-		ProcessId:   req.ProcessId,
-		ProcessType: req.GetProcessType(),
-		WorkerURL:   req.GetWorkerUrl(),
-		StateConfig: req.StartStateConfig,
+		Namespace:             req.Namespace,
+		ProcessId:             req.ProcessId,
+		ProcessType:           req.GetProcessType(),
+		WorkerURL:             req.GetWorkerUrl(),
+		StateConfig:           req.StartStateConfig,
+		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
 	})
 }
 
-func FromAsyncStateExecutionInfoToBytes(info AsyncStateExecutionInfoJson) ([]byte, error) {
+func CopyFromAsyncStateExecutionInfoToBytes(info AsyncStateExecutionInfoJson) ([]byte, error) {
+	return json.Marshal(info)
+}
+
+func FromAsyncStateExecutionInfoToBytesForStateRecovery(
+	info AsyncStateExecutionInfoJson,
+	stateExeId string,
+	api xdbapi.StateApiType,
+) ([]byte, error) {
+	info.RecoverFromStateExecutionId = &stateExeId
+	info.RecoverFromApi = &api
+	// TODO we need to clean up for the next state execution otherwise it will be carried over forever
 	return json.Marshal(info)
 }
 

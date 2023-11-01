@@ -103,7 +103,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		for _, next := range request.StateDecision.GetNextStates() {
 			nextStateInfoJson := request.Prepare.Info
 			nextStateInfoJson.StateConfig = next.StateConfig
-			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(nextStateInfoJson)
+			stateInfo, err := persistence.CopyFromAsyncStateExecutionInfoToBytes(nextStateInfoJson)
 			if err != nil {
 				return nil, err
 			}

@@ -226,13 +226,15 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	return nil
 }
 
-func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(ctx context.Context,
+func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
+	ctx context.Context,
 	task persistence.ImmediateTask,
 	prep persistence.PrepareStateExecutionResponse,
 	status int32,
 	details string,
 	completedAttempts int32,
-	stateApiType xdbapi.StateApiType) error {
+	stateApiType xdbapi.StateApiType,
+) error {
 	stateRecoveryPolicy := xdbapi.StateFailureRecoveryOptions{
 		Policy: xdbapi.FAIL_PROCESS_ON_STATE_FAILURE,
 	}
@@ -314,7 +316,8 @@ func createApiContext(
 	prep persistence.PrepareStateExecutionResponse,
 	task persistence.ImmediateTask,
 	recoverFromStateExecutionId *string,
-	RecoverFromApi *xdbapi.StateApiType) xdbapi.Context {
+	RecoverFromApi *xdbapi.StateApiType,
+) xdbapi.Context {
 	return xdbapi.Context{
 		ProcessId:          prep.Info.ProcessId,
 		ProcessExecutionId: task.ProcessExecutionId.String(),
@@ -341,31 +344,39 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	ctx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
 	defer cancF()
 
-	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
-	resp, httpResp, err := req.AsyncStateExecuteRequest(
-		xdbapi.AsyncStateExecuteRequest{
-			Context: createApiContext(
-				prep,
-				task,
-				prep.Info.RecoverFromStateExecutionId,
-				prep.Info.RecoverFromApi),
-			ProcessType: prep.Info.ProcessType,
-			StateId:     task.StateId,
-			StateInput: &xdbapi.EncodedObject{
-				Encoding: prep.Input.Encoding,
-				Data:     prep.Input.Data,
+	var resp *xdbapi.AsyncStateExecuteResponse
+	var httpResp *http.Response
+	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep)
+	if errToCheck == nil {
+		req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
+		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
+			xdbapi.AsyncStateExecuteRequest{
+				Context: createApiContext(
+					prep,
+					task,
+					prep.Info.RecoverFromStateExecutionId,
+					prep.Info.RecoverFromApi),
+				ProcessType: prep.Info.ProcessType,
+				StateId:     task.StateId,
+				StateInput: &xdbapi.EncodedObject{
+					Encoding: prep.Input.Encoding,
+					Data:     prep.Input.Data,
+				},
+				CommandResults:         &prep.WaitUntilCommandResults,
+				LoadedGlobalAttributes: &loadedGlobalAttributesResp.TableResponses,
 			},
-			CommandResults: &prep.WaitUntilCommandResults,
-		},
-	).Execute()
-	if httpResp != nil {
-		defer httpResp.Body.Close()
+		).Execute()
+		if httpResp != nil {
+			defer httpResp.Body.Close()
+		}
+
+		if errToCheck == nil {
+			errToCheck = checkDecision(resp.StateDecision)
+		}
 	}
-	if err == nil {
-		err = checkDecision(resp.StateDecision)
-	}
-	if w.checkResponseAndError(err, httpResp) {
-		status, details := w.composeHttpError(err, httpResp, prep.Info, task)
+
+	if w.checkResponseAndError(errToCheck, httpResp) {
+		status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
 		if shouldRetry {
@@ -556,4 +567,23 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 		})
 	}
 	return nil
+}
+
+func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
+	ctx context.Context, prep persistence.PrepareStateExecutionResponse,
+) (*persistence.LoadGlobalAttributesResponse, error) {
+	if prep.Info.StateConfig == nil ||
+		prep.Info.StateConfig.LoadGlobalAttributesRequest == nil {
+		return &persistence.LoadGlobalAttributesResponse{}, nil
+	}
+
+	if prep.Info.GlobalAttributeConfig == nil {
+		return &persistence.LoadGlobalAttributesResponse{},
+			fmt.Errorf("global attribute config is not available")
+	}
+
+	return w.store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
+		TableConfig:   *prep.Info.GlobalAttributeConfig,
+		TableRequests: *prep.Info.StateConfig.LoadGlobalAttributesRequest,
+	})
 }
