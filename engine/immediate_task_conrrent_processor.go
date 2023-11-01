@@ -438,10 +438,19 @@ func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
 func (w *immediateTaskConcurrentProcessor) checkRetry(
 	task persistence.ImmediateTask, info persistence.AsyncStateExecutionInfoJson,
 ) (nextBackoffSeconds int32, shouldRetry bool) {
-	return GetNextBackoff(
-		task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
-		task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
-		info.StateConfig.WaitUntilApiRetryPolicy)
+	if task.TaskType == persistence.ImmediateTaskTypeWaitUntil {
+		return GetNextBackoff(
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
+			info.StateConfig.WaitUntilApiRetryPolicy)
+	} else if task.TaskType == persistence.ImmediateTaskTypeExecute {
+		return GetNextBackoff(
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
+			info.StateConfig.ExecuteApiRetryPolicy)
+	}
+
+	panic("invalid task type " + string(task.TaskType))
 }
 
 func (w *immediateTaskConcurrentProcessor) retryTask(
