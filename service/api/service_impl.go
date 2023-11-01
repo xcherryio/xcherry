@@ -56,6 +56,11 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
+	if resp.GlobalAttributeWriteFailed {
+		return nil, NewErrorWithStatus(
+			http.StatusFailedDependency,
+			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())
+	}
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,
@@ -104,7 +109,9 @@ func (s serviceImpl) DescribeLatestProcess(
 	return resp.Response, nil
 }
 
-func (s serviceImpl) PublishToLocalQueue(ctx context.Context, request xdbapi.PublishToLocalQueueRequest) *ErrorWithStatus {
+func (s serviceImpl) PublishToLocalQueue(
+	ctx context.Context, request xdbapi.PublishToLocalQueueRequest,
+) *ErrorWithStatus {
 	resp, err := s.store.PublishToLocalQueue(ctx, persistence.PublishToLocalQueueRequest{
 		Namespace: request.GetNamespace(),
 		ProcessId: request.GetProcessId(),

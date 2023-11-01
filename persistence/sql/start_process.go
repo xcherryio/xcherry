@@ -56,7 +56,10 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
 	if err != nil {
-		return nil, err
+		return &persistence.StartProcessResponse{
+			GlobalAttributeWriteFailed: true,
+			GlobalAttributeWriteError:  err,
+		}, nil
 	}
 
 	requestIdReusePolicy := xdbapi.ALLOW_IF_NO_RUNNING

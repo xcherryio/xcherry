@@ -30,9 +30,11 @@ type (
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId  uuid.UUID
-		AlreadyStarted      bool
-		HasNewImmediateTask bool
+		ProcessExecutionId         uuid.UUID
+		AlreadyStarted             bool
+		HasNewImmediateTask        bool
+		GlobalAttributeWriteFailed bool
+		GlobalAttributeWriteError  error
 	}
 
 	StopProcessRequest struct {
