@@ -98,16 +98,15 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	if len(request.StateDecision.GetNextStates()) > 0 {
 		hasNewImmediateTask = true
-
-		// reuse the info from last state execution as it won't change
-		stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(request.Prepare.Info)
-		if err != nil {
-			return nil, err
-		}
-
 		prcExeId := request.ProcessExecutionId
 
 		for _, next := range request.StateDecision.GetNextStates() {
+			nextStateInfoJson := request.Prepare.Info
+			nextStateInfoJson.StateConfig = next.StateConfig
+			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(nextStateInfoJson)
+			if err != nil {
+				return nil, err
+			}
 			stateId := next.StateId
 			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
 			stateConfig := next.StateConfig
