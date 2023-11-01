@@ -80,9 +80,9 @@ type transactionalCRUD interface {
 
 	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
 
-	InsertCustomTableErrorOnConflict(ctx context.Context, row CustomTableRow) error
-	InsertCustomTableIgnoreOnConflict(ctx context.Context, row CustomTableRow) error
-	InsertCustomTableOverrideOnConflict(ctx context.Context, row CustomTableRow) error
+	InsertCustomTableErrorOnConflict(ctx context.Context, row CustomTableRowForInsert) error
+	InsertCustomTableIgnoreOnConflict(ctx context.Context, row CustomTableRowForInsert) error
+	InsertCustomTableOverrideOnConflict(ctx context.Context, row CustomTableRowForInsert) error
 }
 
 type nonTransactionalCRUD interface {
@@ -105,6 +105,14 @@ type nonTransactionalCRUD interface {
 	SelectLocalQueueMessages(
 		ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string,
 	) ([]LocalQueueMessageRow, error)
+
+	SelectCustomTableByPK(
+		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
+	) (*CustomTableRowSelect, error)
+
+	UpdateCustomTableByPK(
+		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+	) (*CustomTableRowSelect, error)
 }
 
 type ErrorChecker interface {

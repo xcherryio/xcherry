@@ -268,17 +268,17 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 	return effected == 1, err
 }
 
-func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
 	//TODO implement me
 	panic("implement me")
 }

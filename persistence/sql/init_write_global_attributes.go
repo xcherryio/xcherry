@@ -26,7 +26,7 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 		for _, field := range tblCfg.InitialWrite {
 			cols[field.DbColumn] = field.DbQueryValue
 		}
-		row := extensions.CustomTableRow{
+		row := extensions.CustomTableRowForInsert{
 			TableName:       tblCfg.TableName,
 			PrimaryKey:      tblCfg.PrimaryKey.DbColumn,
 			PrimaryKeyValue: tblCfg.PrimaryKey.DbQueryValue,

@@ -363,7 +363,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 					Data:     prep.Input.Data,
 				},
 				CommandResults:         &prep.WaitUntilCommandResults,
-				LoadedGlobalAttributes: &loadedGlobalAttributesResp.TableResponses,
+				LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
 			},
 		).Execute()
 		if httpResp != nil {
@@ -583,7 +583,7 @@ func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
 	}
 
 	return w.store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
-		TableConfig:   *prep.Info.GlobalAttributeConfig,
-		TableRequests: *prep.Info.StateConfig.LoadGlobalAttributesRequest,
+		TableConfig: *prep.Info.GlobalAttributeConfig,
+		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
 }

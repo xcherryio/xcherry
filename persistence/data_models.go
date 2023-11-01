@@ -269,12 +269,12 @@ type (
 	}
 
 	LoadGlobalAttributesRequest struct {
-		TableConfig   InternalGlobalAttributeConfig
-		TableRequests xdbapi.LoadGlobalAttributesRequest
+		TableConfig InternalGlobalAttributeConfig
+		Request     xdbapi.LoadGlobalAttributesRequest
 	}
 
 	LoadGlobalAttributesResponse struct {
-		TableResponses xdbapi.LoadGlobalAttributeResponse
+		Response xdbapi.LoadGlobalAttributeResponse
 	}
 )
 

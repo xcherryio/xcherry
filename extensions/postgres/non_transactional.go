@@ -81,7 +81,9 @@ const batchSelectTimerTasksOfFirstPageQuery = `SELECT
 	FROM xdb_sys_timer_tasks WHERE shard_id = $1 AND fire_time_unix_seconds <= $2 
 	ORDER BY fire_time_unix_seconds, task_sequence ASC LIMIT $3`
 
-func (d dbSession) BatchSelectTimerTasks(ctx context.Context, filter extensions.TimerTaskRangeSelectFilter) ([]extensions.TimerTaskRow, error) {
+func (d dbSession) BatchSelectTimerTasks(
+	ctx context.Context, filter extensions.TimerTaskRangeSelectFilter,
+) ([]extensions.TimerTaskRow, error) {
 	var rows []extensions.TimerTaskRow
 	err := d.db.SelectContext(ctx, &rows, batchSelectTimerTasksOfFirstPageQuery,
 		filter.ShardId, filter.MaxFireTimeUnixSecondsInclusive, filter.PageSize)
@@ -93,7 +95,9 @@ const selectTimerTasksForTimestampsQuery = `SELECT
 	FROM xdb_sys_timer_tasks WHERE shard_id = ? AND fire_time_unix_seconds IN (?) AND task_sequence >= ? 
 	ORDER BY fire_time_unix_seconds, task_sequence ASC`
 
-func (d dbSession) SelectTimerTasksForTimestamps(ctx context.Context, filter extensions.TimerTaskSelectByTimestampsFilter) ([]extensions.TimerTaskRow, error) {
+func (d dbSession) SelectTimerTasksForTimestamps(
+	ctx context.Context, filter extensions.TimerTaskSelectByTimestampsFilter,
+) ([]extensions.TimerTaskRow, error) {
 	var rows []extensions.TimerTaskRow
 	query, args, err := sqlx.In(selectTimerTasksForTimestampsQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.MinTaskSequenceInclusive)
 	if err != nil {
@@ -118,7 +122,9 @@ const selectLocalQueueMessagesQuery = `SELECT
 	FROM xdb_sys_local_queue_messages WHERE process_execution_id = ? AND dedup_id IN (?)
 `
 
-func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) (
+func (d dbSession) SelectLocalQueueMessages(
+	ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string,
+) (
 	[]extensions.LocalQueueMessageRow, error) {
 	var rows []extensions.LocalQueueMessageRow
 	query, args, err := sqlx.In(selectLocalQueueMessagesQuery, processExecutionId.String(), dedupIdStrings)
@@ -128,4 +134,18 @@ func (d dbSession) SelectLocalQueueMessages(ctx context.Context, processExecutio
 	query = d.db.Rebind(query)
 	err = d.db.SelectContext(ctx, &rows, query, args...)
 	return rows, err
+}
+
+func (d dbSession) SelectCustomTableByPK(
+	ctx context.Context, tableName string, pkName, pkValue string, columns []string,
+) (*extensions.CustomTableRowSelect, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbSession) UpdateCustomTableByPK(
+	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+) (*extensions.CustomTableRowSelect, error) {
+	//TODO implement me
+	panic("implement me")
 }
