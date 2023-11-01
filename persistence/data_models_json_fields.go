@@ -302,7 +302,11 @@ func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) (
 	})
 }
 
-func CopyFromAsyncStateExecutionInfoToBytes(info AsyncStateExecutionInfoJson) ([]byte, error) {
+func FromAsyncStateExecutionInfoToBytesForNextState(
+	info AsyncStateExecutionInfoJson,
+	nextStateConfig *xdbapi.AsyncStateConfig,
+) ([]byte, error) {
+	info.StateConfig = nextStateConfig
 	return json.Marshal(info)
 }
 
