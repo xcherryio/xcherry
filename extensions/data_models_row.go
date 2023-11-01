@@ -247,4 +247,11 @@ type (
 
 		Payload types.JSONText
 	}
+
+	CustomTableRow struct {
+		TableName       string
+		PrimaryKey      string
+		PrimaryKeyValue string
+		ColumnToValue   map[string]string
+	}
 )

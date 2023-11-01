@@ -24,15 +24,26 @@ import (
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType string `json:"processType"`
-	WorkerURL   string `json:"workerURL"`
+	ProcessType      string                         `json:"processType"`
+	WorkerURL        string                         `json:"workerURL"`
+	GlobalAttributes *InternalGlobalAttributeConfig `json:"globalAttributes"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
-	return json.Marshal(ProcessExecutionInfoJson{
+	info := ProcessExecutionInfoJson{
 		ProcessType: req.GetProcessType(),
 		WorkerURL:   req.GetWorkerUrl(),
-	})
+	}
+	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
+		primaryKeys := map[string]xdbapi.TableColumnValue{}
+		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
+			primaryKeys[cfg.TableName] = cfg.PrimaryKey
+		}
+		info.GlobalAttributes = &InternalGlobalAttributeConfig{
+			TablePrimaryKeys: primaryKeys,
+		}
+	}
+	return json.Marshal(info)
 }
 
 func BytesToProcessExecutionInfo(bytes []byte) (ProcessExecutionInfoJson, error) {
@@ -122,7 +133,8 @@ func NewStateExecutionLocalQueuesFromBytes(bytes []byte) (StateExecutionLocalQue
 }
 
 func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommand(
-	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
+	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand,
+) {
 	if command.GetCount() == 0 {
 		command.Count = xdbapi.PtrInt32(1)
 	}
@@ -203,8 +215,10 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 // and returns:
 //
 // (true, [(id_1_1, false), (id_2_1, false), (id_2_2, false)])
-func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(stateExecutionId StateExecutionId,
-	commandWaitingType xdbapi.CommandWaitingType) (bool, []InternalLocalQueueMessage) {
+func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(
+	stateExecutionId StateExecutionId,
+	commandWaitingType xdbapi.CommandWaitingType,
+) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
 	var remainingCommands []xdbapi.LocalQueueCommand

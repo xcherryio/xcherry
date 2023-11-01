@@ -85,10 +85,22 @@ github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4d
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/urfave/cli/v2 v2.25.7 h1:VAzn5oq403l5pHjc4OhD54+XGO9cdKVL/7lDjF+iKUs=
 github.com/urfave/cli/v2 v2.25.7/go.mod h1:8qnjx1vcq5s2/wpsqoZFndg2CE5tNFyrTvS6SinrnYQ=
+<<<<<<< HEAD
 github.com/xdblab/xdb-apis v0.0.2-0.20231031213818-31b91616e14a h1:/FbaBe7EGcHtpY6NVZ2KhDKKvzzkSyPTDciys3JB5mg=
 github.com/xdblab/xdb-apis v0.0.2-0.20231031213818-31b91616e14a/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
 github.com/xdblab/xdb-golang-sdk v0.0.0-20231101182405-2a830a4d4b2b h1:m/voBawrwBInkyBes2lyXIU9YfYjSjNlD/bD6MBxXSg=
 github.com/xdblab/xdb-golang-sdk v0.0.0-20231101182405-2a830a4d4b2b/go.mod h1:FMudHYgoLRgw41J6dk7uEGQj0P/x9SchCIdAnYvncXk=
+||||||| parent of 60fa81d (handle start)
+github.com/xdblab/xdb-apis v0.0.2-0.20231030215748-2db5a3140935 h1:Cn1RftoIksWV206j1+aTvu1RA9cd1aik7TGtwNUQeOw=
+github.com/xdblab/xdb-apis v0.0.2-0.20231030215748-2db5a3140935/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231030230341-76ffe404db7a h1:m/8dKI8cLGYKKbxZDBSqv+Iwgix6AazWeLLZFaKpGrw=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231030230341-76ffe404db7a/go.mod h1:Z1lv2ULzGhvIPP6QDo8NfW1pv8h65b8vvTNZEeGwQ1o=
+=======
+github.com/xdblab/xdb-apis v0.0.2-0.20231031213818-31b91616e14a h1:/FbaBe7EGcHtpY6NVZ2KhDKKvzzkSyPTDciys3JB5mg=
+github.com/xdblab/xdb-apis v0.0.2-0.20231031213818-31b91616e14a/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231101173046-7a6b0a1e5ba3 h1:mVMjIGLCEHSfsGkL4Di76d5NEzvcGu1KW9WSmYFk2sA=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231101173046-7a6b0a1e5ba3/go.mod h1:FMudHYgoLRgw41J6dk7uEGQj0P/x9SchCIdAnYvncXk=
+>>>>>>> 60fa81d (handle start)
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 h1:bAn7/zixMGCfxrRTfdpNzjtPYqr8smhKouy9mxVdGPU=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673/go.mod h1:N3UwUGtsrSj3ccvlPHLoLsHnpR27oXr4ZE984MbSER8=
 go.uber.org/goleak v1.2.0 h1:xqgm/S+aQvhWFTtR0XK3Jvg7z8kGV8P4X14IzwN3Eqk=

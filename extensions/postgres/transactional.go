@@ -106,8 +106,10 @@ const selectAsyncStateExecutionForUpdateQuery = `SELECT
 	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3 FOR UPDATE
 `
 
-func (d dbTx) SelectAsyncStateExecutionForUpdate(ctx context.Context,
-	filter extensions.AsyncStateExecutionSelectFilter) (*extensions.AsyncStateExecutionRowForUpdate, error) {
+func (d dbTx) SelectAsyncStateExecutionForUpdate(
+	ctx context.Context,
+	filter extensions.AsyncStateExecutionSelectFilter,
+) (*extensions.AsyncStateExecutionRowForUpdate, error) {
 	var row extensions.AsyncStateExecutionRowForUpdate
 	filter.ProcessExecutionIdString = filter.ProcessExecutionId.String()
 	err := d.tx.GetContext(ctx, &row, selectAsyncStateExecutionForUpdateQuery, filter.ProcessExecutionIdString, filter.StateId, filter.StateIdSequence)
@@ -264,4 +266,19 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 		return false, err
 	}
 	return effected == 1, err
+}
+
+func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row extensions.CustomTableRow) error {
+	//TODO implement me
+	panic("implement me")
 }

@@ -54,6 +54,11 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 ) (*persistence.StartProcessResponse, error) {
 	req := request.Request
 
+	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
+	if err != nil {
+		return nil, err
+	}
+
 	requestIdReusePolicy := xdbapi.ALLOW_IF_NO_RUNNING
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.IdReusePolicy != nil {
 		requestIdReusePolicy = *req.ProcessStartConfig.IdReusePolicy
