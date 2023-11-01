@@ -448,9 +448,9 @@ func (w *immediateTaskConcurrentProcessor) checkRetry(
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
 			info.StateConfig.ExecuteApiRetryPolicy)
-	} else {
-		panic("invalid task type " + string(task.TaskType))
 	}
+
+	panic("invalid task type " + string(task.TaskType))
 }
 
 func (w *immediateTaskConcurrentProcessor) retryTask(
