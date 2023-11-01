@@ -143,7 +143,7 @@ func (d dbSession) SelectCustomTableByPK(
 	panic("implement me")
 }
 
-func (d dbSession) UpdateCustomTableByPK(
+func (d dbSession) UpsertCustomTableByPK(
 	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
 ) (*extensions.CustomTableRowSelect, error) {
 	//TODO implement me

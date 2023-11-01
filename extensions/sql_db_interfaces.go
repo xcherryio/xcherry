@@ -110,7 +110,7 @@ type nonTransactionalCRUD interface {
 		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
 	) (*CustomTableRowSelect, error)
 
-	UpdateCustomTableByPK(
+	UpsertCustomTableByPK(
 		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
 	) (*CustomTableRowSelect, error)
 }

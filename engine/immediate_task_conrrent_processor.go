@@ -397,10 +397,12 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:             prep,
-		StateDecision:       resp.StateDecision,
-		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
-		TaskShardId:         task.ShardId,
+		Prepare:                    prep,
+		StateDecision:              resp.StateDecision,
+		PublishToLocalQueue:        resp.GetPublishToLocalQueue(),
+		TaskShardId:                task.ShardId,
+		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
+		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
 	})
 	if err != nil {
 		return err

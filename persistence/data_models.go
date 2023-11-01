@@ -238,7 +238,11 @@ type (
 		Prepare             PrepareStateExecutionResponse
 		StateDecision       xdbapi.StateDecision
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
-		TaskShardId         int32
+
+		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
+		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+
+		TaskShardId int32
 	}
 
 	CompleteExecuteExecutionResponse struct {

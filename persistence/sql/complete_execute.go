@@ -53,6 +53,11 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewImmediateTask := false
 
+	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
+	if err != nil {
+		return nil, err
+	}
+
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
 	if err != nil {
