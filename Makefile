@@ -161,7 +161,8 @@ integTestsWithLocalServer:
 	$Q go test -v ./integTests -useLocalServer=true
 
 install-schema-postgres: xdb-tools-postgres
-	$Q ./xdb-tools-postgres install-schema
+	$Q ./xdb-tools-postgres install-schema # install xdb system tables
+	$Q ./xdb-tools-postgres install-schema -f ./extensions/postgres/schema/sample_tables.sql
 
 help:
 	@# print help first, so it's visible
