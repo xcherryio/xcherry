@@ -26,6 +26,10 @@ func (p sqlProcessStoreImpl) LoadGlobalAttributes(
 	var tableResponses []xdbapi.TableReadResponse
 	config := request.TableConfig
 	for _, tableReq := range request.Request.TableRequests {
+		if tableReq.GetLockingPolicy() != xdbapi.NO_LOCKING {
+			// TODO support other locking policies
+			return nil, fmt.Errorf("locking policy %v is not supported", tableReq.GetLockingPolicy())
+		}
 		pk, ok := config.TablePrimaryKeys[*tableReq.TableName]
 		if !ok {
 			return nil, fmt.Errorf("table %s is not configured properly with primary key", *tableReq.TableName)
