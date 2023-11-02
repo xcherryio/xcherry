@@ -407,6 +407,12 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	if err != nil {
 		return err
 	}
+	if compResp.FailAtUpdatingGlobalAttributes {
+		// TODO this should be treated as user error, we should use the same logic as backoff+applyStateFailureRecoveryPolicy
+		// for now we just retry the task for demo purpose
+		w.logger.Warn("failed to update global attributes", tag.ID(task.GetTaskId()))
+		return fmt.Errorf("failed to update global attributes")
+	}
 	if compResp.HasNewImmediateTask {
 		w.notifyNewImmediateTask(prep, task)
 	}

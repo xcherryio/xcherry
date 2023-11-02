@@ -33,7 +33,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	}
 
 	resp, err := p.doCompleteExecuteExecutionTx(ctx, tx, request)
-	if err != nil {
+	if err != nil || resp.FailAtUpdatingGlobalAttributes {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -53,9 +53,11 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewImmediateTask := false
 
-	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
+	err := p.updateGlobalAttributesIfNeeded(ctx, tx, *request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
 	if err != nil {
-		return nil, err
+		return &persistence.CompleteExecuteExecutionResponse{
+			FailAtUpdatingGlobalAttributes: true,
+		}, nil
 	}
 
 	// lock process execution row first

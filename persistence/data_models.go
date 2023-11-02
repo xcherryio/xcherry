@@ -30,11 +30,11 @@ type (
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId         uuid.UUID
-		AlreadyStarted             bool
-		HasNewImmediateTask        bool
-		GlobalAttributeWriteFailed bool
-		GlobalAttributeWriteError  error
+		ProcessExecutionId                uuid.UUID
+		AlreadyStarted                    bool
+		HasNewImmediateTask               bool
+		FailedAtWriteInitGlobalAttributes bool
+		GlobalAttributeWriteError         error
 	}
 
 	StopProcessRequest struct {
@@ -246,7 +246,8 @@ type (
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		HasNewImmediateTask bool
+		FailAtUpdatingGlobalAttributes bool
+		HasNewImmediateTask            bool
 	}
 
 	PublishToLocalQueueRequest struct {

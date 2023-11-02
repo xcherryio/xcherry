@@ -14,10 +14,7 @@
 package sql
 
 import (
-	"context"
 	"database/sql"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"
@@ -43,14 +40,4 @@ func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.Pr
 
 func (p sqlProcessStoreImpl) Close() error {
 	return p.session.Close()
-}
-
-func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
-	ctx context.Context, tx extensions.SQLTransaction, tableConfig *persistence.InternalGlobalAttributeConfig,
-	updates []xdbapi.GlobalAttributeTableRowUpdate,
-) error {
-	if len(updates) > 0 {
-		// TODO
-	}
-	return nil
 }

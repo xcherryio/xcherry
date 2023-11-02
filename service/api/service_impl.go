@@ -56,7 +56,7 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
-	if resp.GlobalAttributeWriteFailed {
+	if resp.FailedAtWriteInitGlobalAttributes {
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
 			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())

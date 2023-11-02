@@ -282,3 +282,10 @@ func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row exten
 	//TODO implement me
 	panic("implement me")
 }
+
+func (d dbTx) UpsertCustomTableByPK(
+	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+) error {
+	//TODO implement me
+	panic("implement me")
+}

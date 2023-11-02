@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
@@ -45,6 +46,26 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 		}
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
+	ctx context.Context, tx extensions.SQLTransaction, tableConfig persistence.InternalGlobalAttributeConfig,
+	updates []xdbapi.GlobalAttributeTableRowUpdate,
+) error {
+	if len(updates) > 0 {
+		for _, update := range updates {
+			pks := tableConfig.TablePrimaryKeys[update.TableName]
+			cols := map[string]string{}
+			for _, col := range update.UpdateColumns {
+				cols[col.DbColumn] = col.DbQueryValue
+			}
+			err := tx.UpsertCustomTableByPK(ctx, update.TableName, pks.DbColumn, pks.DbQueryValue, cols)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
