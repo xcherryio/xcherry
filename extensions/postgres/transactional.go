@@ -16,6 +16,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
@@ -269,23 +270,74 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 }
 
 func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	//TODO implement me
-	panic("implement me")
+	var cols []string
+	var vals []string
+	for k, v := range row.ColumnToValue {
+		cols = append(cols, k)
+		vals = append(vals, "'"+v+"'")
+	}
+
+	_, err := d.tx.ExecContext(ctx,
+		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)`)
+	return err
 }
 
 func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	//TODO implement me
-	panic("implement me")
+	var cols []string
+	var vals []string
+	for k, v := range row.ColumnToValue {
+		cols = append(cols, k)
+		vals = append(vals, "'"+v+"'")
+	}
+
+	_, err := d.tx.ExecContext(ctx,
+		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
+		ON CONFLICT DO NOTHING`)
+	return err
 }
 
 func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	//TODO implement me
-	panic("implement me")
+	var cols []string
+	var vals []string
+	for k, v := range row.ColumnToValue {
+		cols = append(cols, k)
+		vals = append(vals, "'"+v+"'")
+	}
+
+	var setClauses []string
+	for col, val := range row.ColumnToValue {
+		setClauses = append(setClauses, col+" = '"+val+"'")
+	}
+	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
+
+	_, err := d.tx.ExecContext(ctx,
+		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
+		ON CONFLICT DO `+updateClause)
+	return err
 }
 
 func (d dbTx) UpsertCustomTableByPK(
 	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
 ) error {
-	//TODO implement me
-	panic("implement me")
+	var cols []string
+	var vals []string
+	for k, v := range colToValue {
+		cols = append(cols, k)
+		vals = append(vals, "'"+v+"'")
+	}
+
+	var setClauses []string
+	for col, val := range colToValue {
+		setClauses = append(setClauses, col+" = '"+val+"'")
+	}
+	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
+
+	_, err := d.tx.ExecContext(ctx,
+		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+pkValue+`', `+strings.Join(vals, ", ")+`)
+		ON CONFLICT DO `+updateClause)
+	return err
 }

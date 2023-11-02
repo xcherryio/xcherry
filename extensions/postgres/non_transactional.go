@@ -16,6 +16,7 @@ package postgres
 import (
 	"context"
 	"github.com/xdblab/xdb/common/uuid"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xdblab/xdb/extensions"
@@ -139,6 +140,33 @@ func (d dbSession) SelectLocalQueueMessages(
 func (d dbSession) SelectCustomTableByPK(
 	ctx context.Context, tableName string, pkName, pkValue string, columns []string,
 ) (*extensions.CustomTableRowSelect, error) {
-	//TODO implement me
-	panic("implement me")
+	row := d.db.QueryRowContext(ctx, `SELECT `+pkName+`, `+
+		strings.Join(columns, ", ")+` FROM `+
+		tableName+` WHERE `+pkName+` = $1`, pkValue)
+	if row.Err() != nil {
+		if d.IsNotFoundError(row.Err()) {
+			return &extensions.CustomTableRowSelect{
+				ColumnToValue: map[string]string{},
+			}, nil
+		}
+		return nil, row.Err()
+	}
+
+	colsToScan := make([]any, len(columns))
+	for i := range colsToScan {
+		colsToScan[i] = new(string)
+	}
+
+	err := row.Scan(colsToScan...)
+	if err != nil {
+		return nil, err
+	}
+
+	columnToValue := map[string]string{}
+	for i := range colsToScan {
+		columnToValue[columns[i]] = *colsToScan[i].(*string)
+	}
+	return &extensions.CustomTableRowSelect{
+		ColumnToValue: columnToValue,
+	}, nil
 }
