@@ -15,7 +15,6 @@ package sqltest
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -153,7 +152,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		},
 	}
 
-	assertEqualIgnoringOrderByJsonEncoder(t, ass, expectedResp1, gloAttResp.Response)
+	assertProbablyEqualForIgnoringOrderByJsonEncoder(t, ass, expectedResp1, gloAttResp.Response)
 
 	loadReq2 := &xdbapi.LoadGlobalAttributesRequest{
 		TableRequests: []xdbapi.TableReadRequest{
@@ -261,7 +260,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		},
 	}
 
-	assertEqualIgnoringOrderByJsonEncoder(t, ass, expectedResp2, gloAttResp.Response)
+	assertProbablyEqualForIgnoringOrderByJsonEncoder(t, ass, expectedResp2, gloAttResp.Response)
 
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
@@ -272,14 +271,4 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 	checkAndGetImmediateTasks(ctx, t, ass, store, 0)
 	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
-}
-
-func assertEqualIgnoringOrderByJsonEncoder(
-	t *testing.T, ass *assert.Assertions, obj1, obj2 interface{},
-) {
-	str1, err1 := json.Marshal(obj1)
-	str2, err2 := json.Marshal(obj2)
-	require.NoError(t, err1)
-	require.NoError(t, err2)
-	ass.Equal(len(str1), len(str2))
 }

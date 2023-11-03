@@ -15,6 +15,7 @@ package sqltest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -498,4 +499,16 @@ func recoverFromFailure(
 	})
 	require.NoError(t, err)
 	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
+}
+
+// this won't guarantee the actual equality, but it's good enough for our test
+// when the objects are large, it's hard to use assert.Equal or assert.ElementsMatch
+func assertProbablyEqualForIgnoringOrderByJsonEncoder(
+	t *testing.T, ass *assert.Assertions, obj1, obj2 interface{},
+) {
+	str1, err1 := json.Marshal(obj1)
+	str2, err2 := json.Marshal(obj2)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+	ass.Equal(len(str1), len(str2))
 }
