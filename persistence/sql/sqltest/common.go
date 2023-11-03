@@ -56,7 +56,7 @@ func startProcessWithConfigs(
 	})
 
 	require.NoError(t, err)
-	ass.Nil(startResp.GlobalAttributeWriteError)
+	require.NoError(t, startResp.GlobalAttributeWriteError)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -458,7 +458,7 @@ func completeExecuteExecutionWithGlobalAttributes(
 		UpdateGlobalAttributes:     gloAttUpdates,
 	})
 	require.NoError(t, err)
-	ass.Nil(compResp.UpdatingGlobalAttributesError)
+	require.NoError(t, compResp.UpdatingGlobalAttributesError)
 	ass.Equal(hasNewImmediateTask, compResp.HasNewImmediateTask)
 }
 
