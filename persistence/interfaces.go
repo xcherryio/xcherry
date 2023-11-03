@@ -24,7 +24,9 @@ type (
 
 		StartProcess(ctx context.Context, request StartProcessRequest) (*StartProcessResponse, error)
 		StopProcess(ctx context.Context, request StopProcessRequest) (*StopProcessResponse, error)
-		DescribeLatestProcess(ctx context.Context, request DescribeLatestProcessRequest) (*DescribeLatestProcessResponse, error)
+		DescribeLatestProcess(
+			ctx context.Context, request DescribeLatestProcessRequest,
+		) (*DescribeLatestProcessResponse, error)
 		RecoverFromStateExecutionFailure(ctx context.Context, request RecoverFromStateExecutionFailureRequest) error
 
 		GetImmediateTasks(ctx context.Context, request GetImmediateTasksRequest) (*GetImmediateTasksResponse, error)
@@ -33,14 +35,30 @@ type (
 		CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
 		GetTimerTasksUpToTimestamp(ctx context.Context, request GetTimerTasksRequest) (*GetTimerTasksResponse, error)
-		GetTimerTasksForTimestamps(ctx context.Context, request GetTimerTasksForTimestampsRequest) (*GetTimerTasksResponse, error)
+		GetTimerTasksForTimestamps(
+			ctx context.Context, request GetTimerTasksForTimestampsRequest,
+		) (*GetTimerTasksResponse, error)
 		ConvertTimerTaskToImmediateTask(ctx context.Context, request ConvertTimerTaskToImmediateTaskRequest) error
 
-		PrepareStateExecution(ctx context.Context, request PrepareStateExecutionRequest) (*PrepareStateExecutionResponse, error)
-		ProcessWaitUntilExecution(ctx context.Context, request ProcessWaitUntilExecutionRequest) (*ProcessWaitUntilExecutionResponse, error)
-		CompleteExecuteExecution(ctx context.Context, request CompleteExecuteExecutionRequest) (*CompleteExecuteExecutionResponse, error)
+		PrepareStateExecution(
+			ctx context.Context, request PrepareStateExecutionRequest,
+		) (*PrepareStateExecutionResponse, error)
+		ProcessWaitUntilExecution(
+			ctx context.Context, request ProcessWaitUntilExecutionRequest,
+		) (*ProcessWaitUntilExecutionResponse, error)
+		CompleteExecuteExecution(
+			ctx context.Context, request CompleteExecuteExecutionRequest,
+		) (*CompleteExecuteExecutionResponse, error)
 
-		PublishToLocalQueue(ctx context.Context, request PublishToLocalQueueRequest) (*PublishToLocalQueueResponse, error)
-		ProcessLocalQueueMessages(ctx context.Context, request ProcessLocalQueueMessagesRequest) (*ProcessLocalQueueMessagesResponse, error)
+		PublishToLocalQueue(
+			ctx context.Context, request PublishToLocalQueueRequest,
+		) (*PublishToLocalQueueResponse, error)
+		ProcessLocalQueueMessages(
+			ctx context.Context, request ProcessLocalQueueMessagesRequest,
+		) (*ProcessLocalQueueMessagesResponse, error)
+
+		LoadGlobalAttributes(
+			ctx context.Context, request LoadGlobalAttributesRequest,
+		) (*LoadGlobalAttributesResponse, error)
 	}
 )

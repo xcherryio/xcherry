@@ -16,6 +16,7 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -29,47 +30,47 @@ func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
 	ass.Nil(err)
 }
 
-func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -88,146 +89,148 @@ func SQLBasicTest(ass *assert.Assertions, store persistence.ProcessStore) {
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 	task = immediateTasks[1]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 
 	// Verify stateId2 was aborted and process has completed
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
 }
 
-func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
+	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
+) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	startProcess(ctx, ass, store, namespace, processId, input)
+	startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// stop the process with temerminated
-	terminateProcess(ctx, ass, store, namespace, processId)
+	terminateProcess(ctx, t, ass, store, namespace, processId)
 
 	// Describe the process, verify it's terminated
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.TERMINATED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.TERMINATED)
 
 	// start the process with allow if previous exit abnormally
-	startProcessWithAllowIfPreviousExitAbnormally(ctx, ass, store, namespace, processId, input)
+	startProcessWithAllowIfPreviousExitAbnormally(ctx, t, ass, store, namespace, processId, input)
 }
 
-func SQLProcessIdReusePolicyDefault(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// stop the process with temerminated
-	terminateProcess(ctx, ass, store, namespace, processId)
+	terminateProcess(ctx, t, ass, store, namespace, processId)
 
 	// Describe the process, verify it's terminated
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.TERMINATED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.TERMINATED)
 
 	// start with default process id reuse policy and it should start correctly
-	prcExeID2 := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeID2 := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	ass.NotEqual(prcExeId.String(), prcExeID2.String())
 }
 
-func SQLProcessIdReusePolicyTerminateIfRunning(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
-	prcExeID2 := startProcessWithTerminateIfRunningPolicy(ctx, ass, store, namespace, processId, input)
+	prcExeID2 := startProcessWithTerminateIfRunningPolicy(ctx, t, ass, store, namespace, processId, input)
 
 	ass.NotEqual(prcExeId.String(), prcExeID2.String())
 }
 
-func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -246,77 +249,79 @@ func SQLProcessIdReusePolicyDisallowReuseTest(ass *assert.Assertions, store pers
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 	task = immediateTasks[1]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 
 	// Verify stateId2 was aborted and process has completed
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
 
 	// try to start with disallow_reuse policy, and verify it's returning already started
-	startProcessWithDisallowReusePolicy(ctx, ass, store, namespace, processId, input)
+	startProcessWithDisallowReusePolicy(ctx, t, ass, store, namespace, processId, input)
 }
 
-func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLProcessIdReusePolicyAllowIfNoRunning(
+	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
+) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Try to start the process again and verify the behavior.
-	retryStartProcessForFailure(ctx, ass, store, namespace, processId, input)
+	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -335,69 +340,69 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(ass *assert.Assertions, store persi
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 	task = immediateTasks[1]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 
 	// Verify stateId2 was aborted and process has completed
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
 
 	// start with allow if no running,
-	startProcessWithAllowIfNoRunningPolicy(ctx, ass, store, namespace, processId, input)
+	startProcessWithAllowIfNoRunningPolicy(ctx, t, ass, store, namespace, processId, input)
 }
 
-func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns-2"
 	processId := fmt.Sprintf("test-graceful-complete-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -415,66 +420,66 @@ func SQLGracefulCompleteTest(ass *assert.Assertions, store persistence.ProcessSt
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 	task = immediateTasks[1]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.GRACEFUL_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 
 	// Verify both stateId2 and process are still running
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 }
 
-func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-force-fail-%v", time.Now().String())
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -492,29 +497,29 @@ func SQLForceFailTest(ass *assert.Assertions, store persistence.ProcessStore) {
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 2)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 	task = immediateTasks[1]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-2")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusExecuteRunning)
 	decision2 := xdbapi.StateDecision{
 		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
 			CloseType: xdbapi.FORCE_FAIL_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 
 	// Verify stateId2 was aborted and process has failed
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), persistence.StateExecutionStatusAborted)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.FAILED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.FAILED)
 }

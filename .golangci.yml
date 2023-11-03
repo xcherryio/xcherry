@@ -118,7 +118,7 @@ linters-settings:
     # minimal length of string constant, 3 by default
     min-len: 3
     # minimum occurrences of constant string count to trigger issue, 3 by default
-    min-occurrences: 3
+    min-occurrences: 30
     # ignore test files, false by default
     ignore-tests: false
     # look for existing constants matching the values, true by default

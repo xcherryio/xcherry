@@ -33,7 +33,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	}
 
 	resp, err := p.doCompleteExecuteExecutionTx(ctx, tx, request)
-	if err != nil {
+	if err != nil || resp.FailAtUpdatingGlobalAttributes {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -52,6 +52,15 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteExecuteExecutionRequest,
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewImmediateTask := false
+
+	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request)
+	if err != nil {
+		//lint:ignore nilerr reason
+		return &persistence.CompleteExecuteExecutionResponse{
+			FailAtUpdatingGlobalAttributes: true,
+			UpdatingGlobalAttributesError:  err,
+		}, nil
+	}
 
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -101,9 +110,9 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		prcExeId := request.ProcessExecutionId
 
 		for _, next := range request.StateDecision.GetNextStates() {
-			nextStateInfoJson := request.Prepare.Info
-			nextStateInfoJson.StateConfig = next.StateConfig
-			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytes(nextStateInfoJson)
+			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytesForNextState(
+				request.Prepare.Info, next.StateConfig,
+			)
 			if err != nil {
 				return nil, err
 			}

@@ -24,15 +24,31 @@ import (
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType string `json:"processType"`
-	WorkerURL   string `json:"workerURL"`
+	ProcessType           string                         `json:"processType"`
+	WorkerURL             string                         `json:"workerURL"`
+	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
-	return json.Marshal(ProcessExecutionInfoJson{
-		ProcessType: req.GetProcessType(),
-		WorkerURL:   req.GetWorkerUrl(),
-	})
+	info := ProcessExecutionInfoJson{
+		ProcessType:           req.GetProcessType(),
+		WorkerURL:             req.GetWorkerUrl(),
+		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
+	}
+	return json.Marshal(info)
+}
+
+func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
+	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
+		primaryKeys := map[string]xdbapi.TableColumnValue{}
+		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
+			primaryKeys[cfg.TableName] = cfg.PrimaryKey
+		}
+		return &InternalGlobalAttributeConfig{
+			TablePrimaryKeys: primaryKeys,
+		}
+	}
+	return nil
 }
 
 func BytesToProcessExecutionInfo(bytes []byte) (ProcessExecutionInfoJson, error) {
@@ -122,7 +138,8 @@ func NewStateExecutionLocalQueuesFromBytes(bytes []byte) (StateExecutionLocalQue
 }
 
 func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommand(
-	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand) {
+	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand,
+) {
 	if command.GetCount() == 0 {
 		command.Count = xdbapi.PtrInt32(1)
 	}
@@ -203,8 +220,10 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 // and returns:
 //
 // (true, [(id_1_1, false), (id_2_1, false), (id_2_2, false)])
-func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(stateExecutionId StateExecutionId,
-	commandWaitingType xdbapi.CommandWaitingType) (bool, []InternalLocalQueueMessage) {
+func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(
+	stateExecutionId StateExecutionId,
+	commandWaitingType xdbapi.CommandWaitingType,
+) (bool, []InternalLocalQueueMessage) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
 	var remainingCommands []xdbapi.LocalQueueCommand
@@ -261,26 +280,44 @@ func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId StateExecuti
 }
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace                   string                   `json:"namespace"`
-	ProcessId                   string                   `json:"processId"`
-	ProcessType                 string                   `json:"processType"`
-	WorkerURL                   string                   `json:"workerURL"`
-	StateConfig                 *xdbapi.AsyncStateConfig `json:"stateConfig"`
-	RecoverFromStateExecutionId *string                  `json:"recoverFromStateExecutionId,omitempty"`
-	RecoverFromApi              *xdbapi.StateApiType     `json:"recoverFromApi,omitempty"`
+	Namespace                   string                         `json:"namespace"`
+	ProcessId                   string                         `json:"processId"`
+	ProcessType                 string                         `json:"processType"`
+	WorkerURL                   string                         `json:"workerURL"`
+	StateConfig                 *xdbapi.AsyncStateConfig       `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xdbapi.StateApiType           `json:"recoverFromApi,omitempty"`
+	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
+
 	return json.Marshal(AsyncStateExecutionInfoJson{
-		Namespace:   req.Namespace,
-		ProcessId:   req.ProcessId,
-		ProcessType: req.GetProcessType(),
-		WorkerURL:   req.GetWorkerUrl(),
-		StateConfig: req.StartStateConfig,
+		Namespace:             req.Namespace,
+		ProcessId:             req.ProcessId,
+		ProcessType:           req.GetProcessType(),
+		WorkerURL:             req.GetWorkerUrl(),
+		StateConfig:           req.StartStateConfig,
+		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
 	})
 }
 
-func FromAsyncStateExecutionInfoToBytes(info AsyncStateExecutionInfoJson) ([]byte, error) {
+func FromAsyncStateExecutionInfoToBytesForNextState(
+	info AsyncStateExecutionInfoJson,
+	nextStateConfig *xdbapi.AsyncStateConfig,
+) ([]byte, error) {
+	info.StateConfig = nextStateConfig
+	return json.Marshal(info)
+}
+
+func FromAsyncStateExecutionInfoToBytesForStateRecovery(
+	info AsyncStateExecutionInfoJson,
+	stateExeId string,
+	api xdbapi.StateApiType,
+) ([]byte, error) {
+	info.RecoverFromStateExecutionId = &stateExeId
+	info.RecoverFromApi = &api
+	// TODO we need to clean up for the next state execution otherwise it will be carried over forever
 	return json.Marshal(info)
 }
 

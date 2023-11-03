@@ -52,6 +52,10 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	err = extensions.SetupSchema(sqlConfig, "../../../"+postgrestool.SampleTablesSchemaFilePath)
+	if err != nil {
+		panic(err)
+	}
 
 	store, err = sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
 	if err != nil {
@@ -59,7 +63,7 @@ func TestMain(m *testing.M) {
 	}
 
 	resultCode := m.Run()
-	fmt.Println("finished running integ test with status code", resultCode)
+	fmt.Println("finished running persistence test with status code", resultCode)
 
 	_ = extensions.DropDatabase(*sqlConfig, testDBName)
 	fmt.Println("testing database deleted")

@@ -25,6 +25,7 @@ const DefaultUserName = "xdb"
 const DefaultPassword = "xdbxdb"
 const DefaultDatabaseName = "xdb"
 const DefaultSchemaFilePath = "./extensions/postgres/schema/xdb_sys_schema.sql"
+const SampleTablesSchemaFilePath = "./extensions/postgres/schema/sample_tables.sql"
 
 // BuildCLIOptions builds the options for cli
 func BuildCLIOptions() *cli.App {

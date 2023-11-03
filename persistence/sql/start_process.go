@@ -34,7 +34,7 @@ func (p sqlProcessStoreImpl) StartProcess(
 	}
 
 	resp, err := p.doStartProcessTx(ctx, tx, request)
-	if err != nil || resp.AlreadyStarted {
+	if err != nil || resp.AlreadyStarted || resp.FailedAtWriteInitGlobalAttributes {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -53,6 +53,15 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
 ) (*persistence.StartProcessResponse, error) {
 	req := request.Request
+
+	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
+	if err != nil {
+		//lint:ignore nilerr reason
+		return &persistence.StartProcessResponse{
+			FailedAtWriteInitGlobalAttributes: true,
+			GlobalAttributeWriteError:         err,
+		}, nil
+	}
 
 	requestIdReusePolicy := xdbapi.ALLOW_IF_NO_RUNNING
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.IdReusePolicy != nil {

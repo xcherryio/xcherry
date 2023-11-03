@@ -32,37 +32,37 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	input := createTestInput()
 
 	// Start the process and verify it started correctly.
-	prcExeId := startProcess(ctx, ass, store, namespace, processId, input)
+	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
-	completeWaitUntilExecution(ctx, ass, store, prcExeId, task, prep)
+	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
@@ -82,17 +82,17 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		},
 	}
 	// Complete 'Execute' execution.
-	completeExecuteExecution(ctx, ass, store, prcExeId, task, prep, decision1, true)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision1, true)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API again
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(
 		ass,
 		prep,
@@ -120,10 +120,10 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		*xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
 	)
 
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId2, 1)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), persistence.StateExecutionStatusFailed)
 
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, stateId1, 2)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId1, 2)
 	verifyStateExecution(
 		ass,
 		prep,

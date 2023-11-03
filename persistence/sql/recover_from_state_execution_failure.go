@@ -24,7 +24,8 @@ import (
 
 func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 	ctx context.Context,
-	request persistence.RecoverFromStateExecutionFailureRequest) error {
+	request persistence.RecoverFromStateExecutionFailureRequest,
+) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return err
@@ -96,10 +97,8 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	}
 
 	// start new state execution with state id from request
-	nextStateInfo := request.Prepare.Info
-	nextStateInfo.RecoverFromStateExecutionId = &request.SourceStateExecutionId.StateId
-	nextStateInfo.RecoverFromApi = &request.SourceFailedStateApi
-	stateInfoBytes, err := persistence.FromAsyncStateExecutionInfoToBytes(nextStateInfo)
+	stateInfoBytes, err := persistence.FromAsyncStateExecutionInfoToBytesForStateRecovery(
+		request.Prepare.Info, request.SourceStateExecutionId.StateId, request.SourceFailedStateApi)
 	if err != nil {
 		return err
 	}

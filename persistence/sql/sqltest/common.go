@@ -15,6 +15,7 @@ package sqltest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,25 +45,34 @@ func createEmptyEncodedObject() xdbapi.EncodedObject {
 	}
 }
 
-func startProcess(
-	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+func startProcessWithConfigs(
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
+	namespace, processId string,
+	input xdbapi.EncodedObject, gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
 ) uuid.UUID {
-	startReq := createStartRequest(namespace, processId, input)
+	startReq := createStartRequest(namespace, processId, input, gloAttCfg, stateCfg)
 	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
+	require.NoError(t, startResp.GlobalAttributeWriteError)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
 }
 
+func startProcess(
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	return startProcessWithConfigs(ctx, t, ass, store, namespace, processId, input, nil, nil)
+}
+
 func terminateProcess(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string,
 ) {
 	resp, err := store.StopProcess(ctx, persistence.StopProcessRequest{
@@ -71,12 +81,12 @@ func terminateProcess(
 		ProcessStopType: xdbapi.TERMINATE,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.False(resp.NotExists)
 }
 
 func startProcessWithAllowIfPreviousExitAbnormally(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
@@ -85,7 +95,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -93,7 +103,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 }
 
 func startProcessWithTerminateIfRunningPolicy(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
@@ -102,7 +112,7 @@ func startProcessWithTerminateIfRunningPolicy(
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -110,7 +120,7 @@ func startProcessWithTerminateIfRunningPolicy(
 }
 
 func startProcessWithAllowIfNoRunningPolicy(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfNoRunningPolicy(namespace, processId, input)
@@ -119,7 +129,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -127,7 +137,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 }
 
 func startProcessWithDisallowReusePolicy(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithDisallowReusePolicy(namespace, processId, input)
@@ -136,12 +146,14 @@ func startProcessWithDisallowReusePolicy(
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.True(startResp.AlreadyStarted)
 	return startResp.ProcessExecutionId
 }
 
-func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -158,7 +170,9 @@ func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, proces
 	}
 }
 
-func createStartRequestWithDisallowReusePolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithDisallowReusePolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -175,7 +189,9 @@ func createStartRequestWithDisallowReusePolicy(namespace, processId string, inpu
 	}
 }
 
-func createStartRequestWithAllowIfNoRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithAllowIfNoRunningPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -192,7 +208,9 @@ func createStartRequestWithAllowIfNoRunningPolicy(namespace, processId string, i
 	}
 }
 
-func createStartRequestWithTerminateIfRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithTerminateIfRunningPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -209,7 +227,10 @@ func createStartRequestWithTerminateIfRunningPolicy(namespace, processId string,
 	}
 }
 
-func createStartRequest(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequest(
+	namespace, processId string, input xdbapi.EncodedObject,
+	gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -218,29 +239,30 @@ func createStartRequest(namespace, processId string, input xdbapi.EncodedObject)
 		WorkerUrl:        "test-url",
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
-		StartStateConfig: nil,
+		StartStateConfig: stateCfg,
 		ProcessStartConfig: &xdbapi.ProcessStartConfig{
-			TimeoutSeconds: ptr.Any(int32(100)),
+			TimeoutSeconds:        ptr.Any(int32(100)),
+			GlobalAttributeConfig: gloAttCfg,
 		},
 	}
 }
 
 func retryStartProcessForFailure(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) {
-	startReq := createStartRequest(namespace, processId, input)
+	startReq := createStartRequest(namespace, processId, input, nil, nil)
 	startResp2, err := store.StartProcess(ctx, persistence.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.True(startResp2.AlreadyStarted)
 	ass.False(startResp2.HasNewImmediateTask)
 }
 
 func describeProcess(
-	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore,
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 	namespace, processId string, processStatus xdbapi.ProcessStatus,
 ) {
 	// Incorrect process id description
@@ -248,7 +270,7 @@ func describeProcess(
 		Namespace: namespace,
 		ProcessId: "some-wrong-id",
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.True(descResp.NotExists)
 
 	// Correct process id description
@@ -256,7 +278,7 @@ func describeProcess(
 		Namespace: namespace,
 		ProcessId: processId,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.False(descResp.NotExists)
 	ass.Equal(testProcessType, descResp.Response.GetProcessType())
 	ass.Equal(testWorkerUrl, descResp.Response.GetWorkerUrl())
@@ -264,20 +286,20 @@ func describeProcess(
 }
 
 func checkAndGetImmediateTasks(
-	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 ) (int64, int64, []persistence.ImmediateTask) {
 	getTasksResp, err := store.GetImmediateTasks(ctx, persistence.GetImmediateTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.Equal(expectedLength, len(getTasksResp.Tasks))
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
 }
 
 func getAndCheckTimerTasksUpToTs(
-	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 	upToTimestamp int64,
 ) (int64, int64, []persistence.TimerTask) {
 	getTasksResp, err := store.GetTimerTasksUpToTimestamp(ctx, persistence.GetTimerTasksRequest{
@@ -285,13 +307,13 @@ func getAndCheckTimerTasksUpToTs(
 		MaxFireTimestampSecondsInclusive: upToTimestamp,
 		PageSize:                         10,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.Equal(expectedLength, len(getTasksResp.Tasks))
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
 }
 
 func getAndCheckTimerTasksUpForTimestamps(
-	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 	forTimestamps []int64, minTaskSeq int64,
 ) (int64, int64, []persistence.TimerTask) {
 	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, persistence.GetTimerTasksForTimestampsRequest{
@@ -303,7 +325,7 @@ func getAndCheckTimerTasksUpForTimestamps(
 			},
 		},
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.Equal(expectedLength, len(getTasksResp.Tasks))
 	return getTasksResp.MinSequenceInclusive, getTasksResp.MaxSequenceInclusive, getTasksResp.Tasks
 }
@@ -342,19 +364,19 @@ func verifyTimerTask(
 }
 
 func deleteAndVerifyImmediateTasksDeleted(
-	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, minSeq, maxSeq int64,
+	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, minSeq, maxSeq int64,
 ) {
 	err := store.DeleteImmediateTasks(ctx, persistence.DeleteImmediateTasksRequest{
 		ShardId:                  persistence.DefaultShardId,
 		MinTaskSequenceInclusive: minSeq,
 		MaxTaskSequenceInclusive: maxSeq,
 	})
-	ass.Nil(err)
-	checkAndGetImmediateTasks(ctx, ass, store, 0) // Expect no tasks
+	require.NoError(t, err)
+	checkAndGetImmediateTasks(ctx, t, ass, store, 0) // Expect no tasks
 }
 
 func prepareStateExecution(
-	ctx context.Context, ass *assert.Assertions,
+	ctx context.Context, t *testing.T,
 	store persistence.ProcessStore, prcExeId uuid.UUID, stateId string, stateIdSeq int32,
 ) *persistence.PrepareStateExecutionResponse {
 	stateExeId := persistence.StateExecutionId{
@@ -365,7 +387,7 @@ func prepareStateExecution(
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	return prep
 }
 
@@ -383,8 +405,9 @@ func verifyStateExecution(
 }
 
 func completeWaitUntilExecution(
-	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
 ) {
 	stateExeId := persistence.StateExecutionId{
 		StateId:         immediateTask.StateId,
@@ -399,28 +422,45 @@ func completeWaitUntilExecution(
 		},
 		TaskShardId: persistence.DefaultShardId,
 	})
-	ass.Nil(err)
+	require.NoError(t, err)
 	ass.True(compWaitResp.HasNewImmediateTask)
 }
 
 func completeExecuteExecution(
-	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
 	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+) {
+	completeExecuteExecutionWithGlobalAttributes(
+		ctx, t, ass, store, prcExeId, immediateTask, prep,
+		stateDecision, hasNewImmediateTask, nil, nil,
+	)
+}
+func completeExecuteExecutionWithGlobalAttributes(
+	ctx context.Context, t *testing.T, ass *assert.Assertions,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
+	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+	gloAttCfg *persistence.InternalGlobalAttributeConfig,
+	gloAttUpdates []xdbapi.GlobalAttributeTableRowUpdate,
 ) {
 	stateExeId := persistence.StateExecutionId{
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compWaitResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
-		ProcessExecutionId: prcExeId,
-		StateExecutionId:   stateExeId,
-		Prepare:            *prep,
-		StateDecision:      stateDecision,
-		TaskShardId:        persistence.DefaultShardId,
+	compResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+		ProcessExecutionId:         prcExeId,
+		StateExecutionId:           stateExeId,
+		Prepare:                    *prep,
+		StateDecision:              stateDecision,
+		TaskShardId:                persistence.DefaultShardId,
+		GlobalAttributeTableConfig: gloAttCfg,
+		UpdateGlobalAttributes:     gloAttUpdates,
 	})
-	ass.Nil(err)
-	ass.Equal(hasNewImmediateTask, compWaitResp.HasNewImmediateTask)
+	require.NoError(t, err)
+	require.NoError(t, compResp.UpdatingGlobalAttributesError)
+	ass.Equal(hasNewImmediateTask, compResp.HasNewImmediateTask)
 }
 
 func recoverFromFailure(
@@ -435,7 +475,8 @@ func recoverFromFailure(
 	sourceFailedStateApi xdbapi.StateApiType,
 	destinationStateId string,
 	destiantionStateConfig *xdbapi.AsyncStateConfig,
-	destinationStateInput xdbapi.EncodedObject) {
+	destinationStateInput xdbapi.EncodedObject,
+) {
 	request := persistence.RecoverFromStateExecutionFailureRequest{
 		Namespace:              namespace,
 		ProcessExecutionId:     prcExeId,
@@ -458,4 +499,16 @@ func recoverFromFailure(
 	})
 	require.NoError(t, err)
 	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
+}
+
+// this won't guarantee the actual equality, but it's good enough for our test
+// when the objects are large, it's hard to use assert.Equal or assert.ElementsMatch
+func assertProbablyEqualForIgnoringOrderByJsonEncoder(
+	t *testing.T, ass *assert.Assertions, obj1, obj2 interface{},
+) {
+	str1, err1 := json.Marshal(obj1)
+	str2, err2 := json.Marshal(obj2)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+	ass.Equal(len(str1), len(str2))
 }

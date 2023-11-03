@@ -67,6 +67,10 @@ func TestMain(m *testing.M) {
 			if err != nil {
 				panic(err)
 			}
+			err = extensions.SetupSchema(sqlConfig, "../"+postgrestool.SampleTablesSchemaFilePath)
+			if err != nil {
+				panic(err)
+			}
 
 			cfg := config.Config{
 				Log: config.Logger{

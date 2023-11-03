@@ -51,18 +51,26 @@ type SQLAdminDBSession interface {
 
 type transactionalCRUD interface {
 	InsertLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
-	SelectLatestProcessExecutionForUpdate(ctx context.Context, namespace string, processId string) (*LatestProcessExecutionRow, bool, error)
+	SelectLatestProcessExecutionForUpdate(
+		ctx context.Context, namespace string, processId string,
+	) (*LatestProcessExecutionRow, bool, error)
 	UpdateLatestProcessExecution(ctx context.Context, row LatestProcessExecutionRow) error
 
 	InsertProcessExecution(ctx context.Context, row ProcessExecutionRow) error
-	SelectProcessExecutionForUpdate(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
+	SelectProcessExecutionForUpdate(
+		ctx context.Context, processExecutionId uuid.UUID,
+	) (*ProcessExecutionRowForUpdate, error)
 	SelectProcessExecution(ctx context.Context, processExecutionId uuid.UUID) (*ProcessExecutionRowForUpdate, error)
 	UpdateProcessExecution(ctx context.Context, row ProcessExecutionRowForUpdate) error
 
 	InsertAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRow) error
-	SelectAsyncStateExecutionForUpdate(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRowForUpdate, error)
+	SelectAsyncStateExecutionForUpdate(
+		ctx context.Context, filter AsyncStateExecutionSelectFilter,
+	) (*AsyncStateExecutionRowForUpdate, error)
 	UpdateAsyncStateExecution(ctx context.Context, row AsyncStateExecutionRowForUpdate) error
-	UpdateAsyncStateExecutionWithoutCommands(ctx context.Context, row AsyncStateExecutionRowForUpdateWithoutCommands) error
+	UpdateAsyncStateExecutionWithoutCommands(
+		ctx context.Context, row AsyncStateExecutionRowForUpdateWithoutCommands,
+	) error
 	BatchUpdateAsyncStateExecutionsToAbortRunning(ctx context.Context, processExecutionId uuid.UUID) error
 	InsertImmediateTask(ctx context.Context, row ImmediateTaskRowForInsert) error
 	InsertTimerTask(ctx context.Context, row TimerTaskRowForInsert) error
@@ -71,14 +79,25 @@ type transactionalCRUD interface {
 	DeleteTimerTask(ctx context.Context, filter TimerTaskRowDeleteFilter) error
 
 	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
+
+	InsertCustomTableErrorOnConflict(ctx context.Context, row CustomTableRowForInsert) error
+	InsertCustomTableIgnoreOnConflict(ctx context.Context, row CustomTableRowForInsert) error
+	InsertCustomTableOverrideOnConflict(ctx context.Context, row CustomTableRowForInsert) error
+	UpsertCustomTableByPK(
+		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+	) error
 }
 
 type nonTransactionalCRUD interface {
 	SelectLatestProcessExecution(ctx context.Context, namespace string, processId string) (*ProcessExecutionRow, error)
 
-	SelectAsyncStateExecution(ctx context.Context, filter AsyncStateExecutionSelectFilter) (*AsyncStateExecutionRow, error)
+	SelectAsyncStateExecution(
+		ctx context.Context, filter AsyncStateExecutionSelectFilter,
+	) (*AsyncStateExecutionRow, error)
 
-	BatchSelectImmediateTasks(ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32) ([]ImmediateTaskRow, error)
+	BatchSelectImmediateTasks(
+		ctx context.Context, shardId int32, startSequenceInclusive int64, pageSize int32,
+	) ([]ImmediateTaskRow, error)
 	BatchDeleteImmediateTask(ctx context.Context, filter ImmediateTaskRangeDeleteFilter) error
 
 	BatchSelectTimerTasks(ctx context.Context, filter TimerTaskRangeSelectFilter) ([]TimerTaskRow, error)
@@ -86,7 +105,13 @@ type nonTransactionalCRUD interface {
 
 	CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
-	SelectLocalQueueMessages(ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string) ([]LocalQueueMessageRow, error)
+	SelectLocalQueueMessages(
+		ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string,
+	) ([]LocalQueueMessageRow, error)
+
+	SelectCustomTableByPK(
+		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
+	) (*CustomTableRowSelect, error)
 }
 
 type ErrorChecker interface {

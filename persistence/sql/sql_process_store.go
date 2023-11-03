@@ -15,7 +15,6 @@ package sql
 
 import (
 	"database/sql"
-
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/config"
 	"github.com/xdblab/xdb/extensions"

@@ -30,9 +30,11 @@ type (
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId  uuid.UUID
-		AlreadyStarted      bool
-		HasNewImmediateTask bool
+		ProcessExecutionId                uuid.UUID
+		AlreadyStarted                    bool
+		HasNewImmediateTask               bool
+		FailedAtWriteInitGlobalAttributes bool
+		GlobalAttributeWriteError         error
 	}
 
 	StopProcessRequest struct {
@@ -196,7 +198,8 @@ type (
 	}
 
 	PrepareStateExecutionResponse struct {
-		Status                  StateExecutionStatus
+		Status StateExecutionStatus
+		// only applicable for state execute API
 		WaitUntilCommandResults xdbapi.CommandResults
 
 		// PreviousVersion is for conditional check in the future transactional update
@@ -235,11 +238,17 @@ type (
 		Prepare             PrepareStateExecutionResponse
 		StateDecision       xdbapi.StateDecision
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
-		TaskShardId         int32
+
+		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
+		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+
+		TaskShardId int32
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		HasNewImmediateTask bool
+		HasNewImmediateTask            bool
+		FailAtUpdatingGlobalAttributes bool
+		UpdatingGlobalAttributesError  error
 	}
 
 	PublishToLocalQueueRequest struct {
@@ -263,6 +272,15 @@ type (
 
 	ProcessLocalQueueMessagesResponse struct {
 		HasNewImmediateTask bool
+	}
+
+	LoadGlobalAttributesRequest struct {
+		TableConfig InternalGlobalAttributeConfig
+		Request     xdbapi.LoadGlobalAttributesRequest
+	}
+
+	LoadGlobalAttributesResponse struct {
+		Response xdbapi.LoadGlobalAttributeResponse
 	}
 )
 
