@@ -21,6 +21,7 @@
 package tag
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -131,6 +132,15 @@ func AnyToStr(v interface{}) string {
 
 func Value(v interface{}) Tag {
 	return newObjectTag("value", v)
+}
+
+func JsonValue(v interface{}) Tag {
+	bs, err := json.Marshal(v)
+	str := string(bs)
+	if err != nil {
+		str = "failed to marshal to json"
+	}
+	return newStringTag("jsonValue", str)
 }
 
 func UnixTimestamp(v int64) Tag {

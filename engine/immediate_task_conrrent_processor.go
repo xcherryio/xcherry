@@ -346,7 +346,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 
 	var resp *xdbapi.AsyncStateExecuteResponse
 	var httpResp *http.Response
-	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep)
+	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
 	if errToCheck == nil {
 		req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
 		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
@@ -578,7 +578,7 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
-	ctx context.Context, prep persistence.PrepareStateExecutionResponse,
+	ctx context.Context, prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask,
 ) (*persistence.LoadGlobalAttributesResponse, error) {
 	if prep.Info.StateConfig == nil ||
 		prep.Info.StateConfig.LoadGlobalAttributesRequest == nil {
@@ -590,8 +590,20 @@ func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
 			fmt.Errorf("global attribute config is not available")
 	}
 
-	return w.store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
+	w.logger.Debug("loading global attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(prep.Info.StateConfig),
+		tag.JsonValue(prep.Info.GlobalAttributeConfig))
+
+	resp, err := w.store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
+
+	w.logger.Debug("loaded global attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(resp),
+		tag.Error(err))
+
+	return resp, err
 }
