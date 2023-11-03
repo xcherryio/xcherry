@@ -21,40 +21,40 @@ import (
 )
 
 func TestBasic(t *testing.T) {
-	sqltest.SQLBasicTest(assert.New(t), store)
+	sqltest.SQLBasicTest(t, assert.New(t), store)
 }
 
 func TestGracefulComplete(t *testing.T) {
-	sqltest.SQLGracefulCompleteTest(assert.New(t), store)
+	sqltest.SQLGracefulCompleteTest(t, assert.New(t), store)
 }
 
 func TestForceFail(t *testing.T) {
-	sqltest.SQLForceFailTest(assert.New(t), store)
+	sqltest.SQLForceFailTest(t, assert.New(t), store)
 }
 
 func TestProcessIdReusePolicyDisallowReuse(t *testing.T) {
-	sqltest.SQLProcessIdReusePolicyDisallowReuseTest(assert.New(t), store)
+	sqltest.SQLProcessIdReusePolicyDisallowReuseTest(t, assert.New(t), store)
 }
 
 func TestProcessIdReusePolicyAllowIfNoRunning(t *testing.T) {
-	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(assert.New(t), store)
+	sqltest.SQLProcessIdReusePolicyAllowIfNoRunning(t, assert.New(t), store)
 }
 
 func TestProcessIdReusePolicyTerminateIfRunning(t *testing.T) {
-	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(assert.New(t), store)
+	sqltest.SQLProcessIdReusePolicyTerminateIfRunning(t, assert.New(t), store)
 }
 
 func TestProcessIdReusePolicyAllowIfPreviousExitAbnormally(t *testing.T) {
-	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(assert.New(t), store)
+	sqltest.SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(t, assert.New(t), store)
 }
 
 func TestProcessIdReusePolicyDefault(t *testing.T) {
-	sqltest.SQLProcessIdReusePolicyDefault(assert.New(t), store)
+	sqltest.SQLProcessIdReusePolicyDefault(t, assert.New(t), store)
 }
 
 func TestBackoffTimer(t *testing.T) {
 	sqltest.CleanupEnv(assert.New(t), store)
-	sqltest.SQLBackoffTest(assert.New(t), store)
+	sqltest.SQLBackoffTest(t, assert.New(t), store)
 }
 
 func TestStateFailureRecovery(t *testing.T) {
@@ -64,5 +64,5 @@ func TestStateFailureRecovery(t *testing.T) {
 
 func TestGlobalAttributes(t *testing.T) {
 	sqltest.CleanupEnv(assert.New(t), store)
-	sqltest.SQLGlobalAttributesTest(assert.New(t), store)
+	sqltest.SQLGlobalAttributesTest(t, assert.New(t), store)
 }

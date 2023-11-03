@@ -16,6 +16,8 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +26,7 @@ import (
 	"github.com/xdblab/xdb/persistence"
 )
 
-func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessStore) {
+func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
@@ -100,25 +102,25 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 		LoadGlobalAttributesRequest: loadReq1,
 	}
 	// Start the process and verify it started correctly.
-	prcExeId := startProcessWithConfigs(ctx, ass, store, namespace, processId, input, gloAttCfg, stateCfg)
+	prcExeId := startProcessWithConfigs(ctx, t, ass, store, namespace, processId, input, gloAttCfg, stateCfg)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for first Execute API
-	prep := prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	gloAttResp, err := store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
-	ass.NoError(err)
+	require.NoError(t, err)
 	expectedResp1 := xdbapi.LoadGlobalAttributeResponse{
 		TableResponses: []xdbapi.TableReadResponse{
 			{
@@ -212,24 +214,24 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 	}
 
 	completeExecuteExecutionWithGlobalAttributes(
-		ctx, ass, store, prcExeId, task, prep, decision1, true,
+		ctx, t, ass, store, prcExeId, task, prep, decision1, true,
 		prep.Info.GlobalAttributeConfig, updates)
 
-	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, ass, store, 1)
+	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
 
 	// Delete and verify immediate tasks are deleted.
-	deleteAndVerifyImmediateTasksDeleted(ctx, ass, store, minSeq, maxSeq)
+	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
-	prep = prepareStateExecution(ctx, ass, store, prcExeId, task.StateId, task.StateIdSequence)
+	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
 
 	gloAttResp, err = store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
-	ass.NoError(err)
+	require.NoError(t, err)
 	expectedResp2 := xdbapi.LoadGlobalAttributeResponse{
 		TableResponses: []xdbapi.TableReadResponse{
 			{
@@ -264,7 +266,7 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 		},
 	}
 	completeExecuteExecution(
-		ctx, ass, store, prcExeId, task, prep, decision2, false)
-	checkAndGetImmediateTasks(ctx, ass, store, 0)
-	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
+		ctx, t, ass, store, prcExeId, task, prep, decision2, false)
+	checkAndGetImmediateTasks(ctx, t, ass, store, 0)
+	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
 }
