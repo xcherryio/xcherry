@@ -279,7 +279,7 @@ func assertEqualIgnoringOrderByJsonEncoder(
 ) {
 	str1, err1 := json.Marshal(obj1)
 	str2, err2 := json.Marshal(obj2)
-	ass.NoError(err1)
-	ass.NoError(err2)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
 	ass.Equal(string(str1), string(str2))
 }
