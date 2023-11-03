@@ -43,7 +43,7 @@ See [contribution](./CONTRIBUTING.md)
   - [x] Basic sequential execution
   - [x] Parallel execution of multiple states
   - [x] StateOption: WaitUntil/Execute API timeout and retry policy
-  - [ ] AsyncState failure policy for recovery
+  - [x] AsyncState failure policy for recovery
 - [ ] StateDecision
   - [x] Single next State
   - [x] Multiple next states
@@ -53,24 +53,27 @@ See [contribution](./CONTRIBUTING.md)
   - [x] Dead end
   - [ ] Conditional complete process with checking queue emptiness
 - [ ] Commands
-  - [ ] AnyOfCompletion and AllOfCompletion waitingType
+  - [x] AnyOf waitingType
+  - [ ] AllOf waitingType
   - [ ] TimerCommand
-- [ ] LocalQueue
-  - [ ] LocalQueueCommand
-  - [ ] MessageId for deduplication
-  - [ ] SendMessage API without RPC
+- [x] LocalQueue
+  - [x] LocalQueueCommand
+  - [x] MessageId for deduplication
+  - [x] SendMessage API without RPC
 - [ ] LocalAttribute persistence
-  - [ ] LoadingPolicy (attribute selection + locking)
+  - [ ] LoadingPolicy (attribute selection + no locking)
   - [ ] InitialUpsert
-- [ ] GlobalAttribute  persistence
-  - [ ] LoadingPolicy (attribute selection + locking)
-  - [ ] InitialUpsert
-  - [ ] Multi-tables
+  - [ ] Exclusive+Shared LockingPolicy
+- [x] GlobalAttribute  persistence
+  - [x] LoadingPolicy (attribute selection + no locking)
+  - [x] InitialUpsert
+  - [x] Multi-tables
+  - [ ] Exclusive+Shared LockingPolicy
 - [ ] RPC
   - [ ] Basic
   - [ ] Persistence
   - [ ] Communication
-- [ ] API error handling for canceled, failed, timeout, terminated
+- [x] API error handling for canceled, failed, timeout, terminated
 - [x] StopProcessExecution API
 - [ ] WaitForStateCompletion API
 - [ ] ResetStateExecution for operation
