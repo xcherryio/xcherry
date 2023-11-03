@@ -44,11 +44,11 @@ func createEmptyEncodedObject() xdbapi.EncodedObject {
 	}
 }
 
-func startProcess(
-	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+func startProcessWithConfigs(
+	ctx context.Context, ass *assert.Assertions, store persistence.ProcessStore, namespace, processId string,
+	input xdbapi.EncodedObject, gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
 ) uuid.UUID {
-	startReq := createStartRequest(namespace, processId, input)
+	startReq := createStartRequest(namespace, processId, input, gloAttCfg, stateCfg)
 	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
@@ -59,6 +59,13 @@ func startProcess(
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
 	return startResp.ProcessExecutionId
+}
+
+func startProcess(
+	ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+) uuid.UUID {
+	return startProcessWithConfigs(ctx, ass, store, namespace, processId, input, nil, nil)
 }
 
 func terminateProcess(
@@ -141,7 +148,9 @@ func startProcessWithDisallowReusePolicy(
 	return startResp.ProcessExecutionId
 }
 
-func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -158,7 +167,9 @@ func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, proces
 	}
 }
 
-func createStartRequestWithDisallowReusePolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithDisallowReusePolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -175,7 +186,9 @@ func createStartRequestWithDisallowReusePolicy(namespace, processId string, inpu
 	}
 }
 
-func createStartRequestWithAllowIfNoRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithAllowIfNoRunningPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -192,7 +205,9 @@ func createStartRequestWithAllowIfNoRunningPolicy(namespace, processId string, i
 	}
 }
 
-func createStartRequestWithTerminateIfRunningPolicy(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequestWithTerminateIfRunningPolicy(
+	namespace, processId string, input xdbapi.EncodedObject,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -209,7 +224,10 @@ func createStartRequestWithTerminateIfRunningPolicy(namespace, processId string,
 	}
 }
 
-func createStartRequest(namespace, processId string, input xdbapi.EncodedObject) xdbapi.ProcessExecutionStartRequest {
+func createStartRequest(
+	namespace, processId string, input xdbapi.EncodedObject,
+	gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
+) xdbapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xdbapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
@@ -218,9 +236,10 @@ func createStartRequest(namespace, processId string, input xdbapi.EncodedObject)
 		WorkerUrl:        "test-url",
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
-		StartStateConfig: nil,
+		StartStateConfig: stateCfg,
 		ProcessStartConfig: &xdbapi.ProcessStartConfig{
-			TimeoutSeconds: ptr.Any(int32(100)),
+			TimeoutSeconds:        ptr.Any(int32(100)),
+			GlobalAttributeConfig: gloAttCfg,
 		},
 	}
 }
@@ -229,7 +248,7 @@ func retryStartProcessForFailure(
 	ctx context.Context, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) {
-	startReq := createStartRequest(namespace, processId, input)
+	startReq := createStartRequest(namespace, processId, input, nil, nil)
 	startResp2, err := store.StartProcess(ctx, persistence.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
@@ -384,7 +403,8 @@ func verifyStateExecution(
 
 func completeWaitUntilExecution(
 	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
 ) {
 	stateExeId := persistence.StateExecutionId{
 		StateId:         immediateTask.StateId,
@@ -405,19 +425,35 @@ func completeWaitUntilExecution(
 
 func completeExecuteExecution(
 	ctx context.Context, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask, prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
 	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+) {
+	completeExecuteExecutionWithGlobalAttributes(
+		ctx, ass, store, prcExeId, immediateTask, prep,
+		stateDecision, hasNewImmediateTask, nil, nil,
+	)
+}
+func completeExecuteExecutionWithGlobalAttributes(
+	ctx context.Context, ass *assert.Assertions,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
+	prep *persistence.PrepareStateExecutionResponse,
+	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+	gloAttCfg *persistence.InternalGlobalAttributeConfig,
+	gloAttUpdates []xdbapi.GlobalAttributeTableRowUpdate,
 ) {
 	stateExeId := persistence.StateExecutionId{
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
 	compWaitResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
-		ProcessExecutionId: prcExeId,
-		StateExecutionId:   stateExeId,
-		Prepare:            *prep,
-		StateDecision:      stateDecision,
-		TaskShardId:        persistence.DefaultShardId,
+		ProcessExecutionId:         prcExeId,
+		StateExecutionId:           stateExeId,
+		Prepare:                    *prep,
+		StateDecision:              stateDecision,
+		TaskShardId:                persistence.DefaultShardId,
+		GlobalAttributeTableConfig: gloAttCfg,
+		UpdateGlobalAttributes:     gloAttUpdates,
 	})
 	ass.Nil(err)
 	ass.Equal(hasNewImmediateTask, compWaitResp.HasNewImmediateTask)
@@ -435,7 +471,8 @@ func recoverFromFailure(
 	sourceFailedStateApi xdbapi.StateApiType,
 	destinationStateId string,
 	destiantionStateConfig *xdbapi.AsyncStateConfig,
-	destinationStateInput xdbapi.EncodedObject) {
+	destinationStateInput xdbapi.EncodedObject,
+) {
 	request := persistence.RecoverFromStateExecutionFailureRequest{
 		Namespace:              namespace,
 		ProcessExecutionId:     prcExeId,

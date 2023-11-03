@@ -53,7 +53,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 ) (*persistence.CompleteExecuteExecutionResponse, error) {
 	hasNewImmediateTask := false
 
-	err := p.updateGlobalAttributesIfNeeded(ctx, tx, *request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
+	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request)
 	if err != nil {
 		return &persistence.CompleteExecuteExecutionResponse{
 			FailAtUpdatingGlobalAttributes: true,
