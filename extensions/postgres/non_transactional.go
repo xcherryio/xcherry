@@ -15,6 +15,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"github.com/xdblab/xdb/common/uuid"
 	"strings"
 
@@ -164,7 +165,13 @@ func (d dbSession) SelectCustomTableByPK(
 
 	columnToValue := map[string]string{}
 	for i := range colsToScan {
-		columnToValue[columns[i]] = *colsToScan[i].(*string)
+		ele := colsToScan[i]
+		strPtr, ok := ele.(*string)
+		if ok {
+			columnToValue[columns[i]] = *strPtr
+		} else {
+			return nil, fmt.Errorf("unexpected type %v", ele)
+		}
 	}
 	return &extensions.CustomTableRowSelect{
 		ColumnToValue: columnToValue,

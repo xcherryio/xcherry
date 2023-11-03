@@ -118,7 +118,7 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
-	ass.Nil(err)
+	ass.NoError(err)
 	expectedResp1 := xdbapi.LoadGlobalAttributeResponse{
 		TableResponses: []xdbapi.TableReadResponse{
 			{
@@ -229,7 +229,7 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
-	ass.Nil(err)
+	ass.NoError(err)
 	expectedResp2 := xdbapi.LoadGlobalAttributeResponse{
 		TableResponses: []xdbapi.TableReadResponse{
 			{
@@ -265,6 +265,6 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 	}
 	completeExecuteExecution(
 		ctx, ass, store, prcExeId, task, prep, decision2, false)
-	_, _, _ = checkAndGetImmediateTasks(ctx, ass, store, 0)
+	checkAndGetImmediateTasks(ctx, ass, store, 0)
 	describeProcess(ctx, ass, store, namespace, processId, xdbapi.COMPLETED)
 }

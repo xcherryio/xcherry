@@ -55,6 +55,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request)
 	if err != nil {
+		//lint:ignore nilerr reason
 		return &persistence.CompleteExecuteExecutionResponse{
 			FailAtUpdatingGlobalAttributes: true,
 			UpdatingGlobalAttributesError:  err,

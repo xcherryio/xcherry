@@ -56,6 +56,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
 	if err != nil {
+		//lint:ignore nilerr reason
 		return &persistence.StartProcessResponse{
 			FailedAtWriteInitGlobalAttributes: true,
 			GlobalAttributeWriteError:         err,
