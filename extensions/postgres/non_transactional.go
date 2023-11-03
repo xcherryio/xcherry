@@ -140,7 +140,7 @@ func (d dbSession) SelectLocalQueueMessages(
 func (d dbSession) SelectCustomTableByPK(
 	ctx context.Context, tableName string, pkName, pkValue string, columns []string,
 ) (*extensions.CustomTableRowSelect, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT `+pkName+`, `+
+	row := d.db.QueryRowContext(ctx, `SELECT `+
 		strings.Join(columns, ", ")+` FROM `+
 		tableName+` WHERE `+pkName+` = $1`, pkValue)
 	if row.Err() != nil {

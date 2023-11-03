@@ -179,7 +179,8 @@ func SQLGlobalAttributesTest(ass *assert.Assertions, store persistence.ProcessSt
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
 			{
-				StateId: stateId2,
+				StateId:    stateId2,
+				StateInput: &input,
 				// no input, skip waitUntil
 				StateConfig: &xdbapi.AsyncStateConfig{
 					SkipWaitUntil:               ptr.Any(true),

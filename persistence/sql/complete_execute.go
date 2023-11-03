@@ -57,6 +57,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	if err != nil {
 		return &persistence.CompleteExecuteExecutionResponse{
 			FailAtUpdatingGlobalAttributes: true,
+			UpdatingGlobalAttributesError:  err,
 		}, nil
 	}
 

@@ -246,8 +246,9 @@ type (
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		FailAtUpdatingGlobalAttributes bool
 		HasNewImmediateTask            bool
+		FailAtUpdatingGlobalAttributes bool
+		UpdatingGlobalAttributesError  error
 	}
 
 	PublishToLocalQueueRequest struct {

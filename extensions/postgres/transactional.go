@@ -315,7 +315,7 @@ func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row exten
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
     	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT DO `+updateClause)
+		ON CONFLICT (`+row.PrimaryKey+`) DO `+updateClause)
 	return err
 }
 
@@ -335,9 +335,11 @@ func (d dbTx) UpsertCustomTableByPK(
 	}
 	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
 
+	// TODO get additonal conflict targets from request
+	// support from https://github.com/xdblab/xdb-golang-sdk/issues/30
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)
     	VALUES ('`+pkValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT DO `+updateClause)
+		ON CONFLICT (`+pkName+`) DO `+updateClause)
 	return err
 }

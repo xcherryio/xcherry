@@ -55,6 +55,7 @@ func startProcessWithConfigs(
 	})
 
 	ass.Nil(err)
+	ass.Nil(startResp.GlobalAttributeWriteError)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -446,7 +447,7 @@ func completeExecuteExecutionWithGlobalAttributes(
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compWaitResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+	compResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
 		ProcessExecutionId:         prcExeId,
 		StateExecutionId:           stateExeId,
 		Prepare:                    *prep,
@@ -456,7 +457,8 @@ func completeExecuteExecutionWithGlobalAttributes(
 		UpdateGlobalAttributes:     gloAttUpdates,
 	})
 	ass.Nil(err)
-	ass.Equal(hasNewImmediateTask, compWaitResp.HasNewImmediateTask)
+	ass.Nil(compResp.UpdatingGlobalAttributesError)
+	ass.Equal(hasNewImmediateTask, compResp.HasNewImmediateTask)
 }
 
 func recoverFromFailure(
