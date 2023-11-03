@@ -54,8 +54,8 @@ See [contribution](./CONTRIBUTING.md)
   - [ ] Conditional complete process with checking queue emptiness
 - [ ] Commands
   - [x] AnyOf waitingType
-  - [ ] AllOf waitingType
-  - [ ] TimerCommand
+  - [x] AllOf waitingType
+  - [x] TimerCommand
 - [x] LocalQueue
   - [x] LocalQueueCommand
   - [x] MessageId for deduplication
