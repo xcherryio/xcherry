@@ -16,6 +16,7 @@ package integTests
 import (
 	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
 	"github.com/xdblab/xdb-golang-sdk/integTests/failure_recovery"
+	"github.com/xdblab/xdb-golang-sdk/integTests/global_attribute"
 	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
 	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
 	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
@@ -41,6 +42,8 @@ func init() {
 		&state_decision.ForceFailProcess{},
 		&state_decision.DeadEndProcess{},
 		&stateretry.BackoffProcess{},
+		&global_attribute.SingleTableProcess{},
+		&global_attribute.MultiTablesProcess{},
 	)
 	if err != nil {
 		panic(err)

@@ -337,6 +337,7 @@ func (d dbTx) UpsertCustomTableByPK(
 
 	// TODO get additonal conflict targets from request
 	// support from https://github.com/xdblab/xdb-golang-sdk/issues/30
+	// ??or maybe put all the columns in the conflict target??
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)
     	VALUES ('`+pkValue+`', `+strings.Join(vals, ", ")+`)

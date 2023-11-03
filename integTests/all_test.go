@@ -14,6 +14,7 @@
 package integTests
 
 import (
+	"github.com/xdblab/xdb-golang-sdk/integTests/global_attribute"
 	"testing"
 
 	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
@@ -80,4 +81,12 @@ func TestStateFailureRecoveryExecuteNoWaitUntil(t *testing.T) {
 
 func TestStateFailureRecoveryExecuteFailedAtStart(t *testing.T) {
 	failure_recovery.TestStateFailureRecoveryTestExecuteFailedAtStartProcess(t, client)
+}
+
+func TestGlobalAttributesWithSingleTable(t *testing.T) {
+	global_attribute.TestGlobalAttributesWithSingleTable(t, client)
+}
+
+func TestGlobalAttributesWithMultiTables(t *testing.T) {
+	global_attribute.TestGlobalAttributesWithMultiTables(t, client)
 }
