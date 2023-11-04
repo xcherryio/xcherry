@@ -22,14 +22,14 @@ import (
 	"testing"
 )
 
-func TestStateExecutionLocalQueuesJsonConsume(t *testing.T) {
+func TestStateExecutionLocalQueuesAddMessageAndTryConsume(t *testing.T) {
 	uuid_q1_1 := uuid.MustNewUUID()
 	uuid_q1_2 := uuid.MustNewUUID()
 	uuid_q2_1 := uuid.MustNewUUID()
 	uuid_q2_2 := uuid.MustNewUUID()
 
 	stateExecutionLocalQueues := persistence.NewStateExecutionLocalQueues()
-	prepareDataForConsume(stateExecutionLocalQueues)
+	prepareDataForAddMessageAndTryConsume(stateExecutionLocalQueues)
 
 	// Data:
 	//	state_1, 1: (q1, 2),
@@ -102,7 +102,7 @@ func TestStateExecutionLocalQueuesJsonConsume(t *testing.T) {
 	}}, stateExecutionLocalQueues.UnconsumedLocalQueueMessages["q1"])
 }
 
-func TestStateExecutionLocalQueuesJsonConsumeFor_All_consumed(t *testing.T) {
+func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_consumed(t *testing.T) {
 	uuids := []uuid.UUID{}
 	uuid_q1_1 := uuid.MustNewUUID()
 	uuid_q1_2 := uuid.MustNewUUID()
@@ -116,7 +116,12 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_All_consumed(t *testing.T) {
 	uuids = append(uuids, uuid_q3_1)
 
 	stateExecutionLocalQueues := persistence.NewStateExecutionLocalQueues()
-	prepareDataForConsumeFor(stateExecutionLocalQueues, uuids)
+	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, []xdbapi.LocalQueueCommand{
+		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
+	})
 
 	// Return UnconsumedMessageQueueCountMap as:
 	//
@@ -155,7 +160,7 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_All_consumed(t *testing.T) {
 	assert.Empty(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap)
 }
 
-func TestStateExecutionLocalQueuesJsonConsumeFor_All_notAllConsumed(t *testing.T) {
+func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed(t *testing.T) {
 	uuids := []uuid.UUID{}
 	uuid_q1_1 := uuid.MustNewUUID()
 	uuid_q1_2 := uuid.MustNewUUID()
@@ -169,12 +174,12 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_All_notAllConsumed(t *testing.T
 	uuids = append(uuids, uuid_q3_1)
 
 	stateExecutionLocalQueues := persistence.NewStateExecutionLocalQueues()
-	prepareDataForConsumeFor(stateExecutionLocalQueues, uuids)
+	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
 
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
-		{QueueName: "q3", Count: ptr.Any(int32(2))},
+		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))}, {QueueName: "q3", Count: ptr.Any(int32(2))},
 	})
 
 	// Return UnconsumedMessageQueueCountMap as:
@@ -221,7 +226,7 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_All_notAllConsumed(t *testing.T
 	}, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"][2])
 }
 
-func TestStateExecutionLocalQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
+func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *testing.T) {
 	uuids := []uuid.UUID{}
 	uuid_q1_1 := uuid.MustNewUUID()
 	uuid_q1_2 := uuid.MustNewUUID()
@@ -235,7 +240,12 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 	uuids = append(uuids, uuid_q3_1)
 
 	stateExecutionLocalQueues := persistence.NewStateExecutionLocalQueues()
-	prepareDataForConsumeFor(stateExecutionLocalQueues, uuids)
+	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+		StateId: "state_1", StateIdSequence: 1,
+	}, []xdbapi.LocalQueueCommand{
+		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
+	})
 
 	// Return UnconsumedMessageQueueCountMap as:
 	//
@@ -274,7 +284,7 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_Any_consumed(t *testing.T) {
 	assert.Empty(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap)
 }
 
-func TestStateExecutionLocalQueuesJsonConsumeFor_Any_notConsumed(t *testing.T) {
+func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t *testing.T) {
 	uuid_q1_1 := uuid.MustNewUUID()
 
 	stateExecutionLocalQueues := persistence.NewStateExecutionLocalQueues()
@@ -331,7 +341,7 @@ func TestStateExecutionLocalQueuesJsonConsumeFor_Any_notConsumed(t *testing.T) {
 //	state_1, 1: (q1, 2),
 //	state_1, 2: (q2, 3),
 //	state_3, 1: (q1: 1), (q2, 2)
-func prepareDataForConsume(stateExecutionLocalQueues persistence.StateExecutionLocalQueuesJson) {
+func prepareDataForAddMessageAndTryConsume(stateExecutionLocalQueues persistence.StateExecutionLocalQueuesJson) {
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
@@ -358,7 +368,7 @@ func prepareDataForConsume(stateExecutionLocalQueues persistence.StateExecutionL
 // and StateToLocalQueueCommandsMap["state_1-1"] as:
 //
 // (q1, 1), (q2, 2)
-func prepareDataForConsumeFor(stateExecutionLocalQueues persistence.StateExecutionLocalQueuesJson, dedupIds []uuid.UUID) {
+func prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues persistence.StateExecutionLocalQueuesJson, dedupIds []uuid.UUID) {
 	stateExecutionLocalQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q1", DedupId: dedupIds[0],
 	})
@@ -373,11 +383,5 @@ func prepareDataForConsumeFor(stateExecutionLocalQueues persistence.StateExecuti
 	})
 	stateExecutionLocalQueues.AddMessageAndTryConsume(persistence.LocalQueueMessageInfoJson{
 		QueueName: "q3", DedupId: dedupIds[4],
-	})
-
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
-		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
-		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
 	})
 }
