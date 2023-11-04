@@ -101,8 +101,12 @@ type (
 		FireTimestampSeconds int64
 	}
 
-	ConvertTimerTaskToImmediateTaskRequest struct {
+	ProcessTimerTaskRequest struct {
 		Task TimerTask
+	}
+
+	ProcessTimerTaskResponse struct {
+		HasNewImmediateTask bool
 	}
 
 	ImmediateTask struct {
@@ -222,6 +226,7 @@ type (
 
 	ProcessWaitUntilExecutionResponse struct {
 		HasNewImmediateTask bool
+		FireTimestamps      []int64
 	}
 
 	CompleteWaitUntilExecutionRequest struct {

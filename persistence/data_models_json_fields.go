@@ -114,15 +114,15 @@ type InternalLocalQueueMessage struct {
 }
 
 type StateExecutionLocalQueuesJson struct {
-	// { state_execution_id_1: [ (queue_name_1, count_1), (queue_name_2, count_2), ... ], ... }
-	StateToLocalQueueCommandsMap map[string][]xdbapi.LocalQueueCommand `json:"stateToLocalQueueCommandsMap"`
+	// { state_execution_id_1: { 1: (queue_name_2, count_2), ... }, ... }
+	StateToLocalQueueCommandsMap map[string]map[int]xdbapi.LocalQueueCommand `json:"stateToLocalQueueCommandsMap"`
 	// { queue_name_1: [dedupId_1, dedupId_2, ...], queue_name_2: [dedup_id, ...], ... }
 	UnconsumedLocalQueueMessages map[string][]InternalLocalQueueMessage `json:"unconsumedLocalQueueMessages"`
 }
 
 func NewStateExecutionLocalQueues() StateExecutionLocalQueuesJson {
 	return StateExecutionLocalQueuesJson{
-		StateToLocalQueueCommandsMap: map[string][]xdbapi.LocalQueueCommand{},
+		StateToLocalQueueCommandsMap: map[string]map[int]xdbapi.LocalQueueCommand{},
 		UnconsumedLocalQueueMessages: map[string][]InternalLocalQueueMessage{},
 	}
 }
@@ -137,37 +137,43 @@ func NewStateExecutionLocalQueuesFromBytes(bytes []byte) (StateExecutionLocalQue
 	return localQueuesJson, err
 }
 
-func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommand(
-	stateExecutionId StateExecutionId, command xdbapi.LocalQueueCommand,
-) {
-	if command.GetCount() == 0 {
-		command.Count = xdbapi.PtrInt32(1)
+func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommands(
+	stateExecutionId StateExecutionId, localQueueCommands []xdbapi.LocalQueueCommand) {
+	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
+	_, ok := s.StateToLocalQueueCommandsMap[stateExecutionIdKey]
+	if !ok {
+		s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = map[int]xdbapi.LocalQueueCommand{}
 	}
 
-	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
+	for idx, command := range localQueueCommands {
+		if command.GetCount() == 0 {
+			command.Count = xdbapi.PtrInt32(1)
+		}
 
-	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey], command)
+		s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx] = command
+	}
 }
 
-// AddMessageAndTryConsume returns (StateExecutionId string, InternalLocalQueueMessages) where the StateExecutionId consumes these messages.
+// AddMessageAndTryConsume returns (StateExecutionId string, index of the command, InternalLocalQueueMessages)
+// where the StateExecutionId consumes these messages for the command.
 //
 // E.g., given StateToLocalQueueCommandsMap as:
 //
-//	state_1, 1: (q1, 2),
-//	state_1, 2: (q2, 3),
-//	state_3, 1: (q1: 1), (q2, 2)
+//	state_1, 1: 0: (q1, 2),
+//	state_1, 2: 0: (q2, 3),
+//	state_3, 1: 0: (q1: 1), 1: (q2, 2)
 //
 // If receiving the queue `q1`, then state_3, 1 will consume the queue `q1`, and StateToLocalQueueCommandsMap becomes:
 //
-//	state_1, 1: (q1, 2),
-//	state_1, 2: (q2, 3),
-//	state_3, 1: (q2, 2)
+//	state_1, 1: 0: (q1, 2),
+//	state_1, 2: 0: (q2, 3),
+//	state_3, 1: 1: (q2, 2)
 //
 // If receiving the queue `q2` for twice, then state_3, 1 will consume the two queue `q2`, and StateToLocalQueueCommandsMap becomes:
 //
-//	state_1, 1: (q1, 2),
-//	state_1, 2: (q2, 3),
-func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQueueMessageInfoJson) (string, []InternalLocalQueueMessage) {
+//	state_1, 1: 0: (q1, 2),
+//	state_1, 2: 0: (q2, 3),
+func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQueueMessageInfoJson) (string, int, []InternalLocalQueueMessage) {
 	s.UnconsumedLocalQueueMessages[message.QueueName] = append(
 		s.UnconsumedLocalQueueMessages[message.QueueName], InternalLocalQueueMessage{
 			DedupId: message.DedupId.String(), IsFull: false,
@@ -188,21 +194,19 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 				delete(s.UnconsumedLocalQueueMessages, message.QueueName)
 			}
 
-			s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = append(s.StateToLocalQueueCommandsMap[stateExecutionIdKey][:i],
-				s.StateToLocalQueueCommandsMap[stateExecutionIdKey][i+1:]...)
+			delete(s.StateToLocalQueueCommandsMap[stateExecutionIdKey], i)
 			if len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) == 0 {
 				delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 			}
 
-			return stateExecutionIdKey, consumedInternalLocalQueueMessages
+			return stateExecutionIdKey, i, consumedInternalLocalQueueMessages
 		}
 	}
 
-	return "", nil
+	return "", -1, nil
 }
 
-// ConsumeWithCheckingLocalQueueWaitingComplete returns a bool indicating if the stateExecutionId can complete the local queue commands waiting,
-// and an array of all the consumed messages.
+// TryConsumeForStateExecution returns a map with key as the command index, and value as an array of all the consumed messages of that command.
 //
 // E.g., given UnconsumedLocalQueueMessages as:
 //
@@ -210,24 +214,23 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 //
 // and StateToLocalQueueCommandsMap[stateExecutionId] as:
 //
-// (q1, 1), (q2, 2)
+// 0: (q1, 1), 1: (q2, 2)
 //
-// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after ConsumeWithCheckingLocalQueueWaitingComplete,
+// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after TryConsumeForStateExecution,
 // the UnconsumedLocalQueueMessages becomes:
 //
 // q1: [id_1_2], q3: [id_3_1]
 //
 // and returns:
 //
-// (true, [(id_1_1, false), (id_2_1, false), (id_2_2, false)])
-func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComplete(
-	stateExecutionId StateExecutionId,
-	commandWaitingType xdbapi.CommandWaitingType,
-) (bool, []InternalLocalQueueMessage) {
+// { 0: [(id_1_1, false)], 1: [(id_2_1, false), (id_2_2, false)] }
+func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(stateExecutionId StateExecutionId,
+	commandWaitingType xdbapi.CommandWaitingType) map[int][]InternalLocalQueueMessage {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
-	var remainingCommands []xdbapi.LocalQueueCommand
-	var consumedMessages []InternalLocalQueueMessage
+	// command_index: {...}
+	remainingCommands := map[int]xdbapi.LocalQueueCommand{}
+	consumedMessages := map[int][]InternalLocalQueueMessage{}
 
 	idx := 0
 
@@ -237,11 +240,11 @@ func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComp
 		messages, ok := s.UnconsumedLocalQueueMessages[command.GetQueueName()]
 
 		if !ok || int(command.GetCount()) > len(messages) {
-			remainingCommands = append(remainingCommands, command)
+			remainingCommands[i] = command
 			continue
 		}
 
-		consumedMessages = append(consumedMessages, s.UnconsumedLocalQueueMessages[command.GetQueueName()][:int(command.GetCount())]...)
+		consumedMessages[i] = s.UnconsumedLocalQueueMessages[command.GetQueueName()][:int(command.GetCount())]
 
 		s.UnconsumedLocalQueueMessages[command.GetQueueName()] = s.UnconsumedLocalQueueMessages[command.GetQueueName()][int(command.GetCount()):]
 		if len(s.UnconsumedLocalQueueMessages[command.GetQueueName()]) == 0 {
@@ -253,12 +256,13 @@ func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComp
 		}
 	}
 
-	if idx < len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
-		remainingCommands = append(remainingCommands, s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx+1:]...)
+	for idx+1 < len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
+		idx += 1
+		remainingCommands[idx] = s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx]
 	}
 
 	if len(remainingCommands) == len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
-		return false, consumedMessages
+		return consumedMessages
 	}
 
 	s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = remainingCommands
@@ -268,15 +272,27 @@ func (s *StateExecutionLocalQueuesJson) ConsumeWithCheckingLocalQueueWaitingComp
 
 	if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
 		s.CleanupFor(stateExecutionId)
-		return true, consumedMessages
 	}
 
-	return len(remainingCommands) == 0, consumedMessages
+	return consumedMessages
 }
 
 func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId StateExecutionId) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 	delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
+}
+
+type CommandResultsJson struct {
+	// if value is true, the timer was fired. Otherwise, the timer was skipped.
+	TimerResults      map[int]bool                             `json:"timerResults"`
+	LocalQueueResults map[int][]xdbapi.LocalQueueMessageResult `json:"localQueueResults"`
+}
+
+func NewCommandResultsJson() CommandResultsJson {
+	return CommandResultsJson{
+		TimerResults:      map[int]bool{},
+		LocalQueueResults: map[int][]xdbapi.LocalQueueMessageResult{},
+	}
 }
 
 type AsyncStateExecutionInfoJson struct {
@@ -347,12 +363,12 @@ func BytesToCommandRequest(bytes []byte) (xdbapi.CommandRequest, error) {
 	return request, err
 }
 
-func FromCommandResultsToBytes(result xdbapi.CommandResults) ([]byte, error) {
+func FromCommandResultsJsonToBytes(result CommandResultsJson) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-func BytesToCommandResults(bytes []byte) (xdbapi.CommandResults, error) {
-	var result xdbapi.CommandResults
+func BytesToCommandResultsJson(bytes []byte) (CommandResultsJson, error) {
+	var result CommandResultsJson
 	err := json.Unmarshal(bytes, &result)
 	return result, err
 }
@@ -391,6 +407,11 @@ func FromImmediateTaskInfoIntoBytes(obj ImmediateTaskInfoJson) ([]byte, error) {
 type TimerTaskInfoJson struct {
 	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
 	WorkerTaskType        *ImmediateTaskType         `json:"workerTaskType"`
+	TimerCommandIndex     int                        `json:"timerCommandIndex"`
+}
+
+func (s *TimerTaskInfoJson) ToBytes() ([]byte, error) {
+	return json.Marshal(s)
 }
 
 func BytesToTimerTaskInfo(bytes []byte) (TimerTaskInfoJson, error) {
@@ -404,7 +425,7 @@ func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *Imme
 		WorkerTaskBackoffInfo: backoff,
 		WorkerTaskType:        taskType,
 	}
-	return json.Marshal(obj)
+	return obj.ToBytes()
 }
 
 type StateExecutionFailureJson struct {

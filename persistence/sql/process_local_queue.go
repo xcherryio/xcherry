@@ -47,7 +47,7 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
 ) (*persistence.ProcessLocalQueueMessagesResponse, error) {
-	assignedStateExecutionIdToMessagesMap := map[string][]persistence.InternalLocalQueueMessage{}
+	assignedStateExecutionIdToMessagesMap := map[string]map[int][]persistence.InternalLocalQueueMessage{}
 
 	// Step 1: get localQueues from the process execution row, and update it with messages
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -61,14 +61,17 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 	}
 
 	for _, message := range request.Messages {
-		assignedStateExecutionIdString, consumedMessages := localQueues.AddMessageAndTryConsume(message)
+		assignedStateExecutionIdString, idx, consumedMessages := localQueues.AddMessageAndTryConsume(message)
 
 		if assignedStateExecutionIdString == "" {
 			continue
 		}
 
-		assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] =
-			append(assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString], consumedMessages...)
+		_, ok := assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString]
+		if !ok {
+			assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] = map[int][]persistence.InternalLocalQueueMessage{}
+		}
+		assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString][idx] = consumedMessages
 	}
 
 	// Step 2: update assigned state execution rows
@@ -76,8 +79,10 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 
 	if len(assignedStateExecutionIdToMessagesMap) > 0 {
 		var allConsumedMessages []persistence.InternalLocalQueueMessage
-		for _, consumedMessages := range assignedStateExecutionIdToMessagesMap {
-			allConsumedMessages = append(allConsumedMessages, consumedMessages...)
+		for _, consumedMessagesMap := range assignedStateExecutionIdToMessagesMap {
+			for _, consumedMessages := range consumedMessagesMap {
+				allConsumedMessages = append(allConsumedMessages, consumedMessages...)
+			}
 		}
 
 		dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, allConsumedMessages)
@@ -85,7 +90,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 			return nil, err
 		}
 
-		for assignedStateExecutionIdString, consumedMessages := range assignedStateExecutionIdToMessagesMap {
+		for assignedStateExecutionIdString, consumedMessagesMap := range assignedStateExecutionIdToMessagesMap {
 			stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
 			if err != nil {
 				return nil, err
@@ -107,12 +112,12 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 				return nil, err
 			}
 
-			commandResults, err := persistence.BytesToCommandResults(stateRow.WaitUntilCommandResults)
+			commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 			if err != nil {
 				return nil, err
 			}
 
-			err = p.updateCommandResultsWithConsumedLocalQueueMessages(&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
+			err = p.updateCommandResultsWithNewlyConsumedLocalQueueMessages(&commandResults, consumedMessagesMap, dedupIdToLocalQueueMessageMap)
 			if err != nil {
 				return nil, err
 			}
@@ -120,26 +125,13 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 			if p.hasCompletedWaitUntilWaiting(commandRequest, commandResults) {
 				hasNewImmediateTask = true
 
-				localQueues.CleanupFor(persistence.StateExecutionId{
-					StateId:         stateRow.StateId,
-					StateIdSequence: stateRow.StateIdSequence,
-				})
-
-				stateRow.Status = persistence.StateExecutionStatusExecuteRunning
-
-				err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-					ShardId:            request.TaskShardId,
-					TaskType:           persistence.ImmediateTaskTypeExecute,
-					ProcessExecutionId: stateRow.ProcessExecutionId,
-					StateId:            stateRow.StateId,
-					StateIdSequence:    stateRow.StateIdSequence,
-				})
+				err = p.updateWhenCompletedWaitUntilWaiting(ctx, tx, request.TaskShardId, &localQueues, stateRow)
 				if err != nil {
 					return nil, err
 				}
 			}
 
-			stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
+			stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
 			if err != nil {
 				return nil, err
 			}

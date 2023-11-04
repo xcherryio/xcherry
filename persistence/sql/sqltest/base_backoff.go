@@ -48,10 +48,13 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 			WorkerTaskBackoffInfo: backoffInfo2,
 			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
-	err := store.ConvertTimerTaskToImmediateTask(ctx, persistence.ConvertTimerTaskToImmediateTaskRequest{
+	resp, err := store.ConvertTimerTaskToImmediateTask(ctx, persistence.ProcessTimerTaskRequest{
 		Task: timerTasks1[0],
 	})
 	ass.Nil(err)
+	ass.Equal(&persistence.ProcessTimerTaskResponse{
+		HasNewImmediateTask: true,
+	}, resp)
 
 	_, _, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	verifyImmediateTask(ass, immediateTasks[0], persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1", persistence.ImmediateTaskInfoJson{

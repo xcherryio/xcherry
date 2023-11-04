@@ -15,6 +15,8 @@ package sql
 
 import (
 	"context"
+	"time"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
@@ -49,6 +51,7 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
 ) (*persistence.ProcessWaitUntilExecutionResponse, error) {
 	hasNewImmediateTask := false
+	var fireTimestamps []int64
 
 	if request.CommandRequest.GetWaitingType() == xdbapi.EMPTY_COMMAND {
 		hasNewImmediateTask = true
@@ -66,9 +69,11 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 		if err != nil {
 			return nil, err
 		}
+
 		if resp.HasNewImmediateTask {
 			hasNewImmediateTask = true
 		}
+		fireTimestamps = resp.FireTimestamps
 	}
 
 	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
@@ -81,6 +86,7 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 
 	return &persistence.ProcessWaitUntilExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
+		FireTimestamps:      fireTimestamps,
 	}, nil
 }
 
@@ -116,28 +122,36 @@ func (p sqlProcessStoreImpl) completeWaitUntilExecution(
 func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
 ) (*persistence.ProcessWaitUntilExecutionResponse, error) {
+	hasLocalQueueCommands := len(request.CommandRequest.GetLocalQueueCommands()) > 0
+
+	var prcRow *extensions.ProcessExecutionRowForUpdate
+	var localQueues persistence.StateExecutionLocalQueuesJson
+	var consumedMessagesMap map[int][]persistence.InternalLocalQueueMessage
+
 	// Step 1: get localQueues from the process execution row,
 	// update it with commands, and try to consume for the state execution
-	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
-	if err != nil {
-		return nil, err
-	}
+	if hasLocalQueueCommands {
+		prcRow2, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
+		if err != nil {
+			return nil, err
+		}
 
-	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
-	if err != nil {
-		return nil, err
-	}
+		prcRow = prcRow2
 
-	for _, localQueueCommand := range request.CommandRequest.GetLocalQueueCommands() {
-		localQueues.AddNewLocalQueueCommand(request.StateExecutionId, localQueueCommand)
-	}
+		localQueues, err = persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+		if err != nil {
+			return nil, err
+		}
 
-	_, consumedMessages := localQueues.ConsumeWithCheckingLocalQueueWaitingComplete(
-		request.StateExecutionId, request.CommandRequest.GetWaitingType())
+		localQueues.AddNewLocalQueueCommands(request.StateExecutionId, request.CommandRequest.GetLocalQueueCommands())
+
+		consumedMessagesMap = localQueues.TryConsumeForStateExecution(
+			request.StateExecutionId, request.CommandRequest.GetWaitingType())
+	}
 
 	// Step 2: update the state execution row
 	stateRow, err := tx.SelectAsyncStateExecutionForUpdate(ctx, extensions.AsyncStateExecutionSelectFilter{
-		ProcessExecutionId: prcRow.ProcessExecutionId,
+		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
 	})
@@ -153,43 +167,39 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		return nil, err
 	}
 
-	dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, prcRow.ProcessExecutionId, consumedMessages)
+	commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResults := xdbapi.CommandResults{}
+	// Step 2 - 1: update local queue command results
+	var allConsumedMessages []persistence.InternalLocalQueueMessage
+	for _, consumedMessages := range consumedMessagesMap {
+		allConsumedMessages = append(allConsumedMessages, consumedMessages...)
+	}
 
-	err = p.updateCommandResultsWithConsumedLocalQueueMessages(&commandResults, consumedMessages, dedupIdToLocalQueueMessageMap)
+	dedupIdToLocalQueueMessageMap, err := p.getDedupIdToLocalQueueMessageMap(ctx, request.ProcessExecutionId, allConsumedMessages)
+	if err != nil {
+		return nil, err
+	}
+
+	err = p.updateCommandResultsWithNewlyConsumedLocalQueueMessages(&commandResults, consumedMessagesMap, dedupIdToLocalQueueMessageMap)
 	if err != nil {
 		return nil, err
 	}
 
 	hasNewImmediateTask := false
 
-	if p.hasCompletedWaitUntilWaiting(request.CommandRequest, commandResults) {
+	if hasLocalQueueCommands && p.hasCompletedWaitUntilWaiting(request.CommandRequest, commandResults) {
 		hasNewImmediateTask = true
 
-		localQueues.CleanupFor(persistence.StateExecutionId{
-			StateId:         stateRow.StateId,
-			StateIdSequence: stateRow.StateIdSequence,
-		})
-
-		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
-
-		err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-			ShardId:            request.TaskShardId,
-			TaskType:           persistence.ImmediateTaskTypeExecute,
-			ProcessExecutionId: stateRow.ProcessExecutionId,
-			StateId:            stateRow.StateId,
-			StateIdSequence:    stateRow.StateIdSequence,
-		})
+		err = p.updateWhenCompletedWaitUntilWaiting(ctx, tx, request.TaskShardId, &localQueues, stateRow)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsToBytes(commandResults)
+	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -199,18 +209,54 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		return nil, err
 	}
 
-	// Step 3: update process execution row, and submit
-	prcRow.StateExecutionLocalQueues, err = localQueues.ToBytes()
-	if err != nil {
-		return nil, err
+	// Step 2 - 2: create timer command tasks
+	var fireTimestamps []int64
+
+	for idx, timerCommand := range request.CommandRequest.TimerCommands {
+		if timerCommand.DelayInSeconds < 0 {
+			timerCommand.DelayInSeconds = 0
+		}
+
+		timerTaskInfoJson := persistence.TimerTaskInfoJson{
+			TimerCommandIndex: idx,
+		}
+		timerInfoBytes, err := timerTaskInfoJson.ToBytes()
+		if err != nil {
+			return nil, err
+		}
+
+		fireTimestamp := time.Now().Add(time.Second * time.Duration(timerCommand.DelayInSeconds)).Unix()
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.TaskShardId,
+			FireTimeUnixSeconds: fireTimestamp,
+			TaskType:            persistence.TimerTaskTypeTimerCommand,
+			ProcessExecutionId:  request.ProcessExecutionId,
+			StateId:             request.StateId,
+			StateIdSequence:     request.StateIdSequence,
+			Info:                timerInfoBytes,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		fireTimestamps = append(fireTimestamps, fireTimestamp)
 	}
 
-	err = tx.UpdateProcessExecution(ctx, *prcRow)
-	if err != nil {
-		return nil, err
+	// Step 3: update process execution row, and submit
+	if hasLocalQueueCommands {
+		prcRow.StateExecutionLocalQueues, err = localQueues.ToBytes()
+		if err != nil {
+			return nil, err
+		}
+
+		err = tx.UpdateProcessExecution(ctx, *prcRow)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &persistence.ProcessWaitUntilExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
+		FireTimestamps:      fireTimestamps,
 	}, nil
 }

@@ -129,6 +129,7 @@ type (
 
 		Status persistence.StateExecutionStatus
 
+		WaitUntilCommands       types.JSONText
 		WaitUntilCommandResults types.JSONText
 
 		PreviousVersion int32 // for conditional check

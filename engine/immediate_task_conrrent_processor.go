@@ -220,9 +220,21 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	if err != nil {
 		return err
 	}
+
 	if compResp.HasNewImmediateTask {
 		w.notifyNewImmediateTask(prep, task)
 	}
+
+	if len(compResp.FireTimestamps) > 0 {
+		w.taskNotifier.NotifyNewTimerTasks(xdbapi.NotifyTimerTasksRequest{
+			ShardId:            task.ShardId,
+			Namespace:          &prep.Info.Namespace,
+			ProcessId:          &prep.Info.ProcessId,
+			ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
+			FireTimestamps:     compResp.FireTimestamps,
+		})
+	}
+
 	return nil
 }
 

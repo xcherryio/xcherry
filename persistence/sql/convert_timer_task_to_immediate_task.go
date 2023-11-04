@@ -22,11 +22,11 @@ import (
 )
 
 func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
-	ctx context.Context, request persistence.ConvertTimerTaskToImmediateTaskRequest,
-) error {
+	ctx context.Context, request persistence.ProcessTimerTaskRequest,
+) (*persistence.ProcessTimerTaskResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = p.doConvertTimerTaskToImmediateTaskTx(ctx, tx, request)
@@ -39,16 +39,18 @@ func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
 		err = tx.Commit()
 		if err != nil {
 			p.logger.Error("error on committing transaction", tag.Error(err))
-			return err
+			return nil, err
 		}
 	}
-	return err
 
+	return &persistence.ProcessTimerTaskResponse{
+		HasNewImmediateTask: true,
+	}, nil
 }
 
 func (p sqlProcessStoreImpl) doConvertTimerTaskToImmediateTaskTx(
 	ctx context.Context, tx extensions.SQLTransaction,
-	request persistence.ConvertTimerTaskToImmediateTaskRequest,
+	request persistence.ProcessTimerTaskRequest,
 ) error {
 	currentTask := request.Task
 	timerInfo := currentTask.TimerTaskInfo
