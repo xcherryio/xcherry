@@ -38,21 +38,13 @@ func insertAsyncStateExecution(
 		return err
 	}
 
-	// we need to set a default value for WaitingType to avoid error when selecting xdbapi.CommandRequest from the database
-	commandRequestBytes, err := persistence.FromCommandRequestToBytes(xdbapi.CommandRequest{
-		WaitingType: xdbapi.EMPTY_COMMAND,
-	})
-	if err != nil {
-		return err
-	}
-
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
 
-		WaitUntilCommands:       commandRequestBytes,
+		WaitUntilCommands:       nil,
 		WaitUntilCommandResults: commandResultsBytes,
 
 		LastFailure:     nil,

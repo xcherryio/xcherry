@@ -358,6 +358,10 @@ func FromCommandRequestToBytes(request xdbapi.CommandRequest) ([]byte, error) {
 }
 
 func BytesToCommandRequest(bytes []byte) (xdbapi.CommandRequest, error) {
+	if bytes == nil {
+		return xdbapi.CommandRequest{}, nil
+	}
+
 	var request xdbapi.CommandRequest
 	err := json.Unmarshal(bytes, &request)
 	return request, err
