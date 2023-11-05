@@ -15,6 +15,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
@@ -32,7 +33,7 @@ func insertAsyncStateExecution(
 	stateInput []byte,
 	stateInfo []byte,
 ) error {
-	commandResultsBytes, err := persistence.FromCommandResultsToBytes(xdbapi.CommandResults{})
+	commandResultsBytes, err := persistence.FromCommandResultsJsonToBytes(persistence.NewCommandResultsJson())
 	if err != nil {
 		return err
 	}
@@ -43,6 +44,7 @@ func insertAsyncStateExecution(
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
 
+		WaitUntilCommands:       nil,
 		WaitUntilCommandResults: commandResultsBytes,
 
 		LastFailure:     nil,
@@ -185,59 +187,69 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 	return dedupIdToLocalQueueMessageMap, nil
 }
 
-func (p sqlProcessStoreImpl) updateCommandResultsWithConsumedLocalQueueMessages(
-	commandResults *xdbapi.CommandResults,
-	consumedMessages []persistence.InternalLocalQueueMessage,
+func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMessages(
+	commandResults *persistence.CommandResultsJson,
+	newlyConsumedMessagesMap map[int][]persistence.InternalLocalQueueMessage,
 	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow) error {
 
-	for _, consumedMessage := range consumedMessages {
-		message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
-		if !ok {
-			continue
+	for idx, consumedMessages := range newlyConsumedMessagesMap {
+		var localQueueMessageResults []xdbapi.LocalQueueMessageResult
+		for _, consumedMessage := range consumedMessages {
+			message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
+			if !ok {
+				panic(fmt.Sprintf("Something wrong with the dedupIdToLocalQueueMessageMap, key: %v", consumedMessage.DedupId))
+			}
+
+			dedupIdString := message.DedupId.String()
+			payload, err := persistence.BytesToEncodedObject(message.Payload)
+			if err != nil {
+				return err
+			}
+
+			localQueueMessageResults = append(localQueueMessageResults, xdbapi.LocalQueueMessageResult{
+				DedupId: dedupIdString,
+				Payload: &payload,
+			})
 		}
 
-		dedupIdString := message.DedupId.String()
-		payload, err := persistence.BytesToEncodedObject(message.Payload)
-		if err != nil {
-			return err
-		}
-
-		commandResults.LocalQueueResults = append(commandResults.LocalQueueResults, xdbapi.LocalQueueMessage{
-			QueueName: message.QueueName,
-			DedupId:   &dedupIdString,
-			Payload:   &payload,
-		})
+		commandResults.LocalQueueResults[idx] = localQueueMessageResults
 	}
 
 	return nil
 }
 
-func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults xdbapi.CommandResults) bool {
-	// TODO: currently, only consider the local queue results
+func (p sqlProcessStoreImpl) updateCommandResultsWithFiredTimerCommand(commandResults *persistence.CommandResultsJson, timerCommandIndex int) {
+	commandResults.TimerResults[timerCommandIndex] = true
+}
 
-	localQueueToMessageCountMap := map[string]int{}
-	for _, localQueueMessage := range commandResults.LocalQueueResults {
-		localQueueToMessageCountMap[localQueueMessage.QueueName] += 1
-	}
-
+func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults persistence.CommandResultsJson) bool {
 	switch commandRequest.GetWaitingType() {
 	case xdbapi.ANY_OF_COMPLETION:
-		for _, localQueueCommand := range commandRequest.LocalQueueCommands {
-			if localQueueToMessageCountMap[localQueueCommand.QueueName] == int(localQueueCommand.GetCount()) {
-				return true
-			}
-		}
-		return false
+		return len(commandResults.LocalQueueResults)+len(commandResults.TimerResults) > 0
 	case xdbapi.ALL_OF_COMPLETION:
-		for _, localQueueCommand := range commandRequest.LocalQueueCommands {
-			if localQueueToMessageCountMap[localQueueCommand.QueueName] < int(localQueueCommand.GetCount()) {
-				return false
-			}
-		}
-		return true
+		return len(commandResults.LocalQueueResults)+len(commandResults.TimerResults) ==
+			len(commandRequest.LocalQueueCommands)+len(commandRequest.TimerCommands)
 	case xdbapi.EMPTY_COMMAND:
 		return true
 	default:
 		panic("this is not supported")
 	}
+}
+
+func (p sqlProcessStoreImpl) updateWhenCompletedWaitUntilWaiting(ctx context.Context, tx extensions.SQLTransaction, shardId int32,
+	localQueues *persistence.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate) error {
+	localQueues.CleanupFor(persistence.StateExecutionId{
+		StateId:         stateRow.StateId,
+		StateIdSequence: stateRow.StateIdSequence,
+	})
+
+	stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+
+	return tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
+		ShardId:            shardId,
+		TaskType:           persistence.ImmediateTaskTypeExecute,
+		ProcessExecutionId: stateRow.ProcessExecutionId,
+		StateId:            stateRow.StateId,
+		StateIdSequence:    stateRow.StateIdSequence,
+	})
 }

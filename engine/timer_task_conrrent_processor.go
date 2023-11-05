@@ -115,7 +115,7 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 	case persistence.TimerTaskTypeProcessTimeout:
 		panic("TODO")
 	case persistence.TimerTaskTypeTimerCommand:
-		panic("TODO")
+		return w.processTimerTaskForTimerCommand(task)
 	default:
 		panic(fmt.Sprintf("unknown timer task type %v", task.TaskType))
 	}
@@ -124,20 +124,49 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
 	task persistence.TimerTask,
 ) error {
-	err := w.store.ConvertTimerTaskToImmediateTask(w.rootCtx, persistence.ConvertTimerTaskToImmediateTaskRequest{
+	resp, err := w.store.ConvertTimerTaskToImmediateTask(w.rootCtx, persistence.ProcessTimerTaskRequest{
 		Task: task,
 	})
 	if err != nil {
 		return err
 	}
-	notiReq := xdbapi.NotifyImmediateTasksRequest{
-		ShardId:            task.ShardId,
-		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
+
+	if resp.HasNewImmediateTask {
+		notiReq := xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            task.ShardId,
+			ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
+		}
+		if task.OptionalPartitionKey != nil {
+			notiReq.ProcessId = &task.OptionalPartitionKey.ProcessId
+			notiReq.Namespace = &task.OptionalPartitionKey.Namespace
+		}
+		w.taskNotifier.NotifyNewImmediateTasks(notiReq)
 	}
-	if task.OptionalPartitionKey != nil {
-		notiReq.ProcessId = &task.OptionalPartitionKey.ProcessId
-		notiReq.Namespace = &task.OptionalPartitionKey.Namespace
+
+	return nil
+}
+
+func (w *timerTaskConcurrentProcessor) processTimerTaskForTimerCommand(
+	task persistence.TimerTask,
+) error {
+	resp, err := w.store.ProcessTimerTaskForTimerCommand(w.rootCtx, persistence.ProcessTimerTaskRequest{
+		Task: task,
+	})
+	if err != nil {
+		return err
 	}
-	w.taskNotifier.NotifyNewImmediateTasks(notiReq)
+
+	if resp.HasNewImmediateTask {
+		notiReq := xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            task.ShardId,
+			ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
+		}
+		if task.OptionalPartitionKey != nil {
+			notiReq.ProcessId = &task.OptionalPartitionKey.ProcessId
+			notiReq.Namespace = &task.OptionalPartitionKey.Namespace
+		}
+		w.taskNotifier.NotifyNewImmediateTasks(notiReq)
+	}
+
 	return nil
 }
