@@ -16,6 +16,7 @@ package engine
 import (
 	"context"
 	"fmt"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -113,12 +114,33 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 	case persistence.TimerTaskTypeWorkerTaskBackoff:
 		return w.processTimerTaskWorkerTaskBackoff(task)
 	case persistence.TimerTaskTypeProcessTimeout:
-		panic("TODO")
+		return w.processTimerTaskProcessTimeout(task)
 	case persistence.TimerTaskTypeTimerCommand:
 		return w.processTimerTaskForTimerCommand(task)
 	default:
 		panic(fmt.Sprintf("unknown timer task type %v", task.TaskType))
 	}
+}
+
+func (w *timerTaskConcurrentProcessor) processTimerTaskProcessTimeout(
+	task persistence.TimerTask,
+) error {
+	resp, err := w.store.ProcessTimerTaskForProcessTimeout(w.rootCtx, persistence.ProcessTimerTaskRequest{
+		Task: task,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp == nil {
+		panic("process timeout should not return nil response")
+	}
+
+	if resp.HasNewImmediateTask {
+		panic("process timeout should not generate new immediate task")
+	}
+
+	return nil
 }
 
 func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(

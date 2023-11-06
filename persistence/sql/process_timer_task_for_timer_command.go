@@ -43,7 +43,7 @@ func (p sqlProcessStoreImpl) ProcessTimerTaskForTimerCommand(
 		}
 	}
 
-	return resp, nil
+	return resp, err
 }
 
 func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(

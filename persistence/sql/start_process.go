@@ -104,6 +104,16 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 		return nil, err
 	}
 
+	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+		ShardId:             request.NewTaskShardId,
+		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+		TaskType:            persistence.TimerTaskTypeProcessTimeout,
+		ProcessExecutionId:  prcExeId,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &persistence.StartProcessResponse{
 		ProcessExecutionId:  prcExeId,
 		AlreadyStarted:      false,
@@ -125,11 +135,11 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	// if finished, start a new process
 	// if there is no previous run with the process id, start a new process
 	if found {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
+		processExecutionRow, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			return nil, err
 		}
-		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
+		if processExecutionRow.Status == persistence.ProcessExecutionStatusRunning {
 			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
@@ -148,6 +158,16 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	}
 
 	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+		ShardId:             request.NewTaskShardId,
+		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+		TaskType:            persistence.TimerTaskTypeProcessTimeout,
+		ProcessExecutionId:  prcExeId,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -170,13 +190,13 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	}
 
 	if found {
-		processExecutionRowForUpdate, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
+		processExecutionRow, err := tx.SelectProcessExecution(ctx, latestProcessExecution.ProcessExecutionId)
 		if err != nil {
 			return nil, err
 		}
 
 		// if it is still running, return already started
-		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
+		if processExecutionRow.Status == persistence.ProcessExecutionStatusRunning {
 			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
@@ -184,13 +204,23 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 
 		// if it is not running, but completed normally, return error
 		// otherwise, start a new process
-		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusCompleted {
+		if processExecutionRow.Status == persistence.ProcessExecutionStatusCompleted {
 			return &persistence.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
 
 		hasNewImmediateTask, prcExeId, err := p.updateLatestAndInsertNewProcessExecution(ctx, tx, request)
+		if err != nil {
+			return nil, err
+		}
+
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -204,6 +234,16 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 
 	// if there is no previous run with the process id, start a new process
 	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+		ShardId:             request.NewTaskShardId,
+		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+		TaskType:            persistence.TimerTaskTypeProcessTimeout,
+		ProcessExecutionId:  prcExeId,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -259,6 +299,16 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			return nil, err
 		}
 
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
+
 		return &persistence.StartProcessResponse{
 			ProcessExecutionId:  prcExeId,
 			AlreadyStarted:      false,
@@ -268,6 +318,16 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 
 	// if there is no previous run with the process id, start a new process
 	hasNewImmediateTask, prcExeId, err := p.insertBrandNewLatestProcessExecution(ctx, tx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+		ShardId:             request.NewTaskShardId,
+		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+		TaskType:            persistence.TimerTaskTypeProcessTimeout,
+		ProcessExecutionId:  prcExeId,
+	})
 	if err != nil {
 		return nil, err
 	}

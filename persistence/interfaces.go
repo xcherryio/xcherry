@@ -38,6 +38,7 @@ type (
 		GetTimerTasksForTimestamps(ctx context.Context, request GetTimerTasksForTimestampsRequest) (*GetTimerTasksResponse, error)
 		ConvertTimerTaskToImmediateTask(ctx context.Context, request ProcessTimerTaskRequest) (*ProcessTimerTaskResponse, error)
 		ProcessTimerTaskForTimerCommand(ctx context.Context, request ProcessTimerTaskRequest) (*ProcessTimerTaskResponse, error)
+		ProcessTimerTaskForProcessTimeout(ctx context.Context, request ProcessTimerTaskRequest) (*ProcessTimerTaskResponse, error)
 
 		PrepareStateExecution(
 			ctx context.Context, request PrepareStateExecutionRequest,

@@ -76,6 +76,7 @@ type (
 		StartTime      time.Time
 		TimeoutSeconds int32
 		Info           types.JSONText
+		WaitToComplete bool
 	}
 
 	AsyncStateExecutionSelectFilter struct {

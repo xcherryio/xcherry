@@ -43,9 +43,17 @@ func NewServiceImpl(cfg config.Config, store persistence.ProcessStore, logger lo
 func (s serviceImpl) StartProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
 ) (response *xdbapi.ProcessExecutionStartResponse, retErr *ErrorWithStatus) {
+	timeoutUnixSeconds := 10
+	if condition := request.ProcessStartConfig.GetTimeoutSeconds() > 0; condition {
+		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
+
+	}
+	timeoutTimeUnixSeconds := time.Now().Unix() + int64(timeoutUnixSeconds)
+
 	resp, perr := s.store.StartProcess(ctx, persistence.StartProcessRequest{
-		Request:        request,
-		NewTaskShardId: persistence.DefaultShardId,
+		Request:                request,
+		NewTaskShardId:         persistence.DefaultShardId,
+		TimeoutTimeUnixSeconds: timeoutTimeUnixSeconds,
 	})
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)
@@ -69,6 +77,15 @@ func (s serviceImpl) StartProcess(
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
 		})
 	}
+
+	s.notifyRemoteTimerTaskAsync(ctx, xdbapi.NotifyTimerTasksRequest{
+		ShardId:            persistence.DefaultShardId,
+		Namespace:          &request.Namespace,
+		ProcessId:          &request.ProcessId,
+		ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
+		FireTimestamps:     []int64{timeoutTimeUnixSeconds},
+	})
+
 	return &xdbapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: resp.ProcessExecutionId.String(),
 	}, nil
@@ -159,6 +176,34 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbap
 		}
 		if err != nil {
 			s.logger.Error("failed to notify remote immediate task", tag.Error(err))
+			// TODO add backoff and retry
+			return
+		}
+	}()
+}
+
+func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xdbapi.NotifyTimerTasksRequest) {
+	// execute in the background as best effort
+	go func() {
+
+		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
+		defer canf()
+
+		apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
+			Servers: []xdbapi.ServerConfiguration{
+				{
+					URL: s.cfg.AsyncService.ClientAddress,
+				},
+			},
+		})
+
+		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyTimerTasksPost(ctx)
+		httpResp, err := request.NotifyTimerTasksRequest(req).Execute()
+		if httpResp != nil {
+			defer httpResp.Body.Close()
+		}
+		if err != nil {
+			s.logger.Error("failed to notify remote timer task", tag.Error(err))
 			// TODO add backoff and retry
 			return
 		}
