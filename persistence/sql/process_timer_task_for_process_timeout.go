@@ -66,5 +66,16 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForProcessTimeoutTx(
 		return nil, fmt.Errorf("process execution not exists")
 	}
 
+	task := request.Task
+	err = tx.DeleteTimerTask(ctx, extensions.TimerTaskRowDeleteFilter{
+		ShardId:              task.ShardId,
+		FireTimeUnixSeconds:  task.FireTimestampSeconds,
+		TaskSequence:         *task.TaskSequence,
+		OptionalPartitionKey: task.OptionalPartitionKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &persistence.ProcessTimerTaskResponse{HasNewImmediateTask: false}, nil
 }
