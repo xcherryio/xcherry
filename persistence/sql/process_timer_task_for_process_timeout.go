@@ -56,14 +56,16 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForProcessTimeoutTx(
 		return nil, err
 	}
 
-	resp, err := p.doStopProcessTx(
-		ctx, tx, processExecution.Namespace, processExecution.ProcessId, persistence.ProcessExecutionStatusTimeout)
-	if err != nil {
-		return nil, err
-	}
+	if processExecution.Status == persistence.ProcessExecutionStatusRunning {
+		resp, err := p.doStopProcessTx(
+			ctx, tx, processExecution.Namespace, processExecution.ProcessId, persistence.ProcessExecutionStatusTimeout)
+		if err != nil {
+			return nil, err
+		}
 
-	if resp.NotExists {
-		return nil, fmt.Errorf("process execution not exists")
+		if resp.NotExists {
+			return nil, fmt.Errorf("process execution not exists")
+		}
 	}
 
 	task := request.Task
