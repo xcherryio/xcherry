@@ -104,14 +104,16 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 		return nil, err
 	}
 
-	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-		ShardId:             request.NewTaskShardId,
-		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-		TaskType:            persistence.TimerTaskTypeProcessTimeout,
-		ProcessExecutionId:  prcExeId,
-	})
-	if err != nil {
-		return nil, err
+	if request.TimeoutTimeUnixSeconds != 0 {
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &persistence.StartProcessResponse{
@@ -150,6 +152,18 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 			return nil, err
 		}
 
+		if request.TimeoutTimeUnixSeconds != 0 {
+			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+				ShardId:             request.NewTaskShardId,
+				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				ProcessExecutionId:  prcExeId,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		return &persistence.StartProcessResponse{
 			ProcessExecutionId:  prcExeId,
 			AlreadyStarted:      false,
@@ -162,14 +176,16 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 		return nil, err
 	}
 
-	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-		ShardId:             request.NewTaskShardId,
-		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-		TaskType:            persistence.TimerTaskTypeProcessTimeout,
-		ProcessExecutionId:  prcExeId,
-	})
-	if err != nil {
-		return nil, err
+	if request.TimeoutTimeUnixSeconds != 0 {
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &persistence.StartProcessResponse{
@@ -215,14 +231,16 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 			return nil, err
 		}
 
-		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-			ShardId:             request.NewTaskShardId,
-			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
-			ProcessExecutionId:  prcExeId,
-		})
-		if err != nil {
-			return nil, err
+		if request.TimeoutTimeUnixSeconds != 0 {
+			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+				ShardId:             request.NewTaskShardId,
+				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				ProcessExecutionId:  prcExeId,
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		return &persistence.StartProcessResponse{
@@ -238,14 +256,16 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		return nil, err
 	}
 
-	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-		ShardId:             request.NewTaskShardId,
-		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-		TaskType:            persistence.TimerTaskTypeProcessTimeout,
-		ProcessExecutionId:  prcExeId,
-	})
-	if err != nil {
-		return nil, err
+	if request.TimeoutTimeUnixSeconds != 0 {
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &persistence.StartProcessResponse{
@@ -299,14 +319,16 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			return nil, err
 		}
 
-		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-			ShardId:             request.NewTaskShardId,
-			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
-			ProcessExecutionId:  prcExeId,
-		})
-		if err != nil {
-			return nil, err
+		if request.TimeoutTimeUnixSeconds != 0 {
+			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+				ShardId:             request.NewTaskShardId,
+				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				ProcessExecutionId:  prcExeId,
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		return &persistence.StartProcessResponse{
@@ -322,14 +344,16 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		return nil, err
 	}
 
-	err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
-		ShardId:             request.NewTaskShardId,
-		FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-		TaskType:            persistence.TimerTaskTypeProcessTimeout,
-		ProcessExecutionId:  prcExeId,
-	})
-	if err != nil {
-		return nil, err
+	if request.TimeoutTimeUnixSeconds != 0 {
+		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
+			ShardId:             request.NewTaskShardId,
+			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
+			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			ProcessExecutionId:  prcExeId,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &persistence.StartProcessResponse{

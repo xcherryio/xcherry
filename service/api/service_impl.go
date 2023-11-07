@@ -43,18 +43,20 @@ func NewServiceImpl(cfg config.Config, store persistence.ProcessStore, logger lo
 func (s serviceImpl) StartProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
 ) (response *xdbapi.ProcessExecutionStartResponse, retErr *ErrorWithStatus) {
-	timeoutUnixSeconds := 10
-	if condition := request.ProcessStartConfig.GetTimeoutSeconds() > 0; condition {
+	timeoutUnixSeconds := 0
+	if request.ProcessStartConfig != nil && request.ProcessStartConfig.TimeoutSeconds != nil {
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
-
 	}
-	timeoutTimeUnixSeconds := time.Now().Unix() + int64(timeoutUnixSeconds)
 
-	resp, perr := s.store.StartProcess(ctx, persistence.StartProcessRequest{
-		Request:                request,
-		NewTaskShardId:         persistence.DefaultShardId,
-		TimeoutTimeUnixSeconds: timeoutTimeUnixSeconds,
-	})
+	storeReq := persistence.StartProcessRequest{
+		Request:        request,
+		NewTaskShardId: persistence.DefaultShardId,
+	}
+	if timeoutUnixSeconds > 0 {
+		storeReq.TimeoutTimeUnixSeconds = time.Now().Unix() + int64(timeoutUnixSeconds)
+	}
+
+	resp, perr := s.store.StartProcess(ctx, storeReq)
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)
 	}
@@ -78,13 +80,15 @@ func (s serviceImpl) StartProcess(
 		})
 	}
 
-	s.notifyRemoteTimerTaskAsync(ctx, xdbapi.NotifyTimerTasksRequest{
-		ShardId:            persistence.DefaultShardId,
-		Namespace:          &request.Namespace,
-		ProcessId:          &request.ProcessId,
-		ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
-		FireTimestamps:     []int64{timeoutTimeUnixSeconds},
-	})
+	if storeReq.TimeoutTimeUnixSeconds != 0 {
+		s.notifyRemoteTimerTaskAsync(ctx, xdbapi.NotifyTimerTasksRequest{
+			ShardId:            persistence.DefaultShardId,
+			Namespace:          &request.Namespace,
+			ProcessId:          &request.ProcessId,
+			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
+			FireTimestamps:     []int64{storeReq.TimeoutTimeUnixSeconds},
+		})
+	}
 
 	return &xdbapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: resp.ProcessExecutionId.String(),

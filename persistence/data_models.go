@@ -15,12 +15,10 @@ package persistence
 
 import (
 	"fmt"
-	"time"
 
 	"strconv"
 	"strings"
 
-	"github.com/jmoiron/sqlx/types"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
 )
@@ -73,28 +71,6 @@ type (
 		DestinationStateConfig       *xdbapi.AsyncStateConfig
 		DestinationStateInput        xdbapi.EncodedObject
 		ShardId                      int32
-	}
-
-	GetProcessExecutionByIdRequest struct {
-		ProcessExecutionId uuid.UUID
-	}
-
-	GetProcessExecutionByIdResponse struct {
-		ProcessExecutionId       uuid.UUID
-		ProcessExecutionIdString string
-
-		Status                 ProcessExecutionStatus
-		HistoryEventIdSequence int32
-
-		StateExecutionSequenceMaps types.JSONText
-		StateExecutionLocalQueues  types.JSONText
-
-		Namespace string
-
-		ProcessId      string
-		StartTime      time.Time
-		TimeoutSeconds int32
-		Info           types.JSONText
 	}
 
 	GetImmediateTasksRequest struct {
