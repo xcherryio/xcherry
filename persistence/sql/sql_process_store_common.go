@@ -1,4 +1,4 @@
-// Copyright (c) XDBLab
+// Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
@@ -80,7 +80,8 @@ func insertImmediateTask(
 // and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
 // publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
-	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage,
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID,
+	messages []xdbapi.LocalQueueMessage,
 ) (bool, error) {
 
 	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
