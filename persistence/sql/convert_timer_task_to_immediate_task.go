@@ -35,7 +35,7 @@ func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
 
 	return &persistence.ProcessTimerTaskResponse{
 		HasNewImmediateTask: true,
-	}, nil
+	}, err
 }
 
 func (p sqlProcessStoreImpl) doConvertTimerTaskToImmediateTaskTx(

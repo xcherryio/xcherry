@@ -20,7 +20,14 @@ func (p sqlProcessStoreImpl) StopProcess(
 		return nil, err
 	}
 
-	resp, err := p.doStopProcessTx(ctx, tx, request)
+	namespace := request.Namespace
+	processId := request.ProcessId
+	status := persistence.ProcessExecutionStatusTerminated
+	if request.ProcessStopType == xdbapi.FAIL {
+		status = persistence.ProcessExecutionStatusFailed
+	}
+
+	resp, err := p.doStopProcessTx(ctx, tx, namespace, processId, status)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -38,9 +45,9 @@ func (p sqlProcessStoreImpl) StopProcess(
 }
 
 func (p sqlProcessStoreImpl) doStopProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.StopProcessRequest,
+	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string, status persistence.ProcessExecutionStatus,
 ) (*persistence.StopProcessResponse, error) {
-	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
+	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, namespace, processId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
 			// early stop when there is no such process running
@@ -70,10 +77,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	procExecRow.Status = persistence.ProcessExecutionStatusTerminated
-	if request.ProcessStopType == xdbapi.FAIL {
-		procExecRow.Status = persistence.ProcessExecutionStatusFailed
-	}
+	procExecRow.Status = status
 
 	err = tx.UpdateProcessExecution(ctx, *procExecRow)
 	if err != nil {

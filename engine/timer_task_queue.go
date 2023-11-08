@@ -7,10 +7,11 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 
 	"github.com/xdblab/xdb/common/log"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -271,8 +272,8 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 			w.currMaxLoadedTaskSequence = resp.MaxSequenceInclusive
 
 			// add the new tasks into the heap
-			for _, task := range resp.Tasks {
-				heap.Push(&w.remainingToFireTimersHeap, &task)
+			for i := range resp.Tasks {
+				heap.Push(&w.remainingToFireTimersHeap, &resp.Tasks[i])
 			}
 
 			minTime := time.Unix(resp.MinFireTimestampSecondsInclusive, 0)

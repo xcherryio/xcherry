@@ -6,9 +6,10 @@ package sqltest
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/common/ptr"
 	"testing"
 	"time"
+
+	"github.com/xdblab/xdb/common/ptr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/xdblab/xdb/persistence"

@@ -15,8 +15,9 @@ import (
 
 type (
 	StartProcessRequest struct {
-		Request        xdbapi.ProcessExecutionStartRequest
-		NewTaskShardId int32
+		Request                xdbapi.ProcessExecutionStartRequest
+		NewTaskShardId         int32
+		TimeoutTimeUnixSeconds int64
 	}
 
 	StartProcessResponse struct {

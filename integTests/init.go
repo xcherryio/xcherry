@@ -8,6 +8,7 @@ import (
 	"github.com/xdblab/xdb-golang-sdk/integTests/failure_recovery"
 	"github.com/xdblab/xdb-golang-sdk/integTests/global_attribute"
 	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
+	"github.com/xdblab/xdb-golang-sdk/integTests/process_timeout"
 	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
 	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
 	"github.com/xdblab/xdb-golang-sdk/xdb"
@@ -34,6 +35,7 @@ func init() {
 		&stateretry.BackoffProcess{},
 		&global_attribute.SingleTableProcess{},
 		&global_attribute.MultiTablesProcess{},
+		&process_timeout.TimeoutProcess{},
 	)
 	if err != nil {
 		panic(err)

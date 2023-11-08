@@ -25,6 +25,7 @@ type (
 		CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
 		GetTimerTasksUpToTimestamp(ctx context.Context, request GetTimerTasksRequest) (*GetTimerTasksResponse, error)
+
 		GetTimerTasksForTimestamps(
 			ctx context.Context, request GetTimerTasksForTimestampsRequest,
 		) (*GetTimerTasksResponse, error)
@@ -32,6 +33,9 @@ type (
 			ctx context.Context, request ProcessTimerTaskRequest,
 		) (*ProcessTimerTaskResponse, error)
 		ProcessTimerTaskForTimerCommand(
+			ctx context.Context, request ProcessTimerTaskRequest,
+		) (*ProcessTimerTaskResponse, error)
+		ProcessTimerTaskForProcessTimeout(
 			ctx context.Context, request ProcessTimerTaskRequest,
 		) (*ProcessTimerTaskResponse, error)
 
