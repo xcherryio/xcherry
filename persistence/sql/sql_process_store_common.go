@@ -1,15 +1,5 @@
-// Copyright 2023 XDBLab organization
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright (c) 2023 XDBLab Organization
+// SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
@@ -90,7 +80,9 @@ func insertImmediateTask(
 // and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
 // publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
-	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, messages []xdbapi.LocalQueueMessage) (bool, error) {
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID,
+	messages []xdbapi.LocalQueueMessage,
+) (bool, error) {
 
 	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
 
@@ -162,7 +154,8 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 	return true, nil
 }
 
-func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Context, processExecutionId uuid.UUID,
+func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(
+	ctx context.Context, processExecutionId uuid.UUID,
 	consumedMessages []persistence.InternalLocalQueueMessage,
 ) (map[string]extensions.LocalQueueMessageRow, error) {
 	if len(consumedMessages) == 0 {
@@ -190,7 +183,8 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(ctx context.Contex
 func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMessages(
 	commandResults *persistence.CommandResultsJson,
 	newlyConsumedMessagesMap map[int][]persistence.InternalLocalQueueMessage,
-	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow) error {
+	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow,
+) error {
 
 	for idx, consumedMessages := range newlyConsumedMessagesMap {
 		var localQueueMessageResults []xdbapi.LocalQueueMessageResult
@@ -218,11 +212,15 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMess
 	return nil
 }
 
-func (p sqlProcessStoreImpl) updateCommandResultsWithFiredTimerCommand(commandResults *persistence.CommandResultsJson, timerCommandIndex int) {
+func (p sqlProcessStoreImpl) updateCommandResultsWithFiredTimerCommand(
+	commandResults *persistence.CommandResultsJson, timerCommandIndex int,
+) {
 	commandResults.TimerResults[timerCommandIndex] = true
 }
 
-func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.CommandRequest, commandResults persistence.CommandResultsJson) bool {
+func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(
+	commandRequest xdbapi.CommandRequest, commandResults persistence.CommandResultsJson,
+) bool {
 	switch commandRequest.GetWaitingType() {
 	case xdbapi.ANY_OF_COMPLETION:
 		return len(commandResults.LocalQueueResults)+len(commandResults.TimerResults) > 0
@@ -236,8 +234,10 @@ func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(commandRequest xdbapi.
 	}
 }
 
-func (p sqlProcessStoreImpl) updateWhenCompletedWaitUntilWaiting(ctx context.Context, tx extensions.SQLTransaction, shardId int32,
-	localQueues *persistence.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate) error {
+func (p sqlProcessStoreImpl) updateWhenCompletedWaitUntilWaiting(
+	ctx context.Context, tx extensions.SQLTransaction, shardId int32,
+	localQueues *persistence.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate,
+) error {
 	localQueues.CleanupFor(persistence.StateExecutionId{
 		StateId:         stateRow.StateId,
 		StateIdSequence: stateRow.StateIdSequence,
