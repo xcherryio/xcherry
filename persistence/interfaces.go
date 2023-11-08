@@ -35,6 +35,9 @@ type (
 		ProcessTimerTaskForTimerCommand(
 			ctx context.Context, request ProcessTimerTaskRequest,
 		) (*ProcessTimerTaskResponse, error)
+		ProcessTimerTaskForProcessTimeout(
+			ctx context.Context, request ProcessTimerTaskRequest,
+		) (*ProcessTimerTaskResponse, error)
 
 		PrepareStateExecution(
 			ctx context.Context, request PrepareStateExecutionRequest,
