@@ -32,9 +32,6 @@ type (
 		ConvertTimerTaskToImmediateTask(
 			ctx context.Context, request ProcessTimerTaskRequest,
 		) (*ProcessTimerTaskResponse, error)
-    ProcessTimerTaskForTimerCommand(
-      ctx context.Context, request ProcessTimerTaskRequest,
-    ) (*ProcessTimerTaskResponse, error)
 		ProcessTimerTaskForTimerCommand(
 			ctx context.Context, request ProcessTimerTaskRequest,
 		) (*ProcessTimerTaskResponse, error)
