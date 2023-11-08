@@ -122,10 +122,6 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskProcessTimeout(
 		return err
 	}
 
-	if resp == nil {
-		panic("process timeout should not return nil response")
-	}
-
 	if resp.HasNewImmediateTask {
 		panic("process timeout should not generate new immediate task")
 	}
