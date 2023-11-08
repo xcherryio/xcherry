@@ -20,14 +20,9 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	firstAttmpTs := int64(123)
 	fireTime1, backoffInfo1 := startProcessAndBackoffWorkerTask(t, ass, store, "test-ns-1", firstAttmpTs)
 	// Check initial timer tasks.
-	minSeq1, maxSeq1, timerTasks1 := getAndCheckTimerTasksUpToTs(ctx, t, ass, store, 2, fireTime1)
+	minSeq1, maxSeq1, timerTasks1 := getAndCheckTimerTasksUpToTs(ctx, t, ass, store, 1, fireTime1)
 
-	verifyTimerTask(ass, timerTasks1[0], persistence.TimerTaskTypeProcessTimeout, "-0", persistence.TimerTaskInfoJson{
-		WorkerTaskBackoffInfo: nil,
-		WorkerTaskType:        nil,
-		TimerCommandIndex:     0,
-	})
-	verifyTimerTask(ass, timerTasks1[1], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
+	verifyTimerTask(ass, timerTasks1[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
 		persistence.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo1,
 			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
@@ -45,7 +40,7 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
 	resp, err := store.ConvertTimerTaskToImmediateTask(ctx, persistence.ProcessTimerTaskRequest{
-		Task: timerTasks1[1],
+		Task: timerTasks1[0],
 	})
 	ass.Nil(err)
 	ass.Equal(&persistence.ProcessTimerTaskResponse{
