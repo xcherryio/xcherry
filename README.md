@@ -24,8 +24,12 @@ As a coding framework, iWF provides three SDKs to use with:
 
 The XDB SDKs/Samples require to run with the server by one of the below options:
 
-### Option 1: brew install
-TODO: brew install xdb binaries
+
+### Option 1: use example docker-compose of xdb with a database
+In this case you don't want to connect to your existing database:
+
+* `wget https://raw.githubusercontent.com/xdblab/xdb/main/docker-compose/docker-compose-postgres14-example.yaml && docker compose -f docker-compose-postgres14-example.yaml up -d`
+  * Will include a PostgresSQL database and some [sample tables](./extensions/postgres/schema/sample_tables.sql)
 
 
 ### Option 2: use docker-compose of xdb to connect with your own database
@@ -34,13 +38,11 @@ TODO: brew install xdb binaries
 * Run docker-compose file from this project:
   * `docker-compose -f ./docker-compose/docker-compose.yaml up`
 
-### Option 3: use example docker-compose of xdb with a database
-In this case you don't want to connect to your existing database:
-
-* `docker-compose -f ./docker-compose/docker-compose-postgres14-example.yaml up`
-  * Will include a PostgresSQL database 
 # Contribution 
 See [contribution](./CONTRIBUTING.md) 
+
+### Option 3: brew install
+TODO: brew install xdb binaries
 
 # Development Plan
 ## 1.0

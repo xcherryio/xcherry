@@ -283,6 +283,7 @@ func anyAbsent(strs ...string) bool {
 
 // String converts the config object into a string
 func (c *Config) String() string {
+	//lint:ignore staticcheck
 	out, err := json.Marshal(c)
 	if err != nil {
 		panic(err)
