@@ -14,6 +14,16 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 
 # How to use 
 
+As a coding framework, iWF provides three SDKs to use with:
+
+
+* [XDB Golang SDK](https://github.com/xdblab/xdb-golang-sdk) and [samples](https://github.com/xdblab/xdb-golang-samples)
+* [XDB Java SDK](https://github.com/xdblab/xdb-java-sdk) and [samples](https://github.com/xdblab/xdb-java-samples)
+* [XDB Python SDK](https://github.com/xdblab/xdb-python-sdk) and [samples](https://github.com/xdblab/xdb-python-samples)
+* [XDB Typescript SDK](https://github.com/xdblab/xdb-ts-sdk) and [samples](https://github.com/xdblab/xdb-ts-samples)
+
+The XDB SDKs/Samples require to run with the server by one of the below options:
+
 ### Option 1: brew install
 TODO: brew install xdb binaries
 
