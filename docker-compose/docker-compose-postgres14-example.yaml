@@ -4,16 +4,22 @@ services:
   xdb-server:
     image: xdblab/xdb-server:latest
     environment:
-      CONFIG_PATH: /xdb/config/development-postgres.yaml
+      CONFIG_PATH: /xdb/config/development-postgres-docker-compose.yaml
+      AUTO_FIX_LOCALHOST_WORKER_URL: host.docker.internal # this will let xdb-server automatically replace all workerURL of "localhost" or "127.0.0.1" with "host.docker.internal"
+#    volumes: # uncomment this to mount the local config/script for override 
+#      - ../config:/xdb/config
+#      - ../script:/xdb/script
     ports:
       - "8801:8801"
       - "8701:8701"
     depends_on:
       postgres:
         condition: service_healthy
-    entrypoint: "/xdb/script/install-schema-and-start-server.sh"
-    network_mode: host # use host mode so that the 127.0.0.1 can point to Postgres
-    # host network also make it possible for async service callback(otherwise it requires to set env AUTO_FIX_LOCALHOST_WORKER_URL=hostURL
+    entrypoint: "/xdb/script/install-schema-and-start-server-docker-compose.sh"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - xdb
   postgres:
     image: postgres:14
     environment:

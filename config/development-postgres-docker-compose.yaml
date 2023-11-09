@@ -1,0 +1,20 @@
+log:
+  stdout: true
+  level: debug
+  levelKey: "level"
+apiService:
+  httpServer: # see more config fields in config.go
+     address: 0.0.0.0:8801
+     readTimeout: 10s
+     writeTimeout: 60s
+database:
+  sql:
+    dbExtensionName: postgres
+    user: xdb
+    password: xdbxdb
+    databaseName: xdb
+    connectAddr: postgres:5432
+asyncService:
+  mode: standalone
+  internalHttpServer:
+    address: 0.0.0.0:8701
