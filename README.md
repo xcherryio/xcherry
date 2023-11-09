@@ -37,7 +37,7 @@ See [contribution](./CONTRIBUTING.md)
 - [ ] StartProcessExecution API
   - [x] Basic
   - [x] ProcessIdReusePolicy
-  - [ ] Process timeout
+  - [x] Process timeout
   - [ ] Retention policy after closed
 - [ ] Executing `wait_until`/`execute` APIs
   - [x] Basic sequential execution
@@ -79,7 +79,7 @@ See [contribution](./CONTRIBUTING.md)
 - [ ] ResetStateExecution for operation
 - [x] DescribeProcessExecution API
 - [ ] WaitForProcessCompletion API
-- [ ] History events for operation/debugging
+- [ ] More history events for operation/debugging
 
 ## Future
 
