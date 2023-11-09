@@ -14,6 +14,16 @@ See [wiki](https://github.com/xdblab/xdb/wiki).
 
 # How to use 
 
+As a coding framework, iWF provides three SDKs to use with:
+
+
+* [XDB Golang SDK](https://github.com/xdblab/xdb-golang-sdk) and [samples](https://github.com/xdblab/xdb-golang-samples)
+* [XDB Java SDK](https://github.com/xdblab/xdb-java-sdk) and [samples](https://github.com/xdblab/xdb-java-samples)
+* [XDB Python SDK](https://github.com/xdblab/xdb-python-sdk) and [samples](https://github.com/xdblab/xdb-python-samples)
+* [XDB Typescript SDK](https://github.com/xdblab/xdb-ts-sdk) and [samples](https://github.com/xdblab/xdb-ts-samples)
+
+The XDB SDKs/Samples require to run with the server by one of the below options:
+
 ### Option 1: brew install
 TODO: brew install xdb binaries
 
@@ -37,13 +47,13 @@ See [contribution](./CONTRIBUTING.md)
 - [ ] StartProcessExecution API
   - [x] Basic
   - [x] ProcessIdReusePolicy
-  - [ ] Process timeout
+  - [x] Process timeout
   - [ ] Retention policy after closed
 - [ ] Executing `wait_until`/`execute` APIs
   - [x] Basic sequential execution
   - [x] Parallel execution of multiple states
   - [x] StateOption: WaitUntil/Execute API timeout and retry policy
-  - [ ] AsyncState failure policy for recovery
+  - [x] AsyncState failure policy for recovery
 - [ ] StateDecision
   - [x] Single next State
   - [x] Multiple next states
@@ -53,30 +63,33 @@ See [contribution](./CONTRIBUTING.md)
   - [x] Dead end
   - [ ] Conditional complete process with checking queue emptiness
 - [ ] Commands
-  - [ ] AnyOfCompletion and AllOfCompletion waitingType
-  - [ ] TimerCommand
-- [ ] LocalQueue
-  - [ ] LocalQueueCommand
-  - [ ] MessageId for deduplication
-  - [ ] SendMessage API without RPC
+  - [x] AnyOf waitingType
+  - [x] AllOf waitingType
+  - [x] TimerCommand
+- [x] LocalQueue
+  - [x] LocalQueueCommand
+  - [x] MessageId for deduplication
+  - [x] SendMessage API without RPC
 - [ ] LocalAttribute persistence
-  - [ ] LoadingPolicy (attribute selection + locking)
+  - [ ] LoadingPolicy (attribute selection + no locking)
   - [ ] InitialUpsert
-- [ ] GlobalAttribute  persistence
-  - [ ] LoadingPolicy (attribute selection + locking)
-  - [ ] InitialUpsert
-  - [ ] Multi-tables
+  - [ ] Exclusive+Shared LockingPolicy
+- [x] GlobalAttribute  persistence
+  - [x] LoadingPolicy (attribute selection + no locking)
+  - [x] InitialUpsert
+  - [x] Multi-tables
+  - [ ] Exclusive+Shared LockingPolicy
 - [ ] RPC
   - [ ] Basic
   - [ ] Persistence
   - [ ] Communication
-- [ ] API error handling for canceled, failed, timeout, terminated
+- [x] API error handling for canceled, failed, timeout, terminated
 - [x] StopProcessExecution API
 - [ ] WaitForStateCompletion API
 - [ ] ResetStateExecution for operation
 - [x] DescribeProcessExecution API
 - [ ] WaitForProcessCompletion API
-- [ ] History events for operation/debugging
+- [ ] More history events for operation/debugging
 
 ## Future
 

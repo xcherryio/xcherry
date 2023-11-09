@@ -35,6 +35,9 @@ func NewDefaultAPIServerWithGin(
 
 	handler := newGinHandler(cfg, store, logger)
 
+	engine.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "Hello from XDB server!")
+	})
 	engine.POST(PathStartProcessExecution, handler.StartProcess)
 	engine.POST(PathDescribeProcessExecution, handler.DescribeProcess)
 	engine.POST(PathStopProcessExecution, handler.StopProcess)
