@@ -8,8 +8,8 @@
 
 [Link to xdb-apis/xdb-golang-sdk PRs if it's on top of any API changes]
 
-- API change: ...
-- Golang SDK change: ...
+- API change link: ...
+- Golang SDK change link: ...
 - Server Component 1: ...
 - Server Component 2: ...
 
@@ -17,6 +17,8 @@
 
 [If writing Integration test in Golang SDK repo, please provide link to the pull request of Golang SDK Repo]
 
+[It's recommended to write integration test in Golang SDK repo, and enabled in this server repo first, 
+without enabling in the SDK repo. After this PR is merged, enable the integration test in the SDK repo]
 
 ## Checklist before merge
 [ ] If applicable, merge the xdb-apis/xdb-golang-sdk PRs to main branch
