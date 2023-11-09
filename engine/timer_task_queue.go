@@ -57,7 +57,7 @@ type timerTaskQueueImpl struct {
 	// it will load the new timers and add to the remainingToFireTimersHeap
 	triggeredPollingChan chan xdbapi.NotifyTimerTasksRequest
 
-	// the current pending requests to poll
+	// the current pending requests to poll within the current preload time window
 	currentNotifyRequests []xdbapi.NotifyTimerTasksRequest
 }
 
@@ -150,6 +150,7 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 	// as we are loading next page, we can drain all the pending requests and stop triggerPolling
 	// because the new timers will be loaded anyway
 	w.drainAllNotifyRequests(nil)
+	w.currentNotifyRequests = nil
 	w.triggerPollTimer.Stop()
 
 	qCfg := w.cfg.AsyncService.TimerTaskQueue
@@ -259,6 +260,8 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 			MinSequenceInclusive: w.currMaxLoadedTaskSequence + 1,
 			DetailedRequests:     w.currentNotifyRequests,
 		})
+
+	w.currentNotifyRequests = nil
 
 	if err != nil {
 		w.logger.Error("failed at triggered polling timer task, will not retry. "+
