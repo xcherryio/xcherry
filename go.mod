@@ -4,15 +4,15 @@ go 1.19
 
 require (
 	github.com/gin-gonic/gin v1.9.1
-	github.com/google/uuid v1.3.1
+	github.com/google/uuid v1.4.0
 	github.com/iancoleman/strcase v0.3.0
 	github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee
 	github.com/jonboulle/clockwork v0.4.0
 	github.com/lib/pq v1.2.0
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xdblab/xdb-apis v0.0.2-0.20231103162847-5f8bbf8de28c
-	github.com/xdblab/xdb-golang-sdk v0.0.0-20231108214104-bab10dc7100c
+	github.com/xdblab/xdb-apis v0.0.2-0.20231109205241-83a802654b63
+	github.com/xdblab/xdb-golang-sdk v0.0.0-20231109205703-5651879e036e
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1

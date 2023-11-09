@@ -30,8 +30,8 @@ github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaS
 github.com/google/go-cmp v0.5.5 h1:Khx7svrCpmxxtHBq5j2mp/xVjsi8hQMfNLvJFAlrGgU=
 github.com/google/go-cmp v0.5.5/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
-github.com/google/uuid v1.3.1 h1:KjJaJ9iWZ3jOFZIf1Lqf4laDRCasjl0BCmnEGxkdLb4=
-github.com/google/uuid v1.3.1/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/google/uuid v1.4.0 h1:MtMxsa51/r9yyhkyLsVeVt0B+BGQZzpQiTQ4eHZ8bc4=
+github.com/google/uuid v1.4.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/iancoleman/strcase v0.3.0 h1:nTXanmYxhfFAMjZL34Ov6gkzEsSJZ5DbhxWjvSASxEI=
 github.com/iancoleman/strcase v0.3.0/go.mod h1:iwCmte+B7n89clKwxIoIXy/HfoL7AsD47ZCWhYzw7ho=
 github.com/jmoiron/sqlx v1.2.1-0.20200615141059-0794cb1f47ee h1:59lyMGvZusByi7Rvctn8cxdVAjhiOnqCv3G5DrYApYQ=
@@ -85,10 +85,10 @@ github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4d
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/urfave/cli/v2 v2.25.7 h1:VAzn5oq403l5pHjc4OhD54+XGO9cdKVL/7lDjF+iKUs=
 github.com/urfave/cli/v2 v2.25.7/go.mod h1:8qnjx1vcq5s2/wpsqoZFndg2CE5tNFyrTvS6SinrnYQ=
-github.com/xdblab/xdb-apis v0.0.2-0.20231103162847-5f8bbf8de28c h1:McwWah5fFq55jM6xSYT5kEQdZexAr0x25HET9IFDuVU=
-github.com/xdblab/xdb-apis v0.0.2-0.20231103162847-5f8bbf8de28c/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
-github.com/xdblab/xdb-golang-sdk v0.0.0-20231108214104-bab10dc7100c h1:FiNbLkuODx4if9JDzvZIwO3wKhZCnbXkSw3gcft5evU=
-github.com/xdblab/xdb-golang-sdk v0.0.0-20231108214104-bab10dc7100c/go.mod h1:5AaS2FY9NPjZVFq0iilU+GzgSZ1Xdi5xY+auzRZE7XE=
+github.com/xdblab/xdb-apis v0.0.2-0.20231109205241-83a802654b63 h1:HFQdLRxmMAp3WLqVoZzDxjhxqLD5Yxm1/1JRwLHG9S0=
+github.com/xdblab/xdb-apis v0.0.2-0.20231109205241-83a802654b63/go.mod h1:+qLBKhgz/BYatlFAYsXmiCvKM3yFA4dld78LClXPyO8=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231109205703-5651879e036e h1:pZroYl206W95n5sblJxTZFiCw05TvTzv5FGt9ae6V0w=
+github.com/xdblab/xdb-golang-sdk v0.0.0-20231109205703-5651879e036e/go.mod h1:VPzQUWHZHj7cL9mI2QjiRr9JJEf4XAWIfChVXsJfQz8=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 h1:bAn7/zixMGCfxrRTfdpNzjtPYqr8smhKouy9mxVdGPU=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673/go.mod h1:N3UwUGtsrSj3ccvlPHLoLsHnpR27oXr4ZE984MbSER8=
 go.uber.org/goleak v1.2.0 h1:xqgm/S+aQvhWFTtR0XK3Jvg7z8kGV8P4X14IzwN3Eqk=
