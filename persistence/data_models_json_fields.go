@@ -30,7 +30,7 @@ func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest)
 
 func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
-		primaryKeys := map[string]xdbapi.TableColumnValue{}
+		primaryKeys := map[string][]xdbapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
