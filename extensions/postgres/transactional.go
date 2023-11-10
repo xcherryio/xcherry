@@ -274,7 +274,7 @@ func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensio
 
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)`)
+    	VALUES (`+strings.Join(pkVals, ", ")+`, `+strings.Join(vals, ", ")+`)`)
 	return err
 }
 
@@ -293,7 +293,7 @@ func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensi
 
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
+    	VALUES (`+strings.Join(pkVals, ", ")+`, `+strings.Join(vals, ", ")+`)
 		ON CONFLICT DO NOTHING`)
 	return err
 }
@@ -317,10 +317,10 @@ func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row exten
 	}
 	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
 
-	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT (`+strings.Join(row.PKNames, ", ")+`) DO `+updateClause)
+	sql := `INSERT INTO ` + row.TableName + ` (` + strings.Join(row.PKNames, ", ") + `, ` + strings.Join(cols, ", ") + `)
+    	VALUES (` + strings.Join(pkVals, ", ") + `, ` + strings.Join(vals, ", ") + `)
+		ON CONFLICT (` + strings.Join(row.PKNames, ", ") + `) DO ` + updateClause
+	_, err := d.tx.ExecContext(ctx, sql)
 	return err
 }
 
@@ -350,7 +350,7 @@ func (d dbTx) UpsertCustomTableByPK(
 	// how to support other conflict target like unique index?
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+tableName+` (`+strings.Join(pkNames, ", ")+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
+    	VALUES (`+strings.Join(pkVals, ", ")+`, `+strings.Join(vals, ", ")+`)
 		ON CONFLICT (`+strings.Join(pkNames, ", ")+`) DO `+updateClause)
 	return err
 }
