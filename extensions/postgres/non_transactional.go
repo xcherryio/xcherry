@@ -129,11 +129,16 @@ func (d dbSession) SelectLocalQueueMessages(
 }
 
 func (d dbSession) SelectCustomTableByPK(
-	ctx context.Context, tableName string, pkName, pkValue string, columns []string,
+	ctx context.Context, tableName string, pkNames, pkValues []string, columns []string,
 ) (*extensions.CustomTableRowSelect, error) {
+	if len(pkNames) != len(pkValues) {
+		return nil, fmt.Errorf("pkNames and pkValues must have the same length")
+	}
+	pkMatch := createPKMatchClause(pkNames, pkValues)
+
 	row := d.db.QueryRowContext(ctx, `SELECT `+
 		strings.Join(columns, ", ")+` FROM `+
-		tableName+` WHERE `+pkName+` = $1`, pkValue)
+		tableName+` WHERE `+pkMatch)
 	if row.Err() != nil {
 		if d.IsNotFoundError(row.Err()) {
 			return &extensions.CustomTableRowSelect{
@@ -166,4 +171,12 @@ func (d dbSession) SelectCustomTableByPK(
 	return &extensions.CustomTableRowSelect{
 		ColumnToValue: columnToValue,
 	}, nil
+}
+
+func createPKMatchClause(pkNames, pkValues []string) string {
+	var pkMatchClauses []string
+	for i := range pkNames {
+		pkMatchClauses = append(pkMatchClauses, pkNames[i]+" = '"+pkValues[i]+"'")
+	}
+	return strings.Join(pkMatchClauses, " AND ")
 }

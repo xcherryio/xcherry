@@ -267,10 +267,14 @@ func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensio
 		cols = append(cols, k)
 		vals = append(vals, "'"+v+"'")
 	}
+	var pkVals []string
+	for _, pkV := range row.PKValues {
+		pkVals = append(pkVals, "'"+pkV+"'")
+	}
 
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)`)
+		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)`)
 	return err
 }
 
@@ -282,9 +286,14 @@ func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensi
 		vals = append(vals, "'"+v+"'")
 	}
 
+	var pkVals []string
+	for _, pkV := range row.PKValues {
+		pkVals = append(pkVals, "'"+pkV+"'")
+	}
+
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
+		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
 		ON CONFLICT DO NOTHING`)
 	return err
 }
@@ -297,6 +306,11 @@ func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row exten
 		vals = append(vals, "'"+v+"'")
 	}
 
+	var pkVals []string
+	for _, pkV := range row.PKValues {
+		pkVals = append(pkVals, "'"+pkV+"'")
+	}
+
 	var setClauses []string
 	for col, val := range row.ColumnToValue {
 		setClauses = append(setClauses, col+" = '"+val+"'")
@@ -304,20 +318,25 @@ func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row exten
 	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
 
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT (`+row.PrimaryKey+`) DO `+updateClause)
+		`INSERT INTO `+row.TableName+` (`+strings.Join(row.PKNames, ", ")+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
+		ON CONFLICT (`+strings.Join(row.PKNames, ", ")+`) DO `+updateClause)
 	return err
 }
 
 func (d dbTx) UpsertCustomTableByPK(
-	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+	ctx context.Context, tableName string, pkNames []string, pkValues []string, colToValue map[string]string,
 ) error {
 	var cols []string
 	var vals []string
 	for k, v := range colToValue {
 		cols = append(cols, k)
 		vals = append(vals, "'"+v+"'")
+	}
+
+	var pkVals []string
+	for _, pkV := range pkValues {
+		pkVals = append(pkVals, "'"+pkV+"'")
 	}
 
 	var setClauses []string
@@ -328,10 +347,10 @@ func (d dbTx) UpsertCustomTableByPK(
 
 	// TODO get additonal conflict targets from request
 	// support from https://github.com/xdblab/xdb-golang-sdk/issues/30
-	// ??or maybe put all the columns in the conflict target??
+	// how to support other conflict target like unique index?
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+pkValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT (`+pkName+`) DO `+updateClause)
+		`INSERT INTO `+tableName+` (`+strings.Join(pkNames, ", ")+`, `+strings.Join(cols, ", ")+`)
+    	VALUES ('`+strings.Join(pkVals, ", ")+`', `+strings.Join(vals, ", ")+`)
+		ON CONFLICT (`+strings.Join(pkNames, ", ")+`) DO `+updateClause)
 	return err
 }

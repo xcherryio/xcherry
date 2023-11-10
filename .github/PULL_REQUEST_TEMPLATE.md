@@ -17,8 +17,8 @@
 
 [If writing Integration test in Golang SDK repo, please provide link to the pull request of Golang SDK Repo]
 
-[It's recommended to write integration test in Golang SDK repo, and enabled in this server repo first, 
-without enabling in the SDK repo. After this PR is merged, enable and merge the integration test in the SDK repo]
+[It's recommended to write integration test in Golang SDK repo, and merge the PR in SDK first while integration test fails. 
+After this PR is merged with new image published, rerun the failed integration test in the SDK repo.]
 
 [Alternatively if Java/other SDK repo is preferred, then just test locally against server PR. 
 After the server PR is merged, merge the integration test in the SDK repo]

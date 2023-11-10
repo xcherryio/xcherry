@@ -74,7 +74,7 @@ type transactionalCRUD interface {
 	InsertCustomTableIgnoreOnConflict(ctx context.Context, row CustomTableRowForInsert) error
 	InsertCustomTableOverrideOnConflict(ctx context.Context, row CustomTableRowForInsert) error
 	UpsertCustomTableByPK(
-		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
+		ctx context.Context, tableName string, pkNames, pkValues []string, colToValue map[string]string,
 	) error
 }
 
@@ -100,7 +100,7 @@ type nonTransactionalCRUD interface {
 	) ([]LocalQueueMessageRow, error)
 
 	SelectCustomTableByPK(
-		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
+		ctx context.Context, tableName string, pkNames, pkValues []string, columns []string,
 	) (*CustomTableRowSelect, error)
 }
 

@@ -30,11 +30,18 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 		for _, field := range tblCfg.InitialWrite {
 			cols[field.DbColumn] = field.DbQueryValue
 		}
+
+		var pkNames, pkValues []string
+		for _, col := range tblCfg.PrimaryKey {
+			pkNames = append(pkNames, col.DbColumn)
+			pkValues = append(pkValues, col.DbQueryValue)
+		}
+
 		row := extensions.CustomTableRowForInsert{
-			TableName:       tblCfg.TableName,
-			PrimaryKey:      tblCfg.PrimaryKey.DbColumn,
-			PrimaryKeyValue: tblCfg.PrimaryKey.DbQueryValue,
-			ColumnToValue:   cols,
+			TableName:     tblCfg.TableName,
+			PKNames:       pkNames,
+			PKValues:      pkValues,
+			ColumnToValue: cols,
 		}
 		var err error
 		switch writeMode {
@@ -62,12 +69,19 @@ func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
 
 	if len(updates) > 0 {
 		for _, update := range updates {
-			pks := tableConfig.TablePrimaryKeys[update.TableName]
+			pk := tableConfig.TablePrimaryKeys[update.TableName]
+
+			var pkNames, pkValues []string
+			for _, col := range pk {
+				pkNames = append(pkNames, col.DbColumn)
+				pkValues = append(pkValues, col.DbQueryValue)
+			}
+
 			cols := map[string]string{}
 			for _, col := range update.UpdateColumns {
 				cols[col.DbColumn] = col.DbQueryValue
 			}
-			err := tx.UpsertCustomTableByPK(ctx, update.TableName, pks.DbColumn, pks.DbQueryValue, cols)
+			err := tx.UpsertCustomTableByPK(ctx, update.TableName, pkNames, pkValues, cols)
 			if err != nil {
 				return err
 			}

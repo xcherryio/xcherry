@@ -241,10 +241,10 @@ type (
 	}
 
 	CustomTableRowForInsert struct {
-		TableName       string
-		PrimaryKey      string
-		PrimaryKeyValue string
-		ColumnToValue   map[string]string
+		TableName     string
+		PKNames       []string
+		PKValues      []string
+		ColumnToValue map[string]string
 	}
 
 	CustomTableRowSelect struct {

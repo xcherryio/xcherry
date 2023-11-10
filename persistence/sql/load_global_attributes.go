@@ -28,7 +28,12 @@ func (p sqlProcessStoreImpl) LoadGlobalAttributes(
 		for _, field := range tableReq.Columns {
 			cols = append(cols, field.DbColumn)
 		}
-		row, err := p.session.SelectCustomTableByPK(ctx, *tableReq.TableName, pk.DbColumn, pk.DbQueryValue, cols)
+		var pkNames, pkValues []string
+		for _, col := range pk {
+			pkNames = append(pkNames, col.DbColumn)
+			pkValues = append(pkValues, col.DbQueryValue)
+		}
+		row, err := p.session.SelectCustomTableByPK(ctx, *tableReq.TableName, pkNames, pkValues, cols)
 		if err != nil {
 			return nil, err
 		}
