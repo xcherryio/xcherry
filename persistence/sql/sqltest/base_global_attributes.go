@@ -26,9 +26,11 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		TableConfigs: []xdbapi.GlobalAttributeTableConfig{
 			{
 				TableName: "sample_user_table",
-				PrimaryKey: xdbapi.TableColumnValue{
-					DbColumn:     "user_id",
-					DbQueryValue: processId,
+				PrimaryKey: []xdbapi.TableColumnValue{
+					{
+						DbColumn:     "user_id",
+						DbQueryValue: processId,
+					},
 				},
 				InitialWrite: []xdbapi.TableColumnValue{
 					{
@@ -44,9 +46,11 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 			{
 				TableName: "sample_order_table",
-				PrimaryKey: xdbapi.TableColumnValue{
-					DbColumn:     "order_id",
-					DbQueryValue: "123",
+				PrimaryKey: []xdbapi.TableColumnValue{
+					{
+						DbColumn:     "order_id",
+						DbQueryValue: "123",
+					},
 				},
 				InitialWrite: []xdbapi.TableColumnValue{
 					{
