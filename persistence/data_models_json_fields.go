@@ -225,14 +225,12 @@ func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 	remainingCommands := map[int]xdbapi.LocalQueueCommand{}
 	consumedMessages := map[int][]InternalLocalQueueMessage{}
 
-	idx := 0
+	stopConsume := false
 
 	for i, command := range s.StateToLocalQueueCommandsMap[stateExecutionIdKey] {
-		idx = i
-
 		messages, ok := s.UnconsumedLocalQueueMessages[command.GetQueueName()]
 
-		if !ok || int(command.GetCount()) > len(messages) {
+		if stopConsume || !ok || int(command.GetCount()) > len(messages) {
 			remainingCommands[i] = command
 			continue
 		}
@@ -245,13 +243,8 @@ func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 		}
 
 		if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
-			break
+			stopConsume = true
 		}
-	}
-
-	for idx+1 < len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
-		idx += 1
-		remainingCommands[idx] = s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx]
 	}
 
 	if len(remainingCommands) == len(s.StateToLocalQueueCommandsMap[stateExecutionIdKey]) {
