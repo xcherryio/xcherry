@@ -234,7 +234,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
-		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
+		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(3))},
 	})
 
 	// Return UnconsumedMessageQueueCountMap as:
@@ -243,7 +243,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 	//
 	// and StateToLocalQueueCommandsMap["state_1-1"] as:
 	//
-	// (q1, 1), (q2, 2)
+	// (q1, 1), (q2, 3)
 
 	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(persistence.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
