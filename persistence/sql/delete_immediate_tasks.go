@@ -5,13 +5,13 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) DeleteImmediateTasks(
-	ctx context.Context, request persistence.DeleteImmediateTasksRequest,
+	ctx context.Context, request data_models.DeleteImmediateTasksRequest,
 ) error {
 	return p.session.BatchDeleteImmediateTask(ctx, extensions.ImmediateTaskRangeDeleteFilter{
 		ShardId:                  request.ShardId,

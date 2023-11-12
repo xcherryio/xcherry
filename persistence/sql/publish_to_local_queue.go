@@ -7,11 +7,11 @@ import (
 	"context"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
-func (p sqlProcessStoreImpl) PublishToLocalQueue(ctx context.Context, request persistence.PublishToLocalQueueRequest) (
-	*persistence.PublishToLocalQueueResponse, error) {
+func (p sqlProcessStoreImpl) PublishToLocalQueue(ctx context.Context, request data_models.PublishToLocalQueueRequest) (
+	*data_models.PublishToLocalQueueResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -36,13 +36,13 @@ func (p sqlProcessStoreImpl) PublishToLocalQueue(ctx context.Context, request pe
 }
 
 func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.PublishToLocalQueueRequest,
-) (*persistence.PublishToLocalQueueResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.PublishToLocalQueueRequest,
+) (*data_models.PublishToLocalQueueResponse, error) {
 	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
 			// early stop when there is no such process running
-			return &persistence.PublishToLocalQueueResponse{
+			return &data_models.PublishToLocalQueueResponse{
 				ProcessNotExists: true,
 			}, nil
 		}
@@ -54,7 +54,7 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		return nil, err
 	}
 
-	return &persistence.PublishToLocalQueueResponse{
+	return &data_models.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
 		HasNewImmediateTask: hasNewImmediateTask,
 		ProcessNotExists:    false,

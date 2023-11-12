@@ -1,11 +1,10 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
 import (
 	"fmt"
-
 	"strconv"
 	"strings"
 
@@ -50,10 +49,10 @@ type (
 
 	RecoverFromStateExecutionFailureRequest struct {
 		Namespace                    string
-		ProcessExecutionId           uuid.UUID
-		Prepare                      PrepareStateExecutionResponse
-		SourceStateExecutionId       StateExecutionId
-		SourceFailedStateApi         xdbapi.StateApiType
+		ProcessExecutionId     uuid.UUID
+		Prepare                PrepareStateExecutionResponse
+		SourceStateExecutionId StateExecutionId
+		SourceFailedStateApi   xdbapi.StateApiType
 		LastFailureStatus            int32
 		LastFailureDetails           string
 		LastFailureCompletedAttempts int32
@@ -209,8 +208,8 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare             PrepareStateExecutionResponse
-		CommandRequest      xdbapi.CommandRequest
+		Prepare        PrepareStateExecutionResponse
+		CommandRequest xdbapi.CommandRequest
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 		TaskShardId         int32
 	}
@@ -231,8 +230,8 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare             PrepareStateExecutionResponse
-		StateDecision       xdbapi.StateDecision
+		Prepare       PrepareStateExecutionResponse
+		StateDecision xdbapi.StateDecision
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig

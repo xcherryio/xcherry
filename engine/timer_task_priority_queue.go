@@ -5,13 +5,13 @@ package engine
 
 import (
 	"container/heap"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 // I know, it looks a lot to have a heap. This is the standard way of using heap in Golang
 // See https://pkg.go.dev/container/heap for more details
 
-func NewTimerTaskPriorityQueue(tasks []persistence.TimerTask) TimerTaskPriorityQueue {
+func NewTimerTaskPriorityQueue(tasks []data_models.TimerTask) TimerTaskPriorityQueue {
 	hq := make(TimerTaskPriorityQueue, 0, len(tasks))
 	for _, task := range tasks {
 		t := task
@@ -22,7 +22,7 @@ func NewTimerTaskPriorityQueue(tasks []persistence.TimerTask) TimerTaskPriorityQ
 }
 
 // A TimerTaskPriorityQueue implements heap.Interface and holds Items.
-type TimerTaskPriorityQueue []*persistence.TimerTask
+type TimerTaskPriorityQueue []*data_models.TimerTask
 
 func (pq *TimerTaskPriorityQueue) Len() int { return len(*pq) }
 
@@ -36,7 +36,7 @@ func (pq *TimerTaskPriorityQueue) Swap(i, j int) {
 }
 
 func (pq *TimerTaskPriorityQueue) Push(x any) {
-	item, ok := x.(*persistence.TimerTask)
+	item, ok := x.(*data_models.TimerTask)
 	if !ok {
 		panic("Pushed item is not a TimerTask")
 	}

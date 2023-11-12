@@ -6,34 +6,34 @@ package sql
 import (
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"math"
 )
 
 func createGetTimerTaskResponse(
 	shardId int32, dbTimerTasks []extensions.TimerTaskRow, reqPageSize *int32,
-) (*persistence.GetTimerTasksResponse, error) {
-	var tasks []persistence.TimerTask
+) (*data_models.GetTimerTasksResponse, error) {
+	var tasks []data_models.TimerTask
 	for _, t := range dbTimerTasks {
-		info, err := persistence.BytesToTimerTaskInfo(t.Info)
+		info, err := data_models.BytesToTimerTaskInfo(t.Info)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, persistence.TimerTask{
+		tasks = append(tasks, data_models.TimerTask{
 			ShardId:              shardId,
 			FireTimestampSeconds: t.FireTimeUnixSeconds,
 			TaskSequence:         ptr.Any(t.TaskSequence),
 
 			TaskType:           t.TaskType,
 			ProcessExecutionId: t.ProcessExecutionId,
-			StateExecutionId: persistence.StateExecutionId{
+			StateExecutionId: data_models.StateExecutionId{
 				StateId:         t.StateId,
 				StateIdSequence: t.StateIdSequence,
 			},
 			TimerTaskInfo: info,
 		})
 	}
-	resp := &persistence.GetTimerTasksResponse{
+	resp := &data_models.GetTimerTasksResponse{
 		Tasks: tasks,
 	}
 	if len(dbTimerTasks) > 0 {

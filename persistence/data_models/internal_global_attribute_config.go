@@ -1,7 +1,7 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
 import "github.com/xdblab/xdb-apis/goapi/xdbapi"
 

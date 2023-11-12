@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"net/http"
 	"time"
 
@@ -38,7 +39,7 @@ func (s serviceImpl) StartProcess(
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
 	}
 
-	storeReq := persistence.StartProcessRequest{
+	storeReq := data_models.StartProcessRequest{
 		Request:        request,
 		NewTaskShardId: persistence.DefaultShardId,
 	}
@@ -88,7 +89,7 @@ func (s serviceImpl) StartProcess(
 func (s serviceImpl) StopProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionStopRequest,
 ) *ErrorWithStatus {
-	resp, err := s.store.StopProcess(ctx, persistence.StopProcessRequest{
+	resp, err := s.store.StopProcess(ctx, data_models.StopProcessRequest{
 		Namespace:       request.GetNamespace(),
 		ProcessId:       request.GetProcessId(),
 		ProcessStopType: request.GetStopType(),
@@ -107,7 +108,7 @@ func (s serviceImpl) StopProcess(
 func (s serviceImpl) DescribeLatestProcess(
 	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
 ) (response *xdbapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
-	resp, perr := s.store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
+	resp, perr := s.store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: request.Namespace,
 		ProcessId: request.ProcessId,
 	})
@@ -123,7 +124,7 @@ func (s serviceImpl) DescribeLatestProcess(
 func (s serviceImpl) PublishToLocalQueue(
 	ctx context.Context, request xdbapi.PublishToLocalQueueRequest,
 ) *ErrorWithStatus {
-	resp, err := s.store.PublishToLocalQueue(ctx, persistence.PublishToLocalQueueRequest{
+	resp, err := s.store.PublishToLocalQueue(ctx, data_models.PublishToLocalQueueRequest{
 		Namespace: request.GetNamespace(),
 		ProcessId: request.GetProcessId(),
 		Messages:  request.GetMessages(),

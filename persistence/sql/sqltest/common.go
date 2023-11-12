@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"encoding/json"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func startProcessWithConfigs(
 	input xdbapi.EncodedObject, gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
 ) uuid.UUID {
 	startReq := createStartRequest(namespace, processId, input, gloAttCfg, stateCfg)
-	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -65,7 +66,7 @@ func terminateProcess(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, namespace, processId string,
 ) {
-	resp, err := store.StopProcess(ctx, persistence.StopProcessRequest{
+	resp, err := store.StopProcess(ctx, data_models.StopProcessRequest{
 		Namespace:       namespace,
 		ProcessId:       processId,
 		ProcessStopType: xdbapi.TERMINATE,
@@ -80,7 +81,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
-	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -97,7 +98,7 @@ func startProcessWithTerminateIfRunningPolicy(
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
-	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -114,7 +115,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfNoRunningPolicy(namespace, processId, input)
-	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -131,7 +132,7 @@ func startProcessWithDisallowReusePolicy(
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithDisallowReusePolicy(namespace, processId, input)
-	startResp, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -242,7 +243,7 @@ func retryStartProcessForFailure(
 	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
 ) {
 	startReq := createStartRequest(namespace, processId, input, nil, nil)
-	startResp2, err := store.StartProcess(ctx, persistence.StartProcessRequest{
+	startResp2, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
@@ -256,7 +257,7 @@ func describeProcess(
 	namespace, processId string, processStatus xdbapi.ProcessStatus,
 ) {
 	// Incorrect process id description
-	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
+	descResp, err := store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: namespace,
 		ProcessId: "some-wrong-id",
 	})
@@ -264,7 +265,7 @@ func describeProcess(
 	ass.True(descResp.NotExists)
 
 	// Correct process id description
-	descResp, err = store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
+	descResp, err = store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: namespace,
 		ProcessId: processId,
 	})
@@ -277,8 +278,8 @@ func describeProcess(
 
 func checkAndGetImmediateTasks(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
-) (int64, int64, []persistence.ImmediateTask) {
-	getTasksResp, err := store.GetImmediateTasks(ctx, persistence.GetImmediateTasksRequest{
+) (int64, int64, []data_models.ImmediateTask) {
+	getTasksResp, err := store.GetImmediateTasks(ctx, data_models.GetImmediateTasksRequest{
 		ShardId:                persistence.DefaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
@@ -291,8 +292,8 @@ func checkAndGetImmediateTasks(
 func getAndCheckTimerTasksUpToTs(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 	upToTimestamp int64,
-) (int64, int64, []persistence.TimerTask) {
-	getTasksResp, err := store.GetTimerTasksUpToTimestamp(ctx, persistence.GetTimerTasksRequest{
+) (int64, int64, []data_models.TimerTask) {
+	getTasksResp, err := store.GetTimerTasksUpToTimestamp(ctx, data_models.GetTimerTasksRequest{
 		ShardId:                          persistence.DefaultShardId,
 		MaxFireTimestampSecondsInclusive: upToTimestamp,
 		PageSize:                         10,
@@ -305,8 +306,8 @@ func getAndCheckTimerTasksUpToTs(
 func getAndCheckTimerTasksUpForTimestamps(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 	forTimestamps []int64, minTaskSeq int64,
-) (int64, int64, []persistence.TimerTask) {
-	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, persistence.GetTimerTasksForTimestampsRequest{
+) (int64, int64, []data_models.TimerTask) {
+	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, data_models.GetTimerTasksForTimestampsRequest{
 		ShardId:              persistence.DefaultShardId,
 		MinSequenceInclusive: minTaskSeq,
 		DetailedRequests: []xdbapi.NotifyTimerTasksRequest{
@@ -321,16 +322,16 @@ func getAndCheckTimerTasksUpForTimestamps(
 }
 
 func verifyImmediateTaskNoInfo(
-	ass *assert.Assertions, task persistence.ImmediateTask,
-	taskType persistence.ImmediateTaskType, stateExeId string,
+	ass *assert.Assertions, task data_models.ImmediateTask,
+	taskType data_models.ImmediateTaskType, stateExeId string,
 ) {
-	verifyImmediateTask(ass, task, taskType, stateExeId, persistence.ImmediateTaskInfoJson{})
+	verifyImmediateTask(ass, task, taskType, stateExeId, data_models.ImmediateTaskInfoJson{})
 }
 
 func verifyImmediateTask(
-	ass *assert.Assertions, task persistence.ImmediateTask,
-	taskType persistence.ImmediateTaskType, stateExeId string,
-	info persistence.ImmediateTaskInfoJson,
+	ass *assert.Assertions, task data_models.ImmediateTask,
+	taskType data_models.ImmediateTaskType, stateExeId string,
+	info data_models.ImmediateTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
@@ -341,9 +342,9 @@ func verifyImmediateTask(
 }
 
 func verifyTimerTask(
-	ass *assert.Assertions, task persistence.TimerTask,
-	taskType persistence.TimerTaskType, stateExeId string,
-	taskInfo persistence.TimerTaskInfoJson,
+	ass *assert.Assertions, task data_models.TimerTask,
+	taskType data_models.TimerTaskType, stateExeId string,
+	taskInfo data_models.TimerTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
@@ -356,7 +357,7 @@ func verifyTimerTask(
 func deleteAndVerifyImmediateTasksDeleted(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, minSeq, maxSeq int64,
 ) {
-	err := store.DeleteImmediateTasks(ctx, persistence.DeleteImmediateTasksRequest{
+	err := store.DeleteImmediateTasks(ctx, data_models.DeleteImmediateTasksRequest{
 		ShardId:                  persistence.DefaultShardId,
 		MinTaskSequenceInclusive: minSeq,
 		MaxTaskSequenceInclusive: maxSeq,
@@ -368,12 +369,12 @@ func deleteAndVerifyImmediateTasksDeleted(
 func prepareStateExecution(
 	ctx context.Context, t *testing.T,
 	store persistence.ProcessStore, prcExeId uuid.UUID, stateId string, stateIdSeq int32,
-) *persistence.PrepareStateExecutionResponse {
-	stateExeId := persistence.StateExecutionId{
+) *data_models.PrepareStateExecutionResponse {
+	stateExeId := data_models.StateExecutionId{
 		StateId:         stateId,
 		StateIdSequence: stateIdSeq,
 	}
-	prep, err := store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
+	prep, err := store.PrepareStateExecution(ctx, data_models.PrepareStateExecutionRequest{
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 	})
@@ -383,9 +384,9 @@ func prepareStateExecution(
 
 func verifyStateExecution(
 	ass *assert.Assertions,
-	prep *persistence.PrepareStateExecutionResponse,
+	prep *data_models.PrepareStateExecutionResponse,
 	processId string, input xdbapi.EncodedObject,
-	expectedStatus persistence.StateExecutionStatus,
+	expectedStatus data_models.StateExecutionStatus,
 ) {
 	ass.Equal(testWorkerUrl, prep.Info.WorkerURL)
 	ass.Equal(testProcessType, prep.Info.ProcessType)
@@ -396,14 +397,14 @@ func verifyStateExecution(
 
 func completeWaitUntilExecution(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
-	prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
+	prep *data_models.PrepareStateExecutionResponse,
 ) {
-	stateExeId := persistence.StateExecutionId{
+	stateExeId := data_models.StateExecutionId{
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compWaitResp, err := store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
+	compWaitResp, err := store.ProcessWaitUntilExecution(ctx, data_models.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
@@ -418,8 +419,8 @@ func completeWaitUntilExecution(
 
 func completeExecuteExecution(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
-	prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
+	prep *data_models.PrepareStateExecutionResponse,
 	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
 ) {
 	completeExecuteExecutionWithGlobalAttributes(
@@ -429,17 +430,17 @@ func completeExecuteExecution(
 }
 func completeExecuteExecutionWithGlobalAttributes(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask persistence.ImmediateTask,
-	prep *persistence.PrepareStateExecutionResponse,
+	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
+	prep *data_models.PrepareStateExecutionResponse,
 	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
-	gloAttCfg *persistence.InternalGlobalAttributeConfig,
+	gloAttCfg *data_models.InternalGlobalAttributeConfig,
 	gloAttUpdates []xdbapi.GlobalAttributeTableRowUpdate,
 ) {
-	stateExeId := persistence.StateExecutionId{
+	stateExeId := data_models.StateExecutionId{
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
-	compResp, err := store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+	compResp, err := store.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
 		ProcessExecutionId:         prcExeId,
 		StateExecutionId:           stateExeId,
 		Prepare:                    *prep,
@@ -460,14 +461,14 @@ func recoverFromFailure(
 	store persistence.ProcessStore,
 	namespace string,
 	prcExeId uuid.UUID,
-	prep persistence.PrepareStateExecutionResponse,
-	sourceStateExecId persistence.StateExecutionId,
+	prep data_models.PrepareStateExecutionResponse,
+	sourceStateExecId data_models.StateExecutionId,
 	sourceFailedStateApi xdbapi.StateApiType,
 	destinationStateId string,
 	destiantionStateConfig *xdbapi.AsyncStateConfig,
 	destinationStateInput xdbapi.EncodedObject,
 ) {
-	request := persistence.RecoverFromStateExecutionFailureRequest{
+	request := data_models.RecoverFromStateExecutionFailureRequest{
 		Namespace:              namespace,
 		ProcessExecutionId:     prcExeId,
 		Prepare:                prep,
@@ -483,7 +484,7 @@ func recoverFromFailure(
 	require.NoError(t, err)
 
 	// verify process execution
-	descResp, err := store.DescribeLatestProcess(ctx, persistence.DescribeLatestProcessRequest{
+	descResp, err := store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: namespace,
 		ProcessId: prep.Info.ProcessId,
 	})

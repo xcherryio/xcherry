@@ -5,14 +5,14 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) GetTimerTasksForTimestamps(
-	ctx context.Context, request persistence.GetTimerTasksForTimestampsRequest,
-) (*persistence.GetTimerTasksResponse, error) {
+	ctx context.Context, request data_models.GetTimerTasksForTimestampsRequest,
+) (*data_models.GetTimerTasksResponse, error) {
 	var ts []int64
 	for _, req := range request.DetailedRequests {
 		ts = append(ts, req.FireTimestamps...)

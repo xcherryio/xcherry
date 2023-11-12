@@ -6,15 +6,15 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 	ctx context.Context,
-	request persistence.RecoverFromStateExecutionFailureRequest,
+	request data_models.RecoverFromStateExecutionFailureRequest,
 ) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
@@ -41,7 +41,7 @@ func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.RecoverFromStateExecutionFailureRequest,
+	request data_models.RecoverFromStateExecutionFailureRequest,
 ) error {
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -50,7 +50,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	}
 
 	// mark the current state as failed
-	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
+	failureBytes, err := data_models.CreateStateExecutionFailureBytesForBackoff(
 		request.LastFailureStatus, request.LastFailureDetails, request.LastFailureCompletedAttempts)
 	if err != nil {
 		return err
@@ -60,7 +60,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.SourceStateExecutionId.StateId,
 		StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
-		Status:             persistence.StateExecutionStatusFailed,
+		Status:             data_models.StateExecutionStatusFailed,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 		LastFailure:        failureBytes,
 	}
@@ -74,7 +74,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	}
 
 	// update process info
-	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
+	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	}
 
 	// start new state execution with state id from request
-	stateInfoBytes, err := persistence.FromAsyncStateExecutionInfoToBytesForStateRecovery(
+	stateInfoBytes, err := data_models.FromAsyncStateExecutionInfoToBytesForStateRecovery(
 		request.Prepare.Info, request.SourceStateExecutionId.StateId, request.SourceFailedStateApi)
 	if err != nil {
 		return err
@@ -97,7 +97,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	nextStateIdSeq := sequenceMaps.StartNewStateExecution(request.DestinationStateId)
 	stateConfig := request.DestinationStateConfig
 	stateInput := request.DestinationStateInput
-	stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(&stateInput)
+	stateInputBytes, err := data_models.FromEncodedObjectIntoBytes(&stateInput)
 	if err != nil {
 		return err
 	}

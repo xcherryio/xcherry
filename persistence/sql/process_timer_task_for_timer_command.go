@@ -5,15 +5,15 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) ProcessTimerTaskForTimerCommand(
-	ctx context.Context, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -37,8 +37,8 @@ func (p sqlProcessStoreImpl) ProcessTimerTaskForTimerCommand(
 }
 
 func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	task := request.Task
 	timerCommandIndex := task.TimerTaskInfo.TimerCommandIndex
 
@@ -48,7 +48,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		return nil, err
 	}
 
-	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+	localQueues, err := data_models.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 	if err != nil {
 		return nil, err
 	}
@@ -64,20 +64,20 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 	}
 
 	// early stop if the state is not waiting commands
-	if stateRow.Status != persistence.StateExecutionStatusWaitUntilWaiting {
-		return &persistence.ProcessTimerTaskResponse{
+	if stateRow.Status != data_models.StateExecutionStatusWaitUntilWaiting {
+		return &data_models.ProcessTimerTaskResponse{
 			HasNewImmediateTask: false,
 		}, nil
 	}
 
 	stateRow.LastFailure = nil
 
-	commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+	commandRequest, err := data_models.BytesToCommandRequest(stateRow.WaitUntilCommands)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+	commandResults, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		}
 	}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
+	stateRow.WaitUntilCommandResults, err = data_models.FromCommandResultsJsonToBytes(commandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		return nil, err
 	}
 
-	return &persistence.ProcessTimerTaskResponse{
+	return &data_models.ProcessTimerTaskResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

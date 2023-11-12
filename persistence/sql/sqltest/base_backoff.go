@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 	"time"
 
@@ -22,10 +23,10 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	// Check initial timer tasks.
 	minSeq1, maxSeq1, timerTasks1 := getAndCheckTimerTasksUpToTs(ctx, t, ass, store, 1, fireTime1)
 
-	verifyTimerTask(ass, timerTasks1[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
-		persistence.TimerTaskInfoJson{
+	verifyTimerTask(ass, timerTasks1[0], data_models.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
+		data_models.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo1,
-			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
+			WorkerTaskType:        ptr.Any(data_models.ImmediateTaskTypeWaitUntil)})
 
 	fireTime2, backoffInfo2 := startProcessAndBackoffWorkerTask(t, ass, store, "test-ns-2", firstAttmpTs)
 
@@ -34,22 +35,22 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	ass.True(minSeq2 > maxSeq1)
 	ass.True(maxSeq2 >= minSeq2)
 
-	verifyTimerTask(ass, timerTasks2[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
-		persistence.TimerTaskInfoJson{
+	verifyTimerTask(ass, timerTasks2[0], data_models.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
+		data_models.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo2,
-			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
+			WorkerTaskType:        ptr.Any(data_models.ImmediateTaskTypeWaitUntil)})
 
-	resp, err := store.ConvertTimerTaskToImmediateTask(ctx, persistence.ProcessTimerTaskRequest{
+	resp, err := store.ConvertTimerTaskToImmediateTask(ctx, data_models.ProcessTimerTaskRequest{
 		Task: timerTasks1[0],
 	})
 	ass.Nil(err)
-	ass.Equal(&persistence.ProcessTimerTaskResponse{
+	ass.Equal(&data_models.ProcessTimerTaskResponse{
 		HasNewImmediateTask: true,
 	}, resp)
 
 	_, _, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
-	verifyImmediateTask(ass, immediateTasks[0], persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1", persistence.ImmediateTaskInfoJson{
-		WorkerTaskBackoffInfo: &persistence.WorkerTaskBackoffInfoJson{
+	verifyImmediateTask(ass, immediateTasks[0], data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1", data_models.ImmediateTaskInfoJson{
+		WorkerTaskBackoffInfo: &data_models.WorkerTaskBackoffInfoJson{
 			CompletedAttempts:            1,
 			FirstAttemptTimestampSeconds: firstAttmpTs,
 		},
@@ -59,7 +60,7 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 func startProcessAndBackoffWorkerTask(
 	t *testing.T,
 	ass *assert.Assertions, store persistence.ProcessStore, namespace string, firstAttemptTimestampSeconds int64,
-) (int64, *persistence.WorkerTaskBackoffInfoJson) {
+) (int64, *data_models.WorkerTaskBackoffInfoJson) {
 	ctx := context.Background()
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
@@ -71,23 +72,23 @@ func startProcessAndBackoffWorkerTask(
 	// Check initial immediate tasks.
 	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	immediateTask := immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, immediateTask, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	verifyImmediateTaskNoInfo(ass, immediateTask, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, t, store, prcExeId, immediateTask.StateId, immediateTask.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
+	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusWaitUntilRunning)
 
-	backoffInfo := &persistence.WorkerTaskBackoffInfoJson{
+	backoffInfo := &data_models.WorkerTaskBackoffInfoJson{
 		CompletedAttempts:            int32(1),
 		FirstAttemptTimestampSeconds: firstAttemptTimestampSeconds,
 	}
 	immediateTask.ImmediateTaskInfo.WorkerTaskBackoffInfo = backoffInfo
 
 	fireTime := time.Now().Add(time.Second * 10).Unix()
-	err := store.BackoffImmediateTask(ctx, persistence.BackoffImmediateTaskRequest{
+	err := store.BackoffImmediateTask(ctx, data_models.BackoffImmediateTaskRequest{
 		LastFailureStatus:    401,
 		LastFailureDetails:   "test-failure-details",
 		Prep:                 *prep,

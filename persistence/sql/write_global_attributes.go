@@ -7,7 +7,7 @@ import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
@@ -55,7 +55,7 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 }
 
 func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteExecuteExecutionRequest,
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.CompleteExecuteExecutionRequest,
 ) error {
 	tableConfig := request.GlobalAttributeTableConfig
 	updates := request.UpdateGlobalAttributes

@@ -6,18 +6,18 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"time"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/common/uuid"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) StartProcess(
-	ctx context.Context, request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	ctx context.Context, request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -40,14 +40,14 @@ func (p sqlProcessStoreImpl) StartProcess(
 }
 
 func (p sqlProcessStoreImpl) doStartProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	req := request.Request
 
 	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
 	if err != nil {
 		//lint:ignore nilerr reason
-		return &persistence.StartProcessResponse{
+		return &data_models.StartProcessResponse{
 			FailedAtWriteInitGlobalAttributes: true,
 			GlobalAttributeWriteError:         err,
 		}, nil
@@ -77,14 +77,14 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	_, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
 	}
 	if found {
-		return &persistence.StartProcessResponse{
+		return &data_models.StartProcessResponse{
 			AlreadyStarted: true,
 		}, nil
 	}
@@ -98,7 +98,7 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 			ShardId:             request.NewTaskShardId,
 			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			TaskType:            data_models.TimerTaskTypeProcessTimeout,
 			ProcessExecutionId:  prcExeId,
 		})
 		if err != nil {
@@ -106,7 +106,7 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 		}
 	}
 
-	return &persistence.StartProcessResponse{
+	return &data_models.StartProcessResponse{
 		ProcessExecutionId:  prcExeId,
 		AlreadyStarted:      false,
 		HasNewImmediateTask: hasNewImmediateTask,
@@ -116,8 +116,8 @@ func (p sqlProcessStoreImpl) applyDisallowReusePolicy(
 func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -131,8 +131,8 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 		if err != nil {
 			return nil, err
 		}
-		if processExecutionRow.Status == persistence.ProcessExecutionStatusRunning {
-			return &persistence.StartProcessResponse{
+		if processExecutionRow.Status == data_models.ProcessExecutionStatusRunning {
+			return &data_models.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
@@ -146,7 +146,7 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 				ShardId:             request.NewTaskShardId,
 				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				TaskType:            data_models.TimerTaskTypeProcessTimeout,
 				ProcessExecutionId:  prcExeId,
 			})
 			if err != nil {
@@ -154,7 +154,7 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 			}
 		}
 
-		return &persistence.StartProcessResponse{
+		return &data_models.StartProcessResponse{
 			ProcessExecutionId:  prcExeId,
 			AlreadyStarted:      false,
 			HasNewImmediateTask: hasNewImmediateTask,
@@ -170,7 +170,7 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 			ShardId:             request.NewTaskShardId,
 			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			TaskType:            data_models.TimerTaskTypeProcessTimeout,
 			ProcessExecutionId:  prcExeId,
 		})
 		if err != nil {
@@ -178,7 +178,7 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 		}
 	}
 
-	return &persistence.StartProcessResponse{
+	return &data_models.StartProcessResponse{
 		ProcessExecutionId:  prcExeId,
 		AlreadyStarted:      false,
 		HasNewImmediateTask: hasNewImmediateTask,
@@ -188,8 +188,8 @@ func (p sqlProcessStoreImpl) applyAllowIfNoRunningPolicy(
 func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -202,16 +202,16 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		}
 
 		// if it is still running, return already started
-		if processExecutionRow.Status == persistence.ProcessExecutionStatusRunning {
-			return &persistence.StartProcessResponse{
+		if processExecutionRow.Status == data_models.ProcessExecutionStatusRunning {
+			return &data_models.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
 
 		// if it is not running, but completed normally, return error
 		// otherwise, start a new process
-		if processExecutionRow.Status == persistence.ProcessExecutionStatusCompleted {
-			return &persistence.StartProcessResponse{
+		if processExecutionRow.Status == data_models.ProcessExecutionStatusCompleted {
+			return &data_models.StartProcessResponse{
 				AlreadyStarted: true,
 			}, nil
 		}
@@ -225,7 +225,7 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 				ShardId:             request.NewTaskShardId,
 				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				TaskType:            data_models.TimerTaskTypeProcessTimeout,
 				ProcessExecutionId:  prcExeId,
 			})
 			if err != nil {
@@ -233,7 +233,7 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 			}
 		}
 
-		return &persistence.StartProcessResponse{
+		return &data_models.StartProcessResponse{
 			ProcessExecutionId:  prcExeId,
 			AlreadyStarted:      false,
 			HasNewImmediateTask: hasNewImmediateTask,
@@ -250,7 +250,7 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 			ShardId:             request.NewTaskShardId,
 			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			TaskType:            data_models.TimerTaskTypeProcessTimeout,
 			ProcessExecutionId:  prcExeId,
 		})
 		if err != nil {
@@ -258,7 +258,7 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 		}
 	}
 
-	return &persistence.StartProcessResponse{
+	return &data_models.StartProcessResponse{
 		ProcessExecutionId:  prcExeId,
 		AlreadyStarted:      false,
 		HasNewImmediateTask: hasNewImmediateTask,
@@ -268,8 +268,8 @@ func (p sqlProcessStoreImpl) applyAllowIfPreviousExitAbnormallyPolicy(
 func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
-) (*persistence.StartProcessResponse, error) {
+	request data_models.StartProcessRequest,
+) (*data_models.StartProcessResponse, error) {
 	latestProcessExecution, found, err := tx.SelectLatestProcessExecutionForUpdate(ctx, request.Request.Namespace, request.Request.ProcessId)
 	if err != nil {
 		return nil, err
@@ -283,10 +283,10 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			return nil, err
 		}
 		// mark the process as terminated
-		if processExecutionRowForUpdate.Status == persistence.ProcessExecutionStatusRunning {
+		if processExecutionRowForUpdate.Status == data_models.ProcessExecutionStatusRunning {
 			err = tx.UpdateProcessExecution(ctx, extensions.ProcessExecutionRowForUpdate{
 				ProcessExecutionId:         processExecutionRowForUpdate.ProcessExecutionId,
-				Status:                     persistence.ProcessExecutionStatusTerminated,
+				Status:                     data_models.ProcessExecutionStatusTerminated,
 				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
 				StateExecutionLocalQueues:  processExecutionRowForUpdate.StateExecutionLocalQueues,
@@ -313,7 +313,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 				ShardId:             request.NewTaskShardId,
 				FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-				TaskType:            persistence.TimerTaskTypeProcessTimeout,
+				TaskType:            data_models.TimerTaskTypeProcessTimeout,
 				ProcessExecutionId:  prcExeId,
 			})
 			if err != nil {
@@ -321,7 +321,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			}
 		}
 
-		return &persistence.StartProcessResponse{
+		return &data_models.StartProcessResponse{
 			ProcessExecutionId:  prcExeId,
 			AlreadyStarted:      false,
 			HasNewImmediateTask: hasNewImmediateTask,
@@ -338,7 +338,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 			ShardId:             request.NewTaskShardId,
 			FireTimeUnixSeconds: request.TimeoutTimeUnixSeconds,
-			TaskType:            persistence.TimerTaskTypeProcessTimeout,
+			TaskType:            data_models.TimerTaskTypeProcessTimeout,
 			ProcessExecutionId:  prcExeId,
 		})
 		if err != nil {
@@ -346,7 +346,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 		}
 	}
 
-	return &persistence.StartProcessResponse{
+	return &data_models.StartProcessResponse{
 		ProcessExecutionId:  prcExeId,
 		AlreadyStarted:      false,
 		HasNewImmediateTask: hasNewImmediateTask,
@@ -356,7 +356,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
+	request data_models.StartProcessRequest,
 ) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
 	hasNewImmediateTask := false
@@ -379,7 +379,7 @@ func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
+	request data_models.StartProcessRequest,
 ) (bool, uuid.UUID, error) {
 	prcExeId := uuid.MustNewUUID()
 	hasNewImmediateTask := false
@@ -403,7 +403,7 @@ func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
 func (p sqlProcessStoreImpl) insertProcessExecution(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.StartProcessRequest,
+	request data_models.StartProcessRequest,
 	processExecutionId uuid.UUID,
 ) (bool, error) {
 	req := request.Request
@@ -414,23 +414,23 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		timeoutSeconds = sc.GetTimeoutSeconds()
 	}
 
-	processExeInfoBytes, err := persistence.FromStartRequestToProcessInfoBytes(req)
+	processExeInfoBytes, err := data_models.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
 		return hasNewImmediateTask, err
 	}
 
-	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
+	sequenceMaps := data_models.NewStateExecutionSequenceMaps()
 	if req.StartStateId != nil {
 		stateId := req.GetStartStateId()
 		stateIdSeq := sequenceMaps.StartNewStateExecution(req.GetStartStateId())
 		stateConfig := req.StartStateConfig
 
-		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
+		stateInputBytes, err := data_models.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
 			return hasNewImmediateTask, err
 		}
 
-		stateInfoBytes, err := persistence.FromStartRequestToStateInfoBytes(req)
+		stateInfoBytes, err := data_models.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
 			return hasNewImmediateTask, err
 		}
@@ -453,7 +453,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		return hasNewImmediateTask, err
 	}
 
-	localQueues := persistence.NewStateExecutionLocalQueues()
+	localQueues := data_models.NewStateExecutionLocalQueues()
 	localQueuesBytes, err := localQueues.ToBytes()
 	if err != nil {
 		return hasNewImmediateTask, err
@@ -462,7 +462,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId: processExecutionId,
 
-		Status:                     persistence.ProcessExecutionStatusRunning,
+		Status:                     data_models.ProcessExecutionStatusRunning,
 		HistoryEventIdSequence:     0,
 		StateExecutionSequenceMaps: sequenceMapsBytes,
 		StateExecutionLocalQueues:  localQueuesBytes,

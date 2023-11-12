@@ -5,38 +5,38 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) GetImmediateTasks(
-	ctx context.Context, request persistence.GetImmediateTasksRequest,
-) (*persistence.GetImmediateTasksResponse, error) {
+	ctx context.Context, request data_models.GetImmediateTasksRequest,
+) (*data_models.GetImmediateTasksResponse, error) {
 	immediateTasks, err := p.session.BatchSelectImmediateTasks(
 		ctx, request.ShardId, request.StartSequenceInclusive, request.PageSize)
 	if err != nil {
 		return nil, err
 	}
-	var tasks []persistence.ImmediateTask
+	var tasks []data_models.ImmediateTask
 	for _, t := range immediateTasks {
-		info, err := persistence.BytesToImmediateTaskInfo(t.Info)
+		info, err := data_models.BytesToImmediateTaskInfo(t.Info)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, persistence.ImmediateTask{
+		tasks = append(tasks, data_models.ImmediateTask{
 			ShardId:            request.ShardId,
 			TaskSequence:       ptr.Any(t.TaskSequence),
 			TaskType:           t.TaskType,
 			ProcessExecutionId: t.ProcessExecutionId,
-			StateExecutionId: persistence.StateExecutionId{
+			StateExecutionId: data_models.StateExecutionId{
 				StateId:         t.StateId,
 				StateIdSequence: t.StateIdSequence,
 			},
 			ImmediateTaskInfo: info,
 		})
 	}
-	resp := &persistence.GetImmediateTasksResponse{
+	resp := &data_models.GetImmediateTasksResponse{
 		Tasks: tasks,
 	}
 	if len(immediateTasks) > 0 {

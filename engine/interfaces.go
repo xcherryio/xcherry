@@ -6,7 +6,7 @@ package engine
 import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 // TaskNotifier is to notify the poller(taskQueue) that there is a/some new immediate/timer tasks
@@ -46,10 +46,10 @@ type ImmediateTaskProcessor interface {
 	Stop(context.Context) error
 
 	// GetTasksToProcessChan exposed a channel for the queue to send tasks to processor
-	GetTasksToProcessChan() chan<- persistence.ImmediateTask
+	GetTasksToProcessChan() chan<- data_models.ImmediateTask
 
 	AddImmediateTaskQueue(
-		shardId int32, tasksToCommitChan chan<- persistence.ImmediateTask,
+		shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 	) (alreadyExisted bool)
 }
 
@@ -58,7 +58,7 @@ type TimerTaskProcessor interface {
 	Stop(context.Context) error
 
 	// GetTasksToProcessChan exposed a channel for the queue to send tasks to processor
-	GetTasksToProcessChan() chan<- persistence.TimerTask
+	GetTasksToProcessChan() chan<- data_models.TimerTask
 
 	AddTimerTaskQueue(
 		shardId int32,

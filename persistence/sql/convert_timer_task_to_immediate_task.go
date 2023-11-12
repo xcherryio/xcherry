@@ -5,15 +5,15 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
-	ctx context.Context, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -33,18 +33,18 @@ func (p sqlProcessStoreImpl) ConvertTimerTaskToImmediateTask(
 		}
 	}
 
-	return &persistence.ProcessTimerTaskResponse{
+	return &data_models.ProcessTimerTaskResponse{
 		HasNewImmediateTask: true,
 	}, err
 }
 
 func (p sqlProcessStoreImpl) doConvertTimerTaskToImmediateTaskTx(
 	ctx context.Context, tx extensions.SQLTransaction,
-	request persistence.ProcessTimerTaskRequest,
+	request data_models.ProcessTimerTaskRequest,
 ) error {
 	currentTask := request.Task
 	timerInfo := currentTask.TimerTaskInfo
-	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(persistence.ImmediateTaskInfoJson{
+	taskInfoBytes, err := data_models.FromImmediateTaskInfoIntoBytes(data_models.ImmediateTaskInfoJson{
 		WorkerTaskBackoffInfo: timerInfo.WorkerTaskBackoffInfo,
 	})
 	if err != nil {

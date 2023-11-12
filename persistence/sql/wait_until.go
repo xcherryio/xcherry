@@ -5,17 +5,17 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"time"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) ProcessWaitUntilExecution(
-	ctx context.Context, request persistence.ProcessWaitUntilExecutionRequest,
-) (*persistence.ProcessWaitUntilExecutionResponse, error) {
+	ctx context.Context, request data_models.ProcessWaitUntilExecutionRequest,
+) (*data_models.ProcessWaitUntilExecutionResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -38,14 +38,14 @@ func (p sqlProcessStoreImpl) ProcessWaitUntilExecution(
 }
 
 func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
-) (*persistence.ProcessWaitUntilExecutionResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessWaitUntilExecutionRequest,
+) (*data_models.ProcessWaitUntilExecutionResponse, error) {
 	hasNewImmediateTask := false
 	var fireTimestamps []int64
 
 	if request.CommandRequest.GetWaitingType() == xdbapi.EMPTY_COMMAND {
 		hasNewImmediateTask = true
-		err := p.completeWaitUntilExecution(ctx, tx, persistence.CompleteWaitUntilExecutionRequest{
+		err := p.completeWaitUntilExecution(ctx, tx, data_models.CompleteWaitUntilExecutionRequest{
 			TaskShardId:        request.TaskShardId,
 			ProcessExecutionId: request.ProcessExecutionId,
 			StateExecutionId:   request.StateExecutionId,
@@ -74,20 +74,20 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 		hasNewImmediateTask = true
 	}
 
-	return &persistence.ProcessWaitUntilExecutionResponse{
+	return &data_models.ProcessWaitUntilExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 		FireTimestamps:      fireTimestamps,
 	}, nil
 }
 
 func (p sqlProcessStoreImpl) completeWaitUntilExecution(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteWaitUntilExecutionRequest,
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.CompleteWaitUntilExecutionRequest,
 ) error {
 	stateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
-		Status:             persistence.StateExecutionStatusExecuteRunning,
+		Status:             data_models.StateExecutionStatusExecuteRunning,
 		PreviousVersion:    request.PreviousVersion,
 		LastFailure:        nil,
 	}
@@ -102,7 +102,7 @@ func (p sqlProcessStoreImpl) completeWaitUntilExecution(
 
 	return tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
 		ShardId:            request.TaskShardId,
-		TaskType:           persistence.ImmediateTaskTypeExecute,
+		TaskType:           data_models.ImmediateTaskTypeExecute,
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
@@ -110,13 +110,13 @@ func (p sqlProcessStoreImpl) completeWaitUntilExecution(
 }
 
 func (p sqlProcessStoreImpl) updateWaitUntilExecution(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessWaitUntilExecutionRequest,
-) (*persistence.ProcessWaitUntilExecutionResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessWaitUntilExecutionRequest,
+) (*data_models.ProcessWaitUntilExecutionResponse, error) {
 	hasLocalQueueCommands := len(request.CommandRequest.GetLocalQueueCommands()) > 0
 
 	var prcRow *extensions.ProcessExecutionRowForUpdate
-	var localQueues persistence.StateExecutionLocalQueuesJson
-	var consumedMessagesMap map[int][]persistence.InternalLocalQueueMessage
+	var localQueues data_models.StateExecutionLocalQueuesJson
+	var consumedMessagesMap map[int][]data_models.InternalLocalQueueMessage
 
 	// Step 1: get localQueues from the process execution row,
 	// update it with commands, and try to consume for the state execution
@@ -128,7 +128,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 
 		prcRow = prcRow2
 
-		localQueues, err = persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+		localQueues, err = data_models.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 		if err != nil {
 			return nil, err
 		}
@@ -149,21 +149,21 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		return nil, err
 	}
 
-	stateRow.Status = persistence.StateExecutionStatusWaitUntilWaiting
+	stateRow.Status = data_models.StateExecutionStatusWaitUntilWaiting
 	stateRow.LastFailure = nil
 
-	stateRow.WaitUntilCommands, err = persistence.FromCommandRequestToBytes(request.CommandRequest)
+	stateRow.WaitUntilCommands, err = data_models.FromCommandRequestToBytes(request.CommandRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+	commandResults, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 2 - 1: update local queue command results
-	var allConsumedMessages []persistence.InternalLocalQueueMessage
+	var allConsumedMessages []data_models.InternalLocalQueueMessage
 	for _, consumedMessages := range consumedMessagesMap {
 		allConsumedMessages = append(allConsumedMessages, consumedMessages...)
 	}
@@ -189,7 +189,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 	}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
+	stateRow.WaitUntilCommandResults, err = data_models.FromCommandResultsJsonToBytes(commandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +207,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 			timerCommand.DelayInSeconds = 0
 		}
 
-		timerTaskInfoJson := persistence.TimerTaskInfoJson{
+		timerTaskInfoJson := data_models.TimerTaskInfoJson{
 			TimerCommandIndex: idx,
 		}
 		timerInfoBytes, err := timerTaskInfoJson.ToBytes()
@@ -219,7 +219,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		err = tx.InsertTimerTask(ctx, extensions.TimerTaskRowForInsert{
 			ShardId:             request.TaskShardId,
 			FireTimeUnixSeconds: fireTimestamp,
-			TaskType:            persistence.TimerTaskTypeTimerCommand,
+			TaskType:            data_models.TimerTaskTypeTimerCommand,
 			ProcessExecutionId:  request.ProcessExecutionId,
 			StateId:             request.StateId,
 			StateIdSequence:     request.StateIdSequence,
@@ -245,7 +245,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 	}
 
-	return &persistence.ProcessWaitUntilExecutionResponse{
+	return &data_models.ProcessWaitUntilExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 		FireTimestamps:      fireTimestamps,
 	}, nil

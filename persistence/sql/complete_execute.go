@@ -6,16 +6,16 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) CompleteExecuteExecution(
-	ctx context.Context, request persistence.CompleteExecuteExecutionRequest,
-) (*persistence.CompleteExecuteExecutionResponse, error) {
+	ctx context.Context, request data_models.CompleteExecuteExecutionRequest,
+) (*data_models.CompleteExecuteExecutionResponse, error) {
 
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
@@ -39,14 +39,14 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 }
 
 func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.CompleteExecuteExecutionRequest,
-) (*persistence.CompleteExecuteExecutionResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.CompleteExecuteExecutionRequest,
+) (*data_models.CompleteExecuteExecutionResponse, error) {
 	hasNewImmediateTask := false
 
 	err := p.updateGlobalAttributesIfNeeded(ctx, tx, request)
 	if err != nil {
 		//lint:ignore nilerr reason
-		return &persistence.CompleteExecuteExecutionResponse{
+		return &data_models.CompleteExecuteExecutionResponse{
 			FailAtUpdatingGlobalAttributes: true,
 			UpdatingGlobalAttributesError:  err,
 		}, nil
@@ -63,7 +63,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.StateId,
 		StateIdSequence:    request.StateIdSequence,
-		Status:             persistence.StateExecutionStatusCompleted,
+		Status:             data_models.StateExecutionStatusCompleted,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 		LastFailure:        nil,
 	}
@@ -80,7 +80,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// at this point, it's either going to next states or closing the process
 	// either will require to do transaction on process execution row
-	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
+	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		prcExeId := request.ProcessExecutionId
 
 		for _, next := range request.StateDecision.GetNextStates() {
-			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytesForNextState(
+			stateInfo, err := data_models.FromAsyncStateExecutionInfoToBytesForNextState(
 				request.Prepare.Info, next.StateConfig,
 			)
 			if err != nil {
@@ -110,7 +110,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
 			stateConfig := next.StateConfig
 
-			stateInput, err := persistence.FromEncodedObjectIntoBytes(next.StateInput)
+			stateInput, err := data_models.FromEncodedObjectIntoBytes(next.StateInput)
 			if err != nil {
 				return nil, err
 			}
@@ -145,12 +145,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		case xdbapi.FORCE_COMPLETE_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
-			prcRow.Status = persistence.ProcessExecutionStatusCompleted
+			prcRow.Status = data_models.ProcessExecutionStatusCompleted
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 		case xdbapi.FORCE_FAIL_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
-			prcRow.Status = persistence.ProcessExecutionStatusFailed
+			prcRow.Status = data_models.ProcessExecutionStatusFailed
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
 		case xdbapi.DEAD_END:
 			// do nothing
@@ -158,7 +158,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	}
 
 	if toGracefullyComplete {
-		prcRow.Status = persistence.ProcessExecutionStatusCompleted
+		prcRow.Status = data_models.ProcessExecutionStatusCompleted
 	}
 
 	if toAbortRunningAsyncStates {
@@ -192,7 +192,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		hasNewImmediateTask = true
 	}
 
-	return &persistence.CompleteExecuteExecutionResponse{
+	return &data_models.CompleteExecuteExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

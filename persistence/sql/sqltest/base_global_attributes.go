@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 	"time"
 
@@ -97,16 +98,16 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 	// Check initial immediate tasks.
 	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
+	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for first Execute API
 	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
+	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	gloAttResp, err := store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
+	gloAttResp, err := store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
@@ -210,15 +211,15 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 
 	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeExecute, stateId2+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
+	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	gloAttResp, err = store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
+	gloAttResp, err = store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})

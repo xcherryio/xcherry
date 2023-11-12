@@ -6,14 +6,14 @@ package sql
 import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) PrepareStateExecution(
-	ctx context.Context, request persistence.PrepareStateExecutionRequest,
-) (*persistence.PrepareStateExecutionResponse, error) {
+	ctx context.Context, request data_models.PrepareStateExecutionRequest,
+) (*data_models.PrepareStateExecutionResponse, error) {
 	stateRow, err := p.session.SelectAsyncStateExecution(
 		ctx, extensions.AsyncStateExecutionSelectFilter{
 			ProcessExecutionId: request.ProcessExecutionId,
@@ -24,29 +24,29 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 		return nil, err
 	}
 
-	info, err := persistence.BytesToAsyncStateExecutionInfo(stateRow.Info)
+	info, err := data_models.BytesToAsyncStateExecutionInfo(stateRow.Info)
 	if err != nil {
 		return nil, err
 	}
 
-	input, err := persistence.BytesToEncodedObject(stateRow.Input)
+	input, err := data_models.BytesToEncodedObject(stateRow.Input)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResultsJson, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+	commandResultsJson, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
 
-	commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+	commandRequest, err := data_models.BytesToCommandRequest(stateRow.WaitUntilCommands)
 	if err != nil {
 		return nil, err
 	}
 
 	commandResults := p.prepareWaitUntilCommandResults(commandResultsJson, commandRequest)
 
-	return &persistence.PrepareStateExecutionResponse{
+	return &data_models.PrepareStateExecutionResponse{
 		Status:                  stateRow.Status,
 		WaitUntilCommandResults: commandResults,
 		PreviousVersion:         stateRow.PreviousVersion,
@@ -56,7 +56,7 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 }
 
 func (p sqlProcessStoreImpl) prepareWaitUntilCommandResults(
-	commandResultsJson persistence.CommandResultsJson, commandRequest xdbapi.CommandRequest,
+	commandResultsJson data_models.CommandResultsJson, commandRequest xdbapi.CommandRequest,
 ) xdbapi.CommandResults {
 	commandResults := xdbapi.CommandResults{}
 

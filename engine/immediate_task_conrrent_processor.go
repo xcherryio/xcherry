@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -22,11 +23,11 @@ import (
 type immediateTaskConcurrentProcessor struct {
 	rootCtx           context.Context
 	cfg               config.Config
-	taskToProcessChan chan persistence.ImmediateTask
+	taskToProcessChan chan data_models.ImmediateTask
 	// for quickly checking if the shardId is being processed
 	currentShards map[int32]bool
 	// shardId to the channel
-	taskToCommitChans map[int32]chan<- persistence.ImmediateTask
+	taskToCommitChans map[int32]chan<- data_models.ImmediateTask
 	taskNotifier      TaskNotifier
 	store             persistence.ProcessStore
 	logger            log.Logger
@@ -40,9 +41,9 @@ func NewImmediateTaskConcurrentProcessor(
 	return &immediateTaskConcurrentProcessor{
 		rootCtx:           ctx,
 		cfg:               cfg,
-		taskToProcessChan: make(chan persistence.ImmediateTask, bufferSize),
+		taskToProcessChan: make(chan data_models.ImmediateTask, bufferSize),
 		currentShards:     map[int32]bool{},
-		taskToCommitChans: make(map[int32]chan<- persistence.ImmediateTask),
+		taskToCommitChans: make(map[int32]chan<- data_models.ImmediateTask),
 		taskNotifier:      notifier,
 		store:             store,
 		logger:            logger,
@@ -52,12 +53,12 @@ func NewImmediateTaskConcurrentProcessor(
 func (w *immediateTaskConcurrentProcessor) Stop(context.Context) error {
 	return nil
 }
-func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.ImmediateTask {
+func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- data_models.ImmediateTask {
 	return w.taskToProcessChan
 }
 
 func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
-	shardId int32, tasksToCommitChan chan<- persistence.ImmediateTask,
+	shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 ) (alreadyExisted bool) {
 	exists := w.currentShards[shardId]
 	w.currentShards[shardId] = true
@@ -106,18 +107,18 @@ func (w *immediateTaskConcurrentProcessor) Start() error {
 }
 
 func (w *immediateTaskConcurrentProcessor) processImmediateTask(
-	ctx context.Context, task persistence.ImmediateTask,
+	ctx context.Context, task data_models.ImmediateTask,
 ) error {
 
 	w.logger.Debug("start executing immediate task", tag.ID(task.GetTaskId()), tag.ImmediateTaskType(task.TaskType.String()))
 
-	if task.TaskType == persistence.ImmediateTaskTypeNewLocalQueueMessages {
+	if task.TaskType == data_models.ImmediateTaskTypeNewLocalQueueMessages {
 		return w.processLocalQueueMessagesTask(ctx, task)
 	}
 
-	prep, err := w.store.PrepareStateExecution(ctx, persistence.PrepareStateExecutionRequest{
+	prep, err := w.store.PrepareStateExecution(ctx, data_models.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
-		StateExecutionId: persistence.StateExecutionId{
+		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
@@ -135,9 +136,9 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 		},
 	})
 
-	if prep.Status == persistence.StateExecutionStatusWaitUntilRunning {
+	if prep.Status == data_models.StateExecutionStatusWaitUntilRunning {
 		return w.processWaitUntilTask(ctx, task, *prep, apiClient)
-	} else if prep.Status == persistence.StateExecutionStatusExecuteRunning {
+	} else if prep.Status == data_models.StateExecutionStatusExecuteRunning {
 		return w.processExecuteTask(ctx, task, *prep, apiClient)
 	} else {
 		w.logger.Warn("noop for immediate task ",
@@ -148,8 +149,8 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
-	ctx context.Context, task persistence.ImmediateTask,
-	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	ctx context.Context, task data_models.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
 ) error {
 
 	workerApiCtx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
@@ -196,9 +197,9 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 			xdbapi.WAIT_UNTIL_API)
 	}
 
-	compResp, err := w.store.ProcessWaitUntilExecution(ctx, persistence.ProcessWaitUntilExecutionRequest{
+	compResp, err := w.store.ProcessWaitUntilExecution(ctx, data_models.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
-		StateExecutionId: persistence.StateExecutionId{
+		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
@@ -230,8 +231,8 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 
 func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	ctx context.Context,
-	task persistence.ImmediateTask,
-	prep persistence.PrepareStateExecutionResponse,
+	task data_models.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse,
 	status int32,
 	details string,
 	completedAttempts int32,
@@ -245,7 +246,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	}
 	switch stateRecoveryPolicy.Policy {
 	case xdbapi.FAIL_PROCESS_ON_STATE_FAILURE:
-		resp, errStopProcess := w.store.StopProcess(ctx, persistence.StopProcessRequest{
+		resp, errStopProcess := w.store.StopProcess(ctx, data_models.StopProcessRequest{
 			Namespace:       prep.Info.Namespace,
 			ProcessId:       prep.Info.ProcessId,
 			ProcessStopType: xdbapi.FAIL,
@@ -264,10 +265,10 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 			return fmt.Errorf("cannot proceed to configured state because of missing state config")
 		}
 
-		err := w.store.RecoverFromStateExecutionFailure(ctx, persistence.RecoverFromStateExecutionFailureRequest{
+		err := w.store.RecoverFromStateExecutionFailure(ctx, data_models.RecoverFromStateExecutionFailureRequest{
 			Namespace:          prep.Info.Namespace,
 			ProcessExecutionId: task.ProcessExecutionId,
-			SourceStateExecutionId: persistence.StateExecutionId{
+			SourceStateExecutionId: data_models.StateExecutionId{
 				StateId:         task.StateId,
 				StateIdSequence: task.StateIdSequence,
 			},
@@ -284,10 +285,10 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 		if err != nil {
 			return err
 		}
-		nextImmediateTask := persistence.ImmediateTask{
+		nextImmediateTask := data_models.ImmediateTask{
 			ShardId:            task.ShardId,
 			ProcessExecutionId: task.ProcessExecutionId,
-			StateExecutionId: persistence.StateExecutionId{
+			StateExecutionId: data_models.StateExecutionId{
 				StateId:         *prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId,
 				StateIdSequence: 1,
 			},
@@ -295,9 +296,9 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 
 		proceedStateConfig := prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateConfig
 		if proceedStateConfig == nil || !proceedStateConfig.GetSkipWaitUntil() {
-			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeWaitUntil
+			nextImmediateTask.TaskType = data_models.ImmediateTaskTypeWaitUntil
 		} else {
-			nextImmediateTask.TaskType = persistence.ImmediateTaskTypeExecute
+			nextImmediateTask.TaskType = data_models.ImmediateTaskTypeExecute
 		}
 		w.notifyNewImmediateTask(prep, nextImmediateTask)
 	default:
@@ -307,16 +308,16 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	return nil
 }
 
-func createWorkerTaskBackoffInfo() *persistence.WorkerTaskBackoffInfoJson {
-	return &persistence.WorkerTaskBackoffInfoJson{
+func createWorkerTaskBackoffInfo() *data_models.WorkerTaskBackoffInfoJson {
+	return &data_models.WorkerTaskBackoffInfoJson{
 		CompletedAttempts:            int32(0),
 		FirstAttemptTimestampSeconds: time.Now().Unix(),
 	}
 }
 
 func createApiContext(
-	prep persistence.PrepareStateExecutionResponse,
-	task persistence.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse,
+	task data_models.ImmediateTask,
 	recoverFromStateExecutionId *string,
 	RecoverFromApi *xdbapi.StateApiType,
 ) xdbapi.Context {
@@ -334,8 +335,8 @@ func createApiContext(
 }
 
 func (w *immediateTaskConcurrentProcessor) processExecuteTask(
-	ctx context.Context, task persistence.ImmediateTask,
-	prep persistence.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	ctx context.Context, task data_models.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
 ) error {
 
 	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
@@ -393,9 +394,9 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			xdbapi.EXECUTE_API)
 	}
 
-	compResp, err := w.store.CompleteExecuteExecution(ctx, persistence.CompleteExecuteExecutionRequest{
+	compResp, err := w.store.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
-		StateExecutionId: persistence.StateExecutionId{
+		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
@@ -422,16 +423,16 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
-	ctx context.Context, taskType persistence.ImmediateTaskType, stateConfig *xdbapi.AsyncStateConfig,
+	ctx context.Context, taskType data_models.ImmediateTaskType, stateConfig *xdbapi.AsyncStateConfig,
 ) (context.Context, context.CancelFunc) {
 	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 	timeout := qCfg.DefaultAsyncStateAPITimeout
 	if stateConfig != nil {
-		if taskType == persistence.ImmediateTaskTypeWaitUntil {
+		if taskType == data_models.ImmediateTaskTypeWaitUntil {
 			if stateConfig.GetWaitUntilApiTimeoutSeconds() > 0 {
 				timeout = time.Duration(stateConfig.GetWaitUntilApiTimeoutSeconds()) * time.Second
 			}
-		} else if taskType == persistence.ImmediateTaskTypeExecute {
+		} else if taskType == data_models.ImmediateTaskTypeExecute {
 			if stateConfig.GetExecuteApiTimeoutSeconds() > 0 {
 				timeout = time.Duration(stateConfig.GetExecuteApiTimeoutSeconds()) * time.Second
 			}
@@ -446,7 +447,7 @@ func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
 }
 
 func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
-	prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
 ) {
 	w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
 		ShardId:            persistence.DefaultShardId,
@@ -457,14 +458,14 @@ func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) checkRetry(
-	task persistence.ImmediateTask, info persistence.AsyncStateExecutionInfoJson,
+	task data_models.ImmediateTask, info data_models.AsyncStateExecutionInfoJson,
 ) (nextBackoffSeconds int32, shouldRetry bool) {
-	if task.TaskType == persistence.ImmediateTaskTypeWaitUntil {
+	if task.TaskType == data_models.ImmediateTaskTypeWaitUntil {
 		return GetNextBackoff(
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
 			info.StateConfig.WaitUntilApiRetryPolicy)
-	} else if task.TaskType == persistence.ImmediateTaskTypeExecute {
+	} else if task.TaskType == data_models.ImmediateTaskTypeExecute {
 		return GetNextBackoff(
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.FirstAttemptTimestampSeconds,
@@ -475,12 +476,12 @@ func (w *immediateTaskConcurrentProcessor) checkRetry(
 }
 
 func (w *immediateTaskConcurrentProcessor) retryTask(
-	ctx context.Context, task persistence.ImmediateTask,
-	prep persistence.PrepareStateExecutionResponse, nextIntervalSecs int32,
+	ctx context.Context, task data_models.ImmediateTask,
+	prep data_models.PrepareStateExecutionResponse, nextIntervalSecs int32,
 	LastFailureStatus int32, LastFailureDetails string,
 ) error {
 	fireTimeUnixSeconds := time.Now().Unix() + int64(nextIntervalSecs)
-	err := w.store.BackoffImmediateTask(ctx, persistence.BackoffImmediateTaskRequest{
+	err := w.store.BackoffImmediateTask(ctx, data_models.BackoffImmediateTaskRequest{
 		LastFailureStatus:    LastFailureStatus,
 		LastFailureDetails:   LastFailureDetails,
 		Prep:                 prep,
@@ -523,7 +524,7 @@ func (w *immediateTaskConcurrentProcessor) checkResponseAndError(err error, http
 
 func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	err error, httpResp *http.Response,
-	info persistence.AsyncStateExecutionInfoJson, task persistence.ImmediateTask,
+	info data_models.AsyncStateExecutionInfoJson, task data_models.ImmediateTask,
 ) (int32, string) {
 	responseBody := "None"
 	var statusCode int32
@@ -557,9 +558,9 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 }
 
 func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
-	ctx context.Context, task persistence.ImmediateTask,
+	ctx context.Context, task data_models.ImmediateTask,
 ) error {
-	resp, err := w.store.ProcessLocalQueueMessages(ctx, persistence.ProcessLocalQueueMessagesRequest{
+	resp, err := w.store.ProcessLocalQueueMessages(ctx, data_models.ProcessLocalQueueMessagesRequest{
 		TaskShardId:        task.ShardId,
 		TaskSequence:       task.GetTaskSequence(),
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -580,15 +581,15 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
-	ctx context.Context, prep persistence.PrepareStateExecutionResponse, task persistence.ImmediateTask,
-) (*persistence.LoadGlobalAttributesResponse, error) {
+	ctx context.Context, prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
+) (*data_models.LoadGlobalAttributesResponse, error) {
 	if prep.Info.StateConfig == nil ||
 		prep.Info.StateConfig.LoadGlobalAttributesRequest == nil {
-		return &persistence.LoadGlobalAttributesResponse{}, nil
+		return &data_models.LoadGlobalAttributesResponse{}, nil
 	}
 
 	if prep.Info.GlobalAttributeConfig == nil {
-		return &persistence.LoadGlobalAttributesResponse{},
+		return &data_models.LoadGlobalAttributesResponse{},
 			fmt.Errorf("global attribute config is not available")
 	}
 
@@ -597,7 +598,7 @@ func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
 		tag.JsonValue(prep.Info.StateConfig),
 		tag.JsonValue(prep.Info.GlobalAttributeConfig))
 
-	resp, err := w.store.LoadGlobalAttributes(ctx, persistence.LoadGlobalAttributesRequest{
+	resp, err := w.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
 		TableConfig: *prep.Info.GlobalAttributeConfig,
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
