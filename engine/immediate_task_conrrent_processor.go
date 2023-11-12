@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -307,8 +308,8 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	return nil
 }
 
-func createWorkerTaskBackoffInfo() *persistence.WorkerTaskBackoffInfoJson {
-	return &persistence.WorkerTaskBackoffInfoJson{
+func createWorkerTaskBackoffInfo() *data_models.WorkerTaskBackoffInfoJson {
+	return &data_models.WorkerTaskBackoffInfoJson{
 		CompletedAttempts:            int32(0),
 		FirstAttemptTimestampSeconds: time.Now().Unix(),
 	}
@@ -457,7 +458,7 @@ func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) checkRetry(
-	task persistence.ImmediateTask, info persistence.AsyncStateExecutionInfoJson,
+	task persistence.ImmediateTask, info data_models.AsyncStateExecutionInfoJson,
 ) (nextBackoffSeconds int32, shouldRetry bool) {
 	if task.TaskType == persistence.ImmediateTaskTypeWaitUntil {
 		return GetNextBackoff(
@@ -523,7 +524,7 @@ func (w *immediateTaskConcurrentProcessor) checkResponseAndError(err error, http
 
 func (w *immediateTaskConcurrentProcessor) composeHttpError(
 	err error, httpResp *http.Response,
-	info persistence.AsyncStateExecutionInfoJson, task persistence.ImmediateTask,
+	info data_models.AsyncStateExecutionInfoJson, task persistence.ImmediateTask,
 ) (int32, string) {
 	responseBody := "None"
 	var statusCode int32

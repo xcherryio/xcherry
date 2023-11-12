@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	minSeq1, maxSeq1, timerTasks1 := getAndCheckTimerTasksUpToTs(ctx, t, ass, store, 1, fireTime1)
 
 	verifyTimerTask(ass, timerTasks1[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
-		persistence.TimerTaskInfoJson{
+		data_models.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo1,
 			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
@@ -35,7 +36,7 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	ass.True(maxSeq2 >= minSeq2)
 
 	verifyTimerTask(ass, timerTasks2[0], persistence.TimerTaskTypeWorkerTaskBackoff, stateId1+"-1",
-		persistence.TimerTaskInfoJson{
+		data_models.TimerTaskInfoJson{
 			WorkerTaskBackoffInfo: backoffInfo2,
 			WorkerTaskType:        ptr.Any(persistence.ImmediateTaskTypeWaitUntil)})
 
@@ -48,8 +49,8 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 	}, resp)
 
 	_, _, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
-	verifyImmediateTask(ass, immediateTasks[0], persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1", persistence.ImmediateTaskInfoJson{
-		WorkerTaskBackoffInfo: &persistence.WorkerTaskBackoffInfoJson{
+	verifyImmediateTask(ass, immediateTasks[0], persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1", data_models.ImmediateTaskInfoJson{
+		WorkerTaskBackoffInfo: &data_models.WorkerTaskBackoffInfoJson{
 			CompletedAttempts:            1,
 			FirstAttemptTimestampSeconds: firstAttmpTs,
 		},
@@ -59,7 +60,7 @@ func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.Proc
 func startProcessAndBackoffWorkerTask(
 	t *testing.T,
 	ass *assert.Assertions, store persistence.ProcessStore, namespace string, firstAttemptTimestampSeconds int64,
-) (int64, *persistence.WorkerTaskBackoffInfoJson) {
+) (int64, *data_models.WorkerTaskBackoffInfoJson) {
 	ctx := context.Background()
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
@@ -80,7 +81,7 @@ func startProcessAndBackoffWorkerTask(
 	prep := prepareStateExecution(ctx, t, store, prcExeId, immediateTask.StateId, immediateTask.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
 
-	backoffInfo := &persistence.WorkerTaskBackoffInfoJson{
+	backoffInfo := &data_models.WorkerTaskBackoffInfoJson{
 		CompletedAttempts:            int32(1),
 		FirstAttemptTimestampSeconds: firstAttemptTimestampSeconds,
 	}

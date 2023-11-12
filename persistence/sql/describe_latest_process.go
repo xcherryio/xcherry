@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
@@ -24,7 +25,7 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 		return nil, err
 	}
 
-	info, err := persistence.BytesToProcessExecutionInfo(row.Info)
+	info, err := data_models.BytesToProcessExecutionInfo(row.Info)
 	if err != nil {
 		return nil, err
 	}

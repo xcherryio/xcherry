@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/persistence"
@@ -20,7 +21,7 @@ func (p sqlProcessStoreImpl) GetImmediateTasks(
 	}
 	var tasks []persistence.ImmediateTask
 	for _, t := range immediateTasks {
-		info, err := persistence.BytesToImmediateTaskInfo(t.Info)
+		info, err := data_models.BytesToImmediateTaskInfo(t.Info)
 		if err != nil {
 			return nil, err
 		}

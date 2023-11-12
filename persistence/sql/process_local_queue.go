@@ -8,6 +8,7 @@ import (
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
@@ -37,7 +38,7 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
 ) (*persistence.ProcessLocalQueueMessagesResponse, error) {
-	assignedStateExecutionIdToMessagesMap := map[string]map[int][]persistence.InternalLocalQueueMessage{}
+	assignedStateExecutionIdToMessagesMap := map[string]map[int][]data_models.InternalLocalQueueMessage{}
 
 	// Step 1: get localQueues from the process execution row, and update it with messages
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -45,7 +46,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 		return nil, err
 	}
 
-	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+	localQueues, err := data_models.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 
 		_, ok := assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString]
 		if !ok {
-			assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] = map[int][]persistence.InternalLocalQueueMessage{}
+			assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString] = map[int][]data_models.InternalLocalQueueMessage{}
 		}
 		assignedStateExecutionIdToMessagesMap[assignedStateExecutionIdString][idx] = consumedMessages
 	}
@@ -68,7 +69,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 	hasNewImmediateTask := false
 
 	if len(assignedStateExecutionIdToMessagesMap) > 0 {
-		var allConsumedMessages []persistence.InternalLocalQueueMessage
+		var allConsumedMessages []data_models.InternalLocalQueueMessage
 		for _, consumedMessagesMap := range assignedStateExecutionIdToMessagesMap {
 			for _, consumedMessages := range consumedMessagesMap {
 				allConsumedMessages = append(allConsumedMessages, consumedMessages...)
@@ -97,12 +98,12 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 
 			stateRow.LastFailure = nil
 
-			commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+			commandRequest, err := data_models.BytesToCommandRequest(stateRow.WaitUntilCommands)
 			if err != nil {
 				return nil, err
 			}
 
-			commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+			commandResults, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 			if err != nil {
 				return nil, err
 			}
@@ -121,7 +122,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 				}
 			}
 
-			stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
+			stateRow.WaitUntilCommandResults, err = data_models.FromCommandResultsJsonToBytes(commandResults)
 			if err != nil {
 				return nil, err
 			}

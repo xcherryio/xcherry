@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"encoding/json"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -324,13 +325,13 @@ func verifyImmediateTaskNoInfo(
 	ass *assert.Assertions, task persistence.ImmediateTask,
 	taskType persistence.ImmediateTaskType, stateExeId string,
 ) {
-	verifyImmediateTask(ass, task, taskType, stateExeId, persistence.ImmediateTaskInfoJson{})
+	verifyImmediateTask(ass, task, taskType, stateExeId, data_models.ImmediateTaskInfoJson{})
 }
 
 func verifyImmediateTask(
 	ass *assert.Assertions, task persistence.ImmediateTask,
 	taskType persistence.ImmediateTaskType, stateExeId string,
-	info persistence.ImmediateTaskInfoJson,
+	info data_models.ImmediateTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
@@ -343,7 +344,7 @@ func verifyImmediateTask(
 func verifyTimerTask(
 	ass *assert.Assertions, task persistence.TimerTask,
 	taskType persistence.TimerTaskType, stateExeId string,
-	taskInfo persistence.TimerTaskInfoJson,
+	taskInfo data_models.TimerTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
 	ass.Equal(persistence.DefaultShardId, int(task.ShardId))

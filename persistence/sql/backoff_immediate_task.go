@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
@@ -45,7 +46,7 @@ func (p sqlProcessStoreImpl) doBackoffImmediateTaskTx(
 	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
 		return fmt.Errorf("WorkerTaskBackoffInfo cannot be nil")
 	}
-	failureBytes, err := persistence.CreateStateExecutionFailureBytesForBackoff(
+	failureBytes, err := data_models.CreateStateExecutionFailureBytesForBackoff(
 		request.LastFailureStatus, request.LastFailureDetails, task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts)
 
 	if err != nil {
@@ -62,7 +63,7 @@ func (p sqlProcessStoreImpl) doBackoffImmediateTaskTx(
 	if err != nil {
 		return err
 	}
-	timerInfoBytes, err := persistence.CreateTimerTaskInfoBytes(task.ImmediateTaskInfo.WorkerTaskBackoffInfo, &task.TaskType)
+	timerInfoBytes, err := data_models.CreateTimerTaskInfoBytes(task.ImmediateTaskInfo.WorkerTaskBackoffInfo, &task.TaskType)
 	if err != nil {
 		return err
 	}

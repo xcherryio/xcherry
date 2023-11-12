@@ -1,17 +1,18 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/persistence"
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType           string                         `json:"processType"`
-	WorkerURL             string                         `json:"workerURL"`
-	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
+	ProcessType           string                                     `json:"processType"`
+	WorkerURL             string                                     `json:"workerURL"`
+	GlobalAttributeConfig *persistence.InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {

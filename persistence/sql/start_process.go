@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"time"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
@@ -414,23 +415,23 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		timeoutSeconds = sc.GetTimeoutSeconds()
 	}
 
-	processExeInfoBytes, err := persistence.FromStartRequestToProcessInfoBytes(req)
+	processExeInfoBytes, err := data_models.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
 		return hasNewImmediateTask, err
 	}
 
-	sequenceMaps := persistence.NewStateExecutionSequenceMaps()
+	sequenceMaps := data_models.NewStateExecutionSequenceMaps()
 	if req.StartStateId != nil {
 		stateId := req.GetStartStateId()
 		stateIdSeq := sequenceMaps.StartNewStateExecution(req.GetStartStateId())
 		stateConfig := req.StartStateConfig
 
-		stateInputBytes, err := persistence.FromEncodedObjectIntoBytes(req.StartStateInput)
+		stateInputBytes, err := data_models.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
 			return hasNewImmediateTask, err
 		}
 
-		stateInfoBytes, err := persistence.FromStartRequestToStateInfoBytes(req)
+		stateInfoBytes, err := data_models.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
 			return hasNewImmediateTask, err
 		}
@@ -453,7 +454,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		return hasNewImmediateTask, err
 	}
 
-	localQueues := persistence.NewStateExecutionLocalQueues()
+	localQueues := data_models.NewStateExecutionLocalQueues()
 	localQueuesBytes, err := localQueues.ToBytes()
 	if err != nil {
 		return hasNewImmediateTask, err

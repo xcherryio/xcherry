@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -80,7 +81,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// at this point, it's either going to next states or closing the process
 	// either will require to do transaction on process execution row
-	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
+	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +101,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		prcExeId := request.ProcessExecutionId
 
 		for _, next := range request.StateDecision.GetNextStates() {
-			stateInfo, err := persistence.FromAsyncStateExecutionInfoToBytesForNextState(
+			stateInfo, err := data_models.FromAsyncStateExecutionInfoToBytesForNextState(
 				request.Prepare.Info, next.StateConfig,
 			)
 			if err != nil {
@@ -110,7 +111,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
 			stateConfig := next.StateConfig
 
-			stateInput, err := persistence.FromEncodedObjectIntoBytes(next.StateInput)
+			stateInput, err := data_models.FromEncodedObjectIntoBytes(next.StateInput)
 			if err != nil {
 				return nil, err
 			}

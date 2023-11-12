@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
@@ -48,7 +49,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		return nil, err
 	}
 
-	localQueues, err := persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+	localQueues, err := data_models.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 	if err != nil {
 		return nil, err
 	}
@@ -72,12 +73,12 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 
 	stateRow.LastFailure = nil
 
-	commandRequest, err := persistence.BytesToCommandRequest(stateRow.WaitUntilCommands)
+	commandRequest, err := data_models.BytesToCommandRequest(stateRow.WaitUntilCommands)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+	commandResults, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		}
 	}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
+	stateRow.WaitUntilCommandResults, err = data_models.FromCommandResultsJsonToBytes(commandResults)
 	if err != nil {
 		return nil, err
 	}

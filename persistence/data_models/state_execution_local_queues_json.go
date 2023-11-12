@@ -1,11 +1,12 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/persistence"
 )
 
 type StateExecutionLocalQueuesJson struct {
@@ -33,7 +34,7 @@ func NewStateExecutionLocalQueuesFromBytes(bytes []byte) (StateExecutionLocalQue
 }
 
 func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommands(
-	stateExecutionId StateExecutionId, localQueueCommands []xdbapi.LocalQueueCommand,
+	stateExecutionId persistence.StateExecutionId, localQueueCommands []xdbapi.LocalQueueCommand,
 ) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 	_, ok := s.StateToLocalQueueCommandsMap[stateExecutionIdKey]
@@ -121,7 +122,7 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 //
 // { 0: [(id_1_1, false)], 1: [(id_2_1, false), (id_2_2, false)] }
 func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
-	stateExecutionId StateExecutionId,
+	stateExecutionId persistence.StateExecutionId,
 	commandWaitingType xdbapi.CommandWaitingType,
 ) map[int][]InternalLocalQueueMessage {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
@@ -168,7 +169,7 @@ func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 	return consumedMessages
 }
 
-func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId StateExecutionId) {
+func (s *StateExecutionLocalQueuesJson) CleanupFor(stateExecutionId persistence.StateExecutionId) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 	delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 }

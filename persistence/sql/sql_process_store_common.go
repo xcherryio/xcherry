@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/uuid"
@@ -23,7 +24,7 @@ func insertAsyncStateExecution(
 	stateInput []byte,
 	stateInfo []byte,
 ) error {
-	commandResultsBytes, err := persistence.FromCommandResultsJsonToBytes(persistence.NewCommandResultsJson())
+	commandResultsBytes, err := data_models.FromCommandResultsJsonToBytes(data_models.NewCommandResultsJson())
 	if err != nil {
 		return err
 	}
@@ -84,7 +85,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 	messages []xdbapi.LocalQueueMessage,
 ) (bool, error) {
 
-	var localQueueMessageInfo []persistence.LocalQueueMessageInfoJson
+	var localQueueMessageInfo []data_models.LocalQueueMessageInfoJson
 
 	for _, message := range messages {
 		dedupId := uuid.MustNewUUID()
@@ -100,7 +101,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 		// insert a row into xdb_sys_local_queue_messages
 
-		payloadBytes, err := persistence.FromEncodedObjectIntoBytes(message.Payload)
+		payloadBytes, err := data_models.FromEncodedObjectIntoBytes(message.Payload)
 		if err != nil {
 			return false, err
 		}
@@ -118,7 +119,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			continue
 		}
 
-		localQueueMessageInfo = append(localQueueMessageInfo, persistence.LocalQueueMessageInfoJson{
+		localQueueMessageInfo = append(localQueueMessageInfo, data_models.LocalQueueMessageInfoJson{
 			QueueName: message.GetQueueName(),
 			DedupId:   dedupId,
 		})
@@ -130,8 +131,8 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 		return false, nil
 	}
 
-	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(
-		persistence.ImmediateTaskInfoJson{
+	taskInfoBytes, err := data_models.FromImmediateTaskInfoIntoBytes(
+		data_models.ImmediateTaskInfoJson{
 			LocalQueueMessageInfo: localQueueMessageInfo,
 		})
 	if err != nil {
@@ -156,7 +157,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(
 	ctx context.Context, processExecutionId uuid.UUID,
-	consumedMessages []persistence.InternalLocalQueueMessage,
+	consumedMessages []data_models.InternalLocalQueueMessage,
 ) (map[string]extensions.LocalQueueMessageRow, error) {
 	if len(consumedMessages) == 0 {
 		return map[string]extensions.LocalQueueMessageRow{}, nil
@@ -181,8 +182,8 @@ func (p sqlProcessStoreImpl) getDedupIdToLocalQueueMessageMap(
 }
 
 func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMessages(
-	commandResults *persistence.CommandResultsJson,
-	newlyConsumedMessagesMap map[int][]persistence.InternalLocalQueueMessage,
+	commandResults *data_models.CommandResultsJson,
+	newlyConsumedMessagesMap map[int][]data_models.InternalLocalQueueMessage,
 	dedupIdToLocalQueueMessageMap map[string]extensions.LocalQueueMessageRow,
 ) error {
 
@@ -195,7 +196,7 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMess
 			}
 
 			dedupIdString := message.DedupId.String()
-			payload, err := persistence.BytesToEncodedObject(message.Payload)
+			payload, err := data_models.BytesToEncodedObject(message.Payload)
 			if err != nil {
 				return err
 			}
@@ -213,13 +214,13 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMess
 }
 
 func (p sqlProcessStoreImpl) updateCommandResultsWithFiredTimerCommand(
-	commandResults *persistence.CommandResultsJson, timerCommandIndex int,
+	commandResults *data_models.CommandResultsJson, timerCommandIndex int,
 ) {
 	commandResults.TimerResults[timerCommandIndex] = true
 }
 
 func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(
-	commandRequest xdbapi.CommandRequest, commandResults persistence.CommandResultsJson,
+	commandRequest xdbapi.CommandRequest, commandResults data_models.CommandResultsJson,
 ) bool {
 	switch commandRequest.GetWaitingType() {
 	case xdbapi.ANY_OF_COMPLETION:
@@ -236,7 +237,7 @@ func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(
 
 func (p sqlProcessStoreImpl) updateWhenCompletedWaitUntilWaiting(
 	ctx context.Context, tx extensions.SQLTransaction, shardId int32,
-	localQueues *persistence.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate,
+	localQueues *data_models.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate,
 ) error {
 	localQueues.CleanupFor(persistence.StateExecutionId{
 		StateId:         stateRow.StateId,

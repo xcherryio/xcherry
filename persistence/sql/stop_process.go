@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
@@ -64,7 +65,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	sequenceMaps, err := persistence.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
+	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
 	}

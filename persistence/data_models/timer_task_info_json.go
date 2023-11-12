@@ -1,14 +1,17 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"github.com/xdblab/xdb/persistence"
+)
 
 type TimerTaskInfoJson struct {
-	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
-	WorkerTaskType        *ImmediateTaskType         `json:"workerTaskType"`
-	TimerCommandIndex     int                        `json:"timerCommandIndex"`
+	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson     `json:"workerTaskBackoffInfo"`
+	WorkerTaskType        *persistence.ImmediateTaskType `json:"workerTaskType"`
+	TimerCommandIndex     int                            `json:"timerCommandIndex"`
 }
 
 func (s *TimerTaskInfoJson) ToBytes() ([]byte, error) {
@@ -21,7 +24,7 @@ func BytesToTimerTaskInfo(bytes []byte) (TimerTaskInfoJson, error) {
 	return obj, err
 }
 
-func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *ImmediateTaskType) ([]byte, error) {
+func CreateTimerTaskInfoBytes(backoff *WorkerTaskBackoffInfoJson, taskType *persistence.ImmediateTaskType) ([]byte, error) {
 	obj := TimerTaskInfoJson{
 		WorkerTaskBackoffInfo: backoff,
 		WorkerTaskType:        taskType,

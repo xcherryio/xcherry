@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
@@ -44,7 +45,7 @@ func (p sqlProcessStoreImpl) doConvertTimerTaskToImmediateTaskTx(
 ) error {
 	currentTask := request.Task
 	timerInfo := currentTask.TimerTaskInfo
-	taskInfoBytes, err := persistence.FromImmediateTaskInfoIntoBytes(persistence.ImmediateTaskInfoJson{
+	taskInfoBytes, err := data_models.FromImmediateTaskInfoIntoBytes(data_models.ImmediateTaskInfoJson{
 		WorkerTaskBackoffInfo: timerInfo.WorkerTaskBackoffInfo,
 	})
 	if err != nil {

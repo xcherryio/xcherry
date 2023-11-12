@@ -1,20 +1,21 @@
 // Copyright (c) 2023 XDBLab Organization
 // SPDX-License-Identifier: BUSL-1.1
 
-package persistence
+package data_models
 
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/persistence"
 )
 
-func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
+func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *persistence.InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
 		primaryKeys := map[string]xdbapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
-		return &InternalGlobalAttributeConfig{
+		return &persistence.InternalGlobalAttributeConfig{
 			TablePrimaryKeys: primaryKeys,
 		}
 	}

@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"time"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
@@ -115,8 +116,8 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	hasLocalQueueCommands := len(request.CommandRequest.GetLocalQueueCommands()) > 0
 
 	var prcRow *extensions.ProcessExecutionRowForUpdate
-	var localQueues persistence.StateExecutionLocalQueuesJson
-	var consumedMessagesMap map[int][]persistence.InternalLocalQueueMessage
+	var localQueues data_models.StateExecutionLocalQueuesJson
+	var consumedMessagesMap map[int][]data_models.InternalLocalQueueMessage
 
 	// Step 1: get localQueues from the process execution row,
 	// update it with commands, and try to consume for the state execution
@@ -128,7 +129,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 
 		prcRow = prcRow2
 
-		localQueues, err = persistence.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
+		localQueues, err = data_models.NewStateExecutionLocalQueuesFromBytes(prcRow.StateExecutionLocalQueues)
 		if err != nil {
 			return nil, err
 		}
@@ -152,18 +153,18 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 	stateRow.Status = persistence.StateExecutionStatusWaitUntilWaiting
 	stateRow.LastFailure = nil
 
-	stateRow.WaitUntilCommands, err = persistence.FromCommandRequestToBytes(request.CommandRequest)
+	stateRow.WaitUntilCommands, err = data_models.FromCommandRequestToBytes(request.CommandRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	commandResults, err := persistence.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
+	commandResults, err := data_models.BytesToCommandResultsJson(stateRow.WaitUntilCommandResults)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 2 - 1: update local queue command results
-	var allConsumedMessages []persistence.InternalLocalQueueMessage
+	var allConsumedMessages []data_models.InternalLocalQueueMessage
 	for _, consumedMessages := range consumedMessagesMap {
 		allConsumedMessages = append(allConsumedMessages, consumedMessages...)
 	}
@@ -189,7 +190,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 		}
 	}
 
-	stateRow.WaitUntilCommandResults, err = persistence.FromCommandResultsJsonToBytes(commandResults)
+	stateRow.WaitUntilCommandResults, err = data_models.FromCommandResultsJsonToBytes(commandResults)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +208,7 @@ func (p sqlProcessStoreImpl) updateWaitUntilExecution(
 			timerCommand.DelayInSeconds = 0
 		}
 
-		timerTaskInfoJson := persistence.TimerTaskInfoJson{
+		timerTaskInfoJson := data_models.TimerTaskInfoJson{
 			TimerCommandIndex: idx,
 		}
 		timerInfoBytes, err := timerTaskInfoJson.ToBytes()

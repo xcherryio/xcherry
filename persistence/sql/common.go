@@ -7,6 +7,7 @@ import (
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"math"
 )
 
@@ -15,7 +16,7 @@ func createGetTimerTaskResponse(
 ) (*persistence.GetTimerTasksResponse, error) {
 	var tasks []persistence.TimerTask
 	for _, t := range dbTimerTasks {
-		info, err := persistence.BytesToTimerTaskInfo(t.Info)
+		info, err := data_models.BytesToTimerTaskInfo(t.Info)
 		if err != nil {
 			return nil, err
 		}

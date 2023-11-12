@@ -5,6 +5,7 @@ package persistence
 
 import (
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ type (
 
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
-		ImmediateTaskInfo ImmediateTaskInfoJson
+		ImmediateTaskInfo data_models.ImmediateTaskInfoJson
 
 		// only needed for distributed database that doesn't support global secondary index
 		OptionalPartitionKey *PartitionKey
@@ -171,7 +172,7 @@ type (
 
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
-		TimerTaskInfo TimerTaskInfoJson
+		TimerTaskInfo data_models.TimerTaskInfoJson
 
 		// only needed for distributed database that doesn't support global secondary index
 		OptionalPartitionKey *PartitionKey
@@ -201,8 +202,8 @@ type (
 		PreviousVersion int32
 
 		Input       xdbapi.EncodedObject
-		Info        AsyncStateExecutionInfoJson
-		LastFailure *StateExecutionFailureJson
+		Info        data_models.AsyncStateExecutionInfoJson
+		LastFailure *data_models.StateExecutionFailureJson
 	}
 
 	ProcessWaitUntilExecutionRequest struct {
@@ -263,7 +264,7 @@ type (
 		TaskShardId        int32
 		TaskSequence       int64
 		ProcessExecutionId uuid.UUID
-		Messages           []LocalQueueMessageInfoJson
+		Messages           []data_models.LocalQueueMessageInfoJson
 	}
 
 	ProcessLocalQueueMessagesResponse struct {
