@@ -6,16 +6,15 @@ package data_models
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence"
 )
 
-func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *persistence.InternalGlobalAttributeConfig {
+func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
 		primaryKeys := map[string]xdbapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
-		return &persistence.InternalGlobalAttributeConfig{
+		return &InternalGlobalAttributeConfig{
 			TablePrimaryKeys: primaryKeys,
 		}
 	}

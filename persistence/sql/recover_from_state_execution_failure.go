@@ -10,12 +10,11 @@ import (
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 	ctx context.Context,
-	request persistence.RecoverFromStateExecutionFailureRequest,
+	request data_models.RecoverFromStateExecutionFailureRequest,
 ) error {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
@@ -42,7 +41,7 @@ func (p sqlProcessStoreImpl) RecoverFromStateExecutionFailure(
 func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
-	request persistence.RecoverFromStateExecutionFailureRequest,
+	request data_models.RecoverFromStateExecutionFailureRequest,
 ) error {
 	// lock process execution row first
 	prcRow, err := tx.SelectProcessExecutionForUpdate(ctx, request.ProcessExecutionId)
@@ -61,7 +60,7 @@ func (p sqlProcessStoreImpl) doRecoverFromStateExecutionFailureTx(
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateId:            request.SourceStateExecutionId.StateId,
 		StateIdSequence:    request.SourceStateExecutionId.StateIdSequence,
-		Status:             persistence.StateExecutionStatusFailed,
+		Status:             data_models.StateExecutionStatusFailed,
 		PreviousVersion:    request.Prepare.PreviousVersion,
 		LastFailure:        failureBytes,
 	}

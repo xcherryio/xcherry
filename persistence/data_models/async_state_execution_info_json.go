@@ -6,18 +6,17 @@ package data_models
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence"
 )
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace                   string                                     `json:"namespace"`
-	ProcessId                   string                                     `json:"processId"`
-	ProcessType                 string                                     `json:"processType"`
-	WorkerURL                   string                                     `json:"workerURL"`
-	StateConfig                 *xdbapi.AsyncStateConfig                   `json:"stateConfig"`
-	RecoverFromStateExecutionId *string                                    `json:"recoverFromStateExecutionId,omitempty"`
-	RecoverFromApi              *xdbapi.StateApiType                       `json:"recoverFromApi,omitempty"`
-	GlobalAttributeConfig       *persistence.InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
+	Namespace                   string                         `json:"namespace"`
+	ProcessId                   string                         `json:"processId"`
+	ProcessType                 string                         `json:"processType"`
+	WorkerURL                   string                         `json:"workerURL"`
+	StateConfig                 *xdbapi.AsyncStateConfig       `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xdbapi.StateApiType           `json:"recoverFromApi,omitempty"`
+	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {

@@ -7,13 +7,12 @@ import (
 	"context"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
-	ctx context.Context, request persistence.ProcessLocalQueueMessagesRequest,
-) (*persistence.ProcessLocalQueueMessagesResponse, error) {
+	ctx context.Context, request data_models.ProcessLocalQueueMessagesRequest,
+) (*data_models.ProcessLocalQueueMessagesResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -36,8 +35,8 @@ func (p sqlProcessStoreImpl) ProcessLocalQueueMessages(
 }
 
 func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessLocalQueueMessagesRequest,
-) (*persistence.ProcessLocalQueueMessagesResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessLocalQueueMessagesRequest,
+) (*data_models.ProcessLocalQueueMessagesResponse, error) {
 	assignedStateExecutionIdToMessagesMap := map[string]map[int][]data_models.InternalLocalQueueMessage{}
 
 	// Step 1: get localQueues from the process execution row, and update it with messages
@@ -82,7 +81,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 		}
 
 		for assignedStateExecutionIdString, consumedMessagesMap := range assignedStateExecutionIdToMessagesMap {
-			stateExecutionId, err := persistence.NewStateExecutionIdFromString(assignedStateExecutionIdString)
+			stateExecutionId, err := data_models.NewStateExecutionIdFromString(assignedStateExecutionIdString)
 			if err != nil {
 				return nil, err
 			}
@@ -154,7 +153,7 @@ func (p sqlProcessStoreImpl) doProcessLocalQueueMessagesTx(
 		return nil, err
 	}
 
-	return &persistence.ProcessLocalQueueMessagesResponse{
+	return &data_models.ProcessLocalQueueMessagesResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

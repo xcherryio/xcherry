@@ -8,7 +8,6 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/persistence"
 	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 )
@@ -108,7 +107,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_consumed(t *te
 
 	stateExecutionLocalQueues := data_models.NewStateExecutionLocalQueues()
 	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
@@ -122,7 +121,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_consumed(t *te
 	//
 	// (q1, 1), (q2, 2)
 
-	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(persistence.StateExecutionId{
+	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ALL_OF_COMPLETION)
 
@@ -167,7 +166,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed
 	stateExecutionLocalQueues := data_models.NewStateExecutionLocalQueues()
 	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
 
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))}, {QueueName: "q3", Count: ptr.Any(int32(2))},
@@ -181,7 +180,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed
 	//
 	// (q1, 1), (q2, 2), (q3, 2)
 
-	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(persistence.StateExecutionId{
+	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ALL_OF_COMPLETION)
 
@@ -232,7 +231,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 
 	stateExecutionLocalQueues := data_models.NewStateExecutionLocalQueues()
 	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(3))},
@@ -246,7 +245,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 	//
 	// (q1, 1), (q2, 3)
 
-	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(persistence.StateExecutionId{
+	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ANY_OF_COMPLETION)
 
@@ -292,7 +291,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 	}}, stateExecutionLocalQueues.UnconsumedLocalQueueMessages["q1"])
 	assert.Empty(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap)
 
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(2))}, {QueueName: "q2", Count: ptr.Any(int32(1))},
@@ -306,7 +305,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 	//
 	// (q1, 2), (q2, 1)
 
-	consumedMessagesMap := stateExecutionLocalQueues.TryConsumeForStateExecution(persistence.StateExecutionId{
+	consumedMessagesMap := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, xdbapi.ANY_OF_COMPLETION)
 
@@ -333,19 +332,19 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 //	state_1, 2: (q2, 3),
 //	state_3, 1: (q1: 1), (q2, 2)
 func prepareDataForAddMessageAndTryConsume(stateExecutionLocalQueues data_models.StateExecutionLocalQueuesJson) {
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(2))},
 	})
 
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q2", Count: ptr.Any(int32(3))},
 	})
 
-	stateExecutionLocalQueues.AddNewLocalQueueCommands(persistence.StateExecutionId{
+	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
 	}, []xdbapi.LocalQueueCommand{
 		{QueueName: "q1"}, {QueueName: "q2", Count: ptr.Any(int32(2))},

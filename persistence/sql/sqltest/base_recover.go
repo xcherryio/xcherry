@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"testing"
 	"time"
 
@@ -31,14 +32,14 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	// Check initial immediate tasks.
 	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task := immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution.
 	prep := prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusWaitUntilRunning)
+	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusWaitUntilRunning)
 
 	// Complete 'WaitUntil' execution.
 	completeWaitUntilExecution(ctx, t, ass, store, prcExeId, task, prep)
@@ -46,14 +47,14 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	// Check initial immediate tasks.
 	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId1+"-1")
+	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeExecute, stateId1+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
 
 	// Prepare state execution for Execute API
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
-	verifyStateExecution(ass, prep, processId, input, persistence.StateExecutionStatusExecuteRunning)
+	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
 	decision1 := xdbapi.StateDecision{
 		NextStates: []xdbapi.StateMovement{
@@ -76,7 +77,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 
 	minSeq, maxSeq, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
 	task = immediateTasks[0]
-	verifyImmediateTaskNoInfo(ass, task, persistence.ImmediateTaskTypeExecute, stateId2+"-1")
+	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeExecute, stateId2+"-1")
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -88,7 +89,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		prep,
 		processId,
 		*xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
-		persistence.StateExecutionStatusExecuteRunning)
+		data_models.StateExecutionStatusExecuteRunning)
 
 	recoverFromFailure(
 		t,
@@ -98,7 +99,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		namespace,
 		prcExeId,
 		*prep,
-		persistence.StateExecutionId{
+		data_models.StateExecutionId{
 			StateId:         stateId2,
 			StateIdSequence: 1,
 		},
@@ -111,7 +112,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	)
 
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), persistence.StateExecutionStatusFailed)
+	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), data_models.StateExecutionStatusFailed)
 
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId1, 2)
 	verifyStateExecution(
@@ -119,5 +120,5 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		prep,
 		processId,
 		*xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
-		persistence.StateExecutionStatusExecuteRunning)
+		data_models.StateExecutionStatusExecuteRunning)
 }

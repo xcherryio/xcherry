@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) LoadGlobalAttributes(
-	ctx context.Context, request persistence.LoadGlobalAttributesRequest,
-) (*persistence.LoadGlobalAttributesResponse, error) {
+	ctx context.Context, request data_models.LoadGlobalAttributesRequest,
+) (*data_models.LoadGlobalAttributesResponse, error) {
 	var tableResponses []xdbapi.TableReadResponse
 	config := request.TableConfig
 	for _, tableReq := range request.Request.TableRequests {
@@ -46,7 +46,7 @@ func (p sqlProcessStoreImpl) LoadGlobalAttributes(
 		})
 	}
 
-	return &persistence.LoadGlobalAttributesResponse{
+	return &data_models.LoadGlobalAttributesResponse{
 		Response: xdbapi.LoadGlobalAttributeResponse{
 			TableResponses: tableResponses,
 		},

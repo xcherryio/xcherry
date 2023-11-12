@@ -9,12 +9,11 @@ import (
 	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) PrepareStateExecution(
-	ctx context.Context, request persistence.PrepareStateExecutionRequest,
-) (*persistence.PrepareStateExecutionResponse, error) {
+	ctx context.Context, request data_models.PrepareStateExecutionRequest,
+) (*data_models.PrepareStateExecutionResponse, error) {
 	stateRow, err := p.session.SelectAsyncStateExecution(
 		ctx, extensions.AsyncStateExecutionSelectFilter{
 			ProcessExecutionId: request.ProcessExecutionId,
@@ -47,7 +46,7 @@ func (p sqlProcessStoreImpl) PrepareStateExecution(
 
 	commandResults := p.prepareWaitUntilCommandResults(commandResultsJson, commandRequest)
 
-	return &persistence.PrepareStateExecutionResponse{
+	return &data_models.PrepareStateExecutionResponse{
 		Status:                  stateRow.Status,
 		WaitUntilCommandResults: commandResults,
 		PreviousVersion:         stateRow.PreviousVersion,

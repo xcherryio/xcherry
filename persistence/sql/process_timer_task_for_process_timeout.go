@@ -16,15 +16,15 @@ package sql
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) ProcessTimerTaskForProcessTimeout(
-	ctx context.Context, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -48,17 +48,17 @@ func (p sqlProcessStoreImpl) ProcessTimerTaskForProcessTimeout(
 }
 
 func (p sqlProcessStoreImpl) doProcessTimerTaskForProcessTimeoutTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	p.logger.Debug("doProcessTimerTaskForProcessTimeoutTx", tag.Value(request.Task))
 	processExecution, err := tx.SelectProcessExecution(ctx, request.Task.ProcessExecutionId)
 	if err != nil {
 		return nil, err
 	}
 
-	if processExecution.Status == persistence.ProcessExecutionStatusRunning {
+	if processExecution.Status == data_models.ProcessExecutionStatusRunning {
 		resp, err := p.doStopProcessTx(
-			ctx, tx, processExecution.Namespace, processExecution.ProcessId, persistence.ProcessExecutionStatusTimeout)
+			ctx, tx, processExecution.Namespace, processExecution.ProcessId, data_models.ProcessExecutionStatusTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -79,5 +79,5 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForProcessTimeoutTx(
 		return nil, err
 	}
 
-	return &persistence.ProcessTimerTaskResponse{HasNewImmediateTask: false}, nil
+	return &data_models.ProcessTimerTaskResponse{HasNewImmediateTask: false}, nil
 }

@@ -4,11 +4,11 @@
 package extensions
 
 import (
+	"github.com/xdblab/xdb/persistence/data_models"
 	"time"
 
 	"github.com/jmoiron/sqlx/types"
 	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/persistence"
 )
 
 /**
@@ -40,7 +40,7 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                 persistence.ProcessExecutionStatus
+		Status                 data_models.ProcessExecutionStatus
 		HistoryEventIdSequence int32
 
 		StateExecutionSequenceMaps types.JSONText
@@ -54,7 +54,7 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
-		Status                 persistence.ProcessExecutionStatus
+		Status                 data_models.ProcessExecutionStatus
 		HistoryEventIdSequence int32
 
 		StateExecutionSequenceMaps types.JSONText
@@ -86,7 +86,7 @@ type (
 		StateId         string
 		StateIdSequence int32
 
-		Status persistence.StateExecutionStatus
+		Status data_models.StateExecutionStatus
 
 		WaitUntilCommands       types.JSONText
 		WaitUntilCommandResults types.JSONText
@@ -104,7 +104,7 @@ type (
 		StateId         string
 		StateIdSequence int32
 
-		Status persistence.StateExecutionStatus
+		Status data_models.StateExecutionStatus
 
 		LastFailure types.JSONText
 
@@ -118,7 +118,7 @@ type (
 		StateId                  string
 		StateIdSequence          int32
 
-		Status persistence.StateExecutionStatus
+		Status data_models.StateExecutionStatus
 
 		WaitUntilCommands       types.JSONText
 		WaitUntilCommandResults types.JSONText
@@ -133,7 +133,7 @@ type (
 
 	ImmediateTaskRowForInsert struct {
 		ShardId  int32
-		TaskType persistence.ImmediateTaskType
+		TaskType data_models.ImmediateTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -149,7 +149,7 @@ type (
 		ShardId      int32
 		TaskSequence int64
 
-		TaskType persistence.ImmediateTaskType
+		TaskType data_models.ImmediateTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -164,7 +164,7 @@ type (
 		ShardId      int32
 		TaskSequence int64
 
-		OptionalPartitionKey *persistence.PartitionKey
+		OptionalPartitionKey *data_models.PartitionKey
 	}
 
 	ImmediateTaskRangeDeleteFilter struct {
@@ -177,7 +177,7 @@ type (
 	TimerTaskRowForInsert struct {
 		ShardId             int32
 		FireTimeUnixSeconds int64
-		TaskType            persistence.TimerTaskType
+		TaskType            data_models.TimerTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -193,7 +193,7 @@ type (
 		FireTimeUnixSeconds int64
 		TaskSequence        int64
 
-		TaskType persistence.TimerTaskType
+		TaskType data_models.TimerTaskType
 
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
@@ -209,7 +209,7 @@ type (
 		FireTimeUnixSeconds int64
 		TaskSequence        int64
 
-		OptionalPartitionKey *persistence.PartitionKey
+		OptionalPartitionKey *data_models.PartitionKey
 	}
 
 	TimerTaskRangeSelectFilter struct {

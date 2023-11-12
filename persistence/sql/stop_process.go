@@ -10,12 +10,11 @@ import (
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) StopProcess(
-	ctx context.Context, request persistence.StopProcessRequest,
-) (*persistence.StopProcessResponse, error) {
+	ctx context.Context, request data_models.StopProcessRequest,
+) (*data_models.StopProcessResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -23,9 +22,9 @@ func (p sqlProcessStoreImpl) StopProcess(
 
 	namespace := request.Namespace
 	processId := request.ProcessId
-	status := persistence.ProcessExecutionStatusTerminated
+	status := data_models.ProcessExecutionStatusTerminated
 	if request.ProcessStopType == xdbapi.FAIL {
-		status = persistence.ProcessExecutionStatusFailed
+		status = data_models.ProcessExecutionStatusFailed
 	}
 
 	resp, err := p.doStopProcessTx(ctx, tx, namespace, processId, status)
@@ -46,13 +45,13 @@ func (p sqlProcessStoreImpl) StopProcess(
 }
 
 func (p sqlProcessStoreImpl) doStopProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string, status persistence.ProcessExecutionStatus,
-) (*persistence.StopProcessResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string, status data_models.ProcessExecutionStatus,
+) (*data_models.StopProcessResponse, error) {
 	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, namespace, processId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
 			// early stop when there is no such process running
-			return &persistence.StopProcessResponse{
+			return &data_models.StopProcessResponse{
 				NotExists: true,
 			}, nil
 		}
@@ -95,7 +94,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		}
 	}
 
-	return &persistence.StopProcessResponse{
+	return &data_models.StopProcessResponse{
 		NotExists: false,
 	}, nil
 }

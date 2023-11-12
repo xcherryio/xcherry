@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"math/rand"
 	"sort"
 	"time"
@@ -31,7 +32,7 @@ type immediateTaskQueueImpl struct {
 	commitTimer TimerGate
 
 	// tasksToCommitChan is the channel to receive completed tasks from processor
-	tasksToCommitChan chan persistence.ImmediateTask
+	tasksToCommitChan chan data_models.ImmediateTask
 	// currentReadCursor is the starting sequenceId(inclusive) to read next immediate tasks
 	currentReadCursor int64
 	// pendingTaskSequenceToPage is the mapping from task sequence to page
@@ -62,7 +63,7 @@ func NewImmediateTaskQueueImpl(
 		pollTimer:                 NewLocalTimerGate(logger),
 		commitTimer:               NewLocalTimerGate(logger),
 		processor:                 processor,
-		tasksToCommitChan:         make(chan persistence.ImmediateTask, qCfg.ProcessorBufferSize),
+		tasksToCommitChan:         make(chan data_models.ImmediateTask, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
 		pendingTaskSequenceToPage: make(map[int64]*immediateTaskPage),
 	}
@@ -121,7 +122,7 @@ func (w *immediateTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 
 	resp, err := w.store.GetImmediateTasks(
-		w.rootCtx, persistence.GetImmediateTasksRequest{
+		w.rootCtx, data_models.GetImmediateTasksRequest{
 			ShardId:                w.shardId,
 			StartSequenceInclusive: w.currentReadCursor,
 			PageSize:               qCfg.PollPageSize,
@@ -158,7 +159,7 @@ func (w *immediateTaskQueueImpl) commitCompletedPages(ctx context.Context) error
 		w.completedPages = mergeImmediateTaskPages(w.completedPages)
 
 		for idx, page := range w.completedPages {
-			req := persistence.DeleteImmediateTasksRequest{
+			req := data_models.DeleteImmediateTasksRequest{
 				ShardId:                  w.shardId,
 				MinTaskSequenceInclusive: page.minTaskSequence,
 				MaxTaskSequenceInclusive: page.maxTaskSequence,
@@ -207,7 +208,7 @@ func mergeImmediateTaskPages(workTaskPages []*immediateTaskPage) []*immediateTas
 	return pages
 }
 
-func (w *immediateTaskQueueImpl) receiveCompletedTask(task persistence.ImmediateTask) {
+func (w *immediateTaskQueueImpl) receiveCompletedTask(task data_models.ImmediateTask) {
 	page := w.pendingTaskSequenceToPage[*task.TaskSequence]
 	delete(w.pendingTaskSequenceToPage, *task.TaskSequence)
 

@@ -9,12 +9,11 @@ import (
 
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) ProcessTimerTaskForTimerCommand(
-	ctx context.Context, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
@@ -38,8 +37,8 @@ func (p sqlProcessStoreImpl) ProcessTimerTaskForTimerCommand(
 }
 
 func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
-	ctx context.Context, tx extensions.SQLTransaction, request persistence.ProcessTimerTaskRequest,
-) (*persistence.ProcessTimerTaskResponse, error) {
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.ProcessTimerTaskRequest,
+) (*data_models.ProcessTimerTaskResponse, error) {
 	task := request.Task
 	timerCommandIndex := task.TimerTaskInfo.TimerCommandIndex
 
@@ -65,8 +64,8 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 	}
 
 	// early stop if the state is not waiting commands
-	if stateRow.Status != persistence.StateExecutionStatusWaitUntilWaiting {
-		return &persistence.ProcessTimerTaskResponse{
+	if stateRow.Status != data_models.StateExecutionStatusWaitUntilWaiting {
+		return &data_models.ProcessTimerTaskResponse{
 			HasNewImmediateTask: false,
 		}, nil
 	}
@@ -128,7 +127,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForTimerCommandTx(
 		return nil, err
 	}
 
-	return &persistence.ProcessTimerTaskResponse{
+	return &data_models.ProcessTimerTaskResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

@@ -6,13 +6,12 @@ package data_models
 import (
 	"encoding/json"
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence"
 )
 
 type ProcessExecutionInfoJson struct {
 	ProcessType           string                                     `json:"processType"`
-	WorkerURL             string                                     `json:"workerURL"`
-	GlobalAttributeConfig *persistence.InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
+	WorkerURL             string                         `json:"workerURL"`
+	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {

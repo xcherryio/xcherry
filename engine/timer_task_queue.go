@@ -7,6 +7,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 	"math"
 	"math/rand"
 	"time"
@@ -157,7 +158,7 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 	maxWindowTime := w.getNextPollTime(qCfg.MaxTimerPreloadLookAhead, qCfg.IntervalJitter)
 
 	resp, err := w.store.GetTimerTasksUpToTimestamp(
-		w.rootCtx, persistence.GetTimerTasksRequest{
+		w.rootCtx, data_models.GetTimerTasksRequest{
 			ShardId:                          w.shardId,
 			MaxFireTimestampSecondsInclusive: maxWindowTime.Unix(),
 			PageSize:                         qCfg.MaxPreloadPageSize,
@@ -255,7 +256,7 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 	}
 
 	resp, err := w.store.GetTimerTasksForTimestamps(
-		w.rootCtx, persistence.GetTimerTasksForTimestampsRequest{
+		w.rootCtx, data_models.GetTimerTasksForTimestampsRequest{
 			ShardId:              w.shardId,
 			MinSequenceInclusive: w.currMaxLoadedTaskSequence + 1,
 			DetailedRequests:     w.currentNotifyRequests,

@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/persistence/data_models"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/log"
@@ -18,7 +19,7 @@ import (
 type timerTaskConcurrentProcessor struct {
 	rootCtx           context.Context
 	cfg               config.Config
-	taskToProcessChan chan persistence.TimerTask
+	taskToProcessChan chan data_models.TimerTask
 	// for quickly checking if the shardId is being processed
 	currentShards map[int32]bool
 	taskNotifier  TaskNotifier
@@ -34,7 +35,7 @@ func NewTimerTaskConcurrentProcessor(
 	return &timerTaskConcurrentProcessor{
 		rootCtx:           ctx,
 		cfg:               cfg,
-		taskToProcessChan: make(chan persistence.TimerTask, bufferSize),
+		taskToProcessChan: make(chan data_models.TimerTask, bufferSize),
 		currentShards:     map[int32]bool{},
 		taskNotifier:      notifier,
 		store:             store,
@@ -45,7 +46,7 @@ func NewTimerTaskConcurrentProcessor(
 func (w *timerTaskConcurrentProcessor) Stop(context.Context) error {
 	return nil
 }
-func (w *timerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- persistence.TimerTask {
+func (w *timerTaskConcurrentProcessor) GetTasksToProcessChan() chan<- data_models.TimerTask {
 	return w.taskToProcessChan
 }
 
@@ -95,17 +96,17 @@ func (w *timerTaskConcurrentProcessor) Start() error {
 }
 
 func (w *timerTaskConcurrentProcessor) processTimerTask(
-	task persistence.TimerTask,
+	task data_models.TimerTask,
 ) error {
 
 	w.logger.Debug("start executing timer task", tag.ID(task.GetStateExecutionId()))
 
 	switch task.TaskType {
-	case persistence.TimerTaskTypeWorkerTaskBackoff:
+	case data_models.TimerTaskTypeWorkerTaskBackoff:
 		return w.processTimerTaskWorkerTaskBackoff(task)
-	case persistence.TimerTaskTypeProcessTimeout:
+	case data_models.TimerTaskTypeProcessTimeout:
 		return w.processTimerTaskProcessTimeout(task)
-	case persistence.TimerTaskTypeTimerCommand:
+	case data_models.TimerTaskTypeTimerCommand:
 		return w.processTimerTaskForTimerCommand(task)
 	default:
 		panic(fmt.Sprintf("unknown timer task type %v", task.TaskType))
@@ -113,9 +114,9 @@ func (w *timerTaskConcurrentProcessor) processTimerTask(
 }
 
 func (w *timerTaskConcurrentProcessor) processTimerTaskProcessTimeout(
-	task persistence.TimerTask,
+	task data_models.TimerTask,
 ) error {
-	resp, err := w.store.ProcessTimerTaskForProcessTimeout(w.rootCtx, persistence.ProcessTimerTaskRequest{
+	resp, err := w.store.ProcessTimerTaskForProcessTimeout(w.rootCtx, data_models.ProcessTimerTaskRequest{
 		Task: task,
 	})
 	if err != nil {
@@ -130,9 +131,9 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskProcessTimeout(
 }
 
 func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
-	task persistence.TimerTask,
+	task data_models.TimerTask,
 ) error {
-	resp, err := w.store.ConvertTimerTaskToImmediateTask(w.rootCtx, persistence.ProcessTimerTaskRequest{
+	resp, err := w.store.ConvertTimerTaskToImmediateTask(w.rootCtx, data_models.ProcessTimerTaskRequest{
 		Task: task,
 	})
 	if err != nil {
@@ -155,9 +156,9 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
 }
 
 func (w *timerTaskConcurrentProcessor) processTimerTaskForTimerCommand(
-	task persistence.TimerTask,
+	task data_models.TimerTask,
 ) error {
-	resp, err := w.store.ProcessTimerTaskForTimerCommand(w.rootCtx, persistence.ProcessTimerTaskRequest{
+	resp, err := w.store.ProcessTimerTaskForTimerCommand(w.rootCtx, data_models.ProcessTimerTaskRequest{
 		Task: task,
 	})
 	if err != nil {

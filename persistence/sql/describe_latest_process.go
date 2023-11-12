@@ -9,16 +9,15 @@ import (
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/persistence"
 )
 
 func (p sqlProcessStoreImpl) DescribeLatestProcess(
-	ctx context.Context, request persistence.DescribeLatestProcessRequest,
-) (*persistence.DescribeLatestProcessResponse, error) {
+	ctx context.Context, request data_models.DescribeLatestProcessRequest,
+) (*data_models.DescribeLatestProcessResponse, error) {
 	row, err := p.session.SelectLatestProcessExecution(ctx, request.Namespace, request.ProcessId)
 	if err != nil {
 		if p.session.IsNotFoundError(err) {
-			return &persistence.DescribeLatestProcessResponse{
+			return &data_models.DescribeLatestProcessResponse{
 				NotExists: true,
 			}, nil
 		}
@@ -30,7 +29,7 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 		return nil, err
 	}
 
-	return &persistence.DescribeLatestProcessResponse{
+	return &data_models.DescribeLatestProcessResponse{
 		Response: &xdbapi.ProcessExecutionDescribeResponse{
 			ProcessExecutionId: ptr.Any(row.ProcessExecutionId.String()),
 			ProcessType:        &info.ProcessType,

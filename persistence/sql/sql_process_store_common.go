@@ -45,9 +45,9 @@ func insertAsyncStateExecution(
 	}
 
 	if stateConfig.GetSkipWaitUntil() {
-		stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+		stateRow.Status = data_models.StateExecutionStatusExecuteRunning
 	} else {
-		stateRow.Status = persistence.StateExecutionStatusWaitUntilRunning
+		stateRow.Status = data_models.StateExecutionStatusWaitUntilRunning
 	}
 
 	return tx.InsertAsyncStateExecution(ctx, stateRow)
@@ -69,9 +69,9 @@ func insertImmediateTask(
 		StateIdSequence:    int32(stateIdSeq),
 	}
 	if stateConfig.GetSkipWaitUntil() {
-		immediateTaskRow.TaskType = persistence.ImmediateTaskTypeExecute
+		immediateTaskRow.TaskType = data_models.ImmediateTaskTypeExecute
 	} else {
-		immediateTaskRow.TaskType = persistence.ImmediateTaskTypeWaitUntil
+		immediateTaskRow.TaskType = data_models.ImmediateTaskTypeWaitUntil
 	}
 
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
@@ -141,7 +141,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 
 	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
 		ShardId:  persistence.DefaultShardId,
-		TaskType: persistence.ImmediateTaskTypeNewLocalQueueMessages,
+		TaskType: data_models.ImmediateTaskTypeNewLocalQueueMessages,
 
 		ProcessExecutionId: processExecutionId,
 		StateId:            "",
@@ -239,16 +239,16 @@ func (p sqlProcessStoreImpl) updateWhenCompletedWaitUntilWaiting(
 	ctx context.Context, tx extensions.SQLTransaction, shardId int32,
 	localQueues *data_models.StateExecutionLocalQueuesJson, stateRow *extensions.AsyncStateExecutionRowForUpdate,
 ) error {
-	localQueues.CleanupFor(persistence.StateExecutionId{
+	localQueues.CleanupFor(data_models.StateExecutionId{
 		StateId:         stateRow.StateId,
 		StateIdSequence: stateRow.StateIdSequence,
 	})
 
-	stateRow.Status = persistence.StateExecutionStatusExecuteRunning
+	stateRow.Status = data_models.StateExecutionStatusExecuteRunning
 
 	return tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
 		ShardId:            shardId,
-		TaskType:           persistence.ImmediateTaskTypeExecute,
+		TaskType:           data_models.ImmediateTaskTypeExecute,
 		ProcessExecutionId: stateRow.ProcessExecutionId,
 		StateId:            stateRow.StateId,
 		StateIdSequence:    stateRow.StateIdSequence,
