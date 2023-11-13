@@ -192,6 +192,15 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		hasNewImmediateTask = true
 	}
 
+	// Step 4: delete current immediate task
+	err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
+		ShardId:      request.TaskShardId,
+		TaskSequence: request.TaskSequence,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &data_models.CompleteExecuteExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil

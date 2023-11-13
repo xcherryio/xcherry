@@ -49,10 +49,10 @@ type (
 
 	RecoverFromStateExecutionFailureRequest struct {
 		Namespace                    string
-		ProcessExecutionId     uuid.UUID
-		Prepare                PrepareStateExecutionResponse
-		SourceStateExecutionId StateExecutionId
-		SourceFailedStateApi   xdbapi.StateApiType
+		ProcessExecutionId           uuid.UUID
+		Prepare                      PrepareStateExecutionResponse
+		SourceStateExecutionId       StateExecutionId
+		SourceFailedStateApi         xdbapi.StateApiType
 		LastFailureStatus            int32
 		LastFailureDetails           string
 		LastFailureCompletedAttempts int32
@@ -208,10 +208,11 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare        PrepareStateExecutionResponse
-		CommandRequest xdbapi.CommandRequest
+		Prepare             PrepareStateExecutionResponse
+		CommandRequest      xdbapi.CommandRequest
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 		TaskShardId         int32
+		TaskSequence        int64
 	}
 
 	ProcessWaitUntilExecutionResponse struct {
@@ -230,14 +231,15 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare       PrepareStateExecutionResponse
-		StateDecision xdbapi.StateDecision
+		Prepare             PrepareStateExecutionResponse
+		StateDecision       xdbapi.StateDecision
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
 		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
 
-		TaskShardId int32
+		TaskShardId  int32
+		TaskSequence int64
 	}
 
 	CompleteExecuteExecutionResponse struct {
