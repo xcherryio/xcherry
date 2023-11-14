@@ -55,13 +55,11 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 }
 
 func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
-	ctx context.Context, tx extensions.SQLTransaction, request data_models.CompleteExecuteExecutionRequest,
+	ctx context.Context, tx extensions.SQLTransaction, tableConfig *data_models.InternalGlobalAttributeConfig,
+	globalAttributesToUpdate []xdbapi.GlobalAttributeTableRowUpdate,
 ) error {
-	tableConfig := request.GlobalAttributeTableConfig
-	updates := request.UpdateGlobalAttributes
-
-	if len(updates) > 0 {
-		for _, update := range updates {
+	if len(globalAttributesToUpdate) > 0 {
+		for _, update := range globalAttributesToUpdate {
 			pks := tableConfig.TablePrimaryKeys[update.TableName]
 			cols := map[string]string{}
 			for _, col := range update.UpdateColumns {

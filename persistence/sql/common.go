@@ -4,10 +4,13 @@
 package sql
 
 import (
+	"context"
+	"math"
+
+	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 	"github.com/xdblab/xdb/common/ptr"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence/data_models"
-	"math"
 )
 
 func createGetTimerTaskResponse(
@@ -59,4 +62,101 @@ func createGetTimerTaskResponse(
 		}
 	}
 	return resp, nil
+}
+
+func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensions.SQLTransaction,
+	request data_models.HandleStateDecisionRequest) (*data_models.HandleStateDecisionResponse, error) {
+	hasNewImmediateTask := false
+
+	// these fields will be updated and returned back in response for ProcessExecutionRowForUpdate
+	sequenceMaps := request.ProcessExecutionRowStateExecutionSequenceMaps
+	procExecWaitToComplete := request.ProcessExecutionRowWaitToComplete
+	procExecStatus := request.ProcessExecutionRowStatus
+
+	if len(request.StateDecision.GetNextStates()) > 0 {
+		hasNewImmediateTask = true
+
+		for _, next := range request.StateDecision.GetNextStates() {
+			stateIdSeq := sequenceMaps.StartNewStateExecution(next.StateId)
+
+			stateInputBytes, err := data_models.FromEncodedObjectIntoBytes(next.StateInput)
+			if err != nil {
+				return nil, err
+			}
+
+			stateInfo := data_models.AsyncStateExecutionInfoJson{
+				Namespace:             request.Namespace,
+				ProcessId:             request.ProcessId,
+				ProcessType:           request.ProcessType,
+				WorkerURL:             request.WorkerUrl,
+				StateConfig:           next.StateConfig,
+				GlobalAttributeConfig: request.GlobalAttributeTableConfig,
+			}
+
+			stateInfoBytes, err := stateInfo.ToBytes()
+			if err != nil {
+				return nil, err
+			}
+
+			err = insertAsyncStateExecution(ctx, tx, request.ProcessExecutionId, next.StateId, stateIdSeq, next.StateConfig, stateInputBytes, stateInfoBytes)
+			if err != nil {
+				return nil, err
+			}
+
+			err = insertImmediateTask(ctx, tx, request.ProcessExecutionId, next.StateId, stateIdSeq, next.StateConfig, request.TaskShardId)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// If the process was previously configured to gracefully complete and there are no states running,
+	// then gracefully complete the process regardless of the thread close type set in this state.
+	// Otherwise, handle the thread close type set in this state.
+
+	toGracefullyComplete := procExecWaitToComplete && len(sequenceMaps.PendingExecutionMap) == 0
+
+	toAbortRunningAsyncStates := false
+
+	threadDecision := request.StateDecision.GetThreadCloseDecision()
+	if !toGracefullyComplete && request.StateDecision.HasThreadCloseDecision() {
+		switch threadDecision.GetCloseType() {
+		case xdbapi.GRACEFUL_COMPLETE_PROCESS:
+			procExecWaitToComplete = true
+			toGracefullyComplete = len(sequenceMaps.PendingExecutionMap) == 0
+		case xdbapi.FORCE_COMPLETE_PROCESS:
+			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
+
+			procExecStatus = data_models.ProcessExecutionStatusCompleted
+			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
+		case xdbapi.FORCE_FAIL_PROCESS:
+			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
+
+			procExecStatus = data_models.ProcessExecutionStatusFailed
+			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
+		case xdbapi.DEAD_END:
+			// do nothing
+		}
+	}
+
+	if toGracefullyComplete {
+		procExecStatus = data_models.ProcessExecutionStatusCompleted
+	}
+
+	if toAbortRunningAsyncStates {
+		// handle xdb_sys_async_state_executions
+		// find all related rows with the processExecutionId, and
+		// modify the wait_until/execute status from running to aborted
+		err := tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, request.ProcessExecutionId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &data_models.HandleStateDecisionResponse{
+		HasNewImmediateTask: hasNewImmediateTask,
+		ProcessExecutionRowNewStateExecutionSequenceMaps: sequenceMaps,
+		ProcessExecutionRowNewWaitToComplete:             procExecWaitToComplete,
+		ProcessExecutionRowNewStatus:                     procExecStatus,
+	}, nil
 }

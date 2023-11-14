@@ -5,6 +5,7 @@ package data_models
 
 import (
 	"encoding/json"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
@@ -20,15 +21,16 @@ type AsyncStateExecutionInfoJson struct {
 }
 
 func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
-
-	return json.Marshal(AsyncStateExecutionInfoJson{
+	infoJson := AsyncStateExecutionInfoJson{
 		Namespace:             req.Namespace,
 		ProcessId:             req.ProcessId,
 		ProcessType:           req.GetProcessType(),
 		WorkerURL:             req.GetWorkerUrl(),
 		StateConfig:           req.StartStateConfig,
 		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
-	})
+	}
+
+	return infoJson.ToBytes()
 }
 
 func FromAsyncStateExecutionInfoToBytesForNextState(
@@ -37,6 +39,10 @@ func FromAsyncStateExecutionInfoToBytesForNextState(
 ) ([]byte, error) {
 	info.StateConfig = nextStateConfig
 	return json.Marshal(info)
+}
+
+func (j *AsyncStateExecutionInfoJson) ToBytes() ([]byte, error) {
+	return json.Marshal(j)
 }
 
 func FromAsyncStateExecutionInfoToBytesForStateRecovery(

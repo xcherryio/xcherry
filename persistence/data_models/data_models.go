@@ -47,12 +47,31 @@ type (
 		NotExists bool
 	}
 
+	GetLatestProcessExecutionRequest struct {
+		Namespace string
+		ProcessId string
+	}
+
+	GetLatestProcessExecutionResponse struct {
+		NotExists bool
+
+		ProcessExecutionId    uuid.UUID
+		Status                ProcessExecutionStatus
+		StartTimestamp        int64
+		GlobalAttributeConfig *InternalGlobalAttributeConfig
+
+		// the process type for SDK to look up the process definition class
+		ProcessType string
+		// the URL for XDB async service to make callback to worker
+		WorkerUrl string
+	}
+
 	RecoverFromStateExecutionFailureRequest struct {
 		Namespace                    string
-		ProcessExecutionId     uuid.UUID
-		Prepare                PrepareStateExecutionResponse
-		SourceStateExecutionId StateExecutionId
-		SourceFailedStateApi   xdbapi.StateApiType
+		ProcessExecutionId           uuid.UUID
+		Prepare                      PrepareStateExecutionResponse
+		SourceStateExecutionId       StateExecutionId
+		SourceFailedStateApi         xdbapi.StateApiType
 		LastFailureStatus            int32
 		LastFailureDetails           string
 		LastFailureCompletedAttempts int32
@@ -208,8 +227,8 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare        PrepareStateExecutionResponse
-		CommandRequest xdbapi.CommandRequest
+		Prepare             PrepareStateExecutionResponse
+		CommandRequest      xdbapi.CommandRequest
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 		TaskShardId         int32
 	}
@@ -230,8 +249,8 @@ type (
 		ProcessExecutionId uuid.UUID
 		StateExecutionId
 
-		Prepare       PrepareStateExecutionResponse
-		StateDecision xdbapi.StateDecision
+		Prepare             PrepareStateExecutionResponse
+		StateDecision       xdbapi.StateDecision
 		PublishToLocalQueue []xdbapi.LocalQueueMessage
 
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
@@ -276,6 +295,54 @@ type (
 
 	LoadGlobalAttributesResponse struct {
 		Response xdbapi.LoadGlobalAttributeResponse
+	}
+
+	UpdateProcessExecutionFromRpcRequest struct {
+		Namespace          string
+		ProcessId          string
+		ProcessType        string
+		ProcessExecutionId uuid.UUID
+
+		StateDecision       xdbapi.StateDecision
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+
+		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
+		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+
+		WorkerUrl   string
+		TaskShardId int32
+	}
+
+	UpdateProcessExecutionFromRpcResponse struct {
+		HasNewImmediateTask            bool
+		FailAtUpdatingGlobalAttributes bool
+		UpdatingGlobalAttributesError  error
+	}
+
+	HandleStateDecisionRequest struct {
+		Namespace                  string
+		ProcessId                  string
+		ProcessType                string
+		ProcessExecutionId         uuid.UUID
+		StateDecision              xdbapi.StateDecision
+		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
+		WorkerUrl                  string
+
+		// for ProcessExecutionRowForUpdate
+		ProcessExecutionRowStateExecutionSequenceMaps *StateExecutionSequenceMapsJson
+		ProcessExecutionRowWaitToComplete             bool
+		ProcessExecutionRowStatus                     ProcessExecutionStatus
+
+		TaskShardId int32
+	}
+
+	HandleStateDecisionResponse struct {
+		HasNewImmediateTask bool
+
+		// for ProcessExecutionRowForUpdate to update
+		ProcessExecutionRowNewStateExecutionSequenceMaps *StateExecutionSequenceMapsJson
+		ProcessExecutionRowNewWaitToComplete             bool
+		ProcessExecutionRowNewStatus                     ProcessExecutionStatus
 	}
 )
 

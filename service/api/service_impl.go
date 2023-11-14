@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/urlautofix"
 	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xdblab/xdb/utils"
 	"net/http"
 	"time"
 
@@ -149,6 +151,111 @@ func (s serviceImpl) PublishToLocalQueue(
 	return nil
 }
 
+func (s serviceImpl) Rpc(
+	ctx context.Context, request xdbapi.ProcessExecutionRpcRequest,
+) (response *xdbapi.ProcessExecutionRpcResponse, retErr *ErrorWithStatus) {
+	latestPrcExe, err := s.store.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
+		Namespace: request.GetNamespace(),
+		ProcessId: request.GetProcessId(),
+	})
+	if err != nil {
+		return nil, s.handleUnknownError(err)
+	}
+
+	if latestPrcExe.NotExists || latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
+		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
+	}
+
+	iwfWorkerBaseUrl := urlautofix.FixWorkerUrl(latestPrcExe.WorkerUrl)
+	apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
+		Servers: []xdbapi.ServerConfiguration{
+			{
+				URL: iwfWorkerBaseUrl,
+			},
+		},
+	})
+
+	loadGlobalAttrResp, err := s.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
+		TableConfig: *latestPrcExe.GlobalAttributeConfig,
+		Request:     request.GetLoadGlobalAttributesRequest(),
+	})
+	if err != nil {
+		return nil, s.handleUnknownError(err)
+	}
+
+	workerApiCtx, cancF := s.createContextWithTimeoutForRpc(ctx, request.GetTimeoutSeconds())
+	defer cancF()
+
+	req := apiClient.DefaultAPI.ApiV1XdbWorkerProcessRpcPost(workerApiCtx)
+	resp, httpResp, err := req.ProcessRpcWorkerRequest(
+		xdbapi.ProcessRpcWorkerRequest{
+			Context: xdbapi.Context{
+				ProcessId:               request.GetProcessId(),
+				ProcessExecutionId:      latestPrcExe.ProcessExecutionId.String(),
+				ProcessStartedTimestamp: latestPrcExe.StartTimestamp,
+			},
+			ProcessType:            latestPrcExe.ProcessType,
+			RpcName:                request.GetRpcName(),
+			Input:                  request.Input,
+			LoadedGlobalAttributes: &loadGlobalAttrResp.Response,
+		},
+	).Execute()
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
+
+	if utils.CheckHttpResponseAndError(err, httpResp, s.logger) {
+		return nil, NewErrorWithStatus(
+			http.StatusFailedDependency,
+			"Failed to call worker RPC method. Error: "+err.Error()+" Http response: "+httpResp.Status)
+	}
+
+	err = utils.CheckDecision(resp.StateDecision)
+	if err != nil {
+		return nil, NewErrorWithStatus(
+			http.StatusBadRequest, err.Error())
+	}
+
+	updateResp, err := s.store.UpdateProcessExecutionFromRpc(ctx, data_models.UpdateProcessExecutionFromRpcRequest{
+		Namespace:          request.Namespace,
+		ProcessId:          request.ProcessId,
+		ProcessExecutionId: latestPrcExe.ProcessExecutionId,
+
+		StateDecision:       resp.GetStateDecision(),
+		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
+
+		GlobalAttributeTableConfig: latestPrcExe.GlobalAttributeConfig,
+		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
+
+		WorkerUrl:   latestPrcExe.WorkerUrl,
+		TaskShardId: persistence.DefaultShardId,
+	})
+	if err != nil {
+		return nil, s.handleUnknownError(err)
+	}
+	if updateResp.FailAtUpdatingGlobalAttributes {
+		s.logger.Warn("failed to update global attributes")
+		return nil, NewErrorWithStatus(
+			http.StatusFailedDependency,
+			"Failed to write global attributes, please check the error message for details: "+updateResp.UpdatingGlobalAttributesError.Error())
+	}
+
+	if updateResp.HasNewImmediateTask {
+		processExecutionIdString := latestPrcExe.ProcessExecutionId.String()
+
+		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
+			ShardId:            persistence.DefaultShardId,
+			Namespace:          &request.Namespace,
+			ProcessId:          &request.ProcessId,
+			ProcessExecutionId: &processExecutionIdString,
+		})
+	}
+
+	return &xdbapi.ProcessExecutionRpcResponse{
+		Output: resp.Output,
+	}, nil
+}
+
 func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbapi.NotifyImmediateTasksRequest) {
 	// execute in the background as best effort
 	go func() {
@@ -208,4 +315,21 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xdbapi.No
 func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 	s.logger.Error("unknown error on operation", tag.Error(err))
 	return NewErrorWithStatus(500, err.Error())
+}
+
+func (s serviceImpl) createContextWithTimeoutForRpc(ctx context.Context, timeoutFromRequest int32,
+) (context.Context, context.CancelFunc) {
+	qCfg := s.cfg.AsyncService.Rpc
+
+	timeout := qCfg.DefaultRpcAPITimeout
+
+	if timeoutFromRequest > 0 {
+		timeout = time.Duration(timeoutFromRequest) * time.Second
+	}
+
+	if timeout > qCfg.MaxRpcAPITimeout {
+		timeout = qCfg.MaxRpcAPITimeout
+	}
+
+	return context.WithTimeout(ctx, timeout)
 }

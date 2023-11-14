@@ -5,6 +5,7 @@ package data_models
 
 import (
 	"encoding/json"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 

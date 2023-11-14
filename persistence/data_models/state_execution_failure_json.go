@@ -5,8 +5,9 @@ package data_models
 
 import (
 	"encoding/json"
-	"github.com/xdblab/xdb/common/ptr"
 	"time"
+
+	"github.com/xdblab/xdb/common/ptr"
 )
 
 type StateExecutionFailureJson struct {
