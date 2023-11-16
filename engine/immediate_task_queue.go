@@ -28,8 +28,6 @@ type immediateTaskQueueImpl struct {
 
 	// timers for polling immediate tasks and dispatch to processor
 	pollTimer TimerGate
-	// timers for committing(deleting) completed immediate tasks
-	commitTimer TimerGate
 
 	// tasksToCommitChan is the channel to receive completed tasks from processor
 	tasksToCommitChan chan data_models.ImmediateTask
@@ -61,7 +59,6 @@ func NewImmediateTaskQueueImpl(
 		cfg:     cfg,
 
 		pollTimer:                 NewLocalTimerGate(logger),
-		commitTimer:               NewLocalTimerGate(logger),
 		processor:                 processor,
 		tasksToCommitChan:         make(chan data_models.ImmediateTask, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
@@ -72,8 +69,6 @@ func NewImmediateTaskQueueImpl(
 func (w *immediateTaskQueueImpl) Stop(ctx context.Context) error {
 	// close timer to prevent goroutine leakage
 	w.pollTimer.Close()
-	w.commitTimer.Close()
-
 	return nil
 }
 
@@ -82,22 +77,16 @@ func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyImmediateTas
 }
 
 func (w *immediateTaskQueueImpl) Start() error {
-	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
-
 	w.processor.AddImmediateTaskQueue(w.shardId, w.tasksToCommitChan)
 
 	// fire immediately to make the first poll for the first page
 	w.pollTimer.Update(time.Now())
-	// schedule the first commit timer firing
-	w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 
 	go func() {
 		for {
 			select {
 			case <-w.pollTimer.FireChan():
 				w.pollAndDispatchAndPrepareNext()
-			case <-w.commitTimer.FireChan():
-				w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 			case task, ok := <-w.tasksToCommitChan:
 				if ok {
 					w.receiveCompletedTask(task)
