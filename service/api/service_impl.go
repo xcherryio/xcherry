@@ -210,22 +210,6 @@ func (s serviceImpl) Rpc(
 			"Failed to call worker RPC method. Error: "+err.Error()+" Http response: "+httpResp.Status)
 	}
 
-	// get the latest process execution again
-	latestPrcExe, err = s.store.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
-		Namespace: request.GetNamespace(),
-		ProcessId: request.GetProcessId(),
-	})
-	if err != nil {
-		return nil, s.handleUnknownError(err)
-	}
-
-	// skip the writing operations on a closed/not-exist process
-	if latestPrcExe.NotExists || latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
-		return &xdbapi.ProcessExecutionRpcResponse{
-			Output: resp.Output,
-		}, nil
-	}
-
 	err = utils.CheckDecision(resp.StateDecision)
 	if err != nil {
 		return nil, NewErrorWithStatus(

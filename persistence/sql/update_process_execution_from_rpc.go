@@ -46,6 +46,13 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 		return nil, err
 	}
 
+	// skip the writing operations on a closed process
+	if prcRow.Status != data_models.ProcessExecutionStatusRunning {
+		return &data_models.UpdateProcessExecutionFromRpcResponse{
+			HasNewImmediateTask: false,
+		}, nil
+	}
+
 	// Step 1: update persistence
 
 	err = p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
