@@ -207,6 +207,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		CommandRequest:      resp.GetCommandRequest(),
 		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
 		TaskShardId:         task.ShardId,
+		TaskSequence:        task.GetTaskSequence(),
 	})
 	if err != nil {
 		return err
@@ -404,6 +405,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		StateDecision:              resp.StateDecision,
 		PublishToLocalQueue:        resp.GetPublishToLocalQueue(),
 		TaskShardId:                task.ShardId,
+		TaskSequence:               task.GetTaskSequence(),
 		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
 		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
 	})

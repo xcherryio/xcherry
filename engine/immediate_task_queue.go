@@ -28,8 +28,6 @@ type immediateTaskQueueImpl struct {
 
 	// timers for polling immediate tasks and dispatch to processor
 	pollTimer TimerGate
-	// timers for committing(deleting) completed immediate tasks
-	commitTimer TimerGate
 
 	// tasksToCommitChan is the channel to receive completed tasks from processor
 	tasksToCommitChan chan data_models.ImmediateTask
@@ -61,7 +59,6 @@ func NewImmediateTaskQueueImpl(
 		cfg:     cfg,
 
 		pollTimer:                 NewLocalTimerGate(logger),
-		commitTimer:               NewLocalTimerGate(logger),
 		processor:                 processor,
 		tasksToCommitChan:         make(chan data_models.ImmediateTask, qCfg.ProcessorBufferSize),
 		currentReadCursor:         0,
@@ -72,10 +69,7 @@ func NewImmediateTaskQueueImpl(
 func (w *immediateTaskQueueImpl) Stop(ctx context.Context) error {
 	// close timer to prevent goroutine leakage
 	w.pollTimer.Close()
-	w.commitTimer.Close()
-
-	// a final attempt to commit the completed page
-	return w.commitCompletedPages(ctx)
+	return nil
 }
 
 func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyImmediateTasksRequest) {
@@ -83,23 +77,16 @@ func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyImmediateTas
 }
 
 func (w *immediateTaskQueueImpl) Start() error {
-	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
-
 	w.processor.AddImmediateTaskQueue(w.shardId, w.tasksToCommitChan)
 
 	// fire immediately to make the first poll for the first page
 	w.pollTimer.Update(time.Now())
-	// schedule the first commit timer firing
-	w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 
 	go func() {
 		for {
 			select {
 			case <-w.pollTimer.FireChan():
 				w.pollAndDispatchAndPrepareNext()
-			case <-w.commitTimer.FireChan():
-				_ = w.commitCompletedPages(w.rootCtx)
-				w.commitTimer.Update(w.getNextPollTime(qCfg.CommitInterval, qCfg.IntervalJitter))
 			case task, ok := <-w.tasksToCommitChan:
 				if ok {
 					w.receiveCompletedTask(task)
@@ -152,35 +139,6 @@ func (w *immediateTaskQueueImpl) pollAndDispatchAndPrepareNext() {
 		w.pollTimer.Update(w.getNextPollTime(qCfg.MaxPollInterval, qCfg.IntervalJitter))
 
 	}
-}
-
-func (w *immediateTaskQueueImpl) commitCompletedPages(ctx context.Context) error {
-	if len(w.completedPages) > 0 {
-		w.completedPages = mergeImmediateTaskPages(w.completedPages)
-
-		for idx, page := range w.completedPages {
-			req := data_models.DeleteImmediateTasksRequest{
-				ShardId:                  w.shardId,
-				MinTaskSequenceInclusive: page.minTaskSequence,
-				MaxTaskSequenceInclusive: page.maxTaskSequence,
-			}
-			w.logger.Debug("completing immediate task page", tag.Value(req))
-
-			err := w.store.DeleteImmediateTasks(ctx, req)
-			if err != nil {
-				w.logger.Error("failed at deleting completed immediate tasks", tag.Error(err))
-				// fix the completed pages -- current page to the end
-				// return and wait for next time
-				w.completedPages = w.completedPages[idx:]
-				return err
-			}
-		}
-		// reset to empty
-		w.completedPages = nil
-	} else {
-		w.logger.Debug("no immediate tasks to commit/delete")
-	}
-	return nil
 }
 
 func mergeImmediateTaskPages(workTaskPages []*immediateTaskPage) []*immediateTaskPage {

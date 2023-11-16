@@ -74,6 +74,14 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 		hasNewImmediateTask = true
 	}
 
+	err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
+		ShardId:      request.TaskShardId,
+		TaskSequence: request.TaskSequence,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &data_models.ProcessWaitUntilExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 		FireTimestamps:      fireTimestamps,
