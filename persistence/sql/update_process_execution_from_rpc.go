@@ -5,8 +5,6 @@ package sql
 
 import (
 	"context"
-	"fmt"
-
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
 	"github.com/xdblab/xdb/persistence/data_models"
@@ -64,11 +62,6 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
-	}
-
-	// if getting next states and there are running state(s), return error
-	if len(request.StateDecision.GetNextStates()) > 0 && len(sequenceMaps.PendingExecutionMap) > 0 {
-		return nil, fmt.Errorf("cannot start new states when there are running state(s)")
 	}
 
 	resp, err := p.handleStateDecision(ctx, tx, data_models.HandleStateDecisionRequest{

@@ -162,7 +162,7 @@ func (s serviceImpl) Rpc(
 		return nil, s.handleUnknownError(err)
 	}
 
-	if latestPrcExe.NotExists || latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
+	if latestPrcExe.NotExists {
 		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 
@@ -208,6 +208,22 @@ func (s serviceImpl) Rpc(
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
 			"Failed to call worker RPC method. Error: "+err.Error()+" Http response: "+httpResp.Status)
+	}
+
+	// get the latest process execution again
+	latestPrcExe, err = s.store.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
+		Namespace: request.GetNamespace(),
+		ProcessId: request.GetProcessId(),
+	})
+	if err != nil {
+		return nil, s.handleUnknownError(err)
+	}
+
+	// skip the writing operations on a closed/not-exist process
+	if latestPrcExe.NotExists || latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
+		return &xdbapi.ProcessExecutionRpcResponse{
+			Output: resp.Output,
+		}, nil
 	}
 
 	err = utils.CheckDecision(resp.StateDecision)
@@ -319,7 +335,7 @@ func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 
 func (s serviceImpl) createContextWithTimeoutForRpc(ctx context.Context, timeoutFromRequest int32,
 ) (context.Context, context.CancelFunc) {
-	qCfg := s.cfg.AsyncService.Rpc
+	qCfg := s.cfg.ApiService.Rpc
 
 	timeout := qCfg.DefaultRpcAPITimeout
 

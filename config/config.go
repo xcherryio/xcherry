@@ -40,6 +40,8 @@ type (
 	ApiServiceConfig struct {
 		// HttpServer is the config for starting http.Server
 		HttpServer HttpServerConfig `yaml:"httpServer"`
+		// Rpc is the config for rpc calls
+		Rpc RpcConfig `yaml:"rpc"`
 	}
 
 	AsyncServiceConfig struct {
@@ -54,8 +56,6 @@ type (
 		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
 		// ClientAddress is the address for API service to call AsyncService's internal API
 		ClientAddress string `yaml:"clientAddress"`
-		// Rpc is the config for rpc calls
-		Rpc RpcConfig `yaml:"rpc"`
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -222,6 +222,13 @@ func (c *Config) ValidateAndSetDefaults() error {
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
 	}
+	rpcConfig := &c.ApiService.Rpc
+	if rpcConfig.MaxRpcAPITimeout == 0 {
+		rpcConfig.MaxRpcAPITimeout = 60 * time.Second
+	}
+	if rpcConfig.DefaultRpcAPITimeout == 0 {
+		rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
+	}
 	if c.AsyncService.Mode == "" {
 		return fmt.Errorf("must set async service mode")
 	}
@@ -280,13 +287,6 @@ func (c *Config) ValidateAndSetDefaults() error {
 			return fmt.Errorf("AsyncService.InternalHttpServer.Address cannot be empty")
 		}
 		c.AsyncService.ClientAddress = "http://" + c.AsyncService.InternalHttpServer.Address
-	}
-	rpcConfig := &c.AsyncService.Rpc
-	if rpcConfig.MaxRpcAPITimeout == 0 {
-		rpcConfig.MaxRpcAPITimeout = 60 * time.Second
-	}
-	if rpcConfig.DefaultRpcAPITimeout == 0 {
-		rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
 	}
 	return nil
 }
