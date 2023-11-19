@@ -175,12 +175,17 @@ func (s serviceImpl) Rpc(
 		},
 	})
 
-	loadGlobalAttrResp, err := s.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
-		TableConfig: *latestPrcExe.GlobalAttributeConfig,
-		Request:     request.GetLoadGlobalAttributesRequest(),
-	})
-	if err != nil {
-		return nil, s.handleUnknownError(err)
+	loadGlobalAttributeResponse := xdbapi.LoadGlobalAttributeResponse{}
+	if latestPrcExe.GlobalAttributeConfig != nil {
+		loadGlobalAttrResp, err := s.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
+			TableConfig: *latestPrcExe.GlobalAttributeConfig,
+			Request:     request.GetLoadGlobalAttributesRequest(),
+		})
+		if err != nil {
+			return nil, s.handleUnknownError(err)
+		}
+
+		loadGlobalAttributeResponse = loadGlobalAttrResp.Response
 	}
 
 	workerApiCtx, cancF := s.createContextWithTimeoutForRpc(ctx, request.GetTimeoutSeconds())
@@ -197,7 +202,7 @@ func (s serviceImpl) Rpc(
 			ProcessType:            latestPrcExe.ProcessType,
 			RpcName:                request.GetRpcName(),
 			Input:                  request.Input,
-			LoadedGlobalAttributes: &loadGlobalAttrResp.Response,
+			LoadedGlobalAttributes: &loadGlobalAttributeResponse,
 		},
 	).Execute()
 	if httpResp != nil {
@@ -219,6 +224,7 @@ func (s serviceImpl) Rpc(
 	updateResp, err := s.store.UpdateProcessExecutionFromRpc(ctx, data_models.UpdateProcessExecutionFromRpcRequest{
 		Namespace:          request.Namespace,
 		ProcessId:          request.ProcessId,
+		ProcessType:        latestPrcExe.ProcessType,
 		ProcessExecutionId: latestPrcExe.ProcessExecutionId,
 
 		StateDecision:       resp.GetStateDecision(),
