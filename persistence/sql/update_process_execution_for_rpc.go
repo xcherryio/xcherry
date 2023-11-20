@@ -10,14 +10,14 @@ import (
 	"github.com/xdblab/xdb/persistence/data_models"
 )
 
-func (p sqlProcessStoreImpl) UpdateProcessExecutionFromRpc(ctx context.Context, request data_models.UpdateProcessExecutionFromRpcRequest) (
-	*data_models.UpdateProcessExecutionFromRpcResponse, error) {
+func (p sqlProcessStoreImpl) UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
+	*data_models.UpdateProcessExecutionForRpcResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := p.doUpdateProcessExecutionFromRpcTx(ctx, tx, request)
+	resp, err := p.doUpdateProcessExecutionForRpcTx(ctx, tx, request)
 
 	if err != nil || resp.FailAtUpdatingGlobalAttributes {
 		err2 := tx.Rollback()
@@ -35,9 +35,9 @@ func (p sqlProcessStoreImpl) UpdateProcessExecutionFromRpc(ctx context.Context, 
 	return resp, err
 }
 
-func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
-	ctx context.Context, tx extensions.SQLTransaction, request data_models.UpdateProcessExecutionFromRpcRequest,
-) (*data_models.UpdateProcessExecutionFromRpcResponse, error) {
+func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.UpdateProcessExecutionForRpcRequest,
+) (*data_models.UpdateProcessExecutionForRpcResponse, error) {
 	hasNewImmediateTask := false
 
 	// lock process execution row first
@@ -48,8 +48,8 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 
 	// skip the writing operations on a closed process
 	if prcRow.Status != data_models.ProcessExecutionStatusRunning {
-		return &data_models.UpdateProcessExecutionFromRpcResponse{
-			HasNewImmediateTask: false,
+		return &data_models.UpdateProcessExecutionForRpcResponse{
+			ProcessNotExists: true,
 		}, nil
 	}
 
@@ -58,7 +58,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 	err = p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
 	if err != nil {
 		//lint:ignore nilerr reason
-		return &data_models.UpdateProcessExecutionFromRpcResponse{
+		return &data_models.UpdateProcessExecutionForRpcResponse{
 			FailAtUpdatingGlobalAttributes: true,
 			UpdatingGlobalAttributesError:  err,
 		}, nil
@@ -71,7 +71,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 		return nil, err
 	}
 
-	resp, err := p.handleStateDecision(ctx, tx, data_models.HandleStateDecisionRequest{
+	resp, err := p.handleStateDecision(ctx, tx, HandleStateDecisionRequest{
 		Namespace:                  request.Namespace,
 		ProcessId:                  request.ProcessId,
 		ProcessType:                request.ProcessType,
@@ -115,7 +115,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionFromRpcTx(
 		hasNewImmediateTask = true
 	}
 
-	return &data_models.UpdateProcessExecutionFromRpcResponse{
+	return &data_models.UpdateProcessExecutionForRpcResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

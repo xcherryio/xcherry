@@ -297,7 +297,7 @@ type (
 		Response xdbapi.LoadGlobalAttributeResponse
 	}
 
-	UpdateProcessExecutionFromRpcRequest struct {
+	UpdateProcessExecutionForRpcRequest struct {
 		Namespace          string
 		ProcessId          string
 		ProcessType        string
@@ -313,36 +313,11 @@ type (
 		TaskShardId int32
 	}
 
-	UpdateProcessExecutionFromRpcResponse struct {
+	UpdateProcessExecutionForRpcResponse struct {
 		HasNewImmediateTask            bool
+		ProcessNotExists               bool
 		FailAtUpdatingGlobalAttributes bool
 		UpdatingGlobalAttributesError  error
-	}
-
-	HandleStateDecisionRequest struct {
-		Namespace                  string
-		ProcessId                  string
-		ProcessType                string
-		ProcessExecutionId         uuid.UUID
-		StateDecision              xdbapi.StateDecision
-		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
-		WorkerUrl                  string
-
-		// for ProcessExecutionRowForUpdate
-		ProcessExecutionRowStateExecutionSequenceMaps *StateExecutionSequenceMapsJson
-		ProcessExecutionRowWaitToComplete             bool
-		ProcessExecutionRowStatus                     ProcessExecutionStatus
-
-		TaskShardId int32
-	}
-
-	HandleStateDecisionResponse struct {
-		HasNewImmediateTask bool
-
-		// for ProcessExecutionRowForUpdate to update
-		ProcessExecutionRowNewStateExecutionSequenceMaps *StateExecutionSequenceMapsJson
-		ProcessExecutionRowNewWaitToComplete             bool
-		ProcessExecutionRowNewStatus                     ProcessExecutionStatus
 	}
 )
 

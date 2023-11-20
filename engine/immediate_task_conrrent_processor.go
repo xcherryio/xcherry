@@ -6,8 +6,9 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/common/decision"
+	"github.com/xdblab/xdb/common/httperror"
 	"github.com/xdblab/xdb/persistence/data_models"
-	"github.com/xdblab/xdb/utils"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -182,7 +183,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 		defer httpResp.Body.Close()
 	}
 
-	if utils.CheckHttpResponseAndError(err, httpResp, w.logger) {
+	if httperror.CheckHttpResponseAndError(err, httpResp, w.logger) {
 		status, details := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
@@ -376,11 +377,11 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		}
 
 		if errToCheck == nil {
-			errToCheck = utils.CheckDecision(resp.StateDecision)
+			errToCheck = decision.ValidateDecision(resp.StateDecision)
 		}
 	}
 
-	if utils.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
+	if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
 		status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)

@@ -5,9 +5,10 @@ package api
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/decision"
+	"github.com/xdblab/xdb/common/httperror"
 	"github.com/xdblab/xdb/common/urlautofix"
 	"github.com/xdblab/xdb/persistence/data_models"
-	"github.com/xdblab/xdb/utils"
 	"net/http"
 	"time"
 
@@ -209,19 +210,19 @@ func (s serviceImpl) Rpc(
 		defer httpResp.Body.Close()
 	}
 
-	if utils.CheckHttpResponseAndError(err, httpResp, s.logger) {
+	if httperror.CheckHttpResponseAndError(err, httpResp, s.logger) {
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
 			"Failed to call worker RPC method. Error: "+err.Error()+" Http response: "+httpResp.Status)
 	}
 
-	err = utils.CheckDecision(resp.StateDecision)
+	err = decision.ValidateDecision(resp.StateDecision)
 	if err != nil {
 		return nil, NewErrorWithStatus(
 			http.StatusBadRequest, err.Error())
 	}
 
-	updateResp, err := s.store.UpdateProcessExecutionFromRpc(ctx, data_models.UpdateProcessExecutionFromRpcRequest{
+	updateResp, err := s.store.UpdateProcessExecutionForRpc(ctx, data_models.UpdateProcessExecutionForRpcRequest{
 		Namespace:          request.Namespace,
 		ProcessId:          request.ProcessId,
 		ProcessType:        latestPrcExe.ProcessType,
@@ -244,6 +245,9 @@ func (s serviceImpl) Rpc(
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
 			"Failed to write global attributes, please check the error message for details: "+updateResp.UpdatingGlobalAttributesError.Error())
+	}
+	if updateResp.ProcessNotExists {
+		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 
 	if updateResp.HasNewImmediateTask {

@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xdblab/xdb/common/uuid"
 	"math"
 
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
@@ -64,8 +65,36 @@ func createGetTimerTaskResponse(
 	return resp, nil
 }
 
+type (
+	HandleStateDecisionRequest struct {
+		Namespace                  string
+		ProcessId                  string
+		ProcessType                string
+		ProcessExecutionId         uuid.UUID
+		StateDecision              xdbapi.StateDecision
+		GlobalAttributeTableConfig *data_models.InternalGlobalAttributeConfig
+		WorkerUrl                  string
+
+		// for ProcessExecutionRowForUpdate
+		ProcessExecutionRowStateExecutionSequenceMaps *data_models.StateExecutionSequenceMapsJson
+		ProcessExecutionRowWaitToComplete             bool
+		ProcessExecutionRowStatus                     data_models.ProcessExecutionStatus
+
+		TaskShardId int32
+	}
+
+	HandleStateDecisionResponse struct {
+		HasNewImmediateTask bool
+
+		// for ProcessExecutionRowForUpdate to update
+		ProcessExecutionRowNewStateExecutionSequenceMaps *data_models.StateExecutionSequenceMapsJson
+		ProcessExecutionRowNewWaitToComplete             bool
+		ProcessExecutionRowNewStatus                     data_models.ProcessExecutionStatus
+	}
+)
+
 func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensions.SQLTransaction,
-	request data_models.HandleStateDecisionRequest) (*data_models.HandleStateDecisionResponse, error) {
+	request HandleStateDecisionRequest) (*HandleStateDecisionResponse, error) {
 	hasNewImmediateTask := false
 
 	// these fields will be updated and returned back in response for ProcessExecutionRowForUpdate
@@ -153,7 +182,7 @@ func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensi
 		}
 	}
 
-	return &data_models.HandleStateDecisionResponse{
+	return &HandleStateDecisionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 		ProcessExecutionRowNewStateExecutionSequenceMaps: sequenceMaps,
 		ProcessExecutionRowNewWaitToComplete:             procExecWaitToComplete,

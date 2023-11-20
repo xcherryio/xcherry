@@ -97,7 +97,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// Step 3 - 2: add next states to PendingExecutionMap
 
-	resp, err := p.handleStateDecision(ctx, tx, data_models.HandleStateDecisionRequest{
+	resp, err := p.handleStateDecision(ctx, tx, HandleStateDecisionRequest{
 		Namespace:                  request.Prepare.Info.Namespace,
 		ProcessId:                  request.Prepare.Info.ProcessId,
 		ProcessType:                request.Prepare.Info.ProcessType,
