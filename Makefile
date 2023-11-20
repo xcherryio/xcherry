@@ -130,26 +130,26 @@ fmt: $(BUILD)/fmt ## run goimports
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 
-xdb-server:
+xcherry-server:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/server/main.go
 
-xdb-tools-postgres:
+xcherry-tools-postgres:
 	@echo "compiling server with OS: $(GOOS), ARCH: $(GOARCH)"
 	@go build -o $@ cmd/tools/postgres/main.go
 
-xdb-tools-copyright:
+xcherry-tools-copyright:
 	@go build -o $@ cmd/tools/copyright/main.go
 
-.PHONY: bins release clean help tests lint xdb-server xdb-tools-postgres install-schema-postgres integTests copyright
+.PHONY: bins release clean help tests lint xcherry-server xcherry-tools-postgres install-schema-postgres integTests copyright
 
-bins: xdb-server xdb-tools-postgres xdb-tools-copyright
+bins: xcherry-server xcherry-tools-postgres xcherry-tools-copyright
 
 tests: ## Run all tests
 	$Q go test -v ./... -coverprofile=coverage.out -cover -coverpkg ./...
 
 clean: ## Clean binaries
-	rm xdb-server; rm xdb-tools-postgres;
+	rm xcherry-server; rm xcherry-tools-postgres;
 
 cleanTestCache:
 	$Q go clean -testcache
@@ -160,9 +160,9 @@ integTests:
 integTestsWithLocalServer:
 	$Q go test -v ./integTests -useLocalServer=true
 
-install-schema-postgres: xdb-tools-postgres
-	$Q ./xdb-tools-postgres install-schema # install xdb system tables
-	$Q ./xdb-tools-postgres install-schema -f ./extensions/postgres/schema/sample_tables.sql
+install-schema-postgres: xcherry-tools-postgres
+	$Q ./xcherry-tools-postgres install-schema # install xcherry system tables
+	$Q ./xcherry-tools-postgres install-schema -f ./extensions/postgres/schema/sample_tables.sql
 
 help:
 	@# print help first, so it's visible

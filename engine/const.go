@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/ptr"
 )
 

@@ -3,6 +3,8 @@
 
 package api
 
+import "github.com/xcherryio/apis/goapi/xcapi"
+
 type ErrorWithStatus struct {
 	StatusCode int
 	Error      xcapi.ApiErrorResponse

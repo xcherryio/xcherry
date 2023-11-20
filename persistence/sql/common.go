@@ -5,6 +5,7 @@ package sql
 
 import (
 	"context"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/uuid"
 	"math"
 

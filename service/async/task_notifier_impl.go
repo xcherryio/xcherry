@@ -4,6 +4,7 @@
 package async
 
 import (
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/engine"
 )
 

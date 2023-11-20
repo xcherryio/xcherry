@@ -5,6 +5,7 @@ package data_models
 
 import (
 	"encoding/json"
+	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
 func getInternalGlobalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {

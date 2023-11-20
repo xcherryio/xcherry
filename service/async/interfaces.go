@@ -5,6 +5,7 @@ package async
 
 import (
 	"context"
+	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
 type Server interface {

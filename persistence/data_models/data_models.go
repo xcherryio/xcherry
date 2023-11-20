@@ -5,6 +5,7 @@ package data_models
 
 import (
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"strconv"
 	"strings"
 

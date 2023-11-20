@@ -7,6 +7,7 @@ package decision
 
 import (
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
 func ValidateDecision(decision xcapi.StateDecision) error {

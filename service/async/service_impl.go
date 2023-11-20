@@ -6,6 +6,7 @@ package async
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/config"

@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 
 	"github.com/xcherryio/xcherry/common/log"

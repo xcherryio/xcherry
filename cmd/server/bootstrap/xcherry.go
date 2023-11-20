@@ -28,7 +28,7 @@ const AsyncServiceName = "async"
 const FlagConfig = "config"
 const FlagService = "service"
 
-func StartXdbServerCli(c *cli.Context) {
+func StartXCherryServerCli(c *cli.Context) {
 	// register interrupt signal for graceful shutdown
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -40,7 +40,7 @@ func StartXdbServerCli(c *cli.Context) {
 	if err != nil {
 		rawLog.Fatalf("Unable to load config for path %v because of error %v", configPath, err)
 	}
-	shutdownFunc := StartXdbServer(rootCtx, cfg, services)
+	shutdownFunc := StartXCherryServer(rootCtx, cfg, services)
 	// wait for os signals
 	<-rootCtx.Done()
 
@@ -54,7 +54,7 @@ func StartXdbServerCli(c *cli.Context) {
 
 type GracefulShutdown func(ctx context.Context) error
 
-func StartXdbServer(rootCtx context.Context, cfg *config.Config, services map[string]bool) GracefulShutdown {
+func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services map[string]bool) GracefulShutdown {
 	if len(services) == 0 {
 		services = map[string]bool{ApiServiceName: true, AsyncServiceName: true}
 	}

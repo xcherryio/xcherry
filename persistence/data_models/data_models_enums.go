@@ -3,6 +3,8 @@
 
 package data_models
 
+import "github.com/xcherryio/apis/goapi/xcapi"
+
 type ProcessExecutionStatus int32
 
 const (

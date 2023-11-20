@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 				},
 			}
 
-			shutdownFunc = bootstrap.StartXdbServer(rootCtx, &cfg, nil)
+			shutdownFunc = bootstrap.StartXCherryServer(rootCtx, &cfg, nil)
 		}
 	}
 

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/decision"
 	"github.com/xcherryio/xcherry/common/httperror"
 	"github.com/xcherryio/xcherry/common/urlautofix"
@@ -191,7 +192,7 @@ func (s serviceImpl) Rpc(
 	workerApiCtx, cancF := s.createContextWithTimeoutForRpc(ctx, request.GetTimeoutSeconds())
 	defer cancF()
 
-	req := apiClient.DefaultAPI.ApiV1XdbWorkerProcessRpcPost(workerApiCtx)
+	req := apiClient.DefaultAPI.ApiV1XcherryWorkerProcessRpcPost(workerApiCtx)
 	resp, httpResp, err := req.ProcessRpcWorkerRequest(
 		xcapi.ProcessRpcWorkerRequest{
 			Context: xcapi.Context{
@@ -280,7 +281,7 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 			},
 		})
 
-		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyImmediateTasksPost(ctx)
+		request := apiClient.DefaultAPI.InternalApiV1XcherryNotifyImmediateTasksPost(ctx)
 		httpResp, err := request.NotifyImmediateTasksRequest(req).Execute()
 		if httpResp != nil {
 			defer httpResp.Body.Close()
@@ -308,7 +309,7 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 			},
 		})
 
-		request := apiClient.DefaultAPI.InternalApiV1XdbNotifyTimerTasksPost(ctx)
+		request := apiClient.DefaultAPI.InternalApiV1XcherryNotifyTimerTasksPost(ctx)
 		httpResp, err := request.NotifyTimerTasksRequest(req).Execute()
 		if httpResp != nil {
 			defer httpResp.Body.Close()

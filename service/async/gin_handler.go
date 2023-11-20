@@ -5,6 +5,7 @@ package async
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/config"
 	"net/http"

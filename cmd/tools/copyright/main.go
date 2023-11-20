@@ -54,7 +54,7 @@ const licenseFileName = "./script/licenseheader.txt"
 // unique prefix that identifies a license header
 const licenseHeaderPrefixOld = "Copyright (c)"
 const licenseHeaderPrefix = "// Copyright 2023 xCherryIO organization"
-const xdbCopyright = "// Copyright 2023 xCherryIO organization"
+const xcherryCopyright = "// Copyright 2023 xCherryIO organization"
 const cadenceModificationHeader = "// Modifications Copyright (c) xCherryIO organization"
 const temporalCopyright = "// Copyright (c) 2020 Uber Technologies, Inc."
 const temporalPartialCopyright = "// Portions of the Software are attributed to Copyright (c) 2020 Uber Technologies Inc."
@@ -128,7 +128,7 @@ func (task *addLicenseHeaderTask) run() error {
 	if task.config.temporalAddMode {
 		task.license = fmt.Sprintf("%v\n\n%v\n\n%v", cadenceModificationHeader, temporalCopyright, task.license)
 	} else if task.config.temporalModifyMode {
-		task.license = fmt.Sprintf("%v\n\n%v\n\n%v", xdbCopyright, temporalPartialCopyright, task.license)
+		task.license = fmt.Sprintf("%v\n\n%v\n\n%v", xcherryCopyright, temporalPartialCopyright, task.license)
 	}
 	if task.config.temporalModifyMode || task.config.temporalAddMode {
 		filePaths, fileInfos, err := getFilePaths(task.config.filePaths)
@@ -142,7 +142,7 @@ func (task *addLicenseHeaderTask) run() error {
 		}
 		return nil
 	}
-	task.license = fmt.Sprintf("%v\n\n%v", xdbCopyright, task.license)
+	task.license = fmt.Sprintf("%v\n\n%v", xcherryCopyright, task.license)
 	err = filepath.Walk(task.config.rootDir, task.handleFile)
 	if err != nil {
 		return fmt.Errorf("copyright header check failed, err=%v", err.Error())

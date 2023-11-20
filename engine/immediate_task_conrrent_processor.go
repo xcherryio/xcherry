@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/decision"
 	"github.com/xcherryio/xcherry/common/httperror"
 	"github.com/xcherryio/xcherry/persistence/data_models"
@@ -162,7 +163,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	}
 	task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts++
 
-	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
+	req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateWaitUntilPost(workerApiCtx)
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
 		xcapi.AsyncStateWaitUntilRequest{
 			Context: createApiContext(
@@ -354,7 +355,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	var httpResp *http.Response
 	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
 	if errToCheck == nil {
-		req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
+		req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateExecutePost(ctx)
 		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
 			xcapi.AsyncStateExecuteRequest{
 				Context: createApiContext(

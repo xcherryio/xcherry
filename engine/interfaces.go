@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
