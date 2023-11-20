@@ -6,6 +6,7 @@ package sqltest
 import (
 	"context"
 	"encoding/json"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 

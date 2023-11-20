@@ -36,7 +36,7 @@ func FromCommandRequestToBytes(request xcapi.CommandRequest) ([]byte, error) {
 }
 
 func BytesToCommandRequest(bytes []byte) (xcapi.CommandRequest, error) {
-	if bytes == nil {
+	if len(bytes) == 0 {
 		return xcapi.CommandRequest{}, nil
 	}
 
