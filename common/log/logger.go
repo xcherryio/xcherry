@@ -22,7 +22,7 @@ package log
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb/common/log/tag"
+	"github.com/xcherryio/xcherry/common/log/tag"
 	"path/filepath"
 	"runtime"
 

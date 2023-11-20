@@ -1,13 +1,13 @@
-// Copyright 2023 XDBLab organization
+// Copyright 2023 xCherryIO organization
 
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package httperror
 
 import (
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
 	"net/http"
 )
 

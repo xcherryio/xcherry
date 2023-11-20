@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package extensions
@@ -7,8 +7,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/config"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/config"
 )
 
 type SQLDBExtension interface {

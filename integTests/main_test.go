@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package integTests
@@ -7,16 +7,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/xdblab/xdb-golang-sdk/xdb"
-	"github.com/xdblab/xdb/cmd/server/bootstrap"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/extensions/postgres"
-	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
+	"github.com/xcherryio/xcherry/cmd/server/bootstrap"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/extensions/postgres"
+	"github.com/xcherryio/xcherry/extensions/postgres/postgrestool"
 	"testing"
 	"time"
 
-	"github.com/xdblab/xdb-golang-sdk/integTests/worker"
+	"github.com/xcherryio/sdk-go/integTests/worker"
 )
 
 func TestMain(m *testing.M) {

@@ -2,7 +2,7 @@
 
 Any contribution is welcome. Even just a fix for typo in a code comment, or README/wiki.
 
-See [Wiki](https://github.com/xdblab/xdb/wiki) for how it works.
+See [Wiki](https://github.com/xcherryio/xcherry/wiki) for how it works.
 
 Here is the repository layout if you are interested to learn about it:
 

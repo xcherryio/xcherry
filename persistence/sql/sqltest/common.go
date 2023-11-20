@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sqltest
@@ -6,15 +6,14 @@ package sqltest
 import (
 	"context"
 	"encoding/json"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 const testProcessType = "test-type"
@@ -22,15 +21,15 @@ const testWorkerUrl = "test-url"
 const stateId1 = "state1"
 const stateId2 = "state2"
 
-func createTestInput() xdbapi.EncodedObject {
-	return xdbapi.EncodedObject{
+func createTestInput() xcapi.EncodedObject {
+	return xcapi.EncodedObject{
 		Encoding: "test-encoding",
 		Data:     "test-data",
 	}
 }
 
-func createEmptyEncodedObject() xdbapi.EncodedObject {
-	return xdbapi.EncodedObject{
+func createEmptyEncodedObject() xcapi.EncodedObject {
+	return xcapi.EncodedObject{
 		Encoding: "",
 		Data:     "",
 	}
@@ -39,7 +38,7 @@ func createEmptyEncodedObject() xdbapi.EncodedObject {
 func startProcessWithConfigs(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 	namespace, processId string,
-	input xdbapi.EncodedObject, gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
+	input xcapi.EncodedObject, gloAttCfg *xcapi.GlobalAttributeConfig, stateCfg *xcapi.AsyncStateConfig,
 ) uuid.UUID {
 	startReq := createStartRequest(namespace, processId, input, gloAttCfg, stateCfg)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -57,7 +56,7 @@ func startProcessWithConfigs(
 
 func startProcess(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) uuid.UUID {
 	return startProcessWithConfigs(ctx, t, ass, store, namespace, processId, input, nil, nil)
 }
@@ -69,7 +68,7 @@ func terminateProcess(
 	resp, err := store.StopProcess(ctx, data_models.StopProcessRequest{
 		Namespace:       namespace,
 		ProcessId:       processId,
-		ProcessStopType: xdbapi.TERMINATE,
+		ProcessStopType: xcapi.TERMINATE,
 	})
 
 	require.NoError(t, err)
@@ -78,7 +77,7 @@ func terminateProcess(
 
 func startProcessWithAllowIfPreviousExitAbnormally(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -95,7 +94,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 
 func startProcessWithTerminateIfRunningPolicy(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -112,7 +111,7 @@ func startProcessWithTerminateIfRunningPolicy(
 
 func startProcessWithAllowIfNoRunningPolicy(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithAllowIfNoRunningPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -129,7 +128,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 
 func startProcessWithDisallowReusePolicy(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) uuid.UUID {
 	startReq := createStartRequestWithDisallowReusePolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -143,10 +142,10 @@ func startProcessWithDisallowReusePolicy(
 }
 
 func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(
-	namespace, processId string, input xdbapi.EncodedObject,
-) xdbapi.ProcessExecutionStartRequest {
+	namespace, processId string, input xcapi.EncodedObject,
+) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
-	return xdbapi.ProcessExecutionStartRequest{
+	return xcapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
 		ProcessId:        processId,
 		ProcessType:      "test-type",
@@ -154,18 +153,18 @@ func createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
 		StartStateConfig: nil,
-		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+		ProcessStartConfig: &xcapi.ProcessStartConfig{
 			TimeoutSeconds: ptr.Any(int32(100)),
-			IdReusePolicy:  xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY.Ptr().Ptr(),
+			IdReusePolicy:  xcapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY.Ptr().Ptr(),
 		},
 	}
 }
 
 func createStartRequestWithDisallowReusePolicy(
-	namespace, processId string, input xdbapi.EncodedObject,
-) xdbapi.ProcessExecutionStartRequest {
+	namespace, processId string, input xcapi.EncodedObject,
+) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
-	return xdbapi.ProcessExecutionStartRequest{
+	return xcapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
 		ProcessId:        processId,
 		ProcessType:      "test-type",
@@ -173,18 +172,18 @@ func createStartRequestWithDisallowReusePolicy(
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
 		StartStateConfig: nil,
-		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+		ProcessStartConfig: &xcapi.ProcessStartConfig{
 			TimeoutSeconds: ptr.Any(int32(100)),
-			IdReusePolicy:  xdbapi.DISALLOW_REUSE.Ptr(),
+			IdReusePolicy:  xcapi.DISALLOW_REUSE.Ptr(),
 		},
 	}
 }
 
 func createStartRequestWithAllowIfNoRunningPolicy(
-	namespace, processId string, input xdbapi.EncodedObject,
-) xdbapi.ProcessExecutionStartRequest {
+	namespace, processId string, input xcapi.EncodedObject,
+) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
-	return xdbapi.ProcessExecutionStartRequest{
+	return xcapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
 		ProcessId:        processId,
 		ProcessType:      "test-type",
@@ -192,18 +191,18 @@ func createStartRequestWithAllowIfNoRunningPolicy(
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
 		StartStateConfig: nil,
-		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+		ProcessStartConfig: &xcapi.ProcessStartConfig{
 			TimeoutSeconds: ptr.Any(int32(100)),
-			IdReusePolicy:  xdbapi.ALLOW_IF_NO_RUNNING.Ptr(),
+			IdReusePolicy:  xcapi.ALLOW_IF_NO_RUNNING.Ptr(),
 		},
 	}
 }
 
 func createStartRequestWithTerminateIfRunningPolicy(
-	namespace, processId string, input xdbapi.EncodedObject,
-) xdbapi.ProcessExecutionStartRequest {
+	namespace, processId string, input xcapi.EncodedObject,
+) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
-	return xdbapi.ProcessExecutionStartRequest{
+	return xcapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
 		ProcessId:        processId,
 		ProcessType:      "test-type",
@@ -211,19 +210,19 @@ func createStartRequestWithTerminateIfRunningPolicy(
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
 		StartStateConfig: nil,
-		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+		ProcessStartConfig: &xcapi.ProcessStartConfig{
 			TimeoutSeconds: ptr.Any(int32(100)),
-			IdReusePolicy:  xdbapi.TERMINATE_IF_RUNNING.Ptr(),
+			IdReusePolicy:  xcapi.TERMINATE_IF_RUNNING.Ptr(),
 		},
 	}
 }
 
 func createStartRequest(
-	namespace, processId string, input xdbapi.EncodedObject,
-	gloAttCfg *xdbapi.GlobalAttributeConfig, stateCfg *xdbapi.AsyncStateConfig,
-) xdbapi.ProcessExecutionStartRequest {
+	namespace, processId string, input xcapi.EncodedObject,
+	gloAttCfg *xcapi.GlobalAttributeConfig, stateCfg *xcapi.AsyncStateConfig,
+) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
-	return xdbapi.ProcessExecutionStartRequest{
+	return xcapi.ProcessExecutionStartRequest{
 		Namespace:        namespace,
 		ProcessId:        processId,
 		ProcessType:      "test-type",
@@ -231,7 +230,7 @@ func createStartRequest(
 		StartStateId:     ptr.Any(stateId1),
 		StartStateInput:  &input,
 		StartStateConfig: stateCfg,
-		ProcessStartConfig: &xdbapi.ProcessStartConfig{
+		ProcessStartConfig: &xcapi.ProcessStartConfig{
 			TimeoutSeconds:        ptr.Any(int32(100)),
 			GlobalAttributeConfig: gloAttCfg,
 		},
@@ -240,7 +239,7 @@ func createStartRequest(
 
 func retryStartProcessForFailure(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
-	store persistence.ProcessStore, namespace, processId string, input xdbapi.EncodedObject,
+	store persistence.ProcessStore, namespace, processId string, input xcapi.EncodedObject,
 ) {
 	startReq := createStartRequest(namespace, processId, input, nil, nil)
 	startResp2, err := store.StartProcess(ctx, data_models.StartProcessRequest{
@@ -254,7 +253,7 @@ func retryStartProcessForFailure(
 
 func describeProcess(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
-	namespace, processId string, processStatus xdbapi.ProcessStatus,
+	namespace, processId string, processStatus xcapi.ProcessStatus,
 ) {
 	// Incorrect process id description
 	descResp, err := store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
@@ -310,7 +309,7 @@ func getAndCheckTimerTasksUpForTimestamps(
 	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, data_models.GetTimerTasksForTimestampsRequest{
 		ShardId:              persistence.DefaultShardId,
 		MinSequenceInclusive: minTaskSeq,
-		DetailedRequests: []xdbapi.NotifyTimerTasksRequest{
+		DetailedRequests: []xcapi.NotifyTimerTasksRequest{
 			{
 				FireTimestamps: forTimestamps,
 			},
@@ -385,7 +384,7 @@ func prepareStateExecution(
 func verifyStateExecution(
 	ass *assert.Assertions,
 	prep *data_models.PrepareStateExecutionResponse,
-	processId string, input xdbapi.EncodedObject,
+	processId string, input xcapi.EncodedObject,
 	expectedStatus data_models.StateExecutionStatus,
 ) {
 	ass.Equal(testWorkerUrl, prep.Info.WorkerURL)
@@ -408,8 +407,8 @@ func completeWaitUntilExecution(
 		ProcessExecutionId: prcExeId,
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
-		CommandRequest: xdbapi.CommandRequest{
-			WaitingType: xdbapi.EMPTY_COMMAND,
+		CommandRequest: xcapi.CommandRequest{
+			WaitingType: xcapi.EMPTY_COMMAND,
 		},
 		TaskShardId: persistence.DefaultShardId,
 	})
@@ -421,7 +420,7 @@ func completeExecuteExecution(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
 	prep *data_models.PrepareStateExecutionResponse,
-	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+	stateDecision xcapi.StateDecision, hasNewImmediateTask bool,
 ) {
 	completeExecuteExecutionWithGlobalAttributes(
 		ctx, t, ass, store, prcExeId, immediateTask, prep,
@@ -432,9 +431,9 @@ func completeExecuteExecutionWithGlobalAttributes(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
 	prep *data_models.PrepareStateExecutionResponse,
-	stateDecision xdbapi.StateDecision, hasNewImmediateTask bool,
+	stateDecision xcapi.StateDecision, hasNewImmediateTask bool,
 	gloAttCfg *data_models.InternalGlobalAttributeConfig,
-	gloAttUpdates []xdbapi.GlobalAttributeTableRowUpdate,
+	gloAttUpdates []xcapi.GlobalAttributeTableRowUpdate,
 ) {
 	stateExeId := data_models.StateExecutionId{
 		StateId:         immediateTask.StateId,
@@ -463,10 +462,10 @@ func recoverFromFailure(
 	prcExeId uuid.UUID,
 	prep data_models.PrepareStateExecutionResponse,
 	sourceStateExecId data_models.StateExecutionId,
-	sourceFailedStateApi xdbapi.StateApiType,
+	sourceFailedStateApi xcapi.StateApiType,
 	destinationStateId string,
-	destiantionStateConfig *xdbapi.AsyncStateConfig,
-	destinationStateInput xdbapi.EncodedObject,
+	destiantionStateConfig *xcapi.AsyncStateConfig,
+	destinationStateInput xcapi.EncodedObject,
 ) {
 	request := data_models.RecoverFromStateExecutionFailureRequest{
 		Namespace:              namespace,
@@ -489,7 +488,7 @@ func recoverFromFailure(
 		ProcessId: prep.Info.ProcessId,
 	})
 	require.NoError(t, err)
-	assert.Equal(xdbapi.RUNNING, *descResp.Response.Status)
+	assert.Equal(xcapi.RUNNING, *descResp.Response.Status)
 }
 
 // this won't guarantee the actual equality, but it's good enough for our test

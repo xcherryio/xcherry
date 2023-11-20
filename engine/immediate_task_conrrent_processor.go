@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
@@ -6,20 +6,19 @@ package engine
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/common/decision"
-	"github.com/xdblab/xdb/common/httperror"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/common/decision"
+	"github.com/xcherryio/xcherry/common/httperror"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"io/ioutil"
 	"net/http"
 	"time"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/common/urlautofix"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/common/urlautofix"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 type immediateTaskConcurrentProcessor struct {
@@ -130,8 +129,8 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 	}
 
 	iwfWorkerBaseUrl := urlautofix.FixWorkerUrl(prep.Info.WorkerURL)
-	apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
-		Servers: []xdbapi.ServerConfiguration{
+	apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+		Servers: []xcapi.ServerConfiguration{
 			{
 				URL: iwfWorkerBaseUrl,
 			},
@@ -152,7 +151,7 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 
 func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	ctx context.Context, task data_models.ImmediateTask,
-	prep data_models.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	prep data_models.PrepareStateExecutionResponse, apiClient *xcapi.APIClient,
 ) error {
 
 	workerApiCtx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
@@ -165,7 +164,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 
 	req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateWaitUntilPost(workerApiCtx)
 	resp, httpResp, err := req.AsyncStateWaitUntilRequest(
-		xdbapi.AsyncStateWaitUntilRequest{
+		xcapi.AsyncStateWaitUntilRequest{
 			Context: createApiContext(
 				prep,
 				task,
@@ -173,7 +172,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 				prep.Info.RecoverFromApi),
 			ProcessType: prep.Info.ProcessType,
 			StateId:     task.StateId,
-			StateInput: &xdbapi.EncodedObject{
+			StateInput: &xcapi.EncodedObject{
 				Encoding: prep.Input.Encoding,
 				Data:     prep.Input.Data,
 			},
@@ -197,7 +196,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 			status,
 			details,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
-			xdbapi.WAIT_UNTIL_API)
+			xcapi.WAIT_UNTIL_API)
 	}
 
 	compResp, err := w.store.ProcessWaitUntilExecution(ctx, data_models.ProcessWaitUntilExecutionRequest{
@@ -221,7 +220,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	}
 
 	if len(compResp.FireTimestamps) > 0 {
-		w.taskNotifier.NotifyNewTimerTasks(xdbapi.NotifyTimerTasksRequest{
+		w.taskNotifier.NotifyNewTimerTasks(xcapi.NotifyTimerTasksRequest{
 			ShardId:            task.ShardId,
 			Namespace:          &prep.Info.Namespace,
 			ProcessId:          &prep.Info.ProcessId,
@@ -240,20 +239,20 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	status int32,
 	details string,
 	completedAttempts int32,
-	stateApiType xdbapi.StateApiType,
+	stateApiType xcapi.StateApiType,
 ) error {
-	stateRecoveryPolicy := xdbapi.StateFailureRecoveryOptions{
-		Policy: xdbapi.FAIL_PROCESS_ON_STATE_FAILURE,
+	stateRecoveryPolicy := xcapi.StateFailureRecoveryOptions{
+		Policy: xcapi.FAIL_PROCESS_ON_STATE_FAILURE,
 	}
 	if prep.Info.StateConfig != nil && prep.Info.StateConfig.StateFailureRecoveryOptions != nil {
 		stateRecoveryPolicy = *prep.Info.StateConfig.StateFailureRecoveryOptions
 	}
 	switch stateRecoveryPolicy.Policy {
-	case xdbapi.FAIL_PROCESS_ON_STATE_FAILURE:
+	case xcapi.FAIL_PROCESS_ON_STATE_FAILURE:
 		resp, errStopProcess := w.store.StopProcess(ctx, data_models.StopProcessRequest{
 			Namespace:       prep.Info.Namespace,
 			ProcessId:       prep.Info.ProcessId,
-			ProcessStopType: xdbapi.FAIL,
+			ProcessStopType: xcapi.FAIL,
 		})
 
 		if errStopProcess != nil {
@@ -263,7 +262,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 			// this should not happen
 			return fmt.Errorf("process does not exist when stopping process for state failure")
 		}
-	case xdbapi.PROCEED_TO_CONFIGURED_STATE:
+	case xcapi.PROCEED_TO_CONFIGURED_STATE:
 		if prep.Info.StateConfig == nil || prep.Info.StateConfig.StateFailureRecoveryOptions == nil ||
 			prep.Info.StateConfig.StateFailureRecoveryOptions.StateFailureProceedStateId == nil {
 			return fmt.Errorf("cannot proceed to configured state because of missing state config")
@@ -323,9 +322,9 @@ func createApiContext(
 	prep data_models.PrepareStateExecutionResponse,
 	task data_models.ImmediateTask,
 	recoverFromStateExecutionId *string,
-	RecoverFromApi *xdbapi.StateApiType,
-) xdbapi.Context {
-	return xdbapi.Context{
+	RecoverFromApi *xcapi.StateApiType,
+) xcapi.Context {
+	return xcapi.Context{
 		ProcessId:          prep.Info.ProcessId,
 		ProcessExecutionId: task.ProcessExecutionId.String(),
 		StateExecutionId:   ptr.Any(task.StateExecutionId.GetStateExecutionId()),
@@ -340,7 +339,7 @@ func createApiContext(
 
 func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	ctx context.Context, task data_models.ImmediateTask,
-	prep data_models.PrepareStateExecutionResponse, apiClient *xdbapi.APIClient,
+	prep data_models.PrepareStateExecutionResponse, apiClient *xcapi.APIClient,
 ) error {
 
 	if task.ImmediateTaskInfo.WorkerTaskBackoffInfo == nil {
@@ -351,13 +350,13 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	ctx, cancF := w.createContextWithTimeout(ctx, task.TaskType, prep.Info.StateConfig)
 	defer cancF()
 
-	var resp *xdbapi.AsyncStateExecuteResponse
+	var resp *xcapi.AsyncStateExecuteResponse
 	var httpResp *http.Response
 	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
 	if errToCheck == nil {
 		req := apiClient.DefaultAPI.ApiV1XdbWorkerAsyncStateExecutePost(ctx)
 		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
-			xdbapi.AsyncStateExecuteRequest{
+			xcapi.AsyncStateExecuteRequest{
 				Context: createApiContext(
 					prep,
 					task,
@@ -365,7 +364,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 					prep.Info.RecoverFromApi),
 				ProcessType: prep.Info.ProcessType,
 				StateId:     task.StateId,
-				StateInput: &xdbapi.EncodedObject{
+				StateInput: &xcapi.EncodedObject{
 					Encoding: prep.Input.Encoding,
 					Data:     prep.Input.Data,
 				},
@@ -395,7 +394,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			status,
 			details,
 			task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
-			xdbapi.EXECUTE_API)
+			xcapi.EXECUTE_API)
 	}
 
 	compResp, err := w.store.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
@@ -428,7 +427,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 }
 
 func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
-	ctx context.Context, taskType data_models.ImmediateTaskType, stateConfig *xdbapi.AsyncStateConfig,
+	ctx context.Context, taskType data_models.ImmediateTaskType, stateConfig *xcapi.AsyncStateConfig,
 ) (context.Context, context.CancelFunc) {
 	qCfg := w.cfg.AsyncService.ImmediateTaskQueue
 	timeout := qCfg.DefaultAsyncStateAPITimeout
@@ -454,7 +453,7 @@ func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
 func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
 	prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
 ) {
-	w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
+	w.taskNotifier.NotifyNewImmediateTasks(xcapi.NotifyImmediateTasksRequest{
 		ShardId:            persistence.DefaultShardId,
 		Namespace:          &prep.Info.Namespace,
 		ProcessId:          &prep.Info.ProcessId,
@@ -496,7 +495,7 @@ func (w *immediateTaskConcurrentProcessor) retryTask(
 	if err != nil {
 		return err
 	}
-	w.taskNotifier.NotifyNewTimerTasks(xdbapi.NotifyTimerTasksRequest{
+	w.taskNotifier.NotifyNewTimerTasks(xcapi.NotifyTimerTasksRequest{
 		ShardId:            persistence.DefaultShardId,
 		Namespace:          &prep.Info.Namespace,
 		ProcessId:          &prep.Info.ProcessId,
@@ -557,7 +556,7 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 
 	if resp.HasNewImmediateTask {
 		processExecutionIdString := task.ProcessExecutionId.String()
-		w.taskNotifier.NotifyNewImmediateTasks(xdbapi.NotifyImmediateTasksRequest{
+		w.taskNotifier.NotifyNewImmediateTasks(xcapi.NotifyImmediateTasksRequest{
 			ShardId:            task.ShardId,
 			ProcessExecutionId: &processExecutionIdString,
 		})

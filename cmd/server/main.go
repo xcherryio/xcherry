@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package main
@@ -9,9 +9,9 @@ import (
 	"os"
 
 	"github.com/urfave/cli/v2"
-	"github.com/xdblab/xdb/cmd/server/bootstrap"
+	"github.com/xcherryio/xcherry/cmd/server/bootstrap"
 
-	_ "github.com/xdblab/xdb/extensions/postgres" // import postgres
+	_ "github.com/xcherryio/xcherry/extensions/postgres" // import postgres
 )
 
 func main() {

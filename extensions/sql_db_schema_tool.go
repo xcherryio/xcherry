@@ -24,7 +24,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/urfave/cli/v2"
-	"github.com/xdblab/xdb/config"
+	"github.com/xcherryio/xcherry/config"
 	"io/ioutil"
 	"net"
 )

@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sqltest
@@ -6,14 +6,14 @@ package sqltest
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 	"time"
 
-	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xcherryio/xcherry/common/ptr"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 func SQLBackoffTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {

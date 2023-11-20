@@ -1,14 +1,14 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package extensions
 
 import (
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"time"
 
 	"github.com/jmoiron/sqlx/types"
-	"github.com/xdblab/xdb/common/uuid"
+	"github.com/xcherryio/xcherry/common/uuid"
 )
 
 /**

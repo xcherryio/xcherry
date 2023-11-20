@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
@@ -7,17 +7,15 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"math"
 	"math/rand"
 	"time"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 type timerTaskQueueImpl struct {
@@ -56,10 +54,10 @@ type timerTaskQueueImpl struct {
 	// the channel to receive trigger of polling for newly created timers.
 	// The queue will check if the new timers are within the currentMaxLoadedTaskTimestamp, and if so,
 	// it will load the new timers and add to the remainingToFireTimersHeap
-	triggeredPollingChan chan xdbapi.NotifyTimerTasksRequest
+	triggeredPollingChan chan xcapi.NotifyTimerTasksRequest
 
 	// the current pending requests to poll within the current preload time window
-	currentNotifyRequests []xdbapi.NotifyTimerTasksRequest
+	currentNotifyRequests []xcapi.NotifyTimerTasksRequest
 }
 
 func NewTimerTaskQueueImpl(
@@ -85,7 +83,7 @@ func NewTimerTaskQueueImpl(
 		currWindowTimestamp:       0,
 
 		remainingToFireTimersHeap: nil,
-		triggeredPollingChan:      make(chan xdbapi.NotifyTimerTasksRequest, qCfg.TriggerNotificationBufferSize),
+		triggeredPollingChan:      make(chan xcapi.NotifyTimerTasksRequest, qCfg.TriggerNotificationBufferSize),
 		currentNotifyRequests:     nil,
 	}
 }
@@ -99,7 +97,7 @@ func (w *timerTaskQueueImpl) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (w *timerTaskQueueImpl) TriggerPollingTasks(req xdbapi.NotifyTimerTasksRequest) {
+func (w *timerTaskQueueImpl) TriggerPollingTasks(req xcapi.NotifyTimerTasksRequest) {
 	if req.ShardId != w.shardId {
 		panic("shardId doesn't match")
 	}
@@ -189,7 +187,7 @@ func (w *timerTaskQueueImpl) loadAndDispatchAndPrepareNext() {
 		tag.Value(len(resp.Tasks)), tag.UnixTimestamp(w.currWindowTimestamp))
 }
 
-func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xdbapi.NotifyTimerTasksRequest) {
+func (w *timerTaskQueueImpl) drainAllNotifyRequests(initReq *xcapi.NotifyTimerTasksRequest) {
 	minTimestamp := int64(math.MaxInt64)
 
 	if initReq != nil {
@@ -295,8 +293,8 @@ func (w *timerTaskQueueImpl) triggeredPolling() {
 
 // filterNotifyRequest filters out the fire timestamps that are outside current preload time window
 func (w *timerTaskQueueImpl) filterNotifyRequest(
-	req xdbapi.NotifyTimerTasksRequest, minTimestampToUpdate *int64,
-) *xdbapi.NotifyTimerTasksRequest {
+	req xcapi.NotifyTimerTasksRequest, minTimestampToUpdate *int64,
+) *xcapi.NotifyTimerTasksRequest {
 	var filteredFireTimestamps []int64
 	for _, ts := range req.FireTimestamps {
 		if ts <= w.currWindowTimestamp {

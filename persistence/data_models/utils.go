@@ -1,17 +1,15 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
 import (
 	"encoding/json"
-
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
-func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
+func getInternalGlobalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
-		primaryKeys := map[string]xdbapi.TableColumnValue{}
+		primaryKeys := map[string]xcapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
@@ -22,26 +20,26 @@ func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *
 	return nil
 }
 
-func FromEncodedObjectIntoBytes(obj *xdbapi.EncodedObject) ([]byte, error) {
+func FromEncodedObjectIntoBytes(obj *xcapi.EncodedObject) ([]byte, error) {
 	return json.Marshal(obj)
 }
 
-func BytesToEncodedObject(bytes []byte) (xdbapi.EncodedObject, error) {
-	var obj xdbapi.EncodedObject
+func BytesToEncodedObject(bytes []byte) (xcapi.EncodedObject, error) {
+	var obj xcapi.EncodedObject
 	err := json.Unmarshal(bytes, &obj)
 	return obj, err
 }
 
-func FromCommandRequestToBytes(request xdbapi.CommandRequest) ([]byte, error) {
+func FromCommandRequestToBytes(request xcapi.CommandRequest) ([]byte, error) {
 	return json.Marshal(request)
 }
 
-func BytesToCommandRequest(bytes []byte) (xdbapi.CommandRequest, error) {
+func BytesToCommandRequest(bytes []byte) (xcapi.CommandRequest, error) {
 	if bytes == nil {
-		return xdbapi.CommandRequest{}, nil
+		return xcapi.CommandRequest{}, nil
 	}
 
-	var request xdbapi.CommandRequest
+	var request xcapi.CommandRequest
 	err := json.Unmarshal(bytes, &request)
 	return request, err
 }

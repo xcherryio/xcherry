@@ -25,8 +25,8 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/extensions"
 
 	"github.com/iancoleman/strcase"
 	"github.com/jmoiron/sqlx"

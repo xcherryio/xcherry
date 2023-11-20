@@ -1,4 +1,4 @@
-// Copyright 2023 XDBLab organization
+// Copyright 2023 xCherryIO organization
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,10 +16,10 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 func (p sqlProcessStoreImpl) ProcessTimerTaskForProcessTimeout(

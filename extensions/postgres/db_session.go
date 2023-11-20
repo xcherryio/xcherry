@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package postgres
@@ -7,7 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/jmoiron/sqlx"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 type dbSession struct {

@@ -1,22 +1,22 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package tests
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/persistence"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/extensions/postgres"
-	"github.com/xdblab/xdb/extensions/postgres/postgrestool"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/extensions/postgres"
+	"github.com/xcherryio/xcherry/extensions/postgres/postgrestool"
 
-	"github.com/xdblab/xdb/persistence/sql"
+	"github.com/xcherryio/xcherry/persistence/sql"
 )
 
 var store persistence.ProcessStore

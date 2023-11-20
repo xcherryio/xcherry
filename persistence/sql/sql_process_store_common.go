@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
@@ -6,12 +6,11 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 func insertAsyncStateExecution(
@@ -20,7 +19,7 @@ func insertAsyncStateExecution(
 	processExecutionId uuid.UUID,
 	stateId string,
 	stateIdSeq int,
-	stateConfig *xdbapi.AsyncStateConfig,
+	stateConfig *xcapi.AsyncStateConfig,
 	stateInput []byte,
 	stateInfo []byte,
 ) error {
@@ -59,7 +58,7 @@ func insertImmediateTask(
 	processExecutionId uuid.UUID,
 	stateId string,
 	stateIdSeq int,
-	stateConfig *xdbapi.AsyncStateConfig,
+	stateConfig *xcapi.AsyncStateConfig,
 	shardId int32,
 ) error {
 	immediateTaskRow := extensions.ImmediateTaskRowForInsert{
@@ -77,12 +76,12 @@ func insertImmediateTask(
 	return tx.InsertImmediateTask(ctx, immediateTaskRow)
 }
 
-// publishToLocalQueue inserts len(valid_messages) rows into xdb_sys_local_queue_messages,
-// and inserts only one row into xdb_sys_immediate_tasks with all the dedupIds for these messages.
+// publishToLocalQueue inserts len(valid_messages) rows into xcherry_sys_local_queue_messages,
+// and inserts only one row into xcherry_sys_immediate_tasks with all the dedupIds for these messages.
 // publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
 	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID,
-	messages []xdbapi.LocalQueueMessage,
+	messages []xcapi.LocalQueueMessage,
 ) (bool, error) {
 
 	var localQueueMessageInfo []data_models.LocalQueueMessageInfoJson
@@ -99,7 +98,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 			dedupId = dedupId2
 		}
 
-		// insert a row into xdb_sys_local_queue_messages
+		// insert a row into xcherry_sys_local_queue_messages
 
 		payloadBytes, err := data_models.FromEncodedObjectIntoBytes(message.Payload)
 		if err != nil {
@@ -125,7 +124,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 		})
 	}
 
-	// insert a row into xdb_sys_immediate_tasks
+	// insert a row into xcherry_sys_immediate_tasks
 
 	if len(localQueueMessageInfo) == 0 {
 		return false, nil
@@ -188,7 +187,7 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMess
 ) error {
 
 	for idx, consumedMessages := range newlyConsumedMessagesMap {
-		var localQueueMessageResults []xdbapi.LocalQueueMessageResult
+		var localQueueMessageResults []xcapi.LocalQueueMessageResult
 		for _, consumedMessage := range consumedMessages {
 			message, ok := dedupIdToLocalQueueMessageMap[consumedMessage.DedupId]
 			if !ok {
@@ -201,7 +200,7 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithNewlyConsumedLocalQueueMess
 				return err
 			}
 
-			localQueueMessageResults = append(localQueueMessageResults, xdbapi.LocalQueueMessageResult{
+			localQueueMessageResults = append(localQueueMessageResults, xcapi.LocalQueueMessageResult{
 				DedupId: dedupIdString,
 				Payload: &payload,
 			})
@@ -220,15 +219,15 @@ func (p sqlProcessStoreImpl) updateCommandResultsWithFiredTimerCommand(
 }
 
 func (p sqlProcessStoreImpl) hasCompletedWaitUntilWaiting(
-	commandRequest xdbapi.CommandRequest, commandResults data_models.CommandResultsJson,
+	commandRequest xcapi.CommandRequest, commandResults data_models.CommandResultsJson,
 ) bool {
 	switch commandRequest.GetWaitingType() {
-	case xdbapi.ANY_OF_COMPLETION:
+	case xcapi.ANY_OF_COMPLETION:
 		return len(commandResults.LocalQueueResults)+len(commandResults.TimerResults) > 0
-	case xdbapi.ALL_OF_COMPLETION:
+	case xcapi.ALL_OF_COMPLETION:
 		return len(commandResults.LocalQueueResults)+len(commandResults.TimerResults) ==
 			len(commandRequest.LocalQueueCommands)+len(commandRequest.TimerCommands)
-	case xdbapi.EMPTY_COMMAND:
+	case xcapi.EMPTY_COMMAND:
 		return true
 	default:
 		panic("this is not supported")

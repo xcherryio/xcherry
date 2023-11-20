@@ -1,17 +1,16 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"context"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
-	ctx context.Context, tx extensions.SQLTransaction, req xdbapi.ProcessExecutionStartRequest,
+	ctx context.Context, tx extensions.SQLTransaction, req xcapi.ProcessExecutionStartRequest,
 ) error {
 	if req.ProcessStartConfig == nil || req.ProcessStartConfig.GlobalAttributeConfig == nil {
 		return nil
@@ -21,7 +20,7 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 		if len(tblCfg.InitialWrite) == 0 {
 			continue
 		}
-		writeMode := xdbapi.RETURN_ERROR_ON_CONFLICT
+		writeMode := xcapi.RETURN_ERROR_ON_CONFLICT
 		if tblCfg.InitialWriteMode != nil {
 			writeMode = *tblCfg.InitialWriteMode
 		}
@@ -38,11 +37,11 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 		}
 		var err error
 		switch writeMode {
-		case xdbapi.RETURN_ERROR_ON_CONFLICT:
+		case xcapi.RETURN_ERROR_ON_CONFLICT:
 			err = tx.InsertCustomTableErrorOnConflict(ctx, row)
-		case xdbapi.IGNORE_CONFLICT:
+		case xcapi.IGNORE_CONFLICT:
 			err = tx.InsertCustomTableIgnoreOnConflict(ctx, row)
-		case xdbapi.OVERRIDE_ON_CONFLICT:
+		case xcapi.OVERRIDE_ON_CONFLICT:
 			err = tx.InsertCustomTableOverrideOnConflict(ctx, row)
 		default:
 			panic("unknown write mode " + string(writeMode))
@@ -56,7 +55,7 @@ func (p sqlProcessStoreImpl) handleInitialGlobalAttributesWrite(
 
 func (p sqlProcessStoreImpl) updateGlobalAttributesIfNeeded(
 	ctx context.Context, tx extensions.SQLTransaction, tableConfig *data_models.InternalGlobalAttributeConfig,
-	globalAttributesToUpdate []xdbapi.GlobalAttributeTableRowUpdate,
+	globalAttributesToUpdate []xcapi.GlobalAttributeTableRowUpdate,
 ) error {
 	if len(globalAttributesToUpdate) > 0 {
 		for _, update := range globalAttributesToUpdate {

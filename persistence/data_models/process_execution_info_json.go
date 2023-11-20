@@ -1,12 +1,10 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
 import (
 	"encoding/json"
-
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
 type ProcessExecutionInfoJson struct {
@@ -15,7 +13,7 @@ type ProcessExecutionInfoJson struct {
 	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
-func FromStartRequestToProcessInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
+func FromStartRequestToProcessInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
 	info := ProcessExecutionInfoJson{
 		ProcessType:           req.GetProcessType(),
 		WorkerURL:             req.GetWorkerUrl(),

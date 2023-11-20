@@ -1,4 +1,4 @@
-module github.com/xdblab/xdb
+module github.com/xcherryio/xcherry
 
 go 1.19
 
@@ -11,8 +11,7 @@ require (
 	github.com/lib/pq v1.2.0
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xdblab/xdb-apis v0.0.2-0.20231114081446-21e17eb11993
-	github.com/xdblab/xdb-golang-sdk v0.0.0-20231109205703-5651879e036e
+	github.com/xcherryio/sdk-go v0.0.0-20231120212917-97e8fc55e1a9
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -41,6 +40,7 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
+	github.com/xcherryio/apis v0.0.2 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/crypto v0.9.0 // indirect

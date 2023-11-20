@@ -21,8 +21,8 @@
 package engine
 
 import (
-	"github.com/xdblab/xdb/common/clock"
-	"github.com/xdblab/xdb/common/log"
+	"github.com/xcherryio/xcherry/common/clock"
+	"github.com/xcherryio/xcherry/common/log"
 	"time"
 )
 

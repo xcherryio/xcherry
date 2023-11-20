@@ -1,12 +1,11 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
 
 import (
 	"context"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
 // TaskNotifier is to notify the poller(taskQueue) that there is a/some new immediate/timer tasks
@@ -21,15 +20,15 @@ import (
 type TaskNotifier interface {
 	AddImmediateTaskQueue(shardId int32, queue ImmediateTaskQueue)
 	AddTimerTaskQueue(shardId int32, queue TimerTaskQueue)
-	NotifyNewImmediateTasks(request xdbapi.NotifyImmediateTasksRequest)
-	NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRequest)
+	NotifyNewImmediateTasks(request xcapi.NotifyImmediateTasksRequest)
+	NotifyNewTimerTasks(request xcapi.NotifyTimerTasksRequest)
 }
 
 // ImmediateTaskQueue is the queue for immediate tasks
 type ImmediateTaskQueue interface {
 	Start() error
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
-	TriggerPollingTasks(request xdbapi.NotifyImmediateTasksRequest)
+	TriggerPollingTasks(request xcapi.NotifyImmediateTasksRequest)
 	Stop(ctx context.Context) error
 }
 
@@ -37,7 +36,7 @@ type ImmediateTaskQueue interface {
 type TimerTaskQueue interface {
 	Start() error
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
-	TriggerPollingTasks(request xdbapi.NotifyTimerTasksRequest)
+	TriggerPollingTasks(request xcapi.NotifyTimerTasksRequest)
 	Stop(ctx context.Context) error
 }
 

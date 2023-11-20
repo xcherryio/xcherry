@@ -1,12 +1,10 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
 import (
 	"encoding/json"
-
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
 type AsyncStateExecutionInfoJson struct {
@@ -14,13 +12,13 @@ type AsyncStateExecutionInfoJson struct {
 	ProcessId                   string                         `json:"processId"`
 	ProcessType                 string                         `json:"processType"`
 	WorkerURL                   string                         `json:"workerURL"`
-	StateConfig                 *xdbapi.AsyncStateConfig       `json:"stateConfig"`
+	StateConfig                 *xcapi.AsyncStateConfig        `json:"stateConfig"`
 	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
-	RecoverFromApi              *xdbapi.StateApiType           `json:"recoverFromApi,omitempty"`
+	RecoverFromApi              *xcapi.StateApiType            `json:"recoverFromApi,omitempty"`
 	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }
 
-func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) ([]byte, error) {
+func FromStartRequestToStateInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
 	infoJson := AsyncStateExecutionInfoJson{
 		Namespace:             req.Namespace,
 		ProcessId:             req.ProcessId,
@@ -35,7 +33,7 @@ func FromStartRequestToStateInfoBytes(req xdbapi.ProcessExecutionStartRequest) (
 
 func FromAsyncStateExecutionInfoToBytesForNextState(
 	info AsyncStateExecutionInfoJson,
-	nextStateConfig *xdbapi.AsyncStateConfig,
+	nextStateConfig *xcapi.AsyncStateConfig,
 ) ([]byte, error) {
 	info.StateConfig = nextStateConfig
 	return json.Marshal(info)
@@ -48,7 +46,7 @@ func (j *AsyncStateExecutionInfoJson) ToBytes() ([]byte, error) {
 func FromAsyncStateExecutionInfoToBytesForStateRecovery(
 	info AsyncStateExecutionInfoJson,
 	stateExeId string,
-	api xdbapi.StateApiType,
+	api xcapi.StateApiType,
 ) ([]byte, error) {
 	info.RecoverFromStateExecutionId = &stateExeId
 	info.RecoverFromApi = &api

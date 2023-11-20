@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
@@ -6,13 +6,12 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"time"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 func (p sqlProcessStoreImpl) StartProcess(
@@ -53,19 +52,19 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		}, nil
 	}
 
-	requestIdReusePolicy := xdbapi.ALLOW_IF_NO_RUNNING
+	requestIdReusePolicy := xcapi.ALLOW_IF_NO_RUNNING
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.IdReusePolicy != nil {
 		requestIdReusePolicy = *req.ProcessStartConfig.IdReusePolicy
 	}
 
 	switch requestIdReusePolicy {
-	case xdbapi.DISALLOW_REUSE:
+	case xcapi.DISALLOW_REUSE:
 		return p.applyDisallowReusePolicy(ctx, tx, request)
-	case xdbapi.ALLOW_IF_NO_RUNNING:
+	case xcapi.ALLOW_IF_NO_RUNNING:
 		return p.applyAllowIfNoRunningPolicy(ctx, tx, request)
-	case xdbapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
+	case xcapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
 		return p.applyAllowIfPreviousExitAbnormallyPolicy(ctx, tx, request)
-	case xdbapi.TERMINATE_IF_RUNNING:
+	case xcapi.TERMINATE_IF_RUNNING:
 		return p.applyTerminateIfRunningPolicy(ctx, tx, request)
 	default:
 		return nil, fmt.Errorf(

@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xcherryio/xcherry/common/ptr"
 )
 
 type StateExecutionFailureJson struct {

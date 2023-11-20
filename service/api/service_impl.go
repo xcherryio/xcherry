@@ -1,23 +1,22 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package api
 
 import (
 	"context"
-	"github.com/xdblab/xdb/common/decision"
-	"github.com/xdblab/xdb/common/httperror"
-	"github.com/xdblab/xdb/common/urlautofix"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/common/decision"
+	"github.com/xcherryio/xcherry/common/httperror"
+	"github.com/xcherryio/xcherry/common/urlautofix"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"net/http"
 	"time"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/config"
-	persistence "github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/config"
+	persistence "github.com/xcherryio/xcherry/persistence"
 )
 
 type serviceImpl struct {
@@ -35,8 +34,8 @@ func NewServiceImpl(cfg config.Config, store persistence.ProcessStore, logger lo
 }
 
 func (s serviceImpl) StartProcess(
-	ctx context.Context, request xdbapi.ProcessExecutionStartRequest,
-) (response *xdbapi.ProcessExecutionStartResponse, retErr *ErrorWithStatus) {
+	ctx context.Context, request xcapi.ProcessExecutionStartRequest,
+) (response *xcapi.ProcessExecutionStartResponse, retErr *ErrorWithStatus) {
 	timeoutUnixSeconds := 0
 	if request.ProcessStartConfig != nil && request.ProcessStartConfig.TimeoutSeconds != nil {
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
@@ -66,7 +65,7 @@ func (s serviceImpl) StartProcess(
 			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())
 	}
 	if resp.HasNewImmediateTask {
-		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
+		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
@@ -75,7 +74,7 @@ func (s serviceImpl) StartProcess(
 	}
 
 	if storeReq.TimeoutTimeUnixSeconds != 0 {
-		s.notifyRemoteTimerTaskAsync(ctx, xdbapi.NotifyTimerTasksRequest{
+		s.notifyRemoteTimerTaskAsync(ctx, xcapi.NotifyTimerTasksRequest{
 			ShardId:            persistence.DefaultShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
@@ -84,13 +83,13 @@ func (s serviceImpl) StartProcess(
 		})
 	}
 
-	return &xdbapi.ProcessExecutionStartResponse{
+	return &xcapi.ProcessExecutionStartResponse{
 		ProcessExecutionId: resp.ProcessExecutionId.String(),
 	}, nil
 }
 
 func (s serviceImpl) StopProcess(
-	ctx context.Context, request xdbapi.ProcessExecutionStopRequest,
+	ctx context.Context, request xcapi.ProcessExecutionStopRequest,
 ) *ErrorWithStatus {
 	resp, err := s.store.StopProcess(ctx, data_models.StopProcessRequest{
 		Namespace:       request.GetNamespace(),
@@ -109,8 +108,8 @@ func (s serviceImpl) StopProcess(
 }
 
 func (s serviceImpl) DescribeLatestProcess(
-	ctx context.Context, request xdbapi.ProcessExecutionDescribeRequest,
-) (response *xdbapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
+	ctx context.Context, request xcapi.ProcessExecutionDescribeRequest,
+) (response *xcapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
 	resp, perr := s.store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: request.Namespace,
 		ProcessId: request.ProcessId,
@@ -125,7 +124,7 @@ func (s serviceImpl) DescribeLatestProcess(
 }
 
 func (s serviceImpl) PublishToLocalQueue(
-	ctx context.Context, request xdbapi.PublishToLocalQueueRequest,
+	ctx context.Context, request xcapi.PublishToLocalQueueRequest,
 ) *ErrorWithStatus {
 	resp, err := s.store.PublishToLocalQueue(ctx, data_models.PublishToLocalQueueRequest{
 		Namespace: request.GetNamespace(),
@@ -141,7 +140,7 @@ func (s serviceImpl) PublishToLocalQueue(
 	}
 
 	if resp.HasNewImmediateTask {
-		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
+		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
@@ -153,8 +152,8 @@ func (s serviceImpl) PublishToLocalQueue(
 }
 
 func (s serviceImpl) Rpc(
-	ctx context.Context, request xdbapi.ProcessExecutionRpcRequest,
-) (response *xdbapi.ProcessExecutionRpcResponse, retErr *ErrorWithStatus) {
+	ctx context.Context, request xcapi.ProcessExecutionRpcRequest,
+) (response *xcapi.ProcessExecutionRpcResponse, retErr *ErrorWithStatus) {
 	latestPrcExe, err := s.store.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
 		Namespace: request.GetNamespace(),
 		ProcessId: request.GetProcessId(),
@@ -168,15 +167,15 @@ func (s serviceImpl) Rpc(
 	}
 
 	iwfWorkerBaseUrl := urlautofix.FixWorkerUrl(latestPrcExe.WorkerUrl)
-	apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
-		Servers: []xdbapi.ServerConfiguration{
+	apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+		Servers: []xcapi.ServerConfiguration{
 			{
 				URL: iwfWorkerBaseUrl,
 			},
 		},
 	})
 
-	loadGlobalAttributeResponse := xdbapi.LoadGlobalAttributeResponse{}
+	loadGlobalAttributeResponse := xcapi.LoadGlobalAttributeResponse{}
 	if latestPrcExe.GlobalAttributeConfig != nil {
 		loadGlobalAttrResp, err := s.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
 			TableConfig: *latestPrcExe.GlobalAttributeConfig,
@@ -194,8 +193,8 @@ func (s serviceImpl) Rpc(
 
 	req := apiClient.DefaultAPI.ApiV1XdbWorkerProcessRpcPost(workerApiCtx)
 	resp, httpResp, err := req.ProcessRpcWorkerRequest(
-		xdbapi.ProcessRpcWorkerRequest{
-			Context: xdbapi.Context{
+		xcapi.ProcessRpcWorkerRequest{
+			Context: xcapi.Context{
 				ProcessId:               request.GetProcessId(),
 				ProcessExecutionId:      latestPrcExe.ProcessExecutionId.String(),
 				ProcessStartedTimestamp: latestPrcExe.StartTimestamp,
@@ -253,7 +252,7 @@ func (s serviceImpl) Rpc(
 	if updateResp.HasNewImmediateTask {
 		processExecutionIdString := latestPrcExe.ProcessExecutionId.String()
 
-		s.notifyRemoteImmediateTaskAsync(ctx, xdbapi.NotifyImmediateTasksRequest{
+		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
@@ -261,20 +260,20 @@ func (s serviceImpl) Rpc(
 		})
 	}
 
-	return &xdbapi.ProcessExecutionRpcResponse{
+	return &xcapi.ProcessExecutionRpcResponse{
 		Output: resp.Output,
 	}, nil
 }
 
-func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbapi.NotifyImmediateTasksRequest) {
+func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi.NotifyImmediateTasksRequest) {
 	// execute in the background as best effort
 	go func() {
 
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
-		apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
-			Servers: []xdbapi.ServerConfiguration{
+		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+			Servers: []xcapi.ServerConfiguration{
 				{
 					URL: s.cfg.AsyncService.ClientAddress,
 				},
@@ -294,15 +293,15 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xdbap
 	}()
 }
 
-func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xdbapi.NotifyTimerTasksRequest) {
+func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.NotifyTimerTasksRequest) {
 	// execute in the background as best effort
 	go func() {
 
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
-		apiClient := xdbapi.NewAPIClient(&xdbapi.Configuration{
-			Servers: []xdbapi.ServerConfiguration{
+		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+			Servers: []xcapi.ServerConfiguration{
 				{
 					URL: s.cfg.AsyncService.ClientAddress,
 				},

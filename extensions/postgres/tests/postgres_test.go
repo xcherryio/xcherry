@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package tests
@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb/persistence/sql/sqltest"
+	"github.com/xcherryio/xcherry/persistence/sql/sqltest"
 )
 
 func TestBasic(t *testing.T) {

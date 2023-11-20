@@ -1,9 +1,9 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
-import "github.com/xdblab/xdb/common/uuid"
+import "github.com/xcherryio/xcherry/common/uuid"
 
 type LocalQueueMessageInfoJson struct {
 	QueueName string    `json:"queueName"`

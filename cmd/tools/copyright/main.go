@@ -53,9 +53,9 @@ const licenseFileName = "./script/licenseheader.txt"
 
 // unique prefix that identifies a license header
 const licenseHeaderPrefixOld = "Copyright (c)"
-const licenseHeaderPrefix = "// Copyright 2023 XDBLab organization"
-const xdbCopyright = "// Copyright 2023 XDBLab organization"
-const cadenceModificationHeader = "// Modifications Copyright (c) XDBLab organization"
+const licenseHeaderPrefix = "// Copyright 2023 xCherryIO organization"
+const xdbCopyright = "// Copyright 2023 xCherryIO organization"
+const cadenceModificationHeader = "// Modifications Copyright (c) xCherryIO organization"
 const temporalCopyright = "// Copyright (c) 2020 Uber Technologies, Inc."
 const temporalPartialCopyright = "// Portions of the Software are attributed to Copyright (c) 2020 Uber Technologies Inc."
 

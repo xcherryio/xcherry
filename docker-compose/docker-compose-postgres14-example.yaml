@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   xdb-server:
-    image: xdblab/xdb-server:latest
+    image: xcherryio/xdb-server:latest
     environment:
       CONFIG_PATH: /xdb/config/development-postgres-docker-compose.yaml
       AUTO_FIX_LOCALHOST_WORKER_URL: host.docker.internal # this will let xdb-server automatically replace all workerURL of "localhost" or "127.0.0.1" with "host.docker.internal"

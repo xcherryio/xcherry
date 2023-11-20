@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   xdb-server:
-    image: xdblab/xdb-server:latest
+    image: xcherryio/xdb-server:latest
     environment:
       CONFIG_PATH: /xdb/config/development-postgres.yaml
     volumes:

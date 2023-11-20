@@ -1,13 +1,12 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package async
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/config"
 	"net/http"
 )
 
@@ -26,7 +25,7 @@ func newGinHandler(cfg config.Config, svc Service, logger log.Logger) *ginHandle
 }
 
 func (h *ginHandler) NotifyImmediateTasks(c *gin.Context) {
-	var req xdbapi.NotifyImmediateTasksRequest
+	var req xcapi.NotifyImmediateTasksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -41,7 +40,7 @@ func (h *ginHandler) NotifyImmediateTasks(c *gin.Context) {
 }
 
 func (h *ginHandler) NotifyTimerTasks(c *gin.Context) {
-	var req xdbapi.NotifyTimerTasksRequest
+	var req xcapi.NotifyTimerTasksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -61,13 +60,13 @@ func successRespond(c *gin.Context) {
 	})
 }
 func invalidRequestSchema(c *gin.Context) {
-	c.JSON(http.StatusBadRequest, xdbapi.ApiErrorResponse{
-		Detail: xdbapi.PtrString("invalid request schema"),
+	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
+		Detail: xcapi.PtrString("invalid request schema"),
 	})
 }
 
 func invalidRequestForError(c *gin.Context, err error) {
-	c.JSON(http.StatusBadRequest, xdbapi.ApiErrorResponse{
-		Detail: xdbapi.PtrString(err.Error()),
+	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
+		Detail: xcapi.PtrString(err.Error()),
 	})
 }
