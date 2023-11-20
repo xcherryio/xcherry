@@ -19,7 +19,7 @@ type (
 		// Log is the logging config
 		Log Logger `yaml:"log"`
 
-		// Database is the database that XDB will be extending on
+		// Database is the database that xCherry server will be extending on
 		// either sql or nosql is needed
 		Database DatabaseConfig `yaml:"database"`
 
@@ -32,7 +32,7 @@ type (
 
 	DatabaseConfig struct {
 		// SQL is the SQL database config
-		// either sql or nosql is needed to run XDB
+		// either sql or nosql is needed to run server
 		// Only SQL is supported for now.
 		SQL *SQL `yaml:"sql"`
 	}

@@ -7,10 +7,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      - "MYSQL_ROOT_PASSWORD=xdbxdb"
+      - "MYSQL_ROOT_PASSWORD=xcherryio"
     networks:
-      - xdb
+      - xcherry
       
 networks:
-  xdb:
+  xcherry:
     driver: bridge

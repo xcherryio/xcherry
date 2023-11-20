@@ -62,7 +62,7 @@ type (
 
 		// the process type for SDK to look up the process definition class
 		ProcessType string
-		// the URL for XDB async service to make callback to worker
+		// the URL for server async service to make callback to worker
 		WorkerUrl string
 	}
 

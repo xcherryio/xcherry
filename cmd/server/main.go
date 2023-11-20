@@ -11,7 +11,7 @@ import (
 	"github.com/urfave/cli/v2"
 	"github.com/xcherryio/xcherry/cmd/server/bootstrap"
 
-	_ "github.com/xcherryio/xcherry/extensions/postgres" // import postgres
+	_ "github.com/xcherryio/xcherry/extensions/postgres" // import postgres extension
 )
 
 func main() {

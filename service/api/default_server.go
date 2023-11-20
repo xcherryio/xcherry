@@ -14,11 +14,11 @@ import (
 	"net/http"
 )
 
-const PathStartProcessExecution = "/api/v1/xdb/service/process-execution/start"
-const PathDescribeProcessExecution = "/api/v1/xdb/service/process-execution/describe"
-const PathStopProcessExecution = "/api/v1/xdb/service/process-execution/stop"
-const PathPublishToLocalQueue = "/api/v1/xdb/service/process-execution/publish-to-local-queue"
-const PathProcessExecutionRpc = "/api/v1/xdb/service/process-execution/rpc"
+const PathStartProcessExecution = "/api/v1/xcherry/service/process-execution/start"
+const PathDescribeProcessExecution = "/api/v1/xcherry/service/process-execution/describe"
+const PathStopProcessExecution = "/api/v1/xcherry/service/process-execution/stop"
+const PathPublishToLocalQueue = "/api/v1/xcherry/service/process-execution/publish-to-local-queue"
+const PathProcessExecutionRpc = "/api/v1/xcherry/service/process-execution/rpc"
 
 type defaultSever struct {
 	rootCtx context.Context
@@ -37,7 +37,7 @@ func NewDefaultAPIServerWithGin(
 	handler := newGinHandler(cfg, store, logger)
 
 	engine.GET("/", func(c *gin.Context) {
-		c.String(http.StatusOK, "Hello from XDB server!")
+		c.String(http.StatusOK, "Hello from xCherry server!")
 	})
 	engine.POST(PathStartProcessExecution, handler.StartProcess)
 	engine.POST(PathDescribeProcessExecution, handler.DescribeProcess)

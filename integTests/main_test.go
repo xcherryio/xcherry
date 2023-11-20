@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/xcherryio/sdk-go/xc"
 	"github.com/xcherryio/xcherry/cmd/server/bootstrap"
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/extensions"
@@ -67,7 +68,7 @@ func TestMain(m *testing.M) {
 				},
 				ApiService: config.ApiServiceConfig{
 					HttpServer: config.HttpServerConfig{
-						Address:      ":" + xdb.DefaultServerPort,
+						Address:      ":" + xc.DefaultServerPort,
 						ReadTimeout:  5 * time.Second,
 						WriteTimeout: 60 * time.Second,
 					},

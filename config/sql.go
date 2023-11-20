@@ -16,7 +16,7 @@ type (
 		// e.g. localhost:5432
 		ConnectAddr string `yaml:"connectAddr"`
 		// DBExtensionName is the name of the extension
-		// that XDB will be using to extend the database
+		// that server will be using this extension
 		DBExtensionName string `yaml:"dbExtensionName"`
 	}
 )

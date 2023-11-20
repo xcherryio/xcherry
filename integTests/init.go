@@ -11,13 +11,14 @@ import (
 	"github.com/xcherryio/sdk-go/integTests/process_timeout"
 	"github.com/xcherryio/sdk-go/integTests/state_decision"
 	"github.com/xcherryio/sdk-go/integTests/stateretry"
+	"github.com/xcherryio/sdk-go/xc"
 )
 
-var registry = xdb.NewRegistry()
+var registry = xc.NewRegistry()
 
-var client = xdb.NewClient(registry, createTestDefaultClientOptions())
+var client = xc.NewClient(registry, createTestDefaultClientOptions())
 
-var workerService = xdb.NewWorkerService(registry, nil)
+var workerService = xc.NewWorkerService(registry, nil)
 
 func init() {
 	err := registry.AddProcesses(
@@ -41,8 +42,8 @@ func init() {
 	}
 }
 
-func createTestDefaultClientOptions() *xdb.ClientOptions {
-	opts := xdb.GetLocalDefaultClientOptions()
+func createTestDefaultClientOptions() *xc.ClientOptions {
+	opts := xc.GetLocalDefaultClientOptions()
 	opts.EnabledDebugLogging = true
 	return opts
 }

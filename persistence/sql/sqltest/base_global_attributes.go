@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 				InitialWrite: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 				},
 				InitialWriteMode: xcapi.IGNORE_CONFLICT.Ptr(),
@@ -131,7 +132,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 					{
 						DbColumn:     "sequence",
@@ -239,7 +240,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 					{
 						DbColumn:     "create_timestamp",

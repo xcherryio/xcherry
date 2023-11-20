@@ -2,7 +2,7 @@
 GET http://localhost:8801/
 
 ### start API POST
-POST http://localhost:8801//api/v1/xdb/service/process-execution/describe
+POST http://localhost:8801//api/v1/xcherry/service/process-execution/describe
 Content-Type: application/json
 
 {

@@ -15,8 +15,8 @@ import (
 	"net/http"
 )
 
-const PathNotifyImmediateTasks = "/internal/api/v1/xdb/notify-immediate-tasks"
-const PathNotifyTimerTasks = "/internal/api/v1/xdb/notify-timer-tasks"
+const PathNotifyImmediateTasks = "/internal/api/v1/xcherry/notify-immediate-tasks"
+const PathNotifyTimerTasks = "/internal/api/v1/xcherry/notify-timer-tasks"
 
 type defaultSever struct {
 	rootCtx context.Context
