@@ -5,23 +5,20 @@ package sql
 
 import (
 	"context"
-	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
-
 	"github.com/xdblab/xdb/common/log/tag"
 	"github.com/xdblab/xdb/extensions"
+	"github.com/xdblab/xdb/persistence/data_models"
 )
 
-func (p sqlProcessStoreImpl) CompleteExecuteExecution(
-	ctx context.Context, request data_models.CompleteExecuteExecutionRequest,
-) (*data_models.CompleteExecuteExecutionResponse, error) {
-
+func (p sqlProcessStoreImpl) UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
+	*data_models.UpdateProcessExecutionForRpcResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := p.doCompleteExecuteExecutionTx(ctx, tx, request)
+	resp, err := p.doUpdateProcessExecutionForRpcTx(ctx, tx, request)
+
 	if err != nil || resp.FailAtUpdatingGlobalAttributes {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -34,12 +31,13 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 			return nil, err
 		}
 	}
+
 	return resp, err
 }
 
-func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
-	ctx context.Context, tx extensions.SQLTransaction, request data_models.CompleteExecuteExecutionRequest,
-) (*data_models.CompleteExecuteExecutionResponse, error) {
+func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
+	ctx context.Context, tx extensions.SQLTransaction, request data_models.UpdateProcessExecutionForRpcRequest,
+) (*data_models.UpdateProcessExecutionForRpcResponse, error) {
 	hasNewImmediateTask := false
 
 	// lock process execution row first
@@ -48,63 +46,39 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
+	// skip the writing operations on a closed process
+	if prcRow.Status != data_models.ProcessExecutionStatusRunning {
+		return &data_models.UpdateProcessExecutionForRpcResponse{
+			ProcessNotExists: true,
+		}, nil
+	}
+
 	// Step 1: update persistence
 
 	err = p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
 	if err != nil {
 		//lint:ignore nilerr reason
-		return &data_models.CompleteExecuteExecutionResponse{
+		return &data_models.UpdateProcessExecutionForRpcResponse{
 			FailAtUpdatingGlobalAttributes: true,
 			UpdatingGlobalAttributesError:  err,
 		}, nil
 	}
 
-	// Step 2: update state info
+	// Step 2: handle state decision
 
-	currStateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
-		ProcessExecutionId: request.ProcessExecutionId,
-		StateId:            request.StateId,
-		StateIdSequence:    request.StateIdSequence,
-		Status:             data_models.StateExecutionStatusCompleted,
-		PreviousVersion:    request.Prepare.PreviousVersion,
-		LastFailure:        nil,
-	}
-
-	err = tx.UpdateAsyncStateExecutionWithoutCommands(ctx, currStateRow)
-	if err != nil {
-		if p.session.IsConditionalUpdateFailure(err) {
-			p.logger.Warn("UpdateAsyncStateExecutionWithoutCommands failed at conditional update")
-		}
-		return nil, err
-	}
-
-	// Step 3: update process info
-
-	// at this point, it's either going to next states or closing the process
-	// either will require to do transaction on process execution row
 	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(prcRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3 - 1: remove current state from PendingExecutionMap
-
-	err = sequenceMaps.CompleteNewStateExecution(request.StateId, int(request.StateIdSequence))
-	if err != nil {
-		return nil, fmt.Errorf("completing a non-existing state execution, maybe data is corrupted %v-%v, currentMap:%v, err:%w",
-			request.StateId, request.StateIdSequence, sequenceMaps, err)
-	}
-
-	// Step 3 - 2: add next states to PendingExecutionMap
-
 	resp, err := p.handleStateDecision(ctx, tx, HandleStateDecisionRequest{
-		Namespace:                  request.Prepare.Info.Namespace,
-		ProcessId:                  request.Prepare.Info.ProcessId,
-		ProcessType:                request.Prepare.Info.ProcessType,
+		Namespace:                  request.Namespace,
+		ProcessId:                  request.ProcessId,
+		ProcessType:                request.ProcessType,
 		ProcessExecutionId:         request.ProcessExecutionId,
 		StateDecision:              request.StateDecision,
 		GlobalAttributeTableConfig: request.GlobalAttributeTableConfig,
-		WorkerUrl:                  request.Prepare.Info.WorkerURL,
+		WorkerUrl:                  request.WorkerUrl,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,
 		ProcessExecutionRowWaitToComplete:             prcRow.WaitToComplete,
@@ -115,7 +89,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	if err != nil {
 		return nil, err
 	}
-
 	if resp.HasNewImmediateTask {
 		hasNewImmediateTask = true
 	}
@@ -127,14 +100,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		return nil, err
 	}
 
-	// Step 3 - 3: update process execution row
-
 	err = tx.UpdateProcessExecution(ctx, *prcRow)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 4: publish to local queue
+	// Step 3: publish to local queue
 
 	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
 	if err != nil {
@@ -144,16 +115,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		hasNewImmediateTask = true
 	}
 
-	// Step 4: delete current immediate task
-	err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
-		ShardId:      request.TaskShardId,
-		TaskSequence: request.TaskSequence,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &data_models.CompleteExecuteExecutionResponse{
+	return &data_models.UpdateProcessExecutionForRpcResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

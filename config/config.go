@@ -40,6 +40,8 @@ type (
 	ApiServiceConfig struct {
 		// HttpServer is the config for starting http.Server
 		HttpServer HttpServerConfig `yaml:"httpServer"`
+		// Rpc is the config for rpc calls
+		Rpc RpcConfig `yaml:"rpc"`
 	}
 
 	AsyncServiceConfig struct {
@@ -167,6 +169,16 @@ type (
 	}
 
 	AsyncServiceMode string
+
+	RpcConfig struct {
+		// MaxRpcAPITimeout is the maximum timeout for RPC APIs
+		// Exceeding the timeout will cause the timeout to be capped at this value.
+		// If not specified then the default value of 60 seconds is used.
+		MaxRpcAPITimeout time.Duration `yaml:"maxRpcAPITimeout"`
+		// DefaultRpcAPITimeout is the default timeout for RPC APIs
+		// If not specified then the default value of 10 seconds is used.
+		DefaultRpcAPITimeout time.Duration `yaml:"defaultRpcAPITimeout"`
+	}
 )
 
 const (
@@ -209,6 +221,13 @@ func (c *Config) ValidateAndSetDefaults() error {
 	sql := c.Database.SQL
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
 		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+	}
+	rpcConfig := &c.ApiService.Rpc
+	if rpcConfig.MaxRpcAPITimeout == 0 {
+		rpcConfig.MaxRpcAPITimeout = 60 * time.Second
+	}
+	if rpcConfig.DefaultRpcAPITimeout == 0 {
+		rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
 	}
 	if c.AsyncService.Mode == "" {
 		return fmt.Errorf("must set async service mode")

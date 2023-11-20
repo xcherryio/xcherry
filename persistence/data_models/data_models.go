@@ -47,6 +47,25 @@ type (
 		NotExists bool
 	}
 
+	GetLatestProcessExecutionRequest struct {
+		Namespace string
+		ProcessId string
+	}
+
+	GetLatestProcessExecutionResponse struct {
+		NotExists bool
+
+		ProcessExecutionId    uuid.UUID
+		Status                ProcessExecutionStatus
+		StartTimestamp        int64
+		GlobalAttributeConfig *InternalGlobalAttributeConfig
+
+		// the process type for SDK to look up the process definition class
+		ProcessType string
+		// the URL for XDB async service to make callback to worker
+		WorkerUrl string
+	}
+
 	RecoverFromStateExecutionFailureRequest struct {
 		Namespace                    string
 		ProcessExecutionId           uuid.UUID
@@ -278,6 +297,29 @@ type (
 
 	LoadGlobalAttributesResponse struct {
 		Response xdbapi.LoadGlobalAttributeResponse
+	}
+
+	UpdateProcessExecutionForRpcRequest struct {
+		Namespace          string
+		ProcessId          string
+		ProcessType        string
+		ProcessExecutionId uuid.UUID
+
+		StateDecision       xdbapi.StateDecision
+		PublishToLocalQueue []xdbapi.LocalQueueMessage
+
+		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
+		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+
+		WorkerUrl   string
+		TaskShardId int32
+	}
+
+	UpdateProcessExecutionForRpcResponse struct {
+		HasNewImmediateTask            bool
+		ProcessNotExists               bool
+		FailAtUpdatingGlobalAttributes bool
+		UpdatingGlobalAttributesError  error
 	}
 )
 

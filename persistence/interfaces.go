@@ -19,6 +19,9 @@ type (
 			ctx context.Context, request data_models.DescribeLatestProcessRequest,
 		) (*data_models.DescribeLatestProcessResponse, error)
 		RecoverFromStateExecutionFailure(ctx context.Context, request data_models.RecoverFromStateExecutionFailureRequest) error
+		GetLatestProcessExecution(
+			ctx context.Context, request data_models.GetLatestProcessExecutionRequest,
+		) (*data_models.GetLatestProcessExecutionResponse, error)
 
 		GetImmediateTasks(ctx context.Context, request data_models.GetImmediateTasksRequest) (*data_models.GetImmediateTasksResponse, error)
 		DeleteImmediateTasks(ctx context.Context, request data_models.DeleteImmediateTasksRequest) error
@@ -60,5 +63,8 @@ type (
 		LoadGlobalAttributes(
 			ctx context.Context, request data_models.LoadGlobalAttributesRequest,
 		) (*data_models.LoadGlobalAttributesResponse, error)
+
+		UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
+			*data_models.UpdateProcessExecutionForRpcResponse, error)
 	}
 )

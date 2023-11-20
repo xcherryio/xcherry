@@ -6,6 +6,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/xdblab/xdb/common/decision"
+	"github.com/xdblab/xdb/common/httperror"
 	"github.com/xdblab/xdb/persistence/data_models"
 	"io/ioutil"
 	"net/http"
@@ -180,7 +182,8 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	if httpResp != nil {
 		defer httpResp.Body.Close()
 	}
-	if w.checkResponseAndError(err, httpResp) {
+
+	if httperror.CheckHttpResponseAndError(err, httpResp, w.logger) {
 		status, details := w.composeHttpError(err, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
@@ -375,11 +378,11 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		}
 
 		if errToCheck == nil {
-			errToCheck = checkDecision(resp.StateDecision)
+			errToCheck = decision.ValidateDecision(resp.StateDecision)
 		}
 	}
 
-	if w.checkResponseAndError(errToCheck, httpResp) {
+	if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
 		status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
 
 		nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
@@ -502,26 +505,6 @@ func (w *immediateTaskConcurrentProcessor) retryTask(
 	})
 	w.logger.Debug("retry is scheduled", tag.Value(nextIntervalSecs), tag.Value(time.Unix(fireTimeUnixSeconds, 0)))
 	return nil
-}
-
-func checkDecision(decision xdbapi.StateDecision) error {
-	if decision.HasThreadCloseDecision() && len(decision.GetNextStates()) > 0 {
-		return fmt.Errorf("cannot have both thread decision and next states")
-	}
-	return nil
-}
-
-func (w *immediateTaskConcurrentProcessor) checkResponseAndError(err error, httpResp *http.Response) bool {
-	status := 0
-	if httpResp != nil {
-		status = httpResp.StatusCode
-	}
-	w.logger.Debug("immediate task executed", tag.Error(err), tag.StatusCode(status))
-
-	if err != nil || (httpResp != nil && httpResp.StatusCode != http.StatusOK) {
-		return true
-	}
-	return false
 }
 
 func (w *immediateTaskConcurrentProcessor) composeHttpError(

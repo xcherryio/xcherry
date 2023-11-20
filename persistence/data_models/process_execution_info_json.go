@@ -5,11 +5,12 @@ package data_models
 
 import (
 	"encoding/json"
+
 	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType           string                                     `json:"processType"`
+	ProcessType           string                         `json:"processType"`
 	WorkerURL             string                         `json:"workerURL"`
 	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
 }

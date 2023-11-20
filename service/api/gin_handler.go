@@ -126,6 +126,34 @@ func (h *ginHandler) PublishToLocalQueue(c *gin.Context) {
 	c.JSON(http.StatusOK, struct{}{})
 }
 
+func (h *ginHandler) Rpc(c *gin.Context) {
+	var req xdbapi.ProcessExecutionRpcRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+
+	if req.GetRpcName() == "" {
+		invalidRequestSchema(c)
+		return
+	}
+
+	var err *ErrorWithStatus
+	h.logger.Debug("received Rpc API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded Rpc API request", tag.Value(h.toJson(err)))
+	}()
+
+	resp, errResp := h.svc.Rpc(c.Request.Context(), req)
+
+	if errResp != nil {
+		c.JSON(errResp.StatusCode, errResp.Error)
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *ginHandler) toJson(req any) string {
 	str, err := json.Marshal(req)
 	if err != nil {
