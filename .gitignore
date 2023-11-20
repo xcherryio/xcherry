@@ -1,6 +1,6 @@
-xdb-server
-xdb-tools-postgres
-xdb-tools-copyright
+xcherry-server
+xcherry-tools-postgres
+xcherry-tools-copyright
 test.log
 coverage.out
 .idea/
