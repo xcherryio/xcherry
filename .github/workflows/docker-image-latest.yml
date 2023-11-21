@@ -27,4 +27,4 @@ jobs:
         with:
           push: true
           platforms: linux/arm64,linux/amd64
-          tags: xcherryio/xdb-server:latest
+          tags: xcherryio/xcherry-server:latest
