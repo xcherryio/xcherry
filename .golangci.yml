@@ -497,6 +497,7 @@ linters:
     - prealloc
     - scopelint
     - musttag
+    - unparam
   disable-all: false
   presets:
     - bugs
