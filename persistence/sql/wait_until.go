@@ -1,16 +1,16 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"context"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"time"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 func (p sqlProcessStoreImpl) ProcessWaitUntilExecution(
@@ -43,7 +43,7 @@ func (p sqlProcessStoreImpl) doProcessWaitUntilExecutionTx(
 	hasNewImmediateTask := false
 	var fireTimestamps []int64
 
-	if request.CommandRequest.GetWaitingType() == xdbapi.EMPTY_COMMAND {
+	if request.CommandRequest.GetWaitingType() == xcapi.EMPTY_COMMAND {
 		hasNewImmediateTask = true
 		err := p.completeWaitUntilExecution(ctx, tx, data_models.CompleteWaitUntilExecutionRequest{
 			TaskShardId:        request.TaskShardId,

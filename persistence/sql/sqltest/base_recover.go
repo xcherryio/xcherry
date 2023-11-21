@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sqltest
@@ -6,19 +6,19 @@ package sqltest
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+	
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -26,7 +26,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
@@ -56,17 +56,17 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId:    stateId2,
-				StateInput: xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
-				StateConfig: &xdbapi.AsyncStateConfig{
+				StateInput: xcapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
+				StateConfig: &xcapi.AsyncStateConfig{
 					SkipWaitUntil: ptr.Any(true),
-					StateFailureRecoveryOptions: &xdbapi.StateFailureRecoveryOptions{
-						Policy:                         xdbapi.PROCEED_TO_CONFIGURED_STATE,
+					StateFailureRecoveryOptions: &xcapi.StateFailureRecoveryOptions{
+						Policy:                         xcapi.PROCEED_TO_CONFIGURED_STATE,
 						StateFailureProceedStateId:     ptr.Any(stateId1),
-						StateFailureProceedStateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+						StateFailureProceedStateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 					},
 				},
 			},
@@ -88,7 +88,7 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 		ass,
 		prep,
 		processId,
-		*xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
+		*xcapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"),
 		data_models.StateExecutionStatusExecuteRunning)
 
 	recoverFromFailure(
@@ -103,22 +103,22 @@ func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store per
 			StateId:         stateId2,
 			StateIdSequence: 1,
 		},
-		xdbapi.EXECUTE_API,
+		xcapi.EXECUTE_API,
 		stateId1,
-		&xdbapi.AsyncStateConfig{
+		&xcapi.AsyncStateConfig{
 			SkipWaitUntil: ptr.Any(true),
 		},
-		*xdbapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
+		*xcapi.NewEncodedObject(input.Encoding, input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
 	)
 
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
-	verifyStateExecution(ass, prep, processId, *xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), data_models.StateExecutionStatusFailed)
+	verifyStateExecution(ass, prep, processId, *xcapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"), data_models.StateExecutionStatusFailed)
 
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId1, 2)
 	verifyStateExecution(
 		ass,
 		prep,
 		processId,
-		*xdbapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
+		*xcapi.NewEncodedObject("test-encoding", input.Data+"-"+stateId1+"-1"+"-"+stateId2+"-1"),
 		data_models.StateExecutionStatusExecuteRunning)
 }

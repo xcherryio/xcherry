@@ -10,9 +10,9 @@ apiService:
 database:
   sql:
     dbExtensionName: postgres
-    user: xdb
-    password: xdbxdb
-    databaseName: xdb
+    user: xcherry
+    password: xcherryio
+    databaseName: xcherry
     connectAddr: 127.0.0.1:5432
 asyncService:
   mode: standalone

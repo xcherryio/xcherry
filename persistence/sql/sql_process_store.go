@@ -1,14 +1,14 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"database/sql"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 type sqlProcessStoreImpl struct {

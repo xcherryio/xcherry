@@ -1,11 +1,11 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package async
 
 import (
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/engine"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/engine"
 )
 
 type taskNotifierImpl struct {
@@ -20,7 +20,7 @@ func newTaskNotifierImpl() engine.TaskNotifier {
 	}
 }
 
-func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xdbapi.NotifyImmediateTasksRequest) {
+func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xcapi.NotifyImmediateTasksRequest) {
 	queue, ok := t.shardIdToImmediateTaskQueue[request.ShardId]
 	if !ok {
 		panic("the shard is not registered")
@@ -28,7 +28,7 @@ func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xdbapi.NotifyImmediat
 	queue.TriggerPollingTasks(request)
 }
 
-func (t *taskNotifierImpl) NotifyNewTimerTasks(request xdbapi.NotifyTimerTasksRequest) {
+func (t *taskNotifierImpl) NotifyNewTimerTasks(request xcapi.NotifyTimerTasksRequest) {
 	queue, ok := t.shardIdToTimerTaskQueue[request.ShardId]
 	if !ok {
 		panic("the shard is not registered")

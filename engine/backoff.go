@@ -1,16 +1,16 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
 
 import (
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"math"
 	"time"
 )
 
 func GetNextBackoff(
-	completedAttempts int32, firstAttemptStartTimestampSeconds int64, policy *xdbapi.RetryPolicy,
+	completedAttempts int32, firstAttemptStartTimestampSeconds int64, policy *xcapi.RetryPolicy,
 ) (nextBackoffSeconds int32, shouldRetry bool) {
 	policy = setDefaultRetryPolicyValue(policy)
 	if *policy.MaximumAttempts > 0 && completedAttempts >= *policy.MaximumAttempts {
@@ -28,9 +28,9 @@ func GetNextBackoff(
 	return nextInterval, true
 }
 
-func setDefaultRetryPolicyValue(policy *xdbapi.RetryPolicy) *xdbapi.RetryPolicy {
+func setDefaultRetryPolicyValue(policy *xcapi.RetryPolicy) *xcapi.RetryPolicy {
 	if policy == nil {
-		policy = &xdbapi.RetryPolicy{}
+		policy = &xcapi.RetryPolicy{}
 	}
 	if policy.InitialIntervalSeconds == nil {
 		policy.InitialIntervalSeconds = defaultWorkerTaskBackoffRetryPolicy.InitialIntervalSeconds

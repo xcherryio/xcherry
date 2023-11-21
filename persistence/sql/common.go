@@ -1,17 +1,17 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"context"
-	"github.com/xdblab/xdb/common/uuid"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/uuid"
 	"math"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
 func createGetTimerTaskResponse(
@@ -71,7 +71,7 @@ type (
 		ProcessId                  string
 		ProcessType                string
 		ProcessExecutionId         uuid.UUID
-		StateDecision              xdbapi.StateDecision
+		StateDecision              xcapi.StateDecision
 		GlobalAttributeTableConfig *data_models.InternalGlobalAttributeConfig
 		WorkerUrl                  string
 
@@ -150,20 +150,20 @@ func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensi
 	threadDecision := request.StateDecision.GetThreadCloseDecision()
 	if !toGracefullyComplete && request.StateDecision.HasThreadCloseDecision() {
 		switch threadDecision.GetCloseType() {
-		case xdbapi.GRACEFUL_COMPLETE_PROCESS:
+		case xcapi.GRACEFUL_COMPLETE_PROCESS:
 			procExecWaitToComplete = true
 			toGracefullyComplete = len(sequenceMaps.PendingExecutionMap) == 0
-		case xdbapi.FORCE_COMPLETE_PROCESS:
+		case xcapi.FORCE_COMPLETE_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
 			procExecStatus = data_models.ProcessExecutionStatusCompleted
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
-		case xdbapi.FORCE_FAIL_PROCESS:
+		case xcapi.FORCE_FAIL_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
 			procExecStatus = data_models.ProcessExecutionStatusFailed
 			sequenceMaps.PendingExecutionMap = map[string]map[int]bool{}
-		case xdbapi.DEAD_END:
+		case xcapi.DEAD_END:
 			// do nothing
 		}
 	}
@@ -173,7 +173,7 @@ func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensi
 	}
 
 	if toAbortRunningAsyncStates {
-		// handle xdb_sys_async_state_executions
+		// handle xcherry_sys_async_state_executions
 		// find all related rows with the processExecutionId, and
 		// modify the wait_until/execute status from running to aborted
 		err := tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, request.ProcessExecutionId)

@@ -1,24 +1,24 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package integTests
 
 import (
-	"github.com/xdblab/xdb-golang-sdk/integTests/basic"
-	"github.com/xdblab/xdb-golang-sdk/integTests/failure_recovery"
-	"github.com/xdblab/xdb-golang-sdk/integTests/global_attribute"
-	"github.com/xdblab/xdb-golang-sdk/integTests/multi_states"
-	"github.com/xdblab/xdb-golang-sdk/integTests/process_timeout"
-	"github.com/xdblab/xdb-golang-sdk/integTests/state_decision"
-	"github.com/xdblab/xdb-golang-sdk/integTests/stateretry"
-	"github.com/xdblab/xdb-golang-sdk/xdb"
+	"github.com/xcherryio/sdk-go/integTests/basic"
+	"github.com/xcherryio/sdk-go/integTests/failure_recovery"
+	"github.com/xcherryio/sdk-go/integTests/global_attribute"
+	"github.com/xcherryio/sdk-go/integTests/multi_states"
+	"github.com/xcherryio/sdk-go/integTests/process_timeout"
+	"github.com/xcherryio/sdk-go/integTests/state_decision"
+	"github.com/xcherryio/sdk-go/integTests/stateretry"
+	"github.com/xcherryio/sdk-go/xc"
 )
 
-var registry = xdb.NewRegistry()
+var registry = xc.NewRegistry()
 
-var client = xdb.NewClient(registry, createTestDefaultClientOptions())
+var client = xc.NewClient(registry, createTestDefaultClientOptions())
 
-var workerService = xdb.NewWorkerService(registry, nil)
+var workerService = xc.NewWorkerService(registry, nil)
 
 func init() {
 	err := registry.AddProcesses(
@@ -42,8 +42,8 @@ func init() {
 	}
 }
 
-func createTestDefaultClientOptions() *xdb.ClientOptions {
-	opts := xdb.GetLocalDefaultClientOptions()
+func createTestDefaultClientOptions() *xc.ClientOptions {
+	opts := xc.GetLocalDefaultClientOptions()
 	opts.EnabledDebugLogging = true
 	return opts
 }

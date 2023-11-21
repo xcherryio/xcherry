@@ -1,11 +1,11 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package async
 
 import (
 	"context"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
 type Server interface {
@@ -16,7 +16,7 @@ type Server interface {
 
 type Service interface {
 	Start() error
-	NotifyPollingImmediateTask(req xdbapi.NotifyImmediateTasksRequest) error
-	NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest) error
+	NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error
+	NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error
 	Stop(ctx context.Context) error
 }

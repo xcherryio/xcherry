@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 package postgres
 
@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jmoiron/sqlx"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 // NOTE we have to use %v because somehow postgres doesn't work with ? here

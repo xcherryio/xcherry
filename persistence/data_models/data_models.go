@@ -1,20 +1,20 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
 import (
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"strconv"
 	"strings"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/uuid"
+	"github.com/xcherryio/xcherry/common/uuid"
 )
 
 type (
 	StartProcessRequest struct {
-		Request                xdbapi.ProcessExecutionStartRequest
+		Request                xcapi.ProcessExecutionStartRequest
 		NewTaskShardId         int32
 		TimeoutTimeUnixSeconds int64
 	}
@@ -30,7 +30,7 @@ type (
 	StopProcessRequest struct {
 		Namespace       string
 		ProcessId       string
-		ProcessStopType xdbapi.ProcessExecutionStopType
+		ProcessStopType xcapi.ProcessExecutionStopType
 	}
 
 	StopProcessResponse struct {
@@ -43,7 +43,7 @@ type (
 	}
 
 	DescribeLatestProcessResponse struct {
-		Response  *xdbapi.ProcessExecutionDescribeResponse
+		Response  *xcapi.ProcessExecutionDescribeResponse
 		NotExists bool
 	}
 
@@ -62,7 +62,7 @@ type (
 
 		// the process type for SDK to look up the process definition class
 		ProcessType string
-		// the URL for XDB async service to make callback to worker
+		// the URL for server async service to make callback to worker
 		WorkerUrl string
 	}
 
@@ -71,13 +71,13 @@ type (
 		ProcessExecutionId           uuid.UUID
 		Prepare                      PrepareStateExecutionResponse
 		SourceStateExecutionId       StateExecutionId
-		SourceFailedStateApi         xdbapi.StateApiType
+		SourceFailedStateApi         xcapi.StateApiType
 		LastFailureStatus            int32
 		LastFailureDetails           string
 		LastFailureCompletedAttempts int32
 		DestinationStateId           string
-		DestinationStateConfig       *xdbapi.AsyncStateConfig
-		DestinationStateInput        xdbapi.EncodedObject
+		DestinationStateConfig       *xcapi.AsyncStateConfig
+		DestinationStateInput        xcapi.EncodedObject
 		ShardId                      int32
 	}
 
@@ -156,7 +156,7 @@ type (
 
 	GetTimerTasksForTimestampsRequest struct {
 		// ShardId is the shardId in all DetailedRequests
-		// just for convenience using xdbapi.NotifyTimerTasksRequest which also has
+		// just for convenience using xcapi.NotifyTimerTasksRequest which also has
 		// the ShardId field, but the caller will ensure the ShardId is the same in all
 		ShardId int32
 		// MinSequenceInclusive is the minimum sequence required for the timer tasks to load
@@ -164,7 +164,7 @@ type (
 		MinSequenceInclusive int64
 		// DetailedRequests is the list of NotifyTimerTasksRequest
 		// which contains the fire timestamps and other info of all timer tasks to pull
-		DetailedRequests []xdbapi.NotifyTimerTasksRequest
+		DetailedRequests []xcapi.NotifyTimerTasksRequest
 	}
 
 	DeleteTimerTasksRequest struct {
@@ -213,12 +213,12 @@ type (
 	PrepareStateExecutionResponse struct {
 		Status StateExecutionStatus
 		// only applicable for state execute API
-		WaitUntilCommandResults xdbapi.CommandResults
+		WaitUntilCommandResults xcapi.CommandResults
 
 		// PreviousVersion is for conditional check in the future transactional update
 		PreviousVersion int32
 
-		Input       xdbapi.EncodedObject
+		Input       xcapi.EncodedObject
 		Info        AsyncStateExecutionInfoJson
 		LastFailure *StateExecutionFailureJson
 	}
@@ -228,8 +228,8 @@ type (
 		StateExecutionId
 
 		Prepare             PrepareStateExecutionResponse
-		CommandRequest      xdbapi.CommandRequest
-		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		CommandRequest      xcapi.CommandRequest
+		PublishToLocalQueue []xcapi.LocalQueueMessage
 		TaskShardId         int32
 		TaskSequence        int64
 	}
@@ -251,11 +251,11 @@ type (
 		StateExecutionId
 
 		Prepare             PrepareStateExecutionResponse
-		StateDecision       xdbapi.StateDecision
-		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		StateDecision       xcapi.StateDecision
+		PublishToLocalQueue []xcapi.LocalQueueMessage
 
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
-		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
 
 		TaskShardId  int32
 		TaskSequence int64
@@ -270,7 +270,7 @@ type (
 	PublishToLocalQueueRequest struct {
 		Namespace string
 		ProcessId string
-		Messages  []xdbapi.LocalQueueMessage
+		Messages  []xcapi.LocalQueueMessage
 	}
 
 	PublishToLocalQueueResponse struct {
@@ -292,11 +292,11 @@ type (
 
 	LoadGlobalAttributesRequest struct {
 		TableConfig InternalGlobalAttributeConfig
-		Request     xdbapi.LoadGlobalAttributesRequest
+		Request     xcapi.LoadGlobalAttributesRequest
 	}
 
 	LoadGlobalAttributesResponse struct {
-		Response xdbapi.LoadGlobalAttributeResponse
+		Response xcapi.LoadGlobalAttributeResponse
 	}
 
 	UpdateProcessExecutionForRpcRequest struct {
@@ -305,11 +305,11 @@ type (
 		ProcessType        string
 		ProcessExecutionId uuid.UUID
 
-		StateDecision       xdbapi.StateDecision
-		PublishToLocalQueue []xdbapi.LocalQueueMessage
+		StateDecision       xcapi.StateDecision
+		PublishToLocalQueue []xcapi.LocalQueueMessage
 
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
-		UpdateGlobalAttributes     []xdbapi.GlobalAttributeTableRowUpdate
+		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
 
 		WorkerUrl   string
 		TaskShardId int32

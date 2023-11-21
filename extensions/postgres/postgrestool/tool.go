@@ -1,4 +1,4 @@
-// Copyright 2023 XDBLab organization
+// Copyright 2023 xCherryIO organization
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,16 +15,16 @@ package postgrestool
 
 import (
 	"github.com/urfave/cli/v2"
-	"github.com/xdblab/xdb/extensions"
-	"github.com/xdblab/xdb/extensions/postgres"
+	"github.com/xcherryio/xcherry/extensions"
+	"github.com/xcherryio/xcherry/extensions/postgres"
 )
 
 const DefaultEndpoint = "127.0.0.1"
 const DefaultPort = 5432
-const DefaultUserName = "xdb"
-const DefaultPassword = "xdbxdb"
-const DefaultDatabaseName = "xdb"
-const DefaultSchemaFilePath = "./extensions/postgres/schema/xdb_sys_schema.sql"
+const DefaultUserName = "xcherry"
+const DefaultPassword = "xcherryio"
+const DefaultDatabaseName = "xcherry"
+const DefaultSchemaFilePath = "./extensions/postgres/schema/xcherry_sys_schema.sql"
 const SampleTablesSchemaFilePath = "./extensions/postgres/schema/sample_tables.sql"
 
 // BuildCLIOptions builds the options for cli
@@ -32,8 +32,8 @@ func BuildCLIOptions() *cli.App {
 
 	app := cli.NewApp()
 
-	app.Name = "xdb postgres tool"
-	app.Usage = "tool for XDB operation on postgres"
+	app.Name = "xcherry postgres tool"
+	app.Usage = "tool for xCherry operation on postgres"
 
 	app.Flags = []cli.Flag{
 		&cli.StringFlag{

@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package async
@@ -6,17 +6,17 @@ package async
 import (
 	"context"
 	"github.com/gin-gonic/gin"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 	"go.uber.org/multierr"
 	"net"
 	"net/http"
 )
 
-const PathNotifyImmediateTasks = "/internal/api/v1/xdb/notify-immediate-tasks"
-const PathNotifyTimerTasks = "/internal/api/v1/xdb/notify-timer-tasks"
+const PathNotifyImmediateTasks = "/internal/api/v1/xcherry/notify-immediate-tasks"
+const PathNotifyTimerTasks = "/internal/api/v1/xcherry/notify-timer-tasks"
 
 type defaultSever struct {
 	rootCtx context.Context

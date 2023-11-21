@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# the script is used to start xdb-server in docker-compose
+# the script is used to start xcherry-server in docker-compose
 
-CONFIG_PATH="${CONFIG_PATH:-/xdb/config/development-postgres.yaml}"
-SRC_ROOT="${SRC_ROOT:-/xdb}"
+CONFIG_PATH="${CONFIG_PATH:-/xcherry/config/development-postgres.yaml}"
+SRC_ROOT="${SRC_ROOT:-/xcherry}"
 
-"${SRC_ROOT}/xdb-tools-postgres" --endpoint "postgres" install-schema
+"${SRC_ROOT}/xcherry-tools-postgres" --endpoint "postgres" install-schema
 
-"${SRC_ROOT}/xdb-tools-postgres" --endpoint "postgres" install-schema -f "${SRC_ROOT}/extensions/postgres/schema/sample_tables.sql"
+"${SRC_ROOT}/xcherry-tools-postgres" --endpoint "postgres" install-schema -f "${SRC_ROOT}/extensions/postgres/schema/sample_tables.sql"
 
-"${SRC_ROOT}/xdb-server" --config "${CONFIG_PATH}" "$@"
+"${SRC_ROOT}/xcherry-server" --config "${CONFIG_PATH}" "$@"

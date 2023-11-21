@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package main
@@ -9,24 +9,24 @@ import (
 	"os"
 
 	"github.com/urfave/cli/v2"
-	"github.com/xdblab/xdb/cmd/server/bootstrap"
+	"github.com/xcherryio/xcherry/cmd/server/bootstrap"
 
-	_ "github.com/xdblab/xdb/extensions/postgres" // import postgres
+	_ "github.com/xcherryio/xcherry/extensions/postgres" // import postgres extension
 )
 
 func main() {
 	app := &cli.App{
-		Name:  "xdb server",
-		Usage: "start the xdb server",
+		Name:  "xCherry server",
+		Usage: "start the xCherry server",
 		Action: func(c *cli.Context) error {
-			bootstrap.StartXdbServerCli(c)
+			bootstrap.StartXCherryServerCli(c)
 			return nil
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  bootstrap.FlagConfig,
 				Value: "./config/development-postgres.yaml",
-				Usage: "the config to start xdb server",
+				Usage: "the config to start xCherry server",
 			},
 			&cli.StringFlag{
 				Name:  bootstrap.FlagService,

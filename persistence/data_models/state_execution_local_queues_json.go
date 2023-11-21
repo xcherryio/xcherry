@@ -1,24 +1,23 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
 import (
 	"encoding/json"
-
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
+	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
 type StateExecutionLocalQueuesJson struct {
 	// { state_execution_id_1: { 1: (queue_name_2, count_2), ... }, ... }
-	StateToLocalQueueCommandsMap map[string]map[int]xdbapi.LocalQueueCommand `json:"stateToLocalQueueCommandsMap"`
+	StateToLocalQueueCommandsMap map[string]map[int]xcapi.LocalQueueCommand `json:"stateToLocalQueueCommandsMap"`
 	// { queue_name_1: [dedupId_1, dedupId_2, ...], queue_name_2: [dedup_id, ...], ... }
 	UnconsumedLocalQueueMessages map[string][]InternalLocalQueueMessage `json:"unconsumedLocalQueueMessages"`
 }
 
 func NewStateExecutionLocalQueues() StateExecutionLocalQueuesJson {
 	return StateExecutionLocalQueuesJson{
-		StateToLocalQueueCommandsMap: map[string]map[int]xdbapi.LocalQueueCommand{},
+		StateToLocalQueueCommandsMap: map[string]map[int]xcapi.LocalQueueCommand{},
 		UnconsumedLocalQueueMessages: map[string][]InternalLocalQueueMessage{},
 	}
 }
@@ -34,17 +33,17 @@ func NewStateExecutionLocalQueuesFromBytes(bytes []byte) (StateExecutionLocalQue
 }
 
 func (s *StateExecutionLocalQueuesJson) AddNewLocalQueueCommands(
-	stateExecutionId StateExecutionId, localQueueCommands []xdbapi.LocalQueueCommand,
+	stateExecutionId StateExecutionId, localQueueCommands []xcapi.LocalQueueCommand,
 ) {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 	_, ok := s.StateToLocalQueueCommandsMap[stateExecutionIdKey]
 	if !ok {
-		s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = map[int]xdbapi.LocalQueueCommand{}
+		s.StateToLocalQueueCommandsMap[stateExecutionIdKey] = map[int]xcapi.LocalQueueCommand{}
 	}
 
 	for idx, command := range localQueueCommands {
 		if command.GetCount() == 0 {
-			command.Count = xdbapi.PtrInt32(1)
+			command.Count = xcapi.PtrInt32(1)
 		}
 
 		s.StateToLocalQueueCommandsMap[stateExecutionIdKey][idx] = command
@@ -113,7 +112,7 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 //
 // 0: (q1, 1), 1: (q2, 2)
 //
-// and xdbapi.CommandWaitingType is ALL_OF_COMPLETION. Then after TryConsumeForStateExecution,
+// and xcapi.CommandWaitingType is ALL_OF_COMPLETION. Then after TryConsumeForStateExecution,
 // the UnconsumedLocalQueueMessages becomes:
 //
 // q1: [id_1_2], q3: [id_3_1]
@@ -123,12 +122,12 @@ func (s *StateExecutionLocalQueuesJson) AddMessageAndTryConsume(message LocalQue
 // { 0: [(id_1_1, false)], 1: [(id_2_1, false), (id_2_2, false)] }
 func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 	stateExecutionId StateExecutionId,
-	commandWaitingType xdbapi.CommandWaitingType,
+	commandWaitingType xcapi.CommandWaitingType,
 ) map[int][]InternalLocalQueueMessage {
 	stateExecutionIdKey := stateExecutionId.GetStateExecutionId()
 
 	// command_index: {...}
-	remainingCommands := map[int]xdbapi.LocalQueueCommand{}
+	remainingCommands := map[int]xcapi.LocalQueueCommand{}
 	consumedMessages := map[int][]InternalLocalQueueMessage{}
 
 	stopConsume := false
@@ -148,7 +147,7 @@ func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 			delete(s.UnconsumedLocalQueueMessages, command.GetQueueName())
 		}
 
-		if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
+		if xcapi.ANY_OF_COMPLETION == commandWaitingType {
 			stopConsume = true
 		}
 	}
@@ -162,7 +161,7 @@ func (s *StateExecutionLocalQueuesJson) TryConsumeForStateExecution(
 		delete(s.StateToLocalQueueCommandsMap, stateExecutionIdKey)
 	}
 
-	if xdbapi.ANY_OF_COMPLETION == commandWaitingType {
+	if xcapi.ANY_OF_COMPLETION == commandWaitingType {
 		s.CleanupFor(stateExecutionId)
 	}
 

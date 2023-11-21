@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package async
@@ -6,12 +6,12 @@ package async
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/engine"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/engine"
+	"github.com/xcherryio/xcherry/persistence"
 	"go.uber.org/multierr"
 )
 
@@ -87,7 +87,7 @@ func (a asyncService) Start() error {
 	return nil
 }
 
-func (a asyncService) NotifyPollingImmediateTask(req xdbapi.NotifyImmediateTasksRequest) error {
+func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
 	if req.ShardId != persistence.DefaultShardId {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}
@@ -95,7 +95,7 @@ func (a asyncService) NotifyPollingImmediateTask(req xdbapi.NotifyImmediateTasks
 	return nil
 }
 
-func (a asyncService) NotifyPollingTimerTask(req xdbapi.NotifyTimerTasksRequest) error {
+func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
 	if req.ShardId != persistence.DefaultShardId {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}

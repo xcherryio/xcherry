@@ -1,15 +1,15 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"context"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
 func (p sqlProcessStoreImpl) StopProcess(
@@ -23,7 +23,7 @@ func (p sqlProcessStoreImpl) StopProcess(
 	namespace := request.Namespace
 	processId := request.ProcessId
 	status := data_models.ProcessExecutionStatusTerminated
-	if request.ProcessStopType == xdbapi.FAIL {
+	if request.ProcessStopType == xcapi.FAIL {
 		status = data_models.ProcessExecutionStatusFailed
 	}
 
@@ -58,7 +58,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	// handle xdb_sys_process_executions
+	// handle xcherry_sys_process_executions
 	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 	}
 
 	if len(pendingExecutionMap) > 0 {
-		// handle xdb_sys_async_state_executions
+		// handle xcherry_sys_async_state_executions
 		// find all related rows with the processExecutionId, and
 		// modify the wait_until/execute status from running to aborted
 		err = tx.BatchUpdateAsyncStateExecutionsToAbortRunning(ctx, curProcExecRow.ProcessExecutionId)

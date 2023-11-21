@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package postgres
@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/extensions"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/extensions"
 )
 
-const insertLatestProcessExecutionQuery = `INSERT INTO xdb_sys_latest_process_executions
+const insertLatestProcessExecutionQuery = `INSERT INTO xcherry_sys_latest_process_executions
 	(namespace, process_id, process_execution_id) VALUES
 	($1, $2, $3)`
 
@@ -23,7 +23,7 @@ func (d dbTx) InsertLatestProcessExecution(ctx context.Context, row extensions.L
 }
 
 const selectLatestProcessExecutionForUpdateQuery = `SELECT namespace, process_id, process_execution_id 
-FROM xdb_sys_latest_process_executions 
+FROM xcherry_sys_latest_process_executions 
 WHERE namespace=$1 AND process_id=$2 FOR UPDATE`
 
 func (d dbTx) SelectLatestProcessExecutionForUpdate(
@@ -47,14 +47,14 @@ func (d dbTx) SelectLatestProcessExecutionForUpdate(
 	return &rows[0], true, err
 }
 
-const updateLatestProcessExecutionQuery = `UPDATE xdb_sys_latest_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
+const updateLatestProcessExecutionQuery = `UPDATE xcherry_sys_latest_process_executions set process_execution_id=$3 WHERE namespace=$1 AND process_id=$2`
 
 func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.LatestProcessExecutionRow) error {
 	_, err := d.tx.ExecContext(ctx, updateLatestProcessExecutionQuery, row.Namespace, row.ProcessId, row.ProcessExecutionId.String())
 	return err
 }
 
-const insertProcessExecutionQuery = `INSERT INTO xdb_sys_process_executions
+const insertProcessExecutionQuery = `INSERT INTO xcherry_sys_process_executions
 	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, 
 	 state_execution_local_queues, info) VALUES
 	(:namespace, :process_execution_id_string, :process_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
@@ -67,7 +67,7 @@ func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-const updateProcessExecutionQuery = `UPDATE xdb_sys_process_executions SET
+const updateProcessExecutionQuery = `UPDATE xcherry_sys_process_executions SET
 status = :status,
 history_event_id_sequence = :history_event_id_sequence,
 state_execution_sequence_maps = :state_execution_sequence_maps,
@@ -82,7 +82,7 @@ func (d dbTx) UpdateProcessExecution(ctx context.Context, row extensions.Process
 	return err
 }
 
-const insertAsyncStateExecutionQuery = `INSERT INTO xdb_sys_async_state_executions 
+const insertAsyncStateExecutionQuery = `INSERT INTO xcherry_sys_async_state_executions 
 	(process_execution_id, state_id, state_id_sequence, version, status, wait_until_commands, wait_until_command_results, info, input) VALUES
 	(:process_execution_id_string, :state_id, :state_id_sequence, :previous_version, :status, :wait_until_commands, :wait_until_command_results, :info, :input)`
 
@@ -94,7 +94,7 @@ func (d dbTx) InsertAsyncStateExecution(ctx context.Context, row extensions.Asyn
 
 const selectAsyncStateExecutionForUpdateQuery = `SELECT 
     status, version as previous_version, wait_until_commands, wait_until_command_results, last_failure
-	FROM xdb_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3 FOR UPDATE
+	FROM xcherry_sys_async_state_executions WHERE process_execution_id=$1 AND state_id=$2 AND state_id_sequence=$3 FOR UPDATE
 `
 
 func (d dbTx) SelectAsyncStateExecutionForUpdate(
@@ -110,7 +110,7 @@ func (d dbTx) SelectAsyncStateExecutionForUpdate(
 	return &row, err
 }
 
-const updateAsyncStateExecutionQuery = `UPDATE xdb_sys_async_state_executions set
+const updateAsyncStateExecutionQuery = `UPDATE xcherry_sys_async_state_executions set
 version = :previous_version + 1,
 status = :status,
 wait_until_commands = :wait_until_commands,
@@ -137,7 +137,7 @@ func (d dbTx) UpdateAsyncStateExecution(
 	return nil
 }
 
-const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xdb_sys_async_state_executions set
+const updateAsyncStateExecutionWithoutCommandsQuery = `UPDATE xcherry_sys_async_state_executions set
 version = :previous_version + 1,
 status = :status,
 last_failure = :last_failure     
@@ -164,7 +164,7 @@ func (d dbTx) UpdateAsyncStateExecutionWithoutCommands(
 	return nil
 }
 
-const batchUpdateAsyncStateExecutionsToAbortRunningQuery = `UPDATE xdb_sys_async_state_executions SET
+const batchUpdateAsyncStateExecutionsToAbortRunningQuery = `UPDATE xcherry_sys_async_state_executions SET
 version = CASE WHEN status<4 THEN version+1 ELSE version END,
 status = CASE WHEN status<4 THEN 7 ELSE status END
 WHERE process_execution_id=$1
@@ -177,7 +177,7 @@ func (d dbTx) BatchUpdateAsyncStateExecutionsToAbortRunning(
 	return err
 }
 
-const insertImmediateTaskQuery = `INSERT INTO xdb_sys_immediate_tasks
+const insertImmediateTaskQuery = `INSERT INTO xcherry_sys_immediate_tasks
 	(shard_id, process_execution_id, state_id, state_id_sequence, task_type, info) VALUES
 	(:shard_id, :process_execution_id_string, :state_id, :state_id_sequence, :task_type, :info)`
 
@@ -189,7 +189,7 @@ func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateT
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
     id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete
-	FROM xdb_sys_process_executions WHERE id=$1 FOR UPDATE`
+	FROM xcherry_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
 	ctx context.Context, processExecutionId uuid.UUID,
@@ -202,7 +202,7 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 const selectProcessExecutionQuery = `SELECT 
     id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete,
 	namespace, process_id, start_time, timeout_seconds, info
-	FROM xdb_sys_process_executions WHERE id=$1 `
+	FROM xcherry_sys_process_executions WHERE id=$1 `
 
 func (d dbTx) SelectProcessExecution(
 	ctx context.Context, processExecutionId uuid.UUID,
@@ -212,7 +212,7 @@ func (d dbTx) SelectProcessExecution(
 	return &row, err
 }
 
-const insertTimerTaskQuery = `INSERT INTO xdb_sys_timer_tasks
+const insertTimerTaskQuery = `INSERT INTO xcherry_sys_timer_tasks
 	(shard_id, fire_time_unix_seconds, process_execution_id, state_id, state_id_sequence, task_type, info) VALUES
 	(:shard_id, :fire_time_unix_seconds, :process_execution_id_string, :state_id, :state_id_sequence, :task_type, :info)`
 
@@ -223,7 +223,7 @@ func (d dbTx) InsertTimerTask(ctx context.Context, row extensions.TimerTaskRowFo
 }
 
 const deleteSingleImmediateTaskQuery = `DELETE 
-	FROM xdb_sys_immediate_tasks WHERE shard_id = $1 AND task_sequence= $2`
+	FROM xcherry_sys_immediate_tasks WHERE shard_id = $1 AND task_sequence= $2`
 
 func (d dbTx) DeleteImmediateTask(ctx context.Context, filter extensions.ImmediateTaskRowDeleteFilter) error {
 	_, err := d.tx.ExecContext(ctx, deleteSingleImmediateTaskQuery, filter.ShardId, filter.TaskSequence)
@@ -231,14 +231,14 @@ func (d dbTx) DeleteImmediateTask(ctx context.Context, filter extensions.Immedia
 }
 
 const deleteSingleTimerTaskQuery = `DELETE 
-	FROM xdb_sys_timer_tasks WHERE shard_id = $1 AND fire_time_unix_seconds = $2 AND task_sequence= $3`
+	FROM xcherry_sys_timer_tasks WHERE shard_id = $1 AND fire_time_unix_seconds = $2 AND task_sequence= $3`
 
 func (d dbTx) DeleteTimerTask(ctx context.Context, filter extensions.TimerTaskRowDeleteFilter) error {
 	_, err := d.tx.ExecContext(ctx, deleteSingleTimerTaskQuery, filter.ShardId, filter.FireTimeUnixSeconds, filter.TaskSequence)
 	return err
 }
 
-const insertLocalQueueMessageQuery = `INSERT INTO xdb_sys_local_queue_messages
+const insertLocalQueueMessageQuery = `INSERT INTO xcherry_sys_local_queue_messages
 	(process_execution_id, queue_name, dedup_id, payload) VALUES 
    	(:process_execution_id_string, :queue_name, :dedup_id_string, :payload)
 	ON CONFLICT (process_execution_id, dedup_id) DO NOTHING
@@ -327,7 +327,7 @@ func (d dbTx) UpsertCustomTableByPK(
 	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
 
 	// TODO get additonal conflict targets from request
-	// support from https://github.com/xdblab/xdb-golang-sdk/issues/30
+	// support from https://github.com/xcherryio/sdk-go/issues/30
 	// ??or maybe put all the columns in the conflict target??
 	_, err := d.tx.ExecContext(ctx,
 		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)

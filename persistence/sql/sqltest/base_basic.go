@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sqltest
@@ -6,14 +6,14 @@ package sqltest
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
@@ -23,7 +23,6 @@ func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
 
 func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -34,7 +33,7 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
@@ -64,17 +63,17 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId: stateId2,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 			{
 				StateId: stateId1, // use the same stateId
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 				StateInput:  &input,
 			},
 		},
@@ -94,9 +93,9 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
@@ -104,14 +103,14 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusAborted)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.COMPLETED)
 }
 
 func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
 	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 ) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -122,13 +121,13 @@ func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// stop the process with temerminated
 	terminateProcess(ctx, t, ass, store, namespace, processId)
 
 	// Describe the process, verify it's terminated
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.TERMINATED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.TERMINATED)
 
 	// start the process with allow if previous exit abnormally
 	startProcessWithAllowIfPreviousExitAbnormally(ctx, t, ass, store, namespace, processId, input)
@@ -136,7 +135,7 @@ func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
 
 func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -147,13 +146,13 @@ func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store 
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// stop the process with temerminated
 	terminateProcess(ctx, t, ass, store, namespace, processId)
 
 	// Describe the process, verify it's terminated
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.TERMINATED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.TERMINATED)
 
 	// start with default process id reuse policy and it should start correctly
 	prcExeID2 := startProcess(ctx, t, ass, store, namespace, processId, input)
@@ -163,7 +162,7 @@ func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store 
 
 func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -174,7 +173,7 @@ func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Asserti
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	prcExeID2 := startProcessWithTerminateIfRunningPolicy(ctx, t, ass, store, namespace, processId, input)
 
@@ -183,7 +182,7 @@ func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Asserti
 
 func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -194,7 +193,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
@@ -224,17 +223,17 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId: stateId2,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 			{
 				StateId: stateId1, // use the same stateId
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 				StateInput:  &input,
 			},
 		},
@@ -254,9 +253,9 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
@@ -264,7 +263,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusAborted)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.COMPLETED)
 
 	// try to start with disallow_reuse policy, and verify it's returning already started
 	startProcessWithDisallowReusePolicy(ctx, t, ass, store, namespace, processId, input)
@@ -274,7 +273,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 ) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -285,7 +284,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	retryStartProcessForFailure(ctx, t, ass, store, namespace, processId, input)
 
 	// Describe the process.
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
@@ -315,17 +314,17 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId: stateId2,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 			{
 				StateId: stateId1, // use the same stateId
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 				StateInput:  &input,
 			},
 		},
@@ -345,9 +344,9 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
@@ -355,7 +354,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusAborted)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.COMPLETED)
 
 	// start with allow if no running,
 	startProcessWithAllowIfNoRunningPolicy(ctx, t, ass, store, namespace, processId, input)
@@ -396,17 +395,17 @@ func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persist
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId: stateId2,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 			{
 				StateId: stateId1, // use the same stateId
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 		},
 	}
@@ -425,9 +424,9 @@ func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persist
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusExecuteRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.GRACEFUL_COMPLETE_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.GRACEFUL_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
@@ -435,12 +434,12 @@ func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persist
 	// Verify both stateId2 and process are still running
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusExecuteRunning)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.RUNNING)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.RUNNING)
 }
 
 func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-force-fail-%v", time.Now().String())
 	input := createTestInput()
 
@@ -473,17 +472,17 @@ func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.Pr
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId: stateId2,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 			{
 				StateId: stateId1, // use the same stateId
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
+				StateConfig: &xcapi.AsyncStateConfig{SkipWaitUntil: ptr.Any(true)},
 			},
 		},
 	}
@@ -502,9 +501,9 @@ func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.Pr
 	// Prepare state execution for Execute API again
 	prep = prepareStateExecution(ctx, t, store, prcExeId, task.StateId, task.StateIdSequence)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusExecuteRunning)
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_FAIL_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.FORCE_FAIL_PROCESS,
 		},
 	}
 	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
@@ -512,5 +511,5 @@ func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.Pr
 	// Verify stateId2 was aborted and process has failed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
 	verifyStateExecution(ass, prep, processId, createEmptyEncodedObject(), data_models.StateExecutionStatusAborted)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.FAILED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.FAILED)
 }

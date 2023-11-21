@@ -1,15 +1,15 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
 
 import (
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/ptr"
 )
 
 // Default: infinite retry with 1 second initial interval, 120 seconds max interval, and 2 backoff factor,
-var defaultWorkerTaskBackoffRetryPolicy = xdbapi.RetryPolicy{
+var defaultWorkerTaskBackoffRetryPolicy = xcapi.RetryPolicy{
 	InitialIntervalSeconds:         ptr.Any(int32(1)),
 	BackoffCoefficient:             ptr.Any(float32(2)),
 	MaximumIntervalSeconds:         ptr.Any(int32(120)),

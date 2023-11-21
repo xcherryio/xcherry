@@ -21,7 +21,7 @@
 package log
 
 import (
-	"github.com/xdblab/xdb/common/log/tag"
+	"github.com/xcherryio/xcherry/common/log/tag"
 )
 
 // Logger is our abstraction for logging

@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
@@ -6,14 +6,14 @@ package engine
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 type timerTaskConcurrentProcessor struct {
@@ -141,7 +141,7 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskWorkerTaskBackoff(
 	}
 
 	if resp.HasNewImmediateTask {
-		notiReq := xdbapi.NotifyImmediateTasksRequest{
+		notiReq := xcapi.NotifyImmediateTasksRequest{
 			ShardId:            task.ShardId,
 			ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 		}
@@ -166,7 +166,7 @@ func (w *timerTaskConcurrentProcessor) processTimerTaskForTimerCommand(
 	}
 
 	if resp.HasNewImmediateTask {
-		notiReq := xdbapi.NotifyImmediateTasksRequest{
+		notiReq := xcapi.NotifyImmediateTasksRequest{
 			ShardId:            task.ShardId,
 			ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
 		}

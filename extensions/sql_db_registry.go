@@ -22,7 +22,7 @@ package extensions
 
 import (
 	"fmt"
-	"github.com/xdblab/xdb/config"
+	"github.com/xcherryio/xcherry/config"
 )
 
 var sqlRegistry = map[string]SQLDBExtension{}

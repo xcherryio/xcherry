@@ -35,7 +35,7 @@ jobs:
         run:  make tests
 
       - name: Check copyright
-        run: ./xdb-tools-copyright -verifyOnly
+        run: ./xcherry-tools-copyright -verifyOnly
       
       - name: Dump docker logs
         if: always()

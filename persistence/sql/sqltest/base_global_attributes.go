@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sqltest
@@ -7,31 +7,31 @@ import (
 	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
-	gloAttCfg := &xdbapi.GlobalAttributeConfig{
-		TableConfigs: []xdbapi.GlobalAttributeTableConfig{
+	gloAttCfg := &xcapi.GlobalAttributeConfig{
+		TableConfigs: []xcapi.GlobalAttributeTableConfig{
 			{
 				TableName: "sample_user_table",
-				PrimaryKey: xdbapi.TableColumnValue{
+				PrimaryKey: xcapi.TableColumnValue{
 					DbColumn:     "user_id",
 					DbQueryValue: processId,
 				},
-				InitialWrite: []xdbapi.TableColumnValue{
+				InitialWrite: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "first_name",
 						DbQueryValue: "Quanzheng",
@@ -41,31 +41,31 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 						DbQueryValue: "123",
 					},
 				},
-				InitialWriteMode: xdbapi.OVERRIDE_ON_CONFLICT.Ptr(),
+				InitialWriteMode: xcapi.OVERRIDE_ON_CONFLICT.Ptr(),
 			},
 			{
 				TableName: "sample_order_table",
-				PrimaryKey: xdbapi.TableColumnValue{
+				PrimaryKey: xcapi.TableColumnValue{
 					DbColumn:     "order_id",
 					DbQueryValue: "123",
 				},
-				InitialWrite: []xdbapi.TableColumnValue{
+				InitialWrite: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 				},
-				InitialWriteMode: xdbapi.IGNORE_CONFLICT.Ptr(),
+				InitialWriteMode: xcapi.IGNORE_CONFLICT.Ptr(),
 			},
 		},
 	}
 
-	loadReq1 := &xdbapi.LoadGlobalAttributesRequest{
-		TableRequests: []xdbapi.TableReadRequest{
+	loadReq1 := &xcapi.LoadGlobalAttributesRequest{
+		TableRequests: []xcapi.TableReadRequest{
 			{
 				TableName:     ptr.Any("sample_user_table"),
-				LockingPolicy: xdbapi.NO_LOCKING.Ptr(),
-				Columns: []xdbapi.TableColumnDef{
+				LockingPolicy: xcapi.NO_LOCKING.Ptr(),
+				Columns: []xcapi.TableColumnDef{
 					{
 						DbColumn: "first_name",
 					},
@@ -76,8 +76,8 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 			{
 				TableName:     ptr.Any("sample_order_table"),
-				LockingPolicy: xdbapi.NO_LOCKING.Ptr(),
-				Columns: []xdbapi.TableColumnDef{
+				LockingPolicy: xcapi.NO_LOCKING.Ptr(),
+				Columns: []xcapi.TableColumnDef{
 					{
 						DbColumn: "item_name",
 					},
@@ -88,7 +88,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 		},
 	}
-	stateCfg := &xdbapi.AsyncStateConfig{
+	stateCfg := &xcapi.AsyncStateConfig{
 		SkipWaitUntil:               ptr.Any(true),
 		LoadGlobalAttributesRequest: loadReq1,
 	}
@@ -112,11 +112,11 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
 	require.NoError(t, err)
-	expectedResp1 := xdbapi.LoadGlobalAttributeResponse{
-		TableResponses: []xdbapi.TableReadResponse{
+	expectedResp1 := xcapi.LoadGlobalAttributeResponse{
+		TableResponses: []xcapi.TableReadResponse{
 			{
 				TableName: ptr.Any("sample_user_table"),
-				Columns: []xdbapi.TableColumnValue{
+				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "first_name",
 						DbQueryValue: "Quanzheng",
@@ -129,10 +129,10 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 			{
 				TableName: ptr.Any("sample_order_table"),
-				Columns: []xdbapi.TableColumnValue{
+				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 					{
 						DbColumn:     "sequence",
@@ -145,12 +145,12 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 
 	assertProbablyEqualForIgnoringOrderByJsonEncoder(t, ass, expectedResp1, gloAttResp.Response)
 
-	loadReq2 := &xdbapi.LoadGlobalAttributesRequest{
-		TableRequests: []xdbapi.TableReadRequest{
+	loadReq2 := &xcapi.LoadGlobalAttributesRequest{
+		TableRequests: []xcapi.TableReadRequest{
 			{
 				TableName:     ptr.Any("sample_user_table"),
-				LockingPolicy: xdbapi.NO_LOCKING.Ptr(),
-				Columns: []xdbapi.TableColumnDef{
+				LockingPolicy: xcapi.NO_LOCKING.Ptr(),
+				Columns: []xcapi.TableColumnDef{
 					{
 						DbColumn: "first_name",
 					},
@@ -158,8 +158,8 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 			{
 				TableName:     ptr.Any("sample_order_table"),
-				LockingPolicy: xdbapi.NO_LOCKING.Ptr(),
-				Columns: []xdbapi.TableColumnDef{
+				LockingPolicy: xcapi.NO_LOCKING.Ptr(),
+				Columns: []xcapi.TableColumnDef{
 					{
 						DbColumn: "item_name",
 					},
@@ -170,13 +170,13 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 		},
 	}
-	decision1 := xdbapi.StateDecision{
-		NextStates: []xdbapi.StateMovement{
+	decision1 := xcapi.StateDecision{
+		NextStates: []xcapi.StateMovement{
 			{
 				StateId:    stateId2,
 				StateInput: &input,
 				// no input, skip waitUntil
-				StateConfig: &xdbapi.AsyncStateConfig{
+				StateConfig: &xcapi.AsyncStateConfig{
 					SkipWaitUntil:               ptr.Any(true),
 					LoadGlobalAttributesRequest: loadReq2,
 				},
@@ -184,10 +184,10 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		},
 	}
 
-	updates := []xdbapi.GlobalAttributeTableRowUpdate{
+	updates := []xcapi.GlobalAttributeTableRowUpdate{
 		{
 			TableName: "sample_user_table",
-			UpdateColumns: []xdbapi.TableColumnValue{
+			UpdateColumns: []xcapi.TableColumnValue{
 				{
 					DbColumn:     "first_name",
 					DbQueryValue: "Long",
@@ -196,7 +196,7 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		},
 		{
 			TableName: "sample_order_table",
-			UpdateColumns: []xdbapi.TableColumnValue{
+			UpdateColumns: []xcapi.TableColumnValue{
 				{
 					DbColumn:     "create_timestamp",
 					DbQueryValue: "456",
@@ -224,11 +224,11 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
 	})
 	require.NoError(t, err)
-	expectedResp2 := xdbapi.LoadGlobalAttributeResponse{
-		TableResponses: []xdbapi.TableReadResponse{
+	expectedResp2 := xcapi.LoadGlobalAttributeResponse{
+		TableResponses: []xcapi.TableReadResponse{
 			{
 				TableName: ptr.Any("sample_user_table"),
-				Columns: []xdbapi.TableColumnValue{
+				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "first_name",
 						DbQueryValue: "Long",
@@ -237,10 +237,10 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 			},
 			{
 				TableName: ptr.Any("sample_order_table"),
-				Columns: []xdbapi.TableColumnValue{
+				Columns: []xcapi.TableColumnValue{
 					{
 						DbColumn:     "item_name",
-						DbQueryValue: "xdb",
+						DbQueryValue: "xcherry",
 					},
 					{
 						DbColumn:     "create_timestamp",
@@ -253,13 +253,13 @@ func SQLGlobalAttributesTest(t *testing.T, ass *assert.Assertions, store persist
 
 	assertProbablyEqualForIgnoringOrderByJsonEncoder(t, ass, expectedResp2, gloAttResp.Response)
 
-	decision2 := xdbapi.StateDecision{
-		ThreadCloseDecision: &xdbapi.ThreadCloseDecision{
-			CloseType: xdbapi.FORCE_COMPLETE_PROCESS,
+	decision2 := xcapi.StateDecision{
+		ThreadCloseDecision: &xcapi.ThreadCloseDecision{
+			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
 	completeExecuteExecution(
 		ctx, t, ass, store, prcExeId, task, prep, decision2, false)
 	checkAndGetImmediateTasks(ctx, t, ass, store, 0)
-	describeProcess(ctx, t, ass, store, namespace, processId, xdbapi.COMPLETED)
+	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.COMPLETED)
 }

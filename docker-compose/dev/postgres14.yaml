@@ -4,15 +4,17 @@ services:
   postgres:
     image: postgres:14
     environment:
-      POSTGRES_USER: xdb
-      POSTGRES_PASSWORD: xdbxdb
+      POSTGRES_USER: xcherry
+      POSTGRES_PASSWORD: xcherryio
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d xdb -U xdb"]
+      test: ["CMD-SHELL", "pg_isready -d xcherry -U xcherry"]
       interval: 3s
       timeout: 5s
       retries: 10
+    networks:
+      - xcherry
 networks:
-  xdb:
+  xcherry:
     driver: bridge

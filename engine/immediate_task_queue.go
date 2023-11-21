@@ -1,20 +1,20 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package engine
 
 import (
 	"context"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"math/rand"
 	"sort"
 	"time"
 
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 )
 
 type immediateTaskQueueImpl struct {
@@ -72,7 +72,7 @@ func (w *immediateTaskQueueImpl) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xdbapi.NotifyImmediateTasksRequest) {
+func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xcapi.NotifyImmediateTasksRequest) {
 	w.pollTimer.Update(time.Now())
 }
 

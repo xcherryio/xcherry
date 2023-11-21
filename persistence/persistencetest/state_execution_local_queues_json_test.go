@@ -1,14 +1,14 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package tests
 
 import (
 	"github.com/stretchr/testify/assert"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
-	"github.com/xdblab/xdb/common/uuid"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/ptr"
+	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"testing"
 )
 
@@ -109,7 +109,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_consumed(t *te
 	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))},
 	})
 
@@ -123,7 +123,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_consumed(t *te
 
 	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.ALL_OF_COMPLETION)
+	}, xcapi.ALL_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -168,7 +168,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed
 
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(2))}, {QueueName: "q3", Count: ptr.Any(int32(2))},
 	})
 
@@ -182,7 +182,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed
 
 	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.ALL_OF_COMPLETION)
+	}, xcapi.ALL_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -210,9 +210,9 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_All_notAllConsumed
 	}}, stateExecutionLocalQueues.UnconsumedLocalQueueMessages["q3"])
 	assert.Len(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap, 1)
 	assert.Len(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"], 1)
-	assert.Equal(t, xdbapi.LocalQueueCommand{
+	assert.Equal(t, xcapi.LocalQueueCommand{
 		QueueName: "q3",
-		Count:     xdbapi.PtrInt32(2),
+		Count:     xcapi.PtrInt32(2),
 	}, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"][2])
 }
 
@@ -233,7 +233,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 	prepareDataForTryConsumeForStateExecution(stateExecutionLocalQueues, uuids)
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(1))}, {QueueName: "q2", Count: ptr.Any(int32(3))},
 	})
 
@@ -247,7 +247,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_consumed(t *te
 
 	consumedMessages := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.ANY_OF_COMPLETION)
+	}, xcapi.ANY_OF_COMPLETION)
 
 	// The new UnconsumedMessageQueueCountMap should be:
 	//
@@ -293,7 +293,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(2))}, {QueueName: "q2", Count: ptr.Any(int32(1))},
 	})
 
@@ -307,7 +307,7 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 
 	consumedMessagesMap := stateExecutionLocalQueues.TryConsumeForStateExecution(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, xdbapi.ANY_OF_COMPLETION)
+	}, xcapi.ANY_OF_COMPLETION)
 
 	assert.Empty(t, consumedMessagesMap)
 	assert.Len(t, stateExecutionLocalQueues.UnconsumedLocalQueueMessages, 1)
@@ -316,13 +316,13 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 	}}, stateExecutionLocalQueues.UnconsumedLocalQueueMessages["q1"])
 	assert.Len(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap, 1)
 	assert.Len(t, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"], 2)
-	assert.Equal(t, xdbapi.LocalQueueCommand{
+	assert.Equal(t, xcapi.LocalQueueCommand{
 		QueueName: "q1",
-		Count:     xdbapi.PtrInt32(2),
+		Count:     xcapi.PtrInt32(2),
 	}, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"][0])
-	assert.Equal(t, xdbapi.LocalQueueCommand{
+	assert.Equal(t, xcapi.LocalQueueCommand{
 		QueueName: "q2",
-		Count:     xdbapi.PtrInt32(1),
+		Count:     xcapi.PtrInt32(1),
 	}, stateExecutionLocalQueues.StateToLocalQueueCommandsMap["state_1-1"][1])
 }
 
@@ -334,19 +334,19 @@ func TestStateExecutionLocalQueuesTryConsumeForStateExecution_Any_notConsumed(t 
 func prepareDataForAddMessageAndTryConsume(stateExecutionLocalQueues data_models.StateExecutionLocalQueuesJson) {
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1", Count: ptr.Any(int32(2))},
 	})
 
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_1", StateIdSequence: 2,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q2", Count: ptr.Any(int32(3))},
 	})
 
 	stateExecutionLocalQueues.AddNewLocalQueueCommands(data_models.StateExecutionId{
 		StateId: "state_3", StateIdSequence: 1,
-	}, []xdbapi.LocalQueueCommand{
+	}, []xcapi.LocalQueueCommand{
 		{QueueName: "q1"}, {QueueName: "q2", Count: ptr.Any(int32(2))},
 	})
 }

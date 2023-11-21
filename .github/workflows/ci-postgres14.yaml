@@ -35,7 +35,7 @@ jobs:
         run: sleep 5 && make install-schema-postgres
         
       - name: Start Postgres server # then run in the background
-        run: ./xdb-server&
+        run: ./xcherry-server&
 
       - name: Run Postgres IntegrationTest
         run:  make integTestsWithLocalServer

@@ -1,9 +1,9 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package data_models
 
-import "github.com/xdblab/xdb-apis/goapi/xdbapi"
+import "github.com/xcherryio/apis/goapi/xcapi"
 
 type ProcessExecutionStatus int32
 
@@ -19,15 +19,15 @@ const (
 func (e ProcessExecutionStatus) String() string {
 	switch e {
 	case ProcessExecutionStatusRunning:
-		return string(xdbapi.RUNNING)
+		return string(xcapi.RUNNING)
 	case ProcessExecutionStatusCompleted:
-		return string(xdbapi.COMPLETED)
+		return string(xcapi.COMPLETED)
 	case ProcessExecutionStatusFailed:
-		return string(xdbapi.FAILED)
+		return string(xcapi.FAILED)
 	case ProcessExecutionStatusTimeout:
-		return string(xdbapi.TIMEOUT)
+		return string(xcapi.TIMEOUT)
 	case ProcessExecutionStatusTerminated:
-		return string(xdbapi.TERMINATED)
+		return string(xcapi.TERMINATED)
 	case ProcessExecutionStatusUndefined:
 		return "UNDEFINED"
 	default:

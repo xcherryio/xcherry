@@ -1,18 +1,18 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package api
 
 import (
 	"encoding/json"
-	"github.com/xdblab/xdb/common/log"
-	"github.com/xdblab/xdb/common/log/tag"
-	"github.com/xdblab/xdb/config"
-	"github.com/xdblab/xdb/persistence"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/log"
+	"github.com/xcherryio/xcherry/common/log/tag"
+	"github.com/xcherryio/xcherry/config"
+	"github.com/xcherryio/xcherry/persistence"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
 )
 
 type ginHandler struct {
@@ -31,13 +31,13 @@ func newGinHandler(cfg config.Config, store persistence.ProcessStore, logger log
 }
 
 func (h *ginHandler) StartProcess(c *gin.Context) {
-	var req xdbapi.ProcessExecutionStartRequest
+	var req xcapi.ProcessExecutionStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
 	}
 	var errResp *ErrorWithStatus
-	var resp *xdbapi.ProcessExecutionStartResponse
+	var resp *xcapi.ProcessExecutionStartResponse
 	h.logger.Debug("received StartProcess API request", tag.Value(h.toJson(req)))
 	defer func() {
 		h.logger.Debug("responded StartProcess API request", tag.Value(h.toJson(resp)), tag.Value(h.toJson(errResp)))
@@ -53,7 +53,7 @@ func (h *ginHandler) StartProcess(c *gin.Context) {
 }
 
 func (h *ginHandler) StopProcess(c *gin.Context) {
-	var req xdbapi.ProcessExecutionStopRequest
+	var req xcapi.ProcessExecutionStopRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -75,12 +75,12 @@ func (h *ginHandler) StopProcess(c *gin.Context) {
 }
 
 func (h *ginHandler) DescribeProcess(c *gin.Context) {
-	var req xdbapi.ProcessExecutionDescribeRequest
+	var req xcapi.ProcessExecutionDescribeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
 	}
-	var resp *xdbapi.ProcessExecutionDescribeResponse
+	var resp *xcapi.ProcessExecutionDescribeResponse
 	var errResp *ErrorWithStatus
 
 	h.logger.Debug("received DescribeProcess API request", tag.Value(h.toJson(req)))
@@ -100,7 +100,7 @@ func (h *ginHandler) DescribeProcess(c *gin.Context) {
 }
 
 func (h *ginHandler) PublishToLocalQueue(c *gin.Context) {
-	var req xdbapi.PublishToLocalQueueRequest
+	var req xcapi.PublishToLocalQueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -127,7 +127,7 @@ func (h *ginHandler) PublishToLocalQueue(c *gin.Context) {
 }
 
 func (h *ginHandler) Rpc(c *gin.Context) {
-	var req xdbapi.ProcessExecutionRpcRequest
+	var req xcapi.ProcessExecutionRpcRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		invalidRequestSchema(c)
 		return
@@ -164,7 +164,7 @@ func (h *ginHandler) toJson(req any) string {
 }
 
 func invalidRequestSchema(c *gin.Context) {
-	c.JSON(http.StatusBadRequest, xdbapi.ApiErrorResponse{
-		Detail: xdbapi.PtrString("invalid request schema"),
+	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
+		Detail: xcapi.PtrString("invalid request schema"),
 	})
 }

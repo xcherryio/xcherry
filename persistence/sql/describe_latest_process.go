@@ -1,14 +1,14 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
 
 import (
 	"context"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/common/ptr"
+	"github.com/xcherryio/xcherry/common/ptr"
 )
 
 func (p sqlProcessStoreImpl) DescribeLatestProcess(
@@ -30,12 +30,12 @@ func (p sqlProcessStoreImpl) DescribeLatestProcess(
 	}
 
 	return &data_models.DescribeLatestProcessResponse{
-		Response: &xdbapi.ProcessExecutionDescribeResponse{
+		Response: &xcapi.ProcessExecutionDescribeResponse{
 			ProcessExecutionId: ptr.Any(row.ProcessExecutionId.String()),
 			ProcessType:        &info.ProcessType,
 			WorkerUrl:          &info.WorkerURL,
 			StartTimestamp:     ptr.Any(int32(row.StartTime.Unix())),
-			Status:             xdbapi.ProcessStatus(row.Status.String()).Ptr(),
+			Status:             xcapi.ProcessStatus(row.Status.String()).Ptr(),
 		},
 	}, nil
 }

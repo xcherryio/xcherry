@@ -1,4 +1,4 @@
-// Copyright (c) 2023 XDBLab Organization
+// Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: BUSL-1.1
 
 package sql
@@ -6,17 +6,17 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/xdblab/xdb-apis/goapi/xdbapi"
-	"github.com/xdblab/xdb/persistence/data_models"
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
 func (p sqlProcessStoreImpl) LoadGlobalAttributes(
 	ctx context.Context, request data_models.LoadGlobalAttributesRequest,
 ) (*data_models.LoadGlobalAttributesResponse, error) {
-	var tableResponses []xdbapi.TableReadResponse
+	var tableResponses []xcapi.TableReadResponse
 	config := request.TableConfig
 	for _, tableReq := range request.Request.TableRequests {
-		if tableReq.GetLockingPolicy() != xdbapi.NO_LOCKING {
+		if tableReq.GetLockingPolicy() != xcapi.NO_LOCKING {
 			// TODO support other locking policies
 			return nil, fmt.Errorf("locking policy %v is not supported", tableReq.GetLockingPolicy())
 		}
@@ -33,21 +33,21 @@ func (p sqlProcessStoreImpl) LoadGlobalAttributes(
 			return nil, err
 		}
 
-		var colsOut []xdbapi.TableColumnValue
+		var colsOut []xcapi.TableColumnValue
 		for fname, fvalue := range row.ColumnToValue {
-			colsOut = append(colsOut, xdbapi.TableColumnValue{
+			colsOut = append(colsOut, xcapi.TableColumnValue{
 				DbColumn:     fname,
 				DbQueryValue: fvalue,
 			})
 		}
-		tableResponses = append(tableResponses, xdbapi.TableReadResponse{
+		tableResponses = append(tableResponses, xcapi.TableReadResponse{
 			TableName: tableReq.TableName,
 			Columns:   colsOut,
 		})
 	}
 
 	return &data_models.LoadGlobalAttributesResponse{
-		Response: xdbapi.LoadGlobalAttributeResponse{
+		Response: xcapi.LoadGlobalAttributeResponse{
 			TableResponses: tableResponses,
 		},
 	}, nil
