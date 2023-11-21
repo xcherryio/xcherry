@@ -5,6 +5,7 @@ package tests
 
 import (
 	"github.com/stretchr/testify/assert"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/ptr"
 	"github.com/xcherryio/xcherry/common/uuid"
 	"github.com/xcherryio/xcherry/persistence/data_models"
