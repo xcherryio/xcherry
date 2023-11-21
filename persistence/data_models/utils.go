@@ -22,6 +22,11 @@ func getInternalGlobalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *I
 }
 
 func FromEncodedObjectIntoBytes(obj *xcapi.EncodedObject) ([]byte, error) {
+	if obj == nil {
+		// set this as default for
+		// https://github.com/xcherryio/xcherry/issues/100
+		return json.Marshal(xcapi.NewEncodedObject("", ""))
+	}
 	return json.Marshal(obj)
 }
 

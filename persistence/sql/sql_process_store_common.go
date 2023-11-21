@@ -29,13 +29,20 @@ func insertAsyncStateExecution(
 		return err
 	}
 
+	// set this as default value for https://github.com/xcherryio/xcherry/issues/100
+	emptyCmdReq := xcapi.NewCommandRequest(xcapi.EMPTY_COMMAND)
+	commandRequestBytes, err := data_models.FromCommandRequestToBytes(*emptyCmdReq)
+	if err != nil {
+		return err
+	}
+
 	stateRow := extensions.AsyncStateExecutionRow{
 		ProcessExecutionId: processExecutionId,
 		StateId:            stateId,
 		StateIdSequence:    int32(stateIdSeq),
 		// the waitUntil/execute status will be set later
 
-		WaitUntilCommands:       nil,
+		WaitUntilCommands:       commandRequestBytes,
 		WaitUntilCommandResults: commandResultsBytes,
 
 		LastFailure:     nil,
