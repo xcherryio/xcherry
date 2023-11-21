@@ -21,6 +21,7 @@ const testProcessType = "test-type"
 const testWorkerUrl = "test-url"
 const stateId1 = "state1"
 const stateId2 = "state2"
+const namespace = "test-ns"
 
 func createTestInput() xcapi.EncodedObject {
 	return xcapi.EncodedObject{

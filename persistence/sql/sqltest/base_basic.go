@@ -23,7 +23,6 @@ func CleanupEnv(ass *assert.Assertions, store persistence.ProcessStore) {
 
 func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -111,7 +110,7 @@ func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
 	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 ) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -136,7 +135,7 @@ func SQLProcessIdReusePolicyAllowIfPreviousExitAbnormally(
 
 func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -163,7 +162,7 @@ func SQLProcessIdReusePolicyDefault(t *testing.T, ass *assert.Assertions, store 
 
 func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -183,7 +182,7 @@ func SQLProcessIdReusePolicyTerminateIfRunning(t *testing.T, ass *assert.Asserti
 
 func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -274,7 +273,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 	t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 ) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
@@ -440,7 +439,7 @@ func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persist
 
 func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+
 	processId := fmt.Sprintf("test-force-fail-%v", time.Now().String())
 	input := createTestInput()
 

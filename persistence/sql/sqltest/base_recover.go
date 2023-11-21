@@ -18,7 +18,7 @@ import (
 
 func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	namespace := "test-ns"
+	
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 
