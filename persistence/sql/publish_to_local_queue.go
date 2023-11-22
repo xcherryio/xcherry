@@ -49,6 +49,21 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		return nil, err
 	}
 
+	// check if the process is running
+
+	procExecRow, err := tx.SelectProcessExecutionForUpdate(ctx, curProcExecRow.ProcessExecutionId)
+	if err != nil {
+		return nil, err
+	}
+
+	if procExecRow.Status != data_models.ProcessExecutionStatusRunning {
+		return &data_models.PublishToLocalQueueResponse{
+			ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
+			HasNewImmediateTask: false,
+			ProcessNotExists:    false,
+		}, nil
+	}
+
 	hasNewImmediateTask, err := p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, request.Messages)
 	if err != nil {
 		return nil, err
