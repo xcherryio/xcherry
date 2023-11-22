@@ -64,6 +64,12 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
+	if procExecRow.Status != data_models.ProcessExecutionStatusRunning {
+		return &data_models.StopProcessResponse{
+			NotExists: false,
+		}, nil
+	}
+
 	sequenceMaps, err := data_models.NewStateExecutionSequenceMapsFromBytes(procExecRow.StateExecutionSequenceMaps)
 	if err != nil {
 		return nil, err
