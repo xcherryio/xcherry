@@ -140,6 +140,10 @@ func (s serviceImpl) PublishToLocalQueue(
 		return NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 
+	if resp.ProcessNotRunning {
+		return NewErrorWithStatus(http.StatusMethodNotAllowed, "Process is not running")
+	}
+
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,

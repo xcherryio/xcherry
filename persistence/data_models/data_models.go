@@ -277,6 +277,7 @@ type (
 		ProcessExecutionId  uuid.UUID
 		HasNewImmediateTask bool
 		ProcessNotExists    bool
+		ProcessNotRunning   bool
 	}
 
 	ProcessLocalQueueMessagesRequest struct {

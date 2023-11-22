@@ -58,9 +58,7 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 
 	if procExecRow.Status != data_models.ProcessExecutionStatusRunning {
 		return &data_models.PublishToLocalQueueResponse{
-			ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
-			HasNewImmediateTask: false,
-			ProcessNotExists:    false,
+			ProcessNotRunning: true,
 		}, nil
 	}
 
@@ -72,6 +70,5 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 	return &data_models.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
 		HasNewImmediateTask: hasNewImmediateTask,
-		ProcessNotExists:    false,
 	}, nil
 }
