@@ -250,4 +250,13 @@ type (
 	CustomTableRowSelect struct {
 		ColumnToValue map[string]string
 	}
+
+	LocalAttributeRow struct {
+		ProcessExecutionId       uuid.UUID
+		ProcessExecutionIdString string
+		Key                      string
+		Value                    types.JSONText
+		Namespace                string
+		ProcessId                string
+	}
 )

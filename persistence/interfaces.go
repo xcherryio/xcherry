@@ -64,6 +64,9 @@ type (
 			ctx context.Context, request data_models.LoadGlobalAttributesRequest,
 		) (*data_models.LoadGlobalAttributesResponse, error)
 
+		LoadLocalAttributes(ctx context.Context, request data_models.LoadLocalAttributesRequest,
+		) (*data_models.LoadLocalAttributesResponse, error)
+
 		UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
 			*data_models.UpdateProcessExecutionForRpcResponse, error)
 	}

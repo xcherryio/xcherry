@@ -8,19 +8,6 @@ import (
 	"github.com/xcherryio/apis/goapi/xcapi"
 )
 
-func getInternalGlobalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
-	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
-		primaryKeys := map[string]xcapi.TableColumnValue{}
-		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
-			primaryKeys[cfg.TableName] = cfg.PrimaryKey
-		}
-		return &InternalGlobalAttributeConfig{
-			TablePrimaryKeys: primaryKeys,
-		}
-	}
-	return nil
-}
-
 func FromEncodedObjectIntoBytes(obj *xcapi.EncodedObject) ([]byte, error) {
 	if obj == nil {
 		// set this as default for

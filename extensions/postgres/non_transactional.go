@@ -167,3 +167,21 @@ func (d dbSession) SelectCustomTableByPK(
 		ColumnToValue: columnToValue,
 	}, nil
 }
+
+const selectLocalAttributesQuery = `SELECT
+process_execution_id, key, value, namespace, process_id
+FROM xdb_sys_local_attributes WHERE process_execution_id = ? AND key IN (?)
+`
+
+func (d dbSession) SelectLocalAttributes(
+	ctx context.Context, processExecutionId uuid.UUID, keys []string,
+) ([]extensions.LocalAttributeRow, error) {
+	var rows []extensions.LocalAttributeRow
+	query, args, err := sqlx.In(selectLocalAttributesQuery, processExecutionId.String(), keys)
+	if err != nil {
+		return nil, err
+	}
+	query = d.db.Rebind(query)
+	err = d.db.SelectContext(ctx, &rows, query, args...)
+	return rows, err
+}

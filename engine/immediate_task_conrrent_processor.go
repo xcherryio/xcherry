@@ -355,30 +355,34 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	var httpResp *http.Response
 	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
 	if errToCheck == nil {
-		req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateExecutePost(ctx)
-		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
-			xcapi.AsyncStateExecuteRequest{
-				Context: createApiContext(
-					prep,
-					task,
-					prep.Info.RecoverFromStateExecutionId,
-					prep.Info.RecoverFromApi),
-				ProcessType: prep.Info.ProcessType,
-				StateId:     task.StateId,
-				StateInput: &xcapi.EncodedObject{
-					Encoding: prep.Input.Encoding,
-					Data:     prep.Input.Data,
-				},
-				CommandResults:         &prep.WaitUntilCommandResults,
-				LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
-			},
-		).Execute()
-		if httpResp != nil {
-			defer httpResp.Body.Close()
-		}
-
+		loadedLocalAttributesResp, errToCheck := w.loadLocalAttributesIfNeeded(ctx, prep, task)
 		if errToCheck == nil {
-			errToCheck = decision.ValidateDecision(resp.StateDecision)
+			req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateExecutePost(ctx)
+			resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
+				xcapi.AsyncStateExecuteRequest{
+					Context: createApiContext(
+						prep,
+						task,
+						prep.Info.RecoverFromStateExecutionId,
+						prep.Info.RecoverFromApi),
+					ProcessType: prep.Info.ProcessType,
+					StateId:     task.StateId,
+					StateInput: &xcapi.EncodedObject{
+						Encoding: prep.Input.Encoding,
+						Data:     prep.Input.Data,
+					},
+					CommandResults:         &prep.WaitUntilCommandResults,
+					LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
+					LoadedLocalAttributes:  &loadedLocalAttributesResp.Response,
+				},
+			).Execute()
+			if httpResp != nil {
+				defer httpResp.Body.Close()
+			}
+
+			if errToCheck == nil {
+				errToCheck = decision.ValidateDecision(resp.StateDecision)
+			}
 		}
 	}
 
@@ -411,6 +415,8 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		TaskSequence:               task.GetTaskSequence(),
 		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
 		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
+		LocalAttributeConfig:       prep.Info.LocalAttributeConfig,
+		UpdateLocalAttributes:      resp.WriteToLocalAttributes,
 	})
 	if err != nil {
 		return err
@@ -589,6 +595,37 @@ func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
 	})
 
 	w.logger.Debug("loaded global attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(resp),
+		tag.Error(err))
+
+	return resp, err
+}
+
+func (w *immediateTaskConcurrentProcessor) loadLocalAttributesIfNeeded(
+	ctx context.Context, prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
+) (*data_models.LoadLocalAttributesResponse, error) {
+	if prep.Info.StateConfig == nil ||
+		prep.Info.StateConfig.LoadLocalAttributesRequest == nil {
+		return &data_models.LoadLocalAttributesResponse{}, nil
+	}
+
+	if prep.Info.LocalAttributeConfig == nil {
+		return &data_models.LoadLocalAttributesResponse{},
+			fmt.Errorf("local attribute config is not available")
+	}
+
+	w.logger.Debug("loading local attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(prep.Info.StateConfig),
+		tag.JsonValue(prep.Info.LocalAttributeConfig))
+
+	resp, err := w.store.LoadLocalAttributes(ctx, data_models.LoadLocalAttributesRequest{
+		AllLocalAttributeKeys: *prep.Info.LocalAttributeConfig,
+		Request:               *prep.Info.StateConfig.LoadLocalAttributesRequest,
+	})
+
+	w.logger.Debug("loaded local attributes for state execute",
 		tag.StateExecutionId(task.GetStateExecutionId()),
 		tag.JsonValue(resp),
 		tag.Error(err))

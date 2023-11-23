@@ -335,3 +335,25 @@ func (d dbTx) UpsertCustomTableByPK(
 		ON CONFLICT (`+pkName+`) DO `+updateClause)
 	return err
 }
+
+const insertLocalAttributeQuery = `INSERT INTO xdb_sys_local_attributes
+	(process_execution_id, key, value, namespace, process_id)
+	VALUES (:process_execution_id_string, :key, :value, :namespace, :process_id)
+`
+
+func (d dbTx) InsertLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	_, err := d.tx.NamedExecContext(ctx, insertLocalAttributeQuery, row)
+	return err
+}
+
+const updateLocalAttributeQuery = `UPDATE xdb_sys_local_attributes SET
+value = :value
+WHERE process_execution_id=:process_execution_id AND key=:key
+`
+
+func (d dbTx) UpdateLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
+	_, err := d.tx.NamedExecContext(ctx, updateLocalAttributeQuery, row)
+	return err
+}
