@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+
 	"github.com/xcherryio/xcherry/persistence/data_models"
 
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -59,6 +60,23 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		}, nil
 	}
 
+	err = p.updateLocalAttributesIfNeeded(
+		ctx,
+		tx,
+		request.LocalAttributeConfig,
+		request.ProcessExecutionId,
+		request.Prepare.Info.Namespace,
+		request.Prepare.Info.ProcessId,
+		request.UpdateLocalAttributes)
+	if err != nil {
+		p.logger.Error("checkpoint", tag.Error(err))
+		//lint:ignore nilerr reason
+		return &data_models.CompleteExecuteExecutionResponse{
+			FailAtUpdatingLocalAttributes: true,
+			UpdatingLocalAttributesError:  err,
+		}, nil
+	}
+
 	// Step 2: update state info
 
 	currStateRow := extensions.AsyncStateExecutionRowForUpdateWithoutCommands{
@@ -104,6 +122,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		ProcessExecutionId:         request.ProcessExecutionId,
 		StateDecision:              request.StateDecision,
 		GlobalAttributeTableConfig: request.GlobalAttributeTableConfig,
+		LocalAttributeConfig:       request.LocalAttributeConfig,
 		WorkerUrl:                  request.Prepare.Info.WorkerURL,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,

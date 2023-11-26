@@ -3,13 +3,13 @@
 
 package data_models
 
-import "github.com/xdblab/xdb-apis/goapi/xdbapi"
+import "github.com/xcherryio/apis/goapi/xcapi"
 
 type InternalLocalAttributeConfig struct {
 	AttributeKeys map[string]bool `json:"attributeKeys"`
 }
 
-func getInternalLocalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalLocalAttributeConfig {
+func getInternalLocalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *InternalLocalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.LocalAttributeConfig != nil {
 		attributeKeys := map[string]bool{}
 		keyValues := req.ProcessStartConfig.LocalAttributeConfig.InitialWrite

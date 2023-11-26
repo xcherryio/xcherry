@@ -5,7 +5,9 @@ package sql
 
 import (
 	"context"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/common/uuid"
 	"github.com/xcherryio/xcherry/extensions"
 	"github.com/xcherryio/xcherry/persistence/data_models"
@@ -36,8 +38,9 @@ func (p sqlProcessStoreImpl) handleInitialLocalAttributesWrite(
 			ProcessId:          req.ProcessId,
 		}
 
-		err = tx.UpdateLocalAttribute(ctx, row)
+		err = tx.InsertLocalAttribute(ctx, row)
 		if err != nil {
+			p.logger.Error("error on inserting local attribute", tag.Error(err))
 			return err
 		}
 	}

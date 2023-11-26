@@ -349,7 +349,7 @@ func (d dbTx) InsertLocalAttribute(ctx context.Context, row extensions.LocalAttr
 
 const updateLocalAttributeQuery = `UPDATE xdb_sys_local_attributes SET
 value = :value
-WHERE process_execution_id=:process_execution_id AND key=:key
+WHERE process_execution_id=:process_execution_id_string AND key=:key
 `
 
 func (d dbTx) UpdateLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {

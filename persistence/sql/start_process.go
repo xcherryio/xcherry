@@ -6,9 +6,10 @@ package sql
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
-	"time"
 
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/common/uuid"
@@ -82,6 +83,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 	err = p.handleInitialLocalAttributesWrite(ctx, tx, req, *resp)
 	if err != nil {
 		//lint:ignore nilerr reason
+		p.logger.Error(err.Error())
 		return &data_models.StartProcessResponse{
 			FailedAtWriteInitLocalAttributes: true,
 			LocalAttributeWriteError:         err,

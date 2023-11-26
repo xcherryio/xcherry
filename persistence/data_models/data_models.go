@@ -5,10 +5,11 @@ package data_models
 
 import (
 	"fmt"
-	"github.com/xcherryio/apis/goapi/xcapi"
-	"github.com/xcherryio/xcherry/common/uuid"
 	"strconv"
 	"strings"
+
+	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/uuid"
 )
 
 type (
@@ -269,6 +270,8 @@ type (
 		HasNewImmediateTask            bool
 		FailAtUpdatingGlobalAttributes bool
 		UpdatingGlobalAttributesError  error
+		FailAtUpdatingLocalAttributes  bool
+		UpdatingLocalAttributesError   error
 	}
 
 	PublishToLocalQueueRequest struct {

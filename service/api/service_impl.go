@@ -5,13 +5,14 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"time"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/decision"
 	"github.com/xcherryio/xcherry/common/httperror"
 	"github.com/xcherryio/xcherry/common/urlautofix"
 	"github.com/xcherryio/xcherry/persistence/data_models"
-	"net/http"
-	"time"
 
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -64,6 +65,11 @@ func (s serviceImpl) StartProcess(
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
 			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())
+	}
+	if resp.FailedAtWriteInitLocalAttributes {
+		return nil, NewErrorWithStatus(
+			http.StatusFailedDependency,
+			"Failed to write local attributes, please check the error message for details: "+resp.LocalAttributeWriteError.Error())
 	}
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{

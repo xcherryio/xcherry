@@ -10,9 +10,9 @@ type InternalGlobalAttributeConfig struct {
 	TablePrimaryKeys map[string]xcapi.TableColumnValue `json:"tablePrimaryKeys"`
 }
 
-func getInternalGlobalAttributeConfig(req xdbapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
+func getInternalGlobalAttributeConfig(req xcapi.ProcessExecutionStartRequest) *InternalGlobalAttributeConfig {
 	if req.ProcessStartConfig != nil && req.ProcessStartConfig.GlobalAttributeConfig != nil {
-		primaryKeys := map[string]xdbapi.TableColumnValue{}
+		primaryKeys := map[string]xcapi.TableColumnValue{}
 		for _, cfg := range req.ProcessStartConfig.GlobalAttributeConfig.TableConfigs {
 			primaryKeys[cfg.TableName] = cfg.PrimaryKey
 		}
