@@ -6,9 +6,10 @@ package sql
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
-	"time"
 
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/common/uuid"
@@ -58,20 +59,33 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 		requestIdReusePolicy = *req.ProcessStartConfig.IdReusePolicy
 	}
 
+	var resp *data_models.StartProcessResponse
+	var errStartProcess error
 	switch requestIdReusePolicy {
 	case xcapi.DISALLOW_REUSE:
-		return p.applyDisallowReusePolicy(ctx, tx, request)
+		resp, errStartProcess = p.applyDisallowReusePolicy(ctx, tx, request)
 	case xcapi.ALLOW_IF_NO_RUNNING:
-		return p.applyAllowIfNoRunningPolicy(ctx, tx, request)
+		resp, errStartProcess = p.applyAllowIfNoRunningPolicy(ctx, tx, request)
 	case xcapi.ALLOW_IF_PREVIOUS_EXIT_ABNORMALLY:
-		return p.applyAllowIfPreviousExitAbnormallyPolicy(ctx, tx, request)
+		resp, errStartProcess = p.applyAllowIfPreviousExitAbnormallyPolicy(ctx, tx, request)
 	case xcapi.TERMINATE_IF_RUNNING:
-		return p.applyTerminateIfRunningPolicy(ctx, tx, request)
+		resp, errStartProcess = p.applyTerminateIfRunningPolicy(ctx, tx, request)
 	default:
 		return nil, fmt.Errorf(
 			"unknown id reuse policy %v",
 			req.ProcessStartConfig.IdReusePolicy)
 	}
+
+	if errStartProcess != nil {
+		return nil, errStartProcess
+	}
+
+	err = p.handleInitialLocalAttributesWrite(ctx, tx, req, *resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (p sqlProcessStoreImpl) applyDisallowReusePolicy(

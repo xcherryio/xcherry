@@ -5,13 +5,14 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"time"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/decision"
 	"github.com/xcherryio/xcherry/common/httperror"
 	"github.com/xcherryio/xcherry/common/urlautofix"
 	"github.com/xcherryio/xcherry/persistence/data_models"
-	"net/http"
-	"time"
 
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -65,6 +66,7 @@ func (s serviceImpl) StartProcess(
 			http.StatusFailedDependency,
 			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())
 	}
+
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
 			ShardId:            persistence.DefaultShardId,

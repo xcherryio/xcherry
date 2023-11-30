@@ -4,8 +4,9 @@
 package extensions
 
 import (
-	"github.com/xcherryio/xcherry/persistence/data_models"
 	"time"
+
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
 	"github.com/jmoiron/sqlx/types"
 	"github.com/xcherryio/xcherry/common/uuid"
@@ -249,5 +250,12 @@ type (
 
 	CustomTableRowSelect struct {
 		ColumnToValue map[string]string
+	}
+
+	LocalAttributeRow struct {
+		ProcessExecutionId       uuid.UUID
+		ProcessExecutionIdString string
+		Key                      string
+		Value                    types.JSONText
 	}
 )

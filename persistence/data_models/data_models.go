@@ -5,10 +5,10 @@ package data_models
 
 import (
 	"fmt"
-	"github.com/xcherryio/apis/goapi/xcapi"
 	"strconv"
 	"strings"
 
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/uuid"
 )
 
@@ -257,6 +257,9 @@ type (
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
 		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
 
+		LocalAttributeConfig  *InternalLocalAttributeConfig
+		UpdateLocalAttributes []xcapi.KeyValue
+
 		TaskShardId  int32
 		TaskSequence int64
 	}
@@ -265,6 +268,8 @@ type (
 		HasNewImmediateTask            bool
 		FailAtUpdatingGlobalAttributes bool
 		UpdatingGlobalAttributesError  error
+		FailAtUpdatingLocalAttributes  bool
+		UpdatingLocalAttributesError   error
 	}
 
 	PublishToLocalQueueRequest struct {
@@ -321,6 +326,16 @@ type (
 		ProcessNotExists               bool
 		FailAtUpdatingGlobalAttributes bool
 		UpdatingGlobalAttributesError  error
+	}
+
+	LoadLocalAttributesRequest struct {
+		ProcessExecutionId    uuid.UUID
+		AllLocalAttributeKeys InternalLocalAttributeConfig
+		Request               xcapi.LoadLocalAttributesRequest
+	}
+
+	LoadLocalAttributesResponse struct {
+		Response xcapi.LoadLocalAttributesResponse
 	}
 )
 

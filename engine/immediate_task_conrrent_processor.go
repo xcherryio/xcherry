@@ -6,13 +6,14 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"time"
+
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/decision"
 	"github.com/xcherryio/xcherry/common/httperror"
 	"github.com/xcherryio/xcherry/persistence/data_models"
-	"io/ioutil"
-	"net/http"
-	"time"
 
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -354,32 +355,67 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	var resp *xcapi.AsyncStateExecuteResponse
 	var httpResp *http.Response
 	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
-	if errToCheck == nil {
-		req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateExecutePost(ctx)
-		resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
-			xcapi.AsyncStateExecuteRequest{
-				Context: createApiContext(
-					prep,
-					task,
-					prep.Info.RecoverFromStateExecutionId,
-					prep.Info.RecoverFromApi),
-				ProcessType: prep.Info.ProcessType,
-				StateId:     task.StateId,
-				StateInput: &xcapi.EncodedObject{
-					Encoding: prep.Input.Encoding,
-					Data:     prep.Input.Data,
-				},
-				CommandResults:         &prep.WaitUntilCommandResults,
-				LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
-			},
-		).Execute()
-		if httpResp != nil {
-			defer httpResp.Body.Close()
-		}
+	if errToCheck != nil {
+		if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
+			status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
 
-		if errToCheck == nil {
-			errToCheck = decision.ValidateDecision(resp.StateDecision)
+			nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
+			if shouldRetry {
+				return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
+			}
+			return w.applyStateFailureRecoveryPolicy(ctx,
+				task,
+				prep,
+				status,
+				details,
+				task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+				xcapi.EXECUTE_API)
 		}
+	}
+	loadedLocalAttributesResp, errToCheck := w.loadLocalAttributesIfNeeded(ctx, prep, task)
+	if errToCheck != nil {
+		if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
+			status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
+
+			nextIntervalSecs, shouldRetry := w.checkRetry(task, prep.Info)
+			if shouldRetry {
+				return w.retryTask(ctx, task, prep, nextIntervalSecs, status, details)
+			}
+			return w.applyStateFailureRecoveryPolicy(ctx,
+				task,
+				prep,
+				status,
+				details,
+				task.ImmediateTaskInfo.WorkerTaskBackoffInfo.CompletedAttempts,
+				xcapi.EXECUTE_API)
+		}
+	}
+
+	req := apiClient.DefaultAPI.ApiV1XcherryWorkerAsyncStateExecutePost(ctx)
+	resp, httpResp, errToCheck = req.AsyncStateExecuteRequest(
+		xcapi.AsyncStateExecuteRequest{
+			Context: createApiContext(
+				prep,
+				task,
+				prep.Info.RecoverFromStateExecutionId,
+				prep.Info.RecoverFromApi),
+			ProcessType: prep.Info.ProcessType,
+			StateId:     task.StateId,
+			StateInput: &xcapi.EncodedObject{
+				Encoding: prep.Input.Encoding,
+				Data:     prep.Input.Data,
+			},
+			CommandResults:         &prep.WaitUntilCommandResults,
+			LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
+			LoadedLocalAttributes:  &loadedLocalAttributesResp.Response,
+		},
+	).Execute()
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
+
+	if errToCheck == nil {
+		errToCheck = decision.ValidateDecision(resp.StateDecision)
 	}
 
 	if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
@@ -411,6 +447,8 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		TaskSequence:               task.GetTaskSequence(),
 		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
 		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
+		LocalAttributeConfig:       prep.Info.LocalAttributeConfig,
+		UpdateLocalAttributes:      resp.WriteToLocalAttributes,
 	})
 	if err != nil {
 		return err
@@ -589,6 +627,38 @@ func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
 	})
 
 	w.logger.Debug("loaded global attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(resp),
+		tag.Error(err))
+
+	return resp, err
+}
+
+func (w *immediateTaskConcurrentProcessor) loadLocalAttributesIfNeeded(
+	ctx context.Context, prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
+) (*data_models.LoadLocalAttributesResponse, error) {
+	if prep.Info.StateConfig == nil ||
+		prep.Info.StateConfig.LoadLocalAttributesRequest == nil {
+		return &data_models.LoadLocalAttributesResponse{}, nil
+	}
+
+	if prep.Info.LocalAttributeConfig == nil {
+		return &data_models.LoadLocalAttributesResponse{},
+			fmt.Errorf("local attribute config is not available")
+	}
+
+	w.logger.Debug("loading local attributes for state execute",
+		tag.StateExecutionId(task.GetStateExecutionId()),
+		tag.JsonValue(prep.Info.StateConfig),
+		tag.JsonValue(prep.Info.LocalAttributeConfig))
+
+	resp, err := w.store.LoadLocalAttributes(ctx, data_models.LoadLocalAttributesRequest{
+		ProcessExecutionId:    task.ProcessExecutionId,
+		AllLocalAttributeKeys: *prep.Info.LocalAttributeConfig,
+		Request:               *prep.Info.StateConfig.LoadLocalAttributesRequest,
+	})
+
+	w.logger.Debug("loaded local attributes for state execute",
 		tag.StateExecutionId(task.GetStateExecutionId()),
 		tag.JsonValue(resp),
 		tag.Error(err))

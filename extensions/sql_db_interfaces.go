@@ -76,6 +76,9 @@ type transactionalCRUD interface {
 	UpsertCustomTableByPK(
 		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
 	) error
+
+	InsertLocalAttribute(ctx context.Context, insert LocalAttributeRow) error
+	UpsertLocalAttribute(ctx context.Context, row LocalAttributeRow) error
 }
 
 type nonTransactionalCRUD interface {
@@ -102,6 +105,10 @@ type nonTransactionalCRUD interface {
 	SelectCustomTableByPK(
 		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
 	) (*CustomTableRowSelect, error)
+
+	SelectLocalAttributes(
+		ctx context.Context, processExecutionId uuid.UUID, keys []string,
+	) ([]LocalAttributeRow, error)
 }
 
 type ErrorChecker interface {
