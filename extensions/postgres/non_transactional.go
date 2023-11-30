@@ -169,7 +169,7 @@ func (d dbSession) SelectCustomTableByPK(
 }
 
 const selectLocalAttributesQuery = `SELECT
-process_execution_id, key, value, namespace, process_id
+process_execution_id, key, value
 FROM xdb_sys_local_attributes WHERE process_execution_id = ? AND key IN (?)
 `
 

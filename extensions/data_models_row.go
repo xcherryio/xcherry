@@ -257,7 +257,5 @@ type (
 		ProcessExecutionIdString string
 		Key                      string
 		Value                    types.JSONText
-		Namespace                string
-		ProcessId                string
 	}
 )

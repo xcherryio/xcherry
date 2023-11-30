@@ -78,7 +78,7 @@ type transactionalCRUD interface {
 	) error
 
 	InsertLocalAttribute(ctx context.Context, insert LocalAttributeRow) error
-	UpdateLocalAttribute(ctx context.Context, row LocalAttributeRow) error
+	UpsertLocalAttribute(ctx context.Context, row LocalAttributeRow) error
 }
 
 type nonTransactionalCRUD interface {

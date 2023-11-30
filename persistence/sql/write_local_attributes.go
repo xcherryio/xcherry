@@ -34,8 +34,6 @@ func (p sqlProcessStoreImpl) handleInitialLocalAttributesWrite(
 			ProcessExecutionId: resp.ProcessExecutionId,
 			Key:                attributes[i].Key,
 			Value:              valueBytes,
-			Namespace:          req.Namespace,
-			ProcessId:          req.ProcessId,
 		}
 
 		err = tx.InsertLocalAttribute(ctx, row)
@@ -63,10 +61,8 @@ func (p sqlProcessStoreImpl) updateLocalAttributesIfNeeded(
 				ProcessExecutionId: processExecutionId,
 				Key:                kv.Key,
 				Value:              valueBytes,
-				Namespace:          namespace,
-				ProcessId:          processId,
 			}
-			err = tx.UpdateLocalAttribute(ctx, row)
+			err = tx.UpsertLocalAttribute(ctx, row)
 			if err != nil {
 				return err
 			}

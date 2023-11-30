@@ -337,8 +337,8 @@ func (d dbTx) UpsertCustomTableByPK(
 }
 
 const insertLocalAttributeQuery = `INSERT INTO xdb_sys_local_attributes
-	(process_execution_id, key, value, namespace, process_id)
-	VALUES (:process_execution_id_string, :key, :value, :namespace, :process_id)
+	(process_execution_id, key, value)
+	VALUES (:process_execution_id_string, :key, :value)
 `
 
 func (d dbTx) InsertLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {
@@ -347,13 +347,14 @@ func (d dbTx) InsertLocalAttribute(ctx context.Context, row extensions.LocalAttr
 	return err
 }
 
-const updateLocalAttributeQuery = `UPDATE xdb_sys_local_attributes SET
-value = :value
-WHERE process_execution_id=:process_execution_id_string AND key=:key
+const upsertLocalAttributeQuery = `INSERT INTO xdb_sys_local_attributes 
+(process_execution_id, key, value)
+VALUES (:process_execution_id_string, :key, :value)
+ON CONFLICT (process_execution_id, key) DO UPDATE SET value = :value
 `
 
-func (d dbTx) UpdateLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {
+func (d dbTx) UpsertLocalAttribute(ctx context.Context, row extensions.LocalAttributeRow) error {
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
-	_, err := d.tx.NamedExecContext(ctx, updateLocalAttributeQuery, row)
+	_, err := d.tx.NamedExecContext(ctx, upsertLocalAttributeQuery, row)
 	return err
 }

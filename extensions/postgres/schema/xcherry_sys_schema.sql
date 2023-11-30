@@ -78,7 +78,5 @@ CREATE TABLE xdb_sys_local_attributes(
     process_execution_id uuid NOT NULL,
     key VARCHAR(31) NOT NULL,
     value jsonb,
-    namespace VARCHAR(31),
-    process_id VARCHAR(255),
     PRIMARY KEY (process_execution_id, key)
 );

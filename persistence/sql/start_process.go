@@ -82,12 +82,7 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 
 	err = p.handleInitialLocalAttributesWrite(ctx, tx, req, *resp)
 	if err != nil {
-		//lint:ignore nilerr reason
-		p.logger.Error(err.Error())
-		return &data_models.StartProcessResponse{
-			FailedAtWriteInitLocalAttributes: true,
-			LocalAttributeWriteError:         err,
-		}, nil
+		return nil, err
 	}
 
 	return resp, nil

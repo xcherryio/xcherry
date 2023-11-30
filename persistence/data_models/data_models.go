@@ -25,8 +25,6 @@ type (
 		HasNewImmediateTask               bool
 		FailedAtWriteInitGlobalAttributes bool
 		GlobalAttributeWriteError         error
-		FailedAtWriteInitLocalAttributes  bool
-		LocalAttributeWriteError          error
 	}
 
 	StopProcessRequest struct {
