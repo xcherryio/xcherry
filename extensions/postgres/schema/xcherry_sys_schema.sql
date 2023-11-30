@@ -74,7 +74,7 @@ CREATE TABLE xcherry_sys_local_queue_messages(
     PRIMARY KEY (process_execution_id, dedup_id)
 );
 
-CREATE TABLE xdb_sys_local_attributes(
+CREATE TABLE xcherry_sys_local_attributes(
     process_execution_id uuid NOT NULL,
     key VARCHAR(31) NOT NULL,
     value jsonb,

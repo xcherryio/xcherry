@@ -336,7 +336,7 @@ func (d dbTx) UpsertCustomTableByPK(
 	return err
 }
 
-const insertLocalAttributeQuery = `INSERT INTO xdb_sys_local_attributes
+const insertLocalAttributeQuery = `INSERT INTO xcherry_sys_local_attributes
 	(process_execution_id, key, value)
 	VALUES (:process_execution_id_string, :key, :value)
 `
@@ -347,7 +347,7 @@ func (d dbTx) InsertLocalAttribute(ctx context.Context, row extensions.LocalAttr
 	return err
 }
 
-const upsertLocalAttributeQuery = `INSERT INTO xdb_sys_local_attributes 
+const upsertLocalAttributeQuery = `INSERT INTO xcherry_sys_local_attributes 
 (process_execution_id, key, value)
 VALUES (:process_execution_id_string, :key, :value)
 ON CONFLICT (process_execution_id, key) DO UPDATE SET value = :value
