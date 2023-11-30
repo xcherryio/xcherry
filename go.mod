@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
 	github.com/xcherryio/apis v0.0.2
-	github.com/xcherryio/sdk-go v0.0.0-20231123063400-1b6cac11a27e
+	github.com/xcherryio/sdk-go v0.0.0-20231130180855-e27b9f455e8a
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0
 	gopkg.in/yaml.v3 v3.0.1
