@@ -12,7 +12,6 @@ type ProcessExecutionInfoJson struct {
 	ProcessType           string                         `json:"processType"`
 	WorkerURL             string                         `json:"workerURL"`
 	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
-	LocalAttributeConfig  *InternalLocalAttributeConfig  `json:"localAttributeConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
@@ -20,7 +19,6 @@ func FromStartRequestToProcessInfoBytes(req xcapi.ProcessExecutionStartRequest) 
 		ProcessType:           req.GetProcessType(),
 		WorkerURL:             req.GetWorkerUrl(),
 		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
-		LocalAttributeConfig:  getInternalLocalAttributeConfig(req),
 	}
 	return json.Marshal(info)
 }

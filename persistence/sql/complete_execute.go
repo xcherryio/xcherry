@@ -63,10 +63,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	err = p.updateLocalAttributesIfNeeded(
 		ctx,
 		tx,
-		request.LocalAttributeConfig,
 		request.ProcessExecutionId,
-		request.Prepare.Info.Namespace,
-		request.Prepare.Info.ProcessId,
 		request.UpdateLocalAttributes)
 	if err != nil {
 		return nil, err
@@ -117,7 +114,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		ProcessExecutionId:         request.ProcessExecutionId,
 		StateDecision:              request.StateDecision,
 		GlobalAttributeTableConfig: request.GlobalAttributeTableConfig,
-		LocalAttributeConfig:       request.LocalAttributeConfig,
 		WorkerUrl:                  request.Prepare.Info.WorkerURL,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,

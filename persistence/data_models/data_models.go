@@ -257,7 +257,6 @@ type (
 		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
 		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
 
-		LocalAttributeConfig  *InternalLocalAttributeConfig
 		UpdateLocalAttributes []xcapi.KeyValue
 
 		TaskShardId  int32
@@ -327,9 +326,8 @@ type (
 	}
 
 	LoadLocalAttributesRequest struct {
-		ProcessExecutionId    uuid.UUID
-		AllLocalAttributeKeys InternalLocalAttributeConfig
-		Request               xcapi.LoadLocalAttributesRequest
+		ProcessExecutionId uuid.UUID
+		Request            xcapi.LoadLocalAttributesRequest
 	}
 
 	LoadLocalAttributesResponse struct {
