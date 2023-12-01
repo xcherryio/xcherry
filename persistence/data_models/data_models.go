@@ -268,8 +268,6 @@ type (
 		HasNewImmediateTask            bool
 		FailAtUpdatingGlobalAttributes bool
 		UpdatingGlobalAttributesError  error
-		FailAtUpdatingLocalAttributes  bool
-		UpdatingLocalAttributesError   error
 	}
 
 	PublishToLocalQueueRequest struct {
