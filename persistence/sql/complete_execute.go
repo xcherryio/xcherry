@@ -69,12 +69,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		request.Prepare.Info.ProcessId,
 		request.UpdateLocalAttributes)
 	if err != nil {
-		p.logger.Error("checkpoint", tag.Error(err))
-		//lint:ignore nilerr reason
-		return &data_models.CompleteExecuteExecutionResponse{
-			FailAtUpdatingLocalAttributes: true,
-			UpdatingLocalAttributesError:  err,
-		}, nil
+		return nil, err
 	}
 
 	// Step 2: update state info
