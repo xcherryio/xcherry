@@ -17,7 +17,6 @@ type AsyncStateExecutionInfoJson struct {
 	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
 	RecoverFromApi              *xcapi.StateApiType            `json:"recoverFromApi,omitempty"`
 	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
-	LocalAttributeConfig        *InternalLocalAttributeConfig  `json:"localAttributeConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
@@ -28,7 +27,6 @@ func FromStartRequestToStateInfoBytes(req xcapi.ProcessExecutionStartRequest) ([
 		WorkerURL:             req.GetWorkerUrl(),
 		StateConfig:           req.StartStateConfig,
 		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
-		LocalAttributeConfig:  getInternalLocalAttributeConfig(req),
 	}
 
 	return infoJson.ToBytes()

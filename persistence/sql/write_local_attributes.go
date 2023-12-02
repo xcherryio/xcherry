@@ -47,8 +47,8 @@ func (p sqlProcessStoreImpl) handleInitialLocalAttributesWrite(
 }
 
 func (p sqlProcessStoreImpl) updateLocalAttributesIfNeeded(
-	ctx context.Context, tx extensions.SQLTransaction, config *data_models.InternalLocalAttributeConfig,
-	processExecutionId uuid.UUID, namespace string, processId string,
+	ctx context.Context, tx extensions.SQLTransaction,
+	processExecutionId uuid.UUID,
 	localAttributeToUpdate []xcapi.KeyValue,
 ) error {
 	if len(localAttributeToUpdate) > 0 {

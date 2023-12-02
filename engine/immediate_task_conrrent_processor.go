@@ -447,7 +447,6 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		TaskSequence:               task.GetTaskSequence(),
 		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
 		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
-		LocalAttributeConfig:       prep.Info.LocalAttributeConfig,
 		UpdateLocalAttributes:      resp.WriteToLocalAttributes,
 	})
 	if err != nil {
@@ -642,20 +641,13 @@ func (w *immediateTaskConcurrentProcessor) loadLocalAttributesIfNeeded(
 		return &data_models.LoadLocalAttributesResponse{}, nil
 	}
 
-	if prep.Info.LocalAttributeConfig == nil {
-		return &data_models.LoadLocalAttributesResponse{},
-			fmt.Errorf("local attribute config is not available")
-	}
-
 	w.logger.Debug("loading local attributes for state execute",
 		tag.StateExecutionId(task.GetStateExecutionId()),
-		tag.JsonValue(prep.Info.StateConfig),
-		tag.JsonValue(prep.Info.LocalAttributeConfig))
+		tag.JsonValue(prep.Info.StateConfig))
 
 	resp, err := w.store.LoadLocalAttributes(ctx, data_models.LoadLocalAttributesRequest{
-		ProcessExecutionId:    task.ProcessExecutionId,
-		AllLocalAttributeKeys: *prep.Info.LocalAttributeConfig,
-		Request:               *prep.Info.StateConfig.LoadLocalAttributesRequest,
+		ProcessExecutionId: task.ProcessExecutionId,
+		Request:            *prep.Info.StateConfig.LoadLocalAttributesRequest,
 	})
 
 	w.logger.Debug("loaded local attributes for state execute",

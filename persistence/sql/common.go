@@ -74,7 +74,6 @@ type (
 		ProcessExecutionId         uuid.UUID
 		StateDecision              xcapi.StateDecision
 		GlobalAttributeTableConfig *data_models.InternalGlobalAttributeConfig
-		LocalAttributeConfig       *data_models.InternalLocalAttributeConfig
 		WorkerUrl                  string
 
 		// for ProcessExecutionRowForUpdate
@@ -122,7 +121,6 @@ func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensi
 				WorkerURL:             request.WorkerUrl,
 				StateConfig:           next.StateConfig,
 				GlobalAttributeConfig: request.GlobalAttributeTableConfig,
-				LocalAttributeConfig:  request.LocalAttributeConfig,
 			}
 
 			stateInfoBytes, err := stateInfo.ToBytes()
