@@ -22,9 +22,8 @@ package uuid
 
 import (
 	"database/sql/driver"
-	"encoding/hex"
-
-	"github.com/google/uuid"
+	"fmt"
+	"github.com/gofrs/uuid"
 )
 
 // UUID represents a 16-byte universally unique identifier
@@ -34,22 +33,24 @@ import (
 type UUID []byte
 
 func MustNewUUID() UUID {
-	exeUUID, err := uuid.NewUUID()
+	newUuid, err := uuid.NewV7()
 	if err != nil {
 		panic(err)
 	}
-	return exeUUID[:]
+
+	return newUuid[:]
 }
 
 // MustParseUUID returns a UUID parsed from the given string representation
 // returns nil if the input is empty string
 // panics if the given input is malformed
 func MustParseUUID(s string) UUID {
-	if s == "" {
+	parsed := uuid.FromStringOrNil(s)
+	if parsed == uuid.Nil {
 		return nil
 	}
-	u := uuid.MustParse(s)
-	return u[:]
+
+	return parsed[:]
 }
 
 // MustParsePtrUUID returns a UUID parsed from the given string representation
@@ -64,9 +65,9 @@ func MustParsePtrUUID(s *string) UUID {
 
 // ParseUUID decodes s into a UUID or returns an error.
 func ParseUUID(s string) (UUID, error) {
-	parsed, err := uuid.Parse(s)
-	if err != nil {
-		return nil, err
+	parsed := uuid.FromStringOrNil(s)
+	if parsed == uuid.Nil {
+		return nil, fmt.Errorf("invalid UUID string: %s", s)
 	}
 
 	return parsed[:], nil
@@ -80,12 +81,16 @@ func UUIDPtr(u UUID) *UUID {
 // String returns the 36 byte hexstring representation of this uuid
 // return empty string if this uuid is nil
 func (u UUID) String() string {
-	if len(u) != 16 {
+	if u == nil {
 		return ""
 	}
-	var buf [36]byte
-	u.encodeHex(buf[:])
-	return string(buf[:])
+
+	parsed := uuid.FromBytesOrNil(u)
+	if parsed == uuid.Nil {
+		return ""
+	}
+
+	return parsed.String()
 }
 
 // Scan implements sql.Scanner interface to allow this type to be
@@ -106,16 +111,4 @@ func (u *UUID) Scan(src interface{}) error {
 // transparently. This method returns a byte slice representation of uuid
 func (u UUID) Value() (driver.Value, error) {
 	return []byte(u), nil
-}
-
-func (u UUID) encodeHex(dst []byte) {
-	hex.Encode(dst, u[:4])
-	dst[8] = '-'
-	hex.Encode(dst[9:13], u[4:6])
-	dst[13] = '-'
-	hex.Encode(dst[14:18], u[6:8])
-	dst[18] = '-'
-	hex.Encode(dst[19:23], u[8:10])
-	dst[23] = '-'
-	hex.Encode(dst[24:], u[10:])
 }
