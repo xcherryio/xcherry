@@ -23,8 +23,8 @@ type (
 		ProcessExecutionId         uuid.UUID
 		AlreadyStarted             bool
 		HasNewImmediateTask        bool
-		FailedAtWriteToAppDatabase bool
-		AppDatabaseWriteError      error
+		FailedAtWritingAppDatabase bool
+		AppDatabaseWritingError    error
 	}
 
 	StopProcessRequest struct {
@@ -264,9 +264,9 @@ type (
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		HasNewImmediateTask      bool
-		FailAtWritingAppDatabase bool
-		WritingAppDatabaseError  error
+		HasNewImmediateTask        bool
+		FailedAtWritingAppDatabase bool
+		AppDatabaseWritingError    error
 	}
 
 	PublishToLocalQueueRequest struct {
@@ -294,8 +294,8 @@ type (
 	}
 
 	AppDatabaseReadRequest struct {
-		TableConfig InternalAppDatabaseConfig
-		Request     xcapi.AppDatabaseReadRequest
+		AppDatabaseConfig InternalAppDatabaseConfig
+		Request           xcapi.AppDatabaseReadRequest
 	}
 
 	AppDatabaseReadResponse struct {
@@ -311,8 +311,8 @@ type (
 		StateDecision       xcapi.StateDecision
 		PublishToLocalQueue []xcapi.LocalQueueMessage
 
-		GlobalAttributeTableConfig *InternalAppDatabaseConfig
-		AppDatabaseWrite           *xcapi.AppDatabaseWrite
+		AppDatabaseConfig *InternalAppDatabaseConfig
+		AppDatabaseWrite  *xcapi.AppDatabaseWrite
 
 		WorkerUrl   string
 		TaskShardId int32

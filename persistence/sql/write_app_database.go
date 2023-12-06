@@ -25,21 +25,21 @@ func (p sqlProcessStoreImpl) writeToAppDatabase(
 				writeMode = *row.ConflictMode
 			}
 
-			primaryKeyColumns := map[string]string{}
-			otherColumns := map[string]string{}
+			primaryKeyColumnToValue := map[string]string{}
+			otherColumnToValue := map[string]string{}
 
 			for _, primaryKeyColumn := range row.GetPrimaryKey() {
-				primaryKeyColumns[primaryKeyColumn.GetColumn()] = primaryKeyColumn.GetQueryValue()
+				primaryKeyColumnToValue[primaryKeyColumn.GetColumn()] = primaryKeyColumn.GetQueryValue()
 			}
 
 			for _, otherColumn := range row.GetInitialWrite() {
-				otherColumns[otherColumn.GetColumn()] = otherColumn.GetQueryValue()
+				otherColumnToValue[otherColumn.GetColumn()] = otherColumn.GetQueryValue()
 			}
 
 			rows := extensions.CustomTableRow{
 				TableName:               tableConfig.TableName,
-				PrimaryKeyColumnToValue: primaryKeyColumns,
-				OtherColumnToValue:      otherColumns,
+				PrimaryKeyColumnToValue: primaryKeyColumnToValue,
+				OtherColumnToValue:      otherColumnToValue,
 			}
 
 			err := tx.InsertCustomTable(ctx, rows, writeMode)
@@ -62,13 +62,13 @@ func (p sqlProcessStoreImpl) writeToAppDatabaseIfNeeded(
 			return fmt.Errorf("table %s is not configured properly with primary key", tableWrite.GetTableName())
 		}
 
-		allPrimaryKeysMap := []map[string]string{}
+		allPrimaryKeysColumnToValue := []map[string]string{}
 		for _, primaryKey := range allPrimaryKeys {
-			parimaryKeyMap := map[string]string{}
+			primaryKeyMap := map[string]string{}
 			for _, pk := range primaryKey {
-				parimaryKeyMap[pk.GetColumn()] = pk.GetQueryValue()
+				primaryKeyMap[pk.GetColumn()] = pk.GetQueryValue()
 			}
-			allPrimaryKeysMap = append(allPrimaryKeysMap, parimaryKeyMap)
+			allPrimaryKeysColumnToValue = append(allPrimaryKeysColumnToValue, primaryKeyMap)
 		}
 
 		for _, rowWrite := range tableWrite.GetRows() {
@@ -79,7 +79,7 @@ func (p sqlProcessStoreImpl) writeToAppDatabaseIfNeeded(
 				primaryKeyColumnToValue[pk.GetColumn()] = pk.GetQueryValue()
 			}
 
-			if !isValidPrimaryKey(allPrimaryKeysMap, primaryKeyColumnToValue) {
+			if !isValidPrimaryKey(allPrimaryKeysColumnToValue, primaryKeyColumnToValue) {
 				return fmt.Errorf("table %s row %v is not configured properly with primary key", tableWrite.GetTableName(), rowWrite)
 			}
 
@@ -101,10 +101,10 @@ func (p sqlProcessStoreImpl) writeToAppDatabaseIfNeeded(
 	return nil
 }
 
-func isValidPrimaryKey(allPrimaryKeys []map[string]string, targetPrimaryKeyColumnToValue map[string]string) bool {
-	for _, primaryKeyMap := range allPrimaryKeys {
+func isValidPrimaryKey(allPrimaryKeysColumnToValue []map[string]string, targetPrimaryKeyColumnToValue map[string]string) bool {
+	for _, primaryKeyColumnToValue := range allPrimaryKeysColumnToValue {
 		isValidPK := true
-		for k, v := range primaryKeyMap {
+		for k, v := range primaryKeyColumnToValue {
 			vv, ok := targetPrimaryKeyColumnToValue[k]
 			if !ok || vv != v {
 				isValidPK = false

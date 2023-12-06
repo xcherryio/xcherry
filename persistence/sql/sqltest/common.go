@@ -49,7 +49,7 @@ func startProcessWithConfigs(
 	})
 
 	require.NoError(t, err)
-	require.NoError(t, startResp.AppDatabaseWriteError)
+	require.NoError(t, startResp.AppDatabaseWritingError)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -424,12 +424,12 @@ func completeExecuteExecution(
 	prep *data_models.PrepareStateExecutionResponse,
 	stateDecision xcapi.StateDecision, hasNewImmediateTask bool,
 ) {
-	completeExecuteExecutionWithGlobalAttributes(
+	completeExecuteExecutionWithAppDatabase(
 		ctx, t, ass, store, prcExeId, immediateTask, prep,
 		stateDecision, hasNewImmediateTask, nil, nil,
 	)
 }
-func completeExecuteExecutionWithGlobalAttributes(
+func completeExecuteExecutionWithAppDatabase(
 	ctx context.Context, t *testing.T, ass *assert.Assertions,
 	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
 	prep *data_models.PrepareStateExecutionResponse,
@@ -451,7 +451,7 @@ func completeExecuteExecutionWithGlobalAttributes(
 		WriteAppDatabase:   appDatabaseWrite,
 	})
 	require.NoError(t, err)
-	require.NoError(t, compResp.WritingAppDatabaseError)
+	require.NoError(t, compResp.AppDatabaseWritingError)
 	ass.Equal(hasNewImmediateTask, compResp.HasNewImmediateTask)
 }
 

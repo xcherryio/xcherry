@@ -23,7 +23,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	}
 
 	resp, err := p.doCompleteExecuteExecutionTx(ctx, tx, request)
-	if err != nil || resp.FailAtWritingAppDatabase {
+	if err != nil || resp.FailedAtWritingAppDatabase {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -55,8 +55,8 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	if err != nil {
 		//lint:ignore nilerr reason
 		return &data_models.CompleteExecuteExecutionResponse{
-			FailAtWritingAppDatabase: true,
-			WritingAppDatabaseError:  err,
+			FailedAtWritingAppDatabase: true,
+			AppDatabaseWritingError:    err,
 		}, nil
 	}
 

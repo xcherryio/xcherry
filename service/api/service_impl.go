@@ -61,10 +61,10 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
-	if resp.FailedAtWriteToAppDatabase {
+	if resp.FailedAtWritingAppDatabase {
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
-			"Failed to write database, please check the error message for details: "+resp.AppDatabaseWriteError.Error())
+			"Failed to write database, please check the error message for details: "+resp.AppDatabaseWritingError.Error())
 	}
 
 	if resp.HasNewImmediateTask {
@@ -185,8 +185,8 @@ func (s serviceImpl) Rpc(
 	appDatabaseReadResponse := xcapi.AppDatabaseReadResponse{}
 	if latestPrcExe.AppDatabaseConfig != nil {
 		appDatabaseReadResp, err := s.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
-			TableConfig: *latestPrcExe.AppDatabaseConfig,
-			Request:     request.GetAppDatabaseReadRequest(),
+			AppDatabaseConfig: *latestPrcExe.AppDatabaseConfig,
+			Request:           request.GetAppDatabaseReadRequest(),
 		})
 		if err != nil {
 			return nil, s.handleUnknownError(err)
@@ -237,8 +237,8 @@ func (s serviceImpl) Rpc(
 		StateDecision:       resp.GetStateDecision(),
 		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
 
-		GlobalAttributeTableConfig: latestPrcExe.AppDatabaseConfig,
-		AppDatabaseWrite:           resp.WriteToAppDatabase,
+		AppDatabaseConfig: latestPrcExe.AppDatabaseConfig,
+		AppDatabaseWrite:  resp.WriteToAppDatabase,
 
 		WorkerUrl:   latestPrcExe.WorkerUrl,
 		TaskShardId: persistence.DefaultShardId,

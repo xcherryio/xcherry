@@ -452,7 +452,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	if err != nil {
 		return err
 	}
-	if compResp.FailAtWritingAppDatabase {
+	if compResp.FailedAtWritingAppDatabase {
 		// TODO this should be treated as user error, we should use the same logic as backoff+applyStateFailureRecoveryPolicy
 		// for now we just retry the task for demo purpose
 		w.logger.Warn("failed to write app database", tag.ID(task.GetTaskId()))
@@ -621,8 +621,8 @@ func (w *immediateTaskConcurrentProcessor) readAppDatabaseIfNeeded(
 		tag.JsonValue(prep.Info.AppDatabaseConfig))
 
 	resp, err := w.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
-		TableConfig: *prep.Info.AppDatabaseConfig,
-		Request:     *prep.Info.StateConfig.AppDatabaseReadRequest,
+		AppDatabaseConfig: *prep.Info.AppDatabaseConfig,
+		Request:           *prep.Info.StateConfig.AppDatabaseReadRequest,
 	})
 
 	w.logger.Debug("loaded app database for state execute",

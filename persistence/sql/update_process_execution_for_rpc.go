@@ -55,7 +55,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
 
 	// Step 1: update persistence
 
-	err = p.writeToAppDatabaseIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.AppDatabaseWrite)
+	err = p.writeToAppDatabaseIfNeeded(ctx, tx, request.AppDatabaseConfig, request.AppDatabaseWrite)
 	if err != nil {
 		//lint:ignore nilerr reason
 		return &data_models.UpdateProcessExecutionForRpcResponse{
@@ -77,7 +77,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
 		ProcessType:        request.ProcessType,
 		ProcessExecutionId: request.ProcessExecutionId,
 		StateDecision:      request.StateDecision,
-		AppDatabaseConfig:  request.GlobalAttributeTableConfig,
+		AppDatabaseConfig:  request.AppDatabaseConfig,
 		WorkerUrl:          request.WorkerUrl,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,

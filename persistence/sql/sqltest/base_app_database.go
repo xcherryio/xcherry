@@ -133,8 +133,8 @@ func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
 	readAppDatabaseReq, err := store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
-		TableConfig: *prep.Info.AppDatabaseConfig,
-		Request:     *prep.Info.StateConfig.AppDatabaseReadRequest,
+		AppDatabaseConfig: *prep.Info.AppDatabaseConfig,
+		Request:           *prep.Info.StateConfig.AppDatabaseReadRequest,
 	})
 	require.NoError(t, err)
 
@@ -285,7 +285,7 @@ func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.
 		},
 	}
 
-	completeExecuteExecutionWithGlobalAttributes(
+	completeExecuteExecutionWithAppDatabase(
 		ctx, t, ass, store, prcExeId, task, prep, decision1, true,
 		prep.Info.AppDatabaseConfig, appDatabaseWrite)
 
@@ -300,8 +300,8 @@ func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.
 	verifyStateExecution(ass, prep, processId, input, data_models.StateExecutionStatusExecuteRunning)
 
 	readAppDatabaseResp, err := store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
-		TableConfig: *prep.Info.AppDatabaseConfig,
-		Request:     *prep.Info.StateConfig.AppDatabaseReadRequest,
+		AppDatabaseConfig: *prep.Info.AppDatabaseConfig,
+		Request:           *prep.Info.StateConfig.AppDatabaseReadRequest,
 	})
 	require.NoError(t, err)
 

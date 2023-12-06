@@ -14,11 +14,11 @@ func (p sqlProcessStoreImpl) ReadAppDatabase(
 	ctx context.Context, request data_models.AppDatabaseReadRequest,
 ) (*data_models.AppDatabaseReadResponse, error) {
 	var tableResponses []xcapi.AppDatabaseTableReadResponse
-	config := request.TableConfig
+	config := request.AppDatabaseConfig
 
 	for _, tableReq := range request.Request.Tables {
 		if tableReq.GetLockType() != xcapi.NO_LOCKING {
-			// TODO support other locking policies
+			// TODO support other locking types
 			return nil, fmt.Errorf("locking type %v is not supported", tableReq.GetLockType())
 		}
 
@@ -32,7 +32,7 @@ func (p sqlProcessStoreImpl) ReadAppDatabase(
 			cols = append(cols, field)
 		}
 
-		rows, err := p.session.SelectCustomTableByPK(ctx, *tableReq.TableName, pk, cols)
+		rows, err := p.session.SelectCustomTableByPK(ctx, tableReq.GetTableName(), pk, cols)
 		if err != nil {
 			return nil, err
 		}
