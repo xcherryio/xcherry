@@ -165,6 +165,6 @@ func (h *ginHandler) toJson(req any) string {
 
 func invalidRequestSchema(c *gin.Context) {
 	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
-		Detail: xcapi.PtrString("invalid request schema"),
+		Details: xcapi.PtrString("invalid request schema"),
 	})
 }

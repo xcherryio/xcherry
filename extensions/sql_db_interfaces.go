@@ -6,6 +6,7 @@ package extensions
 import (
 	"context"
 	"database/sql"
+	"github.com/xcherryio/apis/goapi/xcapi"
 
 	"github.com/xcherryio/xcherry/common/uuid"
 	"github.com/xcherryio/xcherry/config"
@@ -70,12 +71,8 @@ type transactionalCRUD interface {
 
 	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
 
-	InsertCustomTableErrorOnConflict(ctx context.Context, row CustomTableRowForInsert) error
-	InsertCustomTableIgnoreOnConflict(ctx context.Context, row CustomTableRowForInsert) error
-	InsertCustomTableOverrideOnConflict(ctx context.Context, row CustomTableRowForInsert) error
-	UpsertCustomTableByPK(
-		ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
-	) error
+	InsertCustomTable(ctx context.Context, row CustomTableRow, writeConfigMode xcapi.WriteConflictMode) error
+	UpsertCustomTableByPK(ctx context.Context, row CustomTableRow) error
 
 	InsertLocalAttribute(ctx context.Context, insert LocalAttributeRow) error
 	UpsertLocalAttribute(ctx context.Context, row LocalAttributeRow) error
@@ -103,8 +100,8 @@ type nonTransactionalCRUD interface {
 	) ([]LocalQueueMessageRow, error)
 
 	SelectCustomTableByPK(
-		ctx context.Context, tableName string, pkName, pkValue string, columns []string,
-	) (*CustomTableRowSelect, error)
+		ctx context.Context, tableName string, primaryKeys [][]xcapi.AppDatabaseColumnValue, columns []string,
+	) ([]CustomTableRowSelect, error)
 
 	SelectLocalAttributes(
 		ctx context.Context, processExecutionId uuid.UUID, keys []string,

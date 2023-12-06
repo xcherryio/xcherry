@@ -9,35 +9,27 @@ import (
 )
 
 type AsyncStateExecutionInfoJson struct {
-	Namespace                   string                         `json:"namespace"`
-	ProcessId                   string                         `json:"processId"`
-	ProcessType                 string                         `json:"processType"`
-	WorkerURL                   string                         `json:"workerURL"`
-	StateConfig                 *xcapi.AsyncStateConfig        `json:"stateConfig"`
-	RecoverFromStateExecutionId *string                        `json:"recoverFromStateExecutionId,omitempty"`
-	RecoverFromApi              *xcapi.StateApiType            `json:"recoverFromApi,omitempty"`
-	GlobalAttributeConfig       *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
+	Namespace                   string                     `json:"namespace"`
+	ProcessId                   string                     `json:"processId"`
+	ProcessType                 string                     `json:"processType"`
+	WorkerURL                   string                     `json:"workerURL"`
+	StateConfig                 *xcapi.AsyncStateConfig    `json:"stateConfig"`
+	RecoverFromStateExecutionId *string                    `json:"recoverFromStateExecutionId,omitempty"`
+	RecoverFromApi              *xcapi.WorkerApiType       `json:"recoverFromApi,omitempty"`
+	AppDatabaseConfig           *InternalAppDatabaseConfig `json:"appDatabaseConfig"`
 }
 
 func FromStartRequestToStateInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
 	infoJson := AsyncStateExecutionInfoJson{
-		Namespace:             req.Namespace,
-		ProcessId:             req.ProcessId,
-		ProcessType:           req.GetProcessType(),
-		WorkerURL:             req.GetWorkerUrl(),
-		StateConfig:           req.StartStateConfig,
-		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
+		Namespace:         req.Namespace,
+		ProcessId:         req.ProcessId,
+		ProcessType:       req.GetProcessType(),
+		WorkerURL:         req.GetWorkerUrl(),
+		StateConfig:       req.StartStateConfig,
+		AppDatabaseConfig: getInternalAppDatabaseConfig(req),
 	}
 
 	return infoJson.ToBytes()
-}
-
-func FromAsyncStateExecutionInfoToBytesForNextState(
-	info AsyncStateExecutionInfoJson,
-	nextStateConfig *xcapi.AsyncStateConfig,
-) ([]byte, error) {
-	info.StateConfig = nextStateConfig
-	return json.Marshal(info)
 }
 
 func (j *AsyncStateExecutionInfoJson) ToBytes() ([]byte, error) {
@@ -47,7 +39,7 @@ func (j *AsyncStateExecutionInfoJson) ToBytes() ([]byte, error) {
 func FromAsyncStateExecutionInfoToBytesForStateRecovery(
 	info AsyncStateExecutionInfoJson,
 	stateExeId string,
-	api xcapi.StateApiType,
+	api xcapi.WorkerApiType,
 ) ([]byte, error) {
 	info.RecoverFromStateExecutionId = &stateExeId
 	info.RecoverFromApi = &api

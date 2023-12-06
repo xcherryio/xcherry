@@ -241,11 +241,10 @@ type (
 		Payload types.JSONText
 	}
 
-	CustomTableRowForInsert struct {
-		TableName       string
-		PrimaryKey      string
-		PrimaryKeyValue string
-		ColumnToValue   map[string]string
+	CustomTableRow struct {
+		TableName               string
+		PrimaryKeyColumnToValue map[string]string
+		OtherColumnToValue      map[string]string
 	}
 
 	CustomTableRowSelect struct {

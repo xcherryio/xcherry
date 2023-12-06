@@ -28,10 +28,10 @@ func (p sqlProcessStoreImpl) GetLatestProcessExecution(
 	}
 
 	return &data_models.GetLatestProcessExecutionResponse{
-		ProcessExecutionId:    row.ProcessExecutionId,
-		Status:                row.Status,
-		StartTimestamp:        row.StartTime.Unix(),
-		GlobalAttributeConfig: info.GlobalAttributeConfig,
+		ProcessExecutionId: row.ProcessExecutionId,
+		Status:             row.Status,
+		StartTimestamp:     row.StartTime.Unix(),
+		AppDatabaseConfig:  info.AppDatabaseConfig,
 
 		ProcessType: info.ProcessType,
 		WorkerUrl:   info.WorkerURL,

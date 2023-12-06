@@ -40,16 +40,16 @@ func createEmptyEncodedObject() xcapi.EncodedObject {
 func startProcessWithConfigs(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore,
 	namespace, processId string,
-	input xcapi.EncodedObject, gloAttCfg *xcapi.GlobalAttributeConfig, stateCfg *xcapi.AsyncStateConfig,
+	input xcapi.EncodedObject, appDatabaseConfig *xcapi.AppDatabaseConfig, stateCfg *xcapi.AsyncStateConfig,
 ) uuid.UUID {
-	startReq := createStartRequest(namespace, processId, input, gloAttCfg, stateCfg)
+	startReq := createStartRequest(namespace, processId, input, appDatabaseConfig, stateCfg)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
 		NewTaskShardId: persistence.DefaultShardId,
 	})
 
 	require.NoError(t, err)
-	require.NoError(t, startResp.GlobalAttributeWriteError)
+	require.NoError(t, startResp.AppDatabaseWriteError)
 	ass.False(startResp.AlreadyStarted)
 	ass.True(startResp.HasNewImmediateTask)
 	ass.True(len(startResp.ProcessExecutionId.String()) > 0)
@@ -221,7 +221,7 @@ func createStartRequestWithTerminateIfRunningPolicy(
 
 func createStartRequest(
 	namespace, processId string, input xcapi.EncodedObject,
-	gloAttCfg *xcapi.GlobalAttributeConfig, stateCfg *xcapi.AsyncStateConfig,
+	appDatabaseConfig *xcapi.AppDatabaseConfig, stateCfg *xcapi.AsyncStateConfig,
 ) xcapi.ProcessExecutionStartRequest {
 	// Other values like processType, workerUrl etc. are kept constants for simplicity
 	return xcapi.ProcessExecutionStartRequest{
@@ -233,8 +233,8 @@ func createStartRequest(
 		StartStateInput:  &input,
 		StartStateConfig: stateCfg,
 		ProcessStartConfig: &xcapi.ProcessStartConfig{
-			TimeoutSeconds:        ptr.Any(int32(100)),
-			GlobalAttributeConfig: gloAttCfg,
+			TimeoutSeconds:    ptr.Any(int32(100)),
+			AppDatabaseConfig: appDatabaseConfig,
 		},
 	}
 }
@@ -434,24 +434,24 @@ func completeExecuteExecutionWithGlobalAttributes(
 	store persistence.ProcessStore, prcExeId uuid.UUID, immediateTask data_models.ImmediateTask,
 	prep *data_models.PrepareStateExecutionResponse,
 	stateDecision xcapi.StateDecision, hasNewImmediateTask bool,
-	gloAttCfg *data_models.InternalGlobalAttributeConfig,
-	gloAttUpdates []xcapi.GlobalAttributeTableRowUpdate,
+	appDatabaseConfig *data_models.InternalAppDatabaseConfig,
+	appDatabaseWrite *xcapi.AppDatabaseWrite,
 ) {
 	stateExeId := data_models.StateExecutionId{
 		StateId:         immediateTask.StateId,
 		StateIdSequence: immediateTask.StateIdSequence,
 	}
 	compResp, err := store.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
-		ProcessExecutionId:         prcExeId,
-		StateExecutionId:           stateExeId,
-		Prepare:                    *prep,
-		StateDecision:              stateDecision,
-		TaskShardId:                persistence.DefaultShardId,
-		GlobalAttributeTableConfig: gloAttCfg,
-		UpdateGlobalAttributes:     gloAttUpdates,
+		ProcessExecutionId: prcExeId,
+		StateExecutionId:   stateExeId,
+		Prepare:            *prep,
+		StateDecision:      stateDecision,
+		TaskShardId:        persistence.DefaultShardId,
+		AppDatabaseConfig:  appDatabaseConfig,
+		WriteAppDatabase:   appDatabaseWrite,
 	})
 	require.NoError(t, err)
-	require.NoError(t, compResp.UpdatingGlobalAttributesError)
+	require.NoError(t, compResp.WritingAppDatabaseError)
 	ass.Equal(hasNewImmediateTask, compResp.HasNewImmediateTask)
 }
 
@@ -464,7 +464,7 @@ func recoverFromFailure(
 	prcExeId uuid.UUID,
 	prep data_models.PrepareStateExecutionResponse,
 	sourceStateExecId data_models.StateExecutionId,
-	sourceFailedStateApi xcapi.StateApiType,
+	sourceFailedStateApi xcapi.WorkerApiType,
 	destinationStateId string,
 	destiantionStateConfig *xcapi.AsyncStateConfig,
 	destinationStateInput xcapi.EncodedObject,

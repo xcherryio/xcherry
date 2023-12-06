@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/uuid"
 	"strings"
 
@@ -129,43 +130,59 @@ func (d dbSession) SelectLocalQueueMessages(
 }
 
 func (d dbSession) SelectCustomTableByPK(
-	ctx context.Context, tableName string, pkName, pkValue string, columns []string,
-) (*extensions.CustomTableRowSelect, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT `+
-		strings.Join(columns, ", ")+` FROM `+
-		tableName+` WHERE `+pkName+` = $1`, pkValue)
-	if row.Err() != nil {
-		if d.IsNotFoundError(row.Err()) {
-			return &extensions.CustomTableRowSelect{
-				ColumnToValue: map[string]string{},
-			}, nil
+	ctx context.Context, tableName string, primaryKeys [][]xcapi.AppDatabaseColumnValue, columns []string,
+) ([]extensions.CustomTableRowSelect, error) {
+	var rows []extensions.CustomTableRowSelect
+
+	for _, pksPerRow := range primaryKeys {
+		var whereClause string
+
+		for _, pk := range pksPerRow {
+			if len(whereClause) > 0 {
+				whereClause += " AND "
+			}
+
+			whereClause += pk.GetColumn() + " = '" + pk.GetQueryValue() + "'"
 		}
-		return nil, row.Err()
-	}
+		
+		row := d.db.QueryRowContext(ctx, `SELECT `+
+			strings.Join(columns, ", ")+` FROM `+
+			tableName+` WHERE `+whereClause)
 
-	colsToScan := make([]any, len(columns))
-	for i := range colsToScan {
-		colsToScan[i] = new(string)
-	}
-
-	err := row.Scan(colsToScan...)
-	if err != nil {
-		return nil, err
-	}
-
-	columnToValue := map[string]string{}
-	for i := range colsToScan {
-		ele := colsToScan[i]
-		strPtr, ok := ele.(*string)
-		if ok {
-			columnToValue[columns[i]] = *strPtr
-		} else {
-			return nil, fmt.Errorf("unexpected type %v", ele)
+		if row.Err() != nil {
+			if d.IsNotFoundError(row.Err()) {
+				continue
+			}
+			return nil, row.Err()
 		}
+
+		colsToScan := make([]any, len(columns))
+		for i := range colsToScan {
+			colsToScan[i] = new(string)
+		}
+
+		err := row.Scan(colsToScan...)
+		if err != nil {
+			return nil, err
+		}
+
+		columnToValue := map[string]string{}
+		for i := range colsToScan {
+			ele := colsToScan[i]
+			strPtr, ok := ele.(*string)
+			if ok {
+				columnToValue[columns[i]] = *strPtr
+			} else {
+				return nil, fmt.Errorf("unexpected type %v", ele)
+			}
+		}
+
+		rows = append(rows, extensions.CustomTableRowSelect{
+			ColumnToValue: columnToValue,
+		})
 	}
-	return &extensions.CustomTableRowSelect{
-		ColumnToValue: columnToValue,
-	}, nil
+
+	return rows, nil
 }
 
 const selectLocalAttributesQuery = `SELECT

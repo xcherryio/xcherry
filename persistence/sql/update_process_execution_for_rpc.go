@@ -19,7 +19,7 @@ func (p sqlProcessStoreImpl) UpdateProcessExecutionForRpc(ctx context.Context, r
 
 	resp, err := p.doUpdateProcessExecutionForRpcTx(ctx, tx, request)
 
-	if err != nil || resp.FailAtUpdatingGlobalAttributes {
+	if err != nil || resp.FailAtWritingAppDatabase {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -55,12 +55,12 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
 
 	// Step 1: update persistence
 
-	err = p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
+	err = p.writeToAppDatabaseIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.AppDatabaseWrite)
 	if err != nil {
 		//lint:ignore nilerr reason
 		return &data_models.UpdateProcessExecutionForRpcResponse{
-			FailAtUpdatingGlobalAttributes: true,
-			UpdatingGlobalAttributesError:  err,
+			FailAtWritingAppDatabase: true,
+			WritingAppDatabaseError:  err,
 		}, nil
 	}
 
@@ -72,13 +72,13 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
 	}
 
 	resp, err := p.handleStateDecision(ctx, tx, HandleStateDecisionRequest{
-		Namespace:                  request.Namespace,
-		ProcessId:                  request.ProcessId,
-		ProcessType:                request.ProcessType,
-		ProcessExecutionId:         request.ProcessExecutionId,
-		StateDecision:              request.StateDecision,
-		GlobalAttributeTableConfig: request.GlobalAttributeTableConfig,
-		WorkerUrl:                  request.WorkerUrl,
+		Namespace:          request.Namespace,
+		ProcessId:          request.ProcessId,
+		ProcessType:        request.ProcessType,
+		ProcessExecutionId: request.ProcessExecutionId,
+		StateDecision:      request.StateDecision,
+		AppDatabaseConfig:  request.GlobalAttributeTableConfig,
+		WorkerUrl:          request.WorkerUrl,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,
 		ProcessExecutionRowWaitToComplete:             prcRow.WaitToComplete,

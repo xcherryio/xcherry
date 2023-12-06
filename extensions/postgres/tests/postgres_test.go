@@ -52,7 +52,7 @@ func TestStateFailureRecovery(t *testing.T) {
 	sqltest.SQLStateFailureRecoveryTest(t, assert.New(t), store)
 }
 
-func TestGlobalAttributes(t *testing.T) {
+func TestAppDatabase(t *testing.T) {
 	sqltest.CleanupEnv(assert.New(t), store)
-	sqltest.SQLGlobalAttributesTest(t, assert.New(t), store)
+	sqltest.SQLAppDatabaseTest(t, assert.New(t), store)
 }

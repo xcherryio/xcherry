@@ -68,13 +68,13 @@ func createGetTimerTaskResponse(
 
 type (
 	HandleStateDecisionRequest struct {
-		Namespace                  string
-		ProcessId                  string
-		ProcessType                string
-		ProcessExecutionId         uuid.UUID
-		StateDecision              xcapi.StateDecision
-		GlobalAttributeTableConfig *data_models.InternalGlobalAttributeConfig
-		WorkerUrl                  string
+		Namespace          string
+		ProcessId          string
+		ProcessType        string
+		ProcessExecutionId uuid.UUID
+		StateDecision      xcapi.StateDecision
+		AppDatabaseConfig  *data_models.InternalAppDatabaseConfig
+		WorkerUrl          string
 
 		// for ProcessExecutionRowForUpdate
 		ProcessExecutionRowStateExecutionSequenceMaps *data_models.StateExecutionSequenceMapsJson
@@ -115,12 +115,12 @@ func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensi
 			}
 
 			stateInfo := data_models.AsyncStateExecutionInfoJson{
-				Namespace:             request.Namespace,
-				ProcessId:             request.ProcessId,
-				ProcessType:           request.ProcessType,
-				WorkerURL:             request.WorkerUrl,
-				StateConfig:           next.StateConfig,
-				GlobalAttributeConfig: request.GlobalAttributeTableConfig,
+				Namespace:         request.Namespace,
+				ProcessId:         request.ProcessId,
+				ProcessType:       request.ProcessType,
+				WorkerURL:         request.WorkerUrl,
+				StateConfig:       next.StateConfig,
+				AppDatabaseConfig: request.AppDatabaseConfig,
 			}
 
 			stateInfoBytes, err := stateInfo.ToBytes()

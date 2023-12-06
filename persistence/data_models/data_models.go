@@ -20,11 +20,11 @@ type (
 	}
 
 	StartProcessResponse struct {
-		ProcessExecutionId                uuid.UUID
-		AlreadyStarted                    bool
-		HasNewImmediateTask               bool
-		FailedAtWriteInitGlobalAttributes bool
-		GlobalAttributeWriteError         error
+		ProcessExecutionId         uuid.UUID
+		AlreadyStarted             bool
+		HasNewImmediateTask        bool
+		FailedAtWriteToAppDatabase bool
+		AppDatabaseWriteError      error
 	}
 
 	StopProcessRequest struct {
@@ -55,10 +55,10 @@ type (
 	GetLatestProcessExecutionResponse struct {
 		NotExists bool
 
-		ProcessExecutionId    uuid.UUID
-		Status                ProcessExecutionStatus
-		StartTimestamp        int64
-		GlobalAttributeConfig *InternalGlobalAttributeConfig
+		ProcessExecutionId uuid.UUID
+		Status             ProcessExecutionStatus
+		StartTimestamp     int64
+		AppDatabaseConfig  *InternalAppDatabaseConfig
 
 		// the process type for SDK to look up the process definition class
 		ProcessType string
@@ -71,7 +71,7 @@ type (
 		ProcessExecutionId           uuid.UUID
 		Prepare                      PrepareStateExecutionResponse
 		SourceStateExecutionId       StateExecutionId
-		SourceFailedStateApi         xcapi.StateApiType
+		SourceFailedStateApi         xcapi.WorkerApiType
 		LastFailureStatus            int32
 		LastFailureDetails           string
 		LastFailureCompletedAttempts int32
@@ -254,8 +254,8 @@ type (
 		StateDecision       xcapi.StateDecision
 		PublishToLocalQueue []xcapi.LocalQueueMessage
 
-		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
-		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
+		AppDatabaseConfig *InternalAppDatabaseConfig
+		WriteAppDatabase  *xcapi.AppDatabaseWrite
 
 		UpdateLocalAttributes []xcapi.KeyValue
 
@@ -264,9 +264,9 @@ type (
 	}
 
 	CompleteExecuteExecutionResponse struct {
-		HasNewImmediateTask            bool
-		FailAtUpdatingGlobalAttributes bool
-		UpdatingGlobalAttributesError  error
+		HasNewImmediateTask      bool
+		FailAtWritingAppDatabase bool
+		WritingAppDatabaseError  error
 	}
 
 	PublishToLocalQueueRequest struct {
@@ -293,13 +293,13 @@ type (
 		HasNewImmediateTask bool
 	}
 
-	LoadGlobalAttributesRequest struct {
-		TableConfig InternalGlobalAttributeConfig
-		Request     xcapi.LoadGlobalAttributesRequest
+	AppDatabaseReadRequest struct {
+		TableConfig InternalAppDatabaseConfig
+		Request     xcapi.AppDatabaseReadRequest
 	}
 
-	LoadGlobalAttributesResponse struct {
-		Response xcapi.LoadGlobalAttributeResponse
+	AppDatabaseReadResponse struct {
+		Response xcapi.AppDatabaseReadResponse
 	}
 
 	UpdateProcessExecutionForRpcRequest struct {
@@ -311,18 +311,18 @@ type (
 		StateDecision       xcapi.StateDecision
 		PublishToLocalQueue []xcapi.LocalQueueMessage
 
-		GlobalAttributeTableConfig *InternalGlobalAttributeConfig
-		UpdateGlobalAttributes     []xcapi.GlobalAttributeTableRowUpdate
+		GlobalAttributeTableConfig *InternalAppDatabaseConfig
+		AppDatabaseWrite           *xcapi.AppDatabaseWrite
 
 		WorkerUrl   string
 		TaskShardId int32
 	}
 
 	UpdateProcessExecutionForRpcResponse struct {
-		HasNewImmediateTask            bool
-		ProcessNotExists               bool
-		FailAtUpdatingGlobalAttributes bool
-		UpdatingGlobalAttributesError  error
+		HasNewImmediateTask      bool
+		ProcessNotExists         bool
+		FailAtWritingAppDatabase bool
+		WritingAppDatabaseError  error
 	}
 
 	LoadLocalAttributesRequest struct {

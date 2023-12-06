@@ -60,9 +60,9 @@ type (
 			ctx context.Context, request data_models.ProcessLocalQueueMessagesRequest,
 		) (*data_models.ProcessLocalQueueMessagesResponse, error)
 
-		LoadGlobalAttributes(
-			ctx context.Context, request data_models.LoadGlobalAttributesRequest,
-		) (*data_models.LoadGlobalAttributesResponse, error)
+		ReadAppDatabase(
+			ctx context.Context, request data_models.AppDatabaseReadRequest,
+		) (*data_models.AppDatabaseReadResponse, error)
 
 		LoadLocalAttributes(ctx context.Context, request data_models.LoadLocalAttributesRequest,
 		) (*data_models.LoadLocalAttributesResponse, error)
