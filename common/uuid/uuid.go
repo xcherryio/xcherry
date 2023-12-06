@@ -47,7 +47,7 @@ func MustNewUUID() UUID {
 func MustParseUUID(s string) UUID {
 	parsed := uuid.FromStringOrNil(s)
 	if parsed == uuid.Nil {
-		return nil
+		panic("invalid UUID string: " + s)
 	}
 
 	return parsed[:]
