@@ -27,12 +27,7 @@ func (p sqlProcessStoreImpl) ReadAppDatabase(
 			return nil, fmt.Errorf("table %s is not configured properly with primary key", tableReq.GetTableName())
 		}
 
-		var cols []string
-		for _, field := range tableReq.Columns {
-			cols = append(cols, field)
-		}
-
-		rows, err := p.session.SelectCustomTableByPK(ctx, tableReq.GetTableName(), pk, cols)
+		rows, err := p.session.SelectCustomTableByPK(ctx, tableReq.GetTableName(), pk, tableReq.GetColumns())
 		if err != nil {
 			return nil, err
 		}

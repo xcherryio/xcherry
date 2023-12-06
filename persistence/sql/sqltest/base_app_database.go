@@ -17,6 +17,7 @@ import (
 	"github.com/xcherryio/xcherry/persistence"
 )
 
+// nolint: funlen
 func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
 
