@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"strings"
 
 	"github.com/xcherryio/xcherry/common/uuid"
@@ -260,68 +261,64 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 	return effected == 1, err
 }
 
-func (d dbTx) InsertCustomTableErrorOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	var cols []string
-	var vals []string
-	for k, v := range row.ColumnToValue {
-		cols = append(cols, k)
-		vals = append(vals, "'"+v+"'")
+func (d dbTx) InsertAppDatabaseTable(ctx context.Context, row extensions.AppDatabaseTableRow, writeConfigMode xcapi.WriteConflictMode) error {
+	var pkCols []string
+	var pkVals []string
+	var otherCols []string
+	var otherVals []string
+
+	for k, v := range row.PrimaryKeyColumnToValue {
+		pkCols = append(pkCols, k)
+		pkVals = append(pkVals, "'"+v+"'")
 	}
 
+	for k, v := range row.OtherColumnToValue {
+		otherCols = append(otherCols, k)
+		otherVals = append(otherVals, "'"+v+"'")
+	}
+
+	var onConflictClause string
+
+	switch writeConfigMode {
+	case xcapi.RETURN_ERROR_ON_CONFLICT:
+		onConflictClause = ""
+	case xcapi.IGNORE_CONFLICT:
+		onConflictClause = `ON CONFLICT DO NOTHING`
+	case xcapi.OVERRIDE_ON_CONFLICT:
+		var setClauses []string
+		for col, val := range row.OtherColumnToValue {
+			setClauses = append(setClauses, col+" = '"+val+"'")
+		}
+		updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
+
+		onConflictClause = `ON CONFLICT (` + strings.Join(pkCols, ", ") + `) DO ` + updateClause
+	default:
+		panic("unknown write mode " + string(writeConfigMode))
+	}
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)`)
+		`INSERT INTO `+row.TableName+` (`+strings.Join(pkCols, ", ")+`, `+strings.Join(otherCols, ", ")+`)
+    	VALUES (`+strings.Join(pkVals, ", ")+`, `+strings.Join(otherVals, ", ")+`) `+onConflictClause)
 	return err
 }
 
-func (d dbTx) InsertCustomTableIgnoreOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	var cols []string
-	var vals []string
-	for k, v := range row.ColumnToValue {
-		cols = append(cols, k)
-		vals = append(vals, "'"+v+"'")
+func (d dbTx) UpsertAppDatabaseTableByPK(ctx context.Context, row extensions.AppDatabaseTableRow) error {
+	var pkCols []string
+	var pkVals []string
+	var otherCols []string
+	var otherVals []string
+
+	for k, v := range row.PrimaryKeyColumnToValue {
+		pkCols = append(pkCols, k)
+		pkVals = append(pkVals, "'"+v+"'")
 	}
 
-	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT DO NOTHING`)
-	return err
-}
-
-func (d dbTx) InsertCustomTableOverrideOnConflict(ctx context.Context, row extensions.CustomTableRowForInsert) error {
-	var cols []string
-	var vals []string
-	for k, v := range row.ColumnToValue {
-		cols = append(cols, k)
-		vals = append(vals, "'"+v+"'")
+	for k, v := range row.OtherColumnToValue {
+		otherCols = append(otherCols, k)
+		otherVals = append(otherVals, "'"+v+"'")
 	}
 
 	var setClauses []string
-	for col, val := range row.ColumnToValue {
-		setClauses = append(setClauses, col+" = '"+val+"'")
-	}
-	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
-
-	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+row.TableName+` (`+row.PrimaryKey+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+row.PrimaryKeyValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT (`+row.PrimaryKey+`) DO `+updateClause)
-	return err
-}
-
-func (d dbTx) UpsertCustomTableByPK(
-	ctx context.Context, tableName string, pkName, pkValue string, colToValue map[string]string,
-) error {
-	var cols []string
-	var vals []string
-	for k, v := range colToValue {
-		cols = append(cols, k)
-		vals = append(vals, "'"+v+"'")
-	}
-
-	var setClauses []string
-	for col, val := range colToValue {
+	for col, val := range row.OtherColumnToValue {
 		setClauses = append(setClauses, col+" = '"+val+"'")
 	}
 	updateClause := "UPDATE SET " + strings.Join(setClauses, ", ")
@@ -330,9 +327,9 @@ func (d dbTx) UpsertCustomTableByPK(
 	// support from https://github.com/xcherryio/sdk-go/issues/30
 	// ??or maybe put all the columns in the conflict target??
 	_, err := d.tx.ExecContext(ctx,
-		`INSERT INTO `+tableName+` (`+pkName+`, `+strings.Join(cols, ", ")+`)
-    	VALUES ('`+pkValue+`', `+strings.Join(vals, ", ")+`)
-		ON CONFLICT (`+pkName+`) DO `+updateClause)
+		`INSERT INTO `+row.TableName+` (`+strings.Join(pkCols, ", ")+`, `+strings.Join(otherCols, ", ")+`)
+		VALUES (`+strings.Join(pkVals, ", ")+`, `+strings.Join(otherVals, ", ")+`)
+		ON CONFLICT (`+strings.Join(pkCols, ", ")+`) DO `+updateClause)
 	return err
 }
 

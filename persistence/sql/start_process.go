@@ -25,7 +25,7 @@ func (p sqlProcessStoreImpl) StartProcess(
 	}
 
 	resp, err := p.doStartProcessTx(ctx, tx, request)
-	if err != nil || resp.AlreadyStarted || resp.FailedAtWriteInitGlobalAttributes {
+	if err != nil || resp.AlreadyStarted || resp.FailedAtWritingAppDatabase {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -45,12 +45,12 @@ func (p sqlProcessStoreImpl) doStartProcessTx(
 ) (*data_models.StartProcessResponse, error) {
 	req := request.Request
 
-	err := p.handleInitialGlobalAttributesWrite(ctx, tx, req)
+	err := p.writeToAppDatabase(ctx, tx, req)
 	if err != nil {
 		//lint:ignore nilerr reason
 		return &data_models.StartProcessResponse{
-			FailedAtWriteInitGlobalAttributes: true,
-			GlobalAttributeWriteError:         err,
+			FailedAtWritingAppDatabase: true,
+			AppDatabaseWritingError:    err,
 		}, nil
 	}
 

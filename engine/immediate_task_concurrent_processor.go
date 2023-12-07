@@ -241,7 +241,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	status int32,
 	details string,
 	completedAttempts int32,
-	stateApiType xcapi.StateApiType,
+	stateApiType xcapi.WorkerApiType,
 ) error {
 	stateRecoveryPolicy := xcapi.StateFailureRecoveryOptions{
 		Policy: xcapi.FAIL_PROCESS_ON_STATE_FAILURE,
@@ -324,7 +324,7 @@ func createApiContext(
 	prep data_models.PrepareStateExecutionResponse,
 	task data_models.ImmediateTask,
 	recoverFromStateExecutionId *string,
-	RecoverFromApi *xcapi.StateApiType,
+	RecoverFromApi *xcapi.WorkerApiType,
 ) xcapi.Context {
 	return xcapi.Context{
 		ProcessId:          prep.Info.ProcessId,
@@ -354,7 +354,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 
 	var resp *xcapi.AsyncStateExecuteResponse
 	var httpResp *http.Response
-	loadedGlobalAttributesResp, errToCheck := w.loadGlobalAttributesIfNeeded(ctx, prep, task)
+	appDatabaseReadResp, errToCheck := w.readAppDatabaseIfNeeded(ctx, prep, task)
 	if errToCheck != nil {
 		if httperror.CheckHttpResponseAndError(errToCheck, httpResp, w.logger) {
 			status, details := w.composeHttpError(errToCheck, httpResp, prep.Info, task)
@@ -405,9 +405,9 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 				Encoding: prep.Input.Encoding,
 				Data:     prep.Input.Data,
 			},
-			CommandResults:         &prep.WaitUntilCommandResults,
-			LoadedGlobalAttributes: &loadedGlobalAttributesResp.Response,
-			LoadedLocalAttributes:  &loadedLocalAttributesResp.Response,
+			CommandResults:          &prep.WaitUntilCommandResults,
+			AppDatabaseReadResponse: &appDatabaseReadResp.Response,
+			LoadedLocalAttributes:   &loadedLocalAttributesResp.Response,
 		},
 	).Execute()
 	if httpResp != nil {
@@ -440,23 +440,23 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			StateId:         task.StateId,
 			StateIdSequence: task.StateIdSequence,
 		},
-		Prepare:                    prep,
-		StateDecision:              resp.StateDecision,
-		PublishToLocalQueue:        resp.GetPublishToLocalQueue(),
-		TaskShardId:                task.ShardId,
-		TaskSequence:               task.GetTaskSequence(),
-		GlobalAttributeTableConfig: prep.Info.GlobalAttributeConfig,
-		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
-		UpdateLocalAttributes:      resp.WriteToLocalAttributes,
+		Prepare:               prep,
+		StateDecision:         resp.StateDecision,
+		PublishToLocalQueue:   resp.GetPublishToLocalQueue(),
+		TaskShardId:           task.ShardId,
+		TaskSequence:          task.GetTaskSequence(),
+		AppDatabaseConfig:     prep.Info.AppDatabaseConfig,
+		WriteAppDatabase:      resp.WriteToAppDatabase,
+		UpdateLocalAttributes: resp.WriteToLocalAttributes,
 	})
 	if err != nil {
 		return err
 	}
-	if compResp.FailAtUpdatingGlobalAttributes {
+	if compResp.FailedAtWritingAppDatabase {
 		// TODO this should be treated as user error, we should use the same logic as backoff+applyStateFailureRecoveryPolicy
 		// for now we just retry the task for demo purpose
-		w.logger.Warn("failed to update global attributes", tag.ID(task.GetTaskId()))
-		return fmt.Errorf("failed to update global attributes")
+		w.logger.Warn("failed to write app database", tag.ID(task.GetTaskId()))
+		return fmt.Errorf("failed to write app database")
 	}
 	if compResp.HasNewImmediateTask {
 		w.notifyNewImmediateTask(prep, task)
@@ -602,30 +602,30 @@ func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 	return nil
 }
 
-func (w *immediateTaskConcurrentProcessor) loadGlobalAttributesIfNeeded(
+func (w *immediateTaskConcurrentProcessor) readAppDatabaseIfNeeded(
 	ctx context.Context, prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
-) (*data_models.LoadGlobalAttributesResponse, error) {
+) (*data_models.AppDatabaseReadResponse, error) {
 	if prep.Info.StateConfig == nil ||
-		prep.Info.StateConfig.LoadGlobalAttributesRequest == nil {
-		return &data_models.LoadGlobalAttributesResponse{}, nil
+		prep.Info.StateConfig.AppDatabaseReadRequest == nil {
+		return &data_models.AppDatabaseReadResponse{}, nil
 	}
 
-	if prep.Info.GlobalAttributeConfig == nil {
-		return &data_models.LoadGlobalAttributesResponse{},
-			fmt.Errorf("global attribute config is not available")
+	if prep.Info.AppDatabaseConfig == nil {
+		return &data_models.AppDatabaseReadResponse{},
+			fmt.Errorf("app database config is not available")
 	}
 
-	w.logger.Debug("loading global attributes for state execute",
+	w.logger.Debug("loading app database for state execute",
 		tag.StateExecutionId(task.GetStateExecutionId()),
 		tag.JsonValue(prep.Info.StateConfig),
-		tag.JsonValue(prep.Info.GlobalAttributeConfig))
+		tag.JsonValue(prep.Info.AppDatabaseConfig))
 
-	resp, err := w.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
-		TableConfig: *prep.Info.GlobalAttributeConfig,
-		Request:     *prep.Info.StateConfig.LoadGlobalAttributesRequest,
+	resp, err := w.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
+		AppDatabaseConfig: *prep.Info.AppDatabaseConfig,
+		Request:           *prep.Info.StateConfig.AppDatabaseReadRequest,
 	})
 
-	w.logger.Debug("loaded global attributes for state execute",
+	w.logger.Debug("loaded app database for state execute",
 		tag.StateExecutionId(task.GetStateExecutionId()),
 		tag.JsonValue(resp),
 		tag.Error(err))

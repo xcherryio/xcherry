@@ -14,7 +14,7 @@ func NewErrorWithStatus(code int, details string) *ErrorWithStatus {
 	return &ErrorWithStatus{
 		StatusCode: code,
 		Error: xcapi.ApiErrorResponse{
-			Detail: &details,
+			Details: &details,
 		},
 	}
 }

@@ -61,10 +61,10 @@ func (s serviceImpl) StartProcess(
 			http.StatusConflict,
 			"Process is already started, try use a different processId or a proper processIdReusePolicy")
 	}
-	if resp.FailedAtWriteInitGlobalAttributes {
+	if resp.FailedAtWritingAppDatabase {
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
-			"Failed to write global attributes, please check the error message for details: "+resp.GlobalAttributeWriteError.Error())
+			"Failed to write database, please check the error message for details: "+resp.AppDatabaseWritingError.Error())
 	}
 
 	if resp.HasNewImmediateTask {
@@ -182,17 +182,17 @@ func (s serviceImpl) Rpc(
 		},
 	})
 
-	loadGlobalAttributeResponse := xcapi.LoadGlobalAttributeResponse{}
-	if latestPrcExe.GlobalAttributeConfig != nil {
-		loadGlobalAttrResp, err := s.store.LoadGlobalAttributes(ctx, data_models.LoadGlobalAttributesRequest{
-			TableConfig: *latestPrcExe.GlobalAttributeConfig,
-			Request:     request.GetLoadGlobalAttributesRequest(),
+	appDatabaseReadResponse := xcapi.AppDatabaseReadResponse{}
+	if latestPrcExe.AppDatabaseConfig != nil {
+		appDatabaseReadResp, err := s.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
+			AppDatabaseConfig: *latestPrcExe.AppDatabaseConfig,
+			Request:           request.GetAppDatabaseReadRequest(),
 		})
 		if err != nil {
 			return nil, s.handleUnknownError(err)
 		}
 
-		loadGlobalAttributeResponse = loadGlobalAttrResp.Response
+		appDatabaseReadResponse = appDatabaseReadResp.Response
 	}
 
 	workerApiCtx, cancF := s.createContextWithTimeoutForRpc(ctx, request.GetTimeoutSeconds())
@@ -206,10 +206,10 @@ func (s serviceImpl) Rpc(
 				ProcessExecutionId:      latestPrcExe.ProcessExecutionId.String(),
 				ProcessStartedTimestamp: latestPrcExe.StartTimestamp,
 			},
-			ProcessType:            latestPrcExe.ProcessType,
-			RpcName:                request.GetRpcName(),
-			Input:                  request.Input,
-			LoadedGlobalAttributes: &loadGlobalAttributeResponse,
+			ProcessType:             latestPrcExe.ProcessType,
+			RpcName:                 request.GetRpcName(),
+			Input:                   request.Input,
+			AppDatabaseReadResponse: &appDatabaseReadResponse,
 		},
 	).Execute()
 	if httpResp != nil {
@@ -237,8 +237,8 @@ func (s serviceImpl) Rpc(
 		StateDecision:       resp.GetStateDecision(),
 		PublishToLocalQueue: resp.GetPublishToLocalQueue(),
 
-		GlobalAttributeTableConfig: latestPrcExe.GlobalAttributeConfig,
-		UpdateGlobalAttributes:     resp.WriteToGlobalAttributes,
+		AppDatabaseConfig: latestPrcExe.AppDatabaseConfig,
+		AppDatabaseWrite:  resp.WriteToAppDatabase,
 
 		WorkerUrl:   latestPrcExe.WorkerUrl,
 		TaskShardId: persistence.DefaultShardId,
@@ -246,11 +246,11 @@ func (s serviceImpl) Rpc(
 	if err != nil {
 		return nil, s.handleUnknownError(err)
 	}
-	if updateResp.FailAtUpdatingGlobalAttributes {
-		s.logger.Warn("failed to update global attributes")
+	if updateResp.FailAtWritingAppDatabase {
+		s.logger.Warn("failed to write app database")
 		return nil, NewErrorWithStatus(
 			http.StatusFailedDependency,
-			"Failed to write global attributes, please check the error message for details: "+updateResp.UpdatingGlobalAttributesError.Error())
+			"Failed to write app database, please check the error message for details: "+updateResp.WritingAppDatabaseError.Error())
 	}
 	if updateResp.ProcessNotExists {
 		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")

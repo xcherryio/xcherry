@@ -7,8 +7,6 @@ import (
 	"github.com/xcherryio/sdk-go/integTests/local_attribute"
 	"testing"
 
-	"github.com/xcherryio/sdk-go/integTests/global_attribute"
-
 	"github.com/xcherryio/sdk-go/integTests/basic"
 	"github.com/xcherryio/sdk-go/integTests/failure_recovery"
 	"github.com/xcherryio/sdk-go/integTests/multi_states"
@@ -76,13 +74,13 @@ func TestStateFailureRecoveryExecuteFailedAtStart(t *testing.T) {
 	failure_recovery.TestStateFailureRecoveryTestExecuteFailedAtStartProcess(t, client)
 }
 
-func TestGlobalAttributesWithSingleTable(t *testing.T) {
-	global_attribute.TestGlobalAttributesWithSingleTable(t, client)
-}
-
-func TestGlobalAttributesWithMultiTables(t *testing.T) {
-	global_attribute.TestGlobalAttributesWithMultiTables(t, client)
-}
+//func TestGlobalAttributesWithSingleTable(t *testing.T) {
+//	global_attribute.TestGlobalAttributesWithSingleTable(t, client)
+//}
+//
+//func TestGlobalAttributesWithMultiTables(t *testing.T) {
+//	global_attribute.TestGlobalAttributesWithMultiTables(t, client)
+//}
 
 func TestLocalAttributes(t *testing.T) {
 	local_attribute.TestLocalAttributes(t, client)

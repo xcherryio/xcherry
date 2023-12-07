@@ -23,7 +23,7 @@ func (p sqlProcessStoreImpl) CompleteExecuteExecution(
 	}
 
 	resp, err := p.doCompleteExecuteExecutionTx(ctx, tx, request)
-	if err != nil || resp.FailAtUpdatingGlobalAttributes {
+	if err != nil || resp.FailedAtWritingAppDatabase {
 		err2 := tx.Rollback()
 		if err2 != nil {
 			p.logger.Error("error on rollback transaction", tag.Error(err2))
@@ -51,12 +51,12 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// Step 1: update persistence
 
-	err = p.updateGlobalAttributesIfNeeded(ctx, tx, request.GlobalAttributeTableConfig, request.UpdateGlobalAttributes)
+	err = p.writeToAppDatabaseIfNeeded(ctx, tx, request.AppDatabaseConfig, request.WriteAppDatabase)
 	if err != nil {
 		//lint:ignore nilerr reason
 		return &data_models.CompleteExecuteExecutionResponse{
-			FailAtUpdatingGlobalAttributes: true,
-			UpdatingGlobalAttributesError:  err,
+			FailedAtWritingAppDatabase: true,
+			AppDatabaseWritingError:    err,
 		}, nil
 	}
 
@@ -108,13 +108,13 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 	// Step 3 - 2: add next states to PendingExecutionMap
 
 	resp, err := p.handleStateDecision(ctx, tx, HandleStateDecisionRequest{
-		Namespace:                  request.Prepare.Info.Namespace,
-		ProcessId:                  request.Prepare.Info.ProcessId,
-		ProcessType:                request.Prepare.Info.ProcessType,
-		ProcessExecutionId:         request.ProcessExecutionId,
-		StateDecision:              request.StateDecision,
-		GlobalAttributeTableConfig: request.GlobalAttributeTableConfig,
-		WorkerUrl:                  request.Prepare.Info.WorkerURL,
+		Namespace:          request.Prepare.Info.Namespace,
+		ProcessId:          request.Prepare.Info.ProcessId,
+		ProcessType:        request.Prepare.Info.ProcessType,
+		ProcessExecutionId: request.ProcessExecutionId,
+		StateDecision:      request.StateDecision,
+		AppDatabaseConfig:  request.AppDatabaseConfig,
+		WorkerUrl:          request.Prepare.Info.WorkerURL,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,
 		ProcessExecutionRowWaitToComplete:             prcRow.WaitToComplete,

@@ -18,8 +18,8 @@ func (p sqlProcessStoreImpl) LoadLocalAttributes(
 	request data_models.LoadLocalAttributesRequest,
 ) (*data_models.LoadLocalAttributesResponse, error) {
 	if len(request.Request.KeysToLoadWithLock) != 0 &&
-		request.Request.LockingPolicy != ptr.Any(xcapi.NO_LOCKING) {
-		return nil, fmt.Errorf("locking policy %v is not supported", request.Request.LockingPolicy)
+		request.Request.LockType != ptr.Any(xcapi.NO_LOCKING) {
+		return nil, fmt.Errorf("locking type %v is not supported", request.Request.LockType)
 	}
 
 	var noLockRows []extensions.LocalAttributeRow

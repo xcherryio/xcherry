@@ -9,16 +9,16 @@ import (
 )
 
 type ProcessExecutionInfoJson struct {
-	ProcessType           string                         `json:"processType"`
-	WorkerURL             string                         `json:"workerURL"`
-	GlobalAttributeConfig *InternalGlobalAttributeConfig `json:"globalAttributeConfig"`
+	ProcessType       string                     `json:"processType"`
+	WorkerURL         string                     `json:"workerURL"`
+	AppDatabaseConfig *InternalAppDatabaseConfig `json:"appDatabaseConfig"`
 }
 
 func FromStartRequestToProcessInfoBytes(req xcapi.ProcessExecutionStartRequest) ([]byte, error) {
 	info := ProcessExecutionInfoJson{
-		ProcessType:           req.GetProcessType(),
-		WorkerURL:             req.GetWorkerUrl(),
-		GlobalAttributeConfig: getInternalGlobalAttributeConfig(req),
+		ProcessType:       req.GetProcessType(),
+		WorkerURL:         req.GetWorkerUrl(),
+		AppDatabaseConfig: getInternalAppDatabaseConfig(req),
 	}
 	return json.Marshal(info)
 }

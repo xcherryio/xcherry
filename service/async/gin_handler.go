@@ -62,12 +62,12 @@ func successRespond(c *gin.Context) {
 }
 func invalidRequestSchema(c *gin.Context) {
 	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
-		Detail: xcapi.PtrString("invalid request schema"),
+		Details: xcapi.PtrString("invalid request schema"),
 	})
 }
 
 func invalidRequestForError(c *gin.Context, err error) {
 	c.JSON(http.StatusBadRequest, xcapi.ApiErrorResponse{
-		Detail: xcapi.PtrString(err.Error()),
+		Details: xcapi.PtrString(err.Error()),
 	})
 }
