@@ -241,13 +241,13 @@ type (
 		Payload types.JSONText
 	}
 
-	CustomTableRow struct {
+	AppDatabaseTableRow struct {
 		TableName               string
 		PrimaryKeyColumnToValue map[string]string
 		OtherColumnToValue      map[string]string
 	}
 
-	CustomTableRowSelect struct {
+	AppDatabaseTableRowSelect struct {
 		ColumnToValue map[string]string
 	}
 

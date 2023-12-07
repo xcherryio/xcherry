@@ -71,8 +71,8 @@ type transactionalCRUD interface {
 
 	InsertLocalQueueMessage(ctx context.Context, row LocalQueueMessageRow) (bool, error)
 
-	InsertCustomTable(ctx context.Context, row CustomTableRow, writeConfigMode xcapi.WriteConflictMode) error
-	UpsertCustomTableByPK(ctx context.Context, row CustomTableRow) error
+	InsertAppDatabaseTable(ctx context.Context, row AppDatabaseTableRow, writeConfigMode xcapi.WriteConflictMode) error
+	UpsertAppDatabaseTableByPK(ctx context.Context, row AppDatabaseTableRow) error
 
 	InsertLocalAttribute(ctx context.Context, insert LocalAttributeRow) error
 	UpsertLocalAttribute(ctx context.Context, row LocalAttributeRow) error
@@ -99,9 +99,9 @@ type nonTransactionalCRUD interface {
 		ctx context.Context, processExecutionId uuid.UUID, dedupIdStrings []string,
 	) ([]LocalQueueMessageRow, error)
 
-	SelectCustomTableByPK(
+	SelectAppDatabaseTableByPK(
 		ctx context.Context, tableName string, primaryKeys [][]xcapi.AppDatabaseColumnValue, columns []string,
-	) ([]CustomTableRowSelect, error)
+	) ([]AppDatabaseTableRowSelect, error)
 
 	SelectLocalAttributes(
 		ctx context.Context, processExecutionId uuid.UUID, keys []string,

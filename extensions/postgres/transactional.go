@@ -261,7 +261,7 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 	return effected == 1, err
 }
 
-func (d dbTx) InsertCustomTable(ctx context.Context, row extensions.CustomTableRow, writeConfigMode xcapi.WriteConflictMode) error {
+func (d dbTx) InsertAppDatabaseTable(ctx context.Context, row extensions.AppDatabaseTableRow, writeConfigMode xcapi.WriteConflictMode) error {
 	var pkCols []string
 	var pkVals []string
 	var otherCols []string
@@ -301,7 +301,7 @@ func (d dbTx) InsertCustomTable(ctx context.Context, row extensions.CustomTableR
 	return err
 }
 
-func (d dbTx) UpsertCustomTableByPK(ctx context.Context, row extensions.CustomTableRow) error {
+func (d dbTx) UpsertAppDatabaseTableByPK(ctx context.Context, row extensions.AppDatabaseTableRow) error {
 	var pkCols []string
 	var pkVals []string
 	var otherCols []string

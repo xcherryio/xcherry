@@ -129,10 +129,10 @@ func (d dbSession) SelectLocalQueueMessages(
 	return rows, err
 }
 
-func (d dbSession) SelectCustomTableByPK(
+func (d dbSession) SelectAppDatabaseTableByPK(
 	ctx context.Context, tableName string, primaryKeys [][]xcapi.AppDatabaseColumnValue, columns []string,
-) ([]extensions.CustomTableRowSelect, error) {
-	var rows []extensions.CustomTableRowSelect
+) ([]extensions.AppDatabaseTableRowSelect, error) {
+	var rows []extensions.AppDatabaseTableRowSelect
 
 	for _, pksPerRow := range primaryKeys {
 		var whereClause string
@@ -144,7 +144,7 @@ func (d dbSession) SelectCustomTableByPK(
 
 			whereClause += pk.GetColumn() + " = '" + pk.GetQueryValue() + "'"
 		}
-		
+
 		row := d.db.QueryRowContext(ctx, `SELECT `+
 			strings.Join(columns, ", ")+` FROM `+
 			tableName+` WHERE `+whereClause)
@@ -177,7 +177,7 @@ func (d dbSession) SelectCustomTableByPK(
 			}
 		}
 
-		rows = append(rows, extensions.CustomTableRowSelect{
+		rows = append(rows, extensions.AppDatabaseTableRowSelect{
 			ColumnToValue: columnToValue,
 		})
 	}

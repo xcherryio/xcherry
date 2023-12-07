@@ -36,13 +36,13 @@ func (p sqlProcessStoreImpl) writeToAppDatabase(
 				otherColumnToValue[otherColumn.GetColumn()] = otherColumn.GetQueryValue()
 			}
 
-			rows := extensions.CustomTableRow{
+			rows := extensions.AppDatabaseTableRow{
 				TableName:               tableConfig.TableName,
 				PrimaryKeyColumnToValue: primaryKeyColumnToValue,
 				OtherColumnToValue:      otherColumnToValue,
 			}
 
-			err := tx.InsertCustomTable(ctx, rows, writeMode)
+			err := tx.InsertAppDatabaseTable(ctx, rows, writeMode)
 			if err != nil {
 				return err
 			}
@@ -87,7 +87,7 @@ func (p sqlProcessStoreImpl) writeToAppDatabaseIfNeeded(
 				otherColumnToValue[other.GetColumn()] = other.GetQueryValue()
 			}
 
-			err := tx.UpsertCustomTableByPK(ctx, extensions.CustomTableRow{
+			err := tx.UpsertAppDatabaseTableByPK(ctx, extensions.AppDatabaseTableRow{
 				TableName:               tableWrite.GetTableName(),
 				PrimaryKeyColumnToValue: primaryKeyColumnToValue,
 				OtherColumnToValue:      otherColumnToValue,
