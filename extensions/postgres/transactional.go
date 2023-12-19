@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package postgres
 
@@ -261,7 +261,9 @@ func (d dbTx) InsertLocalQueueMessage(ctx context.Context, row extensions.LocalQ
 	return effected == 1, err
 }
 
-func (d dbTx) InsertAppDatabaseTable(ctx context.Context, row extensions.AppDatabaseTableRow, writeConfigMode xcapi.WriteConflictMode) error {
+func (d dbTx) InsertAppDatabaseTable(
+	ctx context.Context, row extensions.AppDatabaseTableRow, writeConfigMode xcapi.WriteConflictMode,
+) error {
 	var pkCols []string
 	var pkVals []string
 	var otherCols []string

@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package sql
 
@@ -94,8 +94,10 @@ type (
 	}
 )
 
-func (p sqlProcessStoreImpl) handleStateDecision(ctx context.Context, tx extensions.SQLTransaction,
-	request HandleStateDecisionRequest) (*HandleStateDecisionResponse, error) {
+func (p sqlProcessStoreImpl) handleStateDecision(
+	ctx context.Context, tx extensions.SQLTransaction,
+	request HandleStateDecisionRequest,
+) (*HandleStateDecisionResponse, error) {
 	hasNewImmediateTask := false
 
 	// these fields will be updated and returned back in response for ProcessExecutionRowForUpdate

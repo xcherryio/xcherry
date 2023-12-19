@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package sql
 
@@ -10,7 +10,9 @@ import (
 	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
-func (p sqlProcessStoreImpl) UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
+func (p sqlProcessStoreImpl) UpdateProcessExecutionForRpc(
+	ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest,
+) (
 	*data_models.UpdateProcessExecutionForRpcResponse, error) {
 	tx, err := p.session.StartTransaction(ctx, defaultTxOpts)
 	if err != nil {

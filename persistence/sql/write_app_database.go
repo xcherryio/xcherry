@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package sql
 
@@ -101,7 +101,9 @@ func (p sqlProcessStoreImpl) writeToAppDatabaseIfNeeded(
 	return nil
 }
 
-func isValidPrimaryKey(allPrimaryKeysColumnToValue []map[string]string, targetPrimaryKeyColumnToValue map[string]string) bool {
+func isValidPrimaryKey(
+	allPrimaryKeysColumnToValue []map[string]string, targetPrimaryKeyColumnToValue map[string]string,
+) bool {
 	for _, primaryKeyColumnToValue := range allPrimaryKeysColumnToValue {
 		isValidPK := true
 		for k, v := range primaryKeyColumnToValue {

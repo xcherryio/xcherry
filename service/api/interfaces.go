@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package api
 
@@ -23,5 +23,7 @@ type Service interface {
 	DescribeLatestProcess(ctx context.Context, request xcapi.ProcessExecutionDescribeRequest) (
 		resp *xcapi.ProcessExecutionDescribeResponse, err *ErrorWithStatus)
 	PublishToLocalQueue(ctx context.Context, request xcapi.PublishToLocalQueueRequest) *ErrorWithStatus
-	Rpc(ctx context.Context, request xcapi.ProcessExecutionRpcRequest) (resp *xcapi.ProcessExecutionRpcResponse, err *ErrorWithStatus)
+	Rpc(
+		ctx context.Context, request xcapi.ProcessExecutionRpcRequest,
+	) (resp *xcapi.ProcessExecutionRpcResponse, err *ErrorWithStatus)
 }

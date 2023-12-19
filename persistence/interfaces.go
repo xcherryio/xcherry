@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package persistence
 
@@ -13,22 +13,32 @@ type (
 	ProcessStore interface {
 		Close() error
 
-		StartProcess(ctx context.Context, request data_models.StartProcessRequest) (*data_models.StartProcessResponse, error)
-		StopProcess(ctx context.Context, request data_models.StopProcessRequest) (*data_models.StopProcessResponse, error)
+		StartProcess(
+			ctx context.Context, request data_models.StartProcessRequest,
+		) (*data_models.StartProcessResponse, error)
+		StopProcess(
+			ctx context.Context, request data_models.StopProcessRequest,
+		) (*data_models.StopProcessResponse, error)
 		DescribeLatestProcess(
 			ctx context.Context, request data_models.DescribeLatestProcessRequest,
 		) (*data_models.DescribeLatestProcessResponse, error)
-		RecoverFromStateExecutionFailure(ctx context.Context, request data_models.RecoverFromStateExecutionFailureRequest) error
+		RecoverFromStateExecutionFailure(
+			ctx context.Context, request data_models.RecoverFromStateExecutionFailureRequest,
+		) error
 		GetLatestProcessExecution(
 			ctx context.Context, request data_models.GetLatestProcessExecutionRequest,
 		) (*data_models.GetLatestProcessExecutionResponse, error)
 
-		GetImmediateTasks(ctx context.Context, request data_models.GetImmediateTasksRequest) (*data_models.GetImmediateTasksResponse, error)
+		GetImmediateTasks(
+			ctx context.Context, request data_models.GetImmediateTasksRequest,
+		) (*data_models.GetImmediateTasksResponse, error)
 		DeleteImmediateTasks(ctx context.Context, request data_models.DeleteImmediateTasksRequest) error
 		BackoffImmediateTask(ctx context.Context, request data_models.BackoffImmediateTaskRequest) error
 		CleanUpTasksForTest(ctx context.Context, shardId int32) error
 
-		GetTimerTasksUpToTimestamp(ctx context.Context, request data_models.GetTimerTasksRequest) (*data_models.GetTimerTasksResponse, error)
+		GetTimerTasksUpToTimestamp(
+			ctx context.Context, request data_models.GetTimerTasksRequest,
+		) (*data_models.GetTimerTasksResponse, error)
 
 		GetTimerTasksForTimestamps(
 			ctx context.Context, request data_models.GetTimerTasksForTimestampsRequest,
@@ -64,7 +74,8 @@ type (
 			ctx context.Context, request data_models.AppDatabaseReadRequest,
 		) (*data_models.AppDatabaseReadResponse, error)
 
-		LoadLocalAttributes(ctx context.Context, request data_models.LoadLocalAttributesRequest,
+		LoadLocalAttributes(
+			ctx context.Context, request data_models.LoadLocalAttributesRequest,
 		) (*data_models.LoadLocalAttributesResponse, error)
 
 		UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (

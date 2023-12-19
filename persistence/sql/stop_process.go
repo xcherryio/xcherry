@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package sql
 
@@ -45,7 +45,8 @@ func (p sqlProcessStoreImpl) StopProcess(
 }
 
 func (p sqlProcessStoreImpl) doStopProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string, status data_models.ProcessExecutionStatus,
+	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string,
+	status data_models.ProcessExecutionStatus,
 ) (*data_models.StopProcessResponse, error) {
 	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, namespace, processId)
 	if err != nil {
