@@ -46,3 +46,6 @@ TODO: brew install xCherry binaries
 
 # Development Plan
 See [development plan](https://github.com/xcherryio/sdk-go/wiki/DevelopmentPlan)
+
+# License
+Apache 2.0. See [license file](./LICENSE)

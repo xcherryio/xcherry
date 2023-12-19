@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package sqltest
 
@@ -18,7 +18,7 @@ import (
 
 func SQLStateFailureRecoveryTest(t *testing.T, ass *assert.Assertions, store persistence.ProcessStore) {
 	ctx := context.Background()
-	
+
 	processId := fmt.Sprintf("test-prcid-%v", time.Now().String())
 	input := createTestInput()
 

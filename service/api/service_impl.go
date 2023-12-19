@@ -1,5 +1,5 @@
 // Copyright (c) 2023 xCherryIO Organization
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 package api
 
@@ -333,7 +333,8 @@ func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {
 	return NewErrorWithStatus(500, err.Error())
 }
 
-func (s serviceImpl) createContextWithTimeoutForRpc(ctx context.Context, timeoutFromRequest int32,
+func (s serviceImpl) createContextWithTimeoutForRpc(
+	ctx context.Context, timeoutFromRequest int32,
 ) (context.Context, context.CancelFunc) {
 	qCfg := s.cfg.ApiService.Rpc
 
