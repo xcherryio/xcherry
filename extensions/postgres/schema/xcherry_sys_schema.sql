@@ -80,3 +80,24 @@ CREATE TABLE xcherry_sys_local_attributes(
     value jsonb,
     PRIMARY KEY (process_execution_id, key)
 );
+
+CREATE TABLE xcherry_executions_visibility (
+    namespace VARCHAR(31) NOT NULL,
+    process_id VARCHAR(255) NOT NULL,
+    process_execution_id uuid NOT NULL,
+    process_type_name VARCHAR(255) NOT NULL,
+    status SMALLINT, -- 0:undefined/1:running/2:completed/3:failed/4:timeout/5:terminated
+    start_time TIMESTAMP NOT NULL,
+    close_time TIMESTAMP NULL,
+    PRIMARY KEY (namespace, process_execution_id)
+);
+
+CREATE INDEX by_start_time ON executions_visibility (namespace, start_time DESC, process_execution_id);
+
+CREATE INDEX by_type_start_time ON executions_visibility (namespace, process_type_name, start_time DESC, process_execution_id);
+
+CREATE INDEX by_process_id_start_time ON executions_visibility (namespace, process_id, start_time DESC, process_execution_id);
+
+CREATE INDEX by_status_start_time ON executions_visibility (namespace, status, start_time DESC, process_execution_id);
+
+CREATE INDEX by_status_type_start_time ON executions_visibility (namespace, status, process_type_name, start_time DESC, process_execution_id);
