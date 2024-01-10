@@ -11,7 +11,7 @@ require (
 	github.com/lib/pq v1.2.0
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xcherryio/apis v0.0.3-0.20231128193054-349f7e04593c
+	github.com/xcherryio/apis v0.0.3-0.20240108182735-a95c25c1b089
 	github.com/xcherryio/sdk-go v0.0.0-20231219215046-83d1a82d46a9
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0
