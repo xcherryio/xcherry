@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -45,7 +46,7 @@ type (
 	}
 
 	AsyncServiceConfig struct {
-		// Mode is the mode of async service. Currently only standalone mode is supported
+		// Mode is the mode of async service.
 		Mode AsyncServiceMode `yaml:"mode"`
 		// ImmediateTaskQueue is the config for immediate task queue
 		ImmediateTaskQueue ImmediateTaskQueueConfig `yaml:"immediateTaskQueue"`
@@ -65,7 +66,14 @@ type (
 		// The service names are defined in RFC 6335 and assigned by IANA.
 		// See net.Dial for details of the address format.
 		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
+		// When the mode is standalone, this field should only contain one TCP address.
+		// Otherwise, this field can contain a list of TCP addresses seperated by comma.
 		Address string `yaml:"address"`
+		// AdvertisePort is related to what address to advertise to other
+		// cluster members. Used for nat traversal.
+		// When the mode is standalone, this field should only contain one port.
+		// Otherwise, this field can contain a list of ports seperated by comma.
+		AdvertisePort string `yaml:"advertisePort"`
 		// ReadTimeout is the maximum duration for reading the entire
 		// request, including the body. Because ReadTimeout does not
 		// let Handlers make per-request decisions on each request body's acceptable
@@ -183,13 +191,9 @@ type (
 
 const (
 	// AsyncServiceModeStandalone means there is only one node for async service
-	// This is the only supported mode now
 	AsyncServiceModeStandalone = "standalone"
 	// AsyncServiceModeConsistentHashingCluster means all the nodes of async service
 	// will form a consistent hashing ring, which is used for shard ownership management
-	// TODO
-	//  1. add ringpop config
-	//  2. add async client address config for APIService to call async service with LBS
 	AsyncServiceModeConsistentHashingCluster = "consistent-hashing-cluster"
 )
 
@@ -231,9 +235,6 @@ func (c *Config) ValidateAndSetDefaults() error {
 	}
 	if c.AsyncService.Mode == "" {
 		return fmt.Errorf("must set async service mode")
-	}
-	if c.AsyncService.Mode != AsyncServiceModeStandalone {
-		return fmt.Errorf("currently only standalone mode is supported")
 	}
 	immediateTaskQConfig := &c.AsyncService.ImmediateTaskQueue
 	if immediateTaskQConfig.MaxPollInterval == 0 {
@@ -282,12 +283,31 @@ func (c *Config) ValidateAndSetDefaults() error {
 	if timerTaskQConfig.TriggerNotificationBufferSize == 0 {
 		timerTaskQConfig.TriggerNotificationBufferSize = 1000
 	}
+
+	addresses := strings.Split(c.AsyncService.InternalHttpServer.Address, ",")
+	ports := strings.Split(c.AsyncService.InternalHttpServer.AdvertisePort, ",")
+
 	if c.AsyncService.ClientAddress == "" {
 		if c.AsyncService.InternalHttpServer.Address == "" {
 			return fmt.Errorf("AsyncService.InternalHttpServer.Address cannot be empty")
 		}
-		c.AsyncService.ClientAddress = "http://" + c.AsyncService.InternalHttpServer.Address
+
+		if c.AsyncService.Mode == AsyncServiceModeStandalone {
+			c.AsyncService.ClientAddress = "http://" + addresses[0]
+		} else {
+			for _, address := range addresses {
+				if len(c.AsyncService.ClientAddress) > 0 {
+					c.AsyncService.ClientAddress += ","
+				}
+				c.AsyncService.ClientAddress += "http://" + address
+			}
+		}
 	}
+
+	if len(addresses) > 1 && len(addresses) != len(ports) {
+		return fmt.Errorf("AsyncService.InternalHttpServer.AdvertisePort does not match the count of Address")
+	}
+
 	return nil
 }
 

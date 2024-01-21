@@ -86,10 +86,13 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 
 	var asyncServer async.Server
 	if services[AsyncServiceName] {
-		asyncServer := async.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))
-		err = asyncServer.Start()
-		if err != nil {
-			logger.Fatal("Failed to start async server", tag.Error(err))
+		asyncServers, _ := async.NewDefaultAsyncServersWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))
+
+		for i, asyncServer := range asyncServers {
+			err = asyncServer.Start()
+			if err != nil {
+				logger.Fatal(fmt.Sprintf("Failed to start the %d-th async server", i), tag.Error(err))
+			}
 		}
 	}
 

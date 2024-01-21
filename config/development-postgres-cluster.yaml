@@ -1,0 +1,21 @@
+log:
+  stdout: true
+  level: debug
+  levelKey: "level"
+apiService:
+  httpServer: # see more config fields in config.go
+     address: 0.0.0.0:8801
+     readTimeout: 10s
+     writeTimeout: 60s
+database:
+  sql:
+    dbExtensionName: postgres
+    user: xcherry
+    password: xcherryio
+    databaseName: xcherry
+    connectAddr: 127.0.0.1:5432
+asyncService:
+  mode: consistent-hashing-cluster
+  internalHttpServer:
+    address: 0.0.0.0:8701,0.0.0.0:8702
+    advertisePort: 8901,8902
