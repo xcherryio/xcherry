@@ -81,4 +81,11 @@ type (
 		UpdateProcessExecutionForRpc(ctx context.Context, request data_models.UpdateProcessExecutionForRpcRequest) (
 			*data_models.UpdateProcessExecutionForRpcResponse, error)
 	}
+
+	VisibilityStore interface {
+		Close() error
+		RecordProcessExecutionStatus(ctx context.Context, req data_models.RecordProcessExecutionStatusRequest) error
+		// TODO: add list process executions api
+		// TODO: add count process executions api
+	}
 )

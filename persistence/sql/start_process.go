@@ -309,6 +309,14 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			if err != nil {
 				return nil, err
 			}
+			err = p.recordProcessExecutionStatusForVisibility(
+				ctx,
+				tx,
+				request,
+				processExecutionRowForUpdate.ProcessExecutionId,
+				data_models.ProcessExecutionStatusTerminated,
+				-1,
+				time.Now().Unix())
 		}
 
 		// update the latest process execution and start a new process
@@ -380,7 +388,7 @@ func (p sqlProcessStoreImpl) insertBrandNewLatestProcessExecution(
 		ProcessExecutionId: prcExeId,
 	})
 	if err != nil {
-		return hasNewImmediateTask, prcExeId, err
+		return false, prcExeId, err
 	}
 
 	hasNewImmediateTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
@@ -403,7 +411,7 @@ func (p sqlProcessStoreImpl) updateLatestAndInsertNewProcessExecution(
 		ProcessExecutionId: prcExeId,
 	})
 	if err != nil {
-		return hasNewImmediateTask, prcExeId, err
+		return false, prcExeId, err
 	}
 
 	hasNewImmediateTask, err = p.insertProcessExecution(ctx, tx, request, prcExeId)
@@ -430,7 +438,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 
 	processExeInfoBytes, err := data_models.FromStartRequestToProcessInfoBytes(req)
 	if err != nil {
-		return hasNewImmediateTask, err
+		return false, err
 	}
 
 	sequenceMaps := data_models.NewStateExecutionSequenceMaps()
@@ -441,22 +449,22 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 
 		stateInputBytes, err := data_models.FromEncodedObjectIntoBytes(req.StartStateInput)
 		if err != nil {
-			return hasNewImmediateTask, err
+			return false, err
 		}
 
 		stateInfoBytes, err := data_models.FromStartRequestToStateInfoBytes(req)
 		if err != nil {
-			return hasNewImmediateTask, err
+			return false, err
 		}
 
 		err = insertAsyncStateExecution(ctx, tx, processExecutionId, stateId, stateIdSeq, stateConfig, stateInputBytes, stateInfoBytes)
 		if err != nil {
-			return hasNewImmediateTask, err
+			return false, err
 		}
 
 		err = insertImmediateTask(ctx, tx, processExecutionId, stateId, 1, stateConfig, request.NewTaskShardId)
 		if err != nil {
-			return hasNewImmediateTask, err
+			return false, err
 		}
 
 		hasNewImmediateTask = true
@@ -473,6 +481,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		return hasNewImmediateTask, err
 	}
 
+	startTime := time.Now()
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId: processExecutionId,
 
@@ -483,12 +492,24 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		Namespace:                  req.Namespace,
 		ProcessId:                  req.ProcessId,
 
-		StartTime:      time.Now(),
+		StartTime:      startTime,
 		TimeoutSeconds: timeoutSeconds,
 
 		Info: processExeInfoBytes,
 	}
 
 	err = tx.InsertProcessExecution(ctx, row)
+	if err != nil {
+		return hasNewImmediateTask, err
+	}
+
+	err = p.recordProcessExecutionStatusForVisibility(
+		ctx,
+		tx,
+		request,
+		processExecutionId,
+		data_models.ProcessExecutionStatusRunning,
+		startTime.Unix(),
+		-1)
 	return hasNewImmediateTask, err
 }

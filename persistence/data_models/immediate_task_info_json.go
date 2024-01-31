@@ -10,6 +10,8 @@ type ImmediateTaskInfoJson struct {
 	WorkerTaskBackoffInfo *WorkerTaskBackoffInfoJson `json:"workerTaskBackoffInfo"`
 	// used when the `task_type` is localQueueMessage
 	LocalQueueMessageInfo []LocalQueueMessageInfoJson `json:"localQueueMessageInfo"`
+	// used when the `task_type` is visibility
+	VisibilityInfo *VisibilityInfoJson `json:"visibilityInfo"`
 }
 
 func BytesToImmediateTaskInfo(bytes []byte) (ImmediateTaskInfoJson, error) {
