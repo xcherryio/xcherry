@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/xcherryio/xcherry/persistence/data_models"
 
@@ -154,7 +155,27 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		hasNewImmediateTask = true
 	}
 
-	// Step 4: delete current immediate task
+	// Step 5: record status if process is ending
+	if prcRow.Status != data_models.ProcessExecutionStatusRunning {
+		err := p.recordProcessExecutionStatusForVisibility(
+			ctx,
+			tx,
+			request.TaskShardId,
+			request.Prepare.Info.Namespace,
+			request.Prepare.Info.ProcessId,
+			request.Prepare.Info.ProcessType,
+			request.ProcessExecutionId,
+			prcRow.Status,
+			-1,
+			time.Now().Unix(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		hasNewImmediateTask = true
+	}
+
+	// Step 6: delete current immediate task
 	err = tx.DeleteImmediateTask(ctx, extensions.ImmediateTaskRowDeleteFilter{
 		ShardId:      request.TaskShardId,
 		TaskSequence: request.TaskSequence,

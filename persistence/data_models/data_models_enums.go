@@ -74,6 +74,7 @@ const (
 	ImmediateTaskTypeWaitUntil             ImmediateTaskType = 1
 	ImmediateTaskTypeExecute               ImmediateTaskType = 2
 	ImmediateTaskTypeNewLocalQueueMessages ImmediateTaskType = 3
+	ImmediateTaskTypeVisibility            ImmediateTaskType = 4
 )
 
 func (e ImmediateTaskType) String() string {
@@ -84,6 +85,8 @@ func (e ImmediateTaskType) String() string {
 		return "Execute"
 	case ImmediateTaskTypeNewLocalQueueMessages:
 		return "NewLocalQueueMessages"
+	case ImmediateTaskTypeVisibility:
+		return "Visibility"
 	default:
 		panic("this is not supported")
 	}
