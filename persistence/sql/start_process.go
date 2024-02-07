@@ -309,7 +309,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 			if err != nil {
 				return nil, err
 			}
-			err = p.recordProcessExecutionStatusForVisibility(
+			err = p.AddVisibilityTaskRecordProcessExecutionStatus(
 				ctx,
 				tx,
 				request.NewTaskShardId,
@@ -509,7 +509,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		return hasNewImmediateTask, err
 	}
 
-	err = p.recordProcessExecutionStatusForVisibility(
+	err = p.AddVisibilityTaskRecordProcessExecutionStatus(
 		ctx,
 		tx,
 		request.NewTaskShardId,

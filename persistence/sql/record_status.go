@@ -10,7 +10,7 @@ import (
 	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
-func (p sqlProcessStoreImpl) recordProcessExecutionStatusForVisibility(
+func (p sqlProcessStoreImpl) AddVisibilityTaskRecordProcessExecutionStatus(
 	ctx context.Context,
 	tx extensions.SQLTransaction,
 	shardId int32,

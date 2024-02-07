@@ -107,7 +107,7 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		return nil, err
 	}
 
-	err = p.recordProcessExecutionStatusForVisibility(
+	err = p.AddVisibilityTaskRecordProcessExecutionStatus(
 		ctx,
 		tx,
 		newTaskShardId,

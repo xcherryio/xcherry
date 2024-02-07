@@ -157,7 +157,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	// Step 5: record status if process is ending
 	if prcRow.Status != data_models.ProcessExecutionStatusRunning {
-		err := p.recordProcessExecutionStatusForVisibility(
+		err := p.AddVisibilityTaskRecordProcessExecutionStatus(
 			ctx,
 			tx,
 			request.TaskShardId,
