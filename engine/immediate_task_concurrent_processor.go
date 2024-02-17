@@ -117,6 +117,8 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 
 	if task.TaskType == data_models.ImmediateTaskTypeNewLocalQueueMessages {
 		return w.processLocalQueueMessagesTask(ctx, task)
+	} else if task.TaskType == data_models.ImmediateTaskTypeVisibility {
+		return w.processVisibilityTask(ctx, task)
 	}
 
 	prep, err := w.store.PrepareStateExecution(ctx, data_models.PrepareStateExecutionRequest{
@@ -149,6 +151,11 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 			tag.Value(fmt.Sprintf("status %v", prep.Status)))
 		return nil
 	}
+}
+
+func (w *immediateTaskConcurrentProcessor) processVisibilityTask(
+	ctx context.Context, task data_models.ImmediateTask) error {
+	return nil
 }
 
 func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(

@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
+	"time"
 
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/extensions"
@@ -27,7 +28,7 @@ func (p sqlProcessStoreImpl) StopProcess(
 		status = data_models.ProcessExecutionStatusFailed
 	}
 
-	resp, err := p.doStopProcessTx(ctx, tx, namespace, processId, status)
+	resp, err := p.doStopProcessTx(ctx, tx, namespace, processId, request.NewTaskShardId, status)
 	if err != nil {
 		err2 := tx.Rollback()
 		if err2 != nil {
@@ -45,7 +46,7 @@ func (p sqlProcessStoreImpl) StopProcess(
 }
 
 func (p sqlProcessStoreImpl) doStopProcessTx(
-	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string,
+	ctx context.Context, tx extensions.SQLTransaction, namespace string, processId string, newTaskShardId int32,
 	status data_models.ProcessExecutionStatus,
 ) (*data_models.StopProcessResponse, error) {
 	curProcExecRow, err := p.session.SelectLatestProcessExecution(ctx, namespace, processId)
@@ -99,6 +100,27 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	procExecInfoJson, err := data_models.BytesToProcessExecutionInfo(curProcExecRow.Info)
+	if err != nil {
+		return nil, err
+	}
+
+	err = p.AddVisibilityTaskRecordProcessExecutionStatus(
+		ctx,
+		tx,
+		newTaskShardId,
+		namespace,
+		processId,
+		procExecInfoJson.ProcessType,
+		curProcExecRow.ProcessExecutionId,
+		status,
+		-1,
+		time.Now().Unix(),
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	return &data_models.StopProcessResponse{

@@ -122,9 +122,11 @@ func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.
 	prcExeId := startProcessWithConfigs(ctx, t, ass, store, namespace, processId, input, appDatabaseConfig, stateCfg)
 
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeExecute, stateId1+"-1")
+	visibilityTask := immediateTasks[1]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -365,7 +367,9 @@ func SQLAppDatabaseTest(t *testing.T, ass *assert.Assertions, store persistence.
 		},
 	}
 	completeExecuteExecution(
-		ctx, t, ass, store, prcExeId, task, prep, decision2, false)
-	checkAndGetImmediateTasks(ctx, t, ass, store, 0)
+		ctx, t, ass, store, prcExeId, task, prep, decision2, true)
+	_, _, immediateTasks = checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	visibilityTask = immediateTasks[0]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 	describeProcess(ctx, t, ass, store, namespace, processId, xcapi.COMPLETED)
 }

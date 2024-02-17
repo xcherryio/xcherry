@@ -10,6 +10,7 @@ type (
 		Namespace       string
 		ProcessId       string
 		ProcessStopType xcapi.ProcessExecutionStopType
+		NewTaskShardId  int32
 	}
 
 	StopProcessResponse struct {
