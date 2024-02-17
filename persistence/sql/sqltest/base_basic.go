@@ -37,9 +37,25 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	taskVisibility := immediateTasks[1]
+	verifyImmediateTask(
+		ass,
+		taskVisibility,
+		data_models.ImmediateTaskTypeVisibility,
+		"-0",
+		data_models.ImmediateTaskInfoJson{
+			VisibilityInfo: &data_models.VisibilityInfoJson{
+				Namespace:   namespace,
+				ProcessId:   processId,
+				ProcessType: testProcessType,
+				Status:      data_models.ProcessExecutionStatusRunning,
+				StartTime:   -1,
+				EndTime:     -1,
+			},
+		})
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -98,7 +114,7 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, true)
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
@@ -197,9 +213,11 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	visibilityTask := immediateTasks[1]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -258,7 +276,7 @@ func SQLProcessIdReusePolicyDisallowReuseTest(t *testing.T, ass *assert.Assertio
 			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, true)
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
@@ -288,9 +306,11 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, task, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	visibilityTask := immediateTasks[1]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -349,7 +369,7 @@ func SQLProcessIdReusePolicyAllowIfNoRunning(
 			CloseType: xcapi.FORCE_COMPLETE_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, true)
 
 	// Verify stateId2 was aborted and process has completed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)
@@ -370,8 +390,10 @@ func SQLGracefulCompleteTest(t *testing.T, ass *assert.Assertions, store persist
 	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
+	visibilityTask := immediateTasks[1]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)
@@ -447,7 +469,7 @@ func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.Pr
 	prcExeId := startProcess(ctx, t, ass, store, namespace, processId, input)
 
 	// Get the task
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	task := immediateTasks[0]
 
 	// Delete and verify immediate tasks are deleted.
@@ -506,7 +528,7 @@ func SQLForceFailTest(t *testing.T, ass *assert.Assertions, store persistence.Pr
 			CloseType: xcapi.FORCE_FAIL_PROCESS,
 		},
 	}
-	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, false)
+	completeExecuteExecution(ctx, t, ass, store, prcExeId, task, prep, decision2, true)
 
 	// Verify stateId2 was aborted and process has failed
 	prep = prepareStateExecution(ctx, t, store, prcExeId, stateId2, 1)

@@ -70,9 +70,11 @@ func startProcessAndBackoffWorkerTask(
 
 	// Test waitUntil API execution
 	// Check initial immediate tasks.
-	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 1)
+	minSeq, maxSeq, immediateTasks := checkAndGetImmediateTasks(ctx, t, ass, store, 2)
 	immediateTask := immediateTasks[0]
 	verifyImmediateTaskNoInfo(ass, immediateTask, data_models.ImmediateTaskTypeWaitUntil, stateId1+"-1")
+	visibilityTask := immediateTasks[1]
+	ass.Equal(data_models.ImmediateTaskTypeVisibility, visibilityTask.TaskType)
 
 	// Delete and verify immediate tasks are deleted.
 	deleteAndVerifyImmediateTasksDeleted(ctx, t, ass, store, minSeq, maxSeq)

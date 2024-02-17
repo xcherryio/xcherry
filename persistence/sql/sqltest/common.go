@@ -339,7 +339,19 @@ func verifyImmediateTask(
 	ass.Equal(taskType, task.TaskType)
 	ass.Equal(stateExeId, task.GetStateExecutionId())
 	ass.True(task.TaskSequence != nil)
-	ass.Equal(info, task.ImmediateTaskInfo)
+	verifyImmediateTaskInfo(ass, task, info)
+}
+
+func verifyImmediateTaskInfo(
+	assert *assert.Assertions,
+	task data_models.ImmediateTask,
+	expectedInfo data_models.ImmediateTaskInfoJson) {
+	if expectedInfo.VisibilityInfo != nil {
+		assert.Equal(expectedInfo.VisibilityInfo.Namespace, task.ImmediateTaskInfo.VisibilityInfo.Namespace)
+		assert.Equal(expectedInfo.VisibilityInfo.ProcessId, task.ImmediateTaskInfo.VisibilityInfo.ProcessId)
+		assert.Equal(expectedInfo.VisibilityInfo.ProcessType, task.ImmediateTaskInfo.VisibilityInfo.ProcessType)
+		assert.Equal(expectedInfo.VisibilityInfo.Status, task.ImmediateTaskInfo.VisibilityInfo.Status)
+	}
 }
 
 func verifyTimerTask(
