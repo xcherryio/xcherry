@@ -24,8 +24,8 @@ const DefaultPort = 5432
 const DefaultUserName = "xcherry"
 const DefaultPassword = "xcherryio"
 const DefaultDatabaseName = "xcherry"
-const DefaultSchemaFilePath = "./extensions/postgres/schema/xcherry_sys_schema.process"
-const SampleTablesSchemaFilePath = "./extensions/postgres/schema/sample_tables.process"
+const DefaultSchemaFilePath = "./extensions/postgres/schema/xcherry_sys_schema.sql"
+const SampleTablesSchemaFilePath = "./extensions/postgres/schema/sample_tables.sql"
 
 // BuildCLIOptions builds the options for cli
 func BuildCLIOptions() *cli.App {
@@ -40,13 +40,13 @@ func BuildCLIOptions() *cli.App {
 			Name:    extensions.CLIFlagEndpoint,
 			Aliases: []string{"e"},
 			Value:   DefaultEndpoint,
-			Usage:   "hostname or ip address of process host to connect to postgres",
+			Usage:   "hostname or ip address of sql host to connect to postgres",
 		},
 		&cli.IntFlag{
 			Name:    extensions.CLIFlagPort,
 			Aliases: []string{"p"},
 			Value:   DefaultPort,
-			Usage:   "port of process host to connect to postgres",
+			Usage:   "port of sql host to connect to postgres",
 		},
 		&cli.StringFlag{
 			Name:    extensions.CLIFlagUser,
