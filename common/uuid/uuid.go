@@ -107,7 +107,7 @@ func (u *UUID) Scan(src interface{}) error {
 	return nil
 }
 
-// Value implements process.Valuer so that UUIDs can be written to databases
+// Value implements sql.Valuer so that UUIDs can be written to databases
 // transparently. This method returns a byte slice representation of uuid
 func (u UUID) Value() (driver.Value, error) {
 	return []byte(u), nil
