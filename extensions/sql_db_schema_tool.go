@@ -54,7 +54,7 @@ func SetupSchema(cfg *config.SQL, filePath string) error {
 	return adminSession.ExecuteSchemaDDL(context.Background(), string(content))
 }
 
-// CreateDatabaseByCli creates a process database
+// CreateDatabaseByCli creates a sql database
 func CreateDatabaseByCli(cli *cli.Context, extensionName string) error {
 	cfg, err := parseConnectConfig(cli, extensionName)
 	if err != nil {
@@ -115,7 +115,7 @@ func ValidateConnectConfig(cfg *config.SQL) error {
 		return fmt.Errorf("invalid host and port " + cfg.ConnectAddr)
 	}
 	if len(host) == 0 {
-		return fmt.Errorf("missing process endpoint argument " + flag(CLIFlagEndpoint))
+		return fmt.Errorf("missing sql endpoint argument " + flag(CLIFlagEndpoint))
 	}
 	if cfg.DatabaseName == "" {
 		return fmt.Errorf("missing " + flag(CLIFlagDatabase) + " argument")
