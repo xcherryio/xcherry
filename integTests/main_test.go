@@ -74,7 +74,8 @@ func TestMain(m *testing.M) {
 					},
 				},
 				Database: config.DatabaseConfig{
-					SQL: sqlConfig,
+					ProcessStoreConfig:    sqlConfig,
+					VisibilityStoreConfig: sqlConfig,
 				},
 				AsyncService: config.AsyncServiceConfig{
 					Mode: config.AsyncServiceModeStandalone,
