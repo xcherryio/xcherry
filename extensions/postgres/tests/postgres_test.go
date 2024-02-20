@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/xcherryio/xcherry/persistence/sql/sqltest"
+	"github.com/xcherryio/xcherry/persistence/process/sqltest"
 )
 
 func TestBasic(t *testing.T) {

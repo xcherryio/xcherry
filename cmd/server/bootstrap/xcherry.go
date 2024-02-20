@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/xcherry/persistence/visibility"
 	rawLog "log"
 	"os"
 	"os/signal"
@@ -16,7 +17,7 @@ import (
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/config"
-	"github.com/xcherryio/xcherry/persistence/sql"
+	"github.com/xcherryio/xcherry/persistence/process"
 	"github.com/xcherryio/xcherry/service/api"
 	"github.com/xcherryio/xcherry/service/async"
 	"go.uber.org/multierr"
@@ -70,14 +71,20 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 		logger.Fatal("config is invalid", tag.Error(err))
 	}
 
-	sqlStore, err := sql.NewSQLProcessStore(*cfg.Database.SQL, logger)
+	processStore, err := process.NewSQLProcessStore(*cfg.Database.ProcessStoreConfig, logger)
 	if err != nil {
 		logger.Fatal("error on persistence setup", tag.Error(err))
 	}
 
+	visibilityStore, err := visibility.NewSqlVisibilityStore(*cfg.Database.VisibilityStoreConfig, logger)
+	if err != nil {
+		logger.Fatal("error on visibility setup", tag.Error(err))
+	}
+
 	var apiServer api.Server
 	if services[ApiServiceName] {
-		apiServer = api.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(ApiServiceName)))
+		apiServer = api.NewDefaultAPIServerWithGin(
+			rootCtx, *cfg, processStore, logger.WithTags(tag.Service(ApiServiceName)))
 		err = apiServer.Start()
 		if err != nil {
 			logger.Fatal("Failed to start api server", tag.Error(err))
@@ -86,7 +93,8 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 
 	var asyncServer async.Server
 	if services[AsyncServiceName] {
-		asyncServer := async.NewDefaultAPIServerWithGin(rootCtx, *cfg, sqlStore, logger.WithTags(tag.Service(AsyncServiceName)))
+		asyncServer := async.NewDefaultAPIServerWithGin(
+			rootCtx, *cfg, processStore, visibilityStore, logger.WithTags(tag.Service(AsyncServiceName)))
 		err = asyncServer.Start()
 		if err != nil {
 			logger.Fatal("Failed to start async server", tag.Error(err))
@@ -109,8 +117,12 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 				errs = multierr.Append(errs, err)
 			}
 		}
-		// stop sqlStore
-		err := sqlStore.Close()
+		// stop processStore and visibilityStore
+		err := processStore.Close()
+		if err != nil {
+			errs = multierr.Append(errs, err)
+		}
+		err = visibilityStore.Close()
 		if err != nil {
 			errs = multierr.Append(errs, err)
 		}

@@ -31,21 +31,24 @@ type asyncService struct {
 }
 
 func NewAsyncServiceImpl(
-	rootCtx context.Context, store persistence.ProcessStore, cfg config.Config, logger log.Logger,
+	rootCtx context.Context, processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	cfg config.Config, logger log.Logger,
 ) Service {
 	notifier := newTaskNotifierImpl()
 
-	immediateTaskProcessor := engine.NewImmediateTaskConcurrentProcessor(rootCtx, cfg, notifier, store, logger)
-	timerTaskProcessor := engine.NewTimerTaskConcurrentProcessor(rootCtx, cfg, notifier, store, logger)
+	immediateTaskProcessor := engine.NewImmediateTaskConcurrentProcessor(
+		rootCtx, cfg, notifier, processStore, visibilityStore, logger)
+	timerTaskProcessor := engine.NewTimerTaskConcurrentProcessor(rootCtx, cfg, notifier, processStore, logger)
 
 	// TODO for config.AsyncServiceModeConsistentHashingCluster
 	// the queues will be created/added/managed dynamically
 
 	immediateTaskQueue := engine.NewImmediateTaskQueueImpl(
-		rootCtx, persistence.DefaultShardId, cfg, store, immediateTaskProcessor, logger)
+		rootCtx, persistence.DefaultShardId, cfg, processStore, immediateTaskProcessor, logger)
 
 	timerTaskQueue := engine.NewTimerTaskQueueImpl(
-		rootCtx, persistence.DefaultShardId, cfg, store, timerTaskProcessor, logger)
+		rootCtx, persistence.DefaultShardId, cfg, processStore, timerTaskProcessor, logger)
 
 	notifier.AddImmediateTaskQueue(persistence.DefaultShardId, immediateTaskQueue)
 	notifier.AddTimerTaskQueue(persistence.DefaultShardId, timerTaskQueue)

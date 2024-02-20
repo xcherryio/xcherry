@@ -29,11 +29,15 @@ type defaultSever struct {
 }
 
 func NewDefaultAPIServerWithGin(
-	rootCtx context.Context, cfg config.Config, store persistence.ProcessStore, logger log.Logger,
+	rootCtx context.Context,
+	cfg config.Config,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	logger log.Logger,
 ) Server {
 	engine := gin.Default()
 
-	svc := NewAsyncServiceImpl(rootCtx, store, cfg, logger)
+	svc := NewAsyncServiceImpl(rootCtx, processStore, visibilityStore, cfg, logger)
 
 	handler := newGinHandler(cfg, svc, logger)
 

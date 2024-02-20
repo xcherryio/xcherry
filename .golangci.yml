@@ -502,7 +502,7 @@ linters:
   presets:
     - bugs
     - unused
-    - sql
+    - process
   fast: false
 
 issues:

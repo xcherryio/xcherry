@@ -20,7 +20,7 @@ type (
 		Log Logger `yaml:"log"`
 
 		// Database is the database that xCherry server will be extending on
-		// either sql or nosql is needed
+		// either process or nosql is needed
 		Database DatabaseConfig `yaml:"database"`
 
 		// ApiService is the API service config
@@ -32,9 +32,10 @@ type (
 
 	DatabaseConfig struct {
 		// SQL is the SQL database config
-		// either sql or nosql is needed to run server
+		// either process or nosql is needed to run server
 		// Only SQL is supported for now.
-		SQL *SQL `yaml:"sql"`
+		ProcessStoreConfig    *SQL `yaml:"processStore"`
+		VisibilityStoreConfig *SQL `yaml:"visibilityStore"`
 	}
 
 	ApiServiceConfig struct {
@@ -215,12 +216,12 @@ func NewConfig(configPath string) (*Config, error) {
 }
 
 func (c *Config) ValidateAndSetDefaults() error {
-	if c.Database.SQL == nil {
-		return fmt.Errorf("sql config is required")
+	if c.Database.ProcessStoreConfig == nil {
+		return fmt.Errorf("process config is required")
 	}
-	sql := c.Database.SQL
+	sql := c.Database.ProcessStoreConfig
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
-		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+		return fmt.Errorf("some required configs are missing: process.DatabaseName, process.DBExtensionName, process.ConnectAddr, process.User")
 	}
 	rpcConfig := &c.ApiService.Rpc
 	if rpcConfig.MaxRpcAPITimeout == 0 {
