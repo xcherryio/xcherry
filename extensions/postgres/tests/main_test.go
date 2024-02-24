@@ -16,7 +16,7 @@ import (
 	"github.com/xcherryio/xcherry/extensions/postgres"
 	"github.com/xcherryio/xcherry/extensions/postgres/postgrestool"
 
-	"github.com/xcherryio/xcherry/persistence/sql"
+	"github.com/xcherryio/xcherry/persistence/process"
 )
 
 var store persistence.ProcessStore
@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	store, err = sql.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
+	store, err = process.NewSQLProcessStore(*sqlConfig, log.NewDevelopmentLogger())
 	if err != nil {
 		panic(err)
 	}

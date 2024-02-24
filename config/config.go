@@ -34,7 +34,8 @@ type (
 		// SQL is the SQL database config
 		// either sql or nosql is needed to run server
 		// Only SQL is supported for now.
-		SQL *SQL `yaml:"sql"`
+		ProcessStoreConfig    *SQL `yaml:"processStore"`
+		VisibilityStoreConfig *SQL `yaml:"visibilityStore"`
 	}
 
 	ApiServiceConfig struct {
@@ -215,12 +216,13 @@ func NewConfig(configPath string) (*Config, error) {
 }
 
 func (c *Config) ValidateAndSetDefaults() error {
-	if c.Database.SQL == nil {
+	if c.Database.ProcessStoreConfig == nil {
 		return fmt.Errorf("sql config is required")
 	}
-	sql := c.Database.SQL
+	sql := c.Database.ProcessStoreConfig
 	if anyAbsent(sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User) {
-		return fmt.Errorf("some required configs are missing: sql.DatabaseName, sql.DBExtensionName, sql.ConnectAddr, sql.User")
+		return fmt.Errorf("some required configs are missing: processStore.DatabaseName, " +
+			"processStore.DBExtensionName, processStore.ConnectAddr, processStore.User")
 	}
 	rpcConfig := &c.ApiService.Rpc
 	if rpcConfig.MaxRpcAPITimeout == 0 {

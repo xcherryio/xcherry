@@ -32,13 +32,15 @@ type immediateTaskConcurrentProcessor struct {
 	// shardId to the channel
 	taskToCommitChans map[int32]chan<- data_models.ImmediateTask
 	taskNotifier      TaskNotifier
-	store             persistence.ProcessStore
+	processStore      persistence.ProcessStore
+	visibilityStore   persistence.VisibilityStore
 	logger            log.Logger
 }
 
 func NewImmediateTaskConcurrentProcessor(
 	ctx context.Context, cfg config.Config, notifier TaskNotifier,
-	store persistence.ProcessStore, logger log.Logger,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore, logger log.Logger,
 ) ImmediateTaskProcessor {
 	bufferSize := cfg.AsyncService.ImmediateTaskQueue.ProcessorBufferSize
 	return &immediateTaskConcurrentProcessor{
@@ -48,7 +50,8 @@ func NewImmediateTaskConcurrentProcessor(
 		currentShards:     map[int32]bool{},
 		taskToCommitChans: make(map[int32]chan<- data_models.ImmediateTask),
 		taskNotifier:      notifier,
-		store:             store,
+		processStore:      processStore,
+		visibilityStore:   visibilityStore,
 		logger:            logger,
 	}
 }
@@ -121,7 +124,7 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 		return w.processVisibilityTask(ctx, task)
 	}
 
-	prep, err := w.store.PrepareStateExecution(ctx, data_models.PrepareStateExecutionRequest{
+	prep, err := w.processStore.PrepareStateExecution(ctx, data_models.PrepareStateExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
@@ -208,7 +211,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 			xcapi.WAIT_UNTIL_API)
 	}
 
-	compResp, err := w.store.ProcessWaitUntilExecution(ctx, data_models.ProcessWaitUntilExecutionRequest{
+	compResp, err := w.processStore.ProcessWaitUntilExecution(ctx, data_models.ProcessWaitUntilExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
@@ -258,7 +261,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 	}
 	switch stateRecoveryPolicy.Policy {
 	case xcapi.FAIL_PROCESS_ON_STATE_FAILURE:
-		resp, errStopProcess := w.store.StopProcess(ctx, data_models.StopProcessRequest{
+		resp, errStopProcess := w.processStore.StopProcess(ctx, data_models.StopProcessRequest{
 			Namespace:       prep.Info.Namespace,
 			ProcessId:       prep.Info.ProcessId,
 			ProcessStopType: xcapi.FAIL,
@@ -277,7 +280,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 			return fmt.Errorf("cannot proceed to configured state because of missing state config")
 		}
 
-		err := w.store.RecoverFromStateExecutionFailure(ctx, data_models.RecoverFromStateExecutionFailureRequest{
+		err := w.processStore.RecoverFromStateExecutionFailure(ctx, data_models.RecoverFromStateExecutionFailureRequest{
 			Namespace:          prep.Info.Namespace,
 			ProcessExecutionId: task.ProcessExecutionId,
 			SourceStateExecutionId: data_models.StateExecutionId{
@@ -441,7 +444,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 			xcapi.EXECUTE_API)
 	}
 
-	compResp, err := w.store.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
+	compResp, err := w.processStore.CompleteExecuteExecution(ctx, data_models.CompleteExecuteExecutionRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		StateExecutionId: data_models.StateExecutionId{
 			StateId:         task.StateId,
@@ -530,7 +533,7 @@ func (w *immediateTaskConcurrentProcessor) retryTask(
 	LastFailureStatus int32, LastFailureDetails string,
 ) error {
 	fireTimeUnixSeconds := time.Now().Unix() + int64(nextIntervalSecs)
-	err := w.store.BackoffImmediateTask(ctx, data_models.BackoffImmediateTaskRequest{
+	err := w.processStore.BackoffImmediateTask(ctx, data_models.BackoffImmediateTaskRequest{
 		LastFailureStatus:    LastFailureStatus,
 		LastFailureDetails:   LastFailureDetails,
 		Prep:                 prep,
@@ -589,7 +592,7 @@ func (w *immediateTaskConcurrentProcessor) composeHttpError(
 func (w *immediateTaskConcurrentProcessor) processLocalQueueMessagesTask(
 	ctx context.Context, task data_models.ImmediateTask,
 ) error {
-	resp, err := w.store.ProcessLocalQueueMessages(ctx, data_models.ProcessLocalQueueMessagesRequest{
+	resp, err := w.processStore.ProcessLocalQueueMessages(ctx, data_models.ProcessLocalQueueMessagesRequest{
 		TaskShardId:        task.ShardId,
 		TaskSequence:       task.GetTaskSequence(),
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -627,7 +630,7 @@ func (w *immediateTaskConcurrentProcessor) readAppDatabaseIfNeeded(
 		tag.JsonValue(prep.Info.StateConfig),
 		tag.JsonValue(prep.Info.AppDatabaseConfig))
 
-	resp, err := w.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
+	resp, err := w.processStore.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
 		AppDatabaseConfig: *prep.Info.AppDatabaseConfig,
 		Request:           *prep.Info.StateConfig.AppDatabaseReadRequest,
 	})
@@ -652,7 +655,7 @@ func (w *immediateTaskConcurrentProcessor) loadLocalAttributesIfNeeded(
 		tag.StateExecutionId(task.GetStateExecutionId()),
 		tag.JsonValue(prep.Info.StateConfig))
 
-	resp, err := w.store.LoadLocalAttributes(ctx, data_models.LoadLocalAttributesRequest{
+	resp, err := w.processStore.LoadLocalAttributes(ctx, data_models.LoadLocalAttributesRequest{
 		ProcessExecutionId: task.ProcessExecutionId,
 		Request:            *prep.Info.StateConfig.LoadLocalAttributesRequest,
 	})

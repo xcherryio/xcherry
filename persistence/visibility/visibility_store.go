@@ -1,7 +1,7 @@
 // Copyright (c) 2023 xCherryIO Organization
 // SPDX-License-Identifier: Apache-2.0
 
-package sql
+package visibility
 
 import (
 	"context"
@@ -17,8 +17,7 @@ type sqlVisibilityStoreImpl struct {
 	logger  log.Logger
 }
 
-func NewSQLProcessStore(sqlConfig config.SQL, logger log.Logger) (persistence.VisibilityStore, error) {
-	// TODO: add visibility sql config to allow using different database for visibility
+func NewSqlVisibilityStore(sqlConfig config.SQL, logger log.Logger) (persistence.VisibilityStore, error) {
 	session, err := extensions.NewSQLSession(&sqlConfig)
 	return &sqlVisibilityStoreImpl{
 		session: session,
