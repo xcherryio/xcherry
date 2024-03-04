@@ -6,6 +6,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/xcherry/common/ptr"
 	"time"
 
 	"github.com/xcherryio/xcherry/persistence/data_models"
@@ -166,8 +167,8 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 			request.Prepare.Info.ProcessType,
 			request.ProcessExecutionId,
 			prcRow.Status,
-			-1,
-			time.Now().Unix(),
+			nil,
+			ptr.Any(time.Now().Unix()),
 		)
 		if err != nil {
 			return nil, err

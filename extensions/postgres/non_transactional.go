@@ -202,3 +202,26 @@ func (d dbSession) SelectLocalAttributes(
 	err = d.db.SelectContext(ctx, &rows, query, args...)
 	return rows, err
 }
+
+const insertProcessExecutionStartQuery = `INSERT INTO xcherry_sys_execution_visibility
+	(namespace, process_id, process_execution_id, process_type_name, status, start_time)
+	VALUES (:namespace, :process_id, :process_execution_id, :process_type_name, :status, :start_time)`
+
+func (d dbSession) InsertProcessExecutionStartForVisibility(
+	ctx context.Context, row extensions.ExecutionVisibilityRow,
+) error {
+	_, err := d.db.NamedExecContext(ctx, insertProcessExecutionStartQuery, row)
+	return err
+}
+
+const updateProcessExecutionStatusQuery = `UPDATE xcherry_sys_execution_visibility
+	SET status = :status, close_time = :close_time
+	WHERE namespace = :namespace AND process_execution_id = :process_execution_id
+`
+
+func (d dbSession) UpdateProcessExecutionStatusForVisibility(
+	ctx context.Context, row extensions.ExecutionVisibilityRow,
+) error {
+	_, err := d.db.NamedExecContext(ctx, updateProcessExecutionStatusQuery, row)
+	return err
+}

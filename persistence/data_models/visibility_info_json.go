@@ -3,11 +3,14 @@
 
 package data_models
 
+import "github.com/xcherryio/xcherry/common/uuid"
+
 type VisibilityInfoJson struct {
-	Namespace   string
-	ProcessId   string
-	ProcessType string
-	Status      ProcessExecutionStatus
-	StartTime   int64
-	EndTime     int64
+	Namespace          string                 `json:"namespace"`
+	ProcessId          string                 `json:"processId"`
+	ProcessExecutionId uuid.UUID              `json:"processExecutionId"`
+	ProcessType        string                 `json:"processType"`
+	Status             ProcessExecutionStatus `json:"status"`
+	StartTime          *int64                 `json:"startTime"`
+	CloseTime          *int64                 `json:"closeTime"`
 }

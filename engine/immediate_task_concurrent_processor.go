@@ -158,7 +158,18 @@ func (w *immediateTaskConcurrentProcessor) processImmediateTask(
 
 func (w *immediateTaskConcurrentProcessor) processVisibilityTask(
 	ctx context.Context, task data_models.ImmediateTask) error {
-	return nil
+	if task.ImmediateTaskInfo.VisibilityInfo == nil {
+		return fmt.Errorf("visibility info is not set")
+	}
+	return w.visibilityStore.RecordProcessExecutionStatus(ctx, data_models.RecordProcessExecutionStatusRequest{
+		Namespace:          task.ImmediateTaskInfo.VisibilityInfo.Namespace,
+		ProcessId:          task.ImmediateTaskInfo.VisibilityInfo.ProcessId,
+		ProcessExecutionId: task.ProcessExecutionId,
+		ProcessType:        task.ImmediateTaskInfo.VisibilityInfo.ProcessType,
+		Status:             task.ImmediateTaskInfo.VisibilityInfo.Status,
+		StartTime:          task.ImmediateTaskInfo.VisibilityInfo.StartTime,
+		CloseTime:          task.ImmediateTaskInfo.VisibilityInfo.CloseTime,
+	})
 }
 
 func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(

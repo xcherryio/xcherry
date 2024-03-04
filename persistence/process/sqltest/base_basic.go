@@ -48,12 +48,13 @@ func SQLBasicTest(t *testing.T, ass *assert.Assertions, store persistence.Proces
 		"-0",
 		data_models.ImmediateTaskInfoJson{
 			VisibilityInfo: &data_models.VisibilityInfoJson{
-				Namespace:   namespace,
-				ProcessId:   processId,
-				ProcessType: testProcessType,
-				Status:      data_models.ProcessExecutionStatusRunning,
-				StartTime:   -1,
-				EndTime:     -1,
+				Namespace:          namespace,
+				ProcessId:          processId,
+				ProcessType:        testProcessType,
+				ProcessExecutionId: prcExeId,
+				Status:             data_models.ProcessExecutionStatusRunning,
+				StartTime:          nil,
+				CloseTime:          nil,
 			},
 		})
 
