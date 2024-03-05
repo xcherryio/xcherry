@@ -92,12 +92,12 @@ CREATE TABLE xcherry_sys_executions_visibility (
     PRIMARY KEY (namespace, process_execution_id)
 );
 
-CREATE INDEX by_start_time ON xcherry_executions_visibility (namespace, start_time DESC, process_execution_id);
+CREATE INDEX by_start_time ON xcherry_sys_executions_visibility (namespace, start_time DESC, process_execution_id);
 
-CREATE INDEX by_type_start_time ON xcherry_executions_visibility (namespace, process_type_name, start_time DESC, process_execution_id);
+CREATE INDEX by_type_start_time ON xcherry_sys_executions_visibility (namespace, process_type_name, start_time DESC, process_execution_id);
 
-CREATE INDEX by_process_id_start_time ON xcherry_executions_visibility (namespace, process_id, start_time DESC, process_execution_id);
+CREATE INDEX by_process_id_start_time ON xcherry_sys_executions_visibility (namespace, process_id, start_time DESC, process_execution_id);
 
-CREATE INDEX by_status_start_time ON xcherry_executions_visibility (namespace, status, start_time DESC, process_execution_id);
+CREATE INDEX by_status_start_time ON xcherry_sys_executions_visibility (namespace, status, start_time DESC, process_execution_id);
 
-CREATE INDEX by_status_type_start_time ON xcherry_executions_visibility (namespace, status, process_type_name, start_time DESC, process_execution_id);
+CREATE INDEX by_status_type_start_time ON xcherry_sys_executions_visibility (namespace, status, process_type_name, start_time DESC, process_execution_id);
