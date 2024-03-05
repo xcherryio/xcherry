@@ -49,14 +49,13 @@ func (p sqlVisibilityStoreImpl) RecordProcessExecutionStatus(
 			Status:             req.Status,
 			StartTime:          time.Unix(*req.StartTime, 0),
 		})
-	} else {
-		return p.session.UpdateProcessExecutionStatusForVisibility(ctx, extensions.ExecutionVisibilityRow{
-			Namespace:          req.Namespace,
-			ProcessId:          req.ProcessId,
-			ProcessExecutionId: req.ProcessExecutionId,
-			ProcessTypeName:    req.ProcessType,
-			Status:             req.Status,
-			CloseTime:          time.Unix(*req.CloseTime, 0),
-		})
 	}
+	return p.session.UpdateProcessExecutionStatusForVisibility(ctx, extensions.ExecutionVisibilityRow{
+		Namespace:          req.Namespace,
+		ProcessId:          req.ProcessId,
+		ProcessExecutionId: req.ProcessExecutionId,
+		ProcessTypeName:    req.ProcessType,
+		Status:             req.Status,
+		CloseTime:          time.Unix(*req.CloseTime, 0),
+	})
 }
