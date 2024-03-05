@@ -81,7 +81,7 @@ CREATE TABLE xcherry_sys_local_attributes(
     PRIMARY KEY (process_execution_id, key)
 );
 
-CREATE TABLE xcherry_executions_visibility (
+CREATE TABLE xcherry_sys_executions_visibility (
     namespace VARCHAR(31) NOT NULL,
     process_id VARCHAR(255) NOT NULL,
     process_execution_id uuid NOT NULL,

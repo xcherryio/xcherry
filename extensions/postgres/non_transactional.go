@@ -203,25 +203,29 @@ func (d dbSession) SelectLocalAttributes(
 	return rows, err
 }
 
-const insertProcessExecutionStartQuery = `INSERT INTO xcherry_sys_execution_visibility
+const insertProcessExecutionStartQuery = `INSERT INTO xcherry_sys_executions_visibility
 	(namespace, process_id, process_execution_id, process_type_name, status, start_time)
-	VALUES (:namespace, :process_id, :process_execution_id, :process_type_name, :status, :start_time)`
+	VALUES (:namespace, :process_id, :process_execution_id_string, :process_type_name, :status, :start_time)`
 
 func (d dbSession) InsertProcessExecutionStartForVisibility(
 	ctx context.Context, row extensions.ExecutionVisibilityRow,
 ) error {
+	row.StartTime = ToPostgresDateTime(row.StartTime)
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.db.NamedExecContext(ctx, insertProcessExecutionStartQuery, row)
 	return err
 }
 
-const updateProcessExecutionStatusQuery = `UPDATE xcherry_sys_execution_visibility
+const updateProcessExecutionStatusQuery = `UPDATE xcherry_sys_executions_visibility
 	SET status = :status, close_time = :close_time
-	WHERE namespace = :namespace AND process_execution_id = :process_execution_id
+	WHERE namespace = :namespace AND process_execution_id = :process_execution_id_string
 `
 
 func (d dbSession) UpdateProcessExecutionStatusForVisibility(
 	ctx context.Context, row extensions.ExecutionVisibilityRow,
 ) error {
+	row.CloseTime = ToPostgresDateTime(row.CloseTime)
+	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.db.NamedExecContext(ctx, updateProcessExecutionStatusQuery, row)
 	return err
 }
