@@ -78,7 +78,7 @@ type (
 
 		// for ProcessExecutionRowForUpdate
 		ProcessExecutionRowStateExecutionSequenceMaps *data_models.StateExecutionSequenceMapsJson
-		ProcessExecutionRowWaitToComplete             bool
+		ProcessExecutionRowGracefulCompleteRequested  bool
 		ProcessExecutionRowStatus                     data_models.ProcessExecutionStatus
 
 		TaskShardId int32
@@ -89,7 +89,7 @@ type (
 
 		// for ProcessExecutionRowForUpdate to update
 		ProcessExecutionRowNewStateExecutionSequenceMaps *data_models.StateExecutionSequenceMapsJson
-		ProcessExecutionRowNewWaitToComplete             bool
+		ProcessExecutionRowNewGracefulCompleteRequested  bool
 		ProcessExecutionRowNewStatus                     data_models.ProcessExecutionStatus
 	}
 )
@@ -102,7 +102,7 @@ func (p sqlProcessStoreImpl) handleStateDecision(
 
 	// these fields will be updated and returned back in response for ProcessExecutionRowForUpdate
 	sequenceMaps := request.ProcessExecutionRowStateExecutionSequenceMaps
-	procExecWaitToComplete := request.ProcessExecutionRowWaitToComplete
+	procExecGracefulCompleteRequested := request.ProcessExecutionRowGracefulCompleteRequested
 	procExecStatus := request.ProcessExecutionRowStatus
 
 	if len(request.StateDecision.GetNextStates()) > 0 {
@@ -146,16 +146,16 @@ func (p sqlProcessStoreImpl) handleStateDecision(
 	// then gracefully complete the process regardless of the thread close type set in this state.
 	// Otherwise, handle the thread close type set in this state.
 
-	toGracefullyComplete := procExecWaitToComplete && len(sequenceMaps.PendingExecutionMap) == 0
+	shouldGracefulComplete := procExecGracefulCompleteRequested && len(sequenceMaps.PendingExecutionMap) == 0
 
 	toAbortRunningAsyncStates := false
 
 	threadDecision := request.StateDecision.GetThreadCloseDecision()
-	if !toGracefullyComplete && request.StateDecision.HasThreadCloseDecision() {
+	if !shouldGracefulComplete && request.StateDecision.HasThreadCloseDecision() {
 		switch threadDecision.GetCloseType() {
 		case xcapi.GRACEFUL_COMPLETE_PROCESS:
-			procExecWaitToComplete = true
-			toGracefullyComplete = len(sequenceMaps.PendingExecutionMap) == 0
+			procExecGracefulCompleteRequested = true
+			shouldGracefulComplete = len(sequenceMaps.PendingExecutionMap) == 0
 		case xcapi.FORCE_COMPLETE_PROCESS:
 			toAbortRunningAsyncStates = len(sequenceMaps.PendingExecutionMap) > 0
 
@@ -171,7 +171,7 @@ func (p sqlProcessStoreImpl) handleStateDecision(
 		}
 	}
 
-	if toGracefullyComplete {
+	if shouldGracefulComplete {
 		procExecStatus = data_models.ProcessExecutionStatusCompleted
 	}
 
@@ -188,7 +188,7 @@ func (p sqlProcessStoreImpl) handleStateDecision(
 	return &HandleStateDecisionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
 		ProcessExecutionRowNewStateExecutionSequenceMaps: sequenceMaps,
-		ProcessExecutionRowNewWaitToComplete:             procExecWaitToComplete,
+		ProcessExecutionRowNewGracefulCompleteRequested:  procExecGracefulCompleteRequested,
 		ProcessExecutionRowNewStatus:                     procExecStatus,
 	}, nil
 }

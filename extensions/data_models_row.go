@@ -47,7 +47,7 @@ type (
 		StateExecutionSequenceMaps types.JSONText
 		StateExecutionLocalQueues  types.JSONText
 
-		WaitToComplete bool
+		GracefulCompleteRequested bool
 	}
 
 	ProcessExecutionRow struct {
@@ -63,11 +63,11 @@ type (
 
 		Namespace string
 
-		ProcessId      string
-		StartTime      time.Time
-		TimeoutSeconds int32
-		Info           types.JSONText
-		WaitToComplete bool
+		ProcessId                 string
+		StartTime                 time.Time
+		TimeoutSeconds            int32
+		Info                      types.JSONText
+		GracefulCompleteRequested bool
 	}
 
 	AsyncStateExecutionSelectFilter struct {

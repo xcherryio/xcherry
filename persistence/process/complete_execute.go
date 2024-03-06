@@ -118,7 +118,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		WorkerUrl:          request.Prepare.Info.WorkerURL,
 
 		ProcessExecutionRowStateExecutionSequenceMaps: &sequenceMaps,
-		ProcessExecutionRowWaitToComplete:             prcRow.WaitToComplete,
+		ProcessExecutionRowGracefulCompleteRequested:  prcRow.GracefulCompleteRequested,
 		ProcessExecutionRowStatus:                     prcRow.Status,
 
 		TaskShardId: request.TaskShardId,
@@ -131,7 +131,7 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 		hasNewImmediateTask = true
 	}
 
-	prcRow.WaitToComplete = resp.ProcessExecutionRowNewWaitToComplete
+	prcRow.GracefulCompleteRequested = resp.ProcessExecutionRowNewGracefulCompleteRequested
 	prcRow.Status = resp.ProcessExecutionRowNewStatus
 	prcRow.StateExecutionSequenceMaps, err = resp.ProcessExecutionRowNewStateExecutionSequenceMaps.ToBytes()
 	if err != nil {

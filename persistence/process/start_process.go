@@ -304,7 +304,7 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 				HistoryEventIdSequence:     processExecutionRowForUpdate.HistoryEventIdSequence,
 				StateExecutionSequenceMaps: processExecutionRowForUpdate.StateExecutionSequenceMaps,
 				StateExecutionLocalQueues:  processExecutionRowForUpdate.StateExecutionLocalQueues,
-				WaitToComplete:             processExecutionRowForUpdate.WaitToComplete,
+				GracefulCompleteRequested:  processExecutionRowForUpdate.GracefulCompleteRequested,
 			})
 			if err != nil {
 				return nil, err
