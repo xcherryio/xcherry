@@ -73,7 +73,7 @@ status = :status,
 history_event_id_sequence = :history_event_id_sequence,
 state_execution_sequence_maps = :state_execution_sequence_maps,
 state_execution_local_queues = :state_execution_local_queues,
-graceful_complete_requested = :graceful_complete_requested,
+graceful_complete_requested = :graceful_complete_requested
 WHERE id=:process_execution_id_string
 `
 
