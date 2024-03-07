@@ -73,7 +73,7 @@ status = :status,
 history_event_id_sequence = :history_event_id_sequence,
 state_execution_sequence_maps = :state_execution_sequence_maps,
 state_execution_local_queues = :state_execution_local_queues,
-wait_to_complete = :wait_to_complete
+graceful_complete_requested = :graceful_complete_requested
 WHERE id=:process_execution_id_string
 `
 
@@ -189,7 +189,7 @@ func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateT
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, graceful_complete_requested
 	FROM xcherry_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(
@@ -201,7 +201,7 @@ func (d dbTx) SelectProcessExecutionForUpdate(
 }
 
 const selectProcessExecutionQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, wait_to_complete,
+    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, graceful_complete_requested,
 	namespace, process_id, start_time, timeout_seconds, info
 	FROM xcherry_sys_process_executions WHERE id=$1 `
 
