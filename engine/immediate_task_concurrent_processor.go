@@ -161,7 +161,7 @@ func (w *immediateTaskConcurrentProcessor) processVisibilityTask(
 	if task.ImmediateTaskInfo.VisibilityInfo == nil {
 		return fmt.Errorf("visibility info is not set")
 	}
-	return w.visibilityStore.RecordProcessExecutionStatus(ctx, data_models.RecordProcessExecutionStatusRequest{
+	err := w.visibilityStore.RecordProcessExecutionStatus(ctx, data_models.RecordProcessExecutionStatusRequest{
 		Namespace:          task.ImmediateTaskInfo.VisibilityInfo.Namespace,
 		ProcessId:          task.ImmediateTaskInfo.VisibilityInfo.ProcessId,
 		ProcessExecutionId: task.ProcessExecutionId,
@@ -169,6 +169,15 @@ func (w *immediateTaskConcurrentProcessor) processVisibilityTask(
 		Status:             task.ImmediateTaskInfo.VisibilityInfo.Status,
 		StartTime:          task.ImmediateTaskInfo.VisibilityInfo.StartTime,
 		CloseTime:          task.ImmediateTaskInfo.VisibilityInfo.CloseTime,
+	})
+	if err != nil {
+		return err
+	}
+
+	return w.processStore.DeleteImmediateTasks(ctx, data_models.DeleteImmediateTasksRequest{
+		ShardId:                  task.ShardId,
+		MinTaskSequenceInclusive: *task.TaskSequence,
+		MaxTaskSequenceInclusive: *task.TaskSequence,
 	})
 }
 
