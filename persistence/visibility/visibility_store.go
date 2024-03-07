@@ -5,11 +5,13 @@ package visibility
 
 import (
 	"context"
+	"fmt"
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/extensions"
 	"github.com/xcherryio/xcherry/persistence"
 	"github.com/xcherryio/xcherry/persistence/data_models"
+	"time"
 )
 
 type sqlVisibilityStoreImpl struct {
@@ -31,6 +33,29 @@ func (p sqlVisibilityStoreImpl) Close() error {
 
 func (p sqlVisibilityStoreImpl) RecordProcessExecutionStatus(
 	ctx context.Context, req data_models.RecordProcessExecutionStatusRequest) error {
-	// TODO: add implementation
-	return nil
+	if req.Status == data_models.ProcessExecutionStatusUndefined {
+		return fmt.Errorf("process status is undefined")
+	}
+
+	if req.Status == data_models.ProcessExecutionStatusRunning {
+		if req.StartTime == nil {
+			return fmt.Errorf("start time is required for recording visibility for running process")
+		}
+		return p.session.InsertProcessExecutionStartForVisibility(ctx, extensions.ExecutionVisibilityRow{
+			Namespace:          req.Namespace,
+			ProcessId:          req.ProcessId,
+			ProcessExecutionId: req.ProcessExecutionId,
+			ProcessTypeName:    req.ProcessType,
+			Status:             req.Status,
+			StartTime:          time.Unix(*req.StartTime, 0),
+		})
+	}
+	return p.session.UpdateProcessExecutionStatusForVisibility(ctx, extensions.ExecutionVisibilityRow{
+		Namespace:          req.Namespace,
+		ProcessId:          req.ProcessId,
+		ProcessExecutionId: req.ProcessExecutionId,
+		ProcessTypeName:    req.ProcessType,
+		Status:             req.Status,
+		CloseTime:          time.Unix(*req.CloseTime, 0),
+	})
 }

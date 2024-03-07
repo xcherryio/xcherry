@@ -6,6 +6,7 @@ package process
 import (
 	"context"
 	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/common/ptr"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 	"time"
 
@@ -116,8 +117,8 @@ func (p sqlProcessStoreImpl) doStopProcessTx(
 		procExecInfoJson.ProcessType,
 		curProcExecRow.ProcessExecutionId,
 		status,
-		-1,
-		time.Now().Unix(),
+		nil,
+		ptr.Any(time.Now().Unix()),
 	)
 	if err != nil {
 		return nil, err

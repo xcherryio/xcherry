@@ -11,6 +11,6 @@ type RecordProcessExecutionStatusRequest struct {
 	ProcessExecutionId uuid.UUID
 	ProcessType        string
 	Status             ProcessExecutionStatus
-	StartTime          int64
-	EndTime            int64
+	StartTime          *int64
+	CloseTime          *int64
 }

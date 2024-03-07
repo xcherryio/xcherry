@@ -106,6 +106,14 @@ type nonTransactionalCRUD interface {
 	SelectLocalAttributes(
 		ctx context.Context, processExecutionId uuid.UUID, keys []string,
 	) ([]LocalAttributeRow, error)
+
+	InsertProcessExecutionStartForVisibility(
+		ctx context.Context, row ExecutionVisibilityRow,
+	) error
+
+	UpdateProcessExecutionStatusForVisibility(
+		ctx context.Context, row ExecutionVisibilityRow,
+	) error
 }
 
 type ErrorChecker interface {

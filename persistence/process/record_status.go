@@ -19,17 +19,18 @@ func (p sqlProcessStoreImpl) AddVisibilityTaskRecordProcessExecutionStatus(
 	processType string,
 	processExecutionId uuid.UUID,
 	status data_models.ProcessExecutionStatus,
-	startTime int64,
-	endTime int64) error {
+	startTime *int64,
+	endTime *int64) error {
 
 	visibilityTaskInfo := data_models.ImmediateTaskInfoJson{
 		VisibilityInfo: &data_models.VisibilityInfoJson{
-			Namespace:   namespace,
-			ProcessId:   processId,
-			ProcessType: processType,
-			Status:      status,
-			StartTime:   startTime,
-			EndTime:     endTime,
+			Namespace:          namespace,
+			ProcessId:          processId,
+			ProcessType:        processType,
+			ProcessExecutionId: processExecutionId,
+			Status:             status,
+			StartTime:          startTime,
+			CloseTime:          endTime,
 		},
 	}
 

@@ -6,6 +6,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"github.com/xcherryio/xcherry/common/ptr"
 	"time"
 
 	"github.com/xcherryio/apis/goapi/xcapi"
@@ -318,8 +319,8 @@ func (p sqlProcessStoreImpl) applyTerminateIfRunningPolicy(
 				request.Request.ProcessType,
 				processExecutionRowForUpdate.ProcessExecutionId,
 				data_models.ProcessExecutionStatusTerminated,
-				-1,
-				time.Now().Unix())
+				nil,
+				ptr.Any(time.Now().Unix()))
 			if err != nil {
 				return nil, err
 			}
@@ -518,8 +519,8 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 		request.Request.ProcessType,
 		processExecutionId,
 		data_models.ProcessExecutionStatusRunning,
-		startTime.Unix(),
-		-1)
+		ptr.Any(startTime.Unix()),
+		nil)
 	if err != nil {
 		return hasNewImmediateTask, err
 	}

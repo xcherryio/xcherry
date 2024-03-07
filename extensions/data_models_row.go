@@ -257,4 +257,15 @@ type (
 		Key                      string
 		Value                    types.JSONText
 	}
+
+	ExecutionVisibilityRow struct {
+		Namespace                string
+		ProcessId                string
+		ProcessExecutionId       uuid.UUID
+		ProcessExecutionIdString string
+		ProcessTypeName          string
+		Status                   data_models.ProcessExecutionStatus
+		StartTime                time.Time
+		CloseTime                time.Time
+	}
 )
