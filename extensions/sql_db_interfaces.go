@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/xcherryio/apis/goapi/xcapi"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 
 	"github.com/xcherryio/xcherry/common/uuid"
 	"github.com/xcherryio/xcherry/config"
@@ -114,6 +115,67 @@ type nonTransactionalCRUD interface {
 	UpdateProcessExecutionStatusForVisibility(
 		ctx context.Context, row ExecutionVisibilityRow,
 	) error
+
+	SelectProcessExecutions(
+		ctx context.Context,
+		namespace string,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
+
+	SelectProcessExecutionsByStatus(
+		ctx context.Context,
+		namespace string,
+		status data_models.ProcessExecutionStatus,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
+
+	SelectProcessExecutionsByTypeQuery(
+		ctx context.Context,
+		namespace string,
+		processTypeName string,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
+
+	SelectProcessExecutionsById(
+		ctx context.Context,
+		namespace string,
+		processId string,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
+
+	SelectProcessExecutionsByStatusAndType(
+		ctx context.Context,
+		namespace string,
+		status data_models.ProcessExecutionStatus,
+		processTypeName string,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
+
+	SelectProcessExecutionsByStatusAndId(
+		ctx context.Context,
+		namespace string,
+		status data_models.ProcessExecutionStatus,
+		processId string,
+		startTimeMinInclusive, startTimeMaxInclusive int64,
+		lastProcessExecutionId uuid.UUID,
+		lastStartTime int64,
+		pageSize int32,
+	) ([]ExecutionVisibilityRow, error)
 }
 
 type ErrorChecker interface {
