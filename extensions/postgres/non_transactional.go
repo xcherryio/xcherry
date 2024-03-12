@@ -245,12 +245,11 @@ func (d dbSession) SelectProcessExecutions(
 	ctx context.Context,
 	namespace string,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsQuery,
 		namespace,
 		time.Unix(startTimeMinInclusive, 0),
@@ -280,12 +279,11 @@ func (d dbSession) SelectProcessExecutionsByStatus(
 	namespace string,
 	status data_models.ProcessExecutionStatus,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusQuery,
 		namespace,
 		status,
@@ -316,12 +314,11 @@ func (d dbSession) SelectProcessExecutionsByTypeQuery(
 	namespace string,
 	processTypeName string,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByTypeQuery,
 		namespace,
 		processTypeName,
@@ -351,12 +348,11 @@ func (d dbSession) SelectProcessExecutionsById(
 	namespace string,
 	processId string,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByIdQuery,
 		namespace,
 		processId,
@@ -389,12 +385,11 @@ func (d dbSession) SelectProcessExecutionsByStatusAndType(
 	status data_models.ProcessExecutionStatus,
 	processTypeName string,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusAndType,
 		namespace,
 		status,
@@ -427,12 +422,11 @@ func (d dbSession) SelectProcessExecutionsByStatusAndId(
 	status data_models.ProcessExecutionStatus,
 	processId string,
 	startTimeMinInclusive, startTimeMaxInclusive int64,
-	lastProcessExecutionId uuid.UUID,
+	lastProcessExecutionIdString string,
 	lastStartTime int64,
 	pageSize int32,
 ) ([]extensions.ExecutionVisibilityRow, error) {
 	var rows []extensions.ExecutionVisibilityRow
-	lastProcessExecutionIdString := lastProcessExecutionId.String()
 	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusAndIdQuery,
 		namespace,
 		status,

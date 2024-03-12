@@ -120,7 +120,7 @@ type nonTransactionalCRUD interface {
 		ctx context.Context,
 		namespace string,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
@@ -130,7 +130,7 @@ type nonTransactionalCRUD interface {
 		namespace string,
 		status data_models.ProcessExecutionStatus,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
@@ -140,7 +140,7 @@ type nonTransactionalCRUD interface {
 		namespace string,
 		processTypeName string,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
@@ -150,7 +150,7 @@ type nonTransactionalCRUD interface {
 		namespace string,
 		processId string,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
@@ -161,7 +161,7 @@ type nonTransactionalCRUD interface {
 		status data_models.ProcessExecutionStatus,
 		processTypeName string,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
@@ -172,7 +172,7 @@ type nonTransactionalCRUD interface {
 		status data_models.ProcessExecutionStatus,
 		processId string,
 		startTimeMinInclusive, startTimeMaxInclusive int64,
-		lastProcessExecutionId uuid.UUID,
+		lastProcessExecutionIdString string,
 		lastStartTime int64,
 		pageSize int32,
 	) ([]ExecutionVisibilityRow, error)
