@@ -22,16 +22,23 @@ import (
 )
 
 type serviceImpl struct {
-	cfg    config.Config
-	store  persistence.ProcessStore
-	logger log.Logger
+	cfg             config.Config
+	processStore    persistence.ProcessStore
+	visibilityStore persistence.VisibilityStore
+	logger          log.Logger
 }
 
-func NewServiceImpl(cfg config.Config, store persistence.ProcessStore, logger log.Logger) Service {
+func NewServiceImpl(
+	cfg config.Config,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	logger log.Logger,
+) Service {
 	return &serviceImpl{
-		cfg:    cfg,
-		store:  store,
-		logger: logger,
+		cfg:             cfg,
+		processStore:    processStore,
+		visibilityStore: visibilityStore,
+		logger:          logger,
 	}
 }
 
@@ -51,7 +58,7 @@ func (s serviceImpl) StartProcess(
 		storeReq.TimeoutTimeUnixSeconds = time.Now().Unix() + int64(timeoutUnixSeconds)
 	}
 
-	resp, perr := s.store.StartProcess(ctx, storeReq)
+	resp, perr := s.processStore.StartProcess(ctx, storeReq)
 	if perr != nil {
 		return nil, s.handleUnknownError(perr)
 	}
@@ -94,7 +101,7 @@ func (s serviceImpl) StartProcess(
 func (s serviceImpl) StopProcess(
 	ctx context.Context, request xcapi.ProcessExecutionStopRequest,
 ) *ErrorWithStatus {
-	resp, err := s.store.StopProcess(ctx, data_models.StopProcessRequest{
+	resp, err := s.processStore.StopProcess(ctx, data_models.StopProcessRequest{
 		Namespace:       request.GetNamespace(),
 		ProcessId:       request.GetProcessId(),
 		ProcessStopType: request.GetStopType(),
@@ -113,7 +120,7 @@ func (s serviceImpl) StopProcess(
 func (s serviceImpl) DescribeLatestProcess(
 	ctx context.Context, request xcapi.ProcessExecutionDescribeRequest,
 ) (response *xcapi.ProcessExecutionDescribeResponse, retErr *ErrorWithStatus) {
-	resp, perr := s.store.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
+	resp, perr := s.processStore.DescribeLatestProcess(ctx, data_models.DescribeLatestProcessRequest{
 		Namespace: request.Namespace,
 		ProcessId: request.ProcessId,
 	})
@@ -129,7 +136,7 @@ func (s serviceImpl) DescribeLatestProcess(
 func (s serviceImpl) PublishToLocalQueue(
 	ctx context.Context, request xcapi.PublishToLocalQueueRequest,
 ) *ErrorWithStatus {
-	resp, err := s.store.PublishToLocalQueue(ctx, data_models.PublishToLocalQueueRequest{
+	resp, err := s.processStore.PublishToLocalQueue(ctx, data_models.PublishToLocalQueueRequest{
 		Namespace: request.GetNamespace(),
 		ProcessId: request.GetProcessId(),
 		Messages:  request.GetMessages(),
@@ -161,7 +168,7 @@ func (s serviceImpl) PublishToLocalQueue(
 func (s serviceImpl) Rpc(
 	ctx context.Context, request xcapi.ProcessExecutionRpcRequest,
 ) (response *xcapi.ProcessExecutionRpcResponse, retErr *ErrorWithStatus) {
-	latestPrcExe, err := s.store.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
+	latestPrcExe, err := s.processStore.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
 		Namespace: request.GetNamespace(),
 		ProcessId: request.GetProcessId(),
 	})
@@ -184,7 +191,7 @@ func (s serviceImpl) Rpc(
 
 	appDatabaseReadResponse := xcapi.AppDatabaseReadResponse{}
 	if latestPrcExe.AppDatabaseConfig != nil {
-		appDatabaseReadResp, err := s.store.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
+		appDatabaseReadResp, err := s.processStore.ReadAppDatabase(ctx, data_models.AppDatabaseReadRequest{
 			AppDatabaseConfig: *latestPrcExe.AppDatabaseConfig,
 			Request:           request.GetAppDatabaseReadRequest(),
 		})
@@ -228,7 +235,7 @@ func (s serviceImpl) Rpc(
 			http.StatusBadRequest, err.Error())
 	}
 
-	updateResp, err := s.store.UpdateProcessExecutionForRpc(ctx, data_models.UpdateProcessExecutionForRpcRequest{
+	updateResp, err := s.processStore.UpdateProcessExecutionForRpc(ctx, data_models.UpdateProcessExecutionForRpcRequest{
 		Namespace:          request.Namespace,
 		ProcessId:          request.ProcessId,
 		ProcessType:        latestPrcExe.ProcessType,
@@ -270,6 +277,28 @@ func (s serviceImpl) Rpc(
 	return &xcapi.ProcessExecutionRpcResponse{
 		Output: resp.Output,
 	}, nil
+}
+
+func (s serviceImpl) ListProcessExecutions(ctx context.Context, request xcapi.ListProcessExecutionsRequest,
+) (response *xcapi.ListProcessExecutionsResponse, retErr *ErrorWithStatus) {
+	if request.Namespace == "" {
+		return nil, NewErrorWithStatus(http.StatusBadRequest, "namespace is required")
+	}
+	if request.PageSize <= 0 {
+		return nil, NewErrorWithStatus(http.StatusBadRequest, "page size should be positive")
+	}
+	if !request.HasStartTimeFilter() {
+		return nil, NewErrorWithStatus(http.StatusBadRequest, "start time filter is required")
+	}
+	if !request.StartTimeFilter.HasEarliestTime() || !request.StartTimeFilter.HasLatestTime() {
+		return nil, NewErrorWithStatus(http.StatusBadRequest, "both earliest and latest time are required for start time filter")
+	}
+
+	resp, err := s.visibilityStore.ListProcessExecutions(ctx, request)
+	if err != nil {
+		return nil, NewErrorWithStatus(http.StatusInternalServerError, err.Error())
+	}
+	return resp, nil
 }
 
 func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi.NotifyImmediateTasksRequest) {

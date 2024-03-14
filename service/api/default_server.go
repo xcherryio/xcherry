@@ -19,6 +19,7 @@ const PathDescribeProcessExecution = "/api/v1/xcherry/service/process-execution/
 const PathStopProcessExecution = "/api/v1/xcherry/service/process-execution/stop"
 const PathPublishToLocalQueue = "/api/v1/xcherry/service/process-execution/publish-to-local-queue"
 const PathProcessExecutionRpc = "/api/v1/xcherry/service/process-execution/rpc"
+const PathListProcessExecutions = "/api/v1/xcherry/service/process-execution/list"
 
 type defaultSever struct {
 	rootCtx context.Context
@@ -30,11 +31,15 @@ type defaultSever struct {
 }
 
 func NewDefaultAPIServerWithGin(
-	rootCtx context.Context, cfg config.Config, store persistence.ProcessStore, logger log.Logger,
+	rootCtx context.Context,
+	cfg config.Config,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	logger log.Logger,
 ) Server {
 	engine := gin.Default()
 
-	handler := newGinHandler(cfg, store, logger)
+	handler := newGinHandler(cfg, processStore, visibilityStore, logger)
 
 	engine.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "Hello from xCherry server!")
@@ -44,6 +49,7 @@ func NewDefaultAPIServerWithGin(
 	engine.POST(PathStopProcessExecution, handler.StopProcess)
 	engine.POST(PathPublishToLocalQueue, handler.PublishToLocalQueue)
 	engine.POST(PathProcessExecutionRpc, handler.Rpc)
+	engine.POST(PathListProcessExecutions, handler.ListProcessExecutions)
 
 	svrCfg := cfg.ApiService.HttpServer
 	httpServer := &http.Server{

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/uuid"
+	"github.com/xcherryio/xcherry/persistence/data_models"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xcherryio/xcherry/extensions"
@@ -228,4 +230,215 @@ func (d dbSession) UpdateProcessExecutionStatusForVisibility(
 	row.ProcessExecutionIdString = row.ProcessExecutionId.String()
 	_, err := d.db.NamedExecContext(ctx, updateProcessExecutionStatusQuery, row)
 	return err
+}
+
+const selectProcessExecutionsQuery = `SELECT * 
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND start_time >= $2 AND start_time <= $3 
+AND (process_execution_id > $4 OR start_time < $5)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $6
+`
+
+func (d dbSession) SelectProcessExecutions(
+	ctx context.Context,
+	namespace string,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsQuery,
+		namespace,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+const selectProcessExecutionsByStatusQuery = `SELECT * 
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND status = $2 
+AND start_time >= $3 AND start_time <= $4 
+AND (process_execution_id > $5 OR start_time < $6)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $7
+`
+
+func (d dbSession) SelectProcessExecutionsByStatus(
+	ctx context.Context,
+	namespace string,
+	status data_models.ProcessExecutionStatus,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusQuery,
+		namespace,
+		status,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+const selectProcessExecutionsByTypeQuery = `SELECT * 
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND process_type_name = $2 
+AND start_time >= $3 AND start_time <= $4 
+AND (process_execution_id > $5 OR start_time < $6)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $7
+`
+
+func (d dbSession) SelectProcessExecutionsByTypeQuery(
+	ctx context.Context,
+	namespace string,
+	processTypeName string,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByTypeQuery,
+		namespace,
+		processTypeName,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+const selectProcessExecutionsByIdQuery = `SELECT *
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND process_id = $2 
+AND start_time >= $3 AND start_time <= $4 
+AND (process_execution_id > $5 OR start_time < $6)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $7`
+
+func (d dbSession) SelectProcessExecutionsById(
+	ctx context.Context,
+	namespace string,
+	processId string,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByIdQuery,
+		namespace,
+		processId,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+const selectProcessExecutionsByStatusAndType = `SELECT *
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND status = $2 
+AND process_type_name = $3 
+AND start_time >= $4 AND start_time <= $5 
+AND (process_execution_id > $6 OR start_time < $7)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $8
+`
+
+func (d dbSession) SelectProcessExecutionsByStatusAndType(
+	ctx context.Context,
+	namespace string,
+	status data_models.ProcessExecutionStatus,
+	processTypeName string,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusAndType,
+		namespace,
+		status,
+		processTypeName,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+const selectProcessExecutionsByStatusAndIdQuery = `SELECT *
+FROM xcherry_sys_executions_visibility
+WHERE namespace = $1 
+AND status = $2 
+AND process_id = $3 
+AND start_time >= $4 AND start_time <= $5 
+AND (process_execution_id > $6 OR start_time < $7)
+ORDER BY start_time DESC, process_execution_id
+LIMIT $8`
+
+func (d dbSession) SelectProcessExecutionsByStatusAndId(
+	ctx context.Context,
+	namespace string,
+	status data_models.ProcessExecutionStatus,
+	processId string,
+	startTimeMinInclusive, startTimeMaxInclusive int64,
+	lastProcessExecutionIdString string,
+	lastStartTime int64,
+	pageSize int32,
+) ([]extensions.ExecutionVisibilityRow, error) {
+	var rows []extensions.ExecutionVisibilityRow
+	err := d.db.SelectContext(ctx, &rows, selectProcessExecutionsByStatusAndIdQuery,
+		namespace,
+		status,
+		processId,
+		time.Unix(startTimeMinInclusive, 0),
+		time.Unix(startTimeMaxInclusive, 0),
+		lastProcessExecutionIdString,
+		time.Unix(lastStartTime, 0),
+		pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows, nil
 }

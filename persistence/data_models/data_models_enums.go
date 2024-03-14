@@ -35,6 +35,23 @@ func (e ProcessExecutionStatus) String() string {
 	}
 }
 
+func ParseProcessExecutionStatus(s string) ProcessExecutionStatus {
+	switch s {
+	case string(xcapi.RUNNING):
+		return ProcessExecutionStatusRunning
+	case string(xcapi.COMPLETED):
+		return ProcessExecutionStatusCompleted
+	case string(xcapi.FAILED):
+		return ProcessExecutionStatusFailed
+	case string(xcapi.TIMEOUT):
+		return ProcessExecutionStatusTimeout
+	case string(xcapi.TERMINATED):
+		return ProcessExecutionStatusTerminated
+	default:
+		return ProcessExecutionStatusUndefined
+	}
+}
+
 type StateExecutionStatus int32
 
 const (

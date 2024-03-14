@@ -5,6 +5,7 @@ package persistence
 
 import (
 	"context"
+	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 )
 
@@ -85,7 +86,9 @@ type (
 	VisibilityStore interface {
 		Close() error
 		RecordProcessExecutionStatus(ctx context.Context, req data_models.RecordProcessExecutionStatusRequest) error
-		// TODO: add list process executions api
+		ListProcessExecutions(
+			ctx context.Context, request xcapi.ListProcessExecutionsRequest,
+		) (*xcapi.ListProcessExecutionsResponse, error)
 		// TODO: add count process executions api
 	}
 )
