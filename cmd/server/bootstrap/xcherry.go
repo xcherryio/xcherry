@@ -84,7 +84,7 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 	var apiServer api.Server
 	if services[ApiServiceName] {
 		apiServer = api.NewDefaultAPIServerWithGin(
-			rootCtx, *cfg, processStore, logger.WithTags(tag.Service(ApiServiceName)))
+			rootCtx, *cfg, processStore, visibilityStore, logger.WithTags(tag.Service(ApiServiceName)))
 		err = apiServer.Start()
 		if err != nil {
 			logger.Fatal("Failed to start api server", tag.Error(err))

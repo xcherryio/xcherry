@@ -17,9 +17,12 @@ func NewPaginationToken(lastProcessExecutionId string, lastStartTime int64) *Pag
 	}
 }
 
-func (pt *PaginationToken) String() string {
-	b, _ := json.Marshal(pt)
-	return string(b)
+func (pt *PaginationToken) String() (string, error) {
+	b, err := json.Marshal(pt)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func ParsePaginationTokenFromString(token string) (*PaginationToken, error) {

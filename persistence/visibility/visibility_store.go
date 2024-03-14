@@ -176,11 +176,17 @@ func (p sqlVisibilityStoreImpl) ListProcessExecutions(
 		}
 	}
 
+	nextPaginationToken := data_models.NewPaginationToken(
+		processExecutionRows[len(processExecutionRows)-1].ProcessExecutionId.String(),
+		processExecutionRows[len(processExecutionRows)-1].StartTime.Unix(),
+	)
+	nextPaginationTokenString, err := nextPaginationToken.String()
+	if err != nil {
+		return nil, err
+	}
+
 	return &xcapi.ListProcessExecutionsResponse{
 		ProcessExecutions: processExecutionListInfo,
-		NextPageToken: ptr.Any(data_models.NewPaginationToken(
-			processExecutionRows[len(processExecutionRows)-1].ProcessExecutionId.String(),
-			processExecutionRows[len(processExecutionRows)-1].StartTime.Unix(),
-		).String()),
+		NextPageToken:     ptr.Any(nextPaginationTokenString),
 	}, nil
 }

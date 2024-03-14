@@ -87,8 +87,8 @@ github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4d
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/urfave/cli/v2 v2.25.7 h1:VAzn5oq403l5pHjc4OhD54+XGO9cdKVL/7lDjF+iKUs=
 github.com/urfave/cli/v2 v2.25.7/go.mod h1:8qnjx1vcq5s2/wpsqoZFndg2CE5tNFyrTvS6SinrnYQ=
-github.com/xcherryio/apis v0.0.3-0.20240312083615-629130811a5b h1:hWg63/NjVmFulP5zeW5I+8CCS9zhyMvyBFlZvs8Uc7E=
-github.com/xcherryio/apis v0.0.3-0.20240312083615-629130811a5b/go.mod h1:7peiYpRUjmq0rl/8F0MmvFH8Vp7Y8Dq5OpRgpH0cMJU=
+github.com/xcherryio/apis v0.0.3-0.20240313171434-ae652fc3c70f h1:csBDKtifwAIRXaHpw3xiUqNDdS0As8OSrflQPr0bTm8=
+github.com/xcherryio/apis v0.0.3-0.20240313171434-ae652fc3c70f/go.mod h1:7peiYpRUjmq0rl/8F0MmvFH8Vp7Y8Dq5OpRgpH0cMJU=
 github.com/xcherryio/sdk-go v0.0.0-20240115163029-e21cc0710e61 h1:6Xr3S342Di2QuvagFb4uG1AkA8lQLWfED1ynZvnu3V0=
 github.com/xcherryio/sdk-go v0.0.0-20240115163029-e21cc0710e61/go.mod h1:Ouc00E061VNVYemKbVQCxB3LSOgIkxV81h//1O1ODws=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 h1:bAn7/zixMGCfxrRTfdpNzjtPYqr8smhKouy9mxVdGPU=

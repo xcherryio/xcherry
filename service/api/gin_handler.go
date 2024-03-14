@@ -21,8 +21,13 @@ type ginHandler struct {
 	svc    Service
 }
 
-func newGinHandler(cfg config.Config, store persistence.ProcessStore, logger log.Logger) *ginHandler {
-	svc := NewServiceImpl(cfg, store, logger)
+func newGinHandler(
+	cfg config.Config,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	logger log.Logger,
+) *ginHandler {
+	svc := NewServiceImpl(cfg, processStore, visibilityStore, logger)
 	return &ginHandler{
 		config: cfg,
 		logger: logger,
@@ -145,6 +150,30 @@ func (h *ginHandler) Rpc(c *gin.Context) {
 	}()
 
 	resp, errResp := h.svc.Rpc(c.Request.Context(), req)
+
+	if errResp != nil {
+		c.JSON(errResp.StatusCode, errResp.Error)
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *ginHandler) ListProcessExecutions(c *gin.Context) {
+	var req xcapi.ListProcessExecutionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+
+	var resp *xcapi.ListProcessExecutionsResponse
+	var errResp *ErrorWithStatus
+	h.logger.Debug("received ListProcessExecutions API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded ListProcessExecutions API request", tag.Value(h.toJson(resp)), tag.Value(h.toJson(errResp)))
+	}()
+
+	//resp, errResp = h.svc.ListProcessExecutions(c.Request.Context(), req)
 
 	if errResp != nil {
 		c.JSON(errResp.StatusCode, errResp.Error)
