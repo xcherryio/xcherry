@@ -233,7 +233,7 @@ func (d dbSession) UpdateProcessExecutionStatusForVisibility(
 }
 
 const selectProcessExecutionsQuery = `SELECT * 
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND start_time >= $2 AND start_time <= $3 
 AND (process_execution_id > $4 OR start_time < $5)
@@ -265,7 +265,7 @@ func (d dbSession) SelectProcessExecutions(
 }
 
 const selectProcessExecutionsByStatusQuery = `SELECT * 
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND status = $2 
 AND start_time >= $3 AND start_time <= $4 
@@ -300,7 +300,7 @@ func (d dbSession) SelectProcessExecutionsByStatus(
 }
 
 const selectProcessExecutionsByTypeQuery = `SELECT * 
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND process_type_name = $2 
 AND start_time >= $3 AND start_time <= $4 
@@ -335,7 +335,7 @@ func (d dbSession) SelectProcessExecutionsByTypeQuery(
 }
 
 const selectProcessExecutionsByIdQuery = `SELECT *
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND process_id = $2 
 AND start_time >= $3 AND start_time <= $4 
@@ -369,7 +369,7 @@ func (d dbSession) SelectProcessExecutionsById(
 }
 
 const selectProcessExecutionsByStatusAndType = `SELECT *
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND status = $2 
 AND process_type_name = $3 
@@ -407,10 +407,10 @@ func (d dbSession) SelectProcessExecutionsByStatusAndType(
 }
 
 const selectProcessExecutionsByStatusAndIdQuery = `SELECT *
-FROM executions_visibility
+FROM xcherry_sys_executions_visibility
 WHERE namespace = $1 
 AND status = $2 
-AND process_type_name = $3 
+AND process_id = $3 
 AND start_time >= $4 AND start_time <= $5 
 AND (process_execution_id > $6 OR start_time < $7)
 ORDER BY start_time DESC, process_execution_id

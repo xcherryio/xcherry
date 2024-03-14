@@ -173,7 +173,7 @@ func (h *ginHandler) ListProcessExecutions(c *gin.Context) {
 		h.logger.Debug("responded ListProcessExecutions API request", tag.Value(h.toJson(resp)), tag.Value(h.toJson(errResp)))
 	}()
 
-	//resp, errResp = h.svc.ListProcessExecutions(c.Request.Context(), req)
+	resp, errResp = h.svc.ListProcessExecutions(c.Request.Context(), req)
 
 	if errResp != nil {
 		c.JSON(errResp.StatusCode, errResp.Error)

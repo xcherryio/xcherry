@@ -26,4 +26,6 @@ type Service interface {
 	Rpc(
 		ctx context.Context, request xcapi.ProcessExecutionRpcRequest,
 	) (resp *xcapi.ProcessExecutionRpcResponse, err *ErrorWithStatus)
+	ListProcessExecutions(ctx context.Context, request xcapi.ListProcessExecutionsRequest,
+	) (response *xcapi.ListProcessExecutionsResponse, retErr *ErrorWithStatus)
 }

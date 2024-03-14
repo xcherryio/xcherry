@@ -88,6 +88,7 @@ func (p sqlVisibilityStoreImpl) ListProcessExecutions(
 
 	var lastProcessExecutionId string
 	var lastStartTime int64
+	lastProcessExecutionId = "00000000-0000-0000-0000-000000000000"
 	if paginationToken != nil {
 		lastProcessExecutionId = paginationToken.LastProcessExecutionId
 		lastStartTime = paginationToken.LastStartTime
