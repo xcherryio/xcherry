@@ -5,6 +5,7 @@ package async
 
 import (
 	"context"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/xcherryio/xcherry/common/log"
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -13,6 +14,7 @@ import (
 	"go.uber.org/multierr"
 	"net"
 	"net/http"
+	"strings"
 )
 
 const PathNotifyImmediateTasks = "/internal/api/v1/xcherry/notify-immediate-tasks"
@@ -28,16 +30,71 @@ type defaultSever struct {
 	svc        Service
 }
 
-func NewDefaultAPIServerWithGin(
+func NewDefaultAsyncServersWithGin(
 	rootCtx context.Context,
 	cfg config.Config,
 	processStore persistence.ProcessStore,
 	visibilityStore persistence.VisibilityStore,
 	logger log.Logger,
-) Server {
+) []Server {
+	var servers []Server
+	advertiseAddressToServerMap := map[string]Server{}
+
+	serverAddresses := strings.Split(cfg.AsyncService.ClientAddress, ",")
+	advertiseAddresses := []string{""}
+
+	if cfg.AsyncService.Mode == config.AsyncServiceModeConsistentHashingCluster {
+		advertiseAddresses = strings.Split(cfg.AsyncService.InternalHttpServer.ClusterAdvertiseAddresses, ",")
+	}
+
+	advertiseAddressToJoin := ""
+	for i, serverAddress := range serverAddresses {
+		server, err := NewDefaultAsyncServerWithGin(rootCtx, serverAddress, advertiseAddresses[i],
+			advertiseAddressToJoin, cfg, processStore, visibilityStore, logger)
+		if err != nil {
+			logger.Fatal(fmt.Sprintf("Failed to create async service with serverAddress %s "+
+				"and advertiseAddress %s", serverAddress, advertiseAddresses[i]), tag.Error(err))
+		}
+
+		servers = append(servers, server)
+
+		advertiseAddressToServerMap[server.GetAdvertiseAddress()] = server
+
+		if advertiseAddressToJoin == "" {
+			advertiseAddressToJoin = server.GetAdvertiseAddress()
+		}
+	}
+
+	for i := 0; i < cfg.AsyncService.Shard; i++ {
+		advertiseAddress := servers[0].GetAdvertiseAddressFor(int32(i))
+
+		server, ok := advertiseAddressToServerMap[advertiseAddress]
+		if !ok {
+			logger.Fatal(fmt.Sprintf("advertise address %s does not exist", advertiseAddress))
+		}
+
+		server.CreateQueues(int32(i), processStore)
+	}
+
+	return servers
+}
+
+func NewDefaultAsyncServerWithGin(
+	rootCtx context.Context,
+	serverAddress string,
+	advertiseAddress string,
+	advertiseAddressToJoin string,
+	cfg config.Config,
+	processStore persistence.ProcessStore,
+	visibilityStore persistence.VisibilityStore,
+	logger log.Logger,
+) (Server, error) {
 	engine := gin.Default()
 
-	svc := NewAsyncServiceImpl(rootCtx, processStore, visibilityStore, cfg, logger)
+	svc, err := NewAsyncServiceImpl(serverAddress, advertiseAddress, advertiseAddressToJoin, rootCtx, processStore, visibilityStore, cfg, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	handler := newGinHandler(cfg, svc, logger)
 
@@ -46,7 +103,7 @@ func NewDefaultAPIServerWithGin(
 
 	svrCfg := cfg.AsyncService.InternalHttpServer
 	httpServer := &http.Server{
-		Addr:              svrCfg.Address,
+		Addr:              strings.Split(serverAddress, "//")[1],
 		ReadTimeout:       svrCfg.ReadTimeout,
 		WriteTimeout:      svrCfg.WriteTimeout,
 		ReadHeaderTimeout: svrCfg.ReadHeaderTimeout,
@@ -67,7 +124,7 @@ func NewDefaultAPIServerWithGin(
 		engine:     engine,
 		httpServer: httpServer,
 		svc:        svc,
-	}
+	}, nil
 }
 
 func (s defaultSever) Start() error {
@@ -84,4 +141,20 @@ func (s defaultSever) Stop(ctx context.Context) error {
 	err1 := s.httpServer.Shutdown(ctx)
 	err2 := s.svc.Stop(ctx)
 	return multierr.Combine(err1, err2)
+}
+
+func (s defaultSever) CreateQueues(shardId int32, processStore persistence.ProcessStore) {
+	s.svc.CreateQueues(shardId, processStore)
+}
+
+func (s defaultSever) GetServerAddress() string {
+	return s.svc.GetServerAddress()
+}
+
+func (s defaultSever) GetAdvertiseAddress() string {
+	return s.svc.GetAdvertiseAddress()
+}
+
+func (s defaultSever) GetAdvertiseAddressFor(shardId int32) string {
+	return s.svc.GetAdvertiseAddressFor(shardId)
 }

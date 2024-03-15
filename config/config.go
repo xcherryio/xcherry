@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -46,8 +47,12 @@ type (
 	}
 
 	AsyncServiceConfig struct {
-		// Mode is the mode of async service. Currently only standalone mode is supported
+		// Mode is the mode of async service.
 		Mode AsyncServiceMode `yaml:"mode"`
+		// Shard specifies how many shards to use in the database.
+		// Shards are managed by consistent hash across all the async services.
+		// In the AsyncServiceModeStandalone mode, this number is always 1.
+		Shard int `yaml:"shard"`
 		// ImmediateTaskQueue is the config for immediate task queue
 		ImmediateTaskQueue ImmediateTaskQueueConfig `yaml:"immediateTaskQueue"`
 		// TimerTaskQueue is the config for timer task queue
@@ -57,6 +62,9 @@ type (
 		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
 		// ClientAddress is the address for API service to call AsyncService's internal API
 		ClientAddress string `yaml:"clientAddress"`
+		// Only available in the AsyncServiceModeConsistentHashingCluster mode.
+		// A map maintains the relationship between cluster advertise addresses and cluster addresses
+		AdvertiseToClientAddressMap map[string]string
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -67,6 +75,12 @@ type (
 		// See net.Dial for details of the address format.
 		// For more details, see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
 		Address string `yaml:"address"`
+		// Used in AsyncServiceConfig with AsyncServiceModeConsistentHashingCluster mode only.
+		// Multiple Address seperated by comma.
+		ClusterAddresses string `yaml:"clusterAddresses"`
+		// Used in AsyncServiceConfig with AsyncServiceModeConsistentHashingCluster mode only.
+		// These are addresses used by memberlist.
+		ClusterAdvertiseAddresses string `yaml:"clusterAdvertiseAddresses"`
 		// ReadTimeout is the maximum duration for reading the entire
 		// request, including the body. Because ReadTimeout does not
 		// let Handlers make per-request decisions on each request body's acceptable
@@ -184,13 +198,9 @@ type (
 
 const (
 	// AsyncServiceModeStandalone means there is only one node for async service
-	// This is the only supported mode now
 	AsyncServiceModeStandalone = "standalone"
 	// AsyncServiceModeConsistentHashingCluster means all the nodes of async service
 	// will form a consistent hashing ring, which is used for shard ownership management
-	// TODO
-	//  1. add ringpop config
-	//  2. add async client address config for APIService to call async service with LBS
 	AsyncServiceModeConsistentHashingCluster = "consistent-hashing-cluster"
 )
 
@@ -232,10 +242,7 @@ func (c *Config) ValidateAndSetDefaults() error {
 		rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
 	}
 	if c.AsyncService.Mode == "" {
-		return fmt.Errorf("must set async service mode")
-	}
-	if c.AsyncService.Mode != AsyncServiceModeStandalone {
-		return fmt.Errorf("currently only standalone mode is supported")
+		return fmt.Errorf("must set a valid async service mode")
 	}
 	immediateTaskQConfig := &c.AsyncService.ImmediateTaskQueue
 	if immediateTaskQConfig.MaxPollInterval == 0 {
@@ -284,12 +291,55 @@ func (c *Config) ValidateAndSetDefaults() error {
 	if timerTaskQConfig.TriggerNotificationBufferSize == 0 {
 		timerTaskQConfig.TriggerNotificationBufferSize = 1000
 	}
-	if c.AsyncService.ClientAddress == "" {
-		if c.AsyncService.InternalHttpServer.Address == "" {
-			return fmt.Errorf("AsyncService.InternalHttpServer.Address cannot be empty")
+
+	if c.AsyncService.Mode == AsyncServiceModeStandalone {
+		c.AsyncService.Shard = 1
+
+		if c.AsyncService.ClientAddress == "" {
+			if c.AsyncService.InternalHttpServer.Address == "" {
+				return fmt.Errorf("AsyncService.InternalHttpServer.Address cannot be empty")
+			}
+
+			c.AsyncService.ClientAddress = "http://" + c.AsyncService.InternalHttpServer.Address
 		}
-		c.AsyncService.ClientAddress = "http://" + c.AsyncService.InternalHttpServer.Address
 	}
+
+	if c.AsyncService.Mode == AsyncServiceModeConsistentHashingCluster {
+		clusterAdvertiseAddresses := strings.Split(c.AsyncService.InternalHttpServer.ClusterAdvertiseAddresses, ",")
+
+		if c.AsyncService.ClientAddress == "" {
+			clusterAddresses := strings.Split(c.AsyncService.InternalHttpServer.ClusterAddresses, ",")
+
+			if len(clusterAddresses) != len(clusterAdvertiseAddresses) {
+				return fmt.Errorf("AsyncService.InternalHttpServer.ClusterAddresses must have the same size " +
+					"as AsyncService.InternalHttpServer.ClusterAdvertiseAddresses")
+			}
+
+			if len(clusterAddresses) == 0 {
+				return fmt.Errorf("AsyncService.InternalHttpServer.ClusterAddresses cannot be empty")
+			}
+
+			for _, clusterAddress := range clusterAddresses {
+				if len(c.AsyncService.ClientAddress) > 0 {
+					c.AsyncService.ClientAddress += ","
+				}
+				c.AsyncService.ClientAddress += "http://" + clusterAddress
+			}
+		}
+
+		clientAddresses := strings.Split(c.AsyncService.ClientAddress, ",")
+
+		if c.AsyncService.Shard < len(clientAddresses) {
+			return fmt.Errorf("AsyncService.Shard should be an equal or bigger number than the AsyncService.ClientAddress count")
+		}
+
+		c.AsyncService.AdvertiseToClientAddressMap = map[string]string{}
+
+		for i, advertiseAddress := range clusterAdvertiseAddresses {
+			c.AsyncService.AdvertiseToClientAddressMap[advertiseAddress] = clientAddresses[i]
+		}
+	}
+
 	return nil
 }
 

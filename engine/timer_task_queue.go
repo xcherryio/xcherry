@@ -130,7 +130,7 @@ func (w *timerTaskQueueImpl) Start() error {
 			case <-w.triggerPollTimer.FireChan():
 				w.triggeredPolling()
 			case <-w.rootCtx.Done():
-				w.logger.Info("processor is being closed")
+				w.logger.Info(fmt.Sprintf("timerTaskQueue %d is being closed", w.shardId))
 				return
 			}
 		}

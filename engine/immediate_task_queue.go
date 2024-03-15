@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 	"math/rand"
@@ -92,7 +93,7 @@ func (w *immediateTaskQueueImpl) Start() error {
 					w.receiveCompletedTask(task)
 				}
 			case <-w.rootCtx.Done():
-				w.logger.Info("processor is being closed")
+				w.logger.Info(fmt.Sprintf("immediateTaskQueue %d is being closed", w.shardId))
 				return
 			}
 		}

@@ -91,13 +91,16 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 		}
 	}
 
-	var asyncServer async.Server
+	var asyncServers []async.Server
 	if services[AsyncServiceName] {
-		asyncServer := async.NewDefaultAPIServerWithGin(
+		asyncServers = async.NewDefaultAsyncServersWithGin(
 			rootCtx, *cfg, processStore, visibilityStore, logger.WithTags(tag.Service(AsyncServiceName)))
-		err = asyncServer.Start()
-		if err != nil {
-			logger.Fatal("Failed to start async server", tag.Error(err))
+
+		for _, asyncServer := range asyncServers {
+			err = asyncServer.Start()
+			if err != nil {
+				logger.Fatal(fmt.Sprintf("Failed to start the async server %s", asyncServer.GetServerAddress()), tag.Error(err))
+			}
 		}
 	}
 
@@ -111,12 +114,13 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 				errs = multierr.Append(errs, err)
 			}
 		}
-		if asyncServer != nil {
+		for _, asyncServer := range asyncServers {
 			err := asyncServer.Stop(ctx)
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		}
+
 		// stop processStore and visibilityStore
 		err := processStore.Close()
 		if err != nil {

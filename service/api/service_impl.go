@@ -5,7 +5,10 @@ package api
 
 import (
 	"context"
+	"github.com/xcherryio/xcherry/utils"
+	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xcherryio/apis/goapi/xcapi"
@@ -50,9 +53,11 @@ func (s serviceImpl) StartProcess(
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
 	}
 
+	shardId := utils.GetRandomShardId(s.cfg.AsyncService.Shard)
+
 	storeReq := data_models.StartProcessRequest{
 		Request:        request,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: int32(shardId),
 	}
 	if timeoutUnixSeconds > 0 {
 		storeReq.TimeoutTimeUnixSeconds = time.Now().Unix() + int64(timeoutUnixSeconds)
@@ -76,7 +81,7 @@ func (s serviceImpl) StartProcess(
 
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            int32(shardId),
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
@@ -85,7 +90,7 @@ func (s serviceImpl) StartProcess(
 
 	if storeReq.TimeoutTimeUnixSeconds != 0 {
 		s.notifyRemoteTimerTaskAsync(ctx, xcapi.NotifyTimerTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            int32(shardId),
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
@@ -308,10 +313,13 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		addresses := strings.Split(s.cfg.AsyncService.ClientAddress, ",")
+
+		// randomly send the request to an async service
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: addresses[rand.Intn(len(addresses))],
 				},
 			},
 		})
@@ -336,10 +344,13 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		addresses := strings.Split(s.cfg.AsyncService.ClientAddress, ",")
+
+		// randomly send the request to an async service
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: addresses[rand.Intn(len(addresses))],
 				},
 			},
 		})
