@@ -25,5 +25,4 @@ asyncService:
   shard: 30
   internalHttpServer:
     clusterAddresses: 0.0.0.0:8701,0.0.0.0:8702,0.0.0.0:8703
-    # need to use real IP here
-    clusterAdvertiseAddresses: 192.168.2.100:8901,192.168.2.100:8902,192.168.2.100:8903
+    clusterAdvertiseAddresses: 0.0.0.0:8901,0.0.0.0:8902,0.0.0.0:8903

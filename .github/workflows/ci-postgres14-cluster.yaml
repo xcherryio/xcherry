@@ -1,4 +1,4 @@
-name: Postgres14 Tests
+name: Postgres14 Cluster Tests
 on:
   push:
     branches:
@@ -35,7 +35,10 @@ jobs:
         run: sleep 5 && make install-schema-postgres
         
       - name: Start Postgres server # then run in the background
-        run: ./xcherry-server&
+        run: ./xcherry-server --config ./config/development-postgres-cluster.yaml&
+
+      - name: Sleep 10 seconds
+        run: sleep 10
 
       - name: Run Postgres IntegrationTest
         run:  make integTestsWithLocalServer

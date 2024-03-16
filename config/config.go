@@ -62,9 +62,6 @@ type (
 		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
 		// ClientAddress is the address for API service to call AsyncService's internal API
 		ClientAddress string `yaml:"clientAddress"`
-		// Only available in the AsyncServiceModeConsistentHashingCluster mode.
-		// A map maintains the relationship between cluster advertise addresses and cluster addresses
-		AdvertiseToClientAddressMap map[string]string
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -331,12 +328,6 @@ func (c *Config) ValidateAndSetDefaults() error {
 
 		if c.AsyncService.Shard < len(clientAddresses) {
 			return fmt.Errorf("AsyncService.Shard should be an equal or bigger number than the AsyncService.ClientAddress count")
-		}
-
-		c.AsyncService.AdvertiseToClientAddressMap = map[string]string{}
-
-		for i, advertiseAddress := range clusterAdvertiseAddresses {
-			c.AsyncService.AdvertiseToClientAddressMap[advertiseAddress] = clientAddresses[i]
 		}
 	}
 

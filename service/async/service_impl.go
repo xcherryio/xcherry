@@ -14,13 +14,14 @@ import (
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/engine"
 	"github.com/xcherryio/xcherry/persistence"
+	"github.com/xcherryio/xcherry/utils"
 	"go.uber.org/multierr"
 	"strconv"
 	"strings"
 	"time"
 )
 
-type AsyncService struct {
+type asyncService struct {
 	rootCtx context.Context
 
 	taskNotifier engine.TaskNotifier
@@ -38,6 +39,8 @@ type AsyncService struct {
 
 	serverAddress    string
 	advertiseAddress string
+
+	advertiseToClientAddressMap map[string]string
 }
 
 func NewAsyncServiceImpl(
@@ -65,7 +68,7 @@ func NewAsyncServiceImpl(
 		}
 
 		conf = memberlist.DefaultLocalConfig()
-		conf.Name = "async_" + strconv.Itoa(port)
+		conf.Name = "async_" + advertiseAddress
 		conf.BindAddr = parts[0]
 		conf.BindPort = port
 		conf.AdvertisePort = conf.BindPort
@@ -85,9 +88,13 @@ func NewAsyncServiceImpl(
 				return nil, err
 			}
 		}
+
+		// update to real address
+		local := list.LocalNode()
+		advertiseAddress = cluster.BuildHostAddress(local)
 	}
 
-	return &AsyncService{
+	return &asyncService{
 		rootCtx: rootCtx,
 
 		taskNotifier: notifier,
@@ -96,8 +103,8 @@ func NewAsyncServiceImpl(
 		timerTaskProcessor:     timerTaskProcessor,
 
 		// to initialize after creating all the async servers
-		immediateTaskQueueMap: make(map[int32]engine.ImmediateTaskQueue),
-		timerTaskQueueMap:     make(map[int32]engine.TimerTaskQueue),
+		immediateTaskQueueMap: map[int32]engine.ImmediateTaskQueue{},
+		timerTaskQueueMap:     map[int32]engine.TimerTaskQueue{},
 
 		cfg:    cfg,
 		logger: logger,
@@ -106,10 +113,12 @@ func NewAsyncServiceImpl(
 
 		serverAddress:    serverAddress,
 		advertiseAddress: advertiseAddress,
+
+		advertiseToClientAddressMap: map[string]string{},
 	}, nil
 }
 
-func (a AsyncService) Start() error {
+func (a asyncService) Start() error {
 	err := a.immediateTaskProcessor.Start()
 	if err != nil {
 		a.logger.Error("fail to start immediate task processor", tag.Error(err))
@@ -138,7 +147,7 @@ func (a AsyncService) Start() error {
 	return nil
 }
 
-func (a AsyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
+func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
 	targetAddress := a.GetAdvertiseAddressFor(req.ShardId)
 
 	if targetAddress != a.GetAdvertiseAddress() {
@@ -156,7 +165,7 @@ func (a AsyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksR
 	return nil
 }
 
-func (a AsyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
+func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
 	targetAddress := a.GetAdvertiseAddressFor(req.ShardId)
 
 	if targetAddress != a.GetAdvertiseAddress() {
@@ -174,7 +183,7 @@ func (a AsyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) 
 	return nil
 }
 
-func (a AsyncService) Stop(ctx context.Context) error {
+func (a asyncService) Stop(ctx context.Context) error {
 	var errs []error
 
 	errs = append(errs, a.immediateTaskProcessor.Stop(ctx))
@@ -191,7 +200,7 @@ func (a AsyncService) Stop(ctx context.Context) error {
 	return multierr.Combine(errs...)
 }
 
-func (a AsyncService) CreateQueues(shardId int32, processStore persistence.ProcessStore) {
+func (a asyncService) CreateQueues(shardId int32, processStore persistence.ProcessStore) {
 	immediateTaskQueue := engine.NewImmediateTaskQueueImpl(
 		a.rootCtx, shardId, a.cfg, processStore, a.immediateTaskProcessor, a.logger)
 
@@ -205,27 +214,33 @@ func (a AsyncService) CreateQueues(shardId int32, processStore persistence.Proce
 	a.timerTaskQueueMap[shardId] = timerTaskQueue
 }
 
-func (a AsyncService) GetServerAddress() string {
+func (a asyncService) SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string) {
+	for k, v := range advertiseToClientAddressMap {
+		a.advertiseToClientAddressMap[k] = v
+	}
+}
+
+func (a asyncService) GetServerAddress() string {
 	return a.serverAddress
 }
 
-func (a AsyncService) GetAdvertiseAddress() string {
+func (a asyncService) GetAdvertiseAddress() string {
 	return a.advertiseAddress
 }
 
-func (a AsyncService) GetAdvertiseAddressFor(shardId int32) string {
+func (a asyncService) GetAdvertiseAddressFor(shardId int32) string {
 	if a.cfg.AsyncService.Mode == config.AsyncServiceModeStandalone {
-		return ""
+		return utils.DefaultAdvertiseAddress
 	}
 
 	delegate, ok := a.clusterConfig.Events.(*cluster.ClusterEventDelegate)
 	if !ok {
-		a.logger.Error("failed to get delegate")
+		a.logger.Error(fmt.Sprintf("failed to get delegate in %s", a.advertiseAddress))
 	}
 	return delegate.GetNodeFor(shardId)
 }
 
-func (a AsyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, advertiseAddress string) {
+func (a asyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, advertiseAddress string) {
 	go func() {
 
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
@@ -234,7 +249,7 @@ func (a AsyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: a.cfg.AsyncService.AdvertiseToClientAddressMap[advertiseAddress],
+					URL: a.advertiseToClientAddressMap[advertiseAddress],
 				},
 			},
 		})
@@ -252,7 +267,7 @@ func (a AsyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 	}()
 }
 
-func (a AsyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, advertiseAddress string) {
+func (a asyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, advertiseAddress string) {
 	// execute in the background as best effort
 	go func() {
 
@@ -262,7 +277,7 @@ func (a AsyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerT
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: a.cfg.AsyncService.AdvertiseToClientAddressMap[advertiseAddress],
+					URL: a.advertiseToClientAddressMap[advertiseAddress],
 				},
 			},
 		})

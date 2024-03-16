@@ -14,6 +14,7 @@ type Server interface {
 	Start() error
 	Stop(ctx context.Context) error
 	CreateQueues(shardId int32, processStore persistence.ProcessStore)
+	SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string)
 	GetServerAddress() string
 	GetAdvertiseAddress() string
 	GetAdvertiseAddressFor(shardId int32) string
@@ -25,6 +26,7 @@ type Service interface {
 	NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error
 	Stop(ctx context.Context) error
 	CreateQueues(shardId int32, processStore persistence.ProcessStore)
+	SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string)
 	GetServerAddress() string
 	GetAdvertiseAddress() string
 	GetAdvertiseAddressFor(shardId int32) string

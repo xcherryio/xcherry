@@ -11,6 +11,7 @@ import (
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/persistence"
+	"github.com/xcherryio/xcherry/utils"
 	"go.uber.org/multierr"
 	"net"
 	"net/http"
@@ -39,9 +40,10 @@ func NewDefaultAsyncServersWithGin(
 ) []Server {
 	var servers []Server
 	advertiseAddressToServerMap := map[string]Server{}
+	advertiseAddressToServerAddressMap := map[string]string{}
 
 	serverAddresses := strings.Split(cfg.AsyncService.ClientAddress, ",")
-	advertiseAddresses := []string{""}
+	advertiseAddresses := []string{utils.DefaultAdvertiseAddress}
 
 	if cfg.AsyncService.Mode == config.AsyncServiceModeConsistentHashingCluster {
 		advertiseAddresses = strings.Split(cfg.AsyncService.InternalHttpServer.ClusterAdvertiseAddresses, ",")
@@ -58,10 +60,13 @@ func NewDefaultAsyncServersWithGin(
 
 		servers = append(servers, server)
 
-		advertiseAddressToServerMap[server.GetAdvertiseAddress()] = server
+		advertiseAddress := server.GetAdvertiseAddress()
+
+		advertiseAddressToServerMap[advertiseAddress] = server
+		advertiseAddressToServerAddressMap[advertiseAddress] = server.GetServerAddress()
 
 		if advertiseAddressToJoin == "" {
-			advertiseAddressToJoin = server.GetAdvertiseAddress()
+			advertiseAddressToJoin = advertiseAddress
 		}
 	}
 
@@ -74,6 +79,10 @@ func NewDefaultAsyncServersWithGin(
 		}
 
 		server.CreateQueues(int32(i), processStore)
+	}
+
+	for _, server := range servers {
+		server.SetAdvertiseToClientAddressMap(advertiseAddressToServerAddressMap)
 	}
 
 	return servers
@@ -145,6 +154,10 @@ func (s defaultSever) Stop(ctx context.Context) error {
 
 func (s defaultSever) CreateQueues(shardId int32, processStore persistence.ProcessStore) {
 	s.svc.CreateQueues(shardId, processStore)
+}
+
+func (s defaultSever) SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string) {
+	s.svc.SetAdvertiseToClientAddressMap(advertiseToClientAddressMap)
 }
 
 func (s defaultSever) GetServerAddress() string {
