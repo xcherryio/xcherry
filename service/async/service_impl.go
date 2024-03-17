@@ -14,7 +14,6 @@ import (
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/engine"
 	"github.com/xcherryio/xcherry/persistence"
-	"github.com/xcherryio/xcherry/utils"
 	"go.uber.org/multierr"
 	"strconv"
 	"strings"
@@ -39,8 +38,6 @@ type asyncService struct {
 
 	serverAddress    string
 	advertiseAddress string
-
-	advertiseToClientAddressMap map[string]string
 }
 
 func NewAsyncServiceImpl(
@@ -68,13 +65,19 @@ func NewAsyncServiceImpl(
 		}
 
 		conf = memberlist.DefaultLocalConfig()
-		conf.Name = "async_" + advertiseAddress
+		conf.Name = "async_" + advertiseAddress + "_" + serverAddress
 		conf.BindAddr = parts[0]
 		conf.BindPort = port
 		conf.AdvertisePort = conf.BindPort
 
 		conf.Events = &cluster.ClusterEventDelegate{
 			ServerAddress: serverAddress,
+		}
+
+		conf.Delegate = &cluster.ClusterDelegate{
+			Meta: cluster.ClusterDelegateMetaData{
+				ServerAddress: serverAddress,
+			},
 		}
 
 		list, err := memberlist.Create(conf)
@@ -113,8 +116,6 @@ func NewAsyncServiceImpl(
 
 		serverAddress:    serverAddress,
 		advertiseAddress: advertiseAddress,
-
-		advertiseToClientAddressMap: map[string]string{},
 	}, nil
 }
 
@@ -148,10 +149,10 @@ func (a asyncService) Start() error {
 }
 
 func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
-	targetAddress := a.GetAdvertiseAddressFor(req.ShardId)
+	targetAddress := a.GetServerAddressFor(req.ShardId)
 
-	if targetAddress != a.GetAdvertiseAddress() {
-		a.logger.Info(fmt.Sprintf("NotifyPollingImmediateTask: %s -> %s", a.GetAdvertiseAddress(), targetAddress))
+	if targetAddress != a.GetServerAddress() {
+		a.logger.Info(fmt.Sprintf("NotifyPollingImmediateTask: %s -> %s", a.GetServerAddress(), targetAddress))
 		a.notifyRemoteImmediateTaskAsyncInCluster(req, targetAddress)
 		return nil
 	}
@@ -166,10 +167,10 @@ func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksR
 }
 
 func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
-	targetAddress := a.GetAdvertiseAddressFor(req.ShardId)
+	targetAddress := a.GetServerAddressFor(req.ShardId)
 
-	if targetAddress != a.GetAdvertiseAddress() {
-		a.logger.Info(fmt.Sprintf("NotifyPollingTimerTask: %s -> %s", a.GetAdvertiseAddress(), targetAddress))
+	if targetAddress != a.GetServerAddress() {
+		a.logger.Info(fmt.Sprintf("NotifyPollingTimerTask: %s -> %s", a.GetServerAddress(), targetAddress))
 		a.notifyRemoteTimerTaskAsyncInCluster(req, targetAddress)
 		return nil
 	}
@@ -214,33 +215,27 @@ func (a asyncService) CreateQueues(shardId int32, processStore persistence.Proce
 	a.timerTaskQueueMap[shardId] = timerTaskQueue
 }
 
-func (a asyncService) SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string) {
-	for k, v := range advertiseToClientAddressMap {
-		a.advertiseToClientAddressMap[k] = v
-	}
-}
-
 func (a asyncService) GetServerAddress() string {
 	return a.serverAddress
+}
+
+func (a asyncService) GetServerAddressFor(shardId int32) string {
+	if a.cfg.AsyncService.Mode == config.AsyncServiceModeStandalone {
+		return a.serverAddress
+	}
+
+	eventDelegate, ok := a.clusterConfig.Events.(*cluster.ClusterEventDelegate)
+	if !ok {
+		a.logger.Error(fmt.Sprintf("failed to get delegate in %s", a.serverAddress))
+	}
+	return eventDelegate.GetServerAddressFor(shardId)
 }
 
 func (a asyncService) GetAdvertiseAddress() string {
 	return a.advertiseAddress
 }
 
-func (a asyncService) GetAdvertiseAddressFor(shardId int32) string {
-	if a.cfg.AsyncService.Mode == config.AsyncServiceModeStandalone {
-		return utils.DefaultAdvertiseAddress
-	}
-
-	delegate, ok := a.clusterConfig.Events.(*cluster.ClusterEventDelegate)
-	if !ok {
-		a.logger.Error(fmt.Sprintf("failed to get delegate in %s", a.advertiseAddress))
-	}
-	return delegate.GetNodeFor(shardId)
-}
-
-func (a asyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, advertiseAddress string) {
+func (a asyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string) {
 	go func() {
 
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
@@ -249,7 +244,7 @@ func (a asyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: a.advertiseToClientAddressMap[advertiseAddress],
+					URL: serverAddress,
 				},
 			},
 		})
@@ -267,7 +262,7 @@ func (a asyncService) notifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 	}()
 }
 
-func (a asyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, advertiseAddress string) {
+func (a asyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string) {
 	// execute in the background as best effort
 	go func() {
 
@@ -277,7 +272,7 @@ func (a asyncService) notifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerT
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: a.advertiseToClientAddressMap[advertiseAddress],
+					URL: serverAddress,
 				},
 			},
 		})

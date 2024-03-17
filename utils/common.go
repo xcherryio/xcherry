@@ -9,10 +9,6 @@ import (
 	"math/rand"
 )
 
-const (
-	DefaultAdvertiseAddress = "0:0"
-)
-
 func GetRandomShardId(shardCount int) int {
 	return rand.Intn(shardCount)
 }

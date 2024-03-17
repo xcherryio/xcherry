@@ -11,7 +11,6 @@ import (
 	"github.com/xcherryio/xcherry/common/log/tag"
 	"github.com/xcherryio/xcherry/config"
 	"github.com/xcherryio/xcherry/persistence"
-	"github.com/xcherryio/xcherry/utils"
 	"go.uber.org/multierr"
 	"net"
 	"net/http"
@@ -39,11 +38,10 @@ func NewDefaultAsyncServersWithGin(
 	logger log.Logger,
 ) []Server {
 	var servers []Server
-	advertiseAddressToServerMap := map[string]Server{}
-	advertiseAddressToServerAddressMap := map[string]string{}
+	addressToServerMap := map[string]Server{}
 
 	serverAddresses := strings.Split(cfg.AsyncService.ClientAddress, ",")
-	advertiseAddresses := []string{utils.DefaultAdvertiseAddress}
+	advertiseAddresses := []string{""}
 
 	if cfg.AsyncService.Mode == config.AsyncServiceModeConsistentHashingCluster {
 		advertiseAddresses = strings.Split(cfg.AsyncService.InternalHttpServer.ClusterAdvertiseAddresses, ",")
@@ -60,29 +58,22 @@ func NewDefaultAsyncServersWithGin(
 
 		servers = append(servers, server)
 
-		advertiseAddress := server.GetAdvertiseAddress()
-
-		advertiseAddressToServerMap[advertiseAddress] = server
-		advertiseAddressToServerAddressMap[advertiseAddress] = server.GetServerAddress()
+		addressToServerMap[serverAddress] = server
 
 		if advertiseAddressToJoin == "" {
-			advertiseAddressToJoin = advertiseAddress
+			advertiseAddressToJoin = server.GetAdvertiseAddress()
 		}
 	}
 
 	for i := 0; i < cfg.AsyncService.Shard; i++ {
-		advertiseAddress := servers[0].GetAdvertiseAddressFor(int32(i))
+		serverAddress := servers[0].GetServerAddressFor(int32(i))
 
-		server, ok := advertiseAddressToServerMap[advertiseAddress]
+		server, ok := addressToServerMap[serverAddress]
 		if !ok {
-			logger.Fatal(fmt.Sprintf("advertise address %s does not exist", advertiseAddress))
+			logger.Fatal(fmt.Sprintf("server address %s does not exist", serverAddress))
 		}
 
 		server.CreateQueues(int32(i), processStore)
-	}
-
-	for _, server := range servers {
-		server.SetAdvertiseToClientAddressMap(advertiseAddressToServerAddressMap)
 	}
 
 	return servers
@@ -156,18 +147,14 @@ func (s defaultSever) CreateQueues(shardId int32, processStore persistence.Proce
 	s.svc.CreateQueues(shardId, processStore)
 }
 
-func (s defaultSever) SetAdvertiseToClientAddressMap(advertiseToClientAddressMap map[string]string) {
-	s.svc.SetAdvertiseToClientAddressMap(advertiseToClientAddressMap)
-}
-
 func (s defaultSever) GetServerAddress() string {
 	return s.svc.GetServerAddress()
 }
 
-func (s defaultSever) GetAdvertiseAddress() string {
-	return s.svc.GetAdvertiseAddress()
+func (s defaultSever) GetServerAddressFor(shardId int32) string {
+	return s.svc.GetServerAddressFor(shardId)
 }
 
-func (s defaultSever) GetAdvertiseAddressFor(shardId int32) string {
-	return s.svc.GetAdvertiseAddressFor(shardId)
+func (s defaultSever) GetAdvertiseAddress() string {
+	return s.svc.GetAdvertiseAddress()
 }
