@@ -18,5 +18,13 @@ type Service interface {
 	Start() error
 	NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error
 	NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error
+	NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string)
+	NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string)
 	Stop(ctx context.Context) error
+	ReBalance(assignedShardIds []int32)
+}
+
+type Membership interface {
+	GetServerAddress() string
+	GetServerAddressFor(shardId int32) string
 }

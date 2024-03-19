@@ -46,6 +46,8 @@ type (
 		Rpc RpcConfig `yaml:"rpc"`
 		// AsyncAddresses are the addresses for API service to call AsyncServices' internal APIs
 		AsyncAddresses []string `yaml:"asyncAddresses"`
+		// the total shard count in AsyncServices. default to be 1.
+		AsyncShard int `yaml:"asyncShard"`
 	}
 
 	AsyncServiceConfig struct {
@@ -90,6 +92,8 @@ type (
 	}
 
 	MembershipConfig struct {
+		// total shard count across all the async servers
+		Shard int `yaml:"shard"`
 		// the advertise address to bind
 		AdvertiseAddress string `yaml:"advertiseAddress"`
 		// the advertise address to join
@@ -241,6 +245,10 @@ func (c *Config) ValidateAndSetDefaults() error {
 
 		if len(c.ApiService.AsyncAddresses) == 0 {
 			return fmt.Errorf("at least one asyncAddress is required")
+		}
+
+		if c.ApiService.AsyncShard == 0 {
+			c.ApiService.AsyncShard = 1
 		}
 
 		for i, asyncAddress := range c.ApiService.AsyncAddresses {

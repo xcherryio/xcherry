@@ -4,6 +4,7 @@
 package async
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/common/log"
@@ -12,16 +13,18 @@ import (
 )
 
 type ginHandler struct {
-	config config.Config
-	logger log.Logger
-	svc    Service
+	config     config.Config
+	logger     log.Logger
+	svc        Service
+	membership Membership
 }
 
-func newGinHandler(cfg config.Config, svc Service, logger log.Logger) *ginHandler {
+func newGinHandler(cfg config.Config, svc Service, membership Membership, logger log.Logger) *ginHandler {
 	return &ginHandler{
-		config: cfg,
-		logger: logger,
-		svc:    svc,
+		config:     cfg,
+		logger:     logger,
+		svc:        svc,
+		membership: membership,
 	}
 }
 
@@ -31,6 +34,18 @@ func (h *ginHandler) NotifyImmediateTasks(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
+
+	if h.config.AsyncService.Mode == config.AsyncServiceModeCluster {
+		targetServerAddress := h.membership.GetServerAddressFor(req.ShardId)
+		if targetServerAddress != h.membership.GetServerAddress() {
+			h.logger.Info(fmt.Sprintf("NotifyRemoteImmediateTaskAsyncInCluster: %s -> %s", h.membership.GetServerAddress(), targetServerAddress))
+
+			h.svc.NotifyRemoteImmediateTaskAsyncInCluster(req, targetServerAddress)
+			successRespond(c)
+			return
+		}
+	}
+
 	err := h.svc.NotifyPollingImmediateTask(req)
 	if err != nil {
 		invalidRequestForError(c, err)
@@ -46,6 +61,18 @@ func (h *ginHandler) NotifyTimerTasks(c *gin.Context) {
 		invalidRequestSchema(c)
 		return
 	}
+
+	if h.config.AsyncService.Mode == config.AsyncServiceModeCluster {
+		targetServerAddress := h.membership.GetServerAddressFor(req.ShardId)
+		if targetServerAddress != h.membership.GetServerAddress() {
+			h.logger.Info(fmt.Sprintf("NotifyRemoteImmediateTaskAsyncInCluster: %s -> %s", h.membership.GetServerAddress(), targetServerAddress))
+
+			h.svc.NotifyRemoteTimerTaskAsyncInCluster(req, targetServerAddress)
+			successRespond(c)
+			return
+		}
+	}
+
 	err := h.svc.NotifyPollingTimerTask(req)
 	if err != nil {
 		invalidRequestForError(c, err)

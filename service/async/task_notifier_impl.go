@@ -4,6 +4,7 @@
 package async
 
 import (
+	"fmt"
 	"github.com/xcherryio/apis/goapi/xcapi"
 	"github.com/xcherryio/xcherry/engine"
 )
@@ -23,7 +24,7 @@ func newTaskNotifierImpl() engine.TaskNotifier {
 func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xcapi.NotifyImmediateTasksRequest) {
 	queue, ok := t.shardIdToImmediateTaskQueue[request.ShardId]
 	if !ok {
-		panic("the shard is not registered")
+		panic(fmt.Sprintf("the shard %d is not registered", request.ShardId))
 	}
 	queue.TriggerPollingTasks(request)
 }
@@ -31,7 +32,7 @@ func (t *taskNotifierImpl) NotifyNewImmediateTasks(request xcapi.NotifyImmediate
 func (t *taskNotifierImpl) NotifyNewTimerTasks(request xcapi.NotifyTimerTasksRequest) {
 	queue, ok := t.shardIdToTimerTaskQueue[request.ShardId]
 	if !ok {
-		panic("the shard is not registered")
+		panic(fmt.Sprintf("the shard %d is not registered", request.ShardId))
 	}
 	queue.TriggerPollingTasks(request)
 }
@@ -39,15 +40,23 @@ func (t *taskNotifierImpl) NotifyNewTimerTasks(request xcapi.NotifyTimerTasksReq
 func (t *taskNotifierImpl) AddImmediateTaskQueue(shardId int32, queue engine.ImmediateTaskQueue) {
 	_, ok := t.shardIdToImmediateTaskQueue[shardId]
 	if ok {
-		panic("the shard is already registered")
+		panic(fmt.Sprintf("the shard %d is already registered", shardId))
 	}
 	t.shardIdToImmediateTaskQueue[shardId] = queue
+}
+
+func (t *taskNotifierImpl) RemoveImmediateTaskQueue(shardId int32) {
+	delete(t.shardIdToImmediateTaskQueue, shardId)
 }
 
 func (t *taskNotifierImpl) AddTimerTaskQueue(shardId int32, queue engine.TimerTaskQueue) {
 	_, ok := t.shardIdToTimerTaskQueue[shardId]
 	if ok {
-		panic("the shard is already registered")
+		panic(fmt.Sprintf("the shard %d is already registered", shardId))
 	}
 	t.shardIdToTimerTaskQueue[shardId] = queue
+}
+
+func (t *taskNotifierImpl) RemoveTimerTaskQueue(shardId int32) {
+	delete(t.shardIdToTimerTaskQueue, shardId)
 }

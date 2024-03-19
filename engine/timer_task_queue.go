@@ -91,18 +91,25 @@ func NewTimerTaskQueueImpl(
 
 func (w *timerTaskQueueImpl) Stop(ctx context.Context) error {
 	// close timer to prevent goroutine leakage
-	w.nextPreloadTimer.Close()
-	w.nextFiringTimer.Close()
-	w.triggerPollTimer.Close()
+	w.nextPreloadTimer.Stop()
+	w.nextFiringTimer.Stop()
+	w.triggerPollTimer.Stop()
+
+	w.processor.RemoveTimerTaskQueue(w.shardId)
 
 	return nil
 }
 
 func (w *timerTaskQueueImpl) TriggerPollingTasks(req xcapi.NotifyTimerTasksRequest) {
 	if req.ShardId != w.shardId {
-		panic("shardId doesn't match")
+		w.logger.Error(fmt.Sprintf("shardId doesn't match: %d - %d", req.ShardId, w.shardId))
+		return
 	}
 	w.triggeredPollingChan <- req
+}
+
+func (w *timerTaskQueueImpl) UpdateShardId(shardId int32) {
+	w.shardId = shardId
 }
 
 func (w *timerTaskQueueImpl) Start() error {

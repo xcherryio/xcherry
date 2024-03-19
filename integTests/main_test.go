@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 						WriteTimeout: 60 * time.Second,
 					},
 					AsyncAddresses: []string{
-						"0.0.0.0:8701",
+						"http://0.0.0.0:8701",
 					},
 				},
 				Database: &config.DatabaseConfig{

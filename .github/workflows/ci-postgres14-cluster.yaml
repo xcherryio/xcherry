@@ -17,10 +17,6 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Get runner ip addresses
-        id: ip
-        uses: haythem/public-ip@v1.3
-
       - name: Install Go
         uses: actions/setup-go@v2
         with:
@@ -29,14 +25,15 @@ jobs:
       - name: Checkout Code Base
         uses: actions/checkout@v3
 
-      - name: Replace configs with real IP
-        run: |
-          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-1.yaml
-          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-2.yaml
-          sed -i "s/0.0.0.0:8902/${{ steps.ip.outputs.ipv4 }}:8902/" config/development-postgres-cluster-async-2.yaml
-          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-3.yaml
-          sed -i "s/0.0.0.0:8903/${{ steps.ip.outputs.ipv4 }}:8903/" config/development-postgres-cluster-async-3.yaml
-        working-directory: ${{ github.workspace }}
+#      - name: Get runner ip addresses
+#        id: ip
+#        uses: haythem/public-ip@v1.3
+#
+#      - name: Replace configs with real IP
+#        run: |
+#          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-2.yaml
+#          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-3.yaml
+#        working-directory: ${{ github.workspace }}
 
       - name: Make Binaries
         run: make bins
@@ -53,7 +50,14 @@ jobs:
       - name: Start Async server 1 # then run in the background
         run: ./xcherry-server --config ./config/development-postgres-cluster-async-1.yaml --service async&
 
-      # TODO: start Async server 2 and 3
+      - name: Start Async server 2 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-2.yaml --service async&
+
+      - name: Start Async server 3 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-3.yaml --service async&
+
+      - name: Sleep 10 seconds
+        run: sleep 10
 
       - name: Run Postgres IntegrationTest
         run:  make integTestsWithLocalServer

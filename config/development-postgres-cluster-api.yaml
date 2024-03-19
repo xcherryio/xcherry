@@ -22,6 +22,6 @@ apiService:
     writeTimeout: 60s
   asyncAddresses:
     - 0.0.0.0:8701
-    # TODO: enable multiple async addresses in cluster mode
-#    - 0.0.0.0:8702
-#    - 0.0.0.0:8703
+    - 0.0.0.0:8702
+    - 0.0.0.0:8703
+  asyncShard: 30

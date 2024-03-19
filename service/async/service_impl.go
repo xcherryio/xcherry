@@ -13,6 +13,9 @@ import (
 	"github.com/xcherryio/xcherry/engine"
 	"github.com/xcherryio/xcherry/persistence"
 	"go.uber.org/multierr"
+	"sort"
+	"strconv"
+	"time"
 )
 
 type asyncService struct {
@@ -20,11 +23,13 @@ type asyncService struct {
 
 	taskNotifier engine.TaskNotifier
 
-	immediateTaskQueue     engine.ImmediateTaskQueue
+	immediateTaskQueueMap  map[int32]engine.ImmediateTaskQueue
 	immediateTaskProcessor engine.ImmediateTaskProcessor
 
-	timerTaskQueue     engine.TimerTaskQueue
+	timerTaskQueueMap  map[int32]engine.TimerTaskQueue
 	timerTaskProcessor engine.TimerTaskProcessor
+
+	processStore persistence.ProcessStore
 
 	cfg    config.Config
 	logger log.Logger
@@ -41,26 +46,17 @@ func NewAsyncServiceImpl(
 		rootCtx, cfg, notifier, processStore, visibilityStore, logger)
 	timerTaskProcessor := engine.NewTimerTaskConcurrentProcessor(rootCtx, cfg, notifier, processStore, logger)
 
-	// TODO for config.AsyncServiceModeConsistentHashingCluster
-	// the queues will be created/added/managed dynamically
+	return asyncService{
+		// to be dynamically initialized later
+		immediateTaskQueueMap: map[int32]engine.ImmediateTaskQueue{},
+		timerTaskQueueMap:     map[int32]engine.TimerTaskQueue{},
 
-	immediateTaskQueue := engine.NewImmediateTaskQueueImpl(
-		rootCtx, persistence.DefaultShardId, cfg, processStore, immediateTaskProcessor, logger)
-
-	timerTaskQueue := engine.NewTimerTaskQueueImpl(
-		rootCtx, persistence.DefaultShardId, cfg, processStore, timerTaskProcessor, logger)
-
-	notifier.AddImmediateTaskQueue(persistence.DefaultShardId, immediateTaskQueue)
-	notifier.AddTimerTaskQueue(persistence.DefaultShardId, timerTaskQueue)
-
-	return &asyncService{
-		immediateTaskQueue:     immediateTaskQueue,
 		immediateTaskProcessor: immediateTaskProcessor,
-
-		timerTaskQueue:     timerTaskQueue,
-		timerTaskProcessor: timerTaskProcessor,
+		timerTaskProcessor:     timerTaskProcessor,
 
 		taskNotifier: notifier,
+
+		processStore: processStore,
 
 		rootCtx: rootCtx,
 		cfg:     cfg,
@@ -79,38 +75,262 @@ func (a asyncService) Start() error {
 		a.logger.Error("fail to start timer task processor", tag.Error(err))
 		return err
 	}
-	err = a.immediateTaskQueue.Start()
-	if err != nil {
-		a.logger.Error("fail to start immediate task queue", tag.Error(err))
+
+	// When in the standalone mode, need to manually re-balance once to create queues
+	if a.cfg.AsyncService.Mode == config.AsyncServiceModeStandalone {
+		a.ReBalance([]int32{0})
 	}
-	err = a.timerTaskQueue.Start()
-	if err != nil {
-		a.logger.Error("fail to start timer task queue", tag.Error(err))
-	}
+
 	return nil
 }
 
 func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
-	if req.ShardId != persistence.DefaultShardId {
+	queue, ok := a.immediateTaskQueueMap[req.ShardId]
+	if !ok {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}
-	a.immediateTaskQueue.TriggerPollingTasks(req)
+
+	queue.TriggerPollingTasks(req)
 	return nil
 }
 
 func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
-	if req.ShardId != persistence.DefaultShardId {
+	queue, ok := a.timerTaskQueueMap[req.ShardId]
+	if !ok {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}
-	a.timerTaskQueue.TriggerPollingTasks(req)
+
+	queue.TriggerPollingTasks(req)
 	return nil
 }
 
 func (a asyncService) Stop(ctx context.Context) error {
-	err1 := a.immediateTaskQueue.Stop(ctx)
-	err2 := a.immediateTaskProcessor.Stop(ctx)
-	err3 := a.timerTaskQueue.Stop(ctx)
-	err4 := a.timerTaskProcessor.Stop(ctx)
+	var errs []error
 
-	return multierr.Combine(err1, err2, err3, err4)
+	errs = append(errs, a.immediateTaskProcessor.Stop(ctx))
+	errs = append(errs, a.timerTaskProcessor.Stop(ctx))
+
+	for _, immediateTaskQueue := range a.immediateTaskQueueMap {
+		errs = append(errs, immediateTaskQueue.Stop(ctx))
+	}
+
+	for _, timerTaskQueue := range a.timerTaskQueueMap {
+		errs = append(errs, timerTaskQueue.Stop(ctx))
+	}
+
+	return multierr.Combine(errs...)
+}
+
+func (a asyncService) ReBalance(assignedShardIds []int32) {
+	// logging
+	var oldShardIds []int
+	for shardId := range a.immediateTaskQueueMap {
+		oldShardIds = append(oldShardIds, int(shardId))
+	}
+	sort.Ints(oldShardIds)
+
+	newShardsStr := ""
+	oldShardStr := ""
+
+	for _, shardId := range assignedShardIds {
+		newShardsStr += " " + strconv.Itoa(int(shardId))
+	}
+
+	for _, shardId := range oldShardIds {
+		oldShardStr += " " + strconv.Itoa(shardId)
+	}
+
+	a.logger.Info(fmt.Sprintf("ReBalance: %s -> %s", oldShardStr, newShardsStr))
+
+	// execute
+	assignedShardMap := map[int32]bool{}
+	var currentShardsToRemove []int32
+
+	for _, shardId := range assignedShardIds {
+		assignedShardMap[shardId] = true
+	}
+
+	for shardId := range a.immediateTaskQueueMap {
+		_, ok := assignedShardMap[shardId]
+		if !ok {
+			currentShardsToRemove = append(currentShardsToRemove, shardId)
+		} else {
+			delete(assignedShardMap, shardId)
+		}
+	}
+
+	assignedShardMap2 := map[int32]bool{}
+	for shardId := range assignedShardMap {
+		assignedShardMap2[shardId] = true
+	}
+
+	i := 0
+	for shardId := range assignedShardMap2 {
+		if i == len(currentShardsToRemove) {
+			break
+		}
+
+		a.updateShardId(currentShardsToRemove[i], shardId)
+
+		delete(assignedShardMap, shardId)
+
+		i += 1
+	}
+
+	for shardId := range assignedShardMap {
+		a.createQueuesAndStart(shardId)
+	}
+
+	for i < len(currentShardsToRemove) {
+		a.stopQueuesAndRemove(currentShardsToRemove[i])
+		i += 1
+	}
+
+}
+
+func (a asyncService) updateShardId(oldShardId int32, newShardId int32) {
+	a.logger.Info(fmt.Sprintf("updateShardId: %d -> %d", oldShardId, newShardId))
+
+	// immediateTaskQueue
+	immediateTaskQueue, ok := a.immediateTaskQueueMap[oldShardId]
+	if !ok {
+		a.logger.Error(fmt.Sprintf("fail to get immediate task queue with shard %d", oldShardId))
+	} else {
+		immediateTaskQueue.UpdateShardId(newShardId)
+
+		a.taskNotifier.RemoveImmediateTaskQueue(oldShardId)
+		a.taskNotifier.AddImmediateTaskQueue(newShardId, immediateTaskQueue)
+
+		delete(a.immediateTaskQueueMap, oldShardId)
+		a.immediateTaskQueueMap[newShardId] = immediateTaskQueue
+	}
+
+	// timerTaskQueue
+	timerTaskQueue, ok := a.timerTaskQueueMap[oldShardId]
+	if !ok {
+		a.logger.Error(fmt.Sprintf("fail to get timer task queue with shard %d", oldShardId))
+	} else {
+		timerTaskQueue.UpdateShardId(newShardId)
+
+		a.taskNotifier.RemoveTimerTaskQueue(oldShardId)
+		a.taskNotifier.AddTimerTaskQueue(newShardId, timerTaskQueue)
+
+		delete(a.timerTaskQueueMap, oldShardId)
+		a.timerTaskQueueMap[newShardId] = timerTaskQueue
+	}
+}
+
+func (a asyncService) createQueuesAndStart(shardId int32) {
+	a.logger.Info(fmt.Sprintf("createQueuesAndStart: %d", shardId))
+
+	// immediateTaskQueue
+	immediateTaskQueue := engine.NewImmediateTaskQueueImpl(
+		a.rootCtx, shardId, a.cfg, a.processStore, a.immediateTaskProcessor, a.logger)
+
+	a.taskNotifier.AddImmediateTaskQueue(shardId, immediateTaskQueue)
+	a.immediateTaskQueueMap[shardId] = immediateTaskQueue
+
+	err := immediateTaskQueue.Start()
+	if err != nil {
+		a.logger.Error(fmt.Sprintf("fail to start immediate task queue with shard %d", shardId), tag.Error(err))
+	}
+
+	// timerTaskQueue
+	timerTaskQueue := engine.NewTimerTaskQueueImpl(
+		a.rootCtx, shardId, a.cfg, a.processStore, a.timerTaskProcessor, a.logger)
+
+	a.taskNotifier.AddTimerTaskQueue(shardId, timerTaskQueue)
+	a.timerTaskQueueMap[shardId] = timerTaskQueue
+
+	err = timerTaskQueue.Start()
+	if err != nil {
+		a.logger.Error(fmt.Sprintf("fail to start timer task queue with shard %d", shardId), tag.Error(err))
+	}
+}
+
+func (a asyncService) stopQueuesAndRemove(shardId int32) {
+	a.logger.Info(fmt.Sprintf("stopQueuesAndRemove: %d", shardId))
+
+	// immediateTaskQueue
+	immediateTaskQueue, ok := a.immediateTaskQueueMap[shardId]
+	if !ok {
+		a.logger.Error(fmt.Sprintf("fail to get immediate task queue with shard %d", shardId))
+	} else {
+		err := immediateTaskQueue.Stop(a.rootCtx)
+		if err != nil {
+			a.logger.Error(fmt.Sprintf("fail to stop immediate task queue with shard %d", shardId), tag.Error(err))
+		}
+
+		a.taskNotifier.RemoveImmediateTaskQueue(shardId)
+		delete(a.immediateTaskQueueMap, shardId)
+	}
+
+	// timerTaskQueue
+	timerTaskQueue, ok := a.timerTaskQueueMap[shardId]
+	if !ok {
+		a.logger.Error(fmt.Sprintf("fail to get timer task queue with shard %d", shardId))
+	} else {
+		err := timerTaskQueue.Stop(a.rootCtx)
+		if err != nil {
+			a.logger.Error(fmt.Sprintf("fail to stop timer task queue with shard %d", shardId), tag.Error(err))
+		}
+
+		a.taskNotifier.RemoveTimerTaskQueue(shardId)
+		delete(a.timerTaskQueueMap, shardId)
+	}
+}
+
+func (a asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string) {
+	go func() {
+
+		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
+		defer canf()
+
+		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+			Servers: []xcapi.ServerConfiguration{
+				{
+					URL: "http://" + serverAddress,
+				},
+			},
+		})
+
+		request := apiClient.DefaultAPI.InternalApiV1XcherryNotifyImmediateTasksPost(ctx)
+		httpResp, err := request.NotifyImmediateTasksRequest(req).Execute()
+		if httpResp != nil {
+			defer httpResp.Body.Close()
+		}
+		if err != nil {
+			a.logger.Error("failed to notify remote immediate task in cluster", tag.Error(err))
+			// TODO add backoff and retry
+			return
+		}
+	}()
+}
+
+func (a asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string) {
+	// execute in the background as best effort
+	go func() {
+
+		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
+		defer canf()
+
+		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+			Servers: []xcapi.ServerConfiguration{
+				{
+					URL: "http://" + serverAddress,
+				},
+			},
+		})
+
+		request := apiClient.DefaultAPI.InternalApiV1XcherryNotifyTimerTasksPost(ctx)
+		httpResp, err := request.NotifyTimerTasksRequest(req).Execute()
+		if httpResp != nil {
+			defer httpResp.Body.Close()
+		}
+		if err != nil {
+			a.logger.Error("failed to notify remote timer task in cluster", tag.Error(err))
+			// TODO add backoff and retry
+			return
+		}
+	}()
 }

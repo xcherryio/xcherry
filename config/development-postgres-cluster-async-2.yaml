@@ -20,6 +20,7 @@ asyncService:
   internalHttpServer:
     address: 0.0.0.0:8702
   membership:
+    shard: 30
     # replace the following addresses with real addresses
     advertiseAddress: 0.0.0.0:8902
     advertiseAddressToJoin: 0.0.0.0:8901

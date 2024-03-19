@@ -39,7 +39,9 @@ func NewDefaultAsyncServerWithGin(
 
 	svc := NewAsyncServiceImpl(rootCtx, processStore, visibilityStore, cfg, logger)
 
-	handler := newGinHandler(cfg, svc, logger)
+	membershipImpl := NewMembershipImpl(rootCtx, cfg, logger, svc)
+
+	handler := newGinHandler(cfg, svc, membershipImpl, logger)
 
 	engine.POST(PathNotifyImmediateTasks, handler.NotifyImmediateTasks)
 	engine.POST(PathNotifyTimerTasks, handler.NotifyTimerTasks)
