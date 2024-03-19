@@ -66,18 +66,21 @@ func TestMain(m *testing.M) {
 				Log: config.Logger{
 					Level: "debug",
 				},
-				ApiService: config.ApiServiceConfig{
+				ApiService: &config.ApiServiceConfig{
 					HttpServer: config.HttpServerConfig{
 						Address:      ":" + xc.DefaultServerPort,
 						ReadTimeout:  5 * time.Second,
 						WriteTimeout: 60 * time.Second,
 					},
+					AsyncAddresses: []string{
+						"0.0.0.0:8701",
+					},
 				},
-				Database: config.DatabaseConfig{
+				Database: &config.DatabaseConfig{
 					ProcessStoreConfig:    sqlConfig,
 					VisibilityStoreConfig: sqlConfig,
 				},
-				AsyncService: config.AsyncServiceConfig{
+				AsyncService: &config.AsyncServiceConfig{
 					Mode: config.AsyncServiceModeStandalone,
 					InternalHttpServer: config.HttpServerConfig{
 						Address: "0.0.0.0:8701",

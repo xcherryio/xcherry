@@ -28,7 +28,7 @@ type defaultSever struct {
 	svc        Service
 }
 
-func NewDefaultAPIServerWithGin(
+func NewDefaultAsyncServerWithGin(
 	rootCtx context.Context,
 	cfg config.Config,
 	processStore persistence.ProcessStore,

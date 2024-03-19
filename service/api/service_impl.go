@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -308,10 +309,13 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		// get a random async server
+		asyncAddress := s.cfg.ApiService.AsyncAddresses[rand.Intn(len(s.cfg.ApiService.AsyncAddresses))]
+
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: asyncAddress,
 				},
 			},
 		})
@@ -336,10 +340,13 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		// get a random async server
+		asyncAddress := s.cfg.ApiService.AsyncAddresses[rand.Intn(len(s.cfg.ApiService.AsyncAddresses))]
+
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: asyncAddress,
 				},
 			},
 		})

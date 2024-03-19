@@ -1,0 +1,63 @@
+name: Postgres14 Cluster Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  workflow:
+    name: IntegrationTests
+
+    strategy:
+      matrix:
+        go-version: [1.19.x]
+        os: [ ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Get runner ip addresses
+        id: ip
+        uses: haythem/public-ip@v1.3
+
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{matrix.go-version}}
+
+      - name: Checkout Code Base
+        uses: actions/checkout@v3
+
+      - name: Replace configs with real IP
+        run: |
+          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-1.yaml
+          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-2.yaml
+          sed -i "s/0.0.0.0:8902/${{ steps.ip.outputs.ipv4 }}:8902/" config/development-postgres-cluster-async-2.yaml
+          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-3.yaml
+          sed -i "s/0.0.0.0:8903/${{ steps.ip.outputs.ipv4 }}:8903/" config/development-postgres-cluster-async-3.yaml
+        working-directory: ${{ github.workspace }}
+
+      - name: Make Binaries
+        run: make bins
+        
+      - name: "Set up Postgres environment"
+        run: docker compose -f docker-compose/dev/postgres14.yaml up -d
+
+      - name: Install Postgres schema #wait for 5 seconds for env to be ready 
+        run: sleep 5 && make install-schema-postgres
+        
+      - name: Start Api server # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-api.yaml --service api&
+
+      - name: Start Async server 1 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-1.yaml --service async&
+
+      # TODO: start Async server 2 and 3
+
+      - name: Run Postgres IntegrationTest
+        run:  make integTestsWithLocalServer
+        
+      - name: Dump docker logs
+        if: always()
+        uses: jwalton/gh-docker-logs@v2

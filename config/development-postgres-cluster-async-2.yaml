@@ -2,13 +2,6 @@ log:
   stdout: true
   level: debug
   levelKey: "level"
-apiService:
-  httpServer: # see more config fields in config.go
-     address: 0.0.0.0:8801
-     readTimeout: 10s
-     writeTimeout: 60s
-  asyncAddresses:
-    - 0.0.0.0:8701
 database:
   processStore:
     dbExtensionName: postgres
@@ -23,6 +16,10 @@ database:
     databaseName: xcherry
     connectAddr: 127.0.0.1:5432
 asyncService:
-  mode: standalone
+  mode: cluster
   internalHttpServer:
-    address: 0.0.0.0:8701
+    address: 0.0.0.0:8702
+  membership:
+    # replace the following addresses with real addresses
+    advertiseAddress: 0.0.0.0:8902
+    advertiseAddressToJoin: 0.0.0.0:8901
