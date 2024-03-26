@@ -94,11 +94,6 @@ func (w *timerTaskQueueImpl) Stop(ctx context.Context) error {
 	w.nextFiringTimer.Stop()
 	w.triggerPollTimer.Stop()
 
-	// close timer to prevent goroutine leakage
-	w.nextPreloadTimer.Close()
-	w.nextFiringTimer.Close()
-	w.triggerPollTimer.Close()
-
 	w.processor.RemoveTimerTaskQueue(w.shardId)
 
 	return nil
