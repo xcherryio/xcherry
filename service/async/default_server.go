@@ -28,7 +28,7 @@ type defaultSever struct {
 	svc        Service
 }
 
-func NewDefaultAPIServerWithGin(
+func NewDefaultAsyncServerWithGin(
 	rootCtx context.Context,
 	cfg config.Config,
 	processStore persistence.ProcessStore,
@@ -39,7 +39,9 @@ func NewDefaultAPIServerWithGin(
 
 	svc := NewAsyncServiceImpl(rootCtx, processStore, visibilityStore, cfg, logger)
 
-	handler := newGinHandler(cfg, svc, logger)
+	membershipImpl := NewMembershipImpl(rootCtx, cfg, logger, svc)
+
+	handler := newGinHandler(cfg, svc, membershipImpl, logger)
 
 	engine.POST(PathNotifyImmediateTasks, handler.NotifyImmediateTasks)
 	engine.POST(PathNotifyTimerTasks, handler.NotifyTimerTasks)

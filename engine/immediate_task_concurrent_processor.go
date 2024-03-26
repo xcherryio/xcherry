@@ -72,6 +72,11 @@ func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 	return exists
 }
 
+func (w *immediateTaskConcurrentProcessor) RemoveImmediateTaskQueue(shardId int32) {
+	delete(w.currentShards, shardId)
+	delete(w.taskToCommitChans, shardId)
+}
+
 func (w *immediateTaskConcurrentProcessor) Start() error {
 	concurrency := w.cfg.AsyncService.ImmediateTaskQueue.ProcessorConcurrency
 
@@ -248,7 +253,7 @@ func (w *immediateTaskConcurrentProcessor) processWaitUntilTask(
 	}
 
 	if compResp.HasNewImmediateTask {
-		w.notifyNewImmediateTask(prep, task)
+		w.notifyNewImmediateTask(task.ShardId, prep, task)
 	}
 
 	if len(compResp.FireTimestamps) > 0 {
@@ -335,7 +340,7 @@ func (w *immediateTaskConcurrentProcessor) applyStateFailureRecoveryPolicy(
 		} else {
 			nextImmediateTask.TaskType = data_models.ImmediateTaskTypeExecute
 		}
-		w.notifyNewImmediateTask(prep, nextImmediateTask)
+		w.notifyNewImmediateTask(task.ShardId, prep, nextImmediateTask)
 	default:
 		return fmt.Errorf("unknown state failure recovery policy %v", stateRecoveryPolicy.Policy)
 	}
@@ -489,7 +494,7 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		return fmt.Errorf("failed to write app database")
 	}
 	if compResp.HasNewImmediateTask {
-		w.notifyNewImmediateTask(prep, task)
+		w.notifyNewImmediateTask(task.ShardId, prep, task)
 	}
 	return nil
 }
@@ -519,10 +524,10 @@ func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(
 }
 
 func (w *immediateTaskConcurrentProcessor) notifyNewImmediateTask(
-	prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
+	shardId int32, prep data_models.PrepareStateExecutionResponse, task data_models.ImmediateTask,
 ) {
 	w.taskNotifier.NotifyNewImmediateTasks(xcapi.NotifyImmediateTasksRequest{
-		ShardId:            persistence.DefaultShardId,
+		ShardId:            shardId,
 		Namespace:          &prep.Info.Namespace,
 		ProcessId:          &prep.Info.ProcessId,
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),
@@ -564,7 +569,7 @@ func (w *immediateTaskConcurrentProcessor) retryTask(
 		return err
 	}
 	w.taskNotifier.NotifyNewTimerTasks(xcapi.NotifyTimerTasksRequest{
-		ShardId:            persistence.DefaultShardId,
+		ShardId:            task.ShardId,
 		Namespace:          &prep.Info.Namespace,
 		ProcessId:          &prep.Info.ProcessId,
 		ProcessExecutionId: ptr.Any(task.ProcessExecutionId.String()),

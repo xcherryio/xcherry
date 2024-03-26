@@ -20,7 +20,9 @@ import (
 // the taskQueue(poller) can just poll the task from specific partition.
 type TaskNotifier interface {
 	AddImmediateTaskQueue(shardId int32, queue ImmediateTaskQueue)
+	RemoveImmediateTaskQueue(shardId int32)
 	AddTimerTaskQueue(shardId int32, queue TimerTaskQueue)
+	RemoveTimerTaskQueue(shardId int32)
 	NotifyNewImmediateTasks(request xcapi.NotifyImmediateTasksRequest)
 	NotifyNewTimerTasks(request xcapi.NotifyTimerTasksRequest)
 }
@@ -51,6 +53,7 @@ type ImmediateTaskProcessor interface {
 	AddImmediateTaskQueue(
 		shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 	) (alreadyExisted bool)
+	RemoveImmediateTaskQueue(shardId int32)
 }
 
 type TimerTaskProcessor interface {
@@ -63,4 +66,5 @@ type TimerTaskProcessor interface {
 	AddTimerTaskQueue(
 		shardId int32,
 	) (alreadyExisted bool)
+	RemoveTimerTaskQueue(shardId int32)
 }

@@ -2,14 +2,8 @@ log:
   stdout: true
   level: debug
   levelKey: "level"
-apiService:
-  httpServer: # see more config fields in config.go
-     address: 0.0.0.0:8801
-     readTimeout: 10s
-     writeTimeout: 60s
-  asyncServiceAddresses:
-    - 0.0.0.0:8701
 database:
+  shards: 30
   processStore:
     dbExtensionName: postgres
     user: xcherry
@@ -23,6 +17,12 @@ database:
     databaseName: xcherry
     connectAddr: 127.0.0.1:5432
 asyncService:
-  mode: standalone
+  mode: cluster
   internalHttpServer:
     address: 0.0.0.0:8701
+  membership:
+    bindAddress: 0.0.0.0:8901
+    # replace the advertiseAddress with a real address
+    advertiseAddress: 0.0.0.0:8901
+    # this async server will be the first one to start and provide its address for others to join
+    advertiseAddressToJoin: ""

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"github.com/xcherryio/xcherry/utils"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -50,9 +52,11 @@ func (s serviceImpl) StartProcess(
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
 	}
 
+	shardId := int32(utils.GetRandomShardId(s.cfg.Database.Shards))
+
 	storeReq := data_models.StartProcessRequest{
 		Request:        request,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: shardId,
 	}
 	if timeoutUnixSeconds > 0 {
 		storeReq.TimeoutTimeUnixSeconds = time.Now().Unix() + int64(timeoutUnixSeconds)
@@ -76,7 +80,7 @@ func (s serviceImpl) StartProcess(
 
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            shardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
@@ -85,7 +89,7 @@ func (s serviceImpl) StartProcess(
 
 	if storeReq.TimeoutTimeUnixSeconds != 0 {
 		s.notifyRemoteTimerTaskAsync(ctx, xcapi.NotifyTimerTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            shardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
@@ -308,10 +312,13 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		// get a random async server
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
+
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: asyncAddress,
 				},
 			},
 		})
@@ -336,10 +343,13 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
+		// get a random async server
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
+
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: s.cfg.AsyncService.ClientAddress,
+					URL: asyncAddress,
 				},
 			},
 		})

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -21,16 +22,18 @@ type (
 
 		// Database is the database that xCherry server will be extending on
 		// either sql or nosql is needed
-		Database DatabaseConfig `yaml:"database"`
+		Database *DatabaseConfig `yaml:"database"`
 
 		// ApiService is the API service config
-		ApiService ApiServiceConfig `yaml:"apiService"`
+		ApiService *ApiServiceConfig `yaml:"apiService"`
 
 		// AsyncService is config for async service
-		AsyncService AsyncServiceConfig `yaml:"asyncService"`
+		AsyncService *AsyncServiceConfig `yaml:"asyncService"`
 	}
 
 	DatabaseConfig struct {
+		// the total shard count. default to be 1.
+		Shards int `yaml:"shards"`
 		// SQL is the SQL database config
 		// either sql or nosql is needed to run server
 		// Only SQL is supported for now.
@@ -43,6 +46,8 @@ type (
 		HttpServer HttpServerConfig `yaml:"httpServer"`
 		// Rpc is the config for rpc calls
 		Rpc RpcConfig `yaml:"rpc"`
+		// AsyncServiceAddresses are the addresses for API service to call AsyncServices' internal APIs
+		AsyncServiceAddresses []string `yaml:"asyncServiceAddresses"`
 	}
 
 	AsyncServiceConfig struct {
@@ -55,8 +60,8 @@ type (
 		// InternalHttpServer is the config for starting a http.Server
 		// to serve some internal APIs
 		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
-		// ClientAddress is the address for API service to call AsyncService's internal API
-		ClientAddress string `yaml:"clientAddress"`
+		// Membership is the config for cluster members
+		Membership MembershipConfig `yaml:"membership"`
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -84,6 +89,15 @@ type (
 		ReadHeaderTimeout time.Duration `yaml:"readHeaderTimeout"`
 		IdleTimeout       time.Duration `yaml:"idleTimeout"`
 		MaxHeaderBytes    int           `yaml:"maxHeaderBytes"`
+	}
+
+	MembershipConfig struct {
+		// the bind address for internal use
+		BindAddress string `yaml:"bindAddress"`
+		// the advertise address for external use
+		AdvertiseAddress string `yaml:"advertiseAddress"`
+		// the advertise address to join
+		AdvertiseAddressToJoin string `yaml:"advertiseAddressToJoin"`
 	}
 
 	ImmediateTaskQueueConfig struct {
@@ -184,14 +198,9 @@ type (
 
 const (
 	// AsyncServiceModeStandalone means there is only one node for async service
-	// This is the only supported mode now
 	AsyncServiceModeStandalone = "standalone"
-	// AsyncServiceModeConsistentHashingCluster means all the nodes of async service
-	// will form a consistent hashing ring, which is used for shard ownership management
-	// TODO
-	//  1. add ringpop config
-	//  2. add async client address config for APIService to call async service with LBS
-	AsyncServiceModeConsistentHashingCluster = "consistent-hashing-cluster"
+	// AsyncServiceModeCluster means each api/async server runs in different machine/container
+	AsyncServiceModeCluster = "cluster"
 )
 
 // NewConfig returns a new decoded Config struct
@@ -224,72 +233,95 @@ func (c *Config) ValidateAndSetDefaults() error {
 		return fmt.Errorf("some required configs are missing: processStore.DatabaseName, " +
 			"processStore.DBExtensionName, processStore.ConnectAddr, processStore.User")
 	}
-	rpcConfig := &c.ApiService.Rpc
-	if rpcConfig.MaxRpcAPITimeout == 0 {
-		rpcConfig.MaxRpcAPITimeout = 60 * time.Second
+
+	if c.Database.Shards == 0 {
+		c.Database.Shards = 1
 	}
-	if rpcConfig.DefaultRpcAPITimeout == 0 {
-		rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
-	}
-	if c.AsyncService.Mode == "" {
-		return fmt.Errorf("must set async service mode")
-	}
-	if c.AsyncService.Mode != AsyncServiceModeStandalone {
-		return fmt.Errorf("currently only standalone mode is supported")
-	}
-	immediateTaskQConfig := &c.AsyncService.ImmediateTaskQueue
-	if immediateTaskQConfig.MaxPollInterval == 0 {
-		immediateTaskQConfig.MaxPollInterval = time.Minute
-	}
-	if immediateTaskQConfig.CommitInterval == 0 {
-		immediateTaskQConfig.CommitInterval = time.Minute
-	}
-	if immediateTaskQConfig.IntervalJitter == 0 {
-		immediateTaskQConfig.IntervalJitter = time.Second * 5
-	}
-	if immediateTaskQConfig.ProcessorConcurrency == 0 {
-		immediateTaskQConfig.ProcessorConcurrency = 10
-	}
-	if immediateTaskQConfig.ProcessorBufferSize == 0 {
-		immediateTaskQConfig.ProcessorBufferSize = 1000
-	}
-	if immediateTaskQConfig.PollPageSize == 0 {
-		immediateTaskQConfig.PollPageSize = 1000
-	}
-	if immediateTaskQConfig.MaxAsyncStateAPITimeout == 0 {
-		immediateTaskQConfig.MaxAsyncStateAPITimeout = 60 * time.Second
-	}
-	if immediateTaskQConfig.DefaultAsyncStateAPITimeout == 0 {
-		immediateTaskQConfig.DefaultAsyncStateAPITimeout = 10 * time.Second
-	}
-	if immediateTaskQConfig.MaxStateAPIFailureDetailSize == 0 {
-		immediateTaskQConfig.MaxStateAPIFailureDetailSize = 1000
-	}
-	timerTaskQConfig := &c.AsyncService.TimerTaskQueue
-	if timerTaskQConfig.MaxTimerPreloadLookAhead == 0 {
-		timerTaskQConfig.MaxTimerPreloadLookAhead = time.Minute
-	}
-	if timerTaskQConfig.MaxPreloadPageSize == 0 {
-		timerTaskQConfig.MaxPreloadPageSize = 1000
-	}
-	if timerTaskQConfig.IntervalJitter == 0 {
-		timerTaskQConfig.IntervalJitter = time.Second * 10
-	}
-	if timerTaskQConfig.ProcessorConcurrency == 0 {
-		timerTaskQConfig.ProcessorConcurrency = 3
-	}
-	if timerTaskQConfig.ProcessorBufferSize == 0 {
-		timerTaskQConfig.ProcessorBufferSize = 1000
-	}
-	if timerTaskQConfig.TriggerNotificationBufferSize == 0 {
-		timerTaskQConfig.TriggerNotificationBufferSize = 1000
-	}
-	if c.AsyncService.ClientAddress == "" {
-		if c.AsyncService.InternalHttpServer.Address == "" {
-			return fmt.Errorf("AsyncService.InternalHttpServer.Address cannot be empty")
+
+	if c.ApiService != nil {
+		rpcConfig := &c.ApiService.Rpc
+		if rpcConfig.MaxRpcAPITimeout == 0 {
+			rpcConfig.MaxRpcAPITimeout = 60 * time.Second
 		}
-		c.AsyncService.ClientAddress = "http://" + c.AsyncService.InternalHttpServer.Address
+		if rpcConfig.DefaultRpcAPITimeout == 0 {
+			rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
+		}
+
+		if len(c.ApiService.AsyncServiceAddresses) == 0 {
+			return fmt.Errorf("at least one asyncAddress is required")
+		}
+
+		for i, asyncAddress := range c.ApiService.AsyncServiceAddresses {
+			if !strings.HasPrefix(asyncAddress, "http") {
+				c.ApiService.AsyncServiceAddresses[i] = "http://" + asyncAddress
+			}
+		}
 	}
+
+	if c.AsyncService != nil {
+		if c.AsyncService.Mode == "" {
+			return fmt.Errorf("must set async service mode")
+		}
+
+		immediateTaskQConfig := &c.AsyncService.ImmediateTaskQueue
+		if immediateTaskQConfig.MaxPollInterval == 0 {
+			immediateTaskQConfig.MaxPollInterval = time.Minute
+		}
+		if immediateTaskQConfig.CommitInterval == 0 {
+			immediateTaskQConfig.CommitInterval = time.Minute
+		}
+		if immediateTaskQConfig.IntervalJitter == 0 {
+			immediateTaskQConfig.IntervalJitter = time.Second * 5
+		}
+		if immediateTaskQConfig.ProcessorConcurrency == 0 {
+			immediateTaskQConfig.ProcessorConcurrency = 10
+		}
+		if immediateTaskQConfig.ProcessorBufferSize == 0 {
+			immediateTaskQConfig.ProcessorBufferSize = 1000
+		}
+		if immediateTaskQConfig.PollPageSize == 0 {
+			immediateTaskQConfig.PollPageSize = 1000
+		}
+		if immediateTaskQConfig.MaxAsyncStateAPITimeout == 0 {
+			immediateTaskQConfig.MaxAsyncStateAPITimeout = 60 * time.Second
+		}
+		if immediateTaskQConfig.DefaultAsyncStateAPITimeout == 0 {
+			immediateTaskQConfig.DefaultAsyncStateAPITimeout = 10 * time.Second
+		}
+		if immediateTaskQConfig.MaxStateAPIFailureDetailSize == 0 {
+			immediateTaskQConfig.MaxStateAPIFailureDetailSize = 1000
+		}
+		timerTaskQConfig := &c.AsyncService.TimerTaskQueue
+		if timerTaskQConfig.MaxTimerPreloadLookAhead == 0 {
+			timerTaskQConfig.MaxTimerPreloadLookAhead = time.Minute
+		}
+		if timerTaskQConfig.MaxPreloadPageSize == 0 {
+			timerTaskQConfig.MaxPreloadPageSize = 1000
+		}
+		if timerTaskQConfig.IntervalJitter == 0 {
+			timerTaskQConfig.IntervalJitter = time.Second * 10
+		}
+		if timerTaskQConfig.ProcessorConcurrency == 0 {
+			timerTaskQConfig.ProcessorConcurrency = 3
+		}
+		if timerTaskQConfig.ProcessorBufferSize == 0 {
+			timerTaskQConfig.ProcessorBufferSize = 1000
+		}
+		if timerTaskQConfig.TriggerNotificationBufferSize == 0 {
+			timerTaskQConfig.TriggerNotificationBufferSize = 1000
+		}
+
+		// membership
+		if c.AsyncService.Mode == AsyncServiceModeCluster {
+			if c.AsyncService.Membership.AdvertiseAddress == "" {
+				return fmt.Errorf("AsyncService.Membership.AdvertiseAddress cannot be empty")
+			}
+			if c.AsyncService.Membership.BindAddress == "" {
+				c.AsyncService.Membership.BindAddress = c.AsyncService.Membership.AdvertiseAddress
+			}
+		}
+	}
+
 	return nil
 }
 

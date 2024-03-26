@@ -67,8 +67,10 @@ func NewImmediateTaskQueueImpl(
 }
 
 func (w *immediateTaskQueueImpl) Stop(ctx context.Context) error {
-	// close timer to prevent goroutine leakage
-	w.pollTimer.Close()
+	w.pollTimer.Stop()
+
+	w.processor.RemoveImmediateTaskQueue(w.shardId)
+
 	return nil
 }
 

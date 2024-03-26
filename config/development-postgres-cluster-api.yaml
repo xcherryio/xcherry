@@ -2,14 +2,8 @@ log:
   stdout: true
   level: debug
   levelKey: "level"
-apiService:
-  httpServer: # see more config fields in config.go
-     address: 0.0.0.0:8801
-     readTimeout: 10s
-     writeTimeout: 60s
-  asyncServiceAddresses:
-    - 0.0.0.0:8701
 database:
+  shards: 30
   processStore:
     dbExtensionName: postgres
     user: xcherry
@@ -22,7 +16,12 @@ database:
     password: xcherryio
     databaseName: xcherry
     connectAddr: 127.0.0.1:5432
-asyncService:
-  mode: standalone
-  internalHttpServer:
-    address: 0.0.0.0:8701
+apiService:
+  httpServer: # see more config fields in config.go
+    address: 0.0.0.0:8801
+    readTimeout: 10s
+    writeTimeout: 60s
+  asyncServiceAddresses:
+    - 0.0.0.0:8701
+    - 0.0.0.0:8702
+    - 0.0.0.0:8703

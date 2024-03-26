@@ -58,6 +58,10 @@ func (w *timerTaskConcurrentProcessor) AddTimerTaskQueue(
 	return exists
 }
 
+func (w *timerTaskConcurrentProcessor) RemoveTimerTaskQueue(shardId int32) {
+	delete(w.currentShards, shardId)
+}
+
 func (w *timerTaskConcurrentProcessor) Start() error {
 	concurrency := w.cfg.AsyncService.ImmediateTaskQueue.ProcessorConcurrency
 

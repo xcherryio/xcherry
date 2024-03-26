@@ -16,7 +16,6 @@ package process
 import (
 	"context"
 	"fmt"
-	"github.com/xcherryio/xcherry/persistence"
 	"github.com/xcherryio/xcherry/persistence/data_models"
 
 	"github.com/xcherryio/xcherry/common/log/tag"
@@ -63,7 +62,7 @@ func (p sqlProcessStoreImpl) doProcessTimerTaskForProcessTimeoutTx(
 			tx,
 			processExecution.Namespace,
 			processExecution.ProcessId,
-			persistence.DefaultShardId,
+			request.Task.ShardId,
 			data_models.ProcessExecutionStatusTimeout)
 		if err != nil {
 			return nil, err

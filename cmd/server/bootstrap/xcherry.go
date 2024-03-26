@@ -93,7 +93,7 @@ func StartXCherryServer(rootCtx context.Context, cfg *config.Config, services ma
 
 	var asyncServer async.Server
 	if services[AsyncServiceName] {
-		asyncServer := async.NewDefaultAPIServerWithGin(
+		asyncServer = async.NewDefaultAsyncServerWithGin(
 			rootCtx, *cfg, processStore, visibilityStore, logger.WithTags(tag.Service(AsyncServiceName)))
 		err = asyncServer.Start()
 		if err != nil {

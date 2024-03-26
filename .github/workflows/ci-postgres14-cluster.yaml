@@ -1,4 +1,4 @@
-name: Postgres14 Tests
+name: Postgres14 Cluster Tests
 on:
   push:
     branches:
@@ -34,8 +34,17 @@ jobs:
       - name: Install Postgres schema #wait for 5 seconds for env to be ready 
         run: sleep 5 && make install-schema-postgres
         
-      - name: Start Postgres server # then run in the background
-        run: ./xcherry-server&
+      - name: Start Api server # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-api.yaml --service api&
+
+      - name: Start Async server 1 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-1.yaml --service async&
+
+      - name: Start Async server 2 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-2.yaml --service async&
+
+      - name: Start Async server 3 # then run in the background
+        run: ./xcherry-server --config ./config/development-postgres-cluster-async-3.yaml --service async&
 
       - name: Run Postgres IntegrationTest
         run:  make integTestsWithLocalServer
