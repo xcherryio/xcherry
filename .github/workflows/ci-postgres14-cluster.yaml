@@ -25,16 +25,6 @@ jobs:
       - name: Checkout Code Base
         uses: actions/checkout@v3
 
-#      - name: Get runner ip addresses
-#        id: ip
-#        uses: haythem/public-ip@v1.3
-#
-#      - name: Replace configs with real IP
-#        run: |
-#          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-2.yaml
-#          sed -i "s/0.0.0.0:8901/${{ steps.ip.outputs.ipv4 }}:8901/" config/development-postgres-cluster-async-3.yaml
-#        working-directory: ${{ github.workspace }}
-
       - name: Make Binaries
         run: make bins
         
@@ -55,9 +45,6 @@ jobs:
 
       - name: Start Async server 3 # then run in the background
         run: ./xcherry-server --config ./config/development-postgres-cluster-async-3.yaml --service async&
-
-      - name: Sleep 10 seconds
-        run: sleep 10
 
       - name: Run Postgres IntegrationTest
         run:  make integTestsWithLocalServer
