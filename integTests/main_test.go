@@ -72,7 +72,7 @@ func TestMain(m *testing.M) {
 						ReadTimeout:  5 * time.Second,
 						WriteTimeout: 60 * time.Second,
 					},
-					AsyncAddresses: []string{
+					AsyncServiceAddresses: []string{
 						"http://0.0.0.0:8701",
 					},
 				},

@@ -7,7 +7,7 @@ apiService:
      address: 0.0.0.0:8801
      readTimeout: 10s
      writeTimeout: 60s
-  asyncAddresses:
+  asyncServiceAddresses:
     - 0.0.0.0:8701
 database:
   sql:

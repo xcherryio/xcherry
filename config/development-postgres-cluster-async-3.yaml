@@ -3,6 +3,7 @@ log:
   level: debug
   levelKey: "level"
 database:
+  shards: 30
   processStore:
     dbExtensionName: postgres
     user: xcherry
@@ -20,7 +21,6 @@ asyncService:
   internalHttpServer:
     address: 0.0.0.0:8703
   membership:
-    shard: 30
-    # replace the following addresses with real addresses
+    bindAddress: 0.0.0.0:8903
     advertiseAddress: 0.0.0.0:8903
     advertiseAddressToJoin: 0.0.0.0:8901

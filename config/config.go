@@ -32,6 +32,8 @@ type (
 	}
 
 	DatabaseConfig struct {
+		// the total shard count. default to be 1.
+		Shards int `yaml:"shards"`
 		// SQL is the SQL database config
 		// either sql or nosql is needed to run server
 		// Only SQL is supported for now.
@@ -44,10 +46,8 @@ type (
 		HttpServer HttpServerConfig `yaml:"httpServer"`
 		// Rpc is the config for rpc calls
 		Rpc RpcConfig `yaml:"rpc"`
-		// AsyncAddresses are the addresses for API service to call AsyncServices' internal APIs
-		AsyncAddresses []string `yaml:"asyncAddresses"`
-		// the total shard count in AsyncServices. default to be 1.
-		AsyncShard int `yaml:"asyncShard"`
+		// AsyncServiceAddresses are the addresses for API service to call AsyncServices' internal APIs
+		AsyncServiceAddresses []string `yaml:"asyncServiceAddresses"`
 	}
 
 	AsyncServiceConfig struct {
@@ -92,9 +92,9 @@ type (
 	}
 
 	MembershipConfig struct {
-		// total shard count across all the async servers
-		Shard int `yaml:"shard"`
-		// the advertise address to bind
+		// the bind address for internal use
+		BindAddress string `yaml:"bindAddress"`
+		// the advertise address for external use
 		AdvertiseAddress string `yaml:"advertiseAddress"`
 		// the advertise address to join
 		AdvertiseAddressToJoin string `yaml:"advertiseAddressToJoin"`
@@ -234,6 +234,10 @@ func (c *Config) ValidateAndSetDefaults() error {
 			"processStore.DBExtensionName, processStore.ConnectAddr, processStore.User")
 	}
 
+	if c.Database.Shards == 0 {
+		c.Database.Shards = 1
+	}
+
 	if c.ApiService != nil {
 		rpcConfig := &c.ApiService.Rpc
 		if rpcConfig.MaxRpcAPITimeout == 0 {
@@ -243,17 +247,13 @@ func (c *Config) ValidateAndSetDefaults() error {
 			rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
 		}
 
-		if len(c.ApiService.AsyncAddresses) == 0 {
+		if len(c.ApiService.AsyncServiceAddresses) == 0 {
 			return fmt.Errorf("at least one asyncAddress is required")
 		}
 
-		if c.ApiService.AsyncShard == 0 {
-			c.ApiService.AsyncShard = 1
-		}
-
-		for i, asyncAddress := range c.ApiService.AsyncAddresses {
+		for i, asyncAddress := range c.ApiService.AsyncServiceAddresses {
 			if !strings.HasPrefix(asyncAddress, "http") {
-				c.ApiService.AsyncAddresses[i] = "http://" + asyncAddress
+				c.ApiService.AsyncServiceAddresses[i] = "http://" + asyncAddress
 			}
 		}
 	}
@@ -315,6 +315,9 @@ func (c *Config) ValidateAndSetDefaults() error {
 		if c.AsyncService.Mode == AsyncServiceModeCluster {
 			if c.AsyncService.Membership.AdvertiseAddress == "" {
 				return fmt.Errorf("AsyncService.Membership.AdvertiseAddress cannot be empty")
+			}
+			if c.AsyncService.Membership.BindAddress == "" {
+				c.AsyncService.Membership.BindAddress = c.AsyncService.Membership.AdvertiseAddress
 			}
 		}
 	}

@@ -26,5 +26,5 @@ type Service interface {
 
 type Membership interface {
 	GetServerAddress() string
-	GetServerAddressFor(shardId int32) string
+	GetServerAddressForShard(shardId int32) string
 }

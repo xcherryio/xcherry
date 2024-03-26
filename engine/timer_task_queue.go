@@ -108,10 +108,6 @@ func (w *timerTaskQueueImpl) TriggerPollingTasks(req xcapi.NotifyTimerTasksReque
 	w.triggeredPollingChan <- req
 }
 
-func (w *timerTaskQueueImpl) UpdateShardId(shardId int32) {
-	w.shardId = shardId
-}
-
 func (w *timerTaskQueueImpl) Start() error {
 	w.processor.AddTimerTaskQueue(w.shardId)
 

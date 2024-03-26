@@ -79,10 +79,6 @@ func (w *immediateTaskQueueImpl) TriggerPollingTasks(_ xcapi.NotifyImmediateTask
 	w.pollTimer.Update(time.Now())
 }
 
-func (w *immediateTaskQueueImpl) UpdateShardId(shardId int32) {
-	w.shardId = shardId
-}
-
 func (w *immediateTaskQueueImpl) Start() error {
 	w.processor.AddImmediateTaskQueue(w.shardId, w.tasksToCommitChan)
 

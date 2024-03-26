@@ -23,9 +23,11 @@ type asyncService struct {
 
 	taskNotifier engine.TaskNotifier
 
+	// shardId: queue
 	immediateTaskQueueMap  map[int32]engine.ImmediateTaskQueue
 	immediateTaskProcessor engine.ImmediateTaskProcessor
 
+	// shardId: queue
 	timerTaskQueueMap  map[int32]engine.TimerTaskQueue
 	timerTaskProcessor engine.TimerTaskProcessor
 
@@ -159,65 +161,14 @@ func (a asyncService) ReBalance(assignedShardIds []int32) {
 		}
 	}
 
-	assignedShardMap2 := map[int32]bool{}
-	for shardId := range assignedShardMap {
-		assignedShardMap2[shardId] = true
-	}
-
-	i := 0
-	for shardId := range assignedShardMap2 {
-		if i == len(currentShardsToRemove) {
-			break
-		}
-
-		a.updateShardId(currentShardsToRemove[i], shardId)
-
-		delete(assignedShardMap, shardId)
-
-		i += 1
+	for i := 0; i < len(currentShardsToRemove); i++ {
+		a.stopQueuesAndRemove(currentShardsToRemove[i])
 	}
 
 	for shardId := range assignedShardMap {
 		a.createQueuesAndStart(shardId)
 	}
 
-	for i < len(currentShardsToRemove) {
-		a.stopQueuesAndRemove(currentShardsToRemove[i])
-		i += 1
-	}
-
-}
-
-func (a asyncService) updateShardId(oldShardId int32, newShardId int32) {
-	a.logger.Info(fmt.Sprintf("updateShardId: %d -> %d", oldShardId, newShardId))
-
-	// immediateTaskQueue
-	immediateTaskQueue, ok := a.immediateTaskQueueMap[oldShardId]
-	if !ok {
-		a.logger.Error(fmt.Sprintf("fail to get immediate task queue with shard %d", oldShardId))
-	} else {
-		immediateTaskQueue.UpdateShardId(newShardId)
-
-		a.taskNotifier.RemoveImmediateTaskQueue(oldShardId)
-		a.taskNotifier.AddImmediateTaskQueue(newShardId, immediateTaskQueue)
-
-		delete(a.immediateTaskQueueMap, oldShardId)
-		a.immediateTaskQueueMap[newShardId] = immediateTaskQueue
-	}
-
-	// timerTaskQueue
-	timerTaskQueue, ok := a.timerTaskQueueMap[oldShardId]
-	if !ok {
-		a.logger.Error(fmt.Sprintf("fail to get timer task queue with shard %d", oldShardId))
-	} else {
-		timerTaskQueue.UpdateShardId(newShardId)
-
-		a.taskNotifier.RemoveTimerTaskQueue(oldShardId)
-		a.taskNotifier.AddTimerTaskQueue(newShardId, timerTaskQueue)
-
-		delete(a.timerTaskQueueMap, oldShardId)
-		a.timerTaskQueueMap[newShardId] = timerTaskQueue
-	}
 }
 
 func (a asyncService) createQueuesAndStart(shardId int32) {

@@ -3,6 +3,7 @@ log:
   level: debug
   levelKey: "level"
 database:
+  shards: 30
   processStore:
     dbExtensionName: postgres
     user: xcherry
@@ -20,7 +21,7 @@ asyncService:
   internalHttpServer:
     address: 0.0.0.0:8701
   membership:
-    shard: 30
+    bindAddress: 0.0.0.0:8901
     # replace the advertiseAddress with a real address
     advertiseAddress: 0.0.0.0:8901
     # this async server will be the first one to start and provide its address for others to join

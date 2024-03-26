@@ -3,6 +3,7 @@ log:
   level: debug
   levelKey: "level"
 database:
+  shards: 30
   processStore:
     dbExtensionName: postgres
     user: xcherry
@@ -20,8 +21,7 @@ apiService:
     address: 0.0.0.0:8801
     readTimeout: 10s
     writeTimeout: 60s
-  asyncAddresses:
+  asyncServiceAddresses:
     - 0.0.0.0:8701
     - 0.0.0.0:8702
     - 0.0.0.0:8703
-  asyncShard: 30

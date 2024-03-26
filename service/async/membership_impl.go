@@ -30,26 +30,34 @@ func NewMembershipImpl(rootCtx context.Context, cfg config.Config, logger log.Lo
 		return nil
 	}
 
+	bindAddress := cfg.AsyncService.Membership.BindAddress
 	advertiseAddress := cfg.AsyncService.Membership.AdvertiseAddress
 	advertiseAddressToJoin := cfg.AsyncService.Membership.AdvertiseAddressToJoin
 
 	serverAddress := cfg.AsyncService.InternalHttpServer.Address
 
-	parts := strings.Split(advertiseAddress, ":")
-	port, err := strconv.Atoi(parts[1])
+	bindParts := strings.Split(bindAddress, ":")
+	bindPort, err := strconv.Atoi(bindParts[1])
+	if err != nil {
+		logger.Fatal(fmt.Sprintf("fail to get port from bind address %s", bindAddress), tag.Error(err))
+	}
+
+	advertiseParts := strings.Split(advertiseAddress, ":")
+	advertisePort, err := strconv.Atoi(advertiseParts[1])
 	if err != nil {
 		logger.Fatal(fmt.Sprintf("fail to get port from advertise address %s", advertiseAddress), tag.Error(err))
 	}
 
 	memberlistConf := memberlist.DefaultLocalConfig()
 	memberlistConf.Name = "async_" + advertiseAddress
-	memberlistConf.BindAddr = parts[0]
-	memberlistConf.BindPort = port
-	memberlistConf.AdvertisePort = memberlistConf.BindPort
+	memberlistConf.BindAddr = bindParts[0]
+	memberlistConf.BindPort = bindPort
+	memberlistConf.AdvertiseAddr = advertiseParts[0]
+	memberlistConf.AdvertisePort = advertisePort
 
 	memberlistConf.Events = &ClusterEventDelegate{
 		Logger:        logger,
-		Shard:         cfg.AsyncService.Membership.Shard,
+		Shard:         cfg.Database.Shards,
 		ServerAddress: serverAddress,
 		AsyncService:  svc,
 	}
@@ -86,7 +94,7 @@ func (m membership) GetServerAddress() string {
 	return m.cfg.AsyncService.InternalHttpServer.Address
 }
 
-func (m membership) GetServerAddressFor(shardId int32) string {
+func (m membership) GetServerAddressForShard(shardId int32) string {
 	eventDelegate, ok := m.memberlistCfg.Events.(*ClusterEventDelegate)
 	if !ok {
 		m.logger.Fatal("failed to get delegate")

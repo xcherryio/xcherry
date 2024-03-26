@@ -52,7 +52,7 @@ func (s serviceImpl) StartProcess(
 		timeoutUnixSeconds = int(request.ProcessStartConfig.GetTimeoutSeconds())
 	}
 
-	shardId := int32(utils.GetRandomShardId(s.cfg.ApiService.AsyncShard))
+	shardId := int32(utils.GetRandomShardId(s.cfg.Database.Shards))
 
 	storeReq := data_models.StartProcessRequest{
 		Request:        request,
@@ -313,7 +313,7 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 		defer canf()
 
 		// get a random async server
-		asyncAddress := s.cfg.ApiService.AsyncAddresses[rand.Intn(len(s.cfg.ApiService.AsyncAddresses))]
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
 
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
@@ -344,7 +344,7 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 		defer canf()
 
 		// get a random async server
-		asyncAddress := s.cfg.ApiService.AsyncAddresses[rand.Intn(len(s.cfg.ApiService.AsyncAddresses))]
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
 
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{

@@ -33,7 +33,6 @@ type ImmediateTaskQueue interface {
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
 	TriggerPollingTasks(request xcapi.NotifyImmediateTasksRequest)
 	Stop(ctx context.Context) error
-	UpdateShardId(shardId int32)
 }
 
 // TimerTaskQueue is the queue for timer tasks
@@ -42,7 +41,6 @@ type TimerTaskQueue interface {
 	// TriggerPollingTasks exposes an API to be called by TaskNotifier
 	TriggerPollingTasks(request xcapi.NotifyTimerTasksRequest)
 	Stop(ctx context.Context) error
-	UpdateShardId(shardId int32)
 }
 
 type ImmediateTaskProcessor interface {

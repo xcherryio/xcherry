@@ -36,7 +36,7 @@ func (h *ginHandler) NotifyImmediateTasks(c *gin.Context) {
 	}
 
 	if h.config.AsyncService.Mode == config.AsyncServiceModeCluster {
-		targetServerAddress := h.membership.GetServerAddressFor(req.ShardId)
+		targetServerAddress := h.membership.GetServerAddressForShard(req.ShardId)
 		if targetServerAddress != h.membership.GetServerAddress() {
 			h.logger.Info(fmt.Sprintf("NotifyRemoteImmediateTaskAsyncInCluster: %s -> %s", h.membership.GetServerAddress(), targetServerAddress))
 
@@ -63,7 +63,7 @@ func (h *ginHandler) NotifyTimerTasks(c *gin.Context) {
 	}
 
 	if h.config.AsyncService.Mode == config.AsyncServiceModeCluster {
-		targetServerAddress := h.membership.GetServerAddressFor(req.ShardId)
+		targetServerAddress := h.membership.GetServerAddressForShard(req.ShardId)
 		if targetServerAddress != h.membership.GetServerAddress() {
 			h.logger.Info(fmt.Sprintf("NotifyRemoteImmediateTaskAsyncInCluster: %s -> %s", h.membership.GetServerAddress(), targetServerAddress))
 
