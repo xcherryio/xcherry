@@ -11,7 +11,6 @@ import (
 
 	"github.com/xcherryio/xcherry/common/uuid"
 	"github.com/xcherryio/xcherry/extensions"
-	"github.com/xcherryio/xcherry/persistence"
 )
 
 func insertAsyncStateExecution(
@@ -88,7 +87,7 @@ func insertImmediateTask(
 // and inserts only one row into xcherry_sys_immediate_tasks with all the dedupIds for these messages.
 // publishToLocalQueue returns (HasNewImmediateTask, error).
 func (p sqlProcessStoreImpl) publishToLocalQueue(
-	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID,
+	ctx context.Context, tx extensions.SQLTransaction, processExecutionId uuid.UUID, shardId int32,
 	messages []xcapi.LocalQueueMessage,
 ) (bool, error) {
 
@@ -147,7 +146,7 @@ func (p sqlProcessStoreImpl) publishToLocalQueue(
 	}
 
 	err = tx.InsertImmediateTask(ctx, extensions.ImmediateTaskRowForInsert{
-		ShardId:  persistence.DefaultShardId,
+		ShardId:  shardId,
 		TaskType: data_models.ImmediateTaskTypeNewLocalQueueMessages,
 
 		ProcessExecutionId: processExecutionId,

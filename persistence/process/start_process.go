@@ -492,6 +492,7 @@ func (p sqlProcessStoreImpl) insertProcessExecution(
 	row := extensions.ProcessExecutionRow{
 		ProcessExecutionId: processExecutionId,
 
+		ShardId:                    request.NewTaskShardId,
 		Status:                     data_models.ProcessExecutionStatusRunning,
 		HistoryEventIdSequence:     0,
 		StateExecutionSequenceMaps: sequenceMapsBytes,

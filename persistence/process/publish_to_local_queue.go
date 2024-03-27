@@ -62,13 +62,14 @@ func (p sqlProcessStoreImpl) doPublishToLocalQueueTx(
 		}, nil
 	}
 
-	hasNewImmediateTask, err := p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, request.Messages)
+	hasNewImmediateTask, err := p.publishToLocalQueue(ctx, tx, curProcExecRow.ProcessExecutionId, procExecRow.ShardId, request.Messages)
 	if err != nil {
 		return nil, err
 	}
 
 	return &data_models.PublishToLocalQueueResponse{
 		ProcessExecutionId:  curProcExecRow.ProcessExecutionId,
+		ShardId:             procExecRow.ShardId,
 		HasNewImmediateTask: hasNewImmediateTask,
 	}, nil
 }

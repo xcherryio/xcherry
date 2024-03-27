@@ -15,6 +15,7 @@ type (
 		NotExists bool
 
 		ProcessExecutionId uuid.UUID
+		ShardId            int32
 		Status             ProcessExecutionStatus
 		StartTimestamp     int64
 		AppDatabaseConfig  *InternalAppDatabaseConfig
