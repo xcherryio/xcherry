@@ -56,9 +56,9 @@ func (d dbTx) UpdateLatestProcessExecution(ctx context.Context, row extensions.L
 }
 
 const insertProcessExecutionQuery = `INSERT INTO xcherry_sys_process_executions
-	(namespace, id, process_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, 
+	(namespace, id, process_id, shard_id, status, start_time, timeout_seconds, history_event_id_sequence, state_execution_sequence_maps, 
 	 state_execution_local_queues, info) VALUES
-	(:namespace, :process_execution_id_string, :process_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
+	(:namespace, :process_execution_id_string, :process_id, :shard_id, :status, :start_time, :timeout_seconds, :history_event_id_sequence, 
 	 :state_execution_sequence_maps, :state_execution_local_queues, :info)`
 
 func (d dbTx) InsertProcessExecution(ctx context.Context, row extensions.ProcessExecutionRow) error {
@@ -189,7 +189,8 @@ func (d dbTx) InsertImmediateTask(ctx context.Context, row extensions.ImmediateT
 }
 
 const selectProcessExecutionForUpdateQuery = `SELECT 
-    id as process_execution_id, status, history_event_id_sequence, state_execution_sequence_maps, state_execution_local_queues, graceful_complete_requested
+    id as process_execution_id, shard_id, status, history_event_id_sequence, state_execution_sequence_maps, 
+    state_execution_local_queues, graceful_complete_requested
 	FROM xcherry_sys_process_executions WHERE id=$1 FOR UPDATE`
 
 func (d dbTx) SelectProcessExecutionForUpdate(

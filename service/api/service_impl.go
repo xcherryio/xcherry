@@ -159,7 +159,7 @@ func (s serviceImpl) PublishToLocalQueue(
 
 	if resp.HasNewImmediateTask {
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            resp.ShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: ptr.Any(resp.ProcessExecutionId.String()),
@@ -252,7 +252,7 @@ func (s serviceImpl) Rpc(
 		AppDatabaseWrite:  resp.WriteToAppDatabase,
 
 		WorkerUrl:   latestPrcExe.WorkerUrl,
-		TaskShardId: persistence.DefaultShardId,
+		TaskShardId: latestPrcExe.ShardId,
 	})
 	if err != nil {
 		return nil, s.handleUnknownError(err)
@@ -271,7 +271,7 @@ func (s serviceImpl) Rpc(
 		processExecutionIdString := latestPrcExe.ProcessExecutionId.String()
 
 		s.notifyRemoteImmediateTaskAsync(ctx, xcapi.NotifyImmediateTasksRequest{
-			ShardId:            persistence.DefaultShardId,
+			ShardId:            latestPrcExe.ShardId,
 			Namespace:          &request.Namespace,
 			ProcessId:          &request.ProcessId,
 			ProcessExecutionId: &processExecutionIdString,

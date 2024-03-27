@@ -41,6 +41,8 @@ type (
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
 
+		ShardId int32
+
 		Status                 data_models.ProcessExecutionStatus
 		HistoryEventIdSequence int32
 
@@ -54,6 +56,8 @@ type (
 		ProcessExecutionId uuid.UUID
 		// See the top of the file for why we need this field
 		ProcessExecutionIdString string
+
+		ShardId int32
 
 		Status                 data_models.ProcessExecutionStatus
 		HistoryEventIdSequence int32

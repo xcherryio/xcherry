@@ -17,7 +17,7 @@ import (
 )
 
 const selectLatestExecutionQuery = `SELECT
-	le.process_execution_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
+	le.process_execution_id, e.shard_id, e.status, e.start_time, e.timeout_seconds, e.history_event_id_sequence, e.state_execution_sequence_maps, e.info
 	FROM xcherry_sys_latest_process_executions le
 	INNER JOIN xcherry_sys_process_executions e ON e.process_id = le.process_id AND e.id = le.process_execution_id
 	WHERE le.namespace = $1 AND le.process_id = $2`
