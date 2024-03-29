@@ -22,6 +22,7 @@ const testWorkerUrl = "test-url"
 const stateId1 = "state1"
 const stateId2 = "state2"
 const namespace = "test-ns"
+const defaultShardId = 0
 
 func createTestInput() xcapi.EncodedObject {
 	return xcapi.EncodedObject{
@@ -45,7 +46,7 @@ func startProcessWithConfigs(
 	startReq := createStartRequest(namespace, processId, input, appDatabaseConfig, stateCfg)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 
 	require.NoError(t, err)
@@ -84,7 +85,7 @@ func startProcessWithAllowIfPreviousExitAbnormally(
 	startReq := createStartRequestWithAllowIfPreviousExitAbnormallyPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 
 	require.NoError(t, err)
@@ -101,7 +102,7 @@ func startProcessWithTerminateIfRunningPolicy(
 	startReq := createStartRequestWithTerminateIfRunningPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func startProcessWithAllowIfNoRunningPolicy(
 	startReq := createStartRequestWithAllowIfNoRunningPolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 
 	require.NoError(t, err)
@@ -135,7 +136,7 @@ func startProcessWithDisallowReusePolicy(
 	startReq := createStartRequestWithDisallowReusePolicy(namespace, processId, input)
 	startResp, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 
 	require.NoError(t, err)
@@ -246,7 +247,7 @@ func retryStartProcessForFailure(
 	startReq := createStartRequest(namespace, processId, input, nil, nil)
 	startResp2, err := store.StartProcess(ctx, data_models.StartProcessRequest{
 		Request:        startReq,
-		NewTaskShardId: persistence.DefaultShardId,
+		NewTaskShardId: defaultShardId,
 	})
 	require.NoError(t, err)
 	ass.True(startResp2.AlreadyStarted)
@@ -281,7 +282,7 @@ func checkAndGetImmediateTasks(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, expectedLength int,
 ) (int64, int64, []data_models.ImmediateTask) {
 	getTasksResp, err := store.GetImmediateTasks(ctx, data_models.GetImmediateTasksRequest{
-		ShardId:                persistence.DefaultShardId,
+		ShardId:                defaultShardId,
 		StartSequenceInclusive: 0,
 		PageSize:               10,
 	})
@@ -295,7 +296,7 @@ func getAndCheckTimerTasksUpToTs(
 	upToTimestamp int64,
 ) (int64, int64, []data_models.TimerTask) {
 	getTasksResp, err := store.GetTimerTasksUpToTimestamp(ctx, data_models.GetTimerTasksRequest{
-		ShardId:                          persistence.DefaultShardId,
+		ShardId:                          defaultShardId,
 		MaxFireTimestampSecondsInclusive: upToTimestamp,
 		PageSize:                         10,
 	})
@@ -309,7 +310,7 @@ func getAndCheckTimerTasksUpForTimestamps(
 	forTimestamps []int64, minTaskSeq int64,
 ) (int64, int64, []data_models.TimerTask) {
 	getTasksResp, err := store.GetTimerTasksForTimestamps(ctx, data_models.GetTimerTasksForTimestampsRequest{
-		ShardId:              persistence.DefaultShardId,
+		ShardId:              defaultShardId,
 		MinSequenceInclusive: minTaskSeq,
 		DetailedRequests: []xcapi.NotifyTimerTasksRequest{
 			{
@@ -335,7 +336,7 @@ func verifyImmediateTask(
 	info data_models.ImmediateTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
-	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
+	ass.Equal(defaultShardId, int(task.ShardId))
 	ass.Equal(taskType, task.TaskType)
 	ass.Equal(stateExeId, task.GetStateExecutionId())
 	ass.True(task.TaskSequence != nil)
@@ -360,7 +361,7 @@ func verifyTimerTask(
 	taskInfo data_models.TimerTaskInfoJson,
 ) {
 	ass.NotNil(task.StateIdSequence)
-	ass.Equal(persistence.DefaultShardId, int(task.ShardId))
+	ass.Equal(defaultShardId, int(task.ShardId))
 	ass.Equal(taskType, task.TaskType)
 	ass.Equal(stateExeId, task.GetStateExecutionId())
 	ass.True(task.TaskSequence != nil)
@@ -371,7 +372,7 @@ func deleteAndVerifyImmediateTasksDeleted(
 	ctx context.Context, t *testing.T, ass *assert.Assertions, store persistence.ProcessStore, minSeq, maxSeq int64,
 ) {
 	err := store.DeleteImmediateTasks(ctx, data_models.DeleteImmediateTasksRequest{
-		ShardId:                  persistence.DefaultShardId,
+		ShardId:                  defaultShardId,
 		MinTaskSequenceInclusive: minSeq,
 		MaxTaskSequenceInclusive: maxSeq,
 	})
@@ -424,7 +425,7 @@ func completeWaitUntilExecution(
 		CommandRequest: xcapi.CommandRequest{
 			WaitingType: xcapi.EMPTY_COMMAND,
 		},
-		TaskShardId: persistence.DefaultShardId,
+		TaskShardId: defaultShardId,
 	})
 	require.NoError(t, err)
 	ass.True(compWaitResp.HasNewImmediateTask)
@@ -458,7 +459,7 @@ func completeExecuteExecutionWithAppDatabase(
 		StateExecutionId:   stateExeId,
 		Prepare:            *prep,
 		StateDecision:      stateDecision,
-		TaskShardId:        persistence.DefaultShardId,
+		TaskShardId:        defaultShardId,
 		AppDatabaseConfig:  appDatabaseConfig,
 		WriteAppDatabase:   appDatabaseWrite,
 	})
@@ -490,7 +491,7 @@ func recoverFromFailure(
 		DestinationStateId:     destinationStateId,
 		DestinationStateConfig: destiantionStateConfig,
 		DestinationStateInput:  destinationStateInput,
-		ShardId:                persistence.DefaultShardId,
+		ShardId:                defaultShardId,
 	}
 
 	err := store.RecoverFromStateExecutionFailure(ctx, request)

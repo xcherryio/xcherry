@@ -109,7 +109,7 @@ func (p sqlProcessStoreImpl) doUpdateProcessExecutionForRpcTx(
 
 	// Step 3: publish to local queue
 
-	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, request.PublishToLocalQueue)
+	hasNewImmediateTask2, err := p.publishToLocalQueue(ctx, tx, request.ProcessExecutionId, prcRow.ShardId, request.PublishToLocalQueue)
 	if err != nil {
 		return nil, err
 	}

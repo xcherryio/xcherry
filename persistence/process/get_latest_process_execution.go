@@ -29,6 +29,7 @@ func (p sqlProcessStoreImpl) GetLatestProcessExecution(
 
 	return &data_models.GetLatestProcessExecutionResponse{
 		ProcessExecutionId: row.ProcessExecutionId,
+		ShardId:            row.ShardId,
 		Status:             row.Status,
 		StartTimestamp:     row.StartTime.Unix(),
 		AppDatabaseConfig:  info.AppDatabaseConfig,

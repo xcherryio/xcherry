@@ -17,6 +17,7 @@ type (
 
 	PublishToLocalQueueResponse struct {
 		ProcessExecutionId  uuid.UUID
+		ShardId             int32
 		HasNewImmediateTask bool
 		ProcessNotExists    bool
 		ProcessNotRunning   bool
