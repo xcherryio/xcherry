@@ -6,7 +6,6 @@
 package async
 
 import (
-	"context"
 	"fmt"
 	"github.com/hashicorp/memberlist"
 	"github.com/xcherryio/xcherry/common/log"
@@ -16,25 +15,44 @@ import (
 	"strings"
 )
 
-type membership struct {
-	rootCtx context.Context
+const (
+	ServerTypeApi   = "api"
+	ServerTypeAsync = "async"
+)
 
+type membership struct {
 	memberlistCfg *memberlist.Config
+
+	serverType    string
+	serverAddress string
 
 	cfg    config.Config
 	logger log.Logger
 }
 
-func NewMembershipImpl(rootCtx context.Context, cfg config.Config, logger log.Logger, svc Service) Membership {
-	if cfg.AsyncService.Mode != config.AsyncServiceModeCluster {
+func NewMembershipImpl(cfg config.Config, logger log.Logger, asyncService *Service, serverType string) Membership {
+	if serverType == ServerTypeApi && cfg.Membership == nil {
+		return nil
+	}
+	if serverType == ServerTypeAsync && cfg.AsyncService.Mode != config.AsyncServiceModeCluster {
 		return nil
 	}
 
-	bindAddress := cfg.AsyncService.Membership.BindAddress
-	advertiseAddress := cfg.AsyncService.Membership.AdvertiseAddress
-	advertiseAddressToJoin := cfg.AsyncService.Membership.AdvertiseAddressToJoin
+	bindAddress := cfg.Membership.BindAddress
+	advertiseAddress := cfg.Membership.AdvertiseAddress
+	advertiseAddressToJoin := cfg.Membership.AdvertiseAddressToJoin
 
-	serverAddress := cfg.AsyncService.InternalHttpServer.Address
+	serverAddress := ""
+	if serverType == ServerTypeApi {
+		serverAddress = cfg.ApiService.HttpServer.Address
+	}
+	if serverType == ServerTypeAsync {
+		serverAddress = cfg.AsyncService.InternalHttpServer.Address
+	}
+
+	if !strings.HasPrefix(serverAddress, "http") {
+		serverAddress = "http://" + serverAddress
+	}
 
 	bindParts := strings.Split(bindAddress, ":")
 	bindPort, err := strconv.Atoi(bindParts[1])
@@ -49,7 +67,7 @@ func NewMembershipImpl(rootCtx context.Context, cfg config.Config, logger log.Lo
 	}
 
 	memberlistConf := memberlist.DefaultLocalConfig()
-	memberlistConf.Name = "async_" + advertiseAddress
+	memberlistConf.Name = serverType + "_" + advertiseAddress
 	memberlistConf.BindAddr = bindParts[0]
 	memberlistConf.BindPort = bindPort
 	memberlistConf.AdvertiseAddr = advertiseParts[0]
@@ -59,11 +77,12 @@ func NewMembershipImpl(rootCtx context.Context, cfg config.Config, logger log.Lo
 		Logger:        logger,
 		Shard:         cfg.Database.Shards,
 		ServerAddress: serverAddress,
-		AsyncService:  svc,
+		AsyncService:  asyncService,
 	}
 
 	memberlistConf.Delegate = &ClusterDelegate{
 		Meta: ClusterDelegateMetaData{
+			ServerType:    serverType,
 			ServerAddress: serverAddress,
 		},
 	}
@@ -81,24 +100,23 @@ func NewMembershipImpl(rootCtx context.Context, cfg config.Config, logger log.Lo
 	}
 
 	return membership{
-		rootCtx: rootCtx,
-
 		memberlistCfg: memberlistConf,
-
-		cfg:    cfg,
-		logger: logger,
+		serverType:    serverType,
+		serverAddress: serverAddress,
+		cfg:           cfg,
+		logger:        logger,
 	}
 }
 
 func (m membership) GetServerAddress() string {
-	return m.cfg.AsyncService.InternalHttpServer.Address
+	return m.serverAddress
 }
 
-func (m membership) GetServerAddressForShard(shardId int32) string {
+func (m membership) GetAsyncServerAddressForShard(shardId int32) string {
 	eventDelegate, ok := m.memberlistCfg.Events.(*ClusterEventDelegate)
 	if !ok {
 		m.logger.Fatal("failed to get delegate")
 	}
 
-	return eventDelegate.GetServerAddressFor(shardId)
+	return eventDelegate.GetAsyncServerAddressFor(shardId)
 }

@@ -7,8 +7,8 @@ apiService:
      address: 0.0.0.0:8801
      readTimeout: 10s
      writeTimeout: 60s
-  asyncServiceAddresses:
-    - 0.0.0.0:8701
+  # asyncServiceAddress is required in standalone mode
+  asyncServiceAddress: 0.0.0.0:8701
 database:
   processStore:
     dbExtensionName: postgres

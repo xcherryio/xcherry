@@ -20,7 +20,7 @@ asyncService:
   mode: cluster
   internalHttpServer:
     address: 0.0.0.0:8702
-  membership:
-    bindAddress: 0.0.0.0:8902
-    advertiseAddress: 0.0.0.0:8902
-    advertiseAddressToJoin: 0.0.0.0:8901
+membership:
+  bindAddress: 0.0.0.0:8902
+  advertiseAddress: 0.0.0.0:8902
+  advertiseAddressToJoin: 0.0.0.0:8888

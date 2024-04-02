@@ -72,9 +72,7 @@ func TestMain(m *testing.M) {
 						ReadTimeout:  5 * time.Second,
 						WriteTimeout: 60 * time.Second,
 					},
-					AsyncServiceAddresses: []string{
-						"http://0.0.0.0:8701",
-					},
+					AsyncServiceAddress: "http://0.0.0.0:8701",
 				},
 				Database: &config.DatabaseConfig{
 					ProcessStoreConfig:    sqlConfig,

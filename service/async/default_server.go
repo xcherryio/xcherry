@@ -39,7 +39,7 @@ func NewDefaultAsyncServerWithGin(
 
 	svc := NewAsyncServiceImpl(rootCtx, processStore, visibilityStore, cfg, logger)
 
-	membershipImpl := NewMembershipImpl(rootCtx, cfg, logger, svc)
+	membershipImpl := NewMembershipImpl(cfg, logger, &svc, ServerTypeAsync)
 
 	handler := newGinHandler(cfg, svc, membershipImpl, logger)
 

@@ -21,7 +21,10 @@ apiService:
     address: 0.0.0.0:8801
     readTimeout: 10s
     writeTimeout: 60s
-  asyncServiceAddresses:
-    - 0.0.0.0:8701
-    - 0.0.0.0:8702
-    - 0.0.0.0:8703
+# Note: delete api server membership config if running async server in standalone mode
+membership:
+  bindAddress: 0.0.0.0:8888
+  # replace the advertiseAddress with a real address
+  advertiseAddress: 0.0.0.0:8888
+  # this async server will be the first one to start and provide its address for others to join
+  advertiseAddressToJoin: ""

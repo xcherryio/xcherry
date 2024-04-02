@@ -29,6 +29,9 @@ type (
 
 		// AsyncService is config for async service
 		AsyncService *AsyncServiceConfig `yaml:"asyncService"`
+
+		// Membership is the config for cluster members
+		Membership *MembershipConfig `yaml:"membership"`
 	}
 
 	DatabaseConfig struct {
@@ -46,8 +49,9 @@ type (
 		HttpServer HttpServerConfig `yaml:"httpServer"`
 		// Rpc is the config for rpc calls
 		Rpc RpcConfig `yaml:"rpc"`
-		// AsyncServiceAddresses are the addresses for API service to call AsyncServices' internal APIs
-		AsyncServiceAddresses []string `yaml:"asyncServiceAddresses"`
+		// AsyncServiceAddress is the address for API service to call the AsyncService's internal APIs
+		// It's required in the standalone mode, but not needed in the cluster mode
+		AsyncServiceAddress string `yaml:"asyncServiceAddress"`
 	}
 
 	AsyncServiceConfig struct {
@@ -60,8 +64,6 @@ type (
 		// InternalHttpServer is the config for starting a http.Server
 		// to serve some internal APIs
 		InternalHttpServer HttpServerConfig `yaml:"internalHttpServer"`
-		// Membership is the config for cluster members
-		Membership MembershipConfig `yaml:"membership"`
 	}
 
 	// HttpServerConfig is the config that will be mapped into http.Server
@@ -247,14 +249,12 @@ func (c *Config) ValidateAndSetDefaults() error {
 			rpcConfig.DefaultRpcAPITimeout = 10 * time.Second
 		}
 
-		if len(c.ApiService.AsyncServiceAddresses) == 0 {
-			return fmt.Errorf("at least one asyncAddress is required")
+		if c.Membership == nil && c.ApiService.AsyncServiceAddress == "" {
+			return fmt.Errorf("ApiService.AsyncServiceAddress is required if not using Membership")
 		}
 
-		for i, asyncAddress := range c.ApiService.AsyncServiceAddresses {
-			if !strings.HasPrefix(asyncAddress, "http") {
-				c.ApiService.AsyncServiceAddresses[i] = "http://" + asyncAddress
-			}
+		if !strings.HasPrefix(c.ApiService.AsyncServiceAddress, "http") {
+			c.ApiService.AsyncServiceAddress = "http://" + c.ApiService.AsyncServiceAddress
 		}
 	}
 
@@ -310,15 +310,14 @@ func (c *Config) ValidateAndSetDefaults() error {
 		if timerTaskQConfig.TriggerNotificationBufferSize == 0 {
 			timerTaskQConfig.TriggerNotificationBufferSize = 1000
 		}
+	}
 
-		// membership
-		if c.AsyncService.Mode == AsyncServiceModeCluster {
-			if c.AsyncService.Membership.AdvertiseAddress == "" {
-				return fmt.Errorf("AsyncService.Membership.AdvertiseAddress cannot be empty")
-			}
-			if c.AsyncService.Membership.BindAddress == "" {
-				c.AsyncService.Membership.BindAddress = c.AsyncService.Membership.AdvertiseAddress
-			}
+	if c.Membership != nil {
+		if c.Membership.AdvertiseAddress == "" {
+			return fmt.Errorf("Membership.AdvertiseAddress cannot be empty")
+		}
+		if c.Membership.BindAddress == "" {
+			c.Membership.BindAddress = c.Membership.AdvertiseAddress
 		}
 	}
 

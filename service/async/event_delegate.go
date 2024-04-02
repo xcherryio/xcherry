@@ -18,7 +18,7 @@ type ClusterEventDelegate struct {
 	Logger        log.Logger
 	Shard         int
 	ServerAddress string
-	AsyncService  Service
+	AsyncService  *Service
 }
 
 func (d *ClusterEventDelegate) NotifyJoin(node *memberlist.Node) {
@@ -27,16 +27,20 @@ func (d *ClusterEventDelegate) NotifyJoin(node *memberlist.Node) {
 		d.Logger.Fatal(fmt.Sprintf("failed to parse ClusterDelegateMetaData %s", node.Meta))
 	}
 
-	hostPort := BuildHostAddress(node)
-	d.Logger.Info(fmt.Sprintf("ClusterEvent JOIN %s: advertise address %s, server address %s", d.ServerAddress, hostPort, meta.ServerAddress))
+	hostAddress := BuildHostAddress(node)
+	d.Logger.Info(fmt.Sprintf("ClusterEvent JOIN %s: advertise address %s, server address %s", d.ServerAddress, hostAddress, meta.ServerAddress))
 
-	if d.consistent == nil {
-		d.consistent = hashring.New([]string{meta.ServerAddress})
-	} else {
-		d.consistent = d.consistent.AddNode(meta.ServerAddress)
+	if meta.ServerType == ServerTypeAsync {
+		if d.consistent == nil {
+			d.consistent = hashring.New([]string{meta.ServerAddress})
+		} else {
+			d.consistent = d.consistent.AddNode(meta.ServerAddress)
+		}
+
+		if d.AsyncService != nil {
+			d.asyncServerReBalance()
+		}
 	}
-
-	d.reBalance()
 }
 
 func (d *ClusterEventDelegate) NotifyLeave(node *memberlist.Node) {
@@ -45,21 +49,25 @@ func (d *ClusterEventDelegate) NotifyLeave(node *memberlist.Node) {
 		d.Logger.Fatal(fmt.Sprintf("failed to parse ClusterDelegateMetaData %s", node.Meta))
 	}
 
-	hostPort := BuildHostAddress(node)
-	d.Logger.Info(fmt.Sprintf("ClusterEvent LEAVE %s: advertise address %s, server address %s", d.ServerAddress, hostPort, meta.ServerAddress))
+	hostAddress := BuildHostAddress(node)
+	d.Logger.Info(fmt.Sprintf("ClusterEvent LEAVE %s: advertise address %s, server address %s", d.ServerAddress, hostAddress, meta.ServerAddress))
 
-	if d.consistent != nil {
-		d.consistent = d.consistent.RemoveNode(meta.ServerAddress)
+	if meta.ServerType == ServerTypeAsync {
+		if d.consistent != nil {
+			d.consistent = d.consistent.RemoveNode(meta.ServerAddress)
+		}
+
+		if d.AsyncService != nil {
+			d.asyncServerReBalance()
+		}
 	}
-
-	d.reBalance()
 }
 
 func (d *ClusterEventDelegate) NotifyUpdate(node *memberlist.Node) {
 	// skip
 }
 
-func (d *ClusterEventDelegate) GetServerAddressFor(shardId int32) string {
+func (d *ClusterEventDelegate) GetAsyncServerAddressFor(shardId int32) string {
 	node, ok := d.consistent.GetNode(strconv.Itoa(int(shardId)))
 	if !ok {
 		d.Logger.Fatal(fmt.Sprintf("Failed to search shardId %d", shardId))
@@ -67,16 +75,16 @@ func (d *ClusterEventDelegate) GetServerAddressFor(shardId int32) string {
 	return node
 }
 
-func (d *ClusterEventDelegate) reBalance() {
+func (d *ClusterEventDelegate) asyncServerReBalance() {
 	var assignedShardIds []int32
 
 	for i := 0; i < d.Shard; i++ {
-		if d.GetServerAddressFor(int32(i)) == d.ServerAddress {
+		if d.GetAsyncServerAddressFor(int32(i)) == d.ServerAddress {
 			assignedShardIds = append(assignedShardIds, int32(i))
 		}
 	}
 
-	d.AsyncService.ReBalance(assignedShardIds)
+	(*d.AsyncService).ReBalance(assignedShardIds)
 }
 
 func BuildHostAddress(node *memberlist.Node) string {
