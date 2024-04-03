@@ -32,6 +32,7 @@ func (d *ClusterDelegate) MergeRemoteState(buf []byte, join bool) {
 }
 
 type ClusterDelegateMetaData struct {
+	ServerType    string
 	ServerAddress string
 }
 

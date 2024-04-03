@@ -5,8 +5,8 @@ package api
 
 import (
 	"context"
+	"github.com/xcherryio/xcherry/service/async"
 	"github.com/xcherryio/xcherry/utils"
-	"math/rand"
 	"net/http"
 	"time"
 
@@ -28,6 +28,7 @@ type serviceImpl struct {
 	processStore    persistence.ProcessStore
 	visibilityStore persistence.VisibilityStore
 	logger          log.Logger
+	membership      async.Membership
 }
 
 func NewServiceImpl(
@@ -36,11 +37,14 @@ func NewServiceImpl(
 	visibilityStore persistence.VisibilityStore,
 	logger log.Logger,
 ) Service {
+	membershipImpl := async.NewMembershipImpl(cfg, logger, nil, async.ServerTypeApi)
+
 	return &serviceImpl{
 		cfg:             cfg,
 		processStore:    processStore,
 		visibilityStore: visibilityStore,
 		logger:          logger,
+		membership:      membershipImpl,
 	}
 }
 
@@ -312,8 +316,10 @@ func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
-		// get a random async server
-		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddress
+		if s.membership != nil {
+			asyncAddress = s.membership.GetAsyncServerAddressForShard(req.ShardId)
+		}
 
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
@@ -343,8 +349,10 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
 		defer canf()
 
-		// get a random async server
-		asyncAddress := s.cfg.ApiService.AsyncServiceAddresses[rand.Intn(len(s.cfg.ApiService.AsyncServiceAddresses))]
+		asyncAddress := s.cfg.ApiService.AsyncServiceAddress
+		if s.membership != nil {
+			asyncAddress = s.membership.GetAsyncServerAddressForShard(req.ShardId)
+		}
 
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{

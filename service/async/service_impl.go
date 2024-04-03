@@ -240,7 +240,7 @@ func (a asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: "http://" + serverAddress,
+					URL: serverAddress,
 				},
 			},
 		})
@@ -268,7 +268,7 @@ func (a asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerT
 		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
 			Servers: []xcapi.ServerConfiguration{
 				{
-					URL: "http://" + serverAddress,
+					URL: serverAddress,
 				},
 			},
 		})
