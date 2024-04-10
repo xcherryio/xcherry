@@ -28,4 +28,6 @@ type Service interface {
 	) (resp *xcapi.ProcessExecutionRpcResponse, err *ErrorWithStatus)
 	ListProcessExecutions(ctx context.Context, request xcapi.ListProcessExecutionsRequest,
 	) (response *xcapi.ListProcessExecutionsResponse, retErr *ErrorWithStatus)
+	WaitForProcessCompletion(ctx context.Context, request xcapi.ProcessExecutionWaitForCompletionRequest) (
+		resp *xcapi.ProcessExecutionWaitForCompletionResponse, err *ErrorWithStatus)
 }

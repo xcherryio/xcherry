@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xcherryio/apis/goapi/xcapi"
@@ -496,7 +497,50 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 	if compResp.HasNewImmediateTask {
 		w.notifyNewImmediateTask(task.ShardId, prep, task)
 	}
+
+	if compResp.ProcessStatus != data_models.ProcessExecutionStatusUndefined &&
+		compResp.ProcessStatus != data_models.ProcessExecutionStatusRunning {
+
+		serverAddress := w.cfg.AsyncService.InternalHttpServer.Address
+		if !strings.HasPrefix(serverAddress, "http") {
+			serverAddress = "http://" + serverAddress
+		}
+
+		w.signalProcessCompletionAsync(ctx, xcapi.SignalProcessCompletionRequest{
+			ShardId:            task.ShardId,
+			ProcessExecutionId: task.ProcessExecutionId.String(),
+			Status:             compResp.ProcessStatus.String(),
+		}, serverAddress)
+	}
+
 	return nil
+}
+
+func (w *immediateTaskConcurrentProcessor) signalProcessCompletionAsync(ctx context.Context,
+	req xcapi.SignalProcessCompletionRequest, serverAddress string) {
+	go func() {
+		ctx2, canf := context.WithTimeout(ctx, time.Second*10)
+		defer canf()
+
+		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+			Servers: []xcapi.ServerConfiguration{
+				{
+					URL: serverAddress,
+				},
+			},
+		})
+
+		request := apiClient.DefaultAPI.InternalApiV1XcherrySignalProcessCompletionPost(ctx2)
+		httpResp, err := request.SignalProcessCompletionRequest(req).Execute()
+		if httpResp != nil {
+			defer httpResp.Body.Close()
+		}
+		if err != nil {
+			w.logger.Error("failed to signal process completion", tag.Error(err))
+			// TODO add backoff and retry
+			return
+		}
+	}()
 }
 
 func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(

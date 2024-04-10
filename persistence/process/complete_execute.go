@@ -187,5 +187,6 @@ func (p sqlProcessStoreImpl) doCompleteExecuteExecutionTx(
 
 	return &data_models.CompleteExecuteExecutionResponse{
 		HasNewImmediateTask: hasNewImmediateTask,
+		ProcessStatus:       prcRow.Status,
 	}, nil
 }

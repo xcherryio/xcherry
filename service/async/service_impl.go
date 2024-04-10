@@ -35,6 +35,8 @@ type asyncService struct {
 
 	cfg    config.Config
 	logger log.Logger
+
+	waitForProcessCompletionChannelMap map[string]chan string
 }
 
 func NewAsyncServiceImpl(
@@ -63,6 +65,8 @@ func NewAsyncServiceImpl(
 		rootCtx: rootCtx,
 		cfg:     cfg,
 		logger:  logger,
+
+		waitForProcessCompletionChannelMap: map[string]chan string{},
 	}
 }
 
@@ -283,5 +287,74 @@ func (a asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerT
 			// TODO add backoff and retry
 			return
 		}
+	}()
+}
+
+func (a asyncService) AskRemoteToWaitForProcessCompletionInCluster(
+	ctx context.Context, req xcapi.WaitForProcessCompletionRequest, serverAddress string,
+) (*xcapi.WaitForProcessCompletionResponse, error) {
+	apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+		Servers: []xcapi.ServerConfiguration{
+			{
+				URL: serverAddress,
+			},
+		},
+	})
+
+	request := apiClient.DefaultAPI.InternalApiV1XcherryWaitForProcessCompletionPost(ctx)
+	resp, httpResp, err := request.WaitForProcessCompletionRequest(req).Execute()
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &xcapi.WaitForProcessCompletionResponse{
+				Timeout: xcapi.PtrBool(true),
+			}, nil
+		}
+
+		a.logger.Error("failed to ask to wait for process completion in cluster", tag.Error(err))
+		// TODO add backoff and retry
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func (a asyncService) WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
+) *xcapi.WaitForProcessCompletionResponse {
+	waitingChannel, ok := a.waitForProcessCompletionChannelMap[req.ProcessExecutionId]
+	if !ok {
+		waitingChannel = make(chan string)
+		a.waitForProcessCompletionChannelMap[req.ProcessExecutionId] = waitingChannel
+	}
+
+	select {
+	case <-ctx.Done():
+		return &xcapi.WaitForProcessCompletionResponse{
+			Timeout: xcapi.PtrBool(true),
+		}
+	case res := <-waitingChannel:
+		return &xcapi.WaitForProcessCompletionResponse{
+			Timeout: xcapi.PtrBool(false),
+			Status:  xcapi.ProcessStatus(res).Ptr(),
+		}
+	}
+}
+
+func (a asyncService) SignalProcessCompletion(req xcapi.SignalProcessCompletionRequest) {
+	waitingChannel, ok := a.waitForProcessCompletionChannelMap[req.ProcessExecutionId]
+	if !ok {
+		return
+	}
+
+	waitingChannel <- req.Status
+
+	go func() {
+		// sleep 3 seconds before close the channel
+		time.Sleep(time.Second * 3)
+
+		close(waitingChannel)
+		delete(a.waitForProcessCompletionChannelMap, req.ProcessExecutionId)
 	}()
 }

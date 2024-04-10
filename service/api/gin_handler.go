@@ -149,10 +149,10 @@ func (h *ginHandler) Rpc(c *gin.Context) {
 		h.logger.Debug("responded Rpc API request", tag.Value(h.toJson(err)))
 	}()
 
-	resp, errResp := h.svc.Rpc(c.Request.Context(), req)
+	resp, err := h.svc.Rpc(c.Request.Context(), req)
 
-	if errResp != nil {
-		c.JSON(errResp.StatusCode, errResp.Error)
+	if err != nil {
+		c.JSON(err.StatusCode, err.Error)
 		return
 	}
 
@@ -174,6 +174,29 @@ func (h *ginHandler) ListProcessExecutions(c *gin.Context) {
 	}()
 
 	resp, errResp = h.svc.ListProcessExecutions(c.Request.Context(), req)
+
+	if errResp != nil {
+		c.JSON(errResp.StatusCode, errResp.Error)
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *ginHandler) WaitForProcessCompletion(c *gin.Context) {
+	var req xcapi.ProcessExecutionWaitForCompletionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+
+	var errResp *ErrorWithStatus
+	h.logger.Debug("received WaitForProcessCompletion API request", tag.Value(h.toJson(req)))
+	defer func() {
+		h.logger.Debug("responded WaitForProcessCompletion API request", tag.Value(h.toJson(errResp)))
+	}()
+
+	resp, errResp := h.svc.WaitForProcessCompletion(c.Request.Context(), req)
 
 	if errResp != nil {
 		c.JSON(errResp.StatusCode, errResp.Error)

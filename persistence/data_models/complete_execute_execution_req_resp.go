@@ -28,6 +28,7 @@ type (
 
 	CompleteExecuteExecutionResponse struct {
 		HasNewImmediateTask        bool
+		ProcessStatus              ProcessExecutionStatus
 		FailedAtWritingAppDatabase bool
 		AppDatabaseWritingError    error
 	}

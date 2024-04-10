@@ -82,6 +82,47 @@ func (h *ginHandler) NotifyTimerTasks(c *gin.Context) {
 	successRespond(c)
 }
 
+func (h *ginHandler) WaitForProcessCompletion(c *gin.Context) {
+	var req xcapi.WaitForProcessCompletionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+
+	if h.config.AsyncService.Mode == config.AsyncServiceModeCluster {
+		targetServerAddress := h.membership.GetAsyncServerAddressForShard(req.ShardId)
+		if targetServerAddress != h.membership.GetServerAddress() {
+			h.logger.Info(fmt.Sprintf("AskRemoteToWaitForProcessCompletionInCluster: %s -> %s",
+				h.membership.GetServerAddress(), targetServerAddress))
+
+			resp, err := h.svc.AskRemoteToWaitForProcessCompletionInCluster(c.Request.Context(), req, targetServerAddress)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+	}
+
+	resp := h.svc.WaitForProcessCompletion(c.Request.Context(), req)
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *ginHandler) SignalProcessCompletion(c *gin.Context) {
+	var req xcapi.SignalProcessCompletionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		invalidRequestSchema(c)
+		return
+	}
+
+	h.svc.SignalProcessCompletion(req)
+
+	successRespond(c)
+}
+
 func successRespond(c *gin.Context) {
 	c.JSON(http.StatusOK, map[string]string{
 		"message": "success",

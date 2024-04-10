@@ -309,6 +309,58 @@ func (s serviceImpl) ListProcessExecutions(ctx context.Context, request xcapi.Li
 	return resp, nil
 }
 
+func (s serviceImpl) WaitForProcessCompletion(
+	ctx context.Context, request xcapi.ProcessExecutionWaitForCompletionRequest,
+) (response *xcapi.ProcessExecutionWaitForCompletionResponse, retErr *ErrorWithStatus) {
+	var timeout = DEFAULT_WAIT_FOR_TIMEOUT
+	if request.TimeoutSeconds != nil {
+		timeout = *request.TimeoutSeconds
+	}
+	if timeout > DEFAULT_WAIT_FOR_TIMEOUT {
+		timeout = DEFAULT_WAIT_FOR_TIMEOUT
+	}
+
+	ctx, canf := context.WithTimeout(ctx, time.Second*time.Duration(timeout))
+	defer canf()
+
+	latestPrcExe, err := s.processStore.GetLatestProcessExecution(ctx, data_models.GetLatestProcessExecutionRequest{
+		Namespace: request.GetNamespace(),
+		ProcessId: request.GetProcessId(),
+	})
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &xcapi.ProcessExecutionWaitForCompletionResponse{
+				Timeout: xcapi.PtrBool(true),
+			}, nil
+		}
+		return nil, s.handleUnknownError(err)
+	}
+
+	if latestPrcExe.NotExists {
+		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
+	}
+
+	if latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
+		return &xcapi.ProcessExecutionWaitForCompletionResponse{
+			Timeout: xcapi.PtrBool(false),
+			Status:  xcapi.ProcessStatus(latestPrcExe.Status.String()).Ptr(),
+		}, nil
+	}
+
+	resp, err := s.askRemoteWaitForProcessCompletion(ctx, xcapi.WaitForProcessCompletionRequest{
+		ShardId:            latestPrcExe.ShardId,
+		ProcessExecutionId: latestPrcExe.ProcessExecutionId.String(),
+	})
+	if err != nil {
+		return nil, NewErrorWithStatus(http.StatusInternalServerError, err.Error())
+	}
+
+	return &xcapi.ProcessExecutionWaitForCompletionResponse{
+		Timeout: resp.Timeout,
+		Status:  resp.Status,
+	}, nil
+}
+
 func (s serviceImpl) notifyRemoteImmediateTaskAsync(_ context.Context, req xcapi.NotifyImmediateTasksRequest) {
 	// execute in the background as best effort
 	go func() {
@@ -373,6 +425,42 @@ func (s serviceImpl) notifyRemoteTimerTaskAsync(_ context.Context, req xcapi.Not
 			return
 		}
 	}()
+}
+
+func (s serviceImpl) askRemoteWaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
+) (*xcapi.WaitForProcessCompletionResponse, error) {
+	asyncAddress := s.cfg.ApiService.AsyncServiceAddress
+	if s.membership != nil {
+		asyncAddress = s.membership.GetAsyncServerAddressForShard(req.ShardId)
+	}
+
+	apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
+		Servers: []xcapi.ServerConfiguration{
+			{
+				URL: asyncAddress,
+			},
+		},
+	})
+
+	request := apiClient.DefaultAPI.InternalApiV1XcherryWaitForProcessCompletionPost(ctx)
+	resp, httpResp, err := request.WaitForProcessCompletionRequest(req).Execute()
+
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &xcapi.WaitForProcessCompletionResponse{
+				Timeout: xcapi.PtrBool(true),
+			}, nil
+		}
+
+		s.logger.Error("failed to ask remote wait for process completion", tag.Error(err))
+		// TODO add backoff and retry
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (s serviceImpl) handleUnknownError(err error) *ErrorWithStatus {

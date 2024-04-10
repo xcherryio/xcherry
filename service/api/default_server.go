@@ -20,6 +20,7 @@ const PathStopProcessExecution = "/api/v1/xcherry/service/process-execution/stop
 const PathPublishToLocalQueue = "/api/v1/xcherry/service/process-execution/publish-to-local-queue"
 const PathProcessExecutionRpc = "/api/v1/xcherry/service/process-execution/rpc"
 const PathListProcessExecutions = "/api/v1/xcherry/service/process-execution/list"
+const PathWaitForProcessCompletion = "/api/v1/xcherry/service/process-execution/wait-for-process-completion"
 
 type defaultSever struct {
 	rootCtx context.Context
@@ -50,6 +51,7 @@ func NewDefaultAPIServerWithGin(
 	engine.POST(PathPublishToLocalQueue, handler.PublishToLocalQueue)
 	engine.POST(PathProcessExecutionRpc, handler.Rpc)
 	engine.POST(PathListProcessExecutions, handler.ListProcessExecutions)
+	engine.POST(PathWaitForProcessCompletion, handler.WaitForProcessCompletion)
 
 	svrCfg := cfg.ApiService.HttpServer
 	httpServer := &http.Server{
