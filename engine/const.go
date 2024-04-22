@@ -16,3 +16,7 @@ var defaultWorkerTaskBackoffRetryPolicy = xcapi.RetryPolicy{
 	MaximumAttempts:                ptr.Any(int32(0)),
 	MaximumAttemptsDurationSeconds: ptr.Any(int32(0)),
 }
+
+const DEFAULT_WAIT_FOR_TIMEOUT_MAX int32 = 30
+
+const WaitForProcessCompletionResultStop string = "STOP"

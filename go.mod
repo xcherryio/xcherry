@@ -13,7 +13,7 @@ require (
 	github.com/serialx/hashring v0.0.0-20200727003509-22c0c7ab6b1b
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
-	github.com/xcherryio/apis v0.0.3-0.20240410114652-2d909f9ececc
+	github.com/xcherryio/apis v0.0.3-0.20240422013829-2c1c8bfbaa4b
 	github.com/xcherryio/sdk-go v0.0.0-20240115163029-e21cc0710e61
 	go.uber.org/multierr v1.10.0
 	go.uber.org/zap v1.26.0

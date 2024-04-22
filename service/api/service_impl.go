@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"github.com/xcherryio/xcherry/engine"
 	"github.com/xcherryio/xcherry/service/async"
 	"github.com/xcherryio/xcherry/utils"
 	"net/http"
@@ -312,12 +313,12 @@ func (s serviceImpl) ListProcessExecutions(ctx context.Context, request xcapi.Li
 func (s serviceImpl) WaitForProcessCompletion(
 	ctx context.Context, request xcapi.ProcessExecutionWaitForCompletionRequest,
 ) (response *xcapi.ProcessExecutionWaitForCompletionResponse, retErr *ErrorWithStatus) {
-	var timeout = DEFAULT_WAIT_FOR_TIMEOUT
+	var timeout = engine.DEFAULT_WAIT_FOR_TIMEOUT_MAX
 	if request.TimeoutSeconds != nil {
 		timeout = *request.TimeoutSeconds
 	}
-	if timeout > DEFAULT_WAIT_FOR_TIMEOUT {
-		timeout = DEFAULT_WAIT_FOR_TIMEOUT
+	if timeout > engine.DEFAULT_WAIT_FOR_TIMEOUT_MAX {
+		timeout = engine.DEFAULT_WAIT_FOR_TIMEOUT_MAX
 	}
 
 	ctx, canf := context.WithTimeout(ctx, time.Second*time.Duration(timeout))
@@ -340,10 +341,12 @@ func (s serviceImpl) WaitForProcessCompletion(
 		return nil, NewErrorWithStatus(http.StatusNotFound, "Process does not exist")
 	}
 
-	if latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
+	if latestPrcExe.Status != data_models.ProcessExecutionStatusUndefined &&
+		latestPrcExe.Status != data_models.ProcessExecutionStatusRunning {
 		return &xcapi.ProcessExecutionWaitForCompletionResponse{
-			Timeout: xcapi.PtrBool(false),
-			Status:  xcapi.ProcessStatus(latestPrcExe.Status.String()).Ptr(),
+			Timeout:      xcapi.PtrBool(false),
+			StopBySystem: xcapi.PtrBool(false),
+			Status:       xcapi.ProcessStatus(latestPrcExe.Status.String()).Ptr(),
 		}, nil
 	}
 
@@ -356,8 +359,9 @@ func (s serviceImpl) WaitForProcessCompletion(
 	}
 
 	return &xcapi.ProcessExecutionWaitForCompletionResponse{
-		Timeout: resp.Timeout,
-		Status:  resp.Status,
+		Timeout:      resp.Timeout,
+		StopBySystem: resp.StopBySystem,
+		Status:       resp.Status,
 	}, nil
 }
 

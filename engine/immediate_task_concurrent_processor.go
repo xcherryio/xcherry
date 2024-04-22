@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/xcherryio/apis/goapi/xcapi"
@@ -28,14 +27,14 @@ type immediateTaskConcurrentProcessor struct {
 	rootCtx           context.Context
 	cfg               config.Config
 	taskToProcessChan chan data_models.ImmediateTask
-	// for quickly checking if the shardId is being processed
-	currentShards map[int32]bool
-	// shardId to the channel
+	// shardId: channel
 	taskToCommitChans map[int32]chan<- data_models.ImmediateTask
-	taskNotifier      TaskNotifier
-	processStore      persistence.ProcessStore
-	visibilityStore   persistence.VisibilityStore
-	logger            log.Logger
+	// shardId: WaitForProcessCompletionChannelsPerShard
+	waitForProcessCompletionChannelsPerShardMap map[int32]WaitForProcessCompletionChannelsPerShard
+	taskNotifier                                TaskNotifier
+	processStore                                persistence.ProcessStore
+	visibilityStore                             persistence.VisibilityStore
+	logger                                      log.Logger
 }
 
 func NewImmediateTaskConcurrentProcessor(
@@ -48,12 +47,12 @@ func NewImmediateTaskConcurrentProcessor(
 		rootCtx:           ctx,
 		cfg:               cfg,
 		taskToProcessChan: make(chan data_models.ImmediateTask, bufferSize),
-		currentShards:     map[int32]bool{},
 		taskToCommitChans: make(map[int32]chan<- data_models.ImmediateTask),
-		taskNotifier:      notifier,
-		processStore:      processStore,
-		visibilityStore:   visibilityStore,
-		logger:            logger,
+		waitForProcessCompletionChannelsPerShardMap: make(map[int32]WaitForProcessCompletionChannelsPerShard),
+		taskNotifier:    notifier,
+		processStore:    processStore,
+		visibilityStore: visibilityStore,
+		logger:          logger,
 	}
 }
 
@@ -67,15 +66,30 @@ func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- data_m
 func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 	shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 ) (alreadyExisted bool) {
-	exists := w.currentShards[shardId]
-	w.currentShards[shardId] = true
-	w.taskToCommitChans[shardId] = tasksToCommitChan
+	_, exists := w.taskToCommitChans[shardId]
+	if !exists {
+		w.taskToCommitChans[shardId] = tasksToCommitChan
+	}
+
 	return exists
 }
 
 func (w *immediateTaskConcurrentProcessor) RemoveImmediateTaskQueue(shardId int32) {
-	delete(w.currentShards, shardId)
 	delete(w.taskToCommitChans, shardId)
+}
+
+func (w *immediateTaskConcurrentProcessor) AddWaitForProcessCompletionChannels(shardId int32,
+	waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannelsPerShard) (alreadyExisted bool) {
+	_, exists := w.waitForProcessCompletionChannelsPerShardMap[shardId]
+	if !exists {
+		w.waitForProcessCompletionChannelsPerShardMap[shardId] = waitForProcessCompletionChannelsPerShard
+	}
+
+	return exists
+}
+
+func (w *immediateTaskConcurrentProcessor) RemoveWaitForProcessCompletionChannels(shardId int32) {
+	delete(w.waitForProcessCompletionChannelsPerShardMap, shardId)
 }
 
 func (w *immediateTaskConcurrentProcessor) Start() error {
@@ -91,15 +105,18 @@ func (w *immediateTaskConcurrentProcessor) Start() error {
 					if !ok {
 						return
 					}
-					if !w.currentShards[task.ShardId] {
+
+					_, exists := w.taskToCommitChans[task.ShardId]
+					if !exists {
 						w.logger.Info("skip the stale task that is due to shard movement", tag.Shard(task.ShardId), tag.ID(task.GetTaskId()))
 						continue
 					}
 
 					err := w.processImmediateTask(w.rootCtx, task)
 
-					if w.currentShards[task.ShardId] { // check again
-						commitChan := w.taskToCommitChans[task.ShardId]
+					commitChan, exists := w.taskToCommitChans[task.ShardId]
+
+					if exists { // check again
 						if err != nil {
 							// put it back to the queue for immediate retry
 							// Note that if the error is because of invoking worker APIs, it will be sent to
@@ -498,49 +515,15 @@ func (w *immediateTaskConcurrentProcessor) processExecuteTask(
 		w.notifyNewImmediateTask(task.ShardId, prep, task)
 	}
 
-	if compResp.ProcessStatus != data_models.ProcessExecutionStatusUndefined &&
+	// signal to the process completion waiting channel
+	waitForProcessCompletionChannelsPerShard, ok := w.waitForProcessCompletionChannelsPerShardMap[task.ShardId]
+	if ok && compResp.ProcessStatus != data_models.ProcessExecutionStatusUndefined &&
 		compResp.ProcessStatus != data_models.ProcessExecutionStatusRunning {
 
-		serverAddress := w.cfg.AsyncService.InternalHttpServer.Address
-		if !strings.HasPrefix(serverAddress, "http") {
-			serverAddress = "http://" + serverAddress
-		}
-
-		w.signalProcessCompletionAsync(ctx, xcapi.SignalProcessCompletionRequest{
-			ShardId:            task.ShardId,
-			ProcessExecutionId: task.ProcessExecutionId.String(),
-			Status:             compResp.ProcessStatus.String(),
-		}, serverAddress)
+		waitForProcessCompletionChannelsPerShard.Signal(task.ProcessExecutionId.String(), compResp.ProcessStatus.String())
 	}
 
 	return nil
-}
-
-func (w *immediateTaskConcurrentProcessor) signalProcessCompletionAsync(ctx context.Context,
-	req xcapi.SignalProcessCompletionRequest, serverAddress string) {
-	go func() {
-		ctx2, canf := context.WithTimeout(ctx, time.Second*10)
-		defer canf()
-
-		apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
-			Servers: []xcapi.ServerConfiguration{
-				{
-					URL: serverAddress,
-				},
-			},
-		})
-
-		request := apiClient.DefaultAPI.InternalApiV1XcherrySignalProcessCompletionPost(ctx2)
-		httpResp, err := request.SignalProcessCompletionRequest(req).Execute()
-		if httpResp != nil {
-			defer httpResp.Body.Close()
-		}
-		if err != nil {
-			w.logger.Error("failed to signal process completion", tag.Error(err))
-			// TODO add backoff and retry
-			return
-		}
-	}()
 }
 
 func (w *immediateTaskConcurrentProcessor) createContextWithTimeout(

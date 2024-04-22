@@ -106,21 +106,13 @@ func (h *ginHandler) WaitForProcessCompletion(c *gin.Context) {
 		}
 	}
 
-	resp := h.svc.WaitForProcessCompletion(c.Request.Context(), req)
-
-	c.JSON(http.StatusOK, resp)
-}
-
-func (h *ginHandler) SignalProcessCompletion(c *gin.Context) {
-	var req xcapi.SignalProcessCompletionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		invalidRequestSchema(c)
+	resp, err := h.svc.WaitForProcessCompletion(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	h.svc.SignalProcessCompletion(req)
-
-	successRespond(c)
+	c.JSON(http.StatusOK, resp)
 }
 
 func successRespond(c *gin.Context) {

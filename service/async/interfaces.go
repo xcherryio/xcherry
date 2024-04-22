@@ -24,8 +24,7 @@ type Service interface {
 		serverAddress string) (*xcapi.WaitForProcessCompletionResponse, error)
 	Stop(ctx context.Context) error
 	ReBalance(assignedShardIds []int32)
-	WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest) *xcapi.WaitForProcessCompletionResponse
-	SignalProcessCompletion(req xcapi.SignalProcessCompletionRequest)
+	WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest) (*xcapi.WaitForProcessCompletionResponse, error)
 }
 
 type Membership interface {

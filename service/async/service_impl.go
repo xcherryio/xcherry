@@ -24,7 +24,10 @@ type asyncService struct {
 	taskNotifier engine.TaskNotifier
 
 	// shardId: queue
-	immediateTaskQueueMap  map[int32]engine.ImmediateTaskQueue
+	immediateTaskQueueMap map[int32]engine.ImmediateTaskQueue
+	// shardId: channelsPerShard
+	waitForProcessCompletionChannelMap map[int32]engine.WaitForProcessCompletionChannelsPerShard
+
 	immediateTaskProcessor engine.ImmediateTaskProcessor
 
 	// shardId: queue
@@ -35,8 +38,6 @@ type asyncService struct {
 
 	cfg    config.Config
 	logger log.Logger
-
-	waitForProcessCompletionChannelMap map[string]chan string
 }
 
 func NewAsyncServiceImpl(
@@ -52,8 +53,9 @@ func NewAsyncServiceImpl(
 
 	return asyncService{
 		// to be dynamically initialized later
-		immediateTaskQueueMap: map[int32]engine.ImmediateTaskQueue{},
-		timerTaskQueueMap:     map[int32]engine.TimerTaskQueue{},
+		immediateTaskQueueMap:              map[int32]engine.ImmediateTaskQueue{},
+		timerTaskQueueMap:                  map[int32]engine.TimerTaskQueue{},
+		waitForProcessCompletionChannelMap: map[int32]engine.WaitForProcessCompletionChannelsPerShard{},
 
 		immediateTaskProcessor: immediateTaskProcessor,
 		timerTaskProcessor:     timerTaskProcessor,
@@ -65,8 +67,6 @@ func NewAsyncServiceImpl(
 		rootCtx: rootCtx,
 		cfg:     cfg,
 		logger:  logger,
-
-		waitForProcessCompletionChannelMap: map[string]chan string{},
 	}
 }
 
@@ -165,12 +165,14 @@ func (a asyncService) ReBalance(assignedShardIds []int32) {
 		}
 	}
 
-	for i := 0; i < len(currentShardsToRemove); i++ {
-		a.stopQueuesAndRemove(currentShardsToRemove[i])
+	for _, shardToRemove := range currentShardsToRemove {
+		a.stopQueuesAndRemove(shardToRemove)
+		a.stopWaitingChannelsAndRemove(shardToRemove)
 	}
 
 	for shardId := range assignedShardMap {
 		a.createQueuesAndStart(shardId)
+		a.createWaitingChannelsAndStart(shardId)
 	}
 
 }
@@ -233,6 +235,29 @@ func (a asyncService) stopQueuesAndRemove(shardId int32) {
 		a.taskNotifier.RemoveTimerTaskQueue(shardId)
 		delete(a.timerTaskQueueMap, shardId)
 	}
+}
+
+func (a asyncService) createWaitingChannelsAndStart(shardId int32) {
+	a.logger.Info(fmt.Sprintf("createWaitingChannelsAndStart: %d", shardId))
+
+	a.waitForProcessCompletionChannelMap[shardId] = engine.NewWaitForProcessCompletionChannelsPerShardImplImpl(
+		shardId, a.logger, a.immediateTaskProcessor)
+
+	a.waitForProcessCompletionChannelMap[shardId].Start()
+}
+
+func (a asyncService) stopWaitingChannelsAndRemove(shardId int32) {
+	a.logger.Info(fmt.Sprintf("stopWaitingChannelsAndRemove: %d", shardId))
+
+	waitForProcessCompletionChannelsPerShard, ok := a.waitForProcessCompletionChannelMap[shardId]
+	if !ok {
+		a.logger.Error(fmt.Sprintf("fail to get process completion waiting channels with shard %d", shardId))
+		return
+	}
+
+	waitForProcessCompletionChannelsPerShard.Stop()
+
+	delete(a.waitForProcessCompletionChannelMap, shardId)
 }
 
 func (a asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string) {
@@ -322,39 +347,28 @@ func (a asyncService) AskRemoteToWaitForProcessCompletionInCluster(
 }
 
 func (a asyncService) WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
-) *xcapi.WaitForProcessCompletionResponse {
-	waitingChannel, ok := a.waitForProcessCompletionChannelMap[req.ProcessExecutionId]
+) (*xcapi.WaitForProcessCompletionResponse, error) {
+	waitForProcessCompletionChannelsPerShard, ok := a.waitForProcessCompletionChannelMap[req.ShardId]
 	if !ok {
-		waitingChannel = make(chan string)
-		a.waitForProcessCompletionChannelMap[req.ProcessExecutionId] = waitingChannel
+		return nil, fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
 	}
+
+	waitingChannel := waitForProcessCompletionChannelsPerShard.Add(req.ProcessExecutionId)
 
 	select {
 	case <-ctx.Done():
 		return &xcapi.WaitForProcessCompletionResponse{
 			Timeout: xcapi.PtrBool(true),
-		}
+		}, nil
 	case res := <-waitingChannel:
-		return &xcapi.WaitForProcessCompletionResponse{
-			Timeout: xcapi.PtrBool(false),
-			Status:  xcapi.ProcessStatus(res).Ptr(),
+		if res == engine.WaitForProcessCompletionResultStop {
+			return &xcapi.WaitForProcessCompletionResponse{
+				StopBySystem: xcapi.PtrBool(true),
+			}, nil
 		}
+
+		return &xcapi.WaitForProcessCompletionResponse{
+			Status: xcapi.ProcessStatus(res).Ptr(),
+		}, nil
 	}
-}
-
-func (a asyncService) SignalProcessCompletion(req xcapi.SignalProcessCompletionRequest) {
-	waitingChannel, ok := a.waitForProcessCompletionChannelMap[req.ProcessExecutionId]
-	if !ok {
-		return
-	}
-
-	waitingChannel <- req.Status
-
-	go func() {
-		// sleep 3 seconds before close the channel
-		time.Sleep(time.Second * 3)
-
-		close(waitingChannel)
-		delete(a.waitForProcessCompletionChannelMap, req.ProcessExecutionId)
-	}()
 }
