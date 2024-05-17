@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/xcherryio/apis/goapi/xcapi"
@@ -29,8 +30,8 @@ type immediateTaskConcurrentProcessor struct {
 	taskToProcessChan chan data_models.ImmediateTask
 	// shardId: channel
 	taskToCommitChans map[int32]chan<- data_models.ImmediateTask
-	// shardId: WaitForProcessCompletionChannelsPerShard
-	waitForProcessCompletionChannelsPerShardMap map[int32]WaitForProcessCompletionChannelsPerShard
+	// shardId: WaitForProcessCompletionChannels
+	waitForProcessCompletionChannelsPerShardMap map[int32]WaitForProcessCompletionChannels
 	taskNotifier                                TaskNotifier
 	processStore                                persistence.ProcessStore
 	visibilityStore                             persistence.VisibilityStore
@@ -48,7 +49,7 @@ func NewImmediateTaskConcurrentProcessor(
 		cfg:               cfg,
 		taskToProcessChan: make(chan data_models.ImmediateTask, bufferSize),
 		taskToCommitChans: make(map[int32]chan<- data_models.ImmediateTask),
-		waitForProcessCompletionChannelsPerShardMap: make(map[int32]WaitForProcessCompletionChannelsPerShard),
+		waitForProcessCompletionChannelsPerShardMap: make(map[int32]WaitForProcessCompletionChannels),
 		taskNotifier:    notifier,
 		processStore:    processStore,
 		visibilityStore: visibilityStore,
@@ -66,6 +67,10 @@ func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- data_m
 func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 	shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 ) (alreadyExisted bool) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	_, exists := w.taskToCommitChans[shardId]
 	if !exists {
 		w.taskToCommitChans[shardId] = tasksToCommitChan
@@ -75,11 +80,19 @@ func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 }
 
 func (w *immediateTaskConcurrentProcessor) RemoveImmediateTaskQueue(shardId int32) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	delete(w.taskToCommitChans, shardId)
 }
 
 func (w *immediateTaskConcurrentProcessor) AddWaitForProcessCompletionChannels(shardId int32,
-	waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannelsPerShard) (alreadyExisted bool) {
+	waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannels) (alreadyExisted bool) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	_, exists := w.waitForProcessCompletionChannelsPerShardMap[shardId]
 	if !exists {
 		w.waitForProcessCompletionChannelsPerShardMap[shardId] = waitForProcessCompletionChannelsPerShard
@@ -89,6 +102,10 @@ func (w *immediateTaskConcurrentProcessor) AddWaitForProcessCompletionChannels(s
 }
 
 func (w *immediateTaskConcurrentProcessor) RemoveWaitForProcessCompletionChannels(shardId int32) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	delete(w.waitForProcessCompletionChannelsPerShardMap, shardId)
 }
 

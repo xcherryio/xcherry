@@ -8,6 +8,7 @@ package engine
 import (
 	"fmt"
 	"github.com/xcherryio/xcherry/common/log"
+	"sync"
 	"time"
 )
 
@@ -24,7 +25,7 @@ type WaitForProcessCompletionChannelsPerShardImpl struct {
 }
 
 func NewWaitForProcessCompletionChannelsPerShardImplImpl(
-	shardId int32, logger log.Logger, processor ImmediateTaskProcessor) WaitForProcessCompletionChannelsPerShard {
+	shardId int32, logger log.Logger, processor ImmediateTaskProcessor) WaitForProcessCompletionChannels {
 	return &WaitForProcessCompletionChannelsPerShardImpl{
 		shardId: shardId,
 		logger:  logger,
@@ -58,6 +59,10 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Add(processExecutionId st
 	w.logger.Info(fmt.Sprintf("Add process execution completion waiting request for %s in shard %d",
 		processExecutionId, w.shardId))
 
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	channel, ok := w.channelMap[processExecutionId]
 	if !ok {
 		channel = make(chan string)
@@ -76,6 +81,10 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Signal(processExecutionId
 	if !ok {
 		return
 	}
+
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
 
 	count := len(w.waitingRequestCreatedAt[processExecutionId])
 
@@ -108,6 +117,10 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) terminationCheck(processE
 		w.logger.Info(fmt.Sprintf("Check process execution completion waiting channel for %s in shard %d",
 			processExecutionId, w.shardId))
 
+		lock := sync.RWMutex{}
+		lock.Lock()
+		defer lock.Unlock()
+
 		var validWaitingRequestCreatedAt []int64
 
 		now := w.now()
@@ -131,6 +144,10 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) terminationCheck(processE
 }
 
 func (w *WaitForProcessCompletionChannelsPerShardImpl) cleanup(processExecutionId string) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	delete(w.waitingRequestCreatedAt, processExecutionId)
 
 	channel, ok := w.channelMap[processExecutionId]

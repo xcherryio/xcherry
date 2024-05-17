@@ -56,7 +56,7 @@ type ImmediateTaskProcessor interface {
 	RemoveImmediateTaskQueue(shardId int32)
 
 	AddWaitForProcessCompletionChannels(shardId int32,
-		waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannelsPerShard) (alreadyExisted bool)
+		waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannels) (alreadyExisted bool)
 	RemoveWaitForProcessCompletionChannels(shardId int32)
 }
 
@@ -73,7 +73,7 @@ type TimerTaskProcessor interface {
 	RemoveTimerTaskQueue(shardId int32)
 }
 
-type WaitForProcessCompletionChannelsPerShard interface {
+type WaitForProcessCompletionChannels interface {
 	Start()
 	Stop()
 

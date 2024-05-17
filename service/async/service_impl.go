@@ -26,7 +26,7 @@ type asyncService struct {
 	// shardId: queue
 	immediateTaskQueueMap map[int32]engine.ImmediateTaskQueue
 	// shardId: channelsPerShard
-	waitForProcessCompletionChannelMap map[int32]engine.WaitForProcessCompletionChannelsPerShard
+	waitForProcessCompletionChannelMap map[int32]engine.WaitForProcessCompletionChannels
 
 	immediateTaskProcessor engine.ImmediateTaskProcessor
 
@@ -55,7 +55,7 @@ func NewAsyncServiceImpl(
 		// to be dynamically initialized later
 		immediateTaskQueueMap:              map[int32]engine.ImmediateTaskQueue{},
 		timerTaskQueueMap:                  map[int32]engine.TimerTaskQueue{},
-		waitForProcessCompletionChannelMap: map[int32]engine.WaitForProcessCompletionChannelsPerShard{},
+		waitForProcessCompletionChannelMap: map[int32]engine.WaitForProcessCompletionChannels{},
 
 		immediateTaskProcessor: immediateTaskProcessor,
 		timerTaskProcessor:     timerTaskProcessor,
