@@ -71,8 +71,6 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Add(processExecutionId st
 
 	w.waitingRequestCreatedAt[processExecutionId] = append(w.waitingRequestCreatedAt[processExecutionId], w.now())
 
-	w.terminationCheck(processExecutionId)
-
 	return channel
 }
 
@@ -109,38 +107,33 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Signal(processExecutionId
 	}()
 }
 
-func (w *WaitForProcessCompletionChannelsPerShardImpl) terminationCheck(processExecutionId string) {
-	// To check if the channel should be closed after a certain time period
-	go func() {
-		time.Sleep(time.Second * time.Duration(DEFAULT_WAIT_FOR_TIMEOUT_MAX+3))
+func (w *WaitForProcessCompletionChannelsPerShardImpl) TerminateWaiting(processExecutionId string) {
+	w.logger.Info(fmt.Sprintf("Terminate process execution completion waiting for %s in shard %d",
+		processExecutionId, w.shardId))
 
-		w.logger.Info(fmt.Sprintf("Check process execution completion waiting channel for %s in shard %d",
-			processExecutionId, w.shardId))
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
 
-		lock := sync.RWMutex{}
-		lock.Lock()
-		defer lock.Unlock()
+	var validWaitingRequestCreatedAt []int64
 
-		var validWaitingRequestCreatedAt []int64
-
-		now := w.now()
-		for _, createdAt := range w.waitingRequestCreatedAt[processExecutionId] {
-			if createdAt+int64(DEFAULT_WAIT_FOR_TIMEOUT_MAX) < now {
-				w.logger.Info(fmt.Sprintf(
-					"Remove process execution completion waiting request created at %d for %s in shard %d",
-					createdAt, processExecutionId, w.shardId))
-				continue
-			}
-
-			validWaitingRequestCreatedAt = append(validWaitingRequestCreatedAt, createdAt)
+	now := w.now()
+	for _, createdAt := range w.waitingRequestCreatedAt[processExecutionId] {
+		if createdAt+int64(DEFAULT_WAIT_FOR_TIMEOUT_MAX) < now {
+			w.logger.Info(fmt.Sprintf(
+				"Remove process execution completion waiting request created at %d for %s in shard %d",
+				createdAt, processExecutionId, w.shardId))
+			continue
 		}
 
-		w.waitingRequestCreatedAt[processExecutionId] = validWaitingRequestCreatedAt
+		validWaitingRequestCreatedAt = append(validWaitingRequestCreatedAt, createdAt)
+	}
 
-		if len(w.waitingRequestCreatedAt) == 0 {
-			w.cleanup(processExecutionId)
-		}
-	}()
+	w.waitingRequestCreatedAt[processExecutionId] = validWaitingRequestCreatedAt
+
+	if len(w.waitingRequestCreatedAt) == 0 {
+		w.cleanup(processExecutionId)
+	}
 }
 
 func (w *WaitForProcessCompletionChannelsPerShardImpl) cleanup(processExecutionId string) {

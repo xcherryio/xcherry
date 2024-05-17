@@ -15,6 +15,7 @@ import (
 	"go.uber.org/multierr"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -128,6 +129,10 @@ func (a asyncService) Stop(ctx context.Context) error {
 }
 
 func (a asyncService) ReBalance(assignedShardIds []int32) {
+	lock := sync.RWMutex{}
+	lock.Lock()
+	defer lock.Unlock()
+
 	// logging
 	var oldShardIds []int
 	for shardId := range a.immediateTaskQueueMap {
@@ -357,6 +362,13 @@ func (a asyncService) WaitForProcessCompletion(ctx context.Context, req xcapi.Wa
 
 	select {
 	case <-ctx.Done():
+		waitForProcessCompletionChannelsPerShard, ok = a.waitForProcessCompletionChannelMap[req.ShardId]
+		if !ok {
+			return nil, fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
+		}
+
+		waitForProcessCompletionChannelsPerShard.TerminateWaiting(req.ProcessExecutionId)
+
 		return &xcapi.WaitForProcessCompletionResponse{
 			Timeout: xcapi.PtrBool(true),
 		}, nil

@@ -79,4 +79,5 @@ type WaitForProcessCompletionChannels interface {
 
 	Add(processExecutionId string) chan string
 	Signal(processExecutionId string, result string)
+	TerminateWaiting(processExecutionId string)
 }
