@@ -36,6 +36,7 @@ type immediateTaskConcurrentProcessor struct {
 	processStore                                persistence.ProcessStore
 	visibilityStore                             persistence.VisibilityStore
 	logger                                      log.Logger
+	lock                                        sync.RWMutex
 }
 
 func NewImmediateTaskConcurrentProcessor(
@@ -54,6 +55,7 @@ func NewImmediateTaskConcurrentProcessor(
 		processStore:    processStore,
 		visibilityStore: visibilityStore,
 		logger:          logger,
+		lock:            sync.RWMutex{},
 	}
 }
 
@@ -67,9 +69,8 @@ func (w *immediateTaskConcurrentProcessor) GetTasksToProcessChan() chan<- data_m
 func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 	shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 ) (alreadyExisted bool) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	_, exists := w.taskToCommitChans[shardId]
 	if !exists {
@@ -80,18 +81,16 @@ func (w *immediateTaskConcurrentProcessor) AddImmediateTaskQueue(
 }
 
 func (w *immediateTaskConcurrentProcessor) RemoveImmediateTaskQueue(shardId int32) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	delete(w.taskToCommitChans, shardId)
 }
 
 func (w *immediateTaskConcurrentProcessor) AddWaitForProcessCompletionChannels(shardId int32,
 	waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannels) (alreadyExisted bool) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	_, exists := w.waitForProcessCompletionChannelsPerShardMap[shardId]
 	if !exists {
@@ -102,9 +101,8 @@ func (w *immediateTaskConcurrentProcessor) AddWaitForProcessCompletionChannels(s
 }
 
 func (w *immediateTaskConcurrentProcessor) RemoveWaitForProcessCompletionChannels(shardId int32) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	delete(w.waitForProcessCompletionChannelsPerShardMap, shardId)
 }

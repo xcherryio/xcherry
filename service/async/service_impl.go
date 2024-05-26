@@ -39,6 +39,8 @@ type asyncService struct {
 
 	cfg    config.Config
 	logger log.Logger
+
+	lock sync.RWMutex
 }
 
 func NewAsyncServiceImpl(
@@ -68,6 +70,8 @@ func NewAsyncServiceImpl(
 		rootCtx: rootCtx,
 		cfg:     cfg,
 		logger:  logger,
+
+		lock: sync.RWMutex{},
 	}
 }
 
@@ -129,9 +133,8 @@ func (a asyncService) Stop(ctx context.Context) error {
 }
 
 func (a asyncService) ReBalance(assignedShardIds []int32) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	a.lock.Lock()
+	defer a.lock.Unlock()
 
 	// logging
 	var oldShardIds []int

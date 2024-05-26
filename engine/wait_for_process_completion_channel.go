@@ -22,6 +22,7 @@ type WaitForProcessCompletionChannelsPerShardImpl struct {
 	channelMap map[string]chan string
 	// processExecutionId : a list of timestamps of when the waiting requests were created
 	waitingRequestCreatedAt map[string][]int64
+	lock                    sync.RWMutex
 }
 
 func NewWaitForProcessCompletionChannelsPerShardImplImpl(
@@ -34,6 +35,7 @@ func NewWaitForProcessCompletionChannelsPerShardImplImpl(
 
 		channelMap:              map[string]chan string{},
 		waitingRequestCreatedAt: map[string][]int64{},
+		lock:                    sync.RWMutex{},
 	}
 }
 
@@ -59,9 +61,8 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Add(processExecutionId st
 	w.logger.Info(fmt.Sprintf("Add process execution completion waiting request for %s in shard %d",
 		processExecutionId, w.shardId))
 
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	channel, ok := w.channelMap[processExecutionId]
 	if !ok {
@@ -80,9 +81,8 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) Signal(processExecutionId
 		return
 	}
 
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	count := len(w.waitingRequestCreatedAt[processExecutionId])
 
@@ -111,9 +111,8 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) TerminateWaiting(processE
 	w.logger.Info(fmt.Sprintf("Terminate process execution completion waiting for %s in shard %d",
 		processExecutionId, w.shardId))
 
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	var validWaitingRequestCreatedAt []int64
 
@@ -137,9 +136,8 @@ func (w *WaitForProcessCompletionChannelsPerShardImpl) TerminateWaiting(processE
 }
 
 func (w *WaitForProcessCompletionChannelsPerShardImpl) cleanup(processExecutionId string) {
-	lock := sync.RWMutex{}
-	lock.Lock()
-	defer lock.Unlock()
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
 	delete(w.waitingRequestCreatedAt, processExecutionId)
 
