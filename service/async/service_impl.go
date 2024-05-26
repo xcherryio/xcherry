@@ -54,7 +54,7 @@ func NewAsyncServiceImpl(
 		rootCtx, cfg, notifier, processStore, visibilityStore, logger)
 	timerTaskProcessor := engine.NewTimerTaskConcurrentProcessor(rootCtx, cfg, notifier, processStore, logger)
 
-	return asyncService{
+	return &asyncService{
 		// to be dynamically initialized later
 		immediateTaskQueueMap:              map[int32]engine.ImmediateTaskQueue{},
 		timerTaskQueueMap:                  map[int32]engine.TimerTaskQueue{},
@@ -75,7 +75,7 @@ func NewAsyncServiceImpl(
 	}
 }
 
-func (a asyncService) Start() error {
+func (a *asyncService) Start() error {
 	err := a.immediateTaskProcessor.Start()
 	if err != nil {
 		a.logger.Error("fail to start immediate task processor", tag.Error(err))
@@ -95,7 +95,7 @@ func (a asyncService) Start() error {
 	return nil
 }
 
-func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
+func (a *asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksRequest) error {
 	queue, ok := a.immediateTaskQueueMap[req.ShardId]
 	if !ok {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
@@ -105,7 +105,7 @@ func (a asyncService) NotifyPollingImmediateTask(req xcapi.NotifyImmediateTasksR
 	return nil
 }
 
-func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
+func (a *asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error {
 	queue, ok := a.timerTaskQueueMap[req.ShardId]
 	if !ok {
 		return fmt.Errorf("the shardId %v is not owned by this instance", req.ShardId)
@@ -115,7 +115,7 @@ func (a asyncService) NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) 
 	return nil
 }
 
-func (a asyncService) Stop(ctx context.Context) error {
+func (a *asyncService) Stop(ctx context.Context) error {
 	var errs []error
 
 	errs = append(errs, a.immediateTaskProcessor.Stop(ctx))
@@ -132,7 +132,7 @@ func (a asyncService) Stop(ctx context.Context) error {
 	return multierr.Combine(errs...)
 }
 
-func (a asyncService) ReBalance(assignedShardIds []int32) {
+func (a *asyncService) ReBalance(assignedShardIds []int32) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 
@@ -185,7 +185,7 @@ func (a asyncService) ReBalance(assignedShardIds []int32) {
 
 }
 
-func (a asyncService) createQueuesAndStart(shardId int32) {
+func (a *asyncService) createQueuesAndStart(shardId int32) {
 	a.logger.Info(fmt.Sprintf("createQueuesAndStart: %d", shardId))
 
 	// immediateTaskQueue
@@ -213,7 +213,7 @@ func (a asyncService) createQueuesAndStart(shardId int32) {
 	}
 }
 
-func (a asyncService) stopQueuesAndRemove(shardId int32) {
+func (a *asyncService) stopQueuesAndRemove(shardId int32) {
 	a.logger.Info(fmt.Sprintf("stopQueuesAndRemove: %d", shardId))
 
 	// immediateTaskQueue
@@ -245,7 +245,7 @@ func (a asyncService) stopQueuesAndRemove(shardId int32) {
 	}
 }
 
-func (a asyncService) createWaitingChannelsAndStart(shardId int32) {
+func (a *asyncService) createWaitingChannelsAndStart(shardId int32) {
 	a.logger.Info(fmt.Sprintf("createWaitingChannelsAndStart: %d", shardId))
 
 	a.waitForProcessCompletionChannelMap[shardId] = engine.NewWaitForProcessCompletionChannelsPerShardImplImpl(
@@ -254,7 +254,7 @@ func (a asyncService) createWaitingChannelsAndStart(shardId int32) {
 	a.waitForProcessCompletionChannelMap[shardId].Start()
 }
 
-func (a asyncService) stopWaitingChannelsAndRemove(shardId int32) {
+func (a *asyncService) stopWaitingChannelsAndRemove(shardId int32) {
 	a.logger.Info(fmt.Sprintf("stopWaitingChannelsAndRemove: %d", shardId))
 
 	waitForProcessCompletionChannelsPerShard, ok := a.waitForProcessCompletionChannelMap[shardId]
@@ -268,7 +268,7 @@ func (a asyncService) stopWaitingChannelsAndRemove(shardId int32) {
 	delete(a.waitForProcessCompletionChannelMap, shardId)
 }
 
-func (a asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string) {
+func (a *asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string) {
 	go func() {
 
 		ctx, canf := context.WithTimeout(context.Background(), time.Second*10)
@@ -295,7 +295,7 @@ func (a asyncService) NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyIm
 	}()
 }
 
-func (a asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string) {
+func (a *asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string) {
 	// execute in the background as best effort
 	go func() {
 
@@ -323,7 +323,7 @@ func (a asyncService) NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerT
 	}()
 }
 
-func (a asyncService) AskRemoteToWaitForProcessCompletionInCluster(
+func (a *asyncService) AskRemoteToWaitForProcessCompletionInCluster(
 	ctx context.Context, req xcapi.WaitForProcessCompletionRequest, serverAddress string,
 ) (*xcapi.WaitForProcessCompletionResponse, error) {
 	apiClient := xcapi.NewAPIClient(&xcapi.Configuration{
@@ -354,7 +354,7 @@ func (a asyncService) AskRemoteToWaitForProcessCompletionInCluster(
 	return resp, nil
 }
 
-func (a asyncService) WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
+func (a *asyncService) WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
 ) (*xcapi.WaitForProcessCompletionResponse, error) {
 	waitForProcessCompletionChannelsPerShard, ok := a.waitForProcessCompletionChannelMap[req.ShardId]
 	if !ok {
