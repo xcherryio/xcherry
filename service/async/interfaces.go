@@ -20,8 +20,11 @@ type Service interface {
 	NotifyPollingTimerTask(req xcapi.NotifyTimerTasksRequest) error
 	NotifyRemoteImmediateTaskAsyncInCluster(req xcapi.NotifyImmediateTasksRequest, serverAddress string)
 	NotifyRemoteTimerTaskAsyncInCluster(req xcapi.NotifyTimerTasksRequest, serverAddress string)
+	AskRemoteToWaitForProcessCompletionInCluster(ctx context.Context, req xcapi.WaitForProcessCompletionRequest,
+		serverAddress string) (*xcapi.WaitForProcessCompletionResponse, error)
 	Stop(ctx context.Context) error
 	ReBalance(assignedShardIds []int32)
+	WaitForProcessCompletion(ctx context.Context, req xcapi.WaitForProcessCompletionRequest) (*xcapi.WaitForProcessCompletionResponse, error)
 }
 
 type Membership interface {

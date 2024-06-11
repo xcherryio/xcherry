@@ -17,6 +17,7 @@ import (
 
 const PathNotifyImmediateTasks = "/internal/api/v1/xcherry/notify-immediate-tasks"
 const PathNotifyTimerTasks = "/internal/api/v1/xcherry/notify-timer-tasks"
+const PathWaitForProcessCompletion = "/internal/api/v1/xcherry/wait-for-process-completion"
 
 type defaultSever struct {
 	rootCtx context.Context
@@ -45,6 +46,7 @@ func NewDefaultAsyncServerWithGin(
 
 	engine.POST(PathNotifyImmediateTasks, handler.NotifyImmediateTasks)
 	engine.POST(PathNotifyTimerTasks, handler.NotifyTimerTasks)
+	engine.POST(PathWaitForProcessCompletion, handler.WaitForProcessCompletion)
 
 	svrCfg := cfg.AsyncService.InternalHttpServer
 	httpServer := &http.Server{

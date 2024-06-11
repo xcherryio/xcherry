@@ -54,6 +54,10 @@ type ImmediateTaskProcessor interface {
 		shardId int32, tasksToCommitChan chan<- data_models.ImmediateTask,
 	) (alreadyExisted bool)
 	RemoveImmediateTaskQueue(shardId int32)
+
+	AddWaitForProcessCompletionChannels(shardId int32,
+		waitForProcessCompletionChannelsPerShard WaitForProcessCompletionChannels) (alreadyExisted bool)
+	RemoveWaitForProcessCompletionChannels(shardId int32)
 }
 
 type TimerTaskProcessor interface {
@@ -67,4 +71,13 @@ type TimerTaskProcessor interface {
 		shardId int32,
 	) (alreadyExisted bool)
 	RemoveTimerTaskQueue(shardId int32)
+}
+
+type WaitForProcessCompletionChannels interface {
+	Start()
+	Stop()
+
+	Add(processExecutionId string) chan string
+	Signal(processExecutionId string, result string)
+	TerminateWaiting(processExecutionId string)
 }
