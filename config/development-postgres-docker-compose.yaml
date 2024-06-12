@@ -9,7 +9,13 @@ apiService:
      writeTimeout: 60s
   asyncServiceAddress: 0.0.0.0:8701
 database:
-  sql:
+  processStore:
+    dbExtensionName: postgres
+    user: xcherry
+    password: xcherryio
+    databaseName: xcherry
+    connectAddr: postgres:5432
+  visibilityStore:
     dbExtensionName: postgres
     user: xcherry
     password: xcherryio
