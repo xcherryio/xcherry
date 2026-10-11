@@ -31,7 +31,15 @@ type mapTableSchema struct {
 	reference         tableReference
 	instanceKeyColumn string
 	keyColumns        []string
-	columns           map[string]columnSchema
+	// replacedColumns are the non-key, non-generated columns that every instance write sets.
+	replacedColumns []string
+	columns         map[string]columnSchema
+}
+
+// instanceColumns holds the column values of one instance and the fields that have no column.
+type instanceColumns struct {
+	values              map[string]filteredValue
+	missingColumnFields []string
 }
 
 func newMapTableSchema(
@@ -59,44 +67,50 @@ func newMapTableSchema(
 		}
 	}
 	for name, column := range columns {
-		if !slices.Contains(table.keyColumns, name) && !column.nullable && !column.hasDefault && !column.generated {
+		if slices.Contains(table.keyColumns, name) || column.generated {
+			continue
+		}
+		if !column.nullable && !column.hasDefault {
 			return nil, fmt.Errorf("column %q prevents partial row inserts", name)
 		}
+		table.replacedColumns = append(table.replacedColumns, name)
 	}
+	sort.Strings(table.replacedColumns)
 	return table, nil
 }
 
-// filterInstanceValue returns the columns to set for one instance: a JSON object's top-level fields under the
-// store's naming rule, or the value column for any other value. Fields that cannot be written are logged and left out.
+// filterInstanceValue returns the column values of one instance: a JSON object's top-level fields under the store's
+// naming rule, or the value column for any other value, plus the fields that have no column. A field that maps to a
+// key column is skipped, and logged when it differs from the key. Other unwritable fields are logged and left out.
 func (t *mapTableSchema) filterInstanceValue(
 	key string,
+	keyValues []string,
 	value *dexpb.Value,
 	naming config.AttributeStoreColumnNaming,
 	storeType config.AttributeStoreType,
 	logger log.Logger,
-) map[string]filteredValue {
+) instanceColumns {
+	result := instanceColumns{values: map[string]filteredValue{}}
 	fields, isObject := jsonObjectFields(value)
 	if !isObject {
-		filtered := map[string]filteredValue{}
 		column, found := t.columns[mapInstanceValueColumn]
 		if !found {
-			logger.Error("skip Attribute Store map instance: value column does not exist", tag.AttributeName(key))
-			return filtered
+			result.missingColumnFields = append(result.missingColumnFields, mapInstanceValueColumn)
+			return result
 		}
 		converted, err := column.convert(value, storeType)
 		if err != nil {
 			logger.Error("skip incompatible Attribute Store map instance", tag.AttributeName(key), tag.Error(err))
-			return filtered
+			return result
 		}
-		filtered[mapInstanceValueColumn] = filteredValue{column: column, value: converted}
-		return filtered
+		result.values[mapInstanceValueColumn] = filteredValue{column: column, value: converted}
+		return result
 	}
 	fieldNamesByColumn := make(map[string][]string, len(fields))
 	for fieldName := range fields {
 		column := columnName(naming, fieldName)
 		fieldNamesByColumn[column] = append(fieldNamesByColumn[column], fieldName)
 	}
-	filtered := make(map[string]filteredValue, len(fieldNamesByColumn))
 	for name, fieldNames := range fieldNamesByColumn {
 		fieldKey := key + "." + fieldNames[0]
 		if len(fieldNames) > 1 {
@@ -105,14 +119,17 @@ func (t *mapTableSchema) filterInstanceValue(
 				tag.AttributeName(key+"."+strings.Join(fieldNames, ", ")))
 			continue
 		}
-		column, found := t.columns[name]
-		if !found {
-			logger.Error("skip Attribute Store map instance field: column does not exist", tag.AttributeName(fieldKey))
+		if keyIndex := slices.Index(t.keyColumns, name); keyIndex >= 0 {
+			var fieldText string
+			if json.Unmarshal(fields[fieldNames[0]], &fieldText) != nil || fieldText != keyValues[keyIndex] {
+				logger.Error("skip Attribute Store map instance field: value differs from its primary-key column",
+					tag.AttributeName(fieldKey))
+			}
 			continue
 		}
-		if slices.Contains(t.keyColumns, name) {
-			logger.Error("skip Attribute Store map instance field: primary-key columns are immutable",
-				tag.AttributeName(fieldKey))
+		column, found := t.columns[name]
+		if !found {
+			result.missingColumnFields = append(result.missingColumnFields, fieldNames[0])
 			continue
 		}
 		converted, err := column.convert(jsonFieldValue(fields[fieldNames[0]], column, storeType), storeType)
@@ -120,9 +137,9 @@ func (t *mapTableSchema) filterInstanceValue(
 			logger.Error("skip incompatible Attribute Store map instance field", tag.AttributeName(fieldKey), tag.Error(err))
 			continue
 		}
-		filtered[name] = filteredValue{column: column, value: converted}
+		result.values[name] = filteredValue{column: column, value: converted}
 	}
-	return filtered
+	return result
 }
 
 // jsonObjectFields returns the top-level fields of a JSON object value, and false for any other value.

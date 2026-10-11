@@ -147,17 +147,21 @@ key **customer_id**, **order_id**, **line_item_id**. Every other required column
 must have a default or generated value. Dex checks the instance tables at startup
 and at every schema refresh, like the store's own table.
 
-Writing an instance upserts its row, and deleting the instance deletes the row:
+Writing an instance replaces its row, and deleting the instance deletes the row.
+An instance is one complete value, so its row always equals the latest value:
 
 - A JSON object writes each top-level field to the column with the same name,
   under **columnNaming**. A JSON number is written as an integer only where the
   column takes one. Nested objects and arrays go to JSON or JSONB columns.
-- Fields without a column, fields that map to a primary-key column, and values
-  that do not convert are logged and skipped. The row still records the
-  instance.
 - Any other value is written to a column named **value**.
-- An upsert sets only the columns of the value's fields. Columns of omitted
-  fields keep their previous values.
+- Every other non-key, non-generated column that the value does not set returns
+  to its default, or NULL without one.
+- A field without a column is skipped. An instance table may store only part of
+  each value, so Dex logs a warning once per process for each such field.
+- A field that maps to a primary-key column is skipped. Dex logs an error only
+  when its value differs from the key.
+- A value that does not convert is logged as an error and skipped. The row still
+  records the instance.
 
 One batch writes the store row and all its instance rows in one transaction,
 with the latest value of each instance. Dex creates no foreign keys between the

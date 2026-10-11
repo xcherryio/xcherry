@@ -134,14 +134,17 @@ AttributeMap 的名称：
 **line_item_id**。其他必填列都必须有 default 或 generated value。Dex 在启动时和每次
 schema refresh 时检查实例表，和 store 自己的表一样。
 
-写一个实例会 upsert 它的行，删除实例会删除这一行：
+写一个实例会替换它的行，删除实例会删除这一行。一个实例是一个完整的值，所以它的行
+始终等于最新的值：
 
 - JSON object 的每个顶层字段按 **columnNaming** 写入同名列。只有列能存整数时，
   JSON number 才作为整数写入。嵌套的 object 和 array 写入 JSON 或 JSONB 列。
-- 没有对应列的字段、映射到 primary key 列的字段，以及无法转换的值，都会记录日志并
-  跳过。这一行仍然记录这个实例。
 - 其他任何值写入名为 **value** 的列。
-- upsert 只设置值中出现的字段对应的列。省略的字段对应的列保留原值。
+- 值没有设置的其他非 key、非 generated 列，恢复为默认值；没有默认值时为 NULL。
+- 没有对应列的字段会被跳过。实例表可以只存放每个值的一部分，所以 Dex 对每个这样的
+  字段，每个进程只记录一次 warning。
+- 映射到 primary key 列的字段会被跳过。只有它的值与 key 不同时，Dex 才记录 error。
+- 无法转换的值记录为 error 并跳过。这一行仍然记录这个实例。
 
 一个 batch 在同一个事务里写入 store 的行和它的全部实例行，每个实例取最新值。Dex
 不在表之间创建外键：违反约束会让整个 batch 失败，并让这个 Flow 之后的写入一直等到

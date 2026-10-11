@@ -18,6 +18,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	_ "github.com/databricks/databricks-sql-go"
@@ -38,8 +39,10 @@ type sqlStore struct {
 	rowKey  *rowKeyTemplate
 	// mapTables holds the resolved table of each configured AttributeMap.
 	mapTables map[string]tableReference
-	schema    atomic.Pointer[tableSchema]
-	logger    log.Logger
+	// missingColumnWarnings remembers the AttributeMap fields already logged for having no column.
+	missingColumnWarnings sync.Map
+	schema                atomic.Pointer[tableSchema]
+	logger                log.Logger
 }
 
 type tableReference struct {
@@ -425,9 +428,16 @@ func (s *sqlStore) buildInstanceStatement(
 		return sqlStatement{query: query, arguments: arguments}
 	}
 	key := mapName + "/" + url.PathEscape(keyValues[len(keyValues)-1])
-	filtered := mapTable.filterInstanceValue(key, value, s.cfg.ColumnNaming, s.cfg.Type, s.logger)
-	columnNames := slices.Sorted(maps.Keys(filtered))
-	query, arguments := s.dialect.buildKeyedUpsert(mapTable.reference, mapTable.keyColumns, keyValues, columnNames, filtered)
+	columns := mapTable.filterInstanceValue(key, keyValues, value, s.cfg.ColumnNaming, s.cfg.Type, s.logger)
+	for _, field := range columns.missingColumnFields {
+		if _, isWarned := s.missingColumnWarnings.LoadOrStore(mapName+"."+field, true); !isWarned {
+			s.logger.Warn("skip Attribute Store map instance field without a column; later writes skip it silently",
+				tag.AttributeName(mapName+"."+field))
+		}
+	}
+	query, arguments := s.dialect.buildKeyedUpsert(
+		mapTable.reference, mapTable.keyColumns, keyValues, mapTable.replacedColumns, columns.values,
+	)
 	return sqlStatement{query: query, arguments: arguments}
 }
 

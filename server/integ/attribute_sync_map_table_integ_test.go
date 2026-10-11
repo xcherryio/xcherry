@@ -97,7 +97,7 @@ PRIMARY KEY (group_id, account_id))`,
 			Attributes: []*dexpb.AttributeWrite{
 				syncedStringAttribute("DisplayName", "Core"),
 				syncedObjectAttribute("Members/account%2F1", `{"Role":"ADMIN","Note":"`+longNote+`"}`),
-				syncedObjectAttribute("Members/account-2", `{"Role":"MEMBER"}`),
+				syncedObjectAttribute("Members/account-2", `{"Role":"MEMBER","Note":"replaced"}`),
 			},
 			FlowConfigOverride: &dexpb.FlowConfig{
 				AttributeStoreNames: &dexpb.AttributeStoreNames{Names: []string{"groups"}},
@@ -137,6 +137,11 @@ PRIMARY KEY (group_id, account_id))`,
 
 	require.Equal(t, []string{"account-2=ADMIN", "account-3=MEMBER"},
 		groupMemberRoles(ctx, database, membersTable, groupID))
+	var replacedNote sql.NullString
+	require.NoError(t, database.QueryRowContext(ctx,
+		"SELECT note FROM public."+membersTable+" WHERE group_id = $1 AND account_id = $2", groupID, "account-2",
+	).Scan(&replacedNote))
+	require.False(t, replacedNote.Valid)
 	var displayName string
 	require.NoError(t, database.QueryRowContext(ctx,
 		"SELECT display_name FROM public."+groupsTable+" WHERE group_id = $1", groupID).Scan(&displayName))

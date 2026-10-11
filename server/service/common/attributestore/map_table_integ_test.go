@@ -20,6 +20,10 @@ import (
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/log"
+	"github.com/superdurable/dex/service/common/log/loggerimpl"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMySQLAndPostgresAttributeStoreMapTablesIntegration(t *testing.T) {
@@ -47,7 +51,7 @@ func TestMySQLAndPostgresAttributeStoreMapTablesIntegration(t *testing.T) {
 				`DROP TABLE IF EXISTS map_group_members`,
 				`CREATE TABLE map_group_members (group_id `+key+`, account_id `+key+`, role TEXT,
 added_at `+timestampType+`, added_by_account_id TEXT, score `+doubleType+`, profile `+jsonType+`,
-PRIMARY KEY (group_id, account_id))`,
+status VARCHAR(16) DEFAULT 'active', PRIMARY KEY (group_id, account_id))`,
 				`DROP TABLE IF EXISTS map_group_labels`,
 				`CREATE TABLE map_group_labels (group_id `+key+`, label_key `+key+`, value TEXT,
 PRIMARY KEY (group_id, label_key))`,
@@ -57,6 +61,7 @@ PRIMARY KEY (group_id, label_key))`,
 				`CREATE TABLE map_plain_items (flow_id `+key+`, item_id `+key+`, value TEXT, PRIMARY KEY (flow_id, item_id))`,
 			)
 			assertMapTableStartupFailures(t, destination)
+			logCore, logs := observer.New(zapcore.WarnLevel)
 			manager, err := NewManager(context.Background(), &config.AttributeStoreConfig{
 				Stores: map[string]config.AttributeStoreConfigEntry{
 					"groups": {
@@ -74,15 +79,17 @@ PRIMARY KEY (group_id, label_key))`,
 						},
 					},
 				},
-			}, log.NewNoop())
+			}, loggerimpl.NewLogger(zap.New(logCore)))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, manager.Close()) })
 
 			writeRowKeyBatch(t, manager, "groups", "group-g1",
 				"DisplayName", stringValue("Core"),
 				"Members/account%2F1", objectValue("json", `{"Role":"ADMIN","AddedAt":"2026-08-11T15:30:00Z",
-"AddedByAccountID":"account/1","Score":3,"Profile":{"tags":["a"]},"Unknown":"skipped","GroupID":"other"}`),
-				"Members/account-2", objectValue("json", `{"Role":"MEMBER","AddedAt":"2026-08-11T15:31:00Z","Score":2.5}`),
+"AddedByAccountID":"account/1","Score":3,"Profile":{"tags":["a"]},"Unknown":"skipped","GroupID":"g1",
+"AccountID":"account/1"}`),
+				"Members/account-2", objectValue("json", `{"Role":"MEMBER","AddedAt":"2026-08-11T15:31:00Z","Score":2.5,
+"Status":"suspended","Unknown":"skipped","GroupID":"other"}`),
 				"Labels/color", stringValue("blue"),
 			)
 			require.Equal(t, "Core", destination.groupDisplayName(t))
@@ -93,7 +100,11 @@ PRIMARY KEY (group_id, label_key))`,
 			require.Equal(t, 3.0, first.score.Float64)
 			require.JSONEq(t, `{"tags":["a"]}`, first.profile.String)
 			require.Equal(t, 2.5, destination.member(t, "account-2").score.Float64)
+			require.Equal(t, "suspended", destination.member(t, "account-2").status.String)
+			require.Equal(t, "active", first.status.String)
 			require.Equal(t, []string{"color=blue"}, destination.labels(t))
+			require.Equal(t, 1, logs.FilterMessageSnippet("without a column").Len())
+			require.Equal(t, 1, logs.FilterMessageSnippet("differs from its primary-key column").Len())
 
 			writeRowKeyBatch(t, manager, "groups", "group-g1",
 				"Members/account%2F1", nullValue(),
@@ -105,14 +116,19 @@ PRIMARY KEY (group_id, label_key))`,
 			require.Equal(t, []string{"account-2", "account-3"}, destination.memberIDs(t))
 			second := destination.member(t, "account-2")
 			require.Equal(t, "ADMIN", second.role.String)
-			require.Equal(t, 2.5, second.score.Float64)
-			require.False(t, destination.member(t, "account-3").role.Valid)
+			require.False(t, second.score.Valid)
+			require.False(t, second.addedAt.Valid)
+			require.Equal(t, "active", second.status.String)
+			third := destination.member(t, "account-3")
+			require.False(t, third.role.Valid)
+			require.Equal(t, "active", third.status.String)
 			require.Empty(t, destination.labels(t))
 
 			writeRowKeyBatch(t, manager, "groups", "group-g1",
-				"Members/account-3", objectValue("json", `{}`),
+				"Members/account-3", objectValue("json", `{"Unknown":"skipped"}`),
 				"Members/account-4", objectValue("json", `{"Role":"MEMBER"}`),
 			)
+			require.Equal(t, 1, logs.FilterMessageSnippet("without a column").Len())
 			require.Equal(t, []string{"account-2", "account-3", "account-4"}, destination.memberIDs(t))
 			require.Equal(t, "Core", destination.groupDisplayName(t))
 
@@ -195,9 +211,9 @@ PRIMARY KEY (group_id, account_id))`,
 }
 
 type memberRow struct {
-	role, addedBy, profile sql.NullString
-	addedAt                sql.NullTime
-	score                  sql.NullFloat64
+	role, addedBy, profile, status sql.NullString
+	addedAt                        sql.NullTime
+	score                          sql.NullFloat64
 }
 
 func (d rowKeyIntegrationDatabase) member(t *testing.T, accountID string) memberRow {
@@ -205,9 +221,9 @@ func (d rowKeyIntegrationDatabase) member(t *testing.T, accountID string) member
 	var row memberRow
 	var profile []byte
 	require.NoError(t, d.database.QueryRowContext(context.Background(),
-		`SELECT role, added_at, added_by_account_id, score, profile FROM map_group_members
+		`SELECT role, added_at, added_by_account_id, score, profile, status FROM map_group_members
 WHERE group_id = `+d.placeholder(1)+` AND account_id = `+d.placeholder(2), "g1", accountID,
-	).Scan(&row.role, &row.addedAt, &row.addedBy, &row.score, &profile))
+	).Scan(&row.role, &row.addedAt, &row.addedBy, &row.score, &profile, &row.status))
 	row.profile = sql.NullString{String: string(profile), Valid: profile != nil}
 	return row
 }

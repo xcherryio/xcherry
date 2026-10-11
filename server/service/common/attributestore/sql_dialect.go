@@ -417,8 +417,8 @@ func (d *builtInSQLDialect) buildUpsert(
 	return d.buildKeyedUpsert(snapshot.reference, snapshot.keyColumns(), keyValues, columnNames, values)
 }
 
-// buildKeyedUpsert returns a PostgreSQL or MySQL upsert of one row that sets only columnNames; a row of key columns
-// alone is inserted once and left unchanged afterwards.
+// buildKeyedUpsert returns a PostgreSQL or MySQL upsert of one row that sets columnNames, writing DEFAULT to a column
+// without a value; a row of key columns alone is inserted once and left unchanged afterwards.
 func (d *builtInSQLDialect) buildKeyedUpsert(
 	reference tableReference,
 	keyColumns []string,
@@ -438,12 +438,15 @@ func (d *builtInSQLDialect) buildKeyedUpsert(
 		arguments = append(arguments, keyValues[index])
 	}
 	columns = append(columns, quotedKeys...)
-	for index, name := range columnNames {
+	for _, name := range columnNames {
 		quoted := d.quoteIdentifier(name)
 		columns = append(columns, quoted)
-		placeholders = append(placeholders,
-			d.valueExpression(d.placeholder(len(keyColumns)+index+1), values[name].column))
-		arguments = append(arguments, d.argumentValue(values[name].column, values[name].value))
+		if value, hasValue := values[name]; hasValue {
+			arguments = append(arguments, d.argumentValue(value.column, value.value))
+			placeholders = append(placeholders, d.valueExpression(d.placeholder(len(arguments)), value.column))
+		} else {
+			placeholders = append(placeholders, "DEFAULT")
+		}
 		if d.storeType == config.AttributeStoreTypePostgres {
 			updates = append(updates, quoted+" = EXCLUDED."+quoted)
 		} else {
