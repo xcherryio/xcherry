@@ -145,8 +145,7 @@ func (settings connectorOAuthSettings) resolveScopes(name string, literal []stri
 	return values, nil
 }
 
-// resolveOption resolves a token request option. A blank or missing value falls back to the field default,
-// and an empty result selects the documented default of the option.
+// resolveOption resolves a token option. A blank value takes the field default.
 func (settings connectorOAuthSettings) resolveOption(name string, literal string, supportedValues []string) (string, error) {
 	if name == "" {
 		return literal, nil
@@ -196,8 +195,7 @@ func (setup *connectorSetup) endpointHTTPClient(settingName string) *http.Client
 	return setup.settingHTTPClient
 }
 
-// checkSettingEndpointAddresses refuses a token or identity endpoint whose address the policy forbids,
-// so the browser does not leave for an authorization that the callback could not finish.
+// checkSettingEndpointAddresses refuses a forbidden token or identity address before the browser leaves.
 func (setup *connectorSetup) checkSettingEndpointAddresses(ctx context.Context, oauth connectorManifestOAuth2) error {
 	endpoints := []struct{ settingName, endpoint string }{{oauth.TokenEndpointSetting, oauth.TokenEndpoint}}
 	for _, derivation := range oauth.CredentialDerivations {

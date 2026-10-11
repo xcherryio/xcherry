@@ -20,11 +20,9 @@ import (
 	"testing"
 )
 
-// The address cases below are the tables of the OAuth 2.0 HTTP connector's address_policy_test.go in the
-// connectors library. Keep them identical, so the two implementations cannot drift apart silently.
+// Keep the address tables identical to the connectors library's address_policy_test.go.
 
-// namedNetwork stands in for DNS and the network: every host name resolves to the addresses a test sets,
-// and every connection really goes to target, so the test sees which address the dialer chose to connect to.
+// namedNetwork resolves host names to test addresses and dials the test server instead.
 type namedNetwork struct {
 	target    string
 	mu        sync.Mutex
@@ -378,5 +376,23 @@ func TestConnectorOAuthStartDoesNotRequireTheEndpointHostsToResolve(t *testing.T
 	}
 	if dialed := network.dialedAddresses(); len(dialed) != 0 {
 		t.Fatalf("dialed %v for a host that does not resolve", dialed)
+	}
+}
+
+// The https table of the library has no row for a public and a private address together; https accepts them.
+func TestConnectorOAuthHTTPSAcceptsPublicAndPrivateAddressesTogether(t *testing.T) {
+	provider := newConnectorOAuthSettingsTestTLSProvider(t, connectorOAuthSettingsTestTokenResponse)
+	network := newNamedNetwork(provider.Listener.Addr().String())
+	network.resolveTo("example.com", "8.8.8.8", "10.0.0.1")
+	setup := newConnectorOAuthSettingsTestSetup(t)
+	useConnectorAddressPolicyForTest(setup, provider.Client().Transport.(*http.Transport), network.policy())
+	host := "https://example.com:" + serverPort(t, provider.Server)
+
+	outcome := runConnectorOAuthAddressPolicyTest(t, setup, provider, map[string]string{
+		"tokenEndpoint": `"` + host + `/token"`, "userInfoEndpoint": `"` + host + `/userinfo"`,
+	})
+
+	if outcome.callback == nil || outcome.callback.Code != http.StatusSeeOther {
+		t.Fatalf("OAuth start = %d: %s; callback = %+v", outcome.start.Code, outcome.start.Body.String(), outcome.callback)
 	}
 }

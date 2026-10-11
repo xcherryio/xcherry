@@ -126,7 +126,11 @@ func (transport *connectorAddressPolicyTransport) RoundTrip(request *http.Reques
 // newConnectorAddressPolicyClient never redirects, ignores proxies, and dials only checked addresses. base may be nil.
 func newConnectorAddressPolicyClient(base *http.Transport, policy connectorAddressPolicy) *http.Client {
 	if base == nil {
-		base = http.DefaultTransport.(*http.Transport)
+		defaultTransport, isTransport := http.DefaultTransport.(*http.Transport)
+		if !isTransport {
+			defaultTransport = &http.Transport{TLSHandshakeTimeout: 10 * time.Second}
+		}
+		base = defaultTransport
 	}
 	clone := func(dialContext func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 		transport := base.Clone()
