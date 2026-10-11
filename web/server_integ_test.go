@@ -45,6 +45,72 @@ type flowService struct {
 	streamRequests     chan *dexpb.ReadStreamRequest
 	stopRequests       chan *dexpb.StopFlowRequest
 	timeTravelRequests chan *dexpb.ResetFlowRequest
+	publishRequests    chan *dexpb.PublishToChannelRequest
+	setRequests        chan *dexpb.SetAttributesRequest
+}
+
+func TestWebServerWritesLiveFlowState(t *testing.T) {
+	service := &flowService{
+		publishRequests: make(chan *dexpb.PublishToChannelRequest, 1),
+		setRequests:     make(chan *dexpb.SetAttributesRequest, 1),
+	}
+	harness := newHarness(t, service)
+
+	publishResponse := postJSON(
+		t,
+		harness.http.URL+"/api/flows/channels/messages",
+		`{"flowId":"checkout-1","runId":"run-1","channelName":"approvals","valueType":"json","value":{"approved":true,"count":3}}`,
+	)
+	publishBody := readBody(t, publishResponse)
+	publishResponse.Body.Close()
+	if publishResponse.StatusCode != http.StatusOK {
+		t.Fatalf("publish status = %d body=%q", publishResponse.StatusCode, publishBody)
+	}
+	published := <-service.publishRequests
+	if published.GetFlowId() != "checkout-1" || published.GetRunId() != "run-1" ||
+		len(published.GetMessages()) != 1 || published.GetMessages()[0].GetChannelName() != "approvals" {
+		t.Fatalf("unexpected publish request: %+v", published)
+	}
+	publishedObject := published.GetMessages()[0].GetValue().GetObjValue()
+	if publishedObject.GetEncoding() != "json" ||
+		string(publishedObject.GetPayload()) != `{"approved":true,"count":3}` {
+		t.Fatalf("unexpected published value: %+v", published.GetMessages()[0].GetValue())
+	}
+
+	setResponse := sendJSON(
+		t,
+		http.MethodPut,
+		harness.http.URL+"/api/flows/attributes",
+		`{"flowId":"checkout-1","runId":"run-1","key":"retries","valueType":"int64","value":"9007199254740993"}`,
+	)
+	setBody := readBody(t, setResponse)
+	setResponse.Body.Close()
+	if setResponse.StatusCode != http.StatusOK {
+		t.Fatalf("set status = %d body=%q", setResponse.StatusCode, setBody)
+	}
+	set := <-service.setRequests
+	if set.GetFlowId() != "checkout-1" || set.GetRunId() != "run-1" || set.GetRequestId() == "" ||
+		len(set.GetAttributes()) != 1 || set.GetAttributes()[0].GetKey() != "retries" ||
+		set.GetAttributes()[0].GetValue().GetIntValue() != 9007199254740993 {
+		t.Fatalf("unexpected set request: %+v", set)
+	}
+
+	for _, invalid := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/flows/channels/messages", `{"flowId":"checkout-1","channelName":"approvals","valueType":"raw","value":"x"}`},
+		{http.MethodPost, "/api/flows/channels/messages", `{"flowId":"checkout-1","valueType":"string","value":"x"}`},
+		{http.MethodPut, "/api/flows/attributes", `{"flowId":"checkout-1","key":"retries","valueType":"bool","value":"yes"}`},
+	} {
+		response := sendJSON(t, invalid.method, harness.http.URL+invalid.path, invalid.body)
+		body := readBody(t, response)
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s %s %s: status=%d body=%q", invalid.method, invalid.path, invalid.body, response.StatusCode, body)
+		}
+	}
 }
 
 func TestWebServerTimeTravelsToStepMethod(t *testing.T) {
@@ -565,6 +631,22 @@ func (s *flowService) StopFlow(
 	return &emptypb.Empty{}, nil
 }
 
+func (s *flowService) PublishToChannel(
+	_ context.Context,
+	request *dexpb.PublishToChannelRequest,
+) (*emptypb.Empty, error) {
+	s.publishRequests <- request
+	return &emptypb.Empty{}, nil
+}
+
+func (s *flowService) SetAttributes(
+	_ context.Context,
+	request *dexpb.SetAttributesRequest,
+) (*emptypb.Empty, error) {
+	s.setRequests <- request
+	return &emptypb.Empty{}, nil
+}
+
 func (s *flowService) ResetFlow(
 	_ context.Context,
 	request *dexpb.ResetFlowRequest,
@@ -634,6 +716,20 @@ func newHarnessWithConfig(t *testing.T, service dexpb.FlowServiceServer, cfg *de
 func postJSON(t *testing.T, url string, body string) *http.Response {
 	t.Helper()
 	response, err := http.Post(url, "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func sendJSON(t *testing.T, method string, url string, body string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, url, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

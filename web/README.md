@@ -581,6 +581,10 @@ SYNC step Context shows the immediately preceding retry failure when available,
 including its backend-native error, worker details, named and numeric gRPC
 status, and an optional Worker-provided stack. Live Flow State shows the latest
 pending failure on its matching active Step and expands that stack by default.
+While a run is active, **Set attribute** writes one Attribute and **Publish
+message** publishes one Channel message to that run. Each takes a JSON,
+string, int64, double, or boolean value. Int64 values travel as decimal text so
+large values keep their precision.
 Selected event Context uses the same failure view with the stack collapsed.
 ## License
 

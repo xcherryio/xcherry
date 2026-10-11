@@ -49,13 +49,83 @@ func RegisterHandlers(mux *http.ServeMux, client dexpb.FlowServiceClient) {
 	mux.HandleFunc("GET /api/flows/summary", handler.getFlowSummary)
 	mux.HandleFunc("GET /api/flows/history", handler.getHistoryEvents)
 	mux.HandleFunc("GET /api/flows/state", handler.getFlowState)
+	mux.HandleFunc("POST /api/flows/channels/messages", handler.publishChannelMessage)
 	mux.HandleFunc("DELETE /api/flows/channels/messages", handler.deleteChannelMessage)
+	mux.HandleFunc("PUT /api/flows/attributes", handler.setAttribute)
 	mux.HandleFunc("GET /api/flows/wait", handler.waitForHistoryEvent)
 	mux.HandleFunc("GET /api/flows/stream", handler.readStream)
 	mux.HandleFunc("POST /api/flows/time-travel", handler.timeTravelFlow)
 	mux.HandleFunc("POST /api/flows/stop", handler.stopFlow)
 	mux.HandleFunc("POST /api/blobs/load", handler.loadBlobs)
 	mux.HandleFunc("GET /healthz", health)
+}
+
+func (h *handler) publishChannelMessage(response http.ResponseWriter, request *http.Request) {
+	var body publishChannelMessageRequest
+	if err := decodeJSON(response, request, &body); err != nil {
+		WriteError(response, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if body.FlowID == "" || body.ChannelName == "" {
+		WriteError(response, http.StatusBadRequest, "flowId and channelName are required", nil)
+		return
+	}
+	value, err := encodeDebugValue(body.Value, body.ValueType)
+	if err != nil {
+		WriteError(response, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	_, err = h.client.PublishToChannel(request.Context(), &dexpb.PublishToChannelRequest{
+		FlowId: body.FlowID,
+		RunId:  body.RunID,
+		Messages: []*dexpb.ChannelMessage{{
+			ChannelName: body.ChannelName,
+			Value:       value,
+		}},
+	})
+	if err != nil {
+		writeGRPCError(response, err, "PublishToChannel")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]bool{"published": true})
+}
+
+func (h *handler) setAttribute(response http.ResponseWriter, request *http.Request) {
+	var body setAttributeRequest
+	if err := decodeJSON(response, request, &body); err != nil {
+		WriteError(response, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if body.FlowID == "" || body.Key == "" {
+		WriteError(response, http.StatusBadRequest, "flowId and key are required", nil)
+		return
+	}
+	value, err := encodeDebugValue(body.Value, body.ValueType)
+	if err != nil {
+		WriteError(response, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	_, err = h.client.SetAttributes(request.Context(), &dexpb.SetAttributesRequest{
+		FlowId:     body.FlowID,
+		RunId:      body.RunID,
+		Attributes: []*dexpb.AttributeWrite{{Key: body.Key, Value: value}},
+		RequestId:  uuid.NewString(),
+	})
+	if err != nil {
+		writeGRPCError(response, err, "SetAttributes")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]bool{"updated": true})
+}
+
+// encodeDebugValue accepts only the scalar and JSON types a person can type into the debug view.
+func encodeDebugValue(value interface{}, valueType string) (*dexpb.Value, error) {
+	switch valueType {
+	case "string", "int64", "double", "bool", "json":
+		return encodeV2Value(value, valueType)
+	default:
+		return nil, fmt.Errorf("valueType must be string, int64, double, bool, or json")
+	}
 }
 
 func (h *handler) deleteChannelMessage(response http.ResponseWriter, request *http.Request) {
