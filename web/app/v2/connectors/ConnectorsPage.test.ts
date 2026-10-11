@@ -182,6 +182,8 @@ describe('Connections contract', () => {
     expect(requestedOAuthScopesText({scopes: ['read']})).toBe('Requested bot scopes: read');
     expect(requestedOAuthScopesText({scopes: [], userScopes: ['search:read']})).toBe('Requested user scopes: search:read');
     expect(requestedOAuthScopesText({scopes: []})).toBe('');
+    expect(requestedOAuthScopesText({scopes: {fromSetting: 'scopes'}})).toBe('');
+    expect(requestedOAuthScopesText({scopes: {fromSetting: 'scopes'}, userScopes: ['search:read']})).toBe('Requested user scopes: search:read');
     expect(requestedOAuthScopesText({})).toBe('');
 
     const markup = renderConnectorForm({

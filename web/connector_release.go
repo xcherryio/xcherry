@@ -239,6 +239,11 @@ type connectorManifestOAuth2 struct {
 	CredentialMappings      []connectorOAuthCredentialMapping    `json:"credentialMappings,omitempty"`
 	CredentialDerivations   []connectorOAuthCredentialDerivation `json:"credentialDerivations,omitempty"`
 	PKCE                    bool                                 `json:"pkce"`
+
+	// A Setting field names the configuration field that supplies the value; the manifest wrote {"fromSetting": name}.
+	AuthorizationEndpointSetting string `json:"-"`
+	TokenEndpointSetting         string `json:"-"`
+	ScopesSetting                string `json:"-"`
 }
 
 type connectorOAuthCredentialMapping struct {
@@ -251,6 +256,8 @@ type connectorOAuthCredentialDerivation struct {
 	Endpoint   string `json:"endpoint"`
 	Source     string `json:"source"`
 	VerifiedBy string `json:"verifiedBy,omitempty"`
+
+	EndpointSetting string `json:"-"`
 }
 
 type connectorManifestStudioSetup struct {
