@@ -5,7 +5,7 @@ This directory contains integration tests for the Dex service.
 * [How to run](../CONTRIBUTING.md#how-to-run-server-or-integration-test)
 * The integration tests are written without Dex SDKs. The workflows are implemented in REST API routes. e.g. [this basic workflow](./workflow/basic/routers.go)
 
-Attribute Sync integration uses isolated MySQL and PostgreSQL services:
+Attribute Sync integration uses isolated MySQL, PostgreSQL, and Redis services:
 
 ```shell
 docker compose -f docker-compose/attribute-store-dependencies.yml up -d --wait
@@ -14,9 +14,12 @@ make attributeSyncIntegTests
 
 The suite covers startup schema contracts, both relational upsert dialects,
 filtering, schema refresh recovery, additive SQL columns, and Attribute Sync
-happy paths on both stores with Temporal and Cadence. In pull requests, the
+happy paths on both stores with Temporal and Cadence. It also covers the Redis
+hash contract, partial updates, skipped fields, and the Redis Attribute Sync
+happy path on Temporal and Cadence. In pull requests, the
 **Attribute Sync CI** workflow runs only when the **ci:attribute-sync** label is
-present. Regular **Server CI** does not start MySQL or PostgreSQL.
+present. Regular **Server CI** does not start MySQL, PostgreSQL, or the Attribute
+Sync Redis service.
 
 MongoDB Attribute Sync runs in a separate label-gated job because its container
 and workflow coverage are comparatively expensive:

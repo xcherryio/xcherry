@@ -5,12 +5,12 @@ title: Custom Attribute Store
 # Custom Attribute Store operations
 
 Custom Attribute Store projects selected Flow Attribute writes into PostgreSQL,
-MySQL, Databricks, Snowflake, or MongoDB. Dex uses asynchronous, latest-state
+MySQL, Databricks, Snowflake, MongoDB, or Redis. Dex uses asynchronous, latest-state
 writes for one Flow at a time. Delivery is attempted at least once, so every
 destination write is idempotent.
 
 Dex never creates, migrates, or backfills a destination. Create the SQL table or
-MongoDB collection before starting Dex.
+MongoDB collection before starting Dex. Redis needs no preparation.
 
 ## Configuration
 
@@ -50,6 +50,10 @@ attributeStore:
       dsn: mongodb://user:password@host:27017
       databaseName: analytics
       collectionName: flow_attributes
+    cache:
+      type: redis
+      dsn: rediss://user:password@host:6379/0
+      keyPrefix: "dex:attributes:"
   schemaSyncInterval: 1m
   syncBatchSize: 100
   syncAttemptTimeout: 30s
@@ -63,7 +67,10 @@ attributeStore:
 
 Every store requires **type** and **dsn**. Dex never logs DSNs. SQL stores also
 require **tableName**. MongoDB instead requires **databaseName** and
-**collectionName**; SQL fields and MongoDB fields cannot be mixed.
+**collectionName**; SQL fields and MongoDB fields cannot be mixed. Redis uses a
+**redis://** or **rediss://** URL as its **dsn** and accepts only the optional
+**keyPrefix**, which defaults to **dex:attributes:**. Other stores reject
+**keyPrefix**.
 
 PostgreSQL and MySQL accept **table** or **schema.table**. Databricks and
 Snowflake accept **table**, **schema.table**, or
@@ -95,11 +102,13 @@ columns exactly, or by their snake_case form under **columnNaming**.
 For MongoDB, the configured collection must exist. Dex does not create the
 collection, change its validator, or create indexes.
 
+For Redis, Dex only parses the URL and pings the server.
+
 ## Row keys and column naming
 
 PostgreSQL and MySQL stores accept two optional settings. Without them, a store
-behaves as before. Databricks, Snowflake, and MongoDB reject both settings at
-startup.
+behaves as before. Databricks, Snowflake, MongoDB, and Redis reject both
+settings at startup.
 
 **rowKey** splits each Flow ID into primary-key columns. Use it when a business
 ID is part of the Flow ID and you query by that ID, or when several Flow types
@@ -171,7 +180,7 @@ a Flow closes.
 
 A Flow that selects several stores writes each AttributeMap only to the stores
 that declare it. Other stores treat its instances as ordinary Attributes.
-Databricks, Snowflake, and MongoDB reject **attributeMaps** at startup.
+Databricks, Snowflake, MongoDB, and Redis reject **attributeMaps** at startup.
 
 ## SQL writes and schema refresh
 
@@ -185,8 +194,8 @@ log.
 Each SQL store refreshes independently. The one-minute default receives uniform
 90–110% jitter every cycle. A successful metadata query atomically replaces the
 immutable in-memory schema snapshot. A failed query retains the previous
-snapshot and retries after the next interval. MongoDB does not run a schema
-refresh loop.
+snapshot and retries after the next interval. MongoDB and Redis do not run a
+schema refresh loop.
 
 Adding nullable or defaulted SQL columns is discovered without restarting Dex.
 A batch that writes a column missing from the current snapshot, in the store's
@@ -252,11 +261,39 @@ with a dollar sign are logged and skipped. Other valid fields in the batch still
 write. If every field is invalid, the sync batch succeeds without contacting the
 collection.
 
+## Redis hash contract
+
+Each Flow maps to one Redis hash. Its key is **keyPrefix** followed by the Flow
+ID, such as **dex:attributes:customer-42**. Each synced Attribute is one hash
+field:
+
+```text
+HGETALL dex:attributes:customer-42
+display_name  "Ada"
+profile       {"active":true}
+score         17
+```
+
+Each field holds the JSON encoding of the Attribute value. Strings keep their
+JSON quotes, so a reader can tell the string "17" from the number 17. Null is
+stored as JSON null. A JSON object keeps its payload. Other encoded objects
+hold their raw payload bytes.
+
+Dex writes each batch with one **HSET**. Attributes omitted from a batch remain
+unchanged. When one batch contains the same Attribute more than once, the last
+value wins. Dex never sets a key expiration. Delete or expire old hashes with
+your own Redis policy.
+
+Non-finite doubles, invalid JSON, and empty Attribute names are logged and
+skipped. Other valid fields in the batch still write. If every field is
+skipped, the sync batch succeeds without contacting Redis.
+
 ## Delivery and shutdown
 
 Attribute Sync stores latest state, not an event history. A later write may
-repeat after an ambiguous failure. SQL upserts, warehouse merges, and MongoDB
-upserts therefore use the Flow ID as their idempotency key.
+repeat after an ambiguous failure. SQL upserts, warehouse merges, MongoDB
+upserts, and Redis hash writes therefore use the Flow ID as their idempotency
+key.
 
 A sync batch first runs a short local phase limited to seven seconds. It uses
 the configured backoff intervals and coefficient, but its attempts are bounded

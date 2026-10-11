@@ -84,6 +84,47 @@ attributeStore:
 	require.Equal(t, "flow_attributes", cfg.AttributeStore.Stores["documents"].CollectionName)
 }
 
+func TestAttributeStoreConfigRedis(t *testing.T) {
+	path := writeTestConfig(t, `
+attributeStore:
+  stores:
+    cache:
+      type: redis
+      dsn: rediss://user:password@redis.example.com:6379/0
+    prefixed:
+      type: redis
+      dsn: redis://localhost:6379/1
+      keyPrefix: "orders:"
+`)
+	cfg, err := NewConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, AttributeStoreTypeRedis, cfg.AttributeStore.Stores["cache"].Type)
+	require.Equal(t, DefaultAttributeStoreRedisKeyPrefix, cfg.AttributeStore.Stores["cache"].EffectiveKeyPrefix())
+	require.Equal(t, "orders:", cfg.AttributeStore.Stores["prefixed"].EffectiveKeyPrefix())
+	require.NoError(t, cfg.AttributeStore.Validate())
+
+	relationalPath := writeTestConfig(t, `
+attributeStore:
+  stores:
+    cache:
+      type: redis
+      dsn: redis://localhost:6379/0
+      rowKey: order-{order_id}
+      columnNaming: snake_case
+      attributeMaps:
+        LineItems:
+          tableName: line_items
+          instanceKeyColumn: line_item_id
+`)
+	relationalConfig, err := NewConfig(relationalPath)
+	require.NoError(t, err)
+	require.ErrorContains(
+		t,
+		relationalConfig.AttributeStore.Validate(),
+		"only mysql and postgres accept rowKey, columnNaming and attributeMaps",
+	)
+}
+
 func TestAttributeStoreConfigBackendSpecificValidation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -146,6 +187,45 @@ func TestAttributeStoreConfigBackendSpecificValidation(t *testing.T) {
 				TableName: "one.two.three.four", FlowIDColumn: "flow_id",
 			},
 			error: "at most 3",
+		},
+		{
+			name: "redis sql fields",
+			store: AttributeStoreConfigEntry{
+				Type: AttributeStoreTypeRedis, DSN: "redis://localhost:6379/0", TableName: "table",
+			},
+			error: "redis configuration does not accept tableName",
+		},
+		{
+			name: "redis row key",
+			store: AttributeStoreConfigEntry{
+				Type: AttributeStoreTypeRedis, DSN: "redis://localhost:6379/0", RowKey: "order-{order_id}",
+			},
+			error: "only mysql and postgres accept rowKey, columnNaming and attributeMaps",
+		},
+		{
+			name: "redis column naming",
+			store: AttributeStoreConfigEntry{
+				Type: AttributeStoreTypeRedis, DSN: "redis://localhost:6379/0",
+				ColumnNaming: AttributeStoreColumnNamingSnakeCase,
+			},
+			error: "only mysql and postgres accept rowKey, columnNaming and attributeMaps",
+		},
+		{
+			name: "redis attribute maps",
+			store: AttributeStoreConfigEntry{
+				Type: AttributeStoreTypeRedis, DSN: "redis://localhost:6379/0",
+				AttributeMaps: map[string]AttributeStoreMapTableConfig{
+					"LineItems": {TableName: "line_items", InstanceKeyColumn: "line_item_id"},
+				},
+			},
+			error: "only mysql and postgres accept rowKey, columnNaming and attributeMaps",
+		},
+		{
+			name: "postgres key prefix",
+			store: AttributeStoreConfigEntry{
+				Type: AttributeStoreTypePostgres, DSN: "dsn", TableName: "table", KeyPrefix: "dex:",
+			},
+			error: "only redis accepts keyPrefix",
 		},
 		{
 			name: "relational table has too many parts",

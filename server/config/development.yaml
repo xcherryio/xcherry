@@ -94,6 +94,10 @@ blobStore:
 #       dsn: mongodb://user:password@localhost:27017
 #       databaseName: analytics
 #       collectionName: flow_attributes
+#     cache:
+#       type: redis
+#       dsn: redis://localhost:6379/0
+#       keyPrefix: "dex:attributes:"
 #   schemaSyncInterval: 1m
 #   syncBatchSize: 100
 #   syncAttemptTimeout: 30s

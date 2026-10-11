@@ -5,10 +5,10 @@ title: 自定义 Attribute Store
 # 自定义 Attribute Store 运维
 
 自定义 Attribute Store 会把选定的 Flow Attribute 写入 PostgreSQL、MySQL、
-Databricks、Snowflake 或 MongoDB。Dex 以异步方式逐个 Flow 写入最新状态，
+Databricks、Snowflake、MongoDB 或 Redis。Dex 以异步方式逐个 Flow 写入最新状态，
 并采用至少一次尝试语义，因此每种目标写入都具有幂等性。
 
-Dex 不会创建、迁移或回填目标。请在启动 Dex 前创建 SQL 表或 MongoDB collection。
+Dex 不会创建、迁移或回填目标。请在启动 Dex 前创建 SQL 表或 MongoDB collection。Redis 不需要预先准备。
 
 ## 配置
 
@@ -48,6 +48,10 @@ attributeStore:
       dsn: mongodb://user:password@host:27017
       databaseName: analytics
       collectionName: flow_attributes
+    cache:
+      type: redis
+      dsn: rediss://user:password@host:6379/0
+      keyPrefix: "dex:attributes:"
   schemaSyncInterval: 1m
   syncBatchSize: 100
   syncAttemptTimeout: 30s
@@ -61,7 +65,9 @@ attributeStore:
 
 每个 store 都必须配置 **type** 和 **dsn**。Dex 绝不会记录 DSN。SQL store 还必须
 配置 **tableName**。MongoDB 则必须配置 **databaseName** 和 **collectionName**；
-SQL 字段与 MongoDB 字段不能混用。
+SQL 字段与 MongoDB 字段不能混用。Redis 的 **dsn** 使用 **redis://** 或 **rediss://**
+URL，只接受可选的 **keyPrefix**，默认值为 **dex:attributes:**。其他 store 不接受
+**keyPrefix**。
 
 PostgreSQL 和 MySQL 接受 **table** 或 **schema.table**。Databricks 和 Snowflake
 接受 **table**、**schema.table** 或 **catalog-or-database.schema.table**。省略的部分
@@ -89,10 +95,12 @@ warehouse 强制执行 primary key。Databricks 连接必须已有可用的 SQL 
 对于 MongoDB，配置的 collection 必须已经存在。Dex 不会创建 collection、修改
 validator 或创建 index。
 
+对于 Redis，Dex 只解析 URL 并 ping server。
+
 ## Row key 与列名规则
 
 PostgreSQL 和 MySQL store 接受两个可选配置。不配置时，store 的行为与以前相同。
-Databricks、Snowflake 和 MongoDB 配置了它们时，启动失败。
+Databricks、Snowflake、MongoDB 和 Redis 配置了它们时，启动失败。
 
 **rowKey** 把每个 Flow ID 拆成 primary key 的各列。业务 ID 是 Flow ID 的一部分、
 需要按它查询时，或者多个 Flow type 描述同一个实体时使用它。模板由固定文字和占位符
@@ -151,7 +159,7 @@ schema refresh 时检查实例表，和 store 自己的表一样。
 重试预算用完。Flow 结束时，Dex 不会删除任何行。
 
 选择了多个 store 的 Flow，只把每个 AttributeMap 写入声明了它的 store。其他 store
-把它的实例当作普通 Attribute。Databricks、Snowflake 和 MongoDB 配置了
+把它的实例当作普通 Attribute。Databricks、Snowflake、MongoDB 和 Redis 配置了
 **attributeMaps** 时，启动失败。
 
 ## SQL 写入与 schema refresh
@@ -163,7 +171,7 @@ change log。
 
 每个 SQL store 独立 refresh。默认一分钟间隔的每轮会加入均匀的 90–110% jitter。
 metadata 查询成功后会原子替换内存中的 immutable schema snapshot；查询失败时继续
-使用旧 snapshot，并在下个间隔后重试。MongoDB 不运行 schema refresh loop。
+使用旧 snapshot，并在下个间隔后重试。MongoDB 和 Redis 不运行 schema refresh loop。
 
 新增 nullable 或有 default 的 SQL 列无需重启 Dex 即可被发现。一个 batch 要写的列
 不在当前 snapshot 里时（store 的表或 AttributeMap 表），它会先刷新这个 store 的
@@ -219,10 +227,34 @@ Attribute name **_id**、包含句点或 NUL 的 name，以及以美元符号开
 记录并跳过。batch 中其他有效字段仍会写入。如果所有字段都无效，sync batch 成功结束且
 不会访问 collection。
 
+## Redis hash 契约
+
+每个 Flow 对应一个 Redis hash。它的 key 是 **keyPrefix** 加上 Flow ID，例如
+**dex:attributes:customer-42**。每个同步的 Attribute 是一个 hash field：
+
+```text
+HGETALL dex:attributes:customer-42
+display_name  "Ada"
+profile       {"active":true}
+score         17
+```
+
+每个 field 保存 Attribute value 的 JSON 编码。字符串保留 JSON 引号，读取方因此能区分
+字符串 "17" 和数字 17。null 保存为 JSON null。JSON object 保持原 payload。其他
+encoded object 保存原始 payload 字节。
+
+Dex 用一次 **HSET** 写入每个 batch。batch 中没有出现的 Attribute 保持不变。同一
+batch 中同一个 Attribute 出现多次时，以最后一个值为准。Dex 不会设置 key 过期时间。
+请用你自己的 Redis 策略删除旧 hash 或为其设置过期时间。
+
+非有限 double、无效 JSON 和空的 Attribute name 会被记录并跳过。batch 中其他有效字段
+仍会写入。如果所有字段都被跳过，sync batch 成功结束且不会访问 Redis。
+
 ## 交付与关闭
 
 Attribute Sync 保存最新状态，而不是 event history。发生不确定失败后，后续写入可能
-重复。因此 SQL upsert、warehouse merge 和 MongoDB upsert 都使用 Flow ID 作为幂等 key。
+重复。因此 SQL upsert、warehouse merge、MongoDB upsert 和 Redis hash 写入都使用 Flow ID
+作为幂等 key。
 
 Sync batch 先执行一个最多七秒的短暂 local 阶段。它使用配置的 backoff interval 和
 coefficient，但 attempt 只受七秒总窗口限制。Regular attempt 的单次 attempt 默认最多 30 秒，总重试

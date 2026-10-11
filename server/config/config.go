@@ -118,6 +118,10 @@ const (
 	AttributeStoreTypeDatabricks AttributeStoreType = "databricks"
 	AttributeStoreTypeSnowflake  AttributeStoreType = "snowflake"
 	AttributeStoreTypeMongoDB    AttributeStoreType = "mongodb"
+	AttributeStoreTypeRedis      AttributeStoreType = "redis"
+
+	// DefaultAttributeStoreRedisKeyPrefix prefixes each Flow ID to form its Redis hash key.
+	DefaultAttributeStoreRedisKeyPrefix = "dex:attributes:"
 )
 
 const (
@@ -269,9 +273,10 @@ type (
 	}
 
 	AttributeStoreConfigEntry struct {
-		// Type selects mysql, postgres, databricks, snowflake, or mongodb. Default empty is invalid for a configured entry. Immutable after startup.
+		// Type selects mysql, postgres, databricks, snowflake, mongodb, or redis. Default empty is invalid for a configured entry. Immutable after startup.
 		Type AttributeStoreType `yaml:"type"`
-		// DSN is the driver connection string or MongoDB URI. Default empty is invalid. It may contain credentials and is never logged.
+		// DSN is the driver connection string, MongoDB URI, or Redis URL. Default empty is invalid. It may contain credentials and is never logged.
+		// A Redis URL uses redis:// or rediss:// (TLS), for example rediss://user:password@redis.example.com:6379/0.
 		DSN string `yaml:"dsn"`
 		// TableName selects the SQL target. MySQL and PostgreSQL accept up to two parts; warehouses accept up to three. Default empty is invalid for SQL stores. Immutable after startup.
 		TableName string `yaml:"tableName"`
@@ -296,6 +301,11 @@ type (
 		// transaction as the batch's other writes. Default empty writes AttributeMap instances like other Attributes.
 		// Immutable after startup.
 		AttributeMaps map[string]AttributeStoreMapTableConfig `yaml:"attributeMaps"`
+		// KeyPrefix prefixes each Flow ID to form the Redis hash key that holds that Flow's Attributes.
+		// Each hash field is an Attribute name. Its value is the JSON encoding of the Attribute value,
+		// except that a value with a non-JSON encoding holds its raw payload bytes. Redis stores only.
+		// Default "dex:attributes:". Immutable after startup; changing it leaves earlier hashes under the old prefix.
+		KeyPrefix string `yaml:"keyPrefix"`
 	}
 
 	AttributeStoreMapTableConfig struct {
@@ -964,6 +974,22 @@ func (c AttributeStoreConfig) Validate() error {
 		if store.DSN == "" {
 			return fmt.Errorf("attribute store %q requires dsn", name)
 		}
+		if store.Type != AttributeStoreTypeRedis && store.KeyPrefix != "" {
+			return fmt.Errorf("attribute store %q only redis accepts keyPrefix", name)
+		}
+		if store.Type == AttributeStoreTypeRedis {
+			if store.TableName != "" || store.FlowIDColumn != "" ||
+				store.DatabaseName != "" || store.CollectionName != "" {
+				return fmt.Errorf(
+					"attribute store %q redis configuration does not accept tableName, flowIdColumn, databaseName, or collectionName",
+					name,
+				)
+			}
+			if store.hasRelationalOptions() {
+				return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey, columnNaming and attributeMaps", name)
+			}
+			continue
+		}
 		if store.Type == AttributeStoreTypeMongoDB {
 			if store.DatabaseName == "" || store.CollectionName == "" {
 				return fmt.Errorf("attribute store %q requires databaseName and collectionName", name)
@@ -1048,7 +1074,7 @@ func validateAttributeStoreTableName(storeType AttributeStoreType, tableName str
 func (t AttributeStoreType) IsSupported() bool {
 	switch t {
 	case AttributeStoreTypeMySQL, AttributeStoreTypePostgres, AttributeStoreTypeDatabricks,
-		AttributeStoreTypeSnowflake, AttributeStoreTypeMongoDB:
+		AttributeStoreTypeSnowflake, AttributeStoreTypeMongoDB, AttributeStoreTypeRedis:
 		return true
 	default:
 		return false
@@ -1063,6 +1089,14 @@ func (n AttributeStoreColumnNaming) IsSupported() bool {
 // IsWarehouse reports whether the store uses an explicitly configured Flow ID column.
 func (t AttributeStoreType) IsWarehouse() bool {
 	return t == AttributeStoreTypeDatabricks || t == AttributeStoreTypeSnowflake
+}
+
+// EffectiveKeyPrefix returns KeyPrefix, or DefaultAttributeStoreRedisKeyPrefix when KeyPrefix is empty.
+func (e AttributeStoreConfigEntry) EffectiveKeyPrefix() string {
+	if e.KeyPrefix == "" {
+		return DefaultAttributeStoreRedisKeyPrefix
+	}
+	return e.KeyPrefix
 }
 
 func (c CleanupStrategy) CronSchedule() (string, error) {
