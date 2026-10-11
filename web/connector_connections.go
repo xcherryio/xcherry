@@ -42,6 +42,9 @@ type connectorSetup struct {
 	oauthSessions      map[string]connectorOAuthSession
 	oauthSessionsMu    sync.Mutex
 	providerHTTPClient *http.Client
+	// endpointPolicy and settingHTTPClient serve the endpoints that connection settings supply.
+	endpointPolicy    connectorAddressPolicy
+	settingHTTPClient *http.Client
 }
 
 type connectorUISession struct {
@@ -213,10 +216,13 @@ func newConnectorSetup(cfg *Config, flowDefinitions FlowDefinitionProvider) (*co
 	if err != nil {
 		return nil, err
 	}
+	endpointPolicy := defaultConnectorAddressPolicy()
 	return &connectorSetup{
 		store: store, flowDefinitions: flowDefinitions, releases: releases, csrfToken: csrfToken,
 		uiSessions: make(map[string]connectorUISession), oauthSessions: make(map[string]connectorOAuthSession),
 		providerHTTPClient: newConnectorProviderHTTPClient(),
+		endpointPolicy:     endpointPolicy,
+		settingHTTPClient:  newConnectorAddressPolicyClient(nil, endpointPolicy),
 	}, nil
 }
 

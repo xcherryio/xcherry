@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -129,6 +130,10 @@ func (setup *connectorSetup) handleOAuthStart(response http.ResponseWriter, requ
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_RELEASE_INVALID", "Connector OAuth token request declarations are invalid")
 		return
 	}
+	if err := setup.checkSettingEndpointAddresses(request.Context(), *oauth); err != nil {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", err.Error())
+		return
+	}
 	redirectURI := connectorOAuthRedirectURI(request)
 
 	state, err := randomConnectorToken(32)
@@ -241,6 +246,10 @@ func (setup *connectorSetup) handleOAuthCallback(response http.ResponseWriter, r
 		return
 	}
 	token, err := setup.exchangeConnectorOAuthToken(request.Context(), session, code)
+	if settingErr := (*connectorOAuthSettingError)(nil); errors.As(err, &settingErr) {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", settingErr.Error())
+		return
+	}
 	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_OAUTH_TOKEN_EXCHANGE_FAILED", "Connector OAuth token exchange failed")
 		return
@@ -308,6 +317,10 @@ func (setup *connectorSetup) handleOAuthCallback(response http.ResponseWriter, r
 		credentials[mapping.Credential] = encoded
 	}
 	derivedCredentials, err := setup.deriveConnectorOAuthCredentials(request.Context(), token, session.authMethod.OAuth2.CredentialDerivations)
+	if settingErr := (*connectorOAuthSettingError)(nil); errors.As(err, &settingErr) {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", settingErr.Error())
+		return
+	}
 	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_OAUTH_IDENTITY_DERIVATION_FAILED", "Connector OAuth identity could not be verified")
 		return
@@ -356,9 +369,9 @@ func (setup *connectorSetup) deriveConnectorOAuthCredentials(
 			}
 			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Authorization", "Bearer "+token.AccessToken)
-			response, err := setup.releases.httpClient.Do(request)
+			response, err := setup.endpointHTTPClient(derivation.EndpointSetting).Do(request)
 			if err != nil {
-				return nil, err
+				return nil, newConnectorOAuthEndpointRequestError(derivation.EndpointSetting, err)
 			}
 			contents, readErr := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 			closeErr := response.Body.Close()
@@ -435,9 +448,9 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 		// Zoom, Calendly, and Notion document base64(id:secret) without RFC 6749 form-encoding.
 		request.SetBasicAuth(session.clientID, session.clientSecret)
 	}
-	response, err := setup.releases.httpClient.Do(request)
+	response, err := setup.endpointHTTPClient(oauth.TokenEndpointSetting).Do(request)
 	if err != nil {
-		return connectorOAuthTokenResponse{}, err
+		return connectorOAuthTokenResponse{}, newConnectorOAuthEndpointRequestError(oauth.TokenEndpointSetting, err)
 	}
 	defer response.Body.Close()
 	contents, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))

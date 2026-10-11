@@ -337,6 +337,9 @@ func TestConnectorOAuthResolvesMethodSettingsAndDefaults(t *testing.T) {
 	}
 }
 
+// connectorOAuthSettingsTestTokenResponse is a grant that satisfies the generic connector's mappings and scopes.
+const connectorOAuthSettingsTestTokenResponse = `{"access_token":"provider-access-token","refresh_token":"provider-refresh-token","scope":"openid profile","expires_in":60}`
+
 // connectorOAuthSettingsTestProvider is a plain-HTTP authorization server, like a realm on a private network.
 type connectorOAuthSettingsTestProvider struct {
 	*httptest.Server
@@ -356,6 +359,14 @@ func newConnectorOAuthSettingsTestProvider(t *testing.T, tokenResponse string) *
 	t.Helper()
 	provider := &connectorOAuthSettingsTestProvider{}
 	provider.Server = httptest.NewServer(provider.handler(t, tokenResponse))
+	t.Cleanup(provider.Close)
+	return provider
+}
+
+func newConnectorOAuthSettingsTestTLSProvider(t *testing.T, tokenResponse string) *connectorOAuthSettingsTestProvider {
+	t.Helper()
+	provider := &connectorOAuthSettingsTestProvider{}
+	provider.Server = httptest.NewTLSServer(provider.handler(t, tokenResponse))
 	t.Cleanup(provider.Close)
 	return provider
 }
@@ -520,6 +531,15 @@ func postConnectorOAuthSettingsTestStart(t *testing.T, setup *connectorSetup, bo
 	recorder := httptest.NewRecorder()
 	setup.handleOAuthStart(recorder, request)
 	return recorder
+}
+
+// callbackConnectorOAuthSettingsTest redeems an authorization code for the session that start opened.
+func callbackConnectorOAuthSettingsTest(t *testing.T, setup *connectorSetup, start *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	callback := httptest.NewRecorder()
+	setup.handleOAuthCallback(callback, httptest.NewRequest(http.MethodGet, "/api/v2/connector-oauth/callback?state="+
+		url.QueryEscape(connectorOAuthSettingsTestAuthorizationURL(t, start).Query().Get("state"))+"&code=authorization-code", nil))
+	return callback
 }
 
 func connectorOAuthSettingsTestAuthorizationURL(t *testing.T, recorder *httptest.ResponseRecorder) *url.URL {
