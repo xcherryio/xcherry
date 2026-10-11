@@ -88,17 +88,37 @@ A Connector can render one connection setting, such as the default model, with
 its own picker. The picker appears after the connection is saved.
 
 OAuth always uses state and a ten-minute single-use session. Connectors use
-PKCE when their provider supports that authorization flow. The OAuth client ID
-and client secret remain in memory and are not written to disk. Dex stores the
-short-lived access token after checking the granted scopes. It does not store
-refresh tokens or refresh access automatically. Reauthorize when the
-connection becomes **Expired**.
+PKCE when their provider supports that authorization flow. Unless the release
+maps them to credentials, the OAuth client ID and client secret remain in
+memory and are not written to disk. Dex stores the access token after checking
+the granted scopes. Dex Web does not refresh access itself, and it stores a
+refresh token only when the release maps one. Reauthorize when the connection
+becomes **Expired**.
 
 Dex displays the exact Redirect URI before OAuth starts so it can be copied
 into the provider application. When a Connector declares a read-only identity
-derivation, Dex calls that HTTPS endpoint with the new access token and stores
+derivation, Dex calls that endpoint with the new access token and stores
 the claim only after its declared verification flag is true. Derived fields,
 such as a verified primary email, do not appear as free-text inputs.
+
+Some Connectors cannot know the authorization server in advance, such as the
+OAuth 2.0 HTTP Connector for your own identity provider. Their release asks for
+the authorization endpoint, the token endpoint, and the scopes as connection
+settings. Fill them in before you choose **Authorize**. Dex checks them first.
+A missing or blank setting, a scope list with an empty entry or an entry that
+contains a space, or a URL that is not absolute fails with a message that names
+the setting, and nothing is sent to the provider. Dex saves the settings with
+the connection, so the Connector reads the same token endpoint when it renews
+the credential.
+
+An endpoint written in the release must use HTTPS. An endpoint that you type
+into a setting may use **http://** or **https://**. It needs a host and cannot
+contain a user name, a password, or a fragment. Dex accepts **http://** because
+you chose the server, such as an identity provider on a private network, and
+connector setup only runs on a loopback address. The authorization code, the
+client secret, and the tokens then cross the network unencrypted. Use
+**https://** wherever the network between this computer and the server is not
+trusted.
 
 Deleting local credentials removes only the local record. It does not revoke
 the provider grant.

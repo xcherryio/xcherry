@@ -359,9 +359,10 @@ Use `--connector-config-dir` to select another directory. Restarting Dex Web
 reloads the file and cached artifacts. OAuth state, PKCE verifier, client
 secret, and UI session nonce remain memory-only and are discarded on restart.
 The page displays the exact OAuth Redirect URI before authorization. A release
-may derive required non-secret credentials from a declared HTTPS identity
-endpoint; Dex accepts a derived claim only after any declared boolean
-verification claim is true, and does not render a duplicate input.
+may derive required non-secret credentials from a declared identity endpoint,
+which must use HTTPS unless a setting supplies it (see below); Dex accepts a
+derived claim only after any declared boolean verification claim is true, and
+does not render a duplicate input.
 The **Local store** zone shows the JSON file inside the store directory and
 the `DEX_CONNECTOR_CONFIG_FILE=... <your-app-command>` launch command, and
 **Copy** copies each absolute value. It never returns credential values. Deleting a local credential does not revoke the
@@ -394,6 +395,32 @@ browser leaves for the provider.
 `scopes` may be empty for providers such as Help Scout and Notion that define
 no OAuth scopes. Dex Web then omits the `scope` authorization parameter,
 requires no granted scope, and does not list requested scopes in the form.
+
+A release for an authorization server that the connection owner chooses, such
+as a company identity provider, cannot fix its URLs. It writes
+`authorizationEndpoint`, `tokenEndpoint`, `scopes`, or a
+`credentialDerivations` `endpoint` as `{"fromSetting": "<field name>"}`
+instead of a constant. The name must match a required configuration field of
+the selected auth method: type `url` for an endpoint and `stringList` for
+`scopes`. Dex Web resolves every reference when OAuth starts, from the
+configuration in the start request, which the callback saves under the same
+field names. The OAuth session keeps the resolved copy, so the authorization
+URL, the code exchange, the granted-scope check, and the identity derivation use
+one set of values. A field default applies when the request has no value. A
+missing, null, or blank setting, an empty scope list, or an endpoint that is
+not an absolute URL fails OAuth start with `400`
+`CONNECTOR_OAUTH_SETTING_INVALID`. The message names the setting and never
+repeats its value. Dex Web does not read the `oidc` block or `protocol`, so it
+performs no discovery and ignores references there. It does not refresh
+tokens: a Connector that renews its own credential reads the saved settings.
+
+An endpoint that a release writes as a constant must use HTTPS, as before. An
+endpoint that a setting supplies may use `http` or `https`. It needs a host and
+cannot carry user information or a fragment. Dex Web allows `http` because
+the connection owner entered the URL, the Connector's own field guidance says
+that `http` suits a server on a private network, and connector setup only runs
+on a loopback address. The authorization code, client secret, and tokens then
+cross the network unencrypted.
 
 Trigger-binding configuration remains in `connections.json`. Connector Step
 operation configuration is stored in the sibling non-secret

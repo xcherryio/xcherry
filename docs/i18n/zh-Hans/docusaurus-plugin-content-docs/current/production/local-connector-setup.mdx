@@ -79,14 +79,28 @@ Connector 可以用自己的选择器渲染某个 connection 设置，例如默�
 connection 后才会显示该选择器。
 
 OAuth 始终使用 state 和十分钟一次性 session。Provider 支持对应授权流程时，
-Connector 还会使用 PKCE。OAuth client ID 与 client secret 只存在内存中，不会
-写入磁盘。Dex 检查 granted scope 后保存短期 access token，不保存 refresh
-token，也不会自动刷新。Connection 变为 **Expired** 后需要重新授权。
+Connector 还会使用 PKCE。除非 release 把 OAuth client ID 与 client secret
+映射为 credential，否则它们只存在内存中，不会写入磁盘。Dex 检查 granted scope
+后保存 access token。Dex Web 自己不刷新 access token；只有 release 映射了
+refresh token 时才会保存它。Connection 变为 **Expired** 后需要重新授权。
 
 OAuth 开始前，Dex 会显示可复制的精确 Redirect URI，供填写到 provider 应用。
-当 Connector 声明只读身份派生时，Dex 会使用新 access token 调用该 HTTPS endpoint，
+当 Connector 声明只读身份派生时，Dex 会使用新 access token 调用该 endpoint，
 并且只在声明的验证标志为 true 后保存 claim。已派生字段（例如已验证的主邮箱）不会
 再显示为自由文本输入框。
+
+有些 Connector 无法预先知道授权服务器，例如连接你自己身份提供方的 OAuth 2.0 HTTP
+Connector。它们的 release 要求把 authorization endpoint、token endpoint 和 scope
+作为 connection 设置填写。请先填写这些设置，再选择 **Authorize**。Dex 会先检查：
+设置缺失或为空、scope 列表含空项或含空格的项，或 URL 不是绝对地址，都会返回指出该
+设置名称的错误，并且不会向 provider 发送任何请求。Dex 把这些设置与 connection
+一起保存，因此 Connector 续期 credential 时读取的是同一个 token endpoint。
+
+release 中直接写出的 endpoint 必须使用 HTTPS。你在设置中填写的 endpoint 可以使用
+**http://** 或 **https://**，但必须带 host，且不能包含用户名、密码或 fragment。Dex
+接受 **http://**，因为服务器是你自己选择的（例如私有网络中的身份提供方），而且
+Connector 配置只在 loopback 地址上运行。此时授权码、client secret 和 token 都会以
+明文在网络中传输。只要这台电脑与服务器之间的网络不可信，就请使用 **https://**。
 
 删除本地 credential 只删除本地记录，不会远程 revoke provider grant。
 
