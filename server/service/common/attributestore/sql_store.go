@@ -13,9 +13,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	_ "github.com/databricks/databricks-sql-go"
@@ -34,8 +37,13 @@ type sqlStore struct {
 	db      *sql.DB
 	table   tableReference
 	rowKey  *rowKeyTemplate
-	schema  atomic.Pointer[tableSchema]
-	logger  log.Logger
+	// mapTables holds the resolved table of each configured AttributeMap.
+	mapTables map[string]tableReference
+	// missingColumnWarnings remembers the AttributeMap fields already logged for having no column.
+	missingColumnWarnings     sync.Map
+	missingColumnWarningCount atomic.Int64
+	schema                    atomic.Pointer[tableSchema]
+	logger                    log.Logger
 }
 
 type tableReference struct {
@@ -50,6 +58,15 @@ type tableSchema struct {
 	flowIDColumn string
 	rowKey       *rowKeyTemplate
 	columns      map[string]columnSchema
+	mapTables    map[string]*mapTableSchema
+}
+
+// maximumMissingColumnWarnings bounds the remembered fields when instance values have dynamic top-level keys.
+const maximumMissingColumnWarnings = 1000
+
+type sqlStatement struct {
+	query     string
+	arguments []any
 }
 
 type columnSchema struct {
@@ -112,6 +129,14 @@ func initializeSQLStore(
 		return nil, err
 	}
 	entry.table = reference
+	entry.mapTables = make(map[string]tableReference, len(cfg.AttributeMaps))
+	for mapName, mapTable := range cfg.AttributeMaps {
+		mapReference, err := dialect.resolveTableReference(ctx, database, mapTable.TableName)
+		if err != nil {
+			return nil, fmt.Errorf("AttributeMap %q: %w", mapName, err)
+		}
+		entry.mapTables[mapName] = mapReference
+	}
 	snapshot, err := entry.describe(ctx)
 	if err != nil {
 		return nil, err
@@ -128,11 +153,16 @@ func closeSQLStoreOnError(database *sql.DB, sourceErr error) error {
 }
 
 func (s *sqlStore) describe(ctx context.Context) (*tableSchema, error) {
-	columns, err := s.describeColumns(ctx)
+	columns, err := s.describeColumns(ctx, s.table)
 	if err != nil {
 		return nil, err
 	}
-	snapshot := &tableSchema{reference: s.table, rowKey: s.rowKey, columns: columns}
+	snapshot := &tableSchema{
+		reference: s.table,
+		rowKey:    s.rowKey,
+		columns:   columns,
+		mapTables: make(map[string]*mapTableSchema, len(s.mapTables)),
+	}
 	if s.rowKey == nil {
 		flowIDColumn, err := s.resolveFlowIDColumn(ctx, columns)
 		if err != nil {
@@ -150,7 +180,31 @@ func (s *sqlStore) describe(ctx context.Context) (*tableSchema, error) {
 			return nil, fmt.Errorf("column %q prevents partial row inserts", name)
 		}
 	}
+	for mapName, reference := range s.mapTables {
+		mapTable, err := s.describeMapTable(ctx, reference, s.cfg.AttributeMaps[mapName].InstanceKeyColumn, snapshot)
+		if err != nil {
+			return nil, fmt.Errorf("AttributeMap %q: %w", mapName, err)
+		}
+		snapshot.mapTables[mapName] = mapTable
+	}
 	return snapshot, nil
+}
+
+func (s *sqlStore) describeMapTable(
+	ctx context.Context,
+	reference tableReference,
+	instanceKeyColumn string,
+	snapshot *tableSchema,
+) (*mapTableSchema, error) {
+	columns, err := s.describeColumns(ctx, reference)
+	if err != nil {
+		return nil, err
+	}
+	primaryKeys, err := s.dialect.describePrimaryKeys(ctx, s.db, reference)
+	if err != nil {
+		return nil, err
+	}
+	return newMapTableSchema(reference, instanceKeyColumn, snapshot.keyColumns(), primaryKeys, columns)
 }
 
 func (s *sqlStore) validateRowKeyColumns(ctx context.Context, columns map[string]columnSchema) error {
@@ -207,8 +261,8 @@ func (s *sqlStore) resolveFlowIDColumn(
 	return primaryKey.name, nil
 }
 
-func (s *sqlStore) describeColumns(ctx context.Context) (map[string]columnSchema, error) {
-	query, arguments := s.dialect.describeColumnsQuery(s.table)
+func (s *sqlStore) describeColumns(ctx context.Context, reference tableReference) (map[string]columnSchema, error) {
+	query, arguments := s.dialect.describeColumnsQuery(reference)
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("describe columns: %w", err)
@@ -232,7 +286,7 @@ func (s *sqlStore) describeColumns(ctx context.Context) (map[string]columnSchema
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("table does not exist or has no columns")
 	}
-	if err := s.dialect.enrichColumns(ctx, s.db, s.table, columns); err != nil {
+	if err := s.dialect.enrichColumns(ctx, s.db, reference, columns); err != nil {
 		return nil, err
 	}
 	return columns, nil
@@ -319,13 +373,115 @@ func (s *sqlStore) writeBatch(
 		}
 		latest[item.GetKey()] = item.GetValue()
 	}
-	filtered := s.filterValues(snapshot, latest)
-	if len(filtered) == 0 {
+	statements := s.buildStatements(snapshot, keyValues, latest)
+	if len(statements) == 0 {
 		return nil
 	}
-	query, arguments := s.buildUpsert(snapshot, keyValues, filtered)
-	if _, err := s.db.ExecContext(ctx, query, arguments...); err != nil {
-		return redactStorageSecret(fmt.Errorf("execute Attribute Store upsert: %w", err), s.cfg.DSN)
+	return redactStorageSecret(s.execute(ctx, statements), s.cfg.DSN)
+}
+
+// buildStatements returns the store row's upsert, when any Attribute survives filtering, followed by one upsert or
+// delete for each AttributeMap instance, ordered by map name and instance key.
+func (s *sqlStore) buildStatements(
+	snapshot *tableSchema,
+	keyValues []string,
+	latest map[string]*dexpb.Value,
+) []sqlStatement {
+	attributeValues := make(map[string]*dexpb.Value, len(latest))
+	instanceValues := map[string]map[string]*dexpb.Value{}
+	for key, value := range latest {
+		mapName, escapedInstance, isInstanceKey := strings.Cut(key, "/")
+		if _, isMapTable := snapshot.mapTables[mapName]; !isInstanceKey || !isMapTable {
+			attributeValues[key] = value
+			continue
+		}
+		instance, err := url.PathUnescape(escapedInstance)
+		if err != nil || instance == "" {
+			s.logger.Error("skip Attribute Store map instance: invalid instance key", tag.AttributeName(key))
+			continue
+		}
+		if instanceValues[mapName] == nil {
+			instanceValues[mapName] = map[string]*dexpb.Value{}
+		}
+		instanceValues[mapName][instance] = value
+	}
+	statements := make([]sqlStatement, 0, 1+len(instanceValues))
+	if filtered := s.filterValues(snapshot, attributeValues); len(filtered) > 0 {
+		query, arguments := s.buildUpsert(snapshot, keyValues, filtered)
+		statements = append(statements, sqlStatement{query: query, arguments: arguments})
+	}
+	for _, mapName := range slices.Sorted(maps.Keys(instanceValues)) {
+		mapTable := snapshot.mapTables[mapName]
+		for _, instance := range slices.Sorted(maps.Keys(instanceValues[mapName])) {
+			statements = append(statements, s.buildInstanceStatement(
+				mapTable, mapName, append(slices.Clone(keyValues), instance), instanceValues[mapName][instance],
+			))
+		}
+	}
+	return statements
+}
+
+func (s *sqlStore) buildInstanceStatement(
+	mapTable *mapTableSchema,
+	mapName string,
+	keyValues []string,
+	value *dexpb.Value,
+) sqlStatement {
+	if _, isDelete := value.GetKind().(*dexpb.Value_NullValue); isDelete {
+		query, arguments := s.dialect.buildKeyedDelete(mapTable.reference, mapTable.keyColumns, keyValues)
+		return sqlStatement{query: query, arguments: arguments}
+	}
+	key := mapName + "/" + url.PathEscape(keyValues[len(keyValues)-1])
+	columns := mapTable.filterInstanceValue(key, keyValues, value, s.cfg.ColumnNaming, s.cfg.Type, s.logger)
+	for _, field := range columns.missingColumnFields {
+		s.warnMissingColumnOnce(mapName + "." + field)
+	}
+	query, arguments := s.dialect.buildKeyedUpsert(
+		mapTable.reference, mapTable.keyColumns, keyValues, mapTable.replacedColumns, columns.values,
+	)
+	return sqlStatement{query: query, arguments: arguments}
+}
+
+// warnMissingColumnOnce logs a field without a column once; dynamically keyed values stop new warnings at the cap.
+func (s *sqlStore) warnMissingColumnOnce(field string) {
+	if s.missingColumnWarningCount.Load() >= maximumMissingColumnWarnings {
+		return
+	}
+	if _, isWarned := s.missingColumnWarnings.LoadOrStore(field, true); isWarned {
+		return
+	}
+	s.missingColumnWarningCount.Add(1)
+	s.logger.Warn("skip Attribute Store map instance field without a column; later writes skip it silently",
+		tag.AttributeName(field))
+}
+
+// execute runs one statement directly, and several statements in one transaction.
+func (s *sqlStore) execute(ctx context.Context, statements []sqlStatement) (err error) {
+	if len(statements) == 1 {
+		if _, err := s.db.ExecContext(ctx, statements[0].query, statements[0].arguments...); err != nil {
+			return fmt.Errorf("execute Attribute Store upsert: %w", err)
+		}
+		return nil
+	}
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Attribute Store transaction: %w", err)
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := transaction.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("roll back Attribute Store transaction: %w", rollbackErr))
+		}
+	}()
+	for _, statement := range statements {
+		if _, err := transaction.ExecContext(ctx, statement.query, statement.arguments...); err != nil {
+			return fmt.Errorf("execute Attribute Store batch: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit Attribute Store transaction: %w", err)
 	}
 	return nil
 }
