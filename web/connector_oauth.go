@@ -91,6 +91,16 @@ func (setup *connectorSetup) handleOAuthStart(response http.ResponseWriter, requ
 		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_REQUEST_INVALID", "Connector OAuth configuration is invalid")
 		return
 	}
+	resolvedOAuth, err := oauth.resolveSettings(
+		connectorConfigurationFieldsForMethods(resolved.release.Manifest.Spec.Configuration.Fields, []connectorManifestAuthMethod{authMethod}),
+		body.Configuration,
+	)
+	if err != nil {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", err.Error())
+		return
+	}
+	oauth = &resolvedOAuth
+	authMethod.OAuth2 = oauth
 	if err := validateManifestValueMaps(resolved.release.Manifest, authMethod, body); err != nil {
 		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_REQUEST_INVALID", "Connector OAuth configuration is invalid")
 		return
@@ -104,8 +114,8 @@ func (setup *connectorSetup) handleOAuthStart(response http.ResponseWriter, requ
 	if body.CredentialSecrets == nil {
 		body.CredentialSecrets = map[string]string{}
 	}
-	authorizationURL, err := url.Parse(oauth.AuthorizationEndpoint)
-	if err != nil || authorizationURL.Scheme != "https" || authorizationURL.Host == "" {
+	authorizationURL, err := parseConnectorOAuthEndpoint(oauth.AuthorizationEndpoint, oauth.AuthorizationEndpointSetting != "")
+	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_RELEASE_INVALID", "Connector OAuth endpoint is invalid")
 		return
 	}
@@ -328,8 +338,8 @@ func (setup *connectorSetup) deriveConnectorOAuthCredentials(
 	credentials := make(map[string]json.RawMessage, len(derivations))
 	responses := make(map[string]map[string]any)
 	for _, derivation := range derivations {
-		endpointURL, err := url.Parse(derivation.Endpoint)
-		if err != nil || endpointURL.Scheme != "https" || endpointURL.Host == "" {
+		endpointURL, err := parseConnectorOAuthEndpoint(derivation.Endpoint, derivation.EndpointSetting != "")
+		if err != nil {
 			return nil, fmt.Errorf("Connector OAuth credential derivation endpoint is invalid")
 		}
 		providerResponse, found := responses[derivation.Endpoint]
@@ -385,8 +395,8 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 	code string,
 ) (connectorOAuthTokenResponse, error) {
 	oauth := session.authMethod.OAuth2
-	tokenURL, err := url.Parse(oauth.TokenEndpoint)
-	if err != nil || tokenURL.Scheme != "https" || tokenURL.Host == "" {
+	tokenURL, err := parseConnectorOAuthEndpoint(oauth.TokenEndpoint, oauth.TokenEndpointSetting != "")
+	if err != nil {
 		return connectorOAuthTokenResponse{}, fmt.Errorf("Connector OAuth token endpoint is invalid")
 	}
 	if err := validateConnectorOAuthTokenRequestDeclarations(*oauth); err != nil {
