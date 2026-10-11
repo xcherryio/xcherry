@@ -27,7 +27,7 @@ type sqlDialect interface {
 	describeColumnsQuery(tableReference) (string, []any)
 	enrichColumns(context.Context, *sql.DB, tableReference, map[string]columnSchema) error
 	describePrimaryKeys(context.Context, *sql.DB, tableReference) ([]string, error)
-	buildUpsert(*tableSchema, string, []string, map[string]filteredValue) (string, []any)
+	buildUpsert(*tableSchema, []string, []string, map[string]filteredValue) (string, []any)
 }
 
 type builtInSQLDialect struct {
@@ -405,31 +405,40 @@ ORDER BY ordinal_position`
 
 func (d *builtInSQLDialect) buildUpsert(
 	snapshot *tableSchema,
-	flowID string,
+	keyValues []string,
 	columnNames []string,
 	values map[string]filteredValue,
 ) (string, []any) {
 	if d.storeType.IsWarehouse() {
-		return d.buildWarehouseMerge(snapshot, flowID, columnNames, values)
+		return d.buildWarehouseMerge(snapshot, keyValues[0], columnNames, values)
 	}
-	return d.buildRelationalUpsert(snapshot, flowID, columnNames, values)
+	return d.buildRelationalUpsert(snapshot, keyValues, columnNames, values)
 }
 
 func (d *builtInSQLDialect) buildRelationalUpsert(
 	snapshot *tableSchema,
-	flowID string,
+	keyValues []string,
 	columnNames []string,
 	values map[string]filteredValue,
 ) (string, []any) {
 	quotedTable := d.qualifiedTable(snapshot.reference)
-	columns := []string{d.quoteIdentifier(snapshot.flowIDColumn)}
-	placeholders := []string{d.placeholder(1)}
+	keyColumns := snapshot.keyColumns()
+	quotedKeys := make([]string, 0, len(keyColumns))
+	columns := make([]string, 0, len(keyColumns)+len(columnNames))
+	placeholders := make([]string, 0, len(keyColumns)+len(columnNames))
 	updates := make([]string, 0, len(columnNames))
-	arguments := []any{flowID}
+	arguments := make([]any, 0, len(keyColumns)+len(columnNames))
+	for index, keyColumn := range keyColumns {
+		quotedKeys = append(quotedKeys, d.quoteIdentifier(keyColumn))
+		placeholders = append(placeholders, d.placeholder(index+1))
+		arguments = append(arguments, keyValues[index])
+	}
+	columns = append(columns, quotedKeys...)
 	for index, name := range columnNames {
 		quoted := d.quoteIdentifier(name)
 		columns = append(columns, quoted)
-		placeholders = append(placeholders, d.valueExpression(d.placeholder(index+2), values[name].column))
+		placeholders = append(placeholders,
+			d.valueExpression(d.placeholder(len(keyColumns)+index+1), values[name].column))
 		arguments = append(arguments, d.argumentValue(values[name].column, values[name].value))
 		if d.storeType == config.AttributeStoreTypePostgres {
 			updates = append(updates, quoted+" = EXCLUDED."+quoted)
@@ -440,7 +449,7 @@ func (d *builtInSQLDialect) buildRelationalUpsert(
 	query := "INSERT INTO " + quotedTable + " (" + strings.Join(columns, ", ") + ") VALUES (" +
 		strings.Join(placeholders, ", ") + ")"
 	if d.storeType == config.AttributeStoreTypePostgres {
-		query += " ON CONFLICT (" + d.quoteIdentifier(snapshot.flowIDColumn) + ") DO UPDATE SET " +
+		query += " ON CONFLICT (" + strings.Join(quotedKeys, ", ") + ") DO UPDATE SET " +
 			strings.Join(updates, ", ")
 	} else {
 		query += " ON DUPLICATE KEY UPDATE " + strings.Join(updates, ", ")

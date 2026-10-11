@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -32,6 +33,7 @@ type sqlStore struct {
 	dialect sqlDialect
 	db      *sql.DB
 	table   tableReference
+	rowKey  *rowKeyTemplate
 	schema  atomic.Pointer[tableSchema]
 	logger  log.Logger
 }
@@ -42,9 +44,11 @@ type tableReference struct {
 	table     string
 }
 
+// tableSchema stores the whole Flow ID in flowIDColumn unless a configured rowKey splits it into key columns.
 type tableSchema struct {
 	reference    tableReference
 	flowIDColumn string
+	rowKey       *rowKeyTemplate
 	columns      map[string]columnSchema
 }
 
@@ -93,6 +97,13 @@ func initializeSQLStore(
 	database *sql.DB,
 ) (*sqlStore, error) {
 	entry := &sqlStore{cfg: cfg, dialect: dialect, db: database, logger: logger}
+	if cfg.RowKey != "" {
+		rowKey, err := parseRowKeyTemplate(cfg.RowKey)
+		if err != nil {
+			return nil, err
+		}
+		entry.rowKey = rowKey
+	}
 	if err := database.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
@@ -121,23 +132,48 @@ func (s *sqlStore) describe(ctx context.Context) (*tableSchema, error) {
 	if err != nil {
 		return nil, err
 	}
-	flowIDColumn, err := s.resolveFlowIDColumn(ctx, columns)
-	if err != nil {
+	snapshot := &tableSchema{reference: s.table, rowKey: s.rowKey, columns: columns}
+	if s.rowKey == nil {
+		flowIDColumn, err := s.resolveFlowIDColumn(ctx, columns)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.flowIDColumn = flowIDColumn
+	} else if err := s.validateRowKeyColumns(ctx, columns); err != nil {
 		return nil, err
 	}
 	for name, column := range columns {
-		if name == flowIDColumn {
+		if snapshot.isKeyColumn(name) {
 			continue
 		}
 		if !column.nullable && !column.hasDefault && !column.generated {
 			return nil, fmt.Errorf("column %q prevents partial row inserts", name)
 		}
 	}
-	return &tableSchema{
-		reference:    s.table,
-		flowIDColumn: flowIDColumn,
-		columns:      columns,
-	}, nil
+	return snapshot, nil
+}
+
+func (s *sqlStore) validateRowKeyColumns(ctx context.Context, columns map[string]columnSchema) error {
+	primaryKeys, err := s.dialect.describePrimaryKeys(ctx, s.db, s.table)
+	if err != nil {
+		return err
+	}
+	expected := s.rowKey.columns()
+	if !hasSameColumns(primaryKeys, expected) {
+		return fmt.Errorf("table primary key %v must be exactly the rowKey columns %v", primaryKeys, expected)
+	}
+	for _, name := range expected {
+		if !columns[name].acceptsString() {
+			return fmt.Errorf("rowKey column %q cannot store strings", name)
+		}
+	}
+	return nil
+}
+
+func hasSameColumns(actual, expected []string) bool {
+	sortedActual := slices.Sorted(slices.Values(actual))
+	sortedExpected := slices.Sorted(slices.Values(expected))
+	return slices.Equal(sortedActual, sortedExpected)
 }
 
 func (s *sqlStore) resolveFlowIDColumn(
@@ -271,6 +307,11 @@ func (s *sqlStore) writeBatch(
 	if snapshot == nil {
 		return fmt.Errorf("Attribute Store schema is unavailable")
 	}
+	keyValues, matches := snapshot.keyValues(flowID)
+	if !matches {
+		s.logger.Error("skip Attribute Store batch: Flow ID does not match rowKey", tag.WorkflowID(flowID))
+		return nil
+	}
 	latest := make(map[string]*dexpb.Value, len(items))
 	for _, item := range items {
 		if item == nil {
@@ -278,37 +319,56 @@ func (s *sqlStore) writeBatch(
 		}
 		latest[item.GetKey()] = item.GetValue()
 	}
-	filtered := make(map[string]filteredValue, len(latest))
-	for name, value := range latest {
-		column, found := snapshot.columns[name]
-		if !found {
-			s.logger.Error("skip Attribute Store item: column does not exist", tag.AttributeName(name))
-			continue
-		}
-		if name == snapshot.flowIDColumn {
-			s.logger.Error("skip Attribute Store item: Flow ID column is immutable", tag.AttributeName(name))
-			continue
-		}
-		converted, err := column.convert(value, s.cfg.Type)
-		if err != nil {
-			s.logger.Error("skip incompatible Attribute Store item", tag.AttributeName(name), tag.Error(err))
-			continue
-		}
-		filtered[name] = filteredValue{column: column, value: converted}
-	}
+	filtered := s.filterValues(snapshot, latest)
 	if len(filtered) == 0 {
 		return nil
 	}
-	query, arguments := s.buildUpsert(snapshot, flowID, filtered)
+	query, arguments := s.buildUpsert(snapshot, keyValues, filtered)
 	if _, err := s.db.ExecContext(ctx, query, arguments...); err != nil {
 		return redactStorageSecret(fmt.Errorf("execute Attribute Store upsert: %w", err), s.cfg.DSN)
 	}
 	return nil
 }
 
+func (s *sqlStore) filterValues(
+	snapshot *tableSchema,
+	latest map[string]*dexpb.Value,
+) map[string]filteredValue {
+	attributeNamesByColumn := make(map[string][]string, len(latest))
+	for name := range latest {
+		column := columnName(s.cfg.ColumnNaming, name)
+		attributeNamesByColumn[column] = append(attributeNamesByColumn[column], name)
+	}
+	filtered := make(map[string]filteredValue, len(attributeNamesByColumn))
+	for name, attributeNames := range attributeNamesByColumn {
+		if len(attributeNames) > 1 {
+			sort.Strings(attributeNames)
+			s.logger.Error("skip Attribute Store items: Attribute names share one column",
+				tag.AttributeName(strings.Join(attributeNames, ", ")))
+			continue
+		}
+		column, found := snapshot.columns[name]
+		if !found {
+			s.logger.Error("skip Attribute Store item: column does not exist", tag.AttributeName(attributeNames[0]))
+			continue
+		}
+		if snapshot.isKeyColumn(name) {
+			s.logger.Error("skip Attribute Store item: Flow ID column is immutable", tag.AttributeName(attributeNames[0]))
+			continue
+		}
+		converted, err := column.convert(latest[attributeNames[0]], s.cfg.Type)
+		if err != nil {
+			s.logger.Error("skip incompatible Attribute Store item", tag.AttributeName(attributeNames[0]), tag.Error(err))
+			continue
+		}
+		filtered[name] = filteredValue{column: column, value: converted}
+	}
+	return filtered
+}
+
 func (s *sqlStore) buildUpsert(
 	snapshot *tableSchema,
-	flowID string,
+	keyValues []string,
 	values map[string]filteredValue,
 ) (string, []any) {
 	columnNames := make([]string, 0, len(values))
@@ -316,9 +376,29 @@ func (s *sqlStore) buildUpsert(
 		columnNames = append(columnNames, name)
 	}
 	sort.Strings(columnNames)
-	return s.dialect.buildUpsert(snapshot, flowID, columnNames, values)
+	return s.dialect.buildUpsert(snapshot, keyValues, columnNames, values)
 }
 
 func (s *sqlStore) close() error {
 	return redactStorageSecret(s.db.Close(), s.cfg.DSN)
+}
+
+// keyColumns returns the primary-key columns in rowKey order, or the single Flow ID column.
+func (t *tableSchema) keyColumns() []string {
+	if t.rowKey == nil {
+		return []string{t.flowIDColumn}
+	}
+	return t.rowKey.columns()
+}
+
+// keyValues returns the value of each key column for flowID, and false when flowID does not match the rowKey.
+func (t *tableSchema) keyValues(flowID string) ([]string, bool) {
+	if t.rowKey == nil {
+		return []string{flowID}, true
+	}
+	return t.rowKey.match(flowID)
+}
+
+func (t *tableSchema) isKeyColumn(name string) bool {
+	return slices.Contains(t.keyColumns(), name)
 }
