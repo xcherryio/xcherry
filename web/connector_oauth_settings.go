@@ -196,7 +196,7 @@ func (setup *connectorSetup) endpointHTTPClient(settingName string) *http.Client
 	return setup.settingHTTPClient
 }
 
-// checkSettingEndpointAddresses resolves the hosts of the token and identity endpoints that settings supply,
+// checkSettingEndpointAddresses refuses a token or identity endpoint whose address the policy forbids,
 // so the browser does not leave for an authorization that the callback could not finish.
 func (setup *connectorSetup) checkSettingEndpointAddresses(ctx context.Context, oauth connectorManifestOAuth2) error {
 	endpoints := []struct{ settingName, endpoint string }{{oauth.TokenEndpointSetting, oauth.TokenEndpoint}}
@@ -212,11 +212,9 @@ func (setup *connectorSetup) checkSettingEndpointAddresses(ctx context.Context, 
 			return fmt.Errorf("Connector OAuth setting %q is invalid: %w", endpoint.settingName, err)
 		}
 		_, err = setup.endpointPolicy.checkedAddresses(ctx, target.Hostname(), target.Scheme == "http")
+		// An unresolvable host is not a refusal; the code exchange reports it.
 		if refusal := (*connectorAddressRefusal)(nil); errors.As(err, &refusal) {
 			return newConnectorOAuthRefusedEndpointError(endpoint.settingName, refusal)
-		}
-		if err != nil {
-			return fmt.Errorf("Connector OAuth setting %q names a host that Dex Web cannot resolve", endpoint.settingName)
 		}
 	}
 	return nil

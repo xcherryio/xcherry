@@ -361,3 +361,22 @@ func TestConnectorOAuthSettingEndpointsNeverFollowRedirects(t *testing.T) {
 		t.Fatalf("start = %d, callback = %+v, redirect followed = %v", outcome.start.Code, outcome.callback, redirectTargetWasRequested)
 	}
 }
+
+func TestConnectorOAuthStartDoesNotRequireTheEndpointHostsToResolve(t *testing.T) {
+	provider := newConnectorOAuthSettingsTestProvider(t, connectorOAuthSettingsTestTokenResponse)
+	network := newNamedNetwork(provider.Listener.Addr().String())
+	setup := newConnectorOAuthSettingsTestSetup(t)
+	useConnectorAddressPolicyForTest(setup, nil, network.policy())
+
+	outcome := runConnectorOAuthAddressPolicyTest(t, setup, provider, map[string]string{
+		"tokenEndpoint": `"https://idp.unresolvable.test/token"`, "userInfoEndpoint": `"https://idp.unresolvable.test/userinfo"`,
+	})
+
+	if outcome.start.Code != http.StatusOK || outcome.callback == nil || outcome.callback.Code != http.StatusBadGateway ||
+		!strings.Contains(outcome.callback.Body.String(), "CONNECTOR_OAUTH_TOKEN_EXCHANGE_FAILED") {
+		t.Fatalf("start = %d: %s; callback = %+v", outcome.start.Code, outcome.start.Body.String(), outcome.callback)
+	}
+	if dialed := network.dialedAddresses(); len(dialed) != 0 {
+		t.Fatalf("dialed %v for a host that does not resolve", dialed)
+	}
+}
