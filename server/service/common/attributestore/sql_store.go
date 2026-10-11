@@ -46,8 +46,8 @@ type sqlStore struct {
 	// columnRefreshMutex guards the two fields below and serializes refreshes for unknown columns.
 	columnRefreshMutex sync.Mutex
 	lastColumnRefresh  time.Time
-	// confirmedMissingColumns maps each column a refresh found missing to the time of that refresh.
-	confirmedMissingColumns map[string]time.Time
+	// confirmedMissingColumns holds the columns a refresh found missing.
+	confirmedMissingColumns map[string]bool
 	schema                  atomic.Pointer[tableSchema]
 	logger                  log.Logger
 }
@@ -67,7 +67,7 @@ type tableSchema struct {
 	mapTables    map[string]*mapTableSchema
 }
 
-// columnRefreshInterval bounds how often a column that a refresh found missing triggers another refresh.
+// columnRefreshInterval bounds how often unremembered names refresh once maximumConfirmedMissingColumns is reached.
 const columnRefreshInterval = 30 * time.Second
 
 // maximumConfirmedMissingColumns bounds the remembered missing columns; beyond it, unremembered names share
@@ -394,9 +394,9 @@ func (s *sqlStore) writeBatch(
 	return redactStorageSecret(s.execute(ctx, statements), s.cfg.DSN)
 }
 
-// snapshotWithColumns returns a schema snapshot for the batch. When the batch writes a column the snapshot lacks,
-// it refreshes the schema first if no refresh has confirmed that column missing, or if that confirmation is older
-// than columnRefreshInterval; concurrent batches wait for that refresh instead of skipping their values.
+// snapshotWithColumns returns a schema snapshot for the batch. When the batch writes a column the snapshot lacks and
+// no refresh has confirmed that column missing, it refreshes the schema first; concurrent batches wait for that
+// refresh instead of skipping their values. Confirmed missing columns wait for the periodic refresh.
 func (s *sqlStore) snapshotWithColumns(
 	ctx context.Context,
 	snapshot *tableSchema,
@@ -419,24 +419,23 @@ func (s *sqlStore) snapshotWithColumns(
 	}
 	s.lastColumnRefresh = now
 	if s.confirmedMissingColumns == nil {
-		s.confirmedMissingColumns = map[string]time.Time{}
+		s.confirmedMissingColumns = map[string]bool{}
 	}
 	snapshot = s.schema.Load()
 	for _, column := range s.unknownColumns(snapshot, latest) {
 		_, isRemembered := s.confirmedMissingColumns[column]
 		if isRemembered || len(s.confirmedMissingColumns) < maximumConfirmedMissingColumns {
-			s.confirmedMissingColumns[column] = now
+			s.confirmedMissingColumns[column] = true
 		}
 	}
 	return snapshot
 }
 
 // needsColumnRefresh reports whether an unknown column warrants a refresh: one no refresh has confirmed missing
-// always does, and a confirmed one only after columnRefreshInterval.
+// does, and a confirmed one never does, because the periodic refresh checks it again.
 func (s *sqlStore) needsColumnRefresh(column string, now time.Time) bool {
-	confirmedAt, isConfirmed := s.confirmedMissingColumns[column]
-	if isConfirmed {
-		return now.Sub(confirmedAt) >= columnRefreshInterval
+	if _, isConfirmed := s.confirmedMissingColumns[column]; isConfirmed {
+		return false
 	}
 	if len(s.confirmedMissingColumns) >= maximumConfirmedMissingColumns {
 		return now.Sub(s.lastColumnRefresh) >= columnRefreshInterval

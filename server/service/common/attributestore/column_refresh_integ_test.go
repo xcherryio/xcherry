@@ -59,6 +59,7 @@ func TestMySQLAndPostgresAttributeStoreColumnRefreshIntegration(t *testing.T) {
 			writeRowKeyBatch(t, manager, "orders", "o1", "Status", stringValue("PLACED"))
 
 			// A refresh confirms Discount missing; it must not delay a column that a migration adds next.
+			// The periodic refresh is an hour, so only the on-demand refresh can find new columns.
 			writeRowKeyBatch(t, manager, "orders", "o1", "Discount", intValue(5))
 			destination.exec(t,
 				`ALTER TABLE refresh_orders ADD COLUMN shipping_note TEXT`,
@@ -80,14 +81,38 @@ func TestMySQLAndPostgresAttributeStoreColumnRefreshIntegration(t *testing.T) {
 			).Scan(&quantity))
 			require.Equal(t, int64(2), quantity)
 
-			// A column confirmed missing is checked again only after the interval.
+			// A column confirmed missing waits for the periodic refresh.
 			destination.exec(t, `ALTER TABLE refresh_orders ADD COLUMN discount BIGINT`)
 			writeRowKeyBatch(t, manager, "orders", "o1", "Discount", intValue(7))
-			var discount sql.NullInt64
+			readDiscount := func() sql.NullInt64 {
+				var discount sql.NullInt64
+				require.NoError(t, destination.database.QueryRowContext(context.Background(),
+					`SELECT discount FROM refresh_orders WHERE order_id = `+destination.placeholder(1), "o1",
+				).Scan(&discount))
+				return discount
+			}
+			require.False(t, readDiscount().Valid)
+			store := manager.entries["orders"].(*sqlStore)
+			require.NoError(t, store.refreshSchema(context.Background()))
+			writeRowKeyBatch(t, manager, "orders", "o1", "Discount", intValue(7))
+			require.Equal(t, sql.NullInt64{Int64: 7, Valid: true}, readDiscount())
+
+			// A field an instance table does not project refreshes only the first time it appears.
+			writeRowKeyBatch(t, manager, "orders", "o1", "Items/i2", objectValue("json", `{"Quantity":1,"Fingerprint":"a"}`))
+			store.columnRefreshMutex.Lock()
+			firstRefresh := store.lastColumnRefresh
+			store.columnRefreshMutex.Unlock()
+			for range 3 {
+				writeRowKeyBatch(t, manager, "orders", "o1", "Items/i2", objectValue("json", `{"Quantity":2,"Fingerprint":"b"}`))
+			}
+			store.columnRefreshMutex.Lock()
+			require.Equal(t, firstRefresh, store.lastColumnRefresh)
+			store.columnRefreshMutex.Unlock()
 			require.NoError(t, destination.database.QueryRowContext(context.Background(),
-				`SELECT discount FROM refresh_orders WHERE order_id = `+destination.placeholder(1), "o1",
-			).Scan(&discount))
-			require.False(t, discount.Valid)
+				`SELECT quantity FROM refresh_order_items WHERE order_id = `+destination.placeholder(1)+
+					` AND item_id = `+destination.placeholder(2), "o1", "i2",
+			).Scan(&quantity))
+			require.Equal(t, int64(2), quantity)
 		})
 	}
 }

@@ -192,8 +192,10 @@ Adding nullable or defaulted SQL columns is discovered without restarting Dex.
 A batch that writes a column missing from the current snapshot, in the store's
 table or an AttributeMap table, refreshes that store's schema before it writes.
 A column that no refresh has found missing refreshes at once; a column that a
-refresh already found missing refreshes again at most every 30 seconds. Batches
-that arrive meanwhile wait for that refresh. A migration that adds a column
+refresh already found missing waits for the periodic refresh. An AttributeMap
+table may store only part of each value, so each field without a column
+triggers at most one refresh per process. Batches that arrive meanwhile wait
+for that refresh. A migration that adds a column
 therefore needs no Dex restart, as long as it completes before the Workers that
 write the column start.
 Removing or changing columns may cause later mutations to be filtered or
