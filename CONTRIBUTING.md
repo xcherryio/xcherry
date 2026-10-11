@@ -206,6 +206,7 @@ Notes:
 - Go modules use path-style tags (`sdk-go/v…`, `blob-cache-go/v…`) so `go get` resolves each subdirectory module.
 - Python, Java, and Docker release workflows also support **workflow_dispatch** for manual runs. Python manual runs build without publishing unless `publish` is selected.
 - TypeScript publishing requires a GitHub Release after its one-time npm bootstrap publish.
+- Publish a manually created Dex CLI Release without marking it latest (`gh release create cli-vX.Y.Z --latest=false`). **Release Dex CLI** uploads the archives and `checksums.txt` minutes after the Release is published, and consumers that resolve the latest stable `cli-v` Release, such as a connector library's compatibility gate, fail until they exist. After that workflow succeeds, mark it latest with `gh release edit cli-vX.Y.Z --latest`.
 
 ### Committed `version` vs release tags (Python / TypeScript / Java / Rust)
 
