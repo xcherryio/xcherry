@@ -40,9 +40,10 @@ type sqlStore struct {
 	// mapTables holds the resolved table of each configured AttributeMap.
 	mapTables map[string]tableReference
 	// missingColumnWarnings remembers the AttributeMap fields already logged for having no column.
-	missingColumnWarnings sync.Map
-	schema                atomic.Pointer[tableSchema]
-	logger                log.Logger
+	missingColumnWarnings     sync.Map
+	missingColumnWarningCount atomic.Int64
+	schema                    atomic.Pointer[tableSchema]
+	logger                    log.Logger
 }
 
 type tableReference struct {
@@ -59,6 +60,9 @@ type tableSchema struct {
 	columns      map[string]columnSchema
 	mapTables    map[string]*mapTableSchema
 }
+
+// maximumMissingColumnWarnings bounds the remembered fields when instance values have dynamic top-level keys.
+const maximumMissingColumnWarnings = 1000
 
 type sqlStatement struct {
 	query     string
@@ -430,15 +434,25 @@ func (s *sqlStore) buildInstanceStatement(
 	key := mapName + "/" + url.PathEscape(keyValues[len(keyValues)-1])
 	columns := mapTable.filterInstanceValue(key, keyValues, value, s.cfg.ColumnNaming, s.cfg.Type, s.logger)
 	for _, field := range columns.missingColumnFields {
-		if _, isWarned := s.missingColumnWarnings.LoadOrStore(mapName+"."+field, true); !isWarned {
-			s.logger.Warn("skip Attribute Store map instance field without a column; later writes skip it silently",
-				tag.AttributeName(mapName+"."+field))
-		}
+		s.warnMissingColumnOnce(mapName + "." + field)
 	}
 	query, arguments := s.dialect.buildKeyedUpsert(
 		mapTable.reference, mapTable.keyColumns, keyValues, mapTable.replacedColumns, columns.values,
 	)
 	return sqlStatement{query: query, arguments: arguments}
+}
+
+// warnMissingColumnOnce logs a field without a column once; dynamically keyed values stop new warnings at the cap.
+func (s *sqlStore) warnMissingColumnOnce(field string) {
+	if s.missingColumnWarningCount.Load() >= maximumMissingColumnWarnings {
+		return
+	}
+	if _, isWarned := s.missingColumnWarnings.LoadOrStore(field, true); isWarned {
+		return
+	}
+	s.missingColumnWarningCount.Add(1)
+	s.logger.Warn("skip Attribute Store map instance field without a column; later writes skip it silently",
+		tag.AttributeName(field))
 }
 
 // execute runs one statement directly, and several statements in one transaction.
