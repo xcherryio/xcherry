@@ -30,6 +30,7 @@ TestRpcWorkflowCadence
 TestRpcReadBlobStoreUnavailableCadence
 TestRpcInlineTransportCadence
 TestSubFlowConditionCadence
+TestSubFlowStartFailureCadence
 TestUpdateWorkerTargetCadence
 TestChannelMessageQueueCadence
 TestChannelMultivalueCadence

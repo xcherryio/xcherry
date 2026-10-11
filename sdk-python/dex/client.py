@@ -1306,6 +1306,9 @@ class Client:
             ),
             int(pb.FLOW_ERROR_TYPE_INTERNAL): FlowErrorType.INTERNAL,
             int(pb.FLOW_ERROR_TYPE_FLOW_TIMEOUT): FlowErrorType.FLOW_TIMEOUT,
+            int(pb.FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED): (
+                FlowErrorType.SUB_FLOW_START_FAILED
+            ),
         }
         return error_types.get(error_type)
 

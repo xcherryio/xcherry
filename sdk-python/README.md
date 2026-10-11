@@ -422,6 +422,11 @@ loser. `SubFlowOptions` configures timing, timeout policy, retry, initial target
 Attributes, Flow config, Condition ID, and reuse. Parent completion does not cancel an unfinished
 SubFlow.
 
+If the server cannot start a SubFlow within its retry budget, the waiting Step's
+`wait_for_failure` decides the outcome. The default fails the parent Flow. With
+`WaitForFailurePolicy.PROCEED`, `execute` runs and the SubFlow result reports
+`FlowStatus.FAILED` with `FlowErrorType.SUB_FLOW_START_FAILED`.
+
 ### Errors
 
 Client calls raise concrete `DexServiceError` subclasses. Existing-Flow reads

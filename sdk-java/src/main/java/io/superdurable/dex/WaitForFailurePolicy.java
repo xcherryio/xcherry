@@ -27,6 +27,12 @@ public enum WaitForFailurePolicy {
      * Continues to the execute method after recording the wait-for failure.
      *
      * <p>Durability follows the normal method, Flow, and server-default precedence.
+     *
+     * <p>This policy also covers a SubFlow condition that the server cannot start within its retry
+     * budget. The execute method then runs immediately with {@link Context#waitForMethodFailed()} set.
+     * {@link SubFlow#getConditionResults(Context, int)} reports {@link FlowStatus#FAILED} with
+     * {@link FlowErrorType#SUB_FLOW_START_FAILED} for each SubFlow that did not start. SubFlows that
+     * did start keep running, and their results stay nonterminal.
      */
     PROCEED
 }

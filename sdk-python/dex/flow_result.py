@@ -201,6 +201,7 @@ def flow_result_from_proto(result: pb.FlowResult, decoder: _Decoder) -> FlowResu
         pb.FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE: FlowErrorType.INVALID_USER_FLOW_CODE,
         pb.FLOW_ERROR_TYPE_INTERNAL: FlowErrorType.INTERNAL,
         pb.FLOW_ERROR_TYPE_FLOW_TIMEOUT: FlowErrorType.FLOW_TIMEOUT,
+        pb.FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED: FlowErrorType.SUB_FLOW_START_FAILED,
     }
     try:
         status = statuses[result.flow_status]

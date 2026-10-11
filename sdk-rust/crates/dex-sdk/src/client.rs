@@ -1277,6 +1277,7 @@ pub(crate) fn map_flow_error_type(error_type: i32) -> Option<FlowErrorType> {
         Some(ProtoFlowErrorType::InvalidUserFlowCode) => Some(FlowErrorType::InvalidUserFlowCode),
         Some(ProtoFlowErrorType::Internal) => Some(FlowErrorType::Internal),
         Some(ProtoFlowErrorType::FlowTimeout) => Some(FlowErrorType::FlowTimeout),
+        Some(ProtoFlowErrorType::SubFlowStartFailed) => Some(FlowErrorType::SubFlowStartFailed),
         _ => None,
     }
 }

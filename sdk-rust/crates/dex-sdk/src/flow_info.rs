@@ -43,6 +43,11 @@ pub enum FlowErrorType {
     Internal,
     /// A Dex soft Flow timeout expired under the fail policy.
     FlowTimeout,
+    /// The server could not start a SubFlow within its configured retry budget.
+    ///
+    /// Only SubFlow results report it. The SubFlow never ran, so the result has no outputs and
+    /// [`crate::FlowResult::error_message`] holds the last start error.
+    SubFlowStartFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

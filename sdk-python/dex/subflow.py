@@ -29,6 +29,12 @@ class SubFlow:
     ) -> Condition:
         """Create a Condition that starts or reuses ``flow`` and awaits completion.
 
+        The server starts the SubFlow after ``wait_for`` returns and retries the
+        start within its configured retry budget. When the start still fails, the
+        waiting Step's ``WaitForFailurePolicy`` decides the outcome. The default
+        ``FAIL_FLOW`` fails the parent Flow. ``PROCEED`` runs ``execute``, and the
+        SubFlow result reports ``FlowErrorType.SUB_FLOW_START_FAILED``.
+
         Args:
             flow: The exact target Flow instance registered by the Worker.
             input: Input accepted by the target Flow's starting Step.
@@ -48,6 +54,16 @@ class SubFlow:
     @staticmethod
     def get_condition_results(context: Context, index: int = 0) -> FlowResult:
         """Return one stable-indexed SubFlow result during Step ``execute``.
+
+        A SubFlow that the server could not start returns ``FlowStatus.FAILED``
+        with ``FlowErrorType.SUB_FLOW_START_FAILED`` and the start error as its
+        error message. ``execute`` sees this result only when the Step uses
+        ``WaitForFailurePolicy.PROCEED``. Check the error type to tell a start
+        failure apart from a SubFlow that started and then failed::
+
+            charge = dex.SubFlow.get_condition_results(context)
+            if charge.error_type is dex.FlowErrorType.SUB_FLOW_START_FAILED:
+                return dex.force_fail(f"SubFlow did not start: {charge.error_message}")
 
         Args:
             context: The current Dex Execute context.

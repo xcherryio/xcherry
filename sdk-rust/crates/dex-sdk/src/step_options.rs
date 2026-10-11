@@ -286,6 +286,12 @@ pub enum WaitForFailurePolicy {
     /// Fails the Flow.
     FailFlow,
     /// Skips the failed wait and invokes `execute` with failure visible in [`crate::Context`].
+    ///
+    /// This also covers a SubFlow Condition that the server cannot start within its retry budget.
+    /// `execute` then runs immediately with [`crate::Context::wait_for_method_failed`] true. Each
+    /// SubFlow that did not start reports [`crate::FlowStatus::Failed`] with
+    /// [`crate::FlowErrorType::SubFlowStartFailed`]. SubFlows that did start keep running, and their
+    /// results stay nonterminal.
     Proceed,
 }
 

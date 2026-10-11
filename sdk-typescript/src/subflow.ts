@@ -59,6 +59,11 @@ export interface SubFlowOptions {
 export const SubFlow = Object.freeze({
   /**
    * Creates a condition that starts or reuses a registered Flow and awaits completion.
+   *
+   * The server starts the SubFlow after `waitFor` returns and retries the start within its
+   * configured retry budget. When the start still fails, the waiting Step's `waitForFailure`
+   * option decides the outcome. The default `"failFlow"` fails the parent Flow. `"proceed"` runs
+   * `execute`, and the SubFlow result reports `FlowErrorType.SUB_FLOW_START_FAILED`.
    * @typeParam Input - Target starting Step input type.
    * @param flow - Exact target Flow instance registered by the Worker.
    * @param input - Input accepted by its starting Step.
@@ -76,6 +81,18 @@ export const SubFlow = Object.freeze({
   },
   /**
    * Returns one stable-indexed SubFlow result during Step execute.
+   *
+   * A SubFlow that the server could not start returns a failed result with
+   * `FlowErrorType.SUB_FLOW_START_FAILED` and the start error as its error message. `execute` sees
+   * this result only when the Step uses `waitForFailure: "proceed"`. Check the error type to tell a
+   * start failure apart from a SubFlow that started and then failed.
+   *
+   * ```ts
+   * const charge = SubFlow.getConditionResults(context);
+   * if (charge.errorType === FlowErrorType.SUB_FLOW_START_FAILED) {
+   *   return forceFail(`SubFlow did not start: ${charge.errorMessage}`);
+   * }
+   * ```
    * @param context - Current Dex Execute context.
    * @param index - Zero-based SubFlow order; defaults to zero.
    * @returns A terminal result or an AnyOf loser's running snapshot.

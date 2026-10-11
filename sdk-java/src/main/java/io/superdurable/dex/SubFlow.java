@@ -18,6 +18,12 @@ package io.superdurable.dex;
  * of the surrounding {@link Wait}. Read the corresponding result only from the same Step's
  * {@link Step#execute} method.
  *
+ * <p>The server starts the SubFlow after the wait-for method returns and retries the start within
+ * its configured retry budget. When the start still fails, the waiting Step's
+ * {@link WaitForFailurePolicy} decides the outcome. {@link WaitForFailurePolicy#FAIL_FLOW}, the
+ * default, fails the parent Flow. {@link WaitForFailurePolicy#PROCEED} runs the execute method, and
+ * the SubFlow result reports {@link FlowErrorType#SUB_FLOW_START_FAILED}.
+ *
  * <pre>{@code
  * public Wait waitFor(Context context, Order input) {
  *     return Wait.until(SubFlow.run(ChargeOrderFlow.class, input));
@@ -84,6 +90,18 @@ public final class SubFlow {
 
     /**
      * Returns one SubFlow condition result from this Step invocation.
+     *
+     * <p>A SubFlow that the server could not start returns {@link FlowStatus#FAILED} with
+     * {@link FlowErrorType#SUB_FLOW_START_FAILED} and the start error as its error message. The
+     * execute method sees this result only when the Step uses {@link WaitForFailurePolicy#PROCEED}.
+     * Check the error type to tell a start failure apart from a SubFlow that started and then failed.
+     *
+     * <pre>{@code
+     * FlowResult charge = SubFlow.getConditionResults(context, 0);
+     * if (charge.getErrorType() == FlowErrorType.SUB_FLOW_START_FAILED) {
+     *     return StepDecision.forceFail("SubFlow did not start: " + charge.getErrorMessage());
+     * }
+     * }</pre>
      *
      * @param context the current execute invocation context
      * @param index the zero-based SubFlow condition index

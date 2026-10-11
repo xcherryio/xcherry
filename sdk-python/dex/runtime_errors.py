@@ -46,6 +46,10 @@ class FlowErrorType(Enum):
         INVALID_USER_FLOW_CODE: Application Flow definitions or results were invalid.
         INTERNAL: Dex encountered an internal invariant or infrastructure failure.
         FLOW_TIMEOUT: A Dex soft Flow timeout expired under the fail policy.
+        SUB_FLOW_START_FAILED: The server could not start a SubFlow within its
+            configured retry budget. Only SubFlow results report it. The SubFlow
+            never ran, so the result has no outputs and its error message holds
+            the last start error.
     """
 
     STEP_DECISION_FAILED = "step_decision_failed"
@@ -54,6 +58,7 @@ class FlowErrorType(Enum):
     INVALID_USER_FLOW_CODE = "invalid_user_flow_code"
     INTERNAL = "internal"
     FLOW_TIMEOUT = "flow_timeout"
+    SUB_FLOW_START_FAILED = "sub_flow_start_failed"
 
 
 class DexServiceError(RuntimeError):

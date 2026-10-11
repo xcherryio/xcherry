@@ -67,7 +67,14 @@ export interface StepOptions {
   readonly waitForRetry?: RetryPolicy;
   /** Optional retry policy for `execute`. */
   readonly executeRetry?: RetryPolicy;
-  /** Behavior after all `waitFor` attempts fail. */
+  /**
+   * Behavior after all `waitFor` attempts fail.
+   *
+   * `"proceed"` also covers a SubFlow condition that the server cannot start within its retry
+   * budget. `execute` then runs immediately with `waitForMethodFailed()` true. Each SubFlow that
+   * did not start reports a failed result with `FlowErrorType.SUB_FLOW_START_FAILED`. SubFlows that
+   * did start keep running, and their results stay nonterminal.
+   */
   readonly waitForFailure?: WaitForFailurePolicy;
   /** WaitFor durability override; otherwise uses Flow configuration, then sync. */
   readonly waitForDurability?: StepDurability;

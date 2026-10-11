@@ -417,6 +417,11 @@ Flow ID with `SubFlow.getFlowId(context, index)` before passing it to
 stable list position, not its starting input or options. SubFlows continue when
 their parent closes.
 
+If the server cannot start a SubFlow within its retry budget, the waiting Step's
+`waitForFailure` policy decides the outcome. The default fails the parent Flow.
+With `WaitForFailurePolicy.PROCEED`, `execute` runs and the SubFlow result
+reports `FlowStatus.FAILED` with `FlowErrorType.SUB_FLOW_START_FAILED`.
+
 `client.waitForAttributeMatch(...)` overloads cover singleton Attributes and
 AttributeMap instances in the current run. Build a match with one of the six
 `AttributeMatch` factories. The method returns the decoded matched value.

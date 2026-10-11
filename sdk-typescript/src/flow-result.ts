@@ -147,6 +147,8 @@ function mapErrorType(type: ProtoFlowErrorType): FlowErrorTypeValue | undefined 
       return FlowErrorType.INVALID_USER_FLOW_CODE;
     case ProtoFlowErrorType.FLOW_ERROR_TYPE_INTERNAL: return FlowErrorType.INTERNAL;
     case ProtoFlowErrorType.FLOW_ERROR_TYPE_FLOW_TIMEOUT: return FlowErrorType.FLOW_TIMEOUT;
+    case ProtoFlowErrorType.FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED:
+      return FlowErrorType.SUB_FLOW_START_FAILED;
     default: throw new TypeError(`unsupported Flow error type ${type}`);
   }
 }

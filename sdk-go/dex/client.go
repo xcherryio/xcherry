@@ -269,6 +269,12 @@ const (
 	FlowErrorInternal
 	// FlowErrorTimeout identifies expiration of a Dex soft Flow timeout.
 	FlowErrorTimeout
+	// FlowErrorSubFlowStartFailed identifies a SubFlow that the server could not start.
+	//
+	// Only SubFlowResult reports it. The server retries each SubFlow start within its
+	// configured retry budget before it reports this failure. The SubFlow never ran, so
+	// FlowResult.Completions is empty and FlowResult.ErrorMessage holds the last start error.
+	FlowErrorSubFlowStartFailed
 )
 
 // StepCompletion contains one hydrated output from a completed Step.

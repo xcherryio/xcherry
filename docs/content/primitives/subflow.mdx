@@ -181,6 +181,16 @@ Use **allOf** to make the parent wait for all SubFlows to complete.
 
 Use **anyOf** when the parent does not need to wait for all SubFlows. A SubFlow keeps running after **WaitFor** has finished waiting. **Execute** can still get the SubFlow ID to stop it, or pass the SubFlow ID to another Step to decide how to handle it.
 
+## When a SubFlow cannot start
+
+Dex Server starts each SubFlow after **WaitFor** returns. It retries a failed start within its configured retry budget. If the start still fails, the waiting Step's **WaitForFailure** policy decides what happens.
+
+By default, the parent Flow fails.
+
+With the proceed policy, **Execute** runs right away, and its context reports a **WaitFor** failure. The result of each SubFlow that did not start has a failed status and the **SubFlowStartFailed** error type. Its error message holds the last start error. Check this error type to tell a start failure apart from a SubFlow that started and then failed. SubFlows that did start keep running, and their results show them as still running.
+
+See [WaitFor failure recovery](/design-patterns/failure-handling/wait-for-failure-recovery) for how to set the proceed policy.
+
 ## SubFlowOptions and SubFlowReusePolicy
 
 **SubFlowOptions** are the equivalent of **StartFlowOptions** on the **StartFlow** API. Most options are the same, except for **SubFlowReusePolicy**.

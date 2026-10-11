@@ -119,6 +119,8 @@ export enum FlowErrorType {
   FLOW_ERROR_TYPE_FLOW_TIMEOUT = 5,
   /** FLOW_ERROR_TYPE_INTERNAL - either bug in sdk or server */
   FLOW_ERROR_TYPE_INTERNAL = 6,
+  /** FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED - A SubFlow result only: the server could not start the SubFlow within its retry budget. */
+  FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED = 7,
   UNRECOGNIZED = -1,
 }
 

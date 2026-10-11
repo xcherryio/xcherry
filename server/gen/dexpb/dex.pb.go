@@ -535,6 +535,8 @@ const (
 	FlowErrorType_FLOW_ERROR_TYPE_FLOW_TIMEOUT           FlowErrorType = 5
 	// either bug in sdk or server
 	FlowErrorType_FLOW_ERROR_TYPE_INTERNAL FlowErrorType = 6
+	// A SubFlow result only: the server could not start the SubFlow within its retry budget.
+	FlowErrorType_FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED FlowErrorType = 7
 )
 
 // Enum value maps for FlowErrorType.
@@ -547,6 +549,7 @@ var (
 		4: "FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE",
 		5: "FLOW_ERROR_TYPE_FLOW_TIMEOUT",
 		6: "FLOW_ERROR_TYPE_INTERNAL",
+		7: "FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED",
 	}
 	FlowErrorType_value = map[string]int32{
 		"FLOW_ERROR_TYPE_UNSPECIFIED":                0,
@@ -556,6 +559,7 @@ var (
 		"FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE":     4,
 		"FLOW_ERROR_TYPE_FLOW_TIMEOUT":               5,
 		"FLOW_ERROR_TYPE_INTERNAL":                   6,
+		"FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED":      7,
 	}
 )
 
@@ -14122,7 +14126,7 @@ const file_dex_proto_rawDesc = "" +
 	"-FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY\x10\x04\x12\x1a\n" +
 	"\x16FLOW_STATUS_TERMINATED\x10\x05\x12\x18\n" +
 	"\x14FLOW_STATUS_CANCELED\x10\x06\x12 \n" +
-	"\x1cFLOW_STATUS_CONTINUED_AS_NEW\x10\a*\x9e\x02\n" +
+	"\x1cFLOW_STATUS_CONTINUED_AS_NEW\x10\a*\xc9\x02\n" +
 	"\rFlowErrorType\x12\x1f\n" +
 	"\x1bFLOW_ERROR_TYPE_UNSPECIFIED\x10\x00\x12.\n" +
 	"*FLOW_ERROR_TYPE_STEP_DECISION_FAILING_FLOW\x10\x01\x12+\n" +
@@ -14130,7 +14134,8 @@ const file_dex_proto_rawDesc = "" +
 	"\x1fFLOW_ERROR_TYPE_WORKER_API_FAIL\x10\x03\x12*\n" +
 	"&FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE\x10\x04\x12 \n" +
 	"\x1cFLOW_ERROR_TYPE_FLOW_TIMEOUT\x10\x05\x12\x1c\n" +
-	"\x18FLOW_ERROR_TYPE_INTERNAL\x10\x06*\x93\x01\n" +
+	"\x18FLOW_ERROR_TYPE_INTERNAL\x10\x06\x12)\n" +
+	"%FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED\x10\a*\x93\x01\n" +
 	"\x16PendingStepMethodPhase\x12)\n" +
 	"%PENDING_STEP_METHOD_PHASE_UNSPECIFIED\x10\x00\x12'\n" +
 	"#PENDING_STEP_METHOD_PHASE_SCHEDULED\x10\x01\x12%\n" +

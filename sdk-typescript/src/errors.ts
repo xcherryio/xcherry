@@ -47,6 +47,13 @@ export const FlowErrorType = Object.freeze({
   INTERNAL: "internal",
   /** A Dex soft Flow timeout expired under the fail policy. */
   FLOW_TIMEOUT: "flowTimeout",
+  /**
+   * The server could not start a SubFlow within its configured retry budget.
+   *
+   * Only SubFlow results report it. The SubFlow never ran, so the result has no outputs and its
+   * error message holds the last start error.
+   */
+  SUB_FLOW_START_FAILED: "subFlowStartFailed",
 } as const);
 
 /** Represents a value from {@link FlowErrorType}. */

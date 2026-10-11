@@ -49,6 +49,11 @@ const (
 	// FailFlowOnWaitForFailure ends the Flow after WaitFor exhausts retries.
 	FailFlowOnWaitForFailure WaitForFailurePolicy = iota
 	// ProceedOnWaitForFailure invokes Execute and exposes the failure through Context.
+	//
+	// It also covers a SubFlow Condition that the server cannot start within its retry
+	// budget. Execute then runs immediately with Context.RecoveryError set. SubFlowResult
+	// reports FlowFailed with FlowErrorSubFlowStartFailed for each SubFlow that did not
+	// start. SubFlows that did start keep running, and their results stay nonterminal.
 	ProceedOnWaitForFailure
 )
 

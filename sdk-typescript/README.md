@@ -391,6 +391,11 @@ public execute(context: Context, _input: ChargeInput): StepDecision {
 `SubFlowOptions` configures timing, timeout policy, retry, initial target Attributes,
 Flow config, Condition ID, and reuse. Parent completion does not cancel an unfinished SubFlow.
 
+If the server cannot start a SubFlow within its retry budget, the waiting Step's
+`waitForFailure` option decides the outcome. The default fails the parent Flow. With
+`"proceed"`, `execute` runs and the SubFlow result reports a failed status with
+`FlowErrorType.SUB_FLOW_START_FAILED`.
+
 ## Errors
 
 Client calls reject with concrete `DexServiceError` subclasses. Existing-Flow

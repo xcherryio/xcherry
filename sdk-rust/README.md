@@ -184,6 +184,11 @@ fn execute(&self, context: &mut Context, _input: ChargeInput) -> HandlerResult<S
 `SubFlowOptions` configures timing, timeout policy, retry, initial target Attributes,
 Flow config, Condition ID, and reuse. Parent completion does not cancel an unfinished SubFlow.
 
+If the server cannot start a SubFlow within its retry budget, the waiting Step's
+`wait_for_failure` policy decides the outcome. The default fails the parent Flow. With
+`WaitForFailurePolicy::Proceed`, `execute` runs and the SubFlow result reports
+`FlowStatus::Failed` with `FlowErrorType::SubFlowStartFailed`.
+
 Existing-Flow reads (`describe_flow`, `wait_for_flow`, and
 `time_travel`) use `FlowNotFound`; operations requiring a running Flow use
 `FlowNotActiveOrNotFound`. Each remote variant owns a `ServiceError`, available through

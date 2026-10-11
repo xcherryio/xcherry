@@ -182,6 +182,16 @@ impl Step for SubFlowParent {
 
 使用 **anyOf** 时，parent 不会等待所有 SubFlow。**WaitFor** 已经结束等待后，SubFlow 仍会继续运行。**Execute** 仍然可以拿到 SubFlow ID 来停止它，或者把 SubFlow ID 传给其他 Step，由它决定如何处理。
 
+## SubFlow 无法启动时
+
+**WaitFor** 返回后，Dex Server 会启动每个 SubFlow。启动失败时，它会在配置的 retry 预算内重试。如果仍然失败，由等待中的 Step 的 **WaitForFailure** policy 决定后续行为。
+
+默认情况下，parent Flow 会失败。
+
+使用 proceed policy 时，**Execute** 会立即运行，它的 context 会报告一次 **WaitFor** 失败。每个没能启动的 SubFlow，其 result 的状态为 failed，error type 为 **SubFlowStartFailed**，error message 是最后一次启动的错误。通过这个 error type，可以区分「没能启动」和「启动后失败」。已经启动的 SubFlow 会继续运行，它们的 result 显示为仍在运行。
+
+如何设置 proceed policy，见 [WaitFor 失败恢复](/design-patterns/failure-handling/wait-for-failure-recovery)。
+
 ## SubFlowOptions 和 SubFlowReusePolicy
 
 **SubFlowOptions** 等同于 **StartFlow** API 上的 **StartFlowOptions**。大部分 option 都一样，只有 **SubFlowReusePolicy** 不同。

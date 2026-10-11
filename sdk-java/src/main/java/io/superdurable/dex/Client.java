@@ -1514,6 +1514,8 @@ public final class Client implements AutoCloseable {
                 return FlowErrorType.INTERNAL;
             case FLOW_ERROR_TYPE_FLOW_TIMEOUT:
                 return FlowErrorType.FLOW_TIMEOUT;
+            case FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED:
+                return FlowErrorType.SUB_FLOW_START_FAILED;
             default:
                 return null;
         }

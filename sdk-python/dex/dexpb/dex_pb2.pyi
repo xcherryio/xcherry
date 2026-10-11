@@ -91,6 +91,7 @@ class FlowErrorType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE: _ClassVar[FlowErrorType]
     FLOW_ERROR_TYPE_FLOW_TIMEOUT: _ClassVar[FlowErrorType]
     FLOW_ERROR_TYPE_INTERNAL: _ClassVar[FlowErrorType]
+    FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED: _ClassVar[FlowErrorType]
 
 class PendingStepMethodPhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -240,6 +241,7 @@ FLOW_ERROR_TYPE_WORKER_API_FAIL: FlowErrorType
 FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE: FlowErrorType
 FLOW_ERROR_TYPE_FLOW_TIMEOUT: FlowErrorType
 FLOW_ERROR_TYPE_INTERNAL: FlowErrorType
+FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED: FlowErrorType
 PENDING_STEP_METHOD_PHASE_UNSPECIFIED: PendingStepMethodPhase
 PENDING_STEP_METHOD_PHASE_SCHEDULED: PendingStepMethodPhase
 PENDING_STEP_METHOD_PHASE_STARTED: PendingStepMethodPhase

@@ -95,6 +95,12 @@ class WaitForFailurePolicy(Enum):
     Attributes:
         FAIL_FLOW: Fail the Flow without invoking ``execute``.
         PROCEED: Invoke ``execute`` and expose the failure through Context.
+            This also covers a SubFlow Condition that the server cannot start
+            within its retry budget. ``execute`` then runs immediately with
+            ``wait_for_method_failed()`` true. Each SubFlow that did not start
+            reports ``FlowStatus.FAILED`` with
+            ``FlowErrorType.SUB_FLOW_START_FAILED``. SubFlows that did start keep
+            running, and their results stay nonterminal.
     """
 
     FAIL_FLOW = "fail_flow"

@@ -25,7 +25,7 @@ type SubFlowStarter struct {
 	condition        *dexpb.WaitingCondition
 	activityConfig   *config.InterpreterActivityConfig
 	doneByIdx        []bool
-	startErr         error
+	startErrByIdx    map[int32]error
 }
 
 func NewSubFlowStarter(
@@ -49,9 +49,15 @@ func NewSubFlowStarter(
 		condition:        condition,
 		activityConfig:   activityConfig,
 		doneByIdx:        make([]bool, len(condition.GetSubFlowConditions())),
+		startErrByIdx:    map[int32]error{},
 	}
 }
 
+// StartAll starts every SubFlow and waits for each start attempt to finish.
+//
+// Returns the Await error when the wait itself fails. Otherwise returns the
+// lowest-index start failure, or nil when every SubFlow started. StartFailureResults
+// reports each failed start.
 func (s *SubFlowStarter) StartAll(ctx interfaces.UnifiedContext) error {
 	ctx = s.provider.WithActivityOptions(ctx, s.activityOptions())
 	for index := range s.condition.GetSubFlowConditions() {
@@ -61,7 +67,25 @@ func (s *SubFlowStarter) StartAll(ctx interfaces.UnifiedContext) error {
 	if err := s.provider.Await(ctx, s.isAllDone); err != nil {
 		return err
 	}
-	return s.startErr
+	for index := range s.condition.GetSubFlowConditions() {
+		if err := s.startErrByIdx[int32(index)]; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StartFailureResults returns a failed SubFlow result for each SubFlow that could not start, keyed by condition index.
+func (s *SubFlowStarter) StartFailureResults() map[int32]*dexpb.FlowResult {
+	results := make(map[int32]*dexpb.FlowResult, len(s.startErrByIdx))
+	for index, err := range s.startErrByIdx {
+		results[index] = &dexpb.FlowResult{
+			FlowStatus:   dexpb.FlowStatus_FLOW_STATUS_FAILED,
+			ErrorType:    dexpb.FlowErrorType_FLOW_ERROR_TYPE_SUB_FLOW_START_FAILED,
+			ErrorMessage: err.Error(),
+		}
+	}
+	return results
 }
 
 func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
@@ -78,9 +102,7 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 	}
 	err := s.provider.ExecuteLocalActivity(&output, ctx, s.activities.StartSubFlow, startInput)
 	if err != nil {
-		if s.startErr == nil {
-			s.startErr = err
-		}
+		s.startErrByIdx[int32(index)] = err
 	}
 	if err == nil {
 		s.tracker.ApplyImmediateFlowResultFromStart(s.stepExecutionID, int32(index), &output)

@@ -32,5 +32,14 @@ public enum FlowErrorType {
     INTERNAL,
 
     /** A Dex soft Flow timeout expired under {@link FlowTimeoutPolicy#FAIL}. */
-    FLOW_TIMEOUT
+    FLOW_TIMEOUT,
+
+    /**
+     * The server could not start a SubFlow within its configured retry budget.
+     *
+     * <p>Only {@link SubFlow#getConditionResults(Context, int)} reports this value. The SubFlow never
+     * ran, so the result has no outputs and {@link FlowResult#getErrorMessage()} holds the last start
+     * error. The waiting Step sees this result only when it uses {@link WaitForFailurePolicy#PROCEED}.
+     */
+    SUB_FLOW_START_FAILED
 }

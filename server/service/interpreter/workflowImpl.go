@@ -990,7 +990,31 @@ func (i *Interpreter) processStepExecution(
 				&i.sharedConfig.Interpreter.InterpreterActivityConfig,
 			)
 			if err := starter.StartAll(ctx); err != nil {
-				return nil, service.StepExecutionStatusInternalError, err
+				if !globalVersioner.UsesSubFlowStartFailureProceed() ||
+					!shouldProceedOnWaitForMethodError(step) {
+					return nil, service.StepExecutionStatusInternalError, err
+				}
+				for index, result := range starter.StartFailureResults() {
+					completedSubFlowResults[index] = result
+				}
+				return i.invokeExecuteAfterSubFlowStartFailure(
+					ctx,
+					provider,
+					basicInfo,
+					step,
+					stepExeId,
+					persistenceManager,
+					channelStore,
+					executionContext,
+					waitingCondition,
+					completedSubFlowResults,
+					err,
+					subFlowTracker,
+					continueAsNewer,
+					flowConfiger,
+					stepExeLocals,
+					globalVersioner,
+				)
 			}
 		}
 	} // end of NOT isResumeFromContinueAsNew
@@ -1203,6 +1227,52 @@ func (i *Interpreter) reportSubFlowCompletion(
 				FlowResult: result,
 			},
 		},
+	)
+}
+
+// invokeExecuteAfterSubFlowStartFailure routes an exhausted SubFlow start like a failed WaitFor that proceeds.
+func (i *Interpreter) invokeExecuteAfterSubFlowStartFailure(
+	ctx interfaces.UnifiedContext,
+	provider interfaces.WorkflowProvider,
+	basicInfo service.BasicInfo,
+	step *dexpb.StepMovement,
+	stepExeId string,
+	persistenceManager *PersistenceManager,
+	channelStore *ChannelStore,
+	executionContext *dexpb.Context,
+	waitingCondition *dexpb.WaitingConditionState,
+	completedSubFlowResults map[int32]*dexpb.FlowResult,
+	startErr error,
+	subFlowTracker *SubFlowTracker,
+	continueAsNewer *ContinueAsNewer,
+	flowConfiger *interpreterconfig.FlowConfiger,
+	stepExeLocals []*dexpb.KV,
+	globalVersioner *GlobalVersioner,
+) (*dexpb.StepDecision, service.StepExecutionStatus, error) {
+	subFlowTracker.Unregister(stepExeId)
+	conditionResults := condition.BuildConditionResults(
+		waitingCondition, nil, nil, completedSubFlowResults,
+	)
+	conditionResults.WaitForFailed = true
+	recoveryError, err := provider.MapToRecoveryError(startErr)
+	if err != nil {
+		return nil, service.StepExecutionStatusInternalError, err
+	}
+	executionContext.RecoveryError = recoveryError
+	return i.invokeExecuteMethod(
+		ctx,
+		provider,
+		basicInfo,
+		step,
+		stepExeId,
+		persistenceManager,
+		channelStore,
+		executionContext,
+		conditionResults,
+		continueAsNewer,
+		flowConfiger,
+		stepExeLocals,
+		globalVersioner,
 	)
 }
 

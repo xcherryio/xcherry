@@ -143,6 +143,13 @@ pub struct SubFlow;
 impl SubFlow {
     /// Creates a SubFlow Condition with default options.
     ///
+    /// The server starts the SubFlow after `wait_for` returns and retries the start within its
+    /// configured retry budget. When the start still fails, the waiting Step's
+    /// [`crate::WaitForFailurePolicy`] decides the outcome. The default
+    /// [`crate::WaitForFailurePolicy::FailFlow`] fails the parent Flow.
+    /// [`crate::WaitForFailurePolicy::Proceed`] runs `execute`, and the SubFlow result reports
+    /// [`crate::FlowErrorType::SubFlowStartFailed`].
+    ///
     /// # Errors
     ///
     /// Returns a value-mapping error when `input` cannot be encoded.
@@ -178,6 +185,20 @@ impl SubFlow {
     }
 
     /// Returns one stable-indexed SubFlow result during Step `execute`.
+    ///
+    /// A SubFlow that the server could not start returns [`crate::FlowStatus::Failed`] with
+    /// [`crate::FlowErrorType::SubFlowStartFailed`] and the start error as its error message.
+    /// `execute` sees this result only when the Step uses [`crate::WaitForFailurePolicy::Proceed`].
+    /// Check the error type to tell a start failure apart from a SubFlow that started and then
+    /// failed.
+    ///
+    /// ```ignore
+    /// let charge = SubFlow::condition_result_at(context, 0)?;
+    /// if charge.error_type() == Some(FlowErrorType::SubFlowStartFailed) {
+    ///     let detail = charge.error_message().unwrap_or_default();
+    ///     return Ok(StepDecision::force_fail(format!("SubFlow did not start: {detail}")));
+    /// }
+    /// ```
     pub fn condition_result_at(context: &Context, index: usize) -> HandlerResult<FlowResult> {
         context.sub_flow_result(index)
     }

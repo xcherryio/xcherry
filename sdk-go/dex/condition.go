@@ -87,6 +87,11 @@ func Timer(duration time.Duration, options ...ConditionOption) Condition {
 // Dex generates the SubFlow Flow ID. Omit options to use the default abnormal-restart policy, or
 // pass exactly one value to configure reuse, timing, Attributes, Flow configuration, and ID.
 //
+// The server starts the SubFlow after WaitFor returns and retries the start within its
+// configured retry budget. When the start still fails, the waiting Step's WaitForFailure
+// policy decides the outcome. The default FailFlowOnWaitForFailure fails the parent Flow.
+// ProceedOnWaitForFailure runs Execute, and SubFlowResult reports FlowErrorSubFlowStartFailed.
+//
 //	return dex.Until(dex.SubFlow(ChargeFlow{}, chargeInput)), nil
 func SubFlow(target Flow, input any, options ...SubFlowOptions) Condition {
 	condition := &conditionImpl{
@@ -111,6 +116,19 @@ func SubFlow(target Flow, input any, options ...SubFlowOptions) Condition {
 //
 // Omit index to read the first SubFlow Condition. Indexes are zero-based in the stable SubFlow
 // order within the surrounding Wait. AnyOf losers return a nonterminal running snapshot.
+//
+// A SubFlow that the server could not start returns Status FlowFailed with ErrorType
+// FlowErrorSubFlowStartFailed and the start error in ErrorMessage. Execute sees this result
+// only when the Step uses ProceedOnWaitForFailure. Check the error type to tell a start
+// failure apart from a SubFlow that started and then failed.
+//
+//	result, err := dex.SubFlowResult(ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if result.ErrorType == dex.FlowErrorSubFlowStartFailed {
+//		return dex.ForceFail("SubFlow did not start: " + result.ErrorMessage), nil
+//	}
 func SubFlowResult(ctx Context, index ...int) (FlowResult, error) {
 	invocation, ok := ctx.(*invocationContext)
 	if !ok || invocation == nil {

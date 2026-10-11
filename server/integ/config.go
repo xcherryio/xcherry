@@ -46,6 +46,8 @@ type DexServiceTestConfig struct {
 	// LazyLoading overrides BlobStore.LazyLoading.
 	// Nil uses EffectiveLazyLoading default (true).
 	LazyLoading *bool
+	// SubFlowStartActivityConfig bounds SubFlow start retries; nil uses the server default.
+	SubFlowStartActivityConfig *config.SubFlowStartActivityConfig
 }
 
 func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config {
@@ -84,6 +86,7 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 			VerboseDebug:          false,
 			InterpreterActivityConfig: config.InterpreterActivityConfig{
 				MinimumStepHeartbeatTimeout: 2 * time.Second,
+				SubFlowStartActivityConfig:  testCfg.SubFlowStartActivityConfig,
 			},
 		},
 	}

@@ -2534,6 +2534,8 @@ const (
 	FlowErrorWorkerMethod
 	FlowErrorInvalidUserCode
 	FlowErrorInternal
+	FlowErrorTimeout
+	FlowErrorSubFlowStartFailed // SubFlowResult only: the server could not start the SubFlow
 )
 
 type StepCompletion struct {

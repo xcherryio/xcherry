@@ -463,6 +463,11 @@ func (ParentStep) Execute(ctx dex.Context, _ ChargeInput) (*dex.StepDecision, er
 target Attributes, Flow config, Condition ID, and reuse. Parent completion does not cancel an
 unfinished SubFlow.
 
+If the server cannot start a SubFlow within its retry budget, the waiting Step's
+`WaitForFailure` decides the outcome. The default fails the parent Flow. With
+`ProceedOnWaitForFailure`, Execute runs and `SubFlowResult` reports `FlowFailed` with
+`FlowErrorSubFlowStartFailed`.
+
 ## Registration
 
 Registration uses Go type names without package or pointer by default:
