@@ -32,6 +32,11 @@ func decodeConnectorOAuthSettingReference(raw json.RawMessage) (settingName stri
 }
 
 func decodeConnectorOAuthEndpoint(raw json.RawMessage) (literal string, settingName string, err error) {
+	return decodeConnectorOAuthText(raw, "an OAuth endpoint must be a URL string")
+}
+
+// decodeConnectorOAuthText reads a literal string or a setting reference. Its requirement words the error.
+func decodeConnectorOAuthText(raw json.RawMessage, requirement string) (literal string, settingName string, err error) {
 	settingName, isReference, err := decodeConnectorOAuthSettingReference(raw)
 	if err != nil || isReference {
 		return "", settingName, err
@@ -40,7 +45,7 @@ func decodeConnectorOAuthEndpoint(raw json.RawMessage) (literal string, settingN
 		return "", "", nil
 	}
 	if err := json.Unmarshal(raw, &literal); err != nil {
-		return "", "", fmt.Errorf(`an OAuth endpoint must be a URL string or a {"fromSetting"} object`)
+		return "", "", fmt.Errorf(`%s or a {"fromSetting"} object`, requirement)
 	}
 	return literal, "", nil
 }
@@ -59,7 +64,7 @@ func decodeConnectorOAuthScopes(raw json.RawMessage) (literal []string, settingN
 	return literal, "", nil
 }
 
-// UnmarshalJSON reads each endpoint and the scopes as a literal or a setting reference.
+// UnmarshalJSON reads each endpoint, the scopes and the token request options as a literal or a setting reference.
 func (oauth *connectorManifestOAuth2) UnmarshalJSON(contents []byte) error {
 	type declarations connectorManifestOAuth2
 	wire := struct {
@@ -67,6 +72,8 @@ func (oauth *connectorManifestOAuth2) UnmarshalJSON(contents []byte) error {
 		AuthorizationEndpoint json.RawMessage `json:"authorizationEndpoint"`
 		TokenEndpoint         json.RawMessage `json:"tokenEndpoint"`
 		Scopes                json.RawMessage `json:"scopes"`
+		TokenRequestEncoding  json.RawMessage `json:"tokenRequestEncoding"`
+		TokenEndpointAuth     json.RawMessage `json:"tokenEndpointAuthMethod"`
 	}{declarations: (*declarations)(oauth)}
 	if err := json.Unmarshal(contents, &wire); err != nil {
 		return err
@@ -81,6 +88,12 @@ func (oauth *connectorManifestOAuth2) UnmarshalJSON(contents []byte) error {
 	if oauth.Scopes, oauth.ScopesSetting, err = decodeConnectorOAuthScopes(wire.Scopes); err != nil {
 		return fmt.Errorf("scopes: %w", err)
 	}
+	if oauth.TokenRequestEncoding, oauth.TokenRequestEncodingSetting, err = decodeConnectorOAuthText(wire.TokenRequestEncoding, "tokenRequestEncoding must be a string"); err != nil {
+		return fmt.Errorf("tokenRequestEncoding: %w", err)
+	}
+	if oauth.TokenEndpointAuthMethod, oauth.TokenEndpointAuthMethodSetting, err = decodeConnectorOAuthText(wire.TokenEndpointAuth, "tokenEndpointAuthMethod must be a string"); err != nil {
+		return fmt.Errorf("tokenEndpointAuthMethod: %w", err)
+	}
 	return nil
 }
 
@@ -92,10 +105,14 @@ func (oauth connectorManifestOAuth2) MarshalJSON() ([]byte, error) {
 		AuthorizationEndpoint any `json:"authorizationEndpoint"`
 		TokenEndpoint         any `json:"tokenEndpoint"`
 		Scopes                any `json:"scopes,omitempty"`
+		TokenRequestEncoding  any `json:"tokenRequestEncoding,omitempty"`
+		TokenEndpointAuth     any `json:"tokenEndpointAuthMethod,omitempty"`
 	}{
 		declarations:          declarations(oauth),
 		AuthorizationEndpoint: connectorOAuthEndpointWireValue(oauth.AuthorizationEndpoint, oauth.AuthorizationEndpointSetting),
 		TokenEndpoint:         connectorOAuthEndpointWireValue(oauth.TokenEndpoint, oauth.TokenEndpointSetting),
+		TokenRequestEncoding:  connectorOAuthOptionWireValue(oauth.TokenRequestEncoding, oauth.TokenRequestEncodingSetting),
+		TokenEndpointAuth:     connectorOAuthOptionWireValue(oauth.TokenEndpointAuthMethod, oauth.TokenEndpointAuthMethodSetting),
 	}
 	if oauth.ScopesSetting != "" {
 		wire.Scopes = connectorOAuthSettingReference{FromSetting: oauth.ScopesSetting}
@@ -143,4 +160,12 @@ func connectorOAuthEndpointWireValue(literal string, settingName string) any {
 		return connectorOAuthSettingReference{FromSetting: settingName}
 	}
 	return literal
+}
+
+// connectorOAuthOptionWireValue is like connectorOAuthEndpointWireValue, but omits an option that is empty.
+func connectorOAuthOptionWireValue(literal string, settingName string) any {
+	if settingName == "" && literal == "" {
+		return nil
+	}
+	return connectorOAuthEndpointWireValue(literal, settingName)
 }

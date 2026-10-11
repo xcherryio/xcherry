@@ -53,6 +53,10 @@ func TestConnectorOAuthSettingsOfASavedConnectionAreUsedForAuthorizationExchange
 	if redeemed := provider.redeemedCodes(); len(redeemed) != 1 || redeemed[0] != "authorization-code" {
 		t.Fatalf("token endpoint requests = %v", redeemed)
 	}
+	if form := provider.lastTokenRequest(t).form; form.Get("client_id") != "oauth-client-id" ||
+		form.Get("client_secret") != "oauth-client-secret" || form.Get("code_verifier") == "" {
+		t.Fatalf("token request form = %v", form)
+	}
 	if bearer := provider.userInfoAuthorization(); bearer != "Bearer provider-access-token" {
 		t.Fatalf("UserInfo authorization = %q", bearer)
 	}
@@ -147,6 +151,127 @@ func TestConnectorOAuthStartRejectsMissingAndInvalidSettingsWithoutLeavingForThe
 	}
 }
 
+func TestConnectorOAuthTokenEndpointAuthMethodComesFromTheSettingOrItsDefault(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantBasic bool
+	}{
+		{"missing value uses the field default", "", false},
+		{"null value uses the field default", `null`, false},
+		{"blank value uses the field default", `""`, false},
+		{"client_secret_post", `"client_secret_post"`, false},
+		{"client_secret_basic", `"client_secret_basic"`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newConnectorOAuthSettingsTestProvider(t, `{"access_token":"provider-access-token","refresh_token":"provider-refresh-token","scope":"openid profile"}`)
+			setup := newConnectorOAuthSettingsTestSetup(t)
+			start := startConnectorOAuthSettingsTest(t, setup, provider.configuration(map[string]string{"tokenEndpointAuthMethod": test.value}))
+			if start.Code != http.StatusOK {
+				t.Fatalf("OAuth start = %d: %s", start.Code, start.Body.String())
+			}
+			callback := httptest.NewRecorder()
+			setup.handleOAuthCallback(callback, httptest.NewRequest(http.MethodGet, "/api/v2/connector-oauth/callback?state="+
+				url.QueryEscape(connectorOAuthSettingsTestAuthorizationURL(t, start).Query().Get("state"))+"&code=authorization-code", nil))
+			if callback.Code != http.StatusSeeOther {
+				t.Fatalf("OAuth callback = %d: %s", callback.Code, callback.Body.String())
+			}
+			request := provider.lastTokenRequest(t)
+			hasClientInForm := request.form.Get("client_id") != "" || request.form.Get("client_secret") != ""
+			if request.hasBasic != test.wantBasic || request.basicUser != map[bool]string{true: "oauth-client-id", false: ""}[test.wantBasic] || hasClientInForm == test.wantBasic {
+				t.Fatalf("token request basic = %v user %q, client in form = %v, want basic = %v", request.hasBasic, request.basicUser, hasClientInForm, test.wantBasic)
+			}
+		})
+	}
+}
+
+func TestConnectorOAuthStartRejectsUnsupportedTokenRequestOptionsFromSettings(t *testing.T) {
+	provider := newConnectorOAuthSettingsTestProvider(t, `{"access_token":"provider-access-token"}`)
+	setup := newConnectorOAuthSettingsTestSetup(t)
+	for _, test := range []struct{ name, value, want string }{
+		{"unsupported method", `"private_key_jwt"`, `must be client_secret_post or client_secret_basic`},
+		{"method with another case", `"CLIENT_SECRET_POST"`, `must be client_secret_post or client_secret_basic`},
+		{"method with a space", `" client_secret_basic"`, `must be client_secret_post or client_secret_basic`},
+		{"method that is not a string", `5`, `must be a string`},
+		{"method list", `["client_secret_basic"]`, `must be a string`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := startConnectorOAuthSettingsTest(t, setup, provider.configuration(map[string]string{"tokenEndpointAuthMethod": test.value}))
+			var body struct {
+				Code  string `json:"code"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusBadRequest || body.Code != "CONNECTOR_OAUTH_SETTING_INVALID" ||
+				!strings.Contains(body.Error, `setting "tokenEndpointAuthMethod" `+test.want) {
+				t.Fatalf("OAuth start = %d %+v", recorder.Code, body)
+			}
+			for _, echoed := range []string{"private_key_jwt", "CLIENT_SECRET_POST"} {
+				if strings.Contains(body.Error, echoed) {
+					t.Fatalf("the error repeats the setting value: %s", body.Error)
+				}
+			}
+		})
+	}
+	if codes := provider.redeemedCodes(); len(codes) != 0 {
+		t.Fatalf("the provider received %d token requests", len(codes))
+	}
+}
+
+func TestConnectorOAuthTokenRequestEncodingComesFromTheSetting(t *testing.T) {
+	provider := newConnectorOAuthSettingsTestProvider(t, `{"access_token":"provider-access-token"}`)
+	identity := connectorOAuthSettingsTestIdentity()
+	setup := connectorTestSetup(t, t.TempDir(), connectorTestDefinitionProvider(t, []connectorDefinitionIdentity{identity}))
+	installConnectorTestReleaseWithAuth(t, setup, identity, "oauth2-http", connectorManifestAuth{
+		Type:   "oauth2",
+		Fields: []connectorManifestField{{Name: "access_token", Type: "secretString", Required: true}},
+		OAuth2: &connectorManifestOAuth2{
+			AuthorizationEndpointSetting: "authorizationEndpoint", TokenEndpointSetting: "tokenEndpoint",
+			TokenRequestEncodingSetting: "tokenRequestEncoding",
+		},
+	},
+		connectorManifestField{Name: "authorizationEndpoint", Type: "url", Required: true},
+		connectorManifestField{Name: "tokenEndpoint", Type: "url", Required: true},
+		connectorManifestField{Name: "tokenRequestEncoding", Type: "enum", Enum: []string{"form", "json"}, Default: "form"},
+	)
+	for _, test := range []struct {
+		value           string
+		wantContentType string
+		wantStatus      int
+	}{
+		{"", "application/x-www-form-urlencoded", http.StatusOK},
+		{`"json"`, "application/json", http.StatusOK},
+		{`"xml"`, "", http.StatusBadRequest},
+	} {
+		configuration := `{"authorizationEndpoint":"` + provider.URL + `/authorize","tokenEndpoint":"` + provider.URL + `/token"`
+		if test.value != "" {
+			configuration += `,"tokenRequestEncoding":` + test.value
+		}
+		configuration += `}`
+		start := postConnectorOAuthSettingsTestStart(t, setup, `{"clientId":"oauth-client-id","clientSecret":"","configuration":`+configuration+`}`)
+		if start.Code != test.wantStatus {
+			t.Fatalf("OAuth start for %q = %d: %s", test.value, start.Code, start.Body.String())
+		}
+		if test.wantStatus != http.StatusOK {
+			if !strings.Contains(start.Body.String(), `setting \"tokenRequestEncoding\" must be form or json`) || strings.Contains(start.Body.String(), "xml") {
+				t.Fatalf("OAuth start error = %s", start.Body.String())
+			}
+			continue
+		}
+		callback := httptest.NewRecorder()
+		setup.handleOAuthCallback(callback, httptest.NewRequest(http.MethodGet, "/api/v2/connector-oauth/callback?state="+
+			url.QueryEscape(connectorOAuthSettingsTestAuthorizationURL(t, start).Query().Get("state"))+"&code=authorization-code", nil))
+		if callback.Code != http.StatusSeeOther {
+			t.Fatalf("OAuth callback = %d: %s", callback.Code, callback.Body.String())
+		}
+		if got := provider.lastTokenRequest(t).contentType; got != test.wantContentType {
+			t.Fatalf("token request content type for %q = %q, want %q", test.value, got, test.wantContentType)
+		}
+	}
+}
+
 func TestConnectorOAuthLiteralEndpointsStayHTTPSOnly(t *testing.T) {
 	provider := newConnectorOAuthSettingsTestProvider(t, `{"access_token":"provider-access-token"}`)
 	t.Run("authorization endpoint", func(t *testing.T) {
@@ -216,27 +341,50 @@ func TestConnectorOAuthResolvesMethodSettingsAndDefaults(t *testing.T) {
 type connectorOAuthSettingsTestProvider struct {
 	*httptest.Server
 	mu            sync.Mutex
-	codes         []string
+	tokenRequests []connectorOAuthSettingsTestTokenRequest
 	userInfoToken string
+}
+
+type connectorOAuthSettingsTestTokenRequest struct {
+	form        url.Values
+	contentType string
+	basicUser   string
+	hasBasic    bool
 }
 
 func newConnectorOAuthSettingsTestProvider(t *testing.T, tokenResponse string) *connectorOAuthSettingsTestProvider {
 	t.Helper()
 	provider := &connectorOAuthSettingsTestProvider{}
-	provider.Server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	provider.Server = httptest.NewServer(provider.handler(t, tokenResponse))
+	t.Cleanup(provider.Close)
+	return provider
+}
+
+func (provider *connectorOAuthSettingsTestProvider) handler(t *testing.T, tokenResponse string) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
 		provider.mu.Lock()
 		defer provider.mu.Unlock()
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/token":
-			if err := request.ParseForm(); err != nil {
-				t.Error(err)
+			tokenRequest := connectorOAuthSettingsTestTokenRequest{contentType: request.Header.Get("Content-Type")}
+			tokenRequest.basicUser, _, tokenRequest.hasBasic = request.BasicAuth()
+			if tokenRequest.contentType == "application/json" {
+				parameters := map[string]string{}
+				if err := json.NewDecoder(request.Body).Decode(&parameters); err != nil {
+					t.Error(err)
+				}
+				tokenRequest.form = url.Values{}
+				for name, value := range parameters {
+					tokenRequest.form.Set(name, value)
+				}
+			} else {
+				if err := request.ParseForm(); err != nil {
+					t.Error(err)
+				}
+				tokenRequest.form = request.PostForm
 			}
-			if request.PostForm.Get("client_id") != "oauth-client-id" || request.PostForm.Get("client_secret") != "oauth-client-secret" ||
-				request.PostForm.Get("code_verifier") == "" {
-				t.Errorf("token request = %v", request.PostForm)
-			}
-			provider.codes = append(provider.codes, request.PostForm.Get("code"))
+			provider.tokenRequests = append(provider.tokenRequests, tokenRequest)
 			if _, err := response.Write([]byte(tokenResponse)); err != nil {
 				t.Error(err)
 			}
@@ -248,15 +396,27 @@ func newConnectorOAuthSettingsTestProvider(t *testing.T, tokenResponse string) *
 		default:
 			http.NotFound(response, request)
 		}
-	}))
-	t.Cleanup(provider.Close)
-	return provider
+	}
 }
 
 func (provider *connectorOAuthSettingsTestProvider) redeemedCodes() []string {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	return append([]string(nil), provider.codes...)
+	var codes []string
+	for _, tokenRequest := range provider.tokenRequests {
+		codes = append(codes, tokenRequest.form.Get("code"))
+	}
+	return codes
+}
+
+func (provider *connectorOAuthSettingsTestProvider) lastTokenRequest(t *testing.T) connectorOAuthSettingsTestTokenRequest {
+	t.Helper()
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.tokenRequests) == 0 {
+		t.Fatal("the provider received no token request")
+	}
+	return provider.tokenRequests[len(provider.tokenRequests)-1]
 }
 
 func (provider *connectorOAuthSettingsTestProvider) userInfoAuthorization() string {
@@ -316,13 +476,17 @@ func newConnectorOAuthSettingsTestSetup(t *testing.T) *connectorSetup {
 			CredentialDerivations: []connectorOAuthCredentialDerivation{{
 				Credential: "primary_email", EndpointSetting: "userInfoEndpoint", Source: "email", VerifiedBy: "email_verified",
 			}},
-			PKCE: true,
+			TokenEndpointAuthMethodSetting: "tokenEndpointAuthMethod",
+			PKCE:                           true,
 		},
 	},
 		connectorManifestField{Name: "authorizationEndpoint", Type: "url", Required: true},
 		connectorManifestField{Name: "tokenEndpoint", Type: "url", Required: true},
 		connectorManifestField{Name: "userInfoEndpoint", Type: "url", Required: true},
 		connectorManifestField{Name: "scopes", Type: "stringList", Required: true},
+		connectorManifestField{
+			Name: "tokenEndpointAuthMethod", Type: "enum", Enum: []string{"client_secret_post", "client_secret_basic"}, Default: "client_secret_post",
+		},
 	)
 	return setup
 }

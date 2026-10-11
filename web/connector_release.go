@@ -241,9 +241,11 @@ type connectorManifestOAuth2 struct {
 	PKCE                    bool                                 `json:"pkce"`
 
 	// A Setting field names the configuration field that supplies the value; the manifest wrote {"fromSetting": name}.
-	AuthorizationEndpointSetting string `json:"-"`
-	TokenEndpointSetting         string `json:"-"`
-	ScopesSetting                string `json:"-"`
+	AuthorizationEndpointSetting   string `json:"-"`
+	TokenEndpointSetting           string `json:"-"`
+	ScopesSetting                  string `json:"-"`
+	TokenRequestEncodingSetting    string `json:"-"`
+	TokenEndpointAuthMethodSetting string `json:"-"`
 }
 
 type connectorOAuthCredentialMapping struct {

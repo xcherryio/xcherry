@@ -47,6 +47,22 @@ func TestConnectorOAuthManifestDecodesLiteralsAndSettingReferences(t *testing.T)
 			oauth2: `{"authorizationEndpoint":"https://idp.example/auth","tokenEndpoint":{"fromSetting":"tokenUrl"},"pkce":false}`,
 			want:   connectorManifestOAuth2{AuthorizationEndpoint: "https://idp.example/auth", TokenEndpointSetting: "tokenUrl"},
 		},
+		{
+			name:   "token request options as literals",
+			oauth2: `{"authorizationEndpoint":"https://idp.example/auth","tokenEndpoint":"https://idp.example/token","tokenRequestEncoding":"json","tokenEndpointAuthMethod":"client_secret_basic","pkce":false}`,
+			want: connectorManifestOAuth2{
+				AuthorizationEndpoint: "https://idp.example/auth", TokenEndpoint: "https://idp.example/token",
+				TokenRequestEncoding: "json", TokenEndpointAuthMethod: "client_secret_basic",
+			},
+		},
+		{
+			name:   "token request options as references",
+			oauth2: `{"authorizationEndpoint":"","tokenEndpoint":"","tokenRequestEncoding":{"fromSetting":"encoding"},"tokenEndpointAuthMethod":{"fromSetting":"clientAuthentication"},"pkce":false}`,
+			want:   connectorManifestOAuth2{TokenRequestEncodingSetting: "encoding", TokenEndpointAuthMethodSetting: "clientAuthentication"},
+		},
+		{name: "empty token option reference", oauth2: `{"tokenEndpointAuthMethod":{"fromSetting":""}}`, wantErr: "tokenEndpointAuthMethod: a setting reference must be exactly"},
+		{name: "token option with another key", oauth2: `{"tokenRequestEncoding":{"fromSetting":"a","values":{}}}`, wantErr: "tokenRequestEncoding: a setting reference must be exactly"},
+		{name: "token option of another type", oauth2: `{"tokenEndpointAuthMethod":["client_secret_post"]}`, wantErr: "tokenEndpointAuthMethod: tokenEndpointAuthMethod must be a string"},
 		{name: "empty reference", oauth2: `{"tokenEndpoint":{"fromSetting":""}}`, wantErr: "tokenEndpoint: a setting reference must be exactly"},
 		{name: "reference with another key", oauth2: `{"tokenEndpoint":{"fromSetting":"a","default":"https://x"}}`, wantErr: "tokenEndpoint: a setting reference must be exactly"},
 		{name: "reference without a name", oauth2: `{"authorizationEndpoint":{}}`, wantErr: "authorizationEndpoint: a setting reference must be exactly"},

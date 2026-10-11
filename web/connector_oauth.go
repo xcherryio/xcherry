@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 	connectorOAuthJSONTokenRequestEncoding    = "json"
 	connectorOAuthClientSecretPostAuthMethod  = "client_secret_post"
 	connectorOAuthClientSecretBasicAuthMethod = "client_secret_basic"
+)
+
+var (
+	connectorOAuthTokenRequestEncodings    = []string{connectorOAuthFormTokenRequestEncoding, connectorOAuthJSONTokenRequestEncoding}
+	connectorOAuthTokenEndpointAuthMethods = []string{connectorOAuthClientSecretPostAuthMethod, connectorOAuthClientSecretBasicAuthMethod}
 )
 
 type connectorOAuthStartRequest struct {
@@ -455,14 +461,10 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 }
 
 func validateConnectorOAuthTokenRequestDeclarations(oauth connectorManifestOAuth2) error {
-	switch oauth.TokenRequestEncoding {
-	case "", connectorOAuthFormTokenRequestEncoding, connectorOAuthJSONTokenRequestEncoding:
-	default:
+	if oauth.TokenRequestEncoding != "" && !slices.Contains(connectorOAuthTokenRequestEncodings, oauth.TokenRequestEncoding) {
 		return fmt.Errorf("Connector OAuth token request encoding %q is not supported", oauth.TokenRequestEncoding)
 	}
-	switch oauth.TokenEndpointAuthMethod {
-	case "", connectorOAuthClientSecretPostAuthMethod, connectorOAuthClientSecretBasicAuthMethod:
-	default:
+	if oauth.TokenEndpointAuthMethod != "" && !slices.Contains(connectorOAuthTokenEndpointAuthMethods, oauth.TokenEndpointAuthMethod) {
 		return fmt.Errorf("Connector OAuth token endpoint auth method %q is not supported", oauth.TokenEndpointAuthMethod)
 	}
 	return nil

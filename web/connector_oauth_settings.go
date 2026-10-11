@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -54,6 +55,12 @@ func (oauth connectorManifestOAuth2) resolveSettings(
 	if resolved.Scopes, err = settings.resolveScopes(oauth.ScopesSetting, oauth.Scopes); err != nil {
 		return connectorManifestOAuth2{}, err
 	}
+	if resolved.TokenRequestEncoding, err = settings.resolveOption(oauth.TokenRequestEncodingSetting, oauth.TokenRequestEncoding, connectorOAuthTokenRequestEncodings); err != nil {
+		return connectorManifestOAuth2{}, err
+	}
+	if resolved.TokenEndpointAuthMethod, err = settings.resolveOption(oauth.TokenEndpointAuthMethodSetting, oauth.TokenEndpointAuthMethod, connectorOAuthTokenEndpointAuthMethods); err != nil {
+		return connectorManifestOAuth2{}, err
+	}
 	resolved.CredentialDerivations = append([]connectorOAuthCredentialDerivation(nil), oauth.CredentialDerivations...)
 	for index, derivation := range resolved.CredentialDerivations {
 		if resolved.CredentialDerivations[index].Endpoint, err = settings.resolveEndpoint(derivation.EndpointSetting, derivation.Endpoint); err != nil {
@@ -74,6 +81,10 @@ func (settings connectorOAuthSettings) value(name string) (json.RawMessage, erro
 	if raw := settings.configuration[name]; len(raw) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return raw, nil
 	}
+	return settings.defaultValue(name)
+}
+
+func (settings connectorOAuthSettings) defaultValue(name string) (json.RawMessage, error) {
 	for _, field := range settings.fields {
 		if field.Name != name || field.Default == nil {
 			continue
@@ -129,4 +140,29 @@ func (settings connectorOAuthSettings) resolveScopes(name string, literal []stri
 		}
 	}
 	return values, nil
+}
+
+// resolveOption resolves a token request option. A blank or missing value falls back to the field default,
+// and an empty result selects the documented default of the option.
+func (settings connectorOAuthSettings) resolveOption(name string, literal string, supportedValues []string) (string, error) {
+	if name == "" {
+		return literal, nil
+	}
+	var value string
+	for _, raw := range []func(string) (json.RawMessage, error){settings.value, settings.defaultValue} {
+		encoded, err := raw(name)
+		if err != nil {
+			return "", err
+		}
+		if encoded != nil && json.Unmarshal(encoded, &value) != nil {
+			return "", fmt.Errorf("Connector OAuth setting %q must be a string", name)
+		}
+		if value != "" {
+			break
+		}
+	}
+	if value != "" && !slices.Contains(supportedValues, value) {
+		return "", fmt.Errorf("Connector OAuth setting %q must be %s", name, strings.Join(supportedValues, " or "))
+	}
+	return value, nil
 }
