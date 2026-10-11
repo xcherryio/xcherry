@@ -346,7 +346,7 @@ func (s *serviceImpl) WaitForStepCompletion(ctx context.Context, req *dexpb.Wait
 			).ToGRPCError()
 		}
 		req.RequestTimeoutSeconds = remainingSeconds
-		updateCtx, cancelUpdate := waitUpdateContext(waitCtx, requestDeadline)
+		updateCtx, cancelUpdate, isRequestBound := waitUpdateContext(waitCtx, requestDeadline)
 		err := s.client.SynchronousUpdateWorkflow(
 			updateCtx,
 			&response,
@@ -361,7 +361,7 @@ func (s *serviceImpl) WaitForStepCompletion(ctx context.Context, req *dexpb.Wait
 		if err == nil {
 			return &response, nil
 		}
-		if errors.Is(updateCause, errWaitRequestDeadlineExceeded) {
+		if s.isWaitRequestExpired(err, updateCause, isRequestBound, requestDeadline) {
 			return nil, serviceerrors.DeadlineExceededRequest(
 				"step completion request timed out",
 			).ToGRPCError()
@@ -480,7 +480,7 @@ func (s *serviceImpl) WaitForAttribute(
 			).ToGRPCError()
 		}
 		req.RequestTimeoutSeconds = remainingSeconds
-		updateCtx, cancelUpdate := waitUpdateContext(waitCtx, requestDeadline)
+		updateCtx, cancelUpdate, isRequestBound := waitUpdateContext(waitCtx, requestDeadline)
 		err := s.client.SynchronousUpdateWorkflow(
 			updateCtx,
 			&response,
@@ -495,7 +495,7 @@ func (s *serviceImpl) WaitForAttribute(
 		if err == nil {
 			return &response, nil
 		}
-		if errors.Is(updateCause, errWaitRequestDeadlineExceeded) {
+		if s.isWaitRequestExpired(err, updateCause, isRequestBound, requestDeadline) {
 			return nil, serviceerrors.DeadlineExceededRequest(
 				"attribute request timed out",
 			).ToGRPCError()
@@ -1853,14 +1853,39 @@ func waitRequestDeadline(requestedSeconds int32) time.Time {
 	return time.Now().Add(time.Duration(requestedSeconds) * time.Second)
 }
 
-func waitUpdateContext(parent context.Context, requestDeadline time.Time) (context.Context, context.CancelFunc) {
+// waitUpdateContext bounds one Update call by the earlier of the request and transport deadlines. The returned flag
+// is true only when the request deadline is the bound, so an equal or earlier transport deadline keeps its own outcome.
+func waitUpdateContext(
+	parent context.Context,
+	requestDeadline time.Time,
+) (context.Context, context.CancelFunc, bool) {
 	if requestDeadline.IsZero() {
-		return context.WithCancel(parent)
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, cancel, false
 	}
 	if parentDeadline, ok := parent.Deadline(); ok && !requestDeadline.Before(parentDeadline) {
-		return context.WithCancel(parent)
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, cancel, false
 	}
-	return context.WithDeadlineCause(parent, requestDeadline, errWaitRequestDeadlineExceeded)
+	ctx, cancel := context.WithDeadlineCause(parent, requestDeadline, errWaitRequestDeadlineExceeded)
+	return ctx, cancel, true
+}
+
+// isWaitRequestExpired reports whether a failed wait Update call ended because the caller's request deadline passed.
+// The transport can report that deadline before this process's own timer for it has fired, which leaves the context
+// cause unset, so a timeout error after the request deadline also counts.
+func (s *serviceImpl) isWaitRequestExpired(
+	err error,
+	updateCause error,
+	isRequestBound bool,
+	requestDeadline time.Time,
+) bool {
+	if errors.Is(updateCause, errWaitRequestDeadlineExceeded) {
+		return true
+	}
+	return isRequestBound &&
+		!time.Now().Before(requestDeadline) &&
+		(errors.Is(err, context.DeadlineExceeded) || s.client.IsRequestTimeoutError(err))
 }
 
 func remainingWaitRequestSeconds(deadline time.Time) (int32, bool) {
