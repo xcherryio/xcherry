@@ -58,6 +58,8 @@ func TestMySQLAndPostgresAttributeStoreColumnRefreshIntegration(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, manager.Close()) })
 			writeRowKeyBatch(t, manager, "orders", "o1", "Status", stringValue("PLACED"))
 
+			// A refresh confirms Discount missing; it must not delay a column that a migration adds next.
+			writeRowKeyBatch(t, manager, "orders", "o1", "Discount", intValue(5))
 			destination.exec(t,
 				`ALTER TABLE refresh_orders ADD COLUMN shipping_note TEXT`,
 				`ALTER TABLE refresh_order_items ADD COLUMN quantity BIGINT`,
@@ -78,13 +80,14 @@ func TestMySQLAndPostgresAttributeStoreColumnRefreshIntegration(t *testing.T) {
 			).Scan(&quantity))
 			require.Equal(t, int64(2), quantity)
 
-			destination.exec(t, `ALTER TABLE refresh_orders ADD COLUMN gift_message TEXT`)
-			writeRowKeyBatch(t, manager, "orders", "o1", "GiftMessage", stringValue("rate limited"))
-			var giftMessage sql.NullString
+			// A column confirmed missing is checked again only after the interval.
+			destination.exec(t, `ALTER TABLE refresh_orders ADD COLUMN discount BIGINT`)
+			writeRowKeyBatch(t, manager, "orders", "o1", "Discount", intValue(7))
+			var discount sql.NullInt64
 			require.NoError(t, destination.database.QueryRowContext(context.Background(),
-				`SELECT gift_message FROM refresh_orders WHERE order_id = `+destination.placeholder(1), "o1",
-			).Scan(&giftMessage))
-			require.False(t, giftMessage.Valid)
+				`SELECT discount FROM refresh_orders WHERE order_id = `+destination.placeholder(1), "o1",
+			).Scan(&discount))
+			require.False(t, discount.Valid)
 		})
 	}
 }

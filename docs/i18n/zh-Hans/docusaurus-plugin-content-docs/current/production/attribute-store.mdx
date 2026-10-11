@@ -167,8 +167,9 @@ metadata 查询成功后会原子替换内存中的 immutable schema snapshot；
 
 新增 nullable 或有 default 的 SQL 列无需重启 Dex 即可被发现。一个 batch 要写的列
 不在当前 snapshot 里时（store 的表或 AttributeMap 表），它会先刷新这个 store 的
-schema 再写，每个 store 每 30 秒最多刷新一次；同时到达的 batch 会等这次刷新完成。
-因此，新增列的迁移不需要重启 Dex，也不需要和开始写这一列的 Worker 排先后顺序。删除或修改列后，
+schema 再写。还没有被任何一次刷新确认缺失的列，立即刷新；已被确认缺失的列，最多每
+30 秒再刷新一次。同时到达的 batch 会等这次刷新完成。因此，只要迁移在写这一列的
+Worker 启动之前完成，新增列就不需要重启 Dex。删除或修改列后，
 后续 mutation 可能在本地验证时被过滤，也可能在 SQL 执行失败后重试。
 
 ### SQL 类型契约

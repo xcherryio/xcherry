@@ -43,11 +43,13 @@ type sqlStore struct {
 	// missingColumnWarnings remembers the AttributeMap fields already logged for having no column.
 	missingColumnWarnings     sync.Map
 	missingColumnWarningCount atomic.Int64
-	// columnRefreshMutex guards lastColumnRefresh and serializes refreshes for unknown columns.
+	// columnRefreshMutex guards the two fields below and serializes refreshes for unknown columns.
 	columnRefreshMutex sync.Mutex
 	lastColumnRefresh  time.Time
-	schema             atomic.Pointer[tableSchema]
-	logger             log.Logger
+	// confirmedMissingColumns maps each column a refresh found missing to the time of that refresh.
+	confirmedMissingColumns map[string]time.Time
+	schema                  atomic.Pointer[tableSchema]
+	logger                  log.Logger
 }
 
 type tableReference struct {
@@ -65,8 +67,12 @@ type tableSchema struct {
 	mapTables    map[string]*mapTableSchema
 }
 
-// columnRefreshInterval bounds how often a batch that names an unknown column refreshes the store's schema.
+// columnRefreshInterval bounds how often a column that a refresh found missing triggers another refresh.
 const columnRefreshInterval = 30 * time.Second
+
+// maximumConfirmedMissingColumns bounds the remembered missing columns; beyond it, unremembered names share
+// columnRefreshInterval.
+const maximumConfirmedMissingColumns = 1000
 
 // maximumMissingColumnWarnings bounds the remembered fields when instance values have dynamic top-level keys.
 const maximumMissingColumnWarnings = 1000
@@ -388,45 +394,73 @@ func (s *sqlStore) writeBatch(
 	return redactStorageSecret(s.execute(ctx, statements), s.cfg.DSN)
 }
 
-// snapshotWithColumns returns a schema snapshot for the batch. When the current snapshot lacks a column the batch
-// names, it refreshes the schema first, at most once per columnRefreshInterval; concurrent batches wait for that
-// refresh instead of skipping their values.
+// snapshotWithColumns returns a schema snapshot for the batch. When the batch writes a column the snapshot lacks,
+// it refreshes the schema first if no refresh has confirmed that column missing, or if that confirmation is older
+// than columnRefreshInterval; concurrent batches wait for that refresh instead of skipping their values.
 func (s *sqlStore) snapshotWithColumns(
 	ctx context.Context,
 	snapshot *tableSchema,
 	latest map[string]*dexpb.Value,
 ) *tableSchema {
-	if !s.namesUnknownColumn(snapshot, latest) {
+	if len(s.unknownColumns(snapshot, latest)) == 0 {
 		return snapshot
 	}
 	s.columnRefreshMutex.Lock()
 	defer s.columnRefreshMutex.Unlock()
 	snapshot = s.schema.Load()
-	if !s.namesUnknownColumn(snapshot, latest) || time.Since(s.lastColumnRefresh) < columnRefreshInterval {
+	unknown := s.unknownColumns(snapshot, latest)
+	now := time.Now()
+	if !slices.ContainsFunc(unknown, func(column string) bool { return s.needsColumnRefresh(column, now) }) {
 		return snapshot
 	}
-	s.lastColumnRefresh = time.Now()
 	if err := s.refreshSchema(ctx); err != nil {
 		s.logger.Error("refresh Attribute Store schema for an unknown column", tag.Error(err))
+		return s.schema.Load()
 	}
-	return s.schema.Load()
+	s.lastColumnRefresh = now
+	if s.confirmedMissingColumns == nil {
+		s.confirmedMissingColumns = map[string]time.Time{}
+	}
+	snapshot = s.schema.Load()
+	for _, column := range s.unknownColumns(snapshot, latest) {
+		_, isRemembered := s.confirmedMissingColumns[column]
+		if isRemembered || len(s.confirmedMissingColumns) < maximumConfirmedMissingColumns {
+			s.confirmedMissingColumns[column] = now
+		}
+	}
+	return snapshot
 }
 
-// namesUnknownColumn reports whether the batch writes a store or instance-table column that snapshot lacks.
-func (s *sqlStore) namesUnknownColumn(snapshot *tableSchema, latest map[string]*dexpb.Value) bool {
+// needsColumnRefresh reports whether an unknown column warrants a refresh: one no refresh has confirmed missing
+// always does, and a confirmed one only after columnRefreshInterval.
+func (s *sqlStore) needsColumnRefresh(column string, now time.Time) bool {
+	confirmedAt, isConfirmed := s.confirmedMissingColumns[column]
+	if isConfirmed {
+		return now.Sub(confirmedAt) >= columnRefreshInterval
+	}
+	if len(s.confirmedMissingColumns) >= maximumConfirmedMissingColumns {
+		return now.Sub(s.lastColumnRefresh) >= columnRefreshInterval
+	}
+	return true
+}
+
+// unknownColumns returns the store columns, and the AttributeMap table columns as <map>.<column>, that the batch
+// writes and snapshot lacks.
+func (s *sqlStore) unknownColumns(snapshot *tableSchema, latest map[string]*dexpb.Value) []string {
+	var unknown []string
 	for key, value := range latest {
 		mapName, _, isInstanceKey := strings.Cut(key, "/")
 		if mapTable, isMapTable := snapshot.mapTables[mapName]; isInstanceKey && isMapTable {
-			if mapTable.namesUnknownColumn(value, s.cfg.ColumnNaming) {
-				return true
+			for _, column := range mapTable.unknownColumns(value, s.cfg.ColumnNaming) {
+				unknown = append(unknown, mapName+"."+column)
 			}
 			continue
 		}
-		if _, found := snapshot.columns[columnName(s.cfg.ColumnNaming, key)]; !found {
-			return true
+		if column := columnName(s.cfg.ColumnNaming, key); snapshot.columns[column].name == "" {
+			unknown = append(unknown, column)
 		}
 	}
-	return false
+	return unknown
 }
 
 // buildStatements returns the store row's upsert, when any Attribute survives filtering, followed by one upsert or
