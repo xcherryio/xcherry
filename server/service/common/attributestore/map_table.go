@@ -142,6 +142,27 @@ func (t *mapTableSchema) filterInstanceValue(
 	return result
 }
 
+// unknownColumns returns the columns an instance value writes that this snapshot lacks; a delete writes none.
+func (t *mapTableSchema) unknownColumns(value *dexpb.Value, naming config.AttributeStoreColumnNaming) []string {
+	if _, isDelete := value.GetKind().(*dexpb.Value_NullValue); isDelete {
+		return nil
+	}
+	fields, isObject := jsonObjectFields(value)
+	if !isObject {
+		if _, found := t.columns[mapInstanceValueColumn]; !found {
+			return []string{mapInstanceValueColumn}
+		}
+		return nil
+	}
+	var unknown []string
+	for fieldName := range fields {
+		if column := columnName(naming, fieldName); t.columns[column].name == "" {
+			unknown = append(unknown, column)
+		}
+	}
+	return unknown
+}
+
 // jsonObjectFields returns the top-level fields of a JSON object value, and false for any other value.
 func jsonObjectFields(value *dexpb.Value) (map[string]json.RawMessage, bool) {
 	object := value.GetObjValue()

@@ -165,7 +165,12 @@ change log。
 metadata 查询成功后会原子替换内存中的 immutable schema snapshot；查询失败时继续
 使用旧 snapshot，并在下个间隔后重试。MongoDB 不运行 schema refresh loop。
 
-新增 nullable 或有 default 的 SQL 列无需重启 Dex 即可被发现。删除或修改列后，
+新增 nullable 或有 default 的 SQL 列无需重启 Dex 即可被发现。一个 batch 要写的列
+不在当前 snapshot 里时（store 的表或 AttributeMap 表），它会先刷新这个 store 的
+schema 再写。还没有被任何一次刷新确认缺失的列，立即刷新；已被确认缺失的列，等周期刷新再检查。
+AttributeMap 表可以只存每个值的一部分，所以每个没有对应列的字段在一个进程里最多触发
+一次刷新。同时到达的 batch 会等这次刷新完成。因此，只要迁移在写这一列的
+Worker 启动之前完成，新增列就不需要重启 Dex。删除或修改列后，
 后续 mutation 可能在本地验证时被过滤，也可能在 SQL 执行失败后重试。
 
 ### SQL 类型契约

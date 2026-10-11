@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	_ "github.com/databricks/databricks-sql-go"
 	_ "github.com/go-sql-driver/mysql"
@@ -42,8 +43,13 @@ type sqlStore struct {
 	// missingColumnWarnings remembers the AttributeMap fields already logged for having no column.
 	missingColumnWarnings     sync.Map
 	missingColumnWarningCount atomic.Int64
-	schema                    atomic.Pointer[tableSchema]
-	logger                    log.Logger
+	// columnRefreshMutex guards the two fields below and serializes refreshes for unknown columns.
+	columnRefreshMutex sync.Mutex
+	lastColumnRefresh  time.Time
+	// confirmedMissingColumns holds the columns a refresh found missing.
+	confirmedMissingColumns map[string]bool
+	schema                  atomic.Pointer[tableSchema]
+	logger                  log.Logger
 }
 
 type tableReference struct {
@@ -60,6 +66,13 @@ type tableSchema struct {
 	columns      map[string]columnSchema
 	mapTables    map[string]*mapTableSchema
 }
+
+// columnRefreshInterval bounds how often unremembered names refresh once maximumConfirmedMissingColumns is reached.
+const columnRefreshInterval = 30 * time.Second
+
+// maximumConfirmedMissingColumns bounds the remembered missing columns; beyond it, unremembered names share
+// columnRefreshInterval.
+const maximumConfirmedMissingColumns = 1000
 
 // maximumMissingColumnWarnings bounds the remembered fields when instance values have dynamic top-level keys.
 const maximumMissingColumnWarnings = 1000
@@ -373,11 +386,80 @@ func (s *sqlStore) writeBatch(
 		}
 		latest[item.GetKey()] = item.GetValue()
 	}
+	snapshot = s.snapshotWithColumns(ctx, snapshot, latest)
 	statements := s.buildStatements(snapshot, keyValues, latest)
 	if len(statements) == 0 {
 		return nil
 	}
 	return redactStorageSecret(s.execute(ctx, statements), s.cfg.DSN)
+}
+
+// snapshotWithColumns returns a schema snapshot for the batch. When the batch writes a column the snapshot lacks and
+// no refresh has confirmed that column missing, it refreshes the schema first; concurrent batches wait for that
+// refresh instead of skipping their values. Confirmed missing columns wait for the periodic refresh.
+func (s *sqlStore) snapshotWithColumns(
+	ctx context.Context,
+	snapshot *tableSchema,
+	latest map[string]*dexpb.Value,
+) *tableSchema {
+	if len(s.unknownColumns(snapshot, latest)) == 0 {
+		return snapshot
+	}
+	s.columnRefreshMutex.Lock()
+	defer s.columnRefreshMutex.Unlock()
+	snapshot = s.schema.Load()
+	unknown := s.unknownColumns(snapshot, latest)
+	now := time.Now()
+	if !slices.ContainsFunc(unknown, func(column string) bool { return s.needsColumnRefresh(column, now) }) {
+		return snapshot
+	}
+	if err := s.refreshSchema(ctx); err != nil {
+		s.logger.Error("refresh Attribute Store schema for an unknown column", tag.Error(err))
+		return s.schema.Load()
+	}
+	s.lastColumnRefresh = now
+	if s.confirmedMissingColumns == nil {
+		s.confirmedMissingColumns = map[string]bool{}
+	}
+	snapshot = s.schema.Load()
+	for _, column := range s.unknownColumns(snapshot, latest) {
+		_, isRemembered := s.confirmedMissingColumns[column]
+		if isRemembered || len(s.confirmedMissingColumns) < maximumConfirmedMissingColumns {
+			s.confirmedMissingColumns[column] = true
+		}
+	}
+	return snapshot
+}
+
+// needsColumnRefresh reports whether an unknown column warrants a refresh: one no refresh has confirmed missing
+// does, and a confirmed one never does, because the periodic refresh checks it again.
+func (s *sqlStore) needsColumnRefresh(column string, now time.Time) bool {
+	if _, isConfirmed := s.confirmedMissingColumns[column]; isConfirmed {
+		return false
+	}
+	if len(s.confirmedMissingColumns) >= maximumConfirmedMissingColumns {
+		return now.Sub(s.lastColumnRefresh) >= columnRefreshInterval
+	}
+	return true
+}
+
+// unknownColumns returns the store columns, and the AttributeMap table columns as <map>.<column>, that the batch
+// writes and snapshot lacks.
+func (s *sqlStore) unknownColumns(snapshot *tableSchema, latest map[string]*dexpb.Value) []string {
+	var unknown []string
+	for key, value := range latest {
+		mapName, _, isInstanceKey := strings.Cut(key, "/")
+		if mapTable, isMapTable := snapshot.mapTables[mapName]; isInstanceKey && isMapTable {
+			for _, column := range mapTable.unknownColumns(value, s.cfg.ColumnNaming) {
+				unknown = append(unknown, mapName+"."+column)
+			}
+			continue
+		}
+		if column := columnName(s.cfg.ColumnNaming, key); snapshot.columns[column].name == "" {
+			unknown = append(unknown, column)
+		}
+	}
+	return unknown
 }
 
 // buildStatements returns the store row's upsert, when any Attribute survives filtering, followed by one upsert or
