@@ -91,16 +91,23 @@ OAuth 开始前，Dex 会显示可复制的精确 Redirect URI，供填写到 pr
 
 有些 Connector 无法预先知道授权服务器，例如连接你自己身份提供方的 OAuth 2.0 HTTP
 Connector。它们的 release 要求把 authorization endpoint、token endpoint 和 scope
-作为 connection 设置填写。请先填写这些设置，再选择 **Authorize**。Dex 会先检查：
-设置缺失或为空、scope 列表含空项或含空格的项，或 URL 不是绝对地址，都会返回指出该
-设置名称的错误，并且不会向 provider 发送任何请求。Dex 把这些设置与 connection
-一起保存，因此 Connector 续期 credential 时读取的是同一个 token endpoint。
+作为 connection 设置填写，还可以要求设置 client 在 token endpoint 的认证方式。Dex
+支持 **client_secret_post** 和 **client_secret_basic**，留空则使用该设置的默认值。
+请先填写这些设置，再选择 **Authorize**。Dex 会先检查：设置缺失或为空、scope 列表含
+空项或含空格的项、URL 不是绝对地址，或认证方式不受支持，都会返回指出该设置名称的
+错误，并且不会向 provider 发送任何请求。Dex 把这些设置与 connection 一起保存，因此
+Connector 续期 credential 时读取的是同一个 token endpoint。
 
 release 中直接写出的 endpoint 必须使用 HTTPS。你在设置中填写的 endpoint 可以使用
 **http://** 或 **https://**，但必须带 host，且不能包含用户名、密码或 fragment。Dex
-接受 **http://**，因为服务器是你自己选择的（例如私有网络中的身份提供方），而且
-Connector 配置只在 loopback 地址上运行。此时授权码、client secret 和 token 都会以
-明文在网络中传输。只要这台电脑与服务器之间的网络不可信，就请使用 **https://**。
+向这样的 endpoint 发送授权码、client secret 或 token 之前，会先解析 host、检查每个
+地址，并且只连接它检查过的地址。只有所有地址都是 loopback 或私有地址时（例如你本机
+或私有网络中的身份提供方），才允许使用 **http://**，其他情况都需要 **https://**。
+link-local 地址（包含云元数据服务）以及 unspecified 和 multicast 地址，即使使用
+**https://** 也会被拒绝。公网地址与私有地址混合的 host 会被整体拒绝。这些请求不使用
+代理，也不跟随重定向。被拒绝的地址会停止配置，并返回指出该设置名称的错误，不会发送
+任何请求。即使 **http://** 地址被允许，授权码、client secret 和 token 仍会在你的
+网络中以明文传输；不信任该网络时请使用 **https://**。
 
 删除本地 credential 只删除本地记录，不会远程 revoke provider grant。
 

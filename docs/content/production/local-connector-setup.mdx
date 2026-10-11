@@ -104,21 +104,31 @@ such as a verified primary email, do not appear as free-text inputs.
 Some Connectors cannot know the authorization server in advance, such as the
 OAuth 2.0 HTTP Connector for your own identity provider. Their release asks for
 the authorization endpoint, the token endpoint, and the scopes as connection
-settings. Fill them in before you choose **Authorize**. Dex checks them first.
-A missing or blank setting, a scope list with an empty entry or an entry that
-contains a space, or a URL that is not absolute fails with a message that names
-the setting, and nothing is sent to the provider. Dex saves the settings with
-the connection, so the Connector reads the same token endpoint when it renews
-the credential.
+settings. It can also ask how the client authenticates at the token endpoint.
+Dex accepts **client_secret_post** and **client_secret_basic**, and a blank
+value uses the default of the setting. Fill the settings in before you choose
+**Authorize**. Dex checks them first. A missing or blank setting, a scope list
+with an empty entry or an entry that contains a space, a URL that is not
+absolute, or an authentication method that Dex does not support fails with a
+message that names the setting, and nothing is sent to the provider. Dex saves
+the settings with the connection, so the Connector reads the same token
+endpoint when it renews the credential.
 
 An endpoint written in the release must use HTTPS. An endpoint that you type
 into a setting may use **http://** or **https://**. It needs a host and cannot
-contain a user name, a password, or a fragment. Dex accepts **http://** because
-you chose the server, such as an identity provider on a private network, and
-connector setup only runs on a loopback address. The authorization code, the
-client secret, and the tokens then cross the network unencrypted. Use
-**https://** wherever the network between this computer and the server is not
-trusted.
+contain a user name, a password, or a fragment. Before Dex sends the
+authorization code, the client secret, or a token to such an endpoint, it
+resolves the host, checks every address, and connects only to an address it
+checked. Plain **http://** works only when every address is loopback or
+private, such as an identity provider on your own machine or private network.
+Anything else needs **https://**. Dex refuses link-local addresses, which
+include the cloud metadata service, and unspecified or multicast addresses even
+over **https://**. It refuses a host whose addresses mix public and private
+ones, uses no proxy, and follows no redirect. A refused address stops the setup
+with a message that names the setting, and nothing is sent. Over a permitted
+**http://** address the authorization code, the client secret, and the tokens
+still cross your network unencrypted. Use **https://** wherever you do not trust
+that network.
 
 Deleting local credentials removes only the local record. It does not revoke
 the provider grant.

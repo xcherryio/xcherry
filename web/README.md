@@ -400,27 +400,49 @@ A release for an authorization server that the connection owner chooses, such
 as a company identity provider, cannot fix its URLs. It writes
 `authorizationEndpoint`, `tokenEndpoint`, `scopes`, or a
 `credentialDerivations` `endpoint` as `{"fromSetting": "<field name>"}`
-instead of a constant. The name must match a required configuration field of
+instead of a constant. `tokenEndpointAuthMethod` and `tokenRequestEncoding`
+accept the same form. The name must match a required configuration field of
 the selected auth method: type `url` for an endpoint and `stringList` for
 `scopes`. Dex Web resolves every reference when OAuth starts, from the
 configuration in the start request, which the callback saves under the same
 field names. The OAuth session keeps the resolved copy, so the authorization
 URL, the code exchange, the granted-scope check, and the identity derivation use
 one set of values. A field default applies when the request has no value. A
-missing, null, or blank setting, an empty scope list, or an endpoint that is
-not an absolute URL fails OAuth start with `400`
-`CONNECTOR_OAUTH_SETTING_INVALID`. The message names the setting and never
-repeats its value. Dex Web does not read the `oidc` block or `protocol`, so it
-performs no discovery and ignores references there. It does not refresh
+blank token option also takes the field default, and an empty option selects
+the documented default. A missing, null, or blank setting, an empty scope list,
+an endpoint that is not an absolute URL, or a token option other than
+`client_secret_post`, `client_secret_basic`, `form`, or `json` fails OAuth start
+with `400` `CONNECTOR_OAUTH_SETTING_INVALID`. The message names the setting and
+never repeats its value. Dex Web does not read the `oidc` block or `protocol`,
+so it performs no discovery and ignores references there. It does not refresh
 tokens: a Connector that renews its own credential reads the saved settings.
 
 An endpoint that a release writes as a constant must use HTTPS, as before. An
 endpoint that a setting supplies may use `http` or `https`. It needs a host and
-cannot carry user information or a fragment. Dex Web allows `http` because
-the connection owner entered the URL, the Connector's own field guidance says
-that `http` suits a server on a private network, and connector setup only runs
-on a loopback address. The authorization code, client secret, and tokens then
-cross the network unencrypted.
+cannot carry user information or a fragment. Every request that Dex Web sends to
+such an endpoint, the code exchange and the identity derivation, follows an
+address policy. Dex Web resolves the host once, checks every resolved address,
+and dials only an address it checked. It ignores proxies and follows no
+redirect for these requests.
+
+- Plain `http` connects only when every resolved address is loopback or
+  private.
+- Link-local addresses (169.254.0.0/16 and fe80::/10, which hold the cloud
+  metadata service), `fd00:ec2::254`, and unspecified and multicast addresses
+  are refused even over `https`.
+- A host that resolves to a public and a private address is refused as a whole.
+- Every other address needs `https`.
+
+OAuth start resolves the token and identity hosts and refuses before the
+browser leaves for the provider. The callback checks again when it dials, so a
+host that resolves differently later is still refused. Both fail with `400`
+`CONNECTOR_OAUTH_SETTING_INVALID`, name the setting and the rule, and send no
+request. Dex Web checks the authorization endpoint only for its shape, because
+the browser opens it. The OAuth 2.0 HTTP Connector applies the same rule to its
+own requests, and `connector_address_policy_test.go` repeats the address table
+of that connector's test so the two cannot drift apart. Even over a permitted
+`http` address, the authorization code, client secret, and tokens cross the
+network unencrypted.
 
 Trigger-binding configuration remains in `connections.json`. Connector Step
 operation configuration is stored in the sibling non-secret
