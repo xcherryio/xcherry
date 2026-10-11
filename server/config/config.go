@@ -287,9 +287,24 @@ type (
 		// named columns, all character columns. A Flow ID that does not match skips its batch with an error log.
 		// Default empty stores the whole Flow ID in the table's single primary-key column. Immutable after startup.
 		RowKey string `yaml:"rowKey"`
-		// ColumnNaming maps Attribute names to PostgreSQL or MySQL column names: empty (default) uses each name exactly,
-		// and snake_case uses its snake_case form. Immutable after startup.
+		// ColumnNaming maps Attribute names, and the fields of AttributeMap instance values, to PostgreSQL or MySQL
+		// column names: empty (default) uses each name exactly, and snake_case uses its snake_case form. Immutable after
+		// startup.
 		ColumnNaming AttributeStoreColumnNaming `yaml:"columnNaming"`
+		// AttributeMaps writes each instance of the named AttributeMaps as one row of its own PostgreSQL or MySQL table,
+		// keyed by AttributeMap name. Writing an instance upserts its row and deleting it deletes the row, in the same
+		// transaction as the batch's other writes. Default empty writes AttributeMap instances like other Attributes.
+		// Immutable after startup.
+		AttributeMaps map[string]AttributeStoreMapTableConfig `yaml:"attributeMaps"`
+	}
+
+	AttributeStoreMapTableConfig struct {
+		// TableName selects the instance table as table or schema.table. Its primary key must be exactly the store's
+		// primary-key columns plus InstanceKeyColumn, all character columns. Required. Immutable after startup.
+		TableName string `yaml:"tableName"`
+		// InstanceKeyColumn stores the unescaped instance key, such as account-7 for the instance written as
+		// Members/account-7. Required. Immutable after startup.
+		InstanceKeyColumn string `yaml:"instanceKeyColumn"`
 	}
 
 	StorageStatus       string
@@ -956,8 +971,8 @@ func (c AttributeStoreConfig) Validate() error {
 			if store.TableName != "" || store.FlowIDColumn != "" {
 				return fmt.Errorf("attribute store %q mongodb configuration does not accept tableName or flowIdColumn", name)
 			}
-			if store.RowKey != "" || store.ColumnNaming != AttributeStoreColumnNamingExact {
-				return fmt.Errorf("attribute store %q mongodb configuration does not accept rowKey or columnNaming", name)
+			if store.hasRelationalOptions() {
+				return fmt.Errorf("attribute store %q mongodb configuration does not accept rowKey, columnNaming or attributeMaps", name)
 			}
 			continue
 		}
@@ -976,12 +991,38 @@ func (c AttributeStoreConfig) Validate() error {
 		if !store.Type.IsWarehouse() && store.FlowIDColumn != "" {
 			return fmt.Errorf("attribute store %q only warehouses accept flowIdColumn", name)
 		}
-		if store.Type.IsWarehouse() && (store.RowKey != "" || store.ColumnNaming != AttributeStoreColumnNamingExact) {
-			return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey and columnNaming", name)
+		if store.Type.IsWarehouse() && store.hasRelationalOptions() {
+			return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey, columnNaming and attributeMaps", name)
 		}
 		if !store.ColumnNaming.IsSupported() {
 			return fmt.Errorf("attribute store %q has unsupported columnNaming %q", name, store.ColumnNaming)
 		}
+		for mapName, mapTable := range store.AttributeMaps {
+			if err := validateAttributeStoreMapTable(store.Type, mapName, mapTable); err != nil {
+				return fmt.Errorf("attribute store %q attributeMaps: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (e AttributeStoreConfigEntry) hasRelationalOptions() bool {
+	return e.RowKey != "" || e.ColumnNaming != AttributeStoreColumnNamingExact || len(e.AttributeMaps) > 0
+}
+
+func validateAttributeStoreMapTable(
+	storeType AttributeStoreType,
+	mapName string,
+	mapTable AttributeStoreMapTableConfig,
+) error {
+	if mapName == "" || strings.Contains(mapName, "/") {
+		return fmt.Errorf("AttributeMap name %q must be non-empty and contain no '/'", mapName)
+	}
+	if mapTable.TableName == "" || mapTable.InstanceKeyColumn == "" {
+		return fmt.Errorf("AttributeMap %q requires tableName and instanceKeyColumn", mapName)
+	}
+	if err := validateAttributeStoreTableName(storeType, mapTable.TableName); err != nil {
+		return fmt.Errorf("AttributeMap %q has invalid tableName: %w", mapName, err)
 	}
 	return nil
 }

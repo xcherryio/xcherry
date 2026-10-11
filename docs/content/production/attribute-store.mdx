@@ -31,6 +31,10 @@ attributeStore:
       tableName: public.orders
       rowKey: order-{customer_id}-{order_id}
       columnNaming: snake_case
+      attributeMaps:
+        LineItems:
+          tableName: public.order_line_items
+          instanceKeyColumn: line_item_id
     lakehouse:
       type: databricks
       dsn: token:secret@workspace:443/sql/1.0/warehouses/warehouse-id
@@ -125,6 +129,45 @@ letter. Then it lower-cases every letter. **DeploymentURL** becomes
 **s3_bucket**. When two Attribute names in one batch map to the same column, Dex
 filters both. The default writes each Attribute to the column with exactly its
 name.
+
+## AttributeMap tables
+
+**attributeMaps** writes each instance of an AttributeMap as one row of its own
+table, so SQL can query map instances such as the line items of an order or the
+members of a group. Each key is an AttributeMap name:
+
+- **tableName** selects the instance table, as **table** or **schema.table**.
+- **instanceKeyColumn** stores the instance key without its escaping: the
+  instance written as **LineItems/item%2F7** is stored as item/7.
+
+The instance table's primary key must be exactly the store's primary-key columns
+plus **instanceKeyColumn**, all character columns. With
+**order-\{customer_id\}-\{order_id\}**, the **LineItems** table needs the primary
+key **customer_id**, **order_id**, **line_item_id**. Every other required column
+must have a default or generated value. Dex checks the instance tables at startup
+and at every schema refresh, like the store's own table.
+
+Writing an instance upserts its row, and deleting the instance deletes the row:
+
+- A JSON object writes each top-level field to the column with the same name,
+  under **columnNaming**. A JSON number is written as an integer only where the
+  column takes one. Nested objects and arrays go to JSON or JSONB columns.
+- Fields without a column, fields that map to a primary-key column, and values
+  that do not convert are logged and skipped. The row still records the
+  instance.
+- Any other value is written to a column named **value**.
+- An upsert sets only the columns of the value's fields. Columns of omitted
+  fields keep their previous values.
+
+One batch writes the store row and all its instance rows in one transaction,
+with the latest value of each instance. Dex creates no foreign keys between the
+tables: a violated constraint would fail the whole batch and hold back the
+Flow's later writes until the retry budget runs out. Dex never deletes rows when
+a Flow closes.
+
+A Flow that selects several stores writes each AttributeMap only to the stores
+that declare it. Other stores treat its instances as ordinary Attributes.
+Databricks, Snowflake, and MongoDB reject **attributeMaps** at startup.
 
 ## SQL writes and schema refresh
 

@@ -29,6 +29,10 @@ attributeStore:
       tableName: public.orders
       rowKey: order-{customer_id}-{order_id}
       columnNaming: snake_case
+      attributeMaps:
+        LineItems:
+          tableName: public.order_line_items
+          instanceKeyColumn: line_item_id
     lakehouse:
       type: databricks
       dsn: token:secret@workspace:443/sql/1.0/warehouses/warehouse-id
@@ -113,6 +117,39 @@ Dex 在两种大写字母前插入下划线：跟在小写字母或数字后面�
 **URLPath** 变为 **url_path**，**S3Bucket** 变为 **s3_bucket**。同一 batch 中两个
 Attribute name 映射到同一列时，Dex 会把两者都过滤掉。默认情况下，每个 Attribute
 写入与其名称完全相同的列。
+
+## AttributeMap 表
+
+**attributeMaps** 把 AttributeMap 的每个实例写成它自己那张表里的一行，这样就能用
+SQL 查询 map 实例，例如一个订单的明细行或一个群组的成员。每个 key 是一个
+AttributeMap 的名称：
+
+- **tableName** 选择实例表，写成 **table** 或 **schema.table**。
+- **instanceKeyColumn** 存放去掉转义后的实例 key：写成 **LineItems/item%2F7** 的
+  实例存为 item/7。
+
+实例表的 primary key 必须正好是 store 的 primary key 各列加上
+**instanceKeyColumn**，并且都是字符串列。使用 **order-\{customer_id\}-\{order_id\}**
+时，**LineItems** 表的 primary key 是 **customer_id**、**order_id**、
+**line_item_id**。其他必填列都必须有 default 或 generated value。Dex 在启动时和每次
+schema refresh 时检查实例表，和 store 自己的表一样。
+
+写一个实例会 upsert 它的行，删除实例会删除这一行：
+
+- JSON object 的每个顶层字段按 **columnNaming** 写入同名列。只有列能存整数时，
+  JSON number 才作为整数写入。嵌套的 object 和 array 写入 JSON 或 JSONB 列。
+- 没有对应列的字段、映射到 primary key 列的字段，以及无法转换的值，都会记录日志并
+  跳过。这一行仍然记录这个实例。
+- 其他任何值写入名为 **value** 的列。
+- upsert 只设置值中出现的字段对应的列。省略的字段对应的列保留原值。
+
+一个 batch 在同一个事务里写入 store 的行和它的全部实例行，每个实例取最新值。Dex
+不在表之间创建外键：违反约束会让整个 batch 失败，并让这个 Flow 之后的写入一直等到
+重试预算用完。Flow 结束时，Dex 不会删除任何行。
+
+选择了多个 store 的 Flow，只把每个 AttributeMap 写入声明了它的 store。其他 store
+把它的实例当作普通 Attribute。Databricks、Snowflake 和 MongoDB 配置了
+**attributeMaps** 时，启动失败。
 
 ## SQL 写入与 schema refresh
 

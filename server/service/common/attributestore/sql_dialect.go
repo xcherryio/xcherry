@@ -28,6 +28,8 @@ type sqlDialect interface {
 	enrichColumns(context.Context, *sql.DB, tableReference, map[string]columnSchema) error
 	describePrimaryKeys(context.Context, *sql.DB, tableReference) ([]string, error)
 	buildUpsert(*tableSchema, []string, []string, map[string]filteredValue) (string, []any)
+	buildKeyedUpsert(tableReference, []string, []string, []string, map[string]filteredValue) (string, []any)
+	buildKeyedDelete(tableReference, []string, []string) (string, []any)
 }
 
 type builtInSQLDialect struct {
@@ -412,17 +414,19 @@ func (d *builtInSQLDialect) buildUpsert(
 	if d.storeType.IsWarehouse() {
 		return d.buildWarehouseMerge(snapshot, keyValues[0], columnNames, values)
 	}
-	return d.buildRelationalUpsert(snapshot, keyValues, columnNames, values)
+	return d.buildKeyedUpsert(snapshot.reference, snapshot.keyColumns(), keyValues, columnNames, values)
 }
 
-func (d *builtInSQLDialect) buildRelationalUpsert(
-	snapshot *tableSchema,
+// buildKeyedUpsert returns a PostgreSQL or MySQL upsert of one row that sets only columnNames; a row of key columns
+// alone is inserted once and left unchanged afterwards.
+func (d *builtInSQLDialect) buildKeyedUpsert(
+	reference tableReference,
+	keyColumns []string,
 	keyValues []string,
 	columnNames []string,
 	values map[string]filteredValue,
 ) (string, []any) {
-	quotedTable := d.qualifiedTable(snapshot.reference)
-	keyColumns := snapshot.keyColumns()
+	quotedTable := d.qualifiedTable(reference)
 	quotedKeys := make([]string, 0, len(keyColumns))
 	columns := make([]string, 0, len(keyColumns)+len(columnNames))
 	placeholders := make([]string, 0, len(keyColumns)+len(columnNames))
@@ -448,13 +452,34 @@ func (d *builtInSQLDialect) buildRelationalUpsert(
 	}
 	query := "INSERT INTO " + quotedTable + " (" + strings.Join(columns, ", ") + ") VALUES (" +
 		strings.Join(placeholders, ", ") + ")"
-	if d.storeType == config.AttributeStoreTypePostgres {
+	lastKey := quotedKeys[len(quotedKeys)-1]
+	switch {
+	case d.storeType == config.AttributeStoreTypePostgres && len(updates) == 0:
+		query += " ON CONFLICT (" + strings.Join(quotedKeys, ", ") + ") DO NOTHING"
+	case d.storeType == config.AttributeStoreTypePostgres:
 		query += " ON CONFLICT (" + strings.Join(quotedKeys, ", ") + ") DO UPDATE SET " +
 			strings.Join(updates, ", ")
-	} else {
+	case len(updates) == 0:
+		query += " ON DUPLICATE KEY UPDATE " + lastKey + " = VALUES(" + lastKey + ")"
+	default:
 		query += " ON DUPLICATE KEY UPDATE " + strings.Join(updates, ", ")
 	}
 	return query, arguments
+}
+
+// buildKeyedDelete returns a PostgreSQL or MySQL delete of the one row with keyValues.
+func (d *builtInSQLDialect) buildKeyedDelete(
+	reference tableReference,
+	keyColumns []string,
+	keyValues []string,
+) (string, []any) {
+	conditions := make([]string, 0, len(keyColumns))
+	arguments := make([]any, 0, len(keyColumns))
+	for index, keyColumn := range keyColumns {
+		conditions = append(conditions, d.quoteIdentifier(keyColumn)+" = "+d.placeholder(index+1))
+		arguments = append(arguments, keyValues[index])
+	}
+	return "DELETE FROM " + d.qualifiedTable(reference) + " WHERE " + strings.Join(conditions, " AND "), arguments
 }
 
 func (d *builtInSQLDialect) buildWarehouseMerge(
