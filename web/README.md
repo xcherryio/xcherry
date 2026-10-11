@@ -430,7 +430,8 @@ redirect for these requests.
 - Link-local addresses (169.254.0.0/16 and fe80::/10, which hold the cloud
   metadata service), `fd00:ec2::254`, and unspecified and multicast addresses
   are refused even over `https`.
-- A host that resolves to a public and a private address is refused as a whole.
+- One refused address refuses the whole host. Over plain `http`, a single public
+  address is enough.
 - Every other address needs `https`.
 
 OAuth start resolves the token and identity hosts and refuses before the

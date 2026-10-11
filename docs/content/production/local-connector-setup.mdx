@@ -123,8 +123,9 @@ checked. Plain **http://** works only when every address is loopback or
 private, such as an identity provider on your own machine or private network.
 Anything else needs **https://**. Dex refuses link-local addresses, which
 include the cloud metadata service, and unspecified or multicast addresses even
-over **https://**. It refuses a host whose addresses mix public and private
-ones, uses no proxy, and follows no redirect. A refused address stops the setup
+over **https://**. If Dex refuses any one address of a host, it refuses the whole
+host, so a single public address rules out **http://**. Dex uses no proxy and
+follows no redirect. A refused address stops the setup
 with a message that names the setting, and nothing is sent. Over a permitted
 **http://** address the authorization code, the client secret, and the tokens
 still cross your network unencrypted. Use **https://** wherever you do not trust
