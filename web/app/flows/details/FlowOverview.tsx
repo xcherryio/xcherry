@@ -11,6 +11,7 @@ import { displayEventNumber } from '@/lib/timeline';
 import type { FlowHistoryEvent, FlowState, FlowSummary } from '@/lib/types';
 import { JsonView } from '../../components/JsonView';
 import { EventDetails, eventTitle, FailureContent, SemanticEventDetails } from './EventDetails';
+import type { StateWriteKind } from './StateWriteDialog';
 
 const sectionExpandByKey = new Map<string, boolean>();
 
@@ -57,6 +58,7 @@ export function FlowOverview({
   selectedEvent,
   deletingChannelMessage,
   onDeleteChannelMessage,
+  onOpenStateWrite,
 }: {
   summary: FlowSummary;
   events: FlowHistoryEvent[];
@@ -64,6 +66,7 @@ export function FlowOverview({
   selectedEvent: FlowHistoryEvent | null;
   deletingChannelMessage?: string;
   onDeleteChannelMessage?: (channelName: string, messageId: string) => Promise<void>;
+  onOpenStateWrite?: (kind: StateWriteKind) => void;
 }) {
   const started = events.find((event) => event.type === 'FlowStartedOrContinued');
   const closed = events.findLast((event) => event.type === 'FlowClosed');
@@ -187,11 +190,21 @@ export function FlowOverview({
                     <p className="eyebrow">Attributes</p>
                     <h3>{state.attributes.length} values</h3>
                   </div>
-                  <SectionExpandToggle
-                    expanded={attributesExpand.expanded}
-                    onChange={attributesExpand.setExpanded}
-                    label="attributes"
-                  />
+                  <div className="live-state-block-actions">
+                    {onOpenStateWrite && (
+                      <button
+                        className="button ghost live-state-write-button"
+                        onClick={() => onOpenStateWrite('attribute')}
+                      >
+                        Set attribute
+                      </button>
+                    )}
+                    <SectionExpandToggle
+                      expanded={attributesExpand.expanded}
+                      onChange={attributesExpand.setExpanded}
+                      label="attributes"
+                    />
+                  </div>
                 </div>
                 <JsonView
                   value={state.attributes}
@@ -207,11 +220,21 @@ export function FlowOverview({
               <div className="live-state-block">
                 <div className="live-state-block-heading">
                   <p className="eyebrow">Channels & Others Internals</p>
-                  <SectionExpandToggle
-                    expanded={channelsExpand.expanded}
-                    onChange={channelsExpand.setExpanded}
-                    label="channels and other internals"
-                  />
+                  <div className="live-state-block-actions">
+                    {onOpenStateWrite && (
+                      <button
+                        className="button ghost live-state-write-button"
+                        onClick={() => onOpenStateWrite('channel')}
+                      >
+                        Publish message
+                      </button>
+                    )}
+                    <SectionExpandToggle
+                      expanded={channelsExpand.expanded}
+                      onChange={channelsExpand.setExpanded}
+                      label="channels and other internals"
+                    />
+                  </div>
                 </div>
                 <JsonView
                   value={state.queuedSteps}

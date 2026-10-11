@@ -29,6 +29,7 @@ import { usePreferences } from '../providers';
 import { FlowOverview } from './details/FlowOverview';
 import { FlowStatePanel } from './details/FlowStatePanel';
 import { TimeTravelDialog } from './details/TimeTravelDialog';
+import { StateWriteDialog, type StateWriteKind } from './details/StateWriteDialog';
 import { StopFlowDialog } from './details/StopFlowDialog';
 import { ExecutionGraph } from './details/ExecutionGraph';
 import { StreamPanel } from './details/StreamPanel';
@@ -127,6 +128,7 @@ export function RunDetailsPage({
   const [timeTravelOpen, setTimeTravelOpen] = useState(false);
   const [timeTravelEvent, setTimeTravelEvent] = useState<FlowHistoryEvent | null>(null);
   const [stopOpen, setStopOpen] = useState(false);
+  const [stateWriteKind, setStateWriteKind] = useState<StateWriteKind | null>(null);
   const [waitCycle, setWaitCycle] = useState(0);
   const [hydratedEvents, setHydratedEvents] = useState<Record<number, FlowHistoryEvent>>({});
   const [dataWarnings, setDataWarnings] = useState<string[]>([]);
@@ -575,6 +577,7 @@ export function RunDetailsPage({
               selectedEvent={selected}
               deletingChannelMessage={deletingChannelMessage}
               onDeleteChannelMessage={deleteChannelMessage}
+              onOpenStateWrite={setStateWriteKind}
             />
           )}
           {tab === 'steps' && !isWaitingForHistory && (
@@ -638,6 +641,15 @@ export function RunDetailsPage({
           summary={summary}
           onClose={() => setStopOpen(false)}
           onStopped={() => void refresh()}
+        />
+      )}
+      {summary && (
+        <StateWriteDialog
+          key={stateWriteKind ?? 'closed'}
+          kind={stateWriteKind}
+          summary={summary}
+          onClose={() => setStateWriteKind(null)}
+          onWritten={() => loadState(summary.flowStatusCode)}
         />
       )}
     </div>

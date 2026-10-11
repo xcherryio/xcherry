@@ -2139,6 +2139,18 @@ pre {
   margin-bottom: 0;
 }
 
+.live-state-block-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.live-state-write-button {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
 .live-state-block-heading > div > .eyebrow {
   margin-bottom: 0;
 }

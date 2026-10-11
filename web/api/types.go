@@ -90,6 +90,22 @@ type flowState struct {
 	CompletedSteps         []interface{}          `json:"completedSteps"`
 }
 
+type publishChannelMessageRequest struct {
+	FlowID      string      `json:"flowId"`
+	RunID       string      `json:"runId"`
+	ChannelName string      `json:"channelName"`
+	ValueType   string      `json:"valueType"`
+	Value       interface{} `json:"value"`
+}
+
+type setAttributeRequest struct {
+	FlowID    string      `json:"flowId"`
+	RunID     string      `json:"runId"`
+	Key       string      `json:"key"`
+	ValueType string      `json:"valueType"`
+	Value     interface{} `json:"value"`
+}
+
 type deleteChannelMessageRequest struct {
 	FlowID      string `json:"flowId"`
 	RunID       string `json:"runId"`
