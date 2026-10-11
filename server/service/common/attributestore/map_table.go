@@ -142,6 +142,24 @@ func (t *mapTableSchema) filterInstanceValue(
 	return result
 }
 
+// namesUnknownColumn reports whether an instance value writes a column this snapshot lacks; a delete writes none.
+func (t *mapTableSchema) namesUnknownColumn(value *dexpb.Value, naming config.AttributeStoreColumnNaming) bool {
+	if _, isDelete := value.GetKind().(*dexpb.Value_NullValue); isDelete {
+		return false
+	}
+	fields, isObject := jsonObjectFields(value)
+	if !isObject {
+		_, found := t.columns[mapInstanceValueColumn]
+		return !found
+	}
+	for fieldName := range fields {
+		if _, found := t.columns[columnName(naming, fieldName)]; !found {
+			return true
+		}
+	}
+	return false
+}
+
 // jsonObjectFields returns the top-level fields of a JSON object value, and false for any other value.
 func jsonObjectFields(value *dexpb.Value) (map[string]json.RawMessage, bool) {
 	object := value.GetObjValue()
