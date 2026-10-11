@@ -13,10 +13,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +31,11 @@ const (
 	connectorOAuthJSONTokenRequestEncoding    = "json"
 	connectorOAuthClientSecretPostAuthMethod  = "client_secret_post"
 	connectorOAuthClientSecretBasicAuthMethod = "client_secret_basic"
+)
+
+var (
+	connectorOAuthTokenRequestEncodings    = []string{connectorOAuthFormTokenRequestEncoding, connectorOAuthJSONTokenRequestEncoding}
+	connectorOAuthTokenEndpointAuthMethods = []string{connectorOAuthClientSecretPostAuthMethod, connectorOAuthClientSecretBasicAuthMethod}
 )
 
 type connectorOAuthStartRequest struct {
@@ -91,6 +98,16 @@ func (setup *connectorSetup) handleOAuthStart(response http.ResponseWriter, requ
 		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_REQUEST_INVALID", "Connector OAuth configuration is invalid")
 		return
 	}
+	resolvedOAuth, err := oauth.resolveSettings(
+		connectorConfigurationFieldsForMethods(resolved.release.Manifest.Spec.Configuration.Fields, []connectorManifestAuthMethod{authMethod}),
+		body.Configuration,
+	)
+	if err != nil {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", err.Error())
+		return
+	}
+	oauth = &resolvedOAuth
+	authMethod.OAuth2 = oauth
 	if err := validateManifestValueMaps(resolved.release.Manifest, authMethod, body); err != nil {
 		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_REQUEST_INVALID", "Connector OAuth configuration is invalid")
 		return
@@ -104,13 +121,17 @@ func (setup *connectorSetup) handleOAuthStart(response http.ResponseWriter, requ
 	if body.CredentialSecrets == nil {
 		body.CredentialSecrets = map[string]string{}
 	}
-	authorizationURL, err := url.Parse(oauth.AuthorizationEndpoint)
-	if err != nil || authorizationURL.Scheme != "https" || authorizationURL.Host == "" {
+	authorizationURL, err := parseConnectorOAuthEndpoint(oauth.AuthorizationEndpoint, oauth.AuthorizationEndpointSetting != "")
+	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_RELEASE_INVALID", "Connector OAuth endpoint is invalid")
 		return
 	}
 	if err := validateConnectorOAuthTokenRequestDeclarations(*oauth); err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_RELEASE_INVALID", "Connector OAuth token request declarations are invalid")
+		return
+	}
+	if err := setup.checkSettingEndpointAddresses(request.Context(), *oauth); err != nil {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", err.Error())
 		return
 	}
 	redirectURI := connectorOAuthRedirectURI(request)
@@ -225,6 +246,10 @@ func (setup *connectorSetup) handleOAuthCallback(response http.ResponseWriter, r
 		return
 	}
 	token, err := setup.exchangeConnectorOAuthToken(request.Context(), session, code)
+	if settingErr := (*connectorOAuthSettingError)(nil); errors.As(err, &settingErr) {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", settingErr.Error())
+		return
+	}
 	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_OAUTH_TOKEN_EXCHANGE_FAILED", "Connector OAuth token exchange failed")
 		return
@@ -292,6 +317,10 @@ func (setup *connectorSetup) handleOAuthCallback(response http.ResponseWriter, r
 		credentials[mapping.Credential] = encoded
 	}
 	derivedCredentials, err := setup.deriveConnectorOAuthCredentials(request.Context(), token, session.authMethod.OAuth2.CredentialDerivations)
+	if settingErr := (*connectorOAuthSettingError)(nil); errors.As(err, &settingErr) {
+		api.WriteCodedError(response, http.StatusBadRequest, "CONNECTOR_OAUTH_SETTING_INVALID", settingErr.Error())
+		return
+	}
 	if err != nil {
 		api.WriteCodedError(response, http.StatusBadGateway, "CONNECTOR_OAUTH_IDENTITY_DERIVATION_FAILED", "Connector OAuth identity could not be verified")
 		return
@@ -328,8 +357,8 @@ func (setup *connectorSetup) deriveConnectorOAuthCredentials(
 	credentials := make(map[string]json.RawMessage, len(derivations))
 	responses := make(map[string]map[string]any)
 	for _, derivation := range derivations {
-		endpointURL, err := url.Parse(derivation.Endpoint)
-		if err != nil || endpointURL.Scheme != "https" || endpointURL.Host == "" {
+		endpointURL, err := parseConnectorOAuthEndpoint(derivation.Endpoint, derivation.EndpointSetting != "")
+		if err != nil {
 			return nil, fmt.Errorf("Connector OAuth credential derivation endpoint is invalid")
 		}
 		providerResponse, found := responses[derivation.Endpoint]
@@ -340,9 +369,9 @@ func (setup *connectorSetup) deriveConnectorOAuthCredentials(
 			}
 			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Authorization", "Bearer "+token.AccessToken)
-			response, err := setup.releases.httpClient.Do(request)
+			response, err := setup.endpointHTTPClient(derivation.EndpointSetting).Do(request)
 			if err != nil {
-				return nil, err
+				return nil, newConnectorOAuthEndpointRequestError(derivation.EndpointSetting, err)
 			}
 			contents, readErr := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 			closeErr := response.Body.Close()
@@ -385,8 +414,8 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 	code string,
 ) (connectorOAuthTokenResponse, error) {
 	oauth := session.authMethod.OAuth2
-	tokenURL, err := url.Parse(oauth.TokenEndpoint)
-	if err != nil || tokenURL.Scheme != "https" || tokenURL.Host == "" {
+	tokenURL, err := parseConnectorOAuthEndpoint(oauth.TokenEndpoint, oauth.TokenEndpointSetting != "")
+	if err != nil {
 		return connectorOAuthTokenResponse{}, fmt.Errorf("Connector OAuth token endpoint is invalid")
 	}
 	if err := validateConnectorOAuthTokenRequestDeclarations(*oauth); err != nil {
@@ -419,9 +448,9 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 		// Zoom, Calendly, and Notion document base64(id:secret) without RFC 6749 form-encoding.
 		request.SetBasicAuth(session.clientID, session.clientSecret)
 	}
-	response, err := setup.releases.httpClient.Do(request)
+	response, err := setup.endpointHTTPClient(oauth.TokenEndpointSetting).Do(request)
 	if err != nil {
-		return connectorOAuthTokenResponse{}, err
+		return connectorOAuthTokenResponse{}, newConnectorOAuthEndpointRequestError(oauth.TokenEndpointSetting, err)
 	}
 	defer response.Body.Close()
 	contents, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
@@ -445,14 +474,10 @@ func (setup *connectorSetup) exchangeConnectorOAuthToken(
 }
 
 func validateConnectorOAuthTokenRequestDeclarations(oauth connectorManifestOAuth2) error {
-	switch oauth.TokenRequestEncoding {
-	case "", connectorOAuthFormTokenRequestEncoding, connectorOAuthJSONTokenRequestEncoding:
-	default:
+	if oauth.TokenRequestEncoding != "" && !slices.Contains(connectorOAuthTokenRequestEncodings, oauth.TokenRequestEncoding) {
 		return fmt.Errorf("Connector OAuth token request encoding %q is not supported", oauth.TokenRequestEncoding)
 	}
-	switch oauth.TokenEndpointAuthMethod {
-	case "", connectorOAuthClientSecretPostAuthMethod, connectorOAuthClientSecretBasicAuthMethod:
-	default:
+	if oauth.TokenEndpointAuthMethod != "" && !slices.Contains(connectorOAuthTokenEndpointAuthMethods, oauth.TokenEndpointAuthMethod) {
 		return fmt.Errorf("Connector OAuth token endpoint auth method %q is not supported", oauth.TokenEndpointAuthMethod)
 	}
 	return nil

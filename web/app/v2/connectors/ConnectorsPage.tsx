@@ -88,6 +88,11 @@ interface ManifestField {
   studioUnit?: { unit: string; port: string };
 }
 
+// A manifest names a connection setting, such as {fromSetting: 'scopes'}, where a connector cannot know the value.
+type ManifestSettingReference = { fromSetting: string };
+type ManifestOAuthEndpoint = string | ManifestSettingReference;
+type ManifestOAuthScopes = string[] | ManifestSettingReference;
+
 interface ManifestAuthMethod {
   id: string;
   displayName: string;
@@ -98,12 +103,12 @@ interface ManifestAuthMethod {
   configuration?: { fields: ManifestField[] };
   guide?: { startURL: string; steps: string[] };
   oauth2?: {
-    scopes?: string[];
+    scopes?: ManifestOAuthScopes;
     clientIDCredential?: string;
     clientSecretCredential?: string;
     userScopes?: string[];
     credentialMappings?: { credential: string; source: string }[];
-    credentialDerivations?: { credential: string; endpoint: string; source: string; verifiedBy?: string }[];
+    credentialDerivations?: { credential: string; endpoint: ManifestOAuthEndpoint; source: string; verifiedBy?: string }[];
   };
 }
 
@@ -117,12 +122,12 @@ interface ReleaseManifest {
       fields: ManifestField[];
       guide?: { startURL: string; steps: string[] };
       oauth2?: {
-        scopes?: string[];
+        scopes?: ManifestOAuthScopes;
         clientIDCredential?: string;
         clientSecretCredential?: string;
         userScopes?: string[];
         credentialMappings?: { credential: string; source: string }[];
-        credentialDerivations?: { credential: string; endpoint: string; source: string; verifiedBy?: string }[];
+        credentialDerivations?: { credential: string; endpoint: ManifestOAuthEndpoint; source: string; verifiedBy?: string }[];
       };
       defaultMethod?: string;
       selection?: 'single' | 'multiple';
@@ -1095,7 +1100,7 @@ export function selectedManifestAuth(auth: ReleaseManifest['spec']['auth'], meth
 }
 
 export function requestedOAuthScopesText(oauth2: ManifestAuthMethod['oauth2']): string {
-  const scopes = oauth2?.scopes ?? [];
+  const scopes = Array.isArray(oauth2?.scopes) ? oauth2.scopes : [];
   const userScopes = oauth2?.userScopes ?? [];
   if (scopes.length === 0) {
     return userScopes.length === 0 ? '' : `Requested user scopes: ${userScopes.join(', ')}`;
