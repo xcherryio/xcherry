@@ -119,14 +119,14 @@ func TestBuildUpsertQuotesIdentifiersAndBindsValues(t *testing.T) {
 	postgresDialect, err := newSQLDialect(config.AttributeStoreTypePostgres)
 	require.NoError(t, err)
 	postgres := &sqlStore{dialect: postgresDialect}
-	query, arguments := postgres.buildUpsert(snapshot, "flow-id", values)
+	query, arguments := postgres.buildUpsert(snapshot, []string{"flow-id"}, values)
 	require.Equal(t, `INSERT INTO "reporting"."flow attributes" ("FlowID", "name", "select") VALUES ($1, $2, $3) ON CONFLICT ("FlowID") DO UPDATE SET "name" = EXCLUDED."name", "select" = EXCLUDED."select"`, query)
 	require.Equal(t, []any{"flow-id", "flow", int64(7)}, arguments)
 
 	mysqlDialect, err := newSQLDialect(config.AttributeStoreTypeMySQL)
 	require.NoError(t, err)
 	mysql := &sqlStore{dialect: mysqlDialect}
-	query, arguments = mysql.buildUpsert(snapshot, "flow-id", values)
+	query, arguments = mysql.buildUpsert(snapshot, []string{"flow-id"}, values)
 	require.Equal(t, "INSERT INTO `reporting`.`flow attributes` (`FlowID`, `name`, `select`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `select` = VALUES(`select`)", query)
 	require.Equal(t, []any{"flow-id", "flow", int64(7)}, arguments)
 }
@@ -148,10 +148,10 @@ func TestBuildWarehouseMergeQuotesIdentifiersAndBindsValues(t *testing.T) {
 	databricksDialect, err := newSQLDialect(config.AttributeStoreTypeDatabricks)
 	require.NoError(t, err)
 	databricks := &sqlStore{dialect: databricksDialect}
-	query, arguments := databricks.buildUpsert(snapshot, "flow-id", values)
+	query, arguments := databricks.buildUpsert(snapshot, []string{"flow-id"}, values)
 	require.Equal(t, "MERGE INTO `analytics`.`reporting`.`flow attributes` AS target USING (SELECT CAST(? AS STRING) AS `FlowID`, ? AS `name`, PARSE_JSON(?) AS `profile`) AS source ON target.`FlowID` = source.`FlowID` WHEN MATCHED THEN UPDATE SET target.`name` = source.`name`, target.`profile` = source.`profile` WHEN NOT MATCHED THEN INSERT (`FlowID`, `name`, `profile`) VALUES (source.`FlowID`, source.`name`, source.`profile`)", query)
 	require.Equal(t, []any{"flow-id", "flow", `{"active":true}`}, arguments)
-	databricksTimestampQuery, databricksTimestampArguments := databricks.buildUpsert(snapshot, "flow-id", map[string]filteredValue{
+	databricksTimestampQuery, databricksTimestampArguments := databricks.buildUpsert(snapshot, []string{"flow-id"}, map[string]filteredValue{
 		"logged_at": {column: columnSchema{dataType: "timestamp_ntz"}, value: "2026-08-11T15:30:00Z"},
 	})
 	require.Contains(t, databricksTimestampQuery, "CAST(? AS TIMESTAMP_NTZ) AS `logged_at`")
@@ -160,27 +160,27 @@ func TestBuildWarehouseMergeQuotesIdentifiersAndBindsValues(t *testing.T) {
 	snowflakeDialect, err := newSQLDialect(config.AttributeStoreTypeSnowflake)
 	require.NoError(t, err)
 	snowflake := &sqlStore{dialect: snowflakeDialect}
-	query, arguments = snowflake.buildUpsert(snapshot, "flow-id", values)
+	query, arguments = snowflake.buildUpsert(snapshot, []string{"flow-id"}, values)
 	require.Equal(t, `MERGE INTO "analytics"."reporting"."flow attributes" AS target USING (SELECT CAST(? AS VARCHAR) AS "FlowID", ? AS "name", PARSE_JSON(?) AS "profile") AS source ON target."FlowID" = source."FlowID" WHEN MATCHED THEN UPDATE SET target."name" = source."name", target."profile" = source."profile" WHEN NOT MATCHED THEN INSERT ("FlowID", "name", "profile") VALUES (source."FlowID", source."name", source."profile")`, query)
 	require.Equal(t, []any{"flow-id", "flow", `{"active":true}`}, arguments)
-	snowflakeTimestampQuery, snowflakeTimestampArguments := snowflake.buildUpsert(snapshot, "flow-id", map[string]filteredValue{
+	snowflakeTimestampQuery, snowflakeTimestampArguments := snowflake.buildUpsert(snapshot, []string{"flow-id"}, map[string]filteredValue{
 		"logged_at": {column: columnSchema{dataType: "timestamp_ntz"}, value: "2026-08-11T15:30:00Z"},
 	})
 	require.Contains(t, snowflakeTimestampQuery, `TO_TIMESTAMP_NTZ(?) AS "logged_at"`)
 	require.Equal(t, []any{"flow-id", "2026-08-11T15:30:00Z"}, snowflakeTimestampArguments)
-	snowflakeBinaryQuery, snowflakeBinaryArguments := snowflake.buildUpsert(snapshot, "flow-id", map[string]filteredValue{
+	snowflakeBinaryQuery, snowflakeBinaryArguments := snowflake.buildUpsert(snapshot, []string{"flow-id"}, map[string]filteredValue{
 		"payload": {column: columnSchema{dataType: "binary"}, value: []byte{0x01, 0xab}},
 	})
 	require.Contains(t, snowflakeBinaryQuery, `TO_BINARY(?, 'HEX') AS "payload"`)
 	require.Equal(t, []any{"flow-id", "01ab"}, snowflakeBinaryArguments)
-	databricksBinaryQuery, databricksBinaryArguments := databricks.buildUpsert(snapshot, "flow-id", map[string]filteredValue{
+	databricksBinaryQuery, databricksBinaryArguments := databricks.buildUpsert(snapshot, []string{"flow-id"}, map[string]filteredValue{
 		"payload": {column: columnSchema{dataType: "binary"}, value: []byte{0x01, 0xab}},
 	})
 	require.Contains(t, databricksBinaryQuery, "UNHEX(?) AS `payload`")
 	require.Equal(t, []any{"flow-id", "01ab"}, databricksBinaryArguments)
 
 	maliciousName := `profile"; DROP TABLE audit; --`
-	query, arguments = snowflake.buildUpsert(snapshot, "flow-value'; DROP TABLE flows; --", map[string]filteredValue{
+	query, arguments = snowflake.buildUpsert(snapshot, []string{"flow-value'; DROP TABLE flows; --"}, map[string]filteredValue{
 		maliciousName: {column: columnSchema{dataType: "varchar"}, value: "attribute-value'; DROP TABLE values; --"},
 	})
 	require.Contains(t, query, `"profile""; DROP TABLE audit; --"`)

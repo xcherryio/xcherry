@@ -120,6 +120,13 @@ const (
 	AttributeStoreTypeMongoDB    AttributeStoreType = "mongodb"
 )
 
+const (
+	// AttributeStoreColumnNamingExact writes each Attribute to the column with exactly its name.
+	AttributeStoreColumnNamingExact AttributeStoreColumnNaming = ""
+	// AttributeStoreColumnNamingSnakeCase writes each Attribute to the snake_case form of its name, such as deployment_url for DeploymentURL.
+	AttributeStoreColumnNamingSnakeCase AttributeStoreColumnNaming = "snake_case"
+)
+
 var defaultHeadlessFailoverStatusCodes = [...]codes.Code{
 	codes.Unavailable,
 	codes.DeadlineExceeded,
@@ -246,6 +253,8 @@ type (
 
 	AttributeStoreType string
 
+	AttributeStoreColumnNaming string
+
 	AttributeStoreConfig struct {
 		// Stores maps FlowConfig names to immutable external destinations. Default empty disables Attribute synchronization.
 		Stores map[string]AttributeStoreConfigEntry `yaml:"stores"`
@@ -272,6 +281,15 @@ type (
 		DatabaseName string `yaml:"databaseName"`
 		// CollectionName selects the existing MongoDB collection. Default empty is invalid for MongoDB stores. Immutable after startup.
 		CollectionName string `yaml:"collectionName"`
+		// RowKey splits each Flow ID into the primary-key columns of a PostgreSQL or MySQL table, such as
+		// release-{project_id}-{release_id}. Each {column} placeholder captures up to the next literal text, and the
+		// last placeholder captures the rest; {*} captures without a column. The table's primary key must be exactly the
+		// named columns, all character columns. A Flow ID that does not match skips its batch with an error log.
+		// Default empty stores the whole Flow ID in the table's single primary-key column. Immutable after startup.
+		RowKey string `yaml:"rowKey"`
+		// ColumnNaming maps Attribute names to PostgreSQL or MySQL column names: empty (default) uses each name exactly,
+		// and snake_case uses its snake_case form. Immutable after startup.
+		ColumnNaming AttributeStoreColumnNaming `yaml:"columnNaming"`
 	}
 
 	StorageStatus       string
@@ -938,6 +956,9 @@ func (c AttributeStoreConfig) Validate() error {
 			if store.TableName != "" || store.FlowIDColumn != "" {
 				return fmt.Errorf("attribute store %q mongodb configuration does not accept tableName or flowIdColumn", name)
 			}
+			if store.RowKey != "" || store.ColumnNaming != AttributeStoreColumnNamingExact {
+				return fmt.Errorf("attribute store %q mongodb configuration does not accept rowKey or columnNaming", name)
+			}
 			continue
 		}
 		if store.TableName == "" {
@@ -954,6 +975,12 @@ func (c AttributeStoreConfig) Validate() error {
 		}
 		if !store.Type.IsWarehouse() && store.FlowIDColumn != "" {
 			return fmt.Errorf("attribute store %q only warehouses accept flowIdColumn", name)
+		}
+		if store.Type.IsWarehouse() && (store.RowKey != "" || store.ColumnNaming != AttributeStoreColumnNamingExact) {
+			return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey and columnNaming", name)
+		}
+		if !store.ColumnNaming.IsSupported() {
+			return fmt.Errorf("attribute store %q has unsupported columnNaming %q", name, store.ColumnNaming)
 		}
 	}
 	return nil
@@ -985,6 +1012,11 @@ func (t AttributeStoreType) IsSupported() bool {
 	default:
 		return false
 	}
+}
+
+// IsSupported reports whether the column naming rule is exact names or snake_case.
+func (n AttributeStoreColumnNaming) IsSupported() bool {
+	return n == AttributeStoreColumnNamingExact || n == AttributeStoreColumnNamingSnakeCase
 }
 
 // IsWarehouse reports whether the store uses an explicitly configured Flow ID column.

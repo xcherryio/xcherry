@@ -25,6 +25,12 @@ attributeStore:
       type: mysql
       dsn: user:password@tcp(host:3306)/database
       tableName: flow_attributes
+    orders:
+      type: postgres
+      dsn: postgres://user:password@host/database
+      tableName: public.orders
+      rowKey: order-{customer_id}-{order_id}
+      columnNaming: snake_case
     lakehouse:
       type: databricks
       dsn: token:secret@workspace:443/sql/1.0/warehouses/warehouse-id
@@ -66,9 +72,11 @@ values always use driver parameters.
 Dex connects, pings, and validates every destination during startup. One failure
 fails startup and closes already-opened clients.
 
-For PostgreSQL and MySQL, each table must have exactly one character-compatible
-primary key. Dex discovers that key and stores the Flow ID in it. This preserves
-the existing configuration and behavior for these stores.
+For PostgreSQL and MySQL without **rowKey**, each table must have exactly one
+character-compatible primary key. Dex discovers that key and stores the Flow ID
+in it. This preserves the existing configuration and behavior for these stores.
+With **rowKey**, the primary key must be exactly the columns the template names,
+and each must be a character column.
 
 For Databricks and Snowflake, **flowIdColumn** must name an existing, non-null,
 non-generated string column. Values in that column must be logically unique.
@@ -77,15 +85,52 @@ primary-key enforcement. A SQL Warehouse must already be available for a
 Databricks connection.
 
 Every other required SQL column must have a default or generated value. This
-allows a partial insert to create a row. Attribute names match non-Flow-ID
-columns exactly.
+allows a partial insert to create a row. Attribute names match the remaining
+columns exactly, or by their snake_case form under **columnNaming**.
 
 For MongoDB, the configured collection must exist. Dex does not create the
 collection, change its validator, or create indexes.
 
+## Row keys and column naming
+
+PostgreSQL and MySQL stores accept two optional settings. Without them, a store
+behaves as before. Databricks, Snowflake, and MongoDB reject both settings at
+startup.
+
+**rowKey** splits each Flow ID into primary-key columns. Use it when a business
+ID is part of the Flow ID and you query by that ID, or when several Flow types
+describe one entity. A template contains literal text and placeholders:
+
+- **\{column\}** stores the captured text in that primary-key column.
+- **\{*\}** matches text without storing it.
+- Each placeholder captures up to the next literal text. The last placeholder
+  captures the rest of the Flow ID.
+- Literal text must separate two placeholders, and no capture may be empty.
+
+For example, **order-\{customer_id\}-\{order_id\}** splits **order-c1-o-7** into
+**customer_id** c1 and **order_id** o-7. A Flow ID that does not match the
+template skips its whole batch with an error log, because a retry cannot change
+the result. Writes to a key column are filtered like Flow ID writes.
+
+Several stores may name the same table. Each upsert sets only the columns of its
+own batch, so two Flow types can write different columns of one row. For
+example, a store with **customer-\{customer_id\}** and another with
+**onboarding-\{customer_id\}-\{*\}** both write the row of one customer.
+
+**columnNaming: snake_case** writes each Attribute to the snake_case form of its
+name. Dex inserts an underscore before an upper-case letter that follows a
+lower-case letter or a digit, or that ends an acronym before a lower-case
+letter. Then it lower-cases every letter. **DeploymentURL** becomes
+**deployment_url**, **URLPath** becomes **url_path**, and **S3Bucket** becomes
+**s3_bucket**. When two Attribute names in one batch map to the same column, Dex
+filters both. The default writes each Attribute to the column with exactly its
+name.
+
 ## SQL writes and schema refresh
 
-PostgreSQL and MySQL retain their existing upsert statements. Databricks and
+PostgreSQL and MySQL retain their existing upsert statements. With a **rowKey**,
+the upsert writes every key column and resolves conflicts on the whole primary
+key. Databricks and
 Snowflake execute one parameterized **MERGE** for each batch from one Flow. Dex
 does not combine batches from different Flows and does not maintain a change
 log.
@@ -118,8 +163,9 @@ SDK datetime values may use RFC3339 strings or JSON epoch seconds. Dex rejects
 oversized strings or binary values, out-of-range integers, excess decimal
 precision, non-finite floating-point values, and invalid JSON.
 
-Missing columns, type mismatches, Flow ID writes, and nulls for required columns
-are logged and filtered one field at a time. Valid fields in the same batch still
+Missing columns, type mismatches, Flow ID and key column writes, Attribute names
+that share one column, and nulls for required columns are logged and filtered
+one field at a time. Valid fields in the same batch still
 write. If every field is filtered, the sync batch succeeds without executing SQL.
 
 ## MongoDB document contract
