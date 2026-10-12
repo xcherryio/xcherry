@@ -558,7 +558,16 @@ type WorkerOptions struct {
 	FlowServiceAddress string
 	AttributeIndexSyncTimeout time.Duration
 	Logger             Logger
+	Credential         Credential
 }
+
+// Credential supplies the bearer credential sent with every FlowService call.
+type Credential interface {
+	Token(ctx context.Context) (string, error)
+}
+
+// FileCredential reads a token file and rereads it when it changes.
+func FileCredential(path string) (Credential, error)
 
 type Worker struct {
 	// unexported
@@ -591,6 +600,12 @@ advertised host. `WorkerTarget.Headless` is preserved. This default is intended
 for a Worker and Dex server with matching local network reachability;
 deployments with containers, pods, load balancers, or DNS must set the
 advertised address explicitly.
+
+`ClientOptions.Credential` and `WorkerOptions.Credential` attach a bearer
+credential to every FlowService call. A multi-tenant Dex server requires it
+and derives the caller's tenant from it; a single-tenant server ignores it.
+`FileCredential` rereads its file when the file changes, so a rotated token,
+such as a projected service account token, takes effect without a restart.
 
 `Worker.WorkerTarget()` returns a fresh copy of the resolved target for
 `ClientOptions`. It does not mutate a caller-owned option value.
