@@ -209,14 +209,15 @@ Tenant mode refuses to start when any of these holds:
   - At each dispatch, the activity matches the persisted target against the pattern of
     its input tenant again. So **a Flow of one tenant is never dispatched to another
     tenant's Worker**, even after a configuration change.
-- **Fairness**: the server sets the Temporal **fairness key** of every workflow and
-  activity task to the tenant ID. Temporal's task queue fairness gives each key a virtual
-  queue served round-robin within the shared queue. It is generally available on
+- **Fairness** (optional): with `tenancy.fairness: true`, the server sets the Temporal
+  **fairness key** of every workflow and activity task to the tenant ID. Temporal's task
+  queue fairness gives each key a virtual queue served round-robin within the shared
+  queue, and the namespace must enable it. It is generally available on
   Temporal Cloud since May 2026 as a paid, per-namespace setting, and on self-hosted
   servers through `matching.enableFairness`
   ([Task Queue Priority and Fairness](https://docs.temporal.io/develop/task-queue-priority-fairness),
-  2026-10-12). Fairness spreads dispatch but is not hard isolation, so the server also
-  enforces the next two bounds.
+  2026-10-12). Fairness spreads dispatch but is not hard isolation. The next two bounds
+  apply whether or not fairness is enabled, and are the default protection.
 - **Concurrent dispatch cap**: each process holds at most
   `limits.maxConcurrentDispatchesPerTenant` (default 32) WaitFor, Execute and Worker RPC
   dispatches per tenant. A dispatch over the cap waits for a slot inside the activity,
@@ -286,9 +287,18 @@ Tenant mode refuses to start when any of these holds:
   interpreter dispatches by Flow type to the Flow's worker target. A tenant's types never
   reach another tenant's Worker, so Flow types need no prefix: two tenants may both
   define `OrderFlow`.
-- **Dex Web**: it renders from one directory and lists the whole namespace. In tenant mode
-  it starts only with `web.tenant` set, and then serves that one tenant through its own
-  tenant credential. Otherwise it is disabled.
+- **Dex Web**: today it renders from one directory and lists the whole namespace. In
+  tenant mode it serves **each request for exactly one tenant: the tenant of the
+  credential that request carries**.
+  - The credential arrives in the request's `Authorization` header, set by a trusted
+    embedding proxy that authenticated and authorized the user. Dex Web forwards it on
+    every FlowService call, so the server's tenant rules apply unchanged: lists, searches
+    and actions see only that tenant's Flows.
+  - A request without a valid tenant credential is refused. Dex Web keeps no tenant state
+    between requests and never caches one tenant's data for another.
+  - It renders definitions from `<flowRenderingDirectory>/<tenant>/`.
+  - The browser never needs the credential: the proxy adds it on the server side.
+  - `web.tenant` still pins a deployment to one tenant for single-tenant setups.
 - **dexcli**: it authenticates with a tenant credential like any other client.
 
 ### Timers, Channels, RPCs and schedules
@@ -385,6 +395,8 @@ enabled, plus the SDK integration suites:
 - **Limits**: a tenant over a limit gets `RESOURCE_EXHAUSTED` without affecting another
   tenant.
 - **Tombstone and purge**:
+  - Dex Web in tenant mode serves two tenants' requests with only their own Flows and
+    definitions, and refuses a request without a credential;
   - a tombstoned tenant's valid token is refused, and the ID is accepted again only after
     `tombstoneRetention` following `done`;
   - PurgeTenant removes executions, blobs, Stream keys and rows, is idempotent, keeps its
@@ -402,7 +414,7 @@ enabled, plus the SDK integration suites:
 
 ## UI/UX
 
-Dex Web in tenant mode serves one tenant or is disabled. No other UI.
+Dex Web in tenant mode serves each request for the one tenant of its credential, which a trusted proxy supplies. No other UI.
 
 ## Release plan
 
@@ -411,8 +423,8 @@ Dex Web in tenant mode serves one tenant or is disabled. No other UI.
 | TENANTAUTH | the `tenancy` configuration, authenticators, principals, the internal listener and token, tombstones |
 | TENANTID | identity mapping in and out, SubFlow IDs, `tenant_id` in the workflow input, length rules |
 | TENANTSEARCH | `DexTenantID`, AST rewriting, result checks, `SyncAttributeIndexes` refusal |
-| TENANTDISPATCH | worker target resolution and re-check, fairness key, dispatch cap, per-tenant pool bound, wake hook with held dispatch |
-| TENANTDATA | blob prefix and `s3KeyPrefix`, cleanup by stored ID, Stream scope and caps, tenant-scoped Attribute Stores, Dex Web tenant mode |
+| TENANTDISPATCH | worker target resolution and re-check, optional fairness key, dispatch cap, per-tenant pool bound, wake hook with held dispatch |
+| TENANTDATA | blob prefix and `s3KeyPrefix`, cleanup by stored ID, Stream scope and caps, tenant-scoped Attribute Stores, Dex Web per-request tenant mode |
 | TENANTLIMITS | per-tenant token buckets |
 | TENANTPURGE | `TenantAdminService` purge and describe |
 | SDKCREDENTIAL | sdk-go credential option, then the other SDKs |
