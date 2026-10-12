@@ -242,13 +242,33 @@ func TestTenantAuthenticationTemporal(t *testing.T) {
 		requireCode(t, codes.PermissionDenied, operatorJWT)
 	})
 
-	t.Run("SyncAttributeIndexes is refused", func(t *testing.T) {
-		_, err := runtime.FlowClient.SyncAttributeIndexes(ctx, &dexpb.SyncAttributeIndexRequest{
-			AttributeIndexes: map[string]dexpb.IndexType{
-				"TenantOwnedIndex": dexpb.IndexType_INDEX_TYPE_KEYWORD,
-			},
-		})
-		require.Equal(t, codes.PermissionDenied, status.Code(err), "error: %v", err)
+	t.Run("SyncAttributeIndexes verifies declarations without creating indexes", func(t *testing.T) {
+		syncIndexes := func(indexes map[string]dexpb.IndexType) error {
+			_, err := runtime.FlowClient.SyncAttributeIndexes(ctx, &dexpb.SyncAttributeIndexRequest{AttributeIndexes: indexes})
+			return err
+		}
+		require.NoError(t, syncIndexes(map[string]dexpb.IndexType{
+			"CustomKeywordField": dexpb.IndexType_INDEX_TYPE_KEYWORD,
+			"CustomIntField":     dexpb.IndexType_INDEX_TYPE_INT,
+		}), "registered indexes with their declared types are accepted")
+
+		missingName := "TenantMissingIndex" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		err := syncIndexes(map[string]dexpb.IndexType{missingName: dexpb.IndexType_INDEX_TYPE_KEYWORD})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err), "error: %v", err)
+		require.Contains(t, status.Convert(err).Message(), missingName)
+		require.Contains(t, status.Convert(err).Message(), "operator must register it")
+		indexes, listErr := runtime.UnifiedClient.ListAttributeIndexes(ctx)
+		require.NoError(t, listErr)
+		require.NotContains(t, indexes, missingName, "a tenant's declaration never creates an index")
+
+		err = syncIndexes(map[string]dexpb.IndexType{"CustomKeywordField": dexpb.IndexType_INDEX_TYPE_INT})
+		require.Equal(t, codes.InvalidArgument, status.Code(err), "error: %v", err)
+		require.Contains(t, status.Convert(err).Message(), "CustomKeywordField")
+
+		for _, reservedName := range []string{"DexTenantID", "FlowType", "DexParentFlowID", "ActiveStepTypes"} {
+			err = syncIndexes(map[string]dexpb.IndexType{reservedName: dexpb.IndexType_INDEX_TYPE_KEYWORD})
+			require.Equal(t, codes.InvalidArgument, status.Code(err), "%s: %v", reservedName, err)
+		}
 	})
 
 	t.Run("InternalService is only on the internal listener with its token", func(t *testing.T) {

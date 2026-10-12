@@ -140,7 +140,7 @@ Tenant mode refuses to start when any of these holds:
 | SearchFlows | tenant | query parsed, rewritten and ANDed with `DexTenantID = T` ([Visibility](#visibility)) | injection attempts |
 | InvokeRPC | tenant | maps | another tenant's FlowID is NotFound |
 | UpdateFlowConfig | tenant | maps; the worker target is resolved for T | another tenant's target is refused |
-| SyncAttributeIndexes | tenant | `PERMISSION_DENIED`: search attributes are registered by the operator, outside Dex (`attributeIndexesManagedExternally` is required) | refused in tenant mode |
+| SyncAttributeIndexes | tenant | never creates anything: search attributes are registered by the operator, outside Dex (`attributeIndexesManagedExternally` is required). Every SDK Worker calls it at startup, so it verifies the declarations against the namespace's registered indexes, cached for 60 seconds across tenants: a missing index is `FAILED_PRECONDITION` naming the index and saying the operator must register it, a wrong type or a server-owned name (`DexTenantID`, `FlowType`, `DexParentFlowID`, `ActiveStepTypes`, `DexWorkQueuePermissions`) is `INVALID_ARGUMENT`. A just-registered index may be reported missing for up to 60 seconds | registered OK, missing, wrong type, reserved name; a Worker starts in tenant mode |
 | InternalService.DumpFlowForContinueAsNew | internal | served only on `tenancy.internal.listen`, never on the public listener; the caller's token must equal `internal.tokenFile` | a tenant credential on the public port gets `UNIMPLEMENTED`; on the internal port without the token, `UNAUTHENTICATED` |
 | TenantAdminService.TombstoneTenant, PurgeTenant, DescribeTenant | operator | names the tenant explicitly; never returns Flow data | a tenant credential is refused |
 | WorkerService (the server calls the Worker) | n/a | the server sends only mapped-out IDs of the Flow's own tenant to the tenant's resolved target | dispatch never reaches another tenant's Worker |
@@ -188,7 +188,9 @@ Tenant mode refuses to start when any of these holds:
   `DexTenantID` and never match a tenant query.
 - **Registration**: search attributes are registered only by the operator, outside Dex,
   because tenant mode requires `attributeIndexesManagedExternally`. A tenant cannot
-  create namespace-wide attributes or use up their slots.
+  create namespace-wide attributes or use up their slots. A tenant's `SyncAttributeIndexes`,
+  which every SDK Worker calls at startup, only verifies that its declared indexes are
+  registered with their types.
   - Budget: Temporal Cloud allows 40 Keyword and 5 KeywordList custom attributes per
     namespace (same source).
   - Dex uses 3 Keyword attributes (`FlowType`, `DexParentFlowID`, `DexTenantID`) and 2
@@ -365,7 +367,7 @@ enabled, plus the SDK integration suites:
   with two tenants that start the same FlowID and the same Flow type.
 - **Internal service**: InternalService is unreachable on the public listener, and
   refused without the internal token on the internal one.
-- **Search**: `SyncAttributeIndexes` is refused in tenant mode. SearchFlows rejects
+- **Search**: `SyncAttributeIndexes` verifies a tenant's declarations without creating anything. SearchFlows rejects
   unknown constructs and parenthesis or `OR` injection, and returns only the caller's Flows
   with unprefixed IDs.
 - **SubFlows**: nested SubFlows show unprefixed IDs to the application and carry exactly
@@ -412,7 +414,7 @@ Dex Web is disabled in tenant mode. No other UI.
 |---|---|
 | TENANTAUTH | the `tenancy` configuration, authenticators, principals, the internal listener and token, tombstones |
 | TENANTID | identity mapping in and out, SubFlow IDs, `tenant_id` in the workflow input, length rules |
-| TENANTSEARCH | `DexTenantID`, AST rewriting, result checks, `SyncAttributeIndexes` refusal |
+| TENANTSEARCH | `DexTenantID`, AST rewriting, result checks |
 | TENANTDISPATCH | worker target resolution and re-check, optional fairness key, dispatch cap, per-tenant pool bound, wake hook with held dispatch |
 | TENANTDATA | blob prefix and `s3KeyPrefix`, cleanup by stored ID, Stream scope and caps, tenant-scoped Attribute Stores, Dex Web disabled in tenant mode |
 | TENANTLIMITS | per-tenant token buckets |
