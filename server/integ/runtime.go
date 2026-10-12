@@ -40,6 +40,7 @@ import (
 	"github.com/superdurable/dex/service/indexsync"
 	"github.com/superdurable/dex/service/interpreter/cadence"
 	"github.com/superdurable/dex/service/interpreter/temporal"
+	"github.com/superdurable/dex/service/tenancy"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
@@ -378,6 +379,9 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		service.SearchAttributeDexWorkflowType: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeDexParentFlowID: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeActiveStepTypes: dexpb.IndexType_INDEX_TYPE_KEYWORD_ARRAY,
+	}
+	if cfg.Tenancy.IsMultiTenant() {
+		attributeIndexes[tenancy.SearchAttributeDexTenantID] = dexpb.IndexType_INDEX_TYPE_KEYWORD
 	}
 	for name, indexType := range localDexDevTestAttributeIndexes {
 		attributeIndexes[name] = indexType
