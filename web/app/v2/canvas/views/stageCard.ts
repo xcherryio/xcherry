@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import { whoActs, type PocFlow, type StepModel } from '../model/pocFlow'
-import { cardStatus, isOpenStatus, runStateFor, type PhaseStatus } from '../model/run'
+import { cardStatus, isExecutedRun, isOpenStatus, runStateFor, type PhaseStatus } from '../model/run'
 import type { StepGroup } from './groups'
 import { connectorName, packChips, tileOf } from './stepBox'
 import type { Box, BoxChip, RunPill, StageSummary, Tile, ViewOpts } from './types'
@@ -71,7 +71,7 @@ function pillOf(members: StepModel[], opts: ViewOpts): { pill?: RunPill; holds: 
   if (overlay === null) return { holds: [] }
   const states = members.flatMap((step) => {
     const run = runStateFor(overlay, step.stepType)
-    return run === null || run.planned ? [] : [{ step, status: cardStatus(run.current) }]
+    return isExecutedRun(run) ? [{ step, status: cardStatus(run.current) }] : []
   })
   const holds = states.filter((s) => isOpenStatus(s.status) || s.status === 'failed').map((s) => s.step.id)
   const pick =

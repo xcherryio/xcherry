@@ -1,12 +1,10 @@
 # Flow Definition renderer
 
 This private package owns both Flow Definition Graph TypeScript contracts and
-renderers. `FlowDefinitionGraphView` renders Version 1 with its compound layout.
-`ProcessCanvasView` renders Version 2 with ordered group bands, collapsed or
-expanded Step cards, top-down or left-right layout, and selection details for
-product documentation. Dex Web draws Version 2 with its own **v2** canvas
-(`web/app/v2/canvas`) and imports this package for Version 1 and the graph
-types.
+the Version 1 renderer. `FlowDefinitionGraphView` renders Version 1 with its
+compound layout. Version 2 is drawn by Dex Web's **v2** canvas
+(`web/app/v2/canvas`), which product documentation imports from source, so Dex
+Web and the docs draw a Version 2 definition the same way.
 
 Consumers must provide React 19, React Flow, and Dagre. The repository uses a
 local file dependency and preserves symlinks in Vite, Docusaurus, and
@@ -30,6 +28,6 @@ Step, WaitFor, Execute decision, RPC, or timeout handler is selected. The RPC
 legend control affects only RPC nodes; Flow timeout handlers always remain
 visible as part of the Flow.
 
-Both renderers accept optional `subFlowLinks`, mapping a SubFlow node ID to its
+The renderer accepts optional `subFlowLinks`, mapping a SubFlow node ID to its
 child definition URL. Without a matching URL the child name remains plain text.
 Wait descriptions show each SubFlow's zero-based source argument index.

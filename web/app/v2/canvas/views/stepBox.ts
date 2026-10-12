@@ -13,6 +13,7 @@ import {
   barDecode,
   cardStatus,
   executionsOf,
+  isExecutedRun,
   isOpenStatus,
   reasonLine,
   runStateFor,
@@ -279,7 +280,7 @@ const PILL_TEXT: Record<PhaseStatus, string> = {
 
 function pillOf(run: RunState | null, isPerson: boolean): RunPill | undefined {
   if (run === null) return undefined
-  if (run.planned) return { status: 'planned', text: 'Next' }
+  if (!isExecutedRun(run)) return { status: 'planned', text: 'Next' }
   const status = cardStatus(run.current)
   const base = (status === 'waiting' || status === 'pending') && isPerson ? 'Waiting for you' : PILL_TEXT[status]
   return { status, text: run.count > 1 ? `${base} ×${run.count}` : base }
@@ -329,7 +330,7 @@ export function stepBox(
 ): Box {
   const overlay = opts.run
   const run = overlay === null ? null : runStateFor(overlay, step.stepType)
-  const executed = run !== null && !run.planned ? run : null
+  const executed = isExecutedRun(run) ? run : null
   const status = executed === null ? null : cardStatus(executed.current)
   const title = stepTitle(step)
   const chips = packChips(chipsOf(flow, step, docked.jumps, docked.arriving))

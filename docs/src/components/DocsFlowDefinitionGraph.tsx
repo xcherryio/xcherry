@@ -6,13 +6,16 @@
 //
 // SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
 
-import {useEffect, useState} from 'react';
+import {lazy, Suspense, useEffect, useState} from 'react';
+import BrowserOnly from '@docusaurus/BrowserOnly';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import {
   FlowDefinitionGraphView,
-  ProcessCanvasView,
   type FlowDefinitionGraph,
 } from '@superdurable/flow-definition-renderer';
+
+// Loaded only on pages that draw a Version 2.0 definition, with its layout engine and styles.
+const DocsFlowCanvas = lazy(() => import('./DocsFlowCanvas'));
 
 interface DocsFlowDefinitionGraphProps {
   graph: FlowDefinitionGraph;
@@ -50,9 +53,17 @@ export default function DocsFlowDefinitionGraph({graph}: DocsFlowDefinitionGraph
             : (isChinese ? '展开 diagram' : 'Expand diagram')}
         </button>
       </div>
-      {graph.schemaVersion === '2.0'
-        ? <ProcessCanvasView graph={graph} />
-        : <FlowDefinitionGraphView displayName={graph.flow.name} graph={graph} />}
+      {graph.schemaVersion === '2.0' ? (
+        <BrowserOnly fallback={<div className="docs-flow-canvas" />}>
+          {() => (
+            <Suspense fallback={<div className="docs-flow-canvas" />}>
+              <DocsFlowCanvas graph={graph} />
+            </Suspense>
+          )}
+        </BrowserOnly>
+      ) : (
+        <FlowDefinitionGraphView displayName={graph.flow.name} graph={graph} />
+      )}
     </div>
   );
 }
