@@ -466,6 +466,9 @@ func doTestWaitForAttributeTransportTimeoutAndReattach(t *testing.T) {
 		MaxWaitSeconds: 1,
 	})
 	flowClient := runtime.FlowClient
+	// The service above caps each wait at one second. The reattach goes through a service with the 12-second test
+	// default, so the cap cannot expire before the workflow task that applies the write has run.
+	reattachClient := startDexService(t, DexServiceTestConfig{BackendType: service.BackendTypeTemporal}).FlowClient
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	flowId := startParkedWaitForAttributeFlow(t, ctx, flowClient, workerTarget, nil)
@@ -489,6 +492,11 @@ func doTestWaitForAttributeTransportTimeoutAndReattach(t *testing.T) {
 		dexpb.ErrorSubStatus_ERROR_SUB_STATUS_LONG_POLL_TIME_OUT,
 		grpcServiceErrorResponse(t, err).GetSubStatus(),
 	)
+	// The call returned at the transport cap, which can precede the workflow task that accepts the Update.
+	require.Eventually(t, func() bool {
+		accepted, _ := countTemporalUpdateEvents(t, ctx, runtime, flowId, description.RunId, requestID)
+		return accepted == 1
+	}, 20*time.Second, 50*time.Millisecond)
 	accepted, completed := countTemporalUpdateEvents(
 		t,
 		ctx,
@@ -507,7 +515,7 @@ func doTestWaitForAttributeTransportTimeoutAndReattach(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	response, err := flowClient.WaitForAttribute(ctx, waitRequest)
+	response, err := reattachClient.WaitForAttribute(ctx, waitRequest)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(expectedValue, response.GetMatchedValue()))
 	accepted, completed = countTemporalUpdateEvents(
@@ -560,7 +568,7 @@ func doTestWaitForAttributeInternalHandlerTimeout(t *testing.T) {
 			requestID,
 		)
 		return counts.accepted == 1 && !time.Now().Before(counts.acceptedAt.Add(time.Second))
-	}, 3*time.Second, 20*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 	_, err = flowClient.SetAttributes(ctx, &dexpb.SetAttributesRequest{
 		RequestId: newRequestID(),
 		FlowId:    flowID,
@@ -569,17 +577,19 @@ func doTestWaitForAttributeInternalHandlerTimeout(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	// The final write must not reach the base handler. Once the base Update has completed with its handler
+	// deadline, the API moves to generation 1, which sees the final write on acceptance or while parked.
 	require.Eventually(t, func() bool {
-		accepted, _ := countTemporalUpdateEvents(
+		_, completed := countTemporalUpdateEvents(
 			t,
 			ctx,
 			runtime,
 			flowID,
 			description.RunId,
-			requestID+"-1",
+			requestID,
 		)
-		return accepted == 1
-	}, 5*time.Second, 50*time.Millisecond)
+		return completed == 1
+	}, 10*time.Second, 50*time.Millisecond)
 	_, err = flowClient.SetAttributes(ctx, &dexpb.SetAttributesRequest{
 		RequestId: newRequestID(),
 		FlowId:    flowID,
