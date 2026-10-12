@@ -11,6 +11,8 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"regexp/syntax"
 	"text/template"
@@ -20,7 +22,8 @@ import (
 const (
 	// TenancyModeSingle serves one namespace for every caller without authentication. It is the default.
 	TenancyModeSingle TenancyMode = "single"
-	// TenancyModeMulti serves many tenants in one namespace and authenticates every FlowService call.
+	// TenancyModeMulti will serve many tenants in one namespace. It is under development: the server refuses it at
+	// startup until tenant isolation of Flow identities, visibility and Worker dispatch is complete.
 	TenancyModeMulti TenancyMode = "multi"
 )
 
@@ -72,23 +75,34 @@ type (
 		// Internal configures the listener that serves InternalService to the server's own interpreter Workers.
 		// Required in multi mode, where InternalService is never served on the public API listener.
 		Internal TenancyInternalConfig `yaml:"internal"`
+		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
+		// development. It cannot be set from a configuration file. Default false.
+		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
 	}
 
 	TenantAuthenticatorConfig struct {
 		// Kind is jwt or staticTokens. Required.
 		Kind TenantAuthenticatorKind `yaml:"kind"`
-		// Issuer is the exact "iss" claim a JWT must carry. Required for jwt.
-		// When JWKSURL is empty, the key set URL is discovered from <issuer>/.well-known/openid-configuration.
+		// Issuer is the exact "iss" claim a JWT must carry. Required for jwt and unique among jwt authenticators.
+		// It must be an https URL; http is accepted only for a loopback host.
+		// When JWKSURL is empty, the key set URL is discovered from <issuer>/.well-known/openid-configuration,
+		// whose "issuer" must equal Issuer and whose "jwks_uri" must also be https (or loopback http).
 		Issuer string `yaml:"issuer"`
 		// Audiences lists accepted "aud" values. Required for jwt; a token must name at least one of them.
 		Audiences []string `yaml:"audiences"`
 		// JWKSURL is the JSON Web Key Set URL. Default empty uses OIDC discovery from Issuer.
 		// Keys are cached and refreshed at most once a minute; a token with an unknown key ID triggers one bounded refresh.
 		// No request makes a remote call otherwise.
+		// It must be an https URL; http is accepted only for a loopback host.
 		JWKSURL string `yaml:"jwksURL"`
+		// CAFile is a PEM bundle trusted for the issuer's https endpoints in addition to the system roots,
+		// for example a cluster's service account issuer CA. Default empty uses the system roots only.
+		CAFile string `yaml:"caFile"`
 		// SubjectPattern is a regular expression that must match the whole "sub" claim. Required for jwt.
 		// Its named group "tenant" is the tenant ID and must be able to match only [a-z0-9]{1,32},
 		// for example '^system:serviceaccount:apps-(?P<tenant>[a-z0-9]{1,32}):app$'.
+		// The group must be a top-level part of the pattern and be followed by the end of the pattern or by a literal
+		// that does not start with [a-z0-9], so that no subject can be read as two different tenants.
 		// A subject that does not match is refused: the tenant is derived fail-closed.
 		// Other named groups become principal claims available to templates.
 		SubjectPattern string `yaml:"subjectPattern"`
@@ -98,14 +112,20 @@ type (
 		Claims map[string]string `yaml:"claims"`
 		// File is the static token file for staticTokens. Required for staticTokens.
 		// It is YAML of the form "tokens: [{sha256: <hex>, tenant: <id>, claims: {<name>: <value>}}]".
-		// The file is reread when its modification time changes. To rotate a token, add the new hash before removing the old one.
+		// Tokens must carry at least 128 bits of entropy, for example 32 random hexadecimal characters.
+		// The file is reread when its modification time or size changes. An empty or deleted file means no tokens.
+		// Malformed content is logged and the previous tokens stay in effect until the file is fixed.
+		// The file must exist and be valid at startup. To rotate a token, add the new hash before removing the old one.
 		File string `yaml:"file"`
 	}
 
 	TenantOperatorConfig struct {
 		// Kind is jwt or staticToken. Required.
 		Kind TenantOperatorKind `yaml:"kind"`
-		// Subject is the exact "sub" claim of an operator JWT verified by any jwt authenticator. Required for jwt.
+		// Issuer selects the jwt authenticator that verifies an operator JWT. Required for jwt.
+		// It must equal the issuer of a configured jwt authenticator.
+		Issuer string `yaml:"issuer"`
+		// Subject is the exact "sub" claim of an operator JWT from Issuer. Required for jwt.
 		Subject string `yaml:"subject"`
 		// SHA256 is the lowercase hexadecimal SHA-256 hash of an operator static token. Required for staticToken.
 		SHA256 string `yaml:"sha256"`
@@ -115,9 +135,14 @@ type (
 		// Listen is the host:port bind address of the InternalService gRPC listener, for example 127.0.0.1:8803.
 		// Only the server's own interpreter Workers connect to it. Required in multi mode.
 		// Interpreter Workers dial interpreter.interpreterActivityConfig.internalServiceTarget when set, otherwise this address.
+		// The listener serves plaintext gRPC. Bind it to loopback, or restrict it to the server's own Pods with a
+		// network policy and encrypt the network path, because the token is sent in clear text.
 		Listen string `yaml:"listen"`
-		// TokenFile holds the bearer token that InternalService callers must present. Required in multi mode.
-		// Servers and interpreter Workers sharing a namespace must read the same token. The file is reread when it changes.
+		// TokenFile holds the bearer tokens that InternalService callers may present, one per line. Required in multi mode.
+		// Each token must be at least 32 characters. Interpreter Workers send the first line; every line is accepted,
+		// so a token is rotated by adding the new token as the first line, rolling out, then removing the old line.
+		// Servers and interpreter Workers sharing a namespace must read the same file. The file is reread when it
+		// changes; an empty or deleted file refuses every caller.
 		TokenFile string `yaml:"tokenFile"`
 	}
 )
@@ -145,6 +170,9 @@ func (c Config) ValidateTenancy() error {
 	if len(c.AttributeStore.Stores) > 0 {
 		return fmt.Errorf("tenancy.mode multi does not support Attribute Stores yet")
 	}
+	if !c.Tenancy.IsIncompleteMultiTenantModeAllowedForTest {
+		return fmt.Errorf("tenancy.mode multi is under development and not available yet")
+	}
 	return c.Tenancy.validateMultiTenant()
 }
 
@@ -152,15 +180,21 @@ func (c TenancyConfig) validateMultiTenant() error {
 	if len(c.Authenticators) == 0 {
 		return fmt.Errorf("tenancy.authenticators must not be empty in multi mode")
 	}
-	hasJWTAuthenticator := false
+	jwtIssuers := map[string]bool{}
 	for i, authenticator := range c.Authenticators {
 		if err := authenticator.validate(); err != nil {
 			return fmt.Errorf("tenancy.authenticators[%d]: %w", i, err)
 		}
-		hasJWTAuthenticator = hasJWTAuthenticator || authenticator.Kind == TenantAuthenticatorKindJWT
+		if authenticator.Kind != TenantAuthenticatorKindJWT {
+			continue
+		}
+		if jwtIssuers[authenticator.Issuer] {
+			return fmt.Errorf("tenancy.authenticators[%d]: issuer %q is configured twice", i, authenticator.Issuer)
+		}
+		jwtIssuers[authenticator.Issuer] = true
 	}
 	for i, operator := range c.Operators {
-		if err := operator.validate(hasJWTAuthenticator); err != nil {
+		if err := operator.validate(jwtIssuers); err != nil {
 			return fmt.Errorf("tenancy.operators[%d]: %w", i, err)
 		}
 	}
@@ -176,8 +210,13 @@ func (c TenancyConfig) validateMultiTenant() error {
 func (c TenantAuthenticatorConfig) validate() error {
 	switch c.Kind {
 	case TenantAuthenticatorKindJWT:
-		if c.Issuer == "" {
-			return fmt.Errorf("issuer is required")
+		if err := ValidateIssuerURL("issuer", c.Issuer); err != nil {
+			return err
+		}
+		if c.JWKSURL != "" {
+			if err := ValidateIssuerURL("jwksURL", c.JWKSURL); err != nil {
+				return err
+			}
 		}
 		if len(c.Audiences) == 0 {
 			return fmt.Errorf("audiences must not be empty")
@@ -201,14 +240,14 @@ func (c TenantAuthenticatorConfig) validate() error {
 	}
 }
 
-func (c TenantOperatorConfig) validate(hasJWTAuthenticator bool) error {
+func (c TenantOperatorConfig) validate(jwtIssuers map[string]bool) error {
 	switch c.Kind {
 	case TenantOperatorKindJWT:
 		if c.Subject == "" {
 			return fmt.Errorf("subject is required")
 		}
-		if !hasJWTAuthenticator {
-			return fmt.Errorf("a jwt operator requires a jwt authenticator to verify its token")
+		if !jwtIssuers[c.Issuer] {
+			return fmt.Errorf("issuer %q is not the issuer of a jwt authenticator", c.Issuer)
 		}
 		return nil
 	case TenantOperatorKindStaticToken:
@@ -236,6 +275,12 @@ func CompileTenantSubjectPattern(pattern string) (*regexp.Regexp, error) {
 	if len(tenantGroups) != 1 {
 		return nil, fmt.Errorf("subjectPattern must contain exactly one (?P<%s>...) group", TenantIDCaptureName)
 	}
+	if !isTenantCaptureDelimited(parsed, tenantGroups[0]) {
+		return nil, fmt.Errorf(
+			"subjectPattern group %q must be followed by the end of the pattern or a literal not starting with [a-z0-9]",
+			TenantIDCaptureName,
+		)
+	}
 	minLength, maxLength, isTenantAlphabet := tenantCaptureLengthBounds(tenantGroups[0].Sub[0])
 	if !isTenantAlphabet || minLength < 1 || maxLength > MaxTenantIDLength {
 		return nil, fmt.Errorf(
@@ -245,6 +290,60 @@ func CompileTenantSubjectPattern(pattern string) (*regexp.Regexp, error) {
 		)
 	}
 	return regexp.Compile(`^(?:` + pattern + `)$`)
+}
+
+// isTenantCaptureDelimited reports whether capture is a top-level part of pattern followed by its end or by a literal
+// whose first rune cannot continue a tenant ID.
+func isTenantCaptureDelimited(pattern *syntax.Regexp, capture *syntax.Regexp) bool {
+	if pattern == capture {
+		return true
+	}
+	if pattern.Op != syntax.OpConcat {
+		return false
+	}
+	for i, part := range pattern.Sub {
+		if part != capture {
+			continue
+		}
+		if i+1 == len(pattern.Sub) {
+			return true
+		}
+		next := pattern.Sub[i+1]
+		switch next.Op {
+		case syntax.OpEndText, syntax.OpEndLine:
+			return true
+		case syntax.OpLiteral:
+			return !isTenantRune(unicode.ToLower(next.Rune[0]))
+		}
+		return false
+	}
+	return false
+}
+
+// ValidateIssuerURL requires https, or http for a loopback host.
+func ValidateIssuerURL(name string, rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("%s must be an absolute URL", name)
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	if parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("%s must use https unless its host is loopback", name)
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }
 
 func findNamedCaptures(expression *syntax.Regexp, name string) []*syntax.Regexp {

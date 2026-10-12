@@ -27,11 +27,17 @@ var errUnknownCredential = errors.New("credential is not recognized")
 type Authenticator struct {
 	tenantAuthenticators []tenantCredentialAuthenticator
 	jwtAuthenticators    []*jwtAuthenticator
-	operatorSubjects     map[string]struct{}
+	operatorSubjects     map[operatorSubject]struct{}
 	operatorTokenHashes  [][sha256.Size]byte
 }
 
 // tenantCredentialAuthenticator is one configured tenant authenticator, in configuration order.
+// operatorSubject binds an operator JWT subject to the issuer that must have signed it.
+type operatorSubject struct {
+	issuer  string
+	subject string
+}
+
 type tenantCredentialAuthenticator struct {
 	jwt         *jwtAuthenticator
 	staticToken *staticTokenAuthenticator
@@ -41,7 +47,7 @@ func NewAuthenticator(cfg *config.TenancyConfig, logger log.Logger) (*Authentica
 	if cfg == nil {
 		panic("tenancy config must not be nil")
 	}
-	authenticator := &Authenticator{operatorSubjects: map[string]struct{}{}}
+	authenticator := &Authenticator{operatorSubjects: map[operatorSubject]struct{}{}}
 	for i := range cfg.Authenticators {
 		entry := &cfg.Authenticators[i]
 		switch entry.Kind {
@@ -71,7 +77,7 @@ func NewAuthenticator(cfg *config.TenancyConfig, logger log.Logger) (*Authentica
 	for i, operator := range cfg.Operators {
 		switch operator.Kind {
 		case config.TenantOperatorKindJWT:
-			authenticator.operatorSubjects[operator.Subject] = struct{}{}
+			authenticator.operatorSubjects[operatorSubject{issuer: operator.Issuer, subject: operator.Subject}] = struct{}{}
 		case config.TenantOperatorKindStaticToken:
 			hash, err := decodeSHA256(operator.SHA256)
 			if err != nil {
@@ -135,7 +141,7 @@ func (a *Authenticator) authenticateOperatorJWT(
 		if err != nil {
 			return nil, err
 		}
-		if _, isOperator := a.operatorSubjects[subject]; isOperator {
+		if _, isOperator := a.operatorSubjects[operatorSubject{issuer: issuer, subject: subject}]; isOperator {
 			return &Principal{Kind: PrincipalKindOperator}, nil
 		}
 		return nil, nil

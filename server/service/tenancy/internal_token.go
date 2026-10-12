@@ -9,36 +9,68 @@
 package tenancy
 
 import (
-	"bytes"
-	"errors"
+	"crypto/sha256"
+	"crypto/subtle"
+	"fmt"
+	"strings"
 
 	"github.com/superdurable/dex/service/common/log"
 )
 
-var errEmptyInternalToken = errors.New("internal token file is empty")
+// MinInternalTokenLength is the shortest accepted internal token.
+const MinInternalTokenLength = 32
 
-// InternalTokenFile holds the InternalService bearer token and rereads its file when it changes.
+// InternalTokenFile holds the InternalService bearer tokens, one per line, and rereads its file when it changes.
 type InternalTokenFile struct {
-	file *watchedFile[[]byte]
+	file *watchedFile[internalTokens]
 }
 
-// NewInternalTokenFile reads the token file; surrounding whitespace is ignored and an empty token is refused.
+type internalTokens struct {
+	first   string
+	digests [][sha256.Size]byte
+}
+
+// NewInternalTokenFile reads the token file, which must hold at least one token at startup.
 func NewInternalTokenFile(path string, logger log.Logger) (*InternalTokenFile, error) {
-	file, err := newWatchedFile(path, parseInternalToken, logger)
+	file, err := newWatchedFile(path, parseInternalTokens, logger)
 	if err != nil {
 		return nil, err
+	}
+	if file.Content().first == "" {
+		return nil, fmt.Errorf("%s holds no token", path)
 	}
 	return &InternalTokenFile{file: file}, nil
 }
 
-func (f *InternalTokenFile) Token() []byte {
-	return f.file.Content()
+// Token returns the token that callers send: the first line. It is empty when the file holds none.
+func (f *InternalTokenFile) Token() string {
+	return f.file.Content().first
 }
 
-func parseInternalToken(data []byte) ([]byte, error) {
-	token := bytes.TrimSpace(data)
-	if len(token) == 0 {
-		return nil, errEmptyInternalToken
+// Accepts reports whether credential equals any listed token, comparing SHA-256 digests in constant time.
+func (f *InternalTokenFile) Accepts(credential string) bool {
+	digest := sha256.Sum256([]byte(credential))
+	isAccepted := 0
+	for _, accepted := range f.file.Content().digests {
+		isAccepted |= subtle.ConstantTimeCompare(digest[:], accepted[:])
 	}
-	return token, nil
+	return isAccepted == 1
+}
+
+func parseInternalTokens(data []byte) (internalTokens, error) {
+	var tokens internalTokens
+	for _, line := range strings.Split(string(data), "\n") {
+		token := strings.TrimSpace(line)
+		if token == "" {
+			continue
+		}
+		if len(token) < MinInternalTokenLength {
+			return internalTokens{}, fmt.Errorf("internal tokens must be at least %d characters", MinInternalTokenLength)
+		}
+		if tokens.first == "" {
+			tokens.first = token
+		}
+		tokens.digests = append(tokens.digests, sha256.Sum256([]byte(token)))
+	}
+	return tokens, nil
 }

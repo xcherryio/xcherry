@@ -50,7 +50,11 @@ func (a *staticTokenAuthenticator) authenticate(credentialHash [sha256.Size]byte
 	return principal, ok
 }
 
+// parseStaticTokenFile treats an empty file as no tokens.
 func parseStaticTokenFile(data []byte) (staticTokenPrincipals, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return staticTokenPrincipals{}, nil
+	}
 	var content staticTokenFileContent
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)

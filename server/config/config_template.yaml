@@ -94,9 +94,8 @@ blobStore:
 #   trimLeaseRetry: 100ms
 #   trimBatchYieldTime: 1ms
 #   trimWorkers: 4
-# Multi-tenant namespaces stay disabled (single-tenant mode) unless configured.
-# Multi mode requires Temporal, interpreter.attributeIndexesManagedExternally,
-# no Attribute Stores, and starting only the api and interpreter services.
+# Multi-tenant namespaces are under development: the server refuses mode multi
+# at startup until tenant isolation is complete. The shape of the section:
 # tenancy:
 #   mode: multi
 #   authenticators:
@@ -110,6 +109,7 @@ blobStore:
 #       file: /etc/dex/tenant-tokens.yaml
 #   operators:
 #     - kind: jwt
+#       issuer: https://issuer.example
 #       subject: system:serviceaccount:platform:controller
 #   internal:
 #     listen: 127.0.0.1:8803

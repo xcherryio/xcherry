@@ -94,6 +94,7 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 	cfg.AttributeStore = testCfg.AttributeStore
 	if testCfg.Tenancy != nil {
 		cfg.Tenancy = *testCfg.Tenancy
+		cfg.Tenancy.IsIncompleteMultiTenantModeAllowedForTest = true
 		cfg.Interpreter.AttributeIndexesManagedExternally = true
 	}
 	cfg.StreamStore = testCfg.StreamStore

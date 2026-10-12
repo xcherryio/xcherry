@@ -10,11 +10,14 @@ package tenancy
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -27,6 +30,7 @@ import (
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -69,12 +73,16 @@ func newJWTAuthenticator(cfg *config.TenantAuthenticatorConfig, logger log.Logge
 		}
 		claimTemplates[name] = parsed
 	}
+	keySet, err := newCachedKeySet(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
 	return &jwtAuthenticator{
 		issuer:         cfg.Issuer,
 		audiences:      cfg.Audiences,
 		subjectPattern: subjectPattern,
 		claimTemplates: claimTemplates,
-		keySet:         newCachedKeySet(cfg.Issuer, cfg.JWKSURL, logger),
+		keySet:         keySet,
 	}, nil
 }
 
@@ -142,53 +150,88 @@ func (a *jwtAuthenticator) tenantPrincipal(subject string, allClaims map[string]
 }
 
 // cachedKeySet fetches a JSON Web Key Set at most once a minute, and once per ten seconds for an unknown key ID.
+// Fetches run outside the lock and concurrent requests share one fetch.
 type cachedKeySet struct {
 	issuer     string
 	jwksURL    string
 	httpClient *http.Client
 	logger     log.Logger
+	fetches    singleflight.Group
 
-	mu          sync.Mutex
-	keys        jose.JSONWebKeySet
-	refreshedAt time.Time
+	mu               sync.RWMutex
+	keys             jose.JSONWebKeySet
+	refreshAttemptAt time.Time
 }
 
-func newCachedKeySet(issuer string, jwksURL string, logger log.Logger) *cachedKeySet {
-	return &cachedKeySet{
-		issuer:     issuer,
-		jwksURL:    jwksURL,
-		httpClient: &http.Client{Timeout: keySetFetchTimeout},
-		logger:     logger,
+func newCachedKeySet(cfg *config.TenantAuthenticatorConfig, logger log.Logger) (*cachedKeySet, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.CAFile != "" {
+		bundle, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("caFile: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(bundle) {
+			return nil, fmt.Errorf("caFile %s holds no PEM certificate", cfg.CAFile)
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	}
+	return &cachedKeySet{
+		issuer:     cfg.Issuer,
+		jwksURL:    cfg.JWKSURL,
+		httpClient: &http.Client{Timeout: keySetFetchTimeout, Transport: transport},
+		logger:     logger,
+	}, nil
 }
 
 func (s *cachedKeySet) key(ctx context.Context, keyID string) (jose.JSONWebKey, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sinceRefresh := time.Since(s.refreshedAt)
-	if sinceRefresh >= keySetRefreshInterval {
-		s.refresh(ctx)
-	} else if len(s.keys.Key(keyID)) == 0 && sinceRefresh >= unknownKeyIDRefreshInterval {
+	if s.isRefreshDue(keyID) {
 		s.refresh(ctx)
 	}
+	s.mu.RLock()
 	keys := s.keys.Key(keyID)
+	s.mu.RUnlock()
 	if len(keys) != 1 || !keys[0].IsPublic() {
 		return jose.JSONWebKey{}, errUntrustedJWT
 	}
 	return keys[0], nil
 }
 
+func (s *cachedKeySet) isRefreshDue(keyID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sinceRefresh := time.Since(s.refreshAttemptAt)
+	if sinceRefresh >= keySetRefreshInterval {
+		return true
+	}
+	return len(s.keys.Key(keyID)) == 0 && sinceRefresh >= unknownKeyIDRefreshInterval
+}
+
 // refresh keeps the previous keys when the fetch fails, and records the attempt to bound the fetch rate.
 func (s *cachedKeySet) refresh(ctx context.Context) {
-	s.refreshedAt = time.Now()
-	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), keySetFetchTimeout)
-	defer cancel()
-	keys, err := s.fetch(fetchCtx)
-	if err != nil {
-		s.logger.Error("refresh JWT key set", tag.Address(s.issuer), tag.Error(err))
-		return
+	result := s.fetches.DoChan("keys", func() (interface{}, error) {
+		s.mu.Lock()
+		s.refreshAttemptAt = time.Now()
+		s.mu.Unlock()
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), keySetFetchTimeout)
+		defer cancel()
+		keys, err := s.fetch(fetchCtx)
+		if err != nil {
+			s.logger.Error("refresh JWT key set", tag.Address(s.issuer), tag.Error(err))
+			return nil, err
+		}
+		s.mu.Lock()
+		s.keys = keys
+		s.mu.Unlock()
+		return nil, nil
+	})
+	select {
+	case <-result:
+	case <-ctx.Done():
 	}
-	s.keys = keys
 }
 
 func (s *cachedKeySet) fetch(ctx context.Context) (jose.JSONWebKeySet, error) {
@@ -196,13 +239,17 @@ func (s *cachedKeySet) fetch(ctx context.Context) (jose.JSONWebKeySet, error) {
 	jwksURL := s.jwksURL
 	if jwksURL == "" {
 		var discovery struct {
+			Issuer  string `json:"issuer"`
 			JWKSURI string `json:"jwks_uri"`
 		}
 		if err := s.getJSON(ctx, strings.TrimSuffix(s.issuer, "/")+openIDConfigurationWellKnown, &discovery); err != nil {
 			return keys, err
 		}
-		if discovery.JWKSURI == "" {
-			return keys, fmt.Errorf("OIDC discovery document has no jwks_uri")
+		if discovery.Issuer != s.issuer {
+			return keys, fmt.Errorf("OIDC discovery document names issuer %q", discovery.Issuer)
+		}
+		if err := config.ValidateIssuerURL("jwks_uri", discovery.JWKSURI); err != nil {
+			return keys, fmt.Errorf("OIDC discovery document: %w", err)
 		}
 		jwksURL = discovery.JWKSURI
 	}

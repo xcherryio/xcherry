@@ -22,7 +22,7 @@ import (
 const watchedFileCheckInterval = time.Second
 
 // watchedFile holds the parsed content of a file and reparses it after its modification time or size changes.
-// A file that fails to parse after a change keeps its previous content.
+// A missing or unreadable file is parsed as empty, so revocation fails closed; malformed content keeps the previous one.
 type watchedFile[T any] struct {
 	path   string
 	parse  func([]byte) (T, error)
@@ -59,16 +59,27 @@ func (f *watchedFile[T]) Content() T {
 	f.checkedAt = now
 	info, err := os.Stat(f.path)
 	if err != nil {
-		f.logger.Error("stat watched tenancy file", tag.Path(f.path), tag.Error(err))
+		f.logger.Error("stat watched tenancy file; treating it as empty", tag.Path(f.path), tag.Error(err))
+		f.setEmpty()
 		return f.content
 	}
 	if info.ModTime().Equal(f.modTime) && info.Size() == f.size {
 		return f.content
 	}
 	if err := f.load(info); err != nil {
-		f.logger.Error("reload watched tenancy file", tag.Path(f.path), tag.Error(err))
+		f.logger.Error("reload watched tenancy file; keeping its previous content", tag.Path(f.path), tag.Error(err))
 	}
 	return f.content
+}
+
+func (f *watchedFile[T]) setEmpty() {
+	content, err := f.parse(nil)
+	if err != nil {
+		panic(fmt.Sprintf("parse empty tenancy file: %v", err))
+	}
+	f.content = content
+	f.modTime = time.Time{}
+	f.size = -1
 }
 
 func (f *watchedFile[T]) load(info os.FileInfo) error {

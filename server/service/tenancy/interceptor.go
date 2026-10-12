@@ -10,7 +10,6 @@ package tenancy
 
 import (
 	"context"
-	"crypto/subtle"
 	"strings"
 
 	"github.com/superdurable/dex/gen/dexpb"
@@ -22,6 +21,8 @@ import (
 )
 
 const (
+	// MaxCredentialBytes bounds a bearer credential before any parsing or hashing.
+	MaxCredentialBytes       = 8 << 10
 	authorizationMetadataKey = "authorization"
 	bearerPrefix             = "bearer "
 	// TenantAdminServiceName is the only service an operator principal may call.
@@ -128,7 +129,7 @@ func (i *InternalServiceInterceptor) Unary(
 		return handler(ctx, req)
 	}
 	credential, ok := bearerCredential(ctx)
-	if !ok || subtle.ConstantTimeCompare([]byte(credential), i.token.Token()) != 1 {
+	if !ok || !i.token.Accepts(credential) {
 		return nil, unauthenticated("the internal token is required")
 	}
 	if !isServiceMethod(info.FullMethod, dexpb.InternalService_ServiceDesc.ServiceName) {
@@ -143,7 +144,7 @@ func bearerCredential(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	values := incoming.Get(authorizationMetadataKey)
-	if len(values) != 1 || len(values[0]) <= len(bearerPrefix) {
+	if len(values) != 1 || len(values[0]) <= len(bearerPrefix) || len(values[0]) > MaxCredentialBytes {
 		return "", false
 	}
 	if !strings.EqualFold(values[0][:len(bearerPrefix)], bearerPrefix) {

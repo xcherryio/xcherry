@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,54 +38,109 @@ const (
 	tenancySubjectFormat = "system:serviceaccount:apps-%s:app"
 )
 
-// tenancyTestEnvironment is a JWT issuer, static token file and internal token for one multi-tenant server.
+// tenancyTestEnvironment is two JWT issuers, a static token file and an internal token for one multi-tenant server.
+// The first issuer is configured with its key set URL, the second through OIDC discovery.
 type tenancyTestEnvironment struct {
-	Config           *config.TenancyConfig
-	Issuer           string
-	InternalToken    string
-	OperatorToken    string
-	StaticTokenFile  string
-	signingKey       *rsa.PrivateKey
-	staticTokenLines []string
+	Config            *config.TenancyConfig
+	Issuer            string
+	SecondIssuer      *testJWTIssuer
+	InternalToken     string
+	InternalTokenFile string
+	OperatorToken     string
+	StaticTokenFile   string
+	issuer            *testJWTIssuer
+	signingKey        *rsa.PrivateKey
+	staticTokenLines  []string
+}
+
+// testJWTIssuer serves an OIDC discovery document and a key set that tests can extend.
+type testJWTIssuer struct {
+	URL  string
+	mu   sync.Mutex
+	keys map[string]*rsa.PrivateKey
+}
+
+func newTestJWTIssuer(t *testing.T) *testJWTIssuer {
+	t.Helper()
+	issuer := &testJWTIssuer{keys: map[string]*rsa.PrivateKey{}}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/.well-known/openid-configuration" {
+			require.NoError(t, json.NewEncoder(writer).Encode(map[string]string{
+				"issuer": issuer.URL, "jwks_uri": issuer.URL + "/keys",
+			}))
+			return
+		}
+		require.NoError(t, json.NewEncoder(writer).Encode(issuer.keySet()))
+	}))
+	t.Cleanup(server.Close)
+	issuer.URL = server.URL
+	issuer.AddKey(t, tenancyTestKeyID)
+	return issuer
+}
+
+// AddKey publishes a new signing key under keyID and returns it.
+func (issuer *testJWTIssuer) AddKey(t *testing.T, keyID string) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	issuer.mu.Lock()
+	defer issuer.mu.Unlock()
+	issuer.keys[keyID] = key
+	return key
+}
+
+func (issuer *testJWTIssuer) key(keyID string) *rsa.PrivateKey {
+	issuer.mu.Lock()
+	defer issuer.mu.Unlock()
+	return issuer.keys[keyID]
+}
+
+func (issuer *testJWTIssuer) keySet() jose.JSONWebKeySet {
+	issuer.mu.Lock()
+	defer issuer.mu.Unlock()
+	keySet := jose.JSONWebKeySet{}
+	for keyID, key := range issuer.keys {
+		keySet.Keys = append(keySet.Keys, jose.JSONWebKey{
+			Key: &key.PublicKey, KeyID: keyID, Algorithm: string(jose.RS256), Use: "sig",
+		})
+	}
+	return keySet
 }
 
 func newTenancyTestEnvironment(t *testing.T) *tenancyTestEnvironment {
 	t.Helper()
-	signingKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	keySet := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
-		Key:       &signingKey.PublicKey,
-		KeyID:     tenancyTestKeyID,
-		Algorithm: string(jose.RS256),
-		Use:       "sig",
-	}}}
-	issuerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(writer).Encode(keySet))
-	}))
-	t.Cleanup(issuerServer.Close)
-
+	issuer := newTestJWTIssuer(t)
+	secondIssuer := newTestJWTIssuer(t)
 	directory := t.TempDir()
 	environment := &tenancyTestEnvironment{
-		Issuer:          issuerServer.URL,
-		InternalToken:   "internal-" + uuid.NewString(),
-		OperatorToken:   "operator-" + uuid.NewString(),
-		StaticTokenFile: filepath.Join(directory, "tenant-tokens.yaml"),
-		signingKey:      signingKey,
+		Issuer:            issuer.URL,
+		SecondIssuer:      secondIssuer,
+		InternalToken:     "internal-" + uuid.NewString(),
+		InternalTokenFile: filepath.Join(directory, "internal-token"),
+		OperatorToken:     "operator-" + uuid.NewString(),
+		StaticTokenFile:   filepath.Join(directory, "tenant-tokens.yaml"),
+		issuer:            issuer,
+		signingKey:        issuer.key(tenancyTestKeyID),
 	}
-	internalTokenFile := filepath.Join(directory, "internal-token")
-	require.NoError(t, os.WriteFile(internalTokenFile, []byte(environment.InternalToken+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(environment.InternalTokenFile, []byte(environment.InternalToken+"\n"), 0o600))
 	require.NoError(t, os.WriteFile(environment.StaticTokenFile, []byte("tokens: []\n"), 0o600))
 	environment.Config = &config.TenancyConfig{
 		Mode: config.TenancyModeMulti,
 		Authenticators: []config.TenantAuthenticatorConfig{
 			{
 				Kind:           config.TenantAuthenticatorKindJWT,
-				Issuer:         issuerServer.URL,
+				Issuer:         issuer.URL,
 				Audiences:      []string{tenancyTestAudience},
-				JWKSURL:        issuerServer.URL + "/keys",
+				JWKSURL:        issuer.URL + "/keys",
 				SubjectPattern: `^system:serviceaccount:apps-(?P<tenant>[a-z0-9]{1,32}):app$`,
 				Claims:         map[string]string{"namespace": "apps-{{ .tenant }}"},
+			},
+			{
+				Kind:           config.TenantAuthenticatorKindJWT,
+				Issuer:         secondIssuer.URL,
+				Audiences:      []string{tenancyTestAudience},
+				SubjectPattern: `^second:(?P<tenant>[a-z0-9]{1,32})$`,
 			},
 			{
 				Kind: config.TenantAuthenticatorKindStaticTokens,
@@ -92,10 +148,10 @@ func newTenancyTestEnvironment(t *testing.T) *tenancyTestEnvironment {
 			},
 		},
 		Operators: []config.TenantOperatorConfig{
-			{Kind: config.TenantOperatorKindJWT, Subject: tenancyOperatorSub},
+			{Kind: config.TenantOperatorKindJWT, Issuer: issuer.URL, Subject: tenancyOperatorSub},
 			{Kind: config.TenantOperatorKindStaticToken, SHA256: sha256Hex(environment.OperatorToken)},
 		},
-		Internal: config.TenancyInternalConfig{TokenFile: internalTokenFile},
+		Internal: config.TenancyInternalConfig{TokenFile: environment.InternalTokenFile},
 	}
 	return environment
 }
@@ -143,10 +199,15 @@ func (environment *tenancyTestEnvironment) SignJWT(
 	claims tenancyJWTClaims,
 ) string {
 	t.Helper()
+	return signTestJWT(t, signingKey, tenancyTestKeyID, claims)
+}
+
+func signTestJWT(t *testing.T, signingKey *rsa.PrivateKey, keyID string, claims any) string {
+	t.Helper()
 	signer, err := jose.NewSigner(
 		jose.SigningKey{
 			Algorithm: jose.RS256,
-			Key:       jose.JSONWebKey{Key: signingKey, KeyID: tenancyTestKeyID},
+			Key:       jose.JSONWebKey{Key: signingKey, KeyID: keyID},
 		},
 		(&jose.SignerOptions{}).WithType("JWT"),
 	)
@@ -164,12 +225,18 @@ func (environment *tenancyTestEnvironment) AddStaticToken(t *testing.T, tenantID
 		environment.staticTokenLines,
 		fmt.Sprintf("  - sha256: %s\n    tenant: %s\n    claims: {namespace: apps-%s}\n", sha256Hex(token), tenantID, tenantID),
 	)
+	environment.WriteStaticTokens(t)
+	return token
+}
+
+// WriteStaticTokens rewrites the static token file from the tokens added so far.
+func (environment *tenancyTestEnvironment) WriteStaticTokens(t *testing.T) {
+	t.Helper()
 	content := "tokens:\n"
 	for _, line := range environment.staticTokenLines {
 		content += line
 	}
 	require.NoError(t, os.WriteFile(environment.StaticTokenFile, []byte(content), 0o600))
-	return token
 }
 
 func sha256Hex(token string) string {

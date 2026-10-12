@@ -33,6 +33,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// maxTenantHeaderListBytes bounds request metadata in multi-tenant mode, leaving room for an 8 KiB credential.
+const maxTenantHeaderListBytes = 32 << 10
+
 // Server hosts FlowService, InternalService, and grpc.health.
 // In multi-tenant mode InternalService moves to a separate internal gRPC server.
 type Server struct {
@@ -114,11 +117,6 @@ func NewServer(
 		grpc.MaxRecvMsgSize(maxMsg),
 		grpc.MaxSendMsgSize(maxMsg),
 	}
-	commonInterceptors := append(
-		extraUnaryInterceptors,
-		unaryRecover(logger),
-		unaryLog(logger),
-	)
 	server := &Server{
 		cfg:        apiCfg,
 		healthSrv:  healthSrv,
@@ -129,7 +127,7 @@ func NewServer(
 	if !tenancyCfg.IsMultiTenant() {
 		server.grpcServer = grpc.NewServer(append(
 			serverOptions,
-			grpc.ChainUnaryInterceptor(commonInterceptors...),
+			grpc.ChainUnaryInterceptor(unaryInterceptorChain(nil, extraUnaryInterceptors, logger)...),
 		)...)
 		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
 		dexpb.RegisterInternalServiceServer(server.grpcServer, handler)
@@ -145,12 +143,15 @@ func NewServer(
 	if err != nil {
 		return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
 	}
+	// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
+	serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxTenantHeaderListBytes))
 	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator)
 	server.grpcServer = grpc.NewServer(append(
 		serverOptions,
-		grpc.ChainUnaryInterceptor(append(
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
 			[]grpc.UnaryServerInterceptor{publicInterceptors.Unary},
-			commonInterceptors...,
+			extraUnaryInterceptors,
+			logger,
 		)...),
 		grpc.ChainStreamInterceptor(publicInterceptors.Stream),
 	)...)
@@ -159,9 +160,10 @@ func NewServer(
 
 	server.internalGrpcServer = grpc.NewServer(append(
 		serverOptions,
-		grpc.ChainUnaryInterceptor(append(
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
 			[]grpc.UnaryServerInterceptor{tenancy.NewInternalServiceInterceptor(internalToken).Unary},
-			commonInterceptors...,
+			extraUnaryInterceptors,
+			logger,
 		)...),
 	)...)
 	dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
@@ -247,6 +249,18 @@ func (s *Server) setServing(serving bool) {
 	s.healthSrv.SetServingStatus("", st)
 	s.healthSrv.SetServingStatus(dexpb.FlowService_ServiceDesc.ServiceName, st)
 	s.healthSrv.SetServingStatus(dexpb.InternalService_ServiceDesc.ServiceName, st)
+}
+
+// unaryInterceptorChain returns a new chain: recovery outermost, then authorization, extra interceptors and logging.
+func unaryInterceptorChain(
+	authorization []grpc.UnaryServerInterceptor,
+	extra []grpc.UnaryServerInterceptor,
+	logger log.Logger,
+) []grpc.UnaryServerInterceptor {
+	chain := []grpc.UnaryServerInterceptor{unaryRecover(logger)}
+	chain = append(chain, authorization...)
+	chain = append(chain, extra...)
+	return append(chain, unaryLog(logger))
 }
 
 func unaryRecover(logger log.Logger) grpc.UnaryServerInterceptor {

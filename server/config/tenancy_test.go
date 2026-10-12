@@ -35,6 +35,9 @@ func TestCompileTenantSubjectPatternRefusesWideTenantCaptures(t *testing.T) {
 		`(?i)apps-(?P<tenant>acme)`,
 		`apps-([a-z0-9]{1,32})`,
 		`(?P<tenant>[a-z]{1,8})-(?P<tenant>[a-z]{1,8})`,
+		`apps-(?P<tenant>[a-z]{1,8})x`,
+		`apps-(?P<tenant>[a-z]{1,8})[a-z]`,
+		`apps-((?P<tenant>[a-z]{1,8})):app`,
 	}
 	for _, pattern := range refused {
 		_, err := CompileTenantSubjectPattern(pattern)
@@ -62,6 +65,7 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 					File: "/etc/dex/tenant-tokens.yaml",
 				}},
 				Internal: TenancyInternalConfig{Listen: "127.0.0.1:8803", TokenFile: "/etc/dex/internal-token"},
+				IsIncompleteMultiTenantModeAllowedForTest: true,
 			},
 		}
 	}
@@ -80,8 +84,30 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 		"no internal listener":   func(cfg *Config) { cfg.Tenancy.Internal.Listen = "" },
 		"no internal token":      func(cfg *Config) { cfg.Tenancy.Internal.TokenFile = "" },
 		"unknown mode":           func(cfg *Config) { cfg.Tenancy.Mode = "shared" },
-		"jwt operator without jwt": func(cfg *Config) {
-			cfg.Tenancy.Operators = []TenantOperatorConfig{{Kind: TenantOperatorKindJWT, Subject: "operator"}}
+		"multi mode while under development": func(cfg *Config) {
+			cfg.Tenancy.IsIncompleteMultiTenantModeAllowedForTest = false
+		},
+		"jwt operator without its issuer": func(cfg *Config) {
+			cfg.Tenancy.Operators = []TenantOperatorConfig{{
+				Kind: TenantOperatorKindJWT, Issuer: "https://issuer.example", Subject: "operator",
+			}}
+		},
+		"duplicate jwt issuers": func(cfg *Config) {
+			jwtAuthenticator := TenantAuthenticatorConfig{
+				Kind:           TenantAuthenticatorKindJWT,
+				Issuer:         "https://issuer.example",
+				Audiences:      []string{"dex"},
+				SubjectPattern: `^apps-(?P<tenant>[a-z]{1,8})$`,
+			}
+			cfg.Tenancy.Authenticators = []TenantAuthenticatorConfig{jwtAuthenticator, jwtAuthenticator}
+		},
+		"plaintext remote issuer": func(cfg *Config) {
+			cfg.Tenancy.Authenticators = []TenantAuthenticatorConfig{{
+				Kind:           TenantAuthenticatorKindJWT,
+				Issuer:         "http://issuer.example",
+				Audiences:      []string{"dex"},
+				SubjectPattern: `^apps-(?P<tenant>[a-z]{1,8})$`,
+			}}
 		},
 		"wide tenant capture": func(cfg *Config) {
 			cfg.Tenancy.Authenticators = []TenantAuthenticatorConfig{{
