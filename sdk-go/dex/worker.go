@@ -53,6 +53,9 @@ type WorkerOptions struct {
 	// Logger defaults to the shared BlobCache logger.
 	// It receives concurrent structured Worker logs and falls back to slog.Default.
 	Logger Logger
+	// Credential is sent as a bearer credential with the Worker's FlowService calls: startup index
+	// verification and blob hydration. Default: nil sends none. A multi-tenant Dex server requires it.
+	Credential Credential
 }
 
 // Worker hosts registered Flows over the private WorkerService protocol.
@@ -118,7 +121,10 @@ func NewWorker(
 	}
 	flowConn, err := grpc.NewClient(
 		flowServiceAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		append(
+			[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+			credentialDialOptions(options.Credential)...,
+		)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)
