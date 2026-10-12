@@ -8,7 +8,7 @@
 
 import type { AgentRole } from '../model/agentic'
 import type { Actor, PocFlow } from '../model/pocFlow'
-import type { CardToken, PhaseStatus, Reason, RunOverlay } from '../model/run'
+import type { PhaseStatus, Reason, RunOverlay } from '../model/run'
 import type { StepGroup } from './groups'
 
 /**
@@ -17,47 +17,6 @@ import type { StepGroup } from './groups'
  * `render/Stage.tsx`.
  */
 
-/**
- * Level of detail. TWO levels, and it is an EXPLICIT control — never derived from zoom.
- *
- * This replaced a four-tier zoom-driven ladder, for two reasons found in research:
- *
- *  1. The top tier died on its own. It carried guard expressions, source spans and resource
- *     access — all of which are VALUES, and every surveyed product keeps values in a panel and
- *     puts only identity plus one status token on a node. Once the cards lost the code there was
- *     nothing left for that tier to show.
- *  2. The bottom tier was never a detail level either. "See the whole flow at once" is geometric
- *     zoom, not different content. n8n makes that work by raising edge contrast as you zoom out
- *     and counter-scaling chrome so labels do not shrink with the graph — cheaper than a tier,
- *     and it does not reflow.
- *
- * What is left matches what the industry actually ships: Copilot Studio's level-of-detail control
- * is literally `Expand/Collapse`, listed as toolbar item 1 with zoom as items 2-3. Nine products
- * were surveyed and NONE ties detail to zoom.
- */
-export type Detail = 'collapsed' | 'expanded'
-
-export const DETAILS: Detail[] = ['collapsed', 'expanded']
-
-export const DETAIL_LABEL: Record<Detail, string> = {
-  collapsed: 'Collapsed',
-  expanded: 'Expanded',
-}
-
-/**
- * Everything a view needs.
- *
- * Deliberately tiny. It used to also carry six overlay flags, an edge-meaning mode and two
- * three-way reveal controls; all of them were removed rather than tuned:
- *
- *  - Streams, Attributes and Channels are never nodes (no surveyed product draws state or
- *    transport as a node), so there was nothing to toggle.
- *  - RPC entries fold into the gate row except the ones that start a Step, which always draw.
- *  - SubFlows are a boundary of the world, so they are always on.
- *  - Recovery is always drawn and routed aside — nobody hides failure paths behind a toggle.
- *  - Diagnostics is a panel, not an overlay.
- *  - With resources gone as nodes, "what do the arrows mean" has only one answer left.
- */
 /**
  * Layout direction for the topology view.
  *
@@ -79,9 +38,7 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
 }
 
 export interface ViewOpts {
-  detail: Detail
   direction: Direction
-  selectedId: string | null
   /**
    * Run state, or null for the definition.
    *
@@ -91,38 +48,46 @@ export interface ViewOpts {
    */
   run: RunOverlay | null
   /**
-   * THE PATH THIS RUN ACTUALLY TOOK, as consecutive step-id pairs in order.
-   *
-   * A LIST OF PAIRS, not a set of steps, and the difference is the whole feature: an agentic definition has
-   * an edge from its decision Step to all eight capabilities, so "which steps ran" says nothing about which
-   * arrows were followed, in what order, or which were followed twice. A run that looped through the
-   * decision Step three times is a path with three visits and a set with one.
-   *
-   * Empty for a deterministic run, where the drawing already is the path.
-   */
-  path?: { from: string; to: string; ordinal: number }[]
-  /**
    * Semantic groups, supplied by the caller rather than derived here.
    *
    * Passed in so the view stays a pure function of the flow: the groups are currently mocked per
    * fixture, and a view that looked up a fixture id would be coupled to the harness.
    */
   groups?: StepGroup[]
+  /** The stages drawn open: Collapsed opens none, Expanded every one. */
+  openStages?: ReadonlySet<string>
 }
 
-export type BoxKind =
-  | 'step'
-  | 'rpc'
-  | 'rpcCard'
-  | 'timeoutHandler'
-  | 'attribute'
-  | 'channel'
-  | 'stream'
-  | 'subflow'
-  | 'commit'
-  | 'gate'
-  | 'summary'
-  | 'note'
+/** A Step card, a closed stage's card, or an RPC card of a Flow without Steps. */
+export type BoxKind = 'step' | 'stage' | 'rpcCard'
+
+/** The palette tones a card part may take. */
+export type Tone = 'attention' | 'door' | 'machine' | 'clock' | 'child' | 'accent' | 'app'
+
+/** The tile at a card's left: a glyph in the tone of who acts, or an app's monogram. */
+export type Tile =
+  | { glyph: 'person' | 'door' | 'cpu' | 'clock' | 'child' | 'wait' | 'spark'; tone: Tone }
+  | { monogram: string; tone: Tone }
+
+/** Something docked to a card instead of drawn as a box with a line. */
+export interface BoxChip {
+  kind:
+    | 'jump'
+    | 'failJump'
+    | 'inbound'
+    | 'fork'
+    | 'ends'
+    | 'stops'
+    | 'fails'
+    | 'answer'
+    | 'entry'
+    | 'child'
+    | 'role'
+  text: string
+  /** The Step a jump leads to, so a click can show it. */
+  targetId?: string
+  title?: string
+}
 
 export interface BoxRow {
   /** A small leading glyph. Text, not an icon font. */
@@ -133,6 +98,23 @@ export interface BoxRow {
   tone?: 'normal' | 'quiet' | 'warn'
 }
 
+/** What a closed stage's card says about its Steps. */
+export interface StageSummary {
+  stepCount: number
+  /** Each kind of tile its Steps carry, once, in reading order. */
+  tiles: Tile[]
+  /** Who it waits for and the apps it uses. */
+  facts: string
+  /** A transition stays inside the stage, so it repeats. */
+  loops: boolean
+}
+
+/** A card's run state, in words so it never rests on colour. */
+export interface RunPill {
+  status: PhaseStatus | 'planned'
+  text: string
+}
+
 export interface Box {
   id: string
   x: number
@@ -141,10 +123,12 @@ export interface Box {
   h: number
   kind: BoxKind
   title: string
-  /** A stable semantic icon supplied by the definition, never inferred from the Step name. */
-  icon?: 'connector'
+  /** The durable identifier behind a friendly title, for hover and the panel. */
+  identity?: string
   /** The TYPE, never a value. Airflow shows the operator name here; we show the Step's role. */
   subtitle?: string
+  subtitleTone?: Tone
+  tile?: Tile
   /**
    * Drives the accent that says who has to act. Taken from the domain rather than restated, so
    * adding an actor cannot leave the renderer silently behind.
@@ -159,29 +143,18 @@ export interface Box {
    * silhouette that says this is a decision rather than work.
    */
   agentRole?: AgentRole
+  /** Chips packed into rows that fit the card's width. */
+  chips?: BoxChip[][]
+  stage?: StageSummary
   /** What an `rpcCard` is in the Flow v2 definition, when it is an Action or a view. */
   rpcRole?: 'action' | 'view'
-  /** Status as TEXT, not colour alone — Temporal had to retrofit exactly this. */
-  status?: string
-  /**
-   * The two-cell phase token. Replaces a single rolled-up status, because our two phases are separate
-   * commits with independent failure — one token would have to lie about one of them.
-   */
-  token?: CardToken
+  pill?: RunPill
   /**
    * ONE line of templated prose, rendered only when blocked or failed. This is the answer to "the run
    * decoration is too sparse": the hard question is never *what* state but *why*.
    */
   reason?: Reason
   rows?: BoxRow[]
-  badge?: string
-  /**
-   * Which way a non-rectangular silhouette points, for kinds that have one (`rpc`).
-   *
-   * The view sets it because only the view knows the reading direction: the node is aimed AT the step
-   * it feeds, so the point follows `direction` rather than being baked into the stylesheet.
-   */
-  point?: 'right' | 'down'
   /**
    * BPMN's LOOP MARKER: this step can transition to itself.
    *
@@ -208,8 +181,7 @@ export interface Box {
    * reasoning as `agentRole` beside `actor`.
    */
   isStart?: boolean
-  emphasis?: 'hub' | 'muted' | 'active' | 'failed' | 'planned'
-  sections?: { label: string; rows: BoxRow[] }[]
+  emphasis?: 'active' | 'failed' | 'planned'
   /**
    * The proportional state bar for a StepType that ran more than once.
    *
@@ -219,76 +191,42 @@ export interface Box {
   bar?: { status: PhaseStatus; count: number }[]
   /** The bar's hover decode: a count per status plus the wait-kind breakdown. */
   barTitle?: string
+  /** The Steps of a closed stage that a run is on, so the stage can carry the "now" ring. */
+  holds?: string[]
 }
 
 /**
  * The closed set of edge meanings. A value here, rather than a bare union, so a test can iterate them
  * and prove each one has an arrowhead — the gap that let every edge ship with no direction at all.
  */
-export const FAMILIES = [
-  'control',
-  'failure',
-  'resource',
-  'wait',
-  'subflow',
-  'gate',
-  'rpc',
-] as const
+export const FAMILIES = ['control', 'failure'] as const
+
+export type LinkFamily = (typeof FAMILIES)[number]
 
 export interface Link {
   id: string
   from: string
   to: string
-  /**
-   * Solid for control, dashed for everything else — one pre-attentive channel.
-   *
-   * `rpc` is BPMN's Message Flow, transplanted: the connector from something OUTSIDE the process to
-   * the step it delivers to. BPMN reserves a distinct connector for exactly this (dashed, hollow
-   * arrowhead, hollow circle at the source) and forbids ordinary Sequence Flow from crossing a pool
-   * boundary at all. We keep that separation because the meanings differ in kind: a control edge says
-   * "the flow proceeds here", an rpc edge says "the outside world reached in here".
-   */
-  family: (typeof FAMILIES)[number]
-  label?: string
-  /**
-   * This edge was TRAVERSED by the run, and when — 1 for the first move, 2 for the second.
-   *
-   * Drives the live execution map's strongest signal. It also OVERRIDES latency: a hub's inbound edges are
-   * normally quiet because eight of them at once is a star nobody can trace, but an edge the run actually
-   * took is never noise, so the path stays drawn while everything it did not take stays quiet. That
-   * inversion is what makes a wide agentic definition readable during a run.
-   */
-  onPath?: number
-  /** Only drawn when the link is lit by selection. Raw guards live here, not on cards. */
-  detail?: string
-  selfLoop?: boolean
-  /**
-   * `side` = do not run straight through the column; leave by a side face and come back.
-   *
-   * Set by the view once positions are known, because only the view can tell that an edge SKIPS a row
-   * and would therefore pass underneath the cards in between. Failure edges have always been routed
-   * this way; this generalises it to any edge that would tunnel through a step it has nothing to do
-   * with.
-   */
-  route?: 'side' | 'around'
-  /** Latent links exist but stay quiet until their endpoint is selected. */
-  latent?: boolean
+  family: LinkFamily
+  /** The routed polyline in scene coordinates, start to end. */
+  points: { x: number; y: number }[]
+  /** A case value, always shown where placed; or a merged-condition count, shown only when lit. */
+  label?: { text: string; at?: { x: number; y: number }; always: boolean }
 }
 
-/** A background region: a swimlane, a container frame, a timeline gutter. */
+/** A labelled region around the members of one group, never another Step. */
 export interface Band {
   id: string
+  groupId: string
   x: number
   y: number
   w: number
   h: number
-  label?: string
-  /** 'lane' tints; 'frame' outlines; 'group' is n8n's labelled region. */
-  style: 'lane' | 'frame' | 'group'
-  /** `rpc` is the outside-the-flow lane — BPMN's collapsed pool for an external participant. */
-  tone?: Actor | 'neutral' | 'rpc'
+  label: string
   /** Cycles the group tint, so adjacent regions are distinguishable without meaning anything. */
-  hue?: number
+  hue: number
+  /** An open stage of two or more Steps, which its ⊖ closes into one card. */
+  collapsible: boolean
 }
 
 export interface Scene {
@@ -309,7 +247,7 @@ export interface ViewSpec {
   principle: string
   claim: string
   risk: string
-  layout: (flow: PocFlow, opts: ViewOpts) => Scene
+  layout: (flow: PocFlow, opts: ViewOpts) => Promise<Scene>
 }
 
 export const emptyScene = (note: string): Scene => ({
@@ -321,12 +259,22 @@ export const emptyScene = (note: string): Scene => ({
   notes: [note],
 })
 
-export function boundsOf(boxes: Box[], bands: Band[], pad = 48): { width: number; height: number } {
+export function boundsOf(
+  boxes: Box[],
+  bands: Band[],
+  links: Link[] = [],
+  pad = 48,
+): { width: number; height: number } {
   let maxX = 0
   let maxY = 0
   for (const b of [...boxes, ...bands]) {
     maxX = Math.max(maxX, b.x + b.w)
     maxY = Math.max(maxY, b.y + b.h)
+  }
+  // A side lane can run just beside the drawing.
+  for (const p of links.flatMap((link) => link.points)) {
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
   }
   return { width: maxX + pad, height: maxY + pad }
 }

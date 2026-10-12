@@ -11,27 +11,53 @@ import { describe, expect, it } from 'vitest'
 import { NodeBox } from './NodeBox'
 
 describe('NodeBox', () => {
-  it('renders the semantic Connector icon only for Connector Steps', () => {
+  it("renders an app's monogram for a Connector Step and a who-acts glyph otherwise", () => {
     const connector = renderToStaticMarkup(
       <NodeBox
-        box={{ id: 'connector', x: 0, y: 0, w: 220, h: 52, kind: 'step', title: 'Generate', icon: 'connector' }}
+        box={{ id: 'connector', x: 0, y: 0, w: 256, h: 62, kind: 'step', title: 'Post', tile: { monogram: 'SL', tone: 'app' } }}
         selected={false}
-        hovered={false}
-        referenced={false}
       />,
     )
-    const ordinary = renderToStaticMarkup(
+    const person = renderToStaticMarkup(
       <NodeBox
-        box={{ id: 'ordinary', x: 0, y: 0, w: 220, h: 52, kind: 'step', title: 'Review' }}
+        box={{ id: 'review', x: 0, y: 0, w: 256, h: 62, kind: 'step', title: 'Review', tile: { glyph: 'person', tone: 'attention' } }}
         selected={false}
-        hovered={false}
-        referenced={false}
       />,
     )
 
-    expect(connector).toContain('aria-label="Connector Step"')
-    expect(connector).toContain('pbox-connector-icon')
-    expect(ordinary).not.toContain('pbox-connector-icon')
+    expect(connector).toContain('<span class="pcard-monogram">SL</span>')
+    expect(person).toContain('class="pcard-tile" data-tone="attention"')
+    expect(person).not.toContain('pcard-monogram')
+  })
+
+  it('docks a jump as a button and every other chip as a label', () => {
+    const markup = renderToStaticMarkup(
+      <NodeBox
+        box={{
+          id: 'step:a',
+          x: 0,
+          y: 0,
+          w: 256,
+          h: 92,
+          kind: 'step',
+          title: 'Check',
+          chips: [[{ kind: 'jump', text: '↪ Retry', targetId: 'step:retry' }, { kind: 'ends', text: '✓ completes' }]],
+        }}
+        selected={false}
+      />,
+    )
+
+    expect(markup).toContain('<button type="button" class="pdock nodrag nopan" data-chip="jump"')
+    expect(markup).toContain('<span class="pdock" data-chip="ends">✓ completes</span>')
+  })
+
+  it('says "now" in its accessible name for the Step a run is at', () => {
+    const markup = renderToStaticMarkup(
+      <NodeBox box={{ id: 'step:a', x: 0, y: 0, w: 256, h: 62, kind: 'step', title: 'Approve' }} selected={false} now />,
+    )
+
+    expect(markup).toContain('aria-label="Approve, now"')
+    expect(markup).toContain('data-now="true"')
   })
 
   it('renders an RPC card as a card and hands its role to the stylesheet', () => {

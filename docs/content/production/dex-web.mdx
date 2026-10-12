@@ -46,6 +46,16 @@ Unknown or repeated parameters, missing required parameters, and invalid JSON ar
 
 Every registered Step has one group declaration and one explanation declaration. The explanation is one sentence that states what the Step does. Group order follows the first member's registration position in **GetSteps**. Step order within a group also follows **GetSteps**.
 
+## Flow canvas
+
+The **v2** canvas draws one card per Step. The card's icon says who acts at the Step: a person, a message from outside, time, a child Flow, an AI model, an app through a Connector, or the Flow itself.
+
+A group of two or more Steps is a stage. **Collapsed** draws each stage as one card. Select the card or its **⊕** to open the stage in place, and select **⊖** on the open stage to close it. **Expanded** opens every stage. Both buttons also return the view to where the canvas opened.
+
+Each Step is drawn with one line in: the transition from the latest Step that leads to it, preferring a Step in its own group. Every other transition is a **↪** chip on the card it leaves. Select a chip to show where it leads. Failure lines are dashed. The Actions that answer a waiting Step, the RPC that starts a Step, and how a Step ends the Flow are also chips on its card.
+
+When you select a run, the stage that holds the waiting Step opens, and the Step is ringed and labeled **now**.
+
 ## Start Flow
 
 The Run workspace shows **Start Flow** when the selected definition contains a generated start schema. The dialog asks for a Flow ID, a plaintext Worker gRPC address, and the start input. It renders nested objects, arrays, string-key maps, enums, booleans, datetime values, optional fields, and explicit null values. Fixed arrays keep their declared length. Integer values remain decimal text in the browser until serialization, so int64 values keep their exact precision.

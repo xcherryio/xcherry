@@ -11,7 +11,7 @@ import { groupsFromDefinition } from '../../groupsFromGraph';
 import { safeDecode } from '../model/decode';
 import { controlTopologyView } from './controlTopology';
 import { LAYOUT_PRINCIPLES, measureScene, violations } from './layoutQuality';
-import type { Detail, Direction, ViewOpts } from './types';
+import type { Direction, Scene, ViewOpts } from './types';
 
 /**
  * Every Flow the docs ship, drawn four ways. Spacing constants are judged here rather than
@@ -27,16 +27,22 @@ const CORPUS = (import.meta as unknown as {
   import: 'default',
 });
 
-const DETAILS: Detail[] = ['collapsed', 'expanded'];
+const DETAILS = ['collapsed', 'expanded'] as const;
 const DIRECTIONS: Direction[] = ['tb', 'lr'];
 
-function scenesOf(graph: CorpusGraph) {
+async function scenesOf(graph: CorpusGraph) {
   const flow = safeDecode(graph as never, { generated: true, note: 'corpus' });
   const groups = groupsFromDefinition(graph as never, flow);
-  return DETAILS.flatMap((detail) => DIRECTIONS.map((direction) => {
-    const opts: ViewOpts = { detail, direction, selectedId: null, run: null, groups };
-    return { detail, direction, flow, scene: controlTopologyView.layout(flow, opts) };
-  }));
+  const scenes: { detail: (typeof DETAILS)[number]; direction: Direction; flow: typeof flow; scene: Scene }[] = [];
+  for (const detail of DETAILS) {
+    for (const direction of DIRECTIONS) {
+      // Collapsed closes every stage and Expanded opens every one.
+      const openStages = new Set(detail === 'expanded' ? groups.map((group) => group.id) : []);
+      const opts: ViewOpts = { direction, run: null, groups, openStages };
+      scenes.push({ detail, direction, flow, scene: await controlTopologyView.layout(flow, opts) });
+    }
+  }
+  return scenes;
 }
 
 const NAMED = Object.entries(CORPUS)
@@ -49,8 +55,8 @@ describe('layout principles hold across the shipped corpus', () => {
     expect(NAMED.length).toBeGreaterThan(20);
   });
 
-  it.each(NAMED)('$name obeys every principle in all four view modes', ({ graph }) => {
-    for (const { detail, direction, flow, scene } of scenesOf(graph)) {
+  it.each(NAMED)('$name obeys every principle in all four view modes', async ({ graph }) => {
+    for (const { detail, direction, flow, scene } of await scenesOf(graph)) {
       const broken = violations(flow, scene, direction);
       expect(broken, `${detail}/${direction}: ${JSON.stringify(broken)}`).toEqual([]);
     }
@@ -60,22 +66,24 @@ describe('layout principles hold across the shipped corpus', () => {
    * Regions come from `dex:group`, an FDG 2.0 directive, so a 1.0 definition has none and passes the
    * region principles vacuously. Pinned so stale regenerated JSON cannot quietly empty the corpus.
    */
-  it('still has definitions that carry groups', () => {
-    const carrying = NAMED.filter(({ graph }) =>
-      scenesOf(graph).some(({ scene }) => scene.bands.some((band) => band.style === 'group')));
-    expect(carrying.map(({ name }) => name)).toEqual([
+  it('still has definitions that carry groups', async () => {
+    const carrying: string[] = [];
+    for (const { name, graph } of NAMED) {
+      if ((await scenesOf(graph)).some(({ scene }) => scene.bands.length > 0)) carrying.push(name);
+    }
+    expect(carrying).toEqual([
       'connector-factory.json',
       'customer-refund-agentic.json',
       'customer-refund.json',
     ]);
   });
 
-  it('reports the worst metric per principle, so a regression has a number', () => {
+  it('reports the worst metric per principle, so a regression has a number', async () => {
     const worst = new Map<string, { value: number; where: string }>();
     let regionScenes = 0;
     for (const { name, graph } of NAMED) {
-      for (const { detail, direction, flow, scene } of scenesOf(graph)) {
-        if (scene.bands.some((band) => band.style === 'group')) regionScenes++;
+      for (const { detail, direction, flow, scene } of await scenesOf(graph)) {
+        if (scene.bands.length > 0) regionScenes++;
         const metrics = measureScene(flow, scene, direction);
         for (const [key, value] of Object.entries(metrics)) {
           const prior = worst.get(key);

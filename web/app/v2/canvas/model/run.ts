@@ -155,6 +155,11 @@ export interface PlannedRunState {
 
 export type RunState = StepRunState | PlannedRunState
 
+/** Still in progress: blocked on its WaitFor, or running. */
+export function isOpenStatus(status: PhaseStatus): boolean {
+  return status === 'waiting' || status === 'running' || status === 'pending'
+}
+
 /**
  * The status a whole Step card shows, from its two phases.
  *

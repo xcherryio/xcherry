@@ -164,3 +164,17 @@ export function fanOutOf(step: StepModel): number {
   }
   return most > 1 ? most : 0
 }
+
+/** The case values sending this Step to `targetStepId`, as a line label, when every such branch is a case. */
+export function caseLabel(step: StepModel, targetStepId: string): string | null {
+  const key = discriminantOf(step)
+  if (key === null) return null
+  const values: string[] = []
+  for (const branch of step.execute.branches) {
+    if (!branch.targets.some((t) => t.stepId === targetStepId)) continue
+    const c = branchCase(branch)
+    if (c === null || c.key !== key) return null
+    values.push(...c.values.map((v) => v.replace(/^["']|["']$/g, '')))
+  }
+  return values.length > 0 ? [...new Set(values)].join(' / ') : null
+}

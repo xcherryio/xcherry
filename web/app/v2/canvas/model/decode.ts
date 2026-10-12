@@ -26,6 +26,8 @@
  *  7. `isHub`               inbound control degree. A hub dominates a naive drawing.
  *  8. `opensGates`          join rpc-publish->channel with channel-condition->wait.
  *  9. transition merging    parallel edges collapse, keeping every guard.
+ *                           Kept in source order for the main line; the analyzer
+ *                           lists edges by node id instead.
  * 10. `action`, `views`     join an rpc node's name with the Flow v2 Action and view RPC names.
  *
  * Tolerant by construction: never throws, and an unknown node kind survives as a
@@ -384,8 +386,7 @@ export function decodeFlow(
 
   // ---- control edges, collapsed to owner -> step ---------------------------
   const rawTransitions: Transition[] = []
-  for (const e of graph.edges) {
-    if (!CONTROL_KINDS.has(e.kind)) continue
+  for (const e of graph.edges.filter((edge) => CONTROL_KINDS.has(edge.kind)).sort(bySourcePosition)) {
     const fromOwner = ownerOf(e.from)
     const toNode = byId.get(e.to)
     if (fromOwner === undefined || toNode === undefined) {
@@ -618,6 +619,14 @@ function connectorIdentity(value: unknown): StepModel['connector'] {
     connectionName: connector.connectionName,
     moduleVersion: connector.moduleVersion,
   }
+}
+
+/** Source position order; an edge without a span keeps wire order after positioned ones. */
+function bySourcePosition(a: FdgEdge, b: FdgEdge): number {
+  if (a.span === undefined || b.span === undefined) {
+    return Number(a.span === undefined) - Number(b.span === undefined)
+  }
+  return a.span.startLine - b.span.startLine || a.span.startColumn - b.span.startColumn
 }
 
 /** Never throws. A malformed fixture yields an empty flow that says so. */

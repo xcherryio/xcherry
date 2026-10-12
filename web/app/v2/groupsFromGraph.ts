@@ -11,13 +11,17 @@ import type { PocFlow } from './canvas/model/pocFlow';
 import type { StepGroup } from './canvas/views/groups';
 
 export function groupsFromDefinition(graph: FlowDefinitionGraph, flow: PocFlow): StepGroup[] {
-  return (graph.groups ?? []).map((group) => ({
-    id: group.id,
-    label: group.label,
-    reason: group.label,
-    stepTypes: group.stepIds.flatMap((stepId) => {
+  return (graph.groups ?? []).map((group) => {
+    const members = group.stepIds.flatMap((stepId) => {
       const step = flow.steps.find((candidate) => candidate.id === stepId);
-      return step === undefined ? [] : [step.stepType];
-    }),
-  }));
+      return step === undefined ? [] : [step];
+    });
+    return {
+      id: group.id,
+      label: group.label,
+      reason: group.label,
+      stepTypes: members.map((step) => step.stepType),
+      stepIds: members.map((step) => step.id),
+    };
+  });
 }

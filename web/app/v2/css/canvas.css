@@ -341,15 +341,6 @@
   background: var(--p-run-failed);
 }
 
-.plegend-status {
-  padding: 0 5px;
-  border: 1px solid var(--p-line);
-  border-radius: 3px;
-  color: var(--p-ink-1);
-  font-family: var(--p-mono);
-  font-size: 11.5px;
-}
-
 /* ---------- detail panel ----------
    The only place values are allowed to appear. Everything crowded off the canvas lands here: full
    guard text, per-attempt failures, per-condition verdicts, the execution list. */
@@ -780,88 +771,6 @@
   border-color: color-mix(in srgb, var(--p-run-failed) 35%, var(--p-line-soft));
 }
 
-/* ---------- the two-cell phase token ----------
-   ONE slot, at most TWO cells. Colour is a second channel: each cell carries a glyph, and the wait
-   cell's glyph IS which condition kind it is about — so "which condition won" is answered by a symbol
-   rather than by prose. A blocked wait is ACHROMATIC, because nothing is consuming anything and
-   nothing should look busy. */
-
-.ptok {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
-}
-.ptok-cell {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 2px;
-  border: 1px solid var(--p-line);
-  border-radius: 3px;
-  background: var(--p-surface-2);
-  color: var(--p-ink-2);
-  font-size: 11.5px;
-  line-height: 1;
-}
-/* The wait cell reads slightly softer than execute, so the pair has a reading order. */
-.ptok-cell[data-phase='wait'] {
-  border-style: dashed;
-}
-.ptok-cell[data-status='completed'] {
-  border-color: var(--p-run-done);
-  border-style: solid;
-  color: var(--p-run-done);
-}
-.ptok-cell[data-status='running'] {
-  border-color: var(--p-run-active);
-  color: var(--p-run-active);
-}
-.ptok-cell[data-status='failed'] {
-  border-color: var(--p-run-failed);
-  border-style: solid;
-  color: var(--p-run-failed);
-}
-/* Achromatic beats every status colour: a blocked wait and a not-started execute stay grey even
-   though they are "active" states, because they are not burning anything. */
-.ptok-cell[data-achromatic='true'] {
-  border-color: var(--p-line);
-  color: var(--p-ink-2);
-}
-.ptok-count {
-  margin-left: 2px;
-  color: var(--p-ink-2);
-  font-family: var(--p-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-/* ---------- the reason line ----------
-   One line, conditional on blocked-or-failed, so a healthy card has no strip at all. */
-
-.pbox-reason {
-  margin-top: auto;
-  overflow: hidden;
-  padding-top: 3px;
-  border-top: 1px solid var(--p-line-soft);
-  color: var(--p-ink-2);
-  font-size: 12.5px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pbox-reason[data-tone='blocked'] {
-  color: var(--p-external);
-}
-.pbox-reason[data-tone='failed'] {
-  color: var(--p-run-failed);
-}
-.pbox-reason[data-tone='terminal'] {
-  color: var(--p-ink-1);
-}
-
 /* ---------- legend ---------- */
 
 .plegend {
@@ -896,30 +805,6 @@
   color: var(--p-ink-3);
   font-family: var(--p-mono);
   font-size: 12px;
-}
-.plegend-swatch {
-  flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
-  border: 1px solid var(--p-machine);
-  border-radius: 3px;
-}
-.plegend-swatch[data-actor='external'] {
-  border-color: var(--p-external);
-  background: var(--p-external-dim);
-}
-.plegend-swatch[data-actor='unknown'] {
-  border-color: var(--p-unknown);
-  border-style: dashed;
-  background: var(--p-unknown-dim);
-}
-.plegend-swatch[data-actor='clock'] {
-  border-color: var(--p-clock);
-  background: var(--p-clock-dim);
-}
-.plegend-swatch[data-actor='child'] {
-  border-color: var(--p-child);
-  background: var(--p-child-dim);
 }
 
 /* The swatch mirrors the edge exactly: same colour, same dash, same relative weight. */
@@ -1114,25 +999,15 @@
   /* Contrast RISES as the graph shrinks, so the skeleton survives being small. Clamps at 1. */
   opacity: calc(0.92 * var(--edge-boost));
 }
-/* Recovery is the thickest line on the canvas — always drawn, and routed to a side gutter rather
+/* Recovery is the thickest line on the canvas — always drawn, and dashed rather
    than hidden behind a toggle. */
 .pedge-failure .react-flow__edge-path {
   stroke: var(--p-edge-failure);
+  stroke-dasharray: 6 4;
   stroke-width: calc(2.4px * var(--zoom-comp));
   opacity: calc(0.9 * var(--edge-boost));
 }
-.pedge-resource .react-flow__edge-path {
-  stroke: var(--p-edge-resource);
-  stroke-dasharray: 5 4;
-}
-.pedge-wait .react-flow__edge-path {
-  stroke: var(--p-edge-wait);
-  stroke-dasharray: 5 4;
-}
-.pedge-subflow .react-flow__edge-path {
-  stroke: var(--p-edge-subflow);
-  stroke-dasharray: 6 4;
-}
+
 .pstage-pane .react-flow__edge.pedge-lit .react-flow__edge-path,
 .pstage-pane .react-flow__edge.selected .react-flow__edge-path {
   /* Marching dash like the v1 Timeline step link. No CSS filter: drop-shadow on an SVG
@@ -1238,93 +1113,10 @@
 .pbox[data-emphasis='muted'] {
   opacity: 0.82;
 }
-/**
- * WHERE THE FLOW BEGINS.
- *
- * ONE channel: an 18px left band, and the card is otherwise identical to its
- * neighbours. A 3px rail in a near-neutral clock grey was not findable; a wash
- * behind the whole card was findable but made the start compete with the amber
- * human gate for "the most coloured box on screen", and the gate should win
- * that. So the gate keeps the loudest FILL and the start takes the loudest
- * EDGE — the same one-fact-one-channel split that keeps run state and `isStart`
- * out of each other's way.
- *
- * The hue is `door`, which already means "the way in from outside" — the RPC
- * pennant wears it. That is the point rather than a collision: the start IS a
- * door, and it outranks an ordinary one by WEIGHT, not by a ninth hue. The
- * pennant is a different silhouette anyway.
- *
- * The band is a BORDER, not `box-shadow: inset`, for two reasons. `.pbox` is
- * `overflow: hidden`, so an inset shadow is the only shadow that survives —
- * and `.pbox[data-agent='intake']` spends that one shadow on a grey rail at
- * identical specificity 1780 lines below here, so a shadow would silently lose
- * the cascade the moment agent charters land. A border cannot be taken.
- *
- * `box-sizing: border-box` means the band eats 8px of content width rather
- * than widening the box, so the layout engine's column maths is untouched.
- *
- * It sets `border-left` ONLY, never `border-color`. Run state owns the other
- * three sides — `[data-emphasis='failed']` paints them rose and
- * `[data-emphasis='active']` blue, both at identical specificity and both
- * ABOVE this rule, so claiming all four here would silently un-fail a failed
- * start Step. One channel each: the run owns the frame, the definition owns
- * the band.
- */
-.pbox[data-start='true'] {
-  border-left: 18px solid var(--p-rpc);
-}
 .pbox[data-emphasis='hub'] {
   border-style: dashed;
 }
-.pbox-gate {
-  border-width: 2px;
-}
-.pbox-note,
-.pbox-summary {
-  border-style: dashed;
-  background: var(--p-surface-2);
-}
-.pbox-rpc {
-  border-radius: 16px;
-}
-.pbox-channel {
-  border-radius: 3px;
-  border-left: 3px solid var(--p-edge-wait);
-}
-.pbox-stream {
-  border-style: dotted;
-}
-.pbox-subflow {
-  border-style: dashed;
-  border-color: var(--p-child);
-}
-.pbox-commit {
-  border-radius: 4px;
-  border-left: 3px solid var(--p-edge-control);
-}
 
-.pbox-head {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  justify-content: space-between;
-}
-.pbox-title-line {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-}
-.pbox-connector-icon {
-  width: 15.5px;
-  height: 15.5px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
 .pbox-title {
   min-width: 0;
   overflow: hidden;
@@ -1334,29 +1126,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pbox-badge {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--p-external);
-  /* The same pair as `.badge-awaiting`: ink ON an amber fill, so it uses the one token that
-   * inverts while the amber does not. It was a hand-copied hex of --p-surface-1. */
-  color: var(--color-attention-on);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-/* The type on the left, the status on the right. Both text — Temporal had to retrofit a text
-   channel for status after shipping colour alone. */
-.pbox-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  justify-content: space-between;
-  min-width: 0;
-}
+
 .pbox-sub {
   overflow: hidden;
   color: var(--p-ink-3);
@@ -1364,33 +1134,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pbox-status {
-  flex: 0 0 auto;
-  padding: 0 5px;
-  border: 1px solid var(--p-line);
-  border-radius: 3px;
-  color: var(--p-ink-1);
-  font-family: var(--p-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
+
 .pbox-rows,
 .pbox-section {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
-.pbox-section {
-  margin-top: 4px;
-  padding-top: 3px;
-  border-top: 1px solid var(--p-line-soft);
-}
-.pbox-section-label {
-  color: var(--p-ink-3);
-  font-size: 11px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
+
 .pbox-row {
   display: flex;
   align-items: baseline;
@@ -1430,35 +1181,7 @@
   border-radius: var(--p-radius);
   pointer-events: none;
 }
-.pband-lane {
-  border: 1px solid var(--p-line-soft);
-  background: var(--p-surface-1);
-  opacity: 0.5;
-}
-.pband-frame {
-  border: 1px dashed var(--p-line);
-  background: none;
-}
-.pband-lane[data-tone='external'] {
-  border-color: var(--p-external);
-  background: var(--p-external-dim);
-}
-.pband-lane[data-tone='unknown'] {
-  border-color: var(--p-unknown);
-  border-style: dashed;
-  background: var(--p-unknown-dim);
-}
-.pband-lane[data-tone='clock'] {
-  border-color: var(--p-clock);
-  background: var(--p-clock-dim);
-}
-.pband-lane[data-tone='child'] {
-  border-color: var(--p-child);
-  background: var(--p-child-dim);
-}
-.pband-lane[data-tone='machine'] {
-  background: var(--p-machine-dim);
-}
+
 .pband-label {
   position: absolute;
   top: 6px;
@@ -1467,92 +1190,6 @@
   font-size: 12px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-/* ============================================================================
- * External RPC — the door into the flow.
- *
- * Two conventions, combined, because our RPC is both things at once:
- *
- *   - BPMN gives a message arriving from outside an ENVELOPE glyph, and routes it over a connector
- *     that no internal flow is allowed to use.
- *   - n8n and Node-RED give an entry point a DISTINCT SILHOUETTE with no input side, so "nothing
- *     flows into this" is structural rather than something you check by looking for a missing wire.
- *
- * So: a pennant, pointed at the step it unblocks. The point does double duty — it is the unique
- * silhouette AND it is an arrow, which is what makes the association readable when the connector
- * itself is only a few pixels long. An RPC node has no inbound edge by construction, so the flat back
- * edge is honest: that side is the edge of the system.
- * ==========================================================================*/
-
-.pbox-rpc {
-  /* Border via two layers: `clip-path` clips a border away, so the outer layer IS the border. */
-  background: var(--p-rpc);
-  padding: 1.5px;
-  border: 0;
-  color: var(--p-ink-0);
-  /*
-   * NO RADIUS, and not a stylistic choice. `.pbox` sets an 8px radius and `overflow: hidden`, and a
-   * rounded corner plus a `clip-path` polygon are two different shapes fighting over the same pixels —
-   * which chewed a notch out of the pennant's left edge. The polygon is the only shape here.
-   *
-   * It also reads better: a crisp geometric tag beside rounded step cards makes "this is not a step"
-   * a silhouette difference rather than a colour difference.
-   */
-  border-radius: 0;
-  overflow: visible;
-}
-
-.pbox-rpc[data-point='right'] {
-  clip-path: polygon(0 0, calc(100% - 13px) 0, 100% 50%, calc(100% - 13px) 100%, 0 100%);
-}
-
-.pbox-rpc[data-point='down'] {
-  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 13px), 50% 100%, 0 calc(100% - 13px));
-}
-
-/* The chevron eats into the bottom edge, so the text has to be held clear of it or it is clipped. */
-.pbox-rpc[data-point='down'] > .pbox-inner {
-  padding-bottom: 17px;
-}
-
-.pbox-rpc > .pbox-inner {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-  width: 100%;
-  height: 100%;
-  padding: 6px 8px;
-  background: var(--p-rpc-dim);
-  clip-path: inherit;
-  border-radius: 0;
-}
-
-.pbox-rpc .pbox-title {
-  color: var(--p-rpc);
-  font-weight: 600;
-}
-
-/* The BPMN envelope, as text rather than an icon font. */
-.pbox-rpc .pbox-title::before {
-  content: '✉ ';
-  opacity: 0.85;
-}
-
-.pbox-rpc .pbox-sub {
-  color: var(--p-ink-2);
-  font-size: 12px;
-}
-
-.pbox-rpc[data-selected='true'] {
-  background: color-mix(in srgb, var(--p-rpc) 100%, var(--p-surface-1) 25%);
-}
-
-/* The outside-the-flow lane: BPMN's collapsed pool for an external participant. */
-.pband-lane[data-tone='rpc'] {
-  border-color: var(--p-rpc);
-  background: var(--p-rpc-dim);
 }
 
 /* An RPC as a card, for a Flow with no Steps: the pennant's door hue and envelope. */
@@ -1574,41 +1211,6 @@
 /* A Summary or Display view only reads, so it is dashed like other quiet boxes. */
 .pbox-rpcCard[data-rpc-role='view'] {
   border-style: dashed;
-}
-
-/*
- * MESSAGE FLOW. Dashed, per BPMN — the connector an internal transition may never use. The dash is
- * the second, redundant channel: the hollow arrowhead already says it, and a reader who is looking at
- * line style rather than at arrowheads still gets the answer.
- */
-.pedge-rpc .react-flow__edge-path,
-.pedge-gate .react-flow__edge-path {
-  stroke: var(--p-edge-rpc);
-  stroke-width: 1.6;
-  stroke-dasharray: 5 4;
-}
-
-/*
- * BPMN's loop marker, on the card. The edge shows the PATH; this states the BEHAVIOUR, which is what
- * survives being small. Quiet by default — a loop is ordinary in a Dex flow (21 of 96 transitions),
- * so it is a fact, not a warning.
- */
-.pbox-loop {
-  flex: 0 0 auto;
-  margin-left: 5px;
-  color: var(--p-ink-2);
-  font-size: 14.5px;
-  line-height: 1;
-}
-
-/*
- * A self-loop arcs out of the right face and back into the top one, so it crosses the card's own
- * corner. Slightly thinner and more transparent than a transition between two steps, because it is
- * decoration on a fact the card already carries.
- */
-.pedge-loop .react-flow__edge-path {
-  stroke-width: calc(1.2px * var(--zoom-comp));
-  opacity: calc(0.65 * var(--edge-boost));
 }
 
 /* ============================================================================
@@ -1699,19 +1301,6 @@
   color: var(--p-ink-1);
   font-size: 13px;
   font-weight: 700;
-}
-
-/*
- * The recovery mark: `⇥` a sink (the flow stops here), `⇉` a dispatcher (it can send the flow onward).
- * Failure-coloured, because that is what it is about, and quiet because a saga catching its own
- * failures is correct structure rather than a warning.
- */
-.pbox-recovery {
-  flex: 0 0 auto;
-  margin-left: 5px;
-  color: var(--p-edge-failure);
-  font-size: 14.5px;
-  line-height: 1;
 }
 
 /* ============================================================================
@@ -1910,28 +1499,6 @@
   color: var(--p-ink-2);
   font-size: 13px;
   line-height: 1.5;
-}
-
-/* ---------- a group band as a tap target ---------- */
-
-/*
- * Clickable only in its OWN space. Cards sit above the band, so a click on a Step still reaches the
- * Step and a click on the label strip or the padding reaches the region.
- */
-.pband-tap {
-  pointer-events: auto;
-  cursor: pointer;
-}
-.pband-tap:hover {
-  border-color: var(--p-ink-3);
-}
-.pband-tap[data-selected='true'] {
-  border-style: solid;
-  border-color: var(--p-ink-2);
-}
-.pband-tap:focus-visible {
-  outline: 1px solid var(--p-ink-1);
-  outline-offset: 2px;
 }
 
 /* The region panel's opening line, which is the group's reason for existing. */
@@ -3058,45 +2625,32 @@
 /* ==========================================================================
  * THE LIVE EXECUTION MAP — an agentic run drawn on the definition.
  *
- * Two additions and no new colours. The PATH is a weight-and-opacity change, not a
- * hue: colour on this canvas already means who must act, and "the run came this way"
- * is orthogonal to that. The AGENT ROLES are silhouette changes for the same reason —
- * a decision point and a human gate must be tellable apart at thumbnail size and
- * under any colour deficiency.
+ * The AGENT ROLES are silhouette changes rather than colours: colour on this canvas already
+ * means who must act, and a decision point and a human gate must be tellable apart at
+ * thumbnail size and under any colour deficiency.
  * ====================================================================== */
-
-/* An edge the run actually traversed. Thicker, fully opaque, and it outranks dimming. */
-.pedge-path .react-flow__edge-path {
-  stroke-width: calc(2.4px * var(--p-edge-boost, 1));
-  opacity: 1;
-}
-
-/* Everything the run did NOT take, while a run is on screen: present, quiet, still traceable. */
-.pcanvas[data-run='true'] .pedge:not(.pedge-path):not(.pedge-lit):not(.selected) .react-flow__edge-path {
-  opacity: 0.34;
-}
 
 /*
  * THE DECISION STEP. A double left rule rather than a fill: the agent decision is where
  * the run branches, and a bar on the leading edge reads as "something happens here"
  * without competing with the actor accent that says who must act.
  */
-.pbox[data-agent='decision'] {
+.pcard[data-agent='decision'] {
   border-style: solid;
   box-shadow: inset 3px 0 0 var(--p-ink-2);
 }
 
-.pbox[data-agent='decision'][data-emphasis='active'] {
+.pcard[data-agent='decision'][data-emphasis='active'] {
   box-shadow: inset 3px 0 0 var(--p-run-active);
 }
 
 /* The hand-over. Amber already says a person must act; the dashes say the run is parked. */
-.pbox[data-agent='human-gate'] {
+.pcard[data-agent='human-gate'] {
   border-style: dashed;
 }
 
 /* Where the request arrives. Quietest of the three — it is context, not a decision. */
-.pbox[data-agent='intake'] {
+.pcard[data-agent='intake'] {
   box-shadow: inset 3px 0 0 var(--p-line);
 }
 
@@ -3663,4 +3217,558 @@
   flex: 0 0 auto;
   min-height: 0;
   padding: 0;
+}
+
+/* ============================================================================
+ * Flow canvas cards: who-acts tile, the Step in words, docked chips.
+ * Sizes match views/stepBox.ts and views/stageCard.ts.
+ * ========================================================================== */
+
+.pglyph {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.pcard,
+.pstage-card {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  border: 1px solid var(--p-line);
+  background: var(--p-surface-2);
+  color: var(--p-ink-0);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pcard {
+  padding: 12px 12px 10px;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.pcard:hover {
+  border-color: var(--p-ink-3);
+}
+/* The border says who must act: amber a person, teal outside, slate a timer, purple a child. */
+.pcard[data-actor='external'] {
+  border-color: var(--hue-attention-line);
+}
+.pcard[data-actor='unknown'] {
+  border-color: var(--hue-attention-line);
+  border-style: dashed;
+}
+.pcard[data-actor='clock'] {
+  border-color: var(--hue-clock-line);
+}
+.pcard[data-actor='child'] {
+  border-color: var(--hue-child-line);
+}
+/* Run state outranks who acts. */
+.pcard[data-emphasis='active'] {
+  border-color: var(--hue-progress-line);
+}
+.pcard[data-emphasis='failed'] {
+  border-color: var(--hue-danger-line);
+  background: var(--hue-danger-fill);
+}
+.pcard[data-emphasis='planned'] {
+  border-style: dashed;
+  border-color: var(--p-line);
+}
+.pcard[data-emphasis='planned'] .pcard-title {
+  color: var(--p-ink-2);
+}
+.pcard[data-selected='true'],
+.pstage-card[data-selected='true'] {
+  box-shadow: 0 0 0 2px var(--color-focus);
+}
+.pcard[data-hover='true'],
+.pcard[data-ref='true'] {
+  border-color: var(--p-ink-2);
+}
+.pcard:focus-visible,
+.pstage-card:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* The "now" ring, in the hue of who must act. */
+.pcard[data-now='true'],
+.pstage-card[data-now='true'] {
+  outline: 3px solid var(--hue-progress-line);
+  outline-offset: 2px;
+}
+.pcard[data-now='true'][data-actor='external'],
+.pcard[data-now='true'][data-actor='unknown'],
+.pstage-card[data-now='true'][data-actor='external'] {
+  outline-color: var(--hue-attention-line);
+}
+.pcard[data-now='true'][data-actor='clock'] {
+  outline-color: var(--hue-clock-line);
+}
+.pcard[data-now='true'][data-emphasis='failed'] {
+  outline-color: var(--hue-danger-line);
+}
+.pnow-tag {
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  z-index: 10;
+  padding: 0 7px;
+  border: 1px solid var(--p-line);
+  border-radius: 999px;
+  background: var(--p-surface-2);
+  color: var(--p-ink-0);
+  font-size: 10.5px;
+  font-weight: 600;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.pcard-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+.pcard-words {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.pcard-title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.pcard-sub {
+  overflow: hidden;
+  color: var(--p-ink-2);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pcard-mark {
+  display: flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--p-ink-2);
+}
+.pcard-mark .pglyph {
+  width: 14px;
+  height: 14px;
+}
+.pcard-recovery {
+  flex: 0 0 auto;
+  color: var(--hue-danger-line);
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Tones: colour repeats what the glyph or the words already say. */
+[data-tone='attention'] {
+  --tone-ink: var(--hue-attention-ink);
+  --tone-fill: var(--hue-attention-fill);
+}
+[data-tone='door'] {
+  --tone-ink: var(--hue-door-ink);
+  --tone-fill: var(--hue-door-fill);
+}
+[data-tone='clock'] {
+  --tone-ink: var(--hue-clock-ink);
+  --tone-fill: var(--hue-clock-fill);
+}
+[data-tone='child'] {
+  --tone-ink: var(--hue-child-ink);
+  --tone-fill: var(--hue-child-fill);
+}
+[data-tone='accent'] {
+  --tone-ink: var(--hue-progress-ink);
+  --tone-fill: var(--hue-progress-fill);
+}
+[data-tone='machine'] {
+  --tone-ink: var(--p-ink-2);
+  --tone-fill: var(--band-0);
+}
+[data-tone='app'] {
+  --tone-ink: var(--p-ink-1);
+  --tone-fill: var(--band-1);
+}
+.pcard-sub[data-tone] {
+  color: var(--tone-ink);
+}
+.pcard-tile {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--tone-fill);
+  color: var(--tone-ink);
+}
+.pcard-tile .pglyph {
+  width: 20px;
+  height: 20px;
+}
+.pcard-monogram {
+  font-family: var(--p-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.pcard-minitile {
+  display: flex;
+  color: var(--tone-ink);
+}
+.pcard-minitile .pglyph {
+  width: 13px;
+  height: 13px;
+}
+
+/* Docked chips: a jump is a button that shows where it leads; the rest are labels. */
+.pcard-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.pcard-chip-row {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+.pdock {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  height: 18px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--band-0);
+  color: var(--p-ink-1);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.pdock {
+  cursor: pointer;
+}
+button.pdock:hover {
+  outline: 1px solid var(--p-ink-3);
+}
+button.pdock:focus-visible {
+  outline: 2px solid var(--color-focus);
+}
+.pdock[data-chip='inbound'] {
+  color: var(--p-ink-2);
+}
+.pdock[data-chip='stops'] {
+  background: var(--band-1);
+}
+.pdock[data-chip='failJump'],
+.pdock[data-chip='fails'] {
+  background: var(--hue-danger-fill);
+  color: var(--hue-danger-ink);
+}
+.pdock[data-chip='ends'] {
+  background: var(--hue-success-fill);
+  color: var(--hue-success-ink);
+}
+.pdock[data-chip='answer'] {
+  background: var(--hue-attention-fill);
+  color: var(--hue-attention-ink);
+}
+.pdock[data-chip='entry'] {
+  background: var(--hue-door-fill);
+  color: var(--hue-door-ink);
+}
+.pdock[data-chip='child'] {
+  background: var(--hue-child-fill);
+  color: var(--hue-child-ink);
+}
+.pdock[data-chip='role'] {
+  background: var(--hue-progress-fill);
+  color: var(--hue-progress-ink);
+}
+
+/* Start and the run's state sit on the card's top edge, like a trigger. */
+.pcard-start,
+.pcard-pill {
+  position: absolute;
+  top: -9px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 7px;
+  border: 2px solid var(--p-bg);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.pcard-start {
+  left: 12px;
+  background: var(--hue-door-fill);
+  color: var(--hue-door-ink);
+}
+.pcard-start .pglyph {
+  width: 11px;
+  height: 11px;
+}
+.pcard-pill {
+  right: 10px;
+  background: var(--band-1);
+  color: var(--p-ink-2);
+  font-size: 10px;
+}
+.pcard-pill[data-status='pending'],
+.pcard-pill[data-status='waiting'] {
+  background: var(--hue-attention-fill);
+  color: var(--hue-attention-ink);
+}
+.pcard-pill[data-status='running'] {
+  background: var(--hue-progress-fill);
+  color: var(--hue-progress-ink);
+  animation: pcard-pulse var(--pulse-dur) var(--ease-breathe) infinite;
+}
+.pcard-pill[data-status='completed'] {
+  background: var(--hue-success-fill);
+  color: var(--hue-success-ink);
+}
+.pcard-pill[data-status='failed'] {
+  background: var(--hue-danger-fill);
+  color: var(--hue-danger-ink);
+}
+@keyframes pcard-pulse {
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.pcard-reason {
+  overflow: hidden;
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--p-line-soft);
+  color: var(--p-ink-1);
+  font-size: 12px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pcard-reason[data-tone='blocked'] {
+  color: var(--hue-attention-ink);
+}
+.pcard-reason[data-tone='failed'] {
+  color: var(--hue-danger-ink);
+}
+.pcard .pbox-bar {
+  margin-top: 6px;
+}
+
+/* A closed stage: a little stack of cards, because that is what it holds. */
+.pstage-card {
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  box-shadow:
+    5px 5px 0 -1px var(--p-surface-2),
+    5px 5px 0 0 var(--p-line);
+}
+.pstage-card:hover {
+  border-color: var(--p-ink-3);
+}
+.pstage-card[data-actor='external'] {
+  border-color: var(--hue-attention-line);
+}
+.pstage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.pstage-title {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pstage-count {
+  flex: 0 0 auto;
+  color: var(--p-ink-2);
+  font-family: var(--p-mono);
+  font-size: 11px;
+}
+.pstage-open {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: -4px;
+  color: var(--p-ink-2);
+}
+.pstage-open .pglyph {
+  width: 18px;
+  height: 18px;
+}
+.pstage-card:hover .pstage-open {
+  color: var(--hue-progress-ink);
+}
+.pstage-tiles {
+  display: flex;
+  height: 14px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+.pstage-facts {
+  overflow: hidden;
+  margin-top: 6px;
+  color: var(--p-ink-1);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An open stage's band: its label selects the group, its ⊖ closes it into one card. */
+.pband-group > .pband-label[role='button'] {
+  cursor: pointer;
+  pointer-events: auto;
+}
+.pband-group > .pband-label[role='button']:hover {
+  color: var(--p-ink-0);
+}
+.pband-group > .pband-label[role='button']:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.pband-group[data-selected='true'] {
+  border-style: solid;
+  border-color: var(--p-ink-2);
+}
+.pband-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--p-ink-2);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.pband-close:hover {
+  background: var(--band-1);
+  color: var(--p-ink-0);
+}
+.pband-close:focus-visible {
+  outline: 2px solid var(--color-focus);
+}
+.pband-close .pglyph {
+  width: 18px;
+  height: 18px;
+}
+
+/* Cards glide to new places when a stage opens; lines fade out while they move. */
+.pstage-pane .react-flow__node {
+  transition: transform 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.pstage-pane .react-flow__node > * {
+  animation: pcard-in 220ms ease-out;
+}
+.pstage-pane .react-flow__edges,
+.pstage-pane .react-flow__edgelabel-renderer {
+  transition: opacity 160ms ease 200ms;
+}
+.pstage-pane[data-relayout='true'] .react-flow__edges,
+.pstage-pane[data-relayout='true'] .react-flow__edgelabel-renderer {
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+@keyframes pcard-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pstage-pane .react-flow__node,
+  .pstage-pane .react-flow__edges {
+    transition: none;
+  }
+  .pstage-pane .react-flow__node > *,
+  .pcard-pill[data-status='running'] {
+    animation: none;
+  }
+}
+
+/* The legend's census rows. */
+.plegend-head {
+  margin: 10px 0 2px;
+  color: var(--p-ink-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.plegend-head:first-child {
+  margin-top: 0;
+}
+.plegend-tile {
+  display: flex;
+  width: 24px;
+  flex: 0 0 auto;
+}
+.plegend-tile .pcard-tile {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.plegend-tile .pcard-tile .pglyph {
+  width: 14px;
+  height: 14px;
+}
+.plegend-tile .pcard-monogram {
+  font-size: 8.5px;
+}
+.plegend-stage {
+  width: 16px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 1px solid var(--p-line);
+  border-radius: 4px;
+  box-shadow:
+    2px 2px 0 -1px var(--p-surface-2),
+    2px 2px 0 0 var(--p-line);
+}
+.plegend-glyph {
+  width: 14px;
+  height: 14px;
+  color: var(--p-ink-2);
+}
+.plegend-list .pdock {
+  flex: 0 0 auto;
 }

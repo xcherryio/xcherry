@@ -1,15 +1,16 @@
 # Canvas layout: principles, not per-screenshot tuning
 
-A view here places boxes by arithmetic over a ranked graph. Every spacing constant is therefore a
-claim about every Flow, not just the one on screen. This directory holds the machinery that keeps
-that claim honest.
+A view here ranks the graph, chooses which transitions are lines, and hands placement and line routing
+to ELK's layered algorithm (`elkPlacement.ts`). Every rule and spacing constant is therefore a claim
+about every Flow, not just the one on screen. This directory holds the machinery that keeps that claim
+honest.
 
 ## The loop
 
 Change a layout constant or rule the same way every time:
 
 1. **Measure first.** `layoutQuality.test.ts` runs all shipped Flow definitions in
-   `docs/src/data/flow-definitions/` through every detail and direction. Run it before touching
+   `docs/src/data/flow-definitions/` Collapsed and Expanded, in both directions. Run it before touching
    anything and keep the numbers.
 2. **Find the worst case by number, not by eye.** The report names the flow and mode holding each
    worst metric. That is where to look, and it is often not the drawing you were shown.
@@ -34,16 +35,63 @@ only guide a reader. Current corpus worst is in the report the test prints.
 | `group-cohesion` | A group sits in one place where the graph allows it. |
 | `short-edges` | An arrow spans about a rank, not the whole drawing. |
 | `reading-order` | The first card is the start of the Flow. |
+| `clear-lines` | No line passes under a card it does not join. |
 
 They pull against each other on purpose. Cohesion moves a card toward its group and lengthens its
 edges; `short-edges` is where that stops. Do not relax a limit to let a change through without saying
 which principle you are trading away and what the corpus number becomes.
 
+`short-edges` was raised from 6.5 to 7 when an open stage became one ELK container, so its grey band
+is a single region. That trades edge length for `tight-regions` and `group-cohesion`: the corpus worst
+edge span went from 5.60 to 6.86 (`customer-refund-agentic.json`, Expanded, top-down, where lines from
+across the Flow enter an 11-Step stage), and the worst region hole went from 0.548 to 0.323.
+`clear-lines` reads 0 across the corpus; forcing straight lines reads 38.
+
+## How a Flow is drawn
+
+In priority order; a lower rule never breaks a higher one.
+
+1. Nothing is hidden. Every Step and every transition appears, as a line or as a ↪ chip on the card it
+   leaves. A wait the analyzer could not name is drawn as a wait, never as automatic.
+2. No line passes under a card (ELK's orthogonal routing; `clear-lines`).
+3. The start comes first and is on screen when the canvas opens.
+4. Status is never colour alone: every state has words or a glyph.
+5. Layout never blanks the canvas: each failed ELK pass falls back to a simpler one, the last to a
+   plain grid, and the legend says so.
+6. One line in (`mainLine.ts`): each Step is drawn with the transition from the latest Step that leads
+   to it, from its own group when one does; every other transition is a ↪ chip. Main lines are chosen
+   once between Steps and every view draws the ones that cross between its cards, so opening a stage
+   never turns a line into a chip or back. Cards are ranked by the drawn lines only.
+7. Side to side (`sideLanes.ts`): a line that loops around both of its cards, or runs long, leaves the
+   side of its card along a clear lane when that is shorter and crosses no more lines.
+8. A long Flow is drawn long, never folded into columns. One too large to read whole opens on its
+   start at a readable zoom (`READABLE_ZOOM`).
+9. An open stage is one region: its Steps are one ELK container. If ELK cannot place the containers,
+   groups fall back to bands that hug their members (`groupBands.ts`) and never enclose another card.
+10. Attach, don't connect: the Actions that answer a waiting Step, the RPC that starts it, the child
+    Flow it launches and how it ends the Flow are chips on its card, not boxes with lines.
+
+## Stages
+
+A group of two or more Steps is a stage: closed, it is one card (`stageCard.ts`) with ⊕; open, its Steps
+sit in one labelled band with ⊖. Collapsed closes every stage and Expanded opens every one; both start
+the view again. A one-Step group is always drawn as its Step in its band. Opening or closing one stage
+keeps the reader's place (`anchor.ts`, `../useStageScene.ts`): the new Scene is moved so the stage's
+leading edge stays where it was. When a run is shown, the stage holding the waiting Step opens.
+
+## The main line
+
+A Step's main line comes from the source ranked closest before it (`longestPathRanks`), so a chain reads
+straight, a shared finish is drawn from the end of the work, and a shortcut is a chip. A source in the
+Step's own group wins, then ordinary transitions over failures, then reading order, then source order.
+The decoder sorts transitions by source position, because the analyzer lists edges by node id. The
+choice therefore does not change with the edge order on the wire, nor when code moves down the file.
+
 ## Regions only exist for FDG 2.0
 
 `dex:group` is an FDG 2.0 directive, so a 1.0 definition produces no regions and passes
-`tight-regions` and `group-cohesion` vacuously. Two of the shipped definitions carry groups today, so
-those two principles are exercised by 8 of 132 scenes. Do not read the corpus count as their coverage.
+`tight-regions` and `group-cohesion` vacuously. Three of the shipped definitions carry groups today, so
+those two principles are exercised by 12 of 128 scenes. Do not read the corpus count as their coverage.
 The generation side needs nothing: the analyzer already errors unless every Step declares exactly one
 `dex:group`, and rejects one group id used with two labels, so membership is total and unambiguous.
 

@@ -8,8 +8,9 @@
 
 import type { JSX } from 'react'
 import type { PocFlow } from '../canvas/model/pocFlow'
-import { ACTOR_LABEL, ACTOR_ORDER } from '../canvas/model/pocFlow'
-import type { Scene } from '../canvas/views/types'
+import { TileView } from '../canvas/render/CardParts'
+import { Glyph } from '../canvas/render/Glyph'
+import type { BoxChip, LinkFamily, Scene, Tile } from '../canvas/views/types'
 
 /**
  * A legend, DERIVED from what is actually on screen.
@@ -24,55 +25,74 @@ import type { Scene } from '../canvas/views/types'
  * contains them, and counts come from the scene so the legend doubles as a census.
  */
 
-const EDGE_LABEL: Record<string, string> = {
-  control: 'what happens next',
-  failure: 'failure path',
-  gate: 'reached in from outside',
-  rpc: 'reached in from outside',
-  wait: 'waited on',
-  resource: 'reads / writes',
-  subflow: 'starts another flow',
+/** What a tile means, keyed as `tileKey` names it, in legend order. */
+const TILE_MEANING: [string, string][] = [
+  ['person', 'waits for a person'],
+  ['door', 'waits for a message from outside'],
+  ['wait', 'waits on something the analyzer could not name'],
+  ['clock', 'waits for time'],
+  ['child', 'waits for child flows'],
+  ['spark', 'asks an AI model'],
+  ['app', 'calls an app through a connector'],
+  ['cpu', 'runs automatically'],
+]
+
+function tileKey(tile: Tile): string {
+  return 'glyph' in tile ? tile.glyph : 'app'
 }
 
-/** Same order the eye should read them in: control flow first, data last. */
-const EDGE_ORDER = ['control', 'failure', 'rpc', 'gate', 'wait', 'resource', 'subflow']
+const SAMPLE_TILE: Record<string, Tile> = {
+  person: { glyph: 'person', tone: 'attention' },
+  door: { glyph: 'door', tone: 'door' },
+  wait: { glyph: 'wait', tone: 'attention' },
+  clock: { glyph: 'clock', tone: 'clock' },
+  child: { glyph: 'child', tone: 'child' },
+  spark: { glyph: 'spark', tone: 'accent' },
+  app: { monogram: 'AP', tone: 'app' },
+  cpu: { glyph: 'cpu', tone: 'machine' },
+}
+
+const LINE_LABEL: Record<LinkFamily, string> = {
+  control: 'what happens next',
+  failure: 'where a failure goes',
+}
+
+const CHIP: Record<BoxChip['kind'], { sample: string; label: string }> = {
+  role: { sample: '◆', label: 'what the step is for in an agent' },
+  answer: { sample: 'Approve', label: 'an Action that answers the step' },
+  entry: { sample: '⚡ call', label: 'a call that starts the step' },
+  child: { sample: '↳ flow', label: 'a child flow the step starts' },
+  inbound: { sample: '← 6', label: 'steps that lead here' },
+  fork: { sample: '▮', label: 'runs every path at once' },
+  jump: { sample: '↪ step', label: 'a jump to a step drawn elsewhere' },
+  failJump: { sample: '↪ step', label: 'where a failure jumps' },
+  ends: { sample: '✓', label: 'completes the flow' },
+  stops: { sample: '■', label: 'stops one branch of the flow' },
+  fails: { sample: '✕', label: 'fails the flow' },
+}
+
+function increment(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1)
+}
 
 export function Legend({ scene, flow }: { scene: Scene; flow: PocFlow }): JSX.Element | null {
-  const onScreen = new Set(scene.boxes.map((b) => b.id))
-
-  // Actors, counted from the boxes actually drawn rather than from the flow — a view that
-  // omits steps must not claim them.
-  const actorCounts = new Map<string, number>()
-  for (const b of scene.boxes) {
-    if (b.actor === undefined) continue
-    actorCounts.set(b.actor, (actorCounts.get(b.actor) ?? 0) + 1)
+  const tiles = new Map<string, number>()
+  const chips = new Map<string, number>()
+  for (const box of scene.boxes) {
+    if (box.tile) increment(tiles, tileKey(box.tile))
+    for (const tile of box.stage?.tiles ?? []) increment(tiles, tileKey(tile))
+    for (const row of box.chips ?? []) for (const chip of row) increment(chips, chip.kind)
   }
-
-  const drawn = scene.links.filter(
-    (l) => l.latent !== true && onScreen.has(l.from) && onScreen.has(l.to),
-  )
-  const latent = scene.links.filter(
-    (l) => l.latent === true && onScreen.has(l.from) && onScreen.has(l.to),
-  )
-  const latentControl = latent.filter((l) => l.family === 'control' || l.family === 'failure').length
-  const latentData = latent.length - latentControl
-  const edgeCounts = new Map<string, number>()
-  for (const l of drawn) edgeCounts.set(l.family, (edgeCounts.get(l.family) ?? 0) + 1)
+  const lines = new Map<string, number>()
+  for (const link of scene.links) increment(lines, link.family)
+  const stages = scene.boxes.filter((box) => box.kind === 'stage').length
 
   const marks: { key: string; label: string }[] = []
-  if (scene.boxes.some((b) => b.isStart === true)) {
-    marks.push({ key: 'start', label: 'where it begins' })
+  if (scene.boxes.some((b) => b.isStart === true)) marks.push({ key: 'start', label: 'where the flow begins' })
+  if (scene.boxes.some((b) => b.loops === true || b.stage?.loops === true)) {
+    marks.push({ key: 'loop', label: 'runs again on its own' })
   }
-  if (scene.boxes.some((b) => b.emphasis === 'hub')) {
-    marks.push({ key: 'hub', label: 'many steps return here' })
-  }
-  if (flow.steps.some((s) => s.isRecoveryHub)) {
-    marks.push({ key: 'recovery', label: 'catches failures' })
-  }
-  // The external RPC is a node CLASS, not an actor, so it gets a mark rather than an actor swatch.
-  if (scene.boxes.some((b) => b.kind === 'rpc')) {
-    marks.push({ key: 'rpc', label: 'an external call, pointed at what it unblocks' })
-  }
+  if (flow.steps.some((s) => s.isRecoveryHub)) marks.push({ key: 'recovery', label: 'catches failures' })
   if (scene.boxes.some((b) => b.kind === 'rpcCard' && b.rpcRole === undefined)) {
     marks.push({ key: 'rpc-card', label: 'an RPC and the state it reads and writes' })
   }
@@ -83,105 +103,76 @@ export function Legend({ scene, flow }: { scene: Scene; flow: PocFlow }): JSX.El
     marks.push({ key: 'view', label: 'a Summary or Display view RPC' })
   }
 
-  /**
-   * Run statuses, decoded from the TWO-CELL TOKEN — not from `status`, which now carries the ×N count.
-   * Reading `status` here briefly made the legend list "×2" as if it were a status, which is exactly
-   * the kind of noise a derived legend exists to avoid.
-   *
-   * Counted per PHASE, because that is what the cells encode: a Step can be waiting and not-started at
-   * the same moment and both facts are on screen.
-   */
-  const statusCounts = new Map<string, number>()
-  for (const b of scene.boxes) {
-    if (b.token === undefined) {
-      // Views that render a plain status word rather than the token (view C's commit rows).
-      if (b.status !== undefined) statusCounts.set(b.status, (statusCounts.get(b.status) ?? 0) + 1)
-      continue
-    }
-    if (b.token.wait !== null) {
-      const k = `wait ${b.token.wait.status}`
-      statusCounts.set(k, (statusCounts.get(k) ?? 0) + 1)
-    }
-    const k = `run ${b.token.execute.status}`
-    statusCounts.set(k, (statusCounts.get(k) ?? 0) + 1)
-  }
-
-  if (
-    actorCounts.size === 0 &&
-    edgeCounts.size === 0 &&
-    marks.length === 0 &&
-    statusCounts.size === 0
-  ) {
-    return null
-  }
+  if (tiles.size === 0 && lines.size === 0 && chips.size === 0 && marks.length === 0 && stages === 0) return null
 
   return (
     <section className="plegend">
-
-      {[...actorCounts.keys()].length > 0 ? (
-        <ul className="plegend-list">
-          {ACTOR_ORDER.filter((a) => actorCounts.has(a)).map((a) => (
-            <li key={a}>
-              <span className="plegend-swatch" data-actor={a} />
-              <span className="plegend-text">{ACTOR_LABEL[a]}</span>
-              <span className="plegend-count">{actorCounts.get(a)}</span>
-            </li>
-          ))}
-        </ul>
+      {tiles.size > 0 ? (
+        <>
+          <h4 className="plegend-head">Who acts</h4>
+          <ul className="plegend-list">
+            {TILE_MEANING.filter(([key]) => tiles.has(key)).map(([key, label]) => (
+              <li key={key} data-tile={key}>
+                <span className="plegend-tile">
+                  <TileView tile={SAMPLE_TILE[key] as Tile} />
+                </span>
+                <span className="plegend-text">{label}</span>
+                <span className="plegend-count">{tiles.get(key)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
 
-      {edgeCounts.size > 0 ? (
-        <ul className="plegend-list">
-          {EDGE_ORDER.filter((f) => edgeCounts.has(f)).map((f) => (
-            <li key={f}>
-              <span className="plegend-line" data-family={f} />
-              <span className="plegend-text">{EDGE_LABEL[f] ?? f}</span>
-              <span className="plegend-count">{edgeCounts.get(f)}</span>
+      {stages > 0 || lines.size > 0 || marks.length > 0 ? <h4 className="plegend-head">Shapes</h4> : null}
+      <ul className="plegend-list">
+        {stages > 0 ? (
+          <li>
+            <span className="plegend-stage" />
+            <span className="plegend-text">a stage: ⊕ shows its steps</span>
+            <span className="plegend-count">{stages}</span>
+          </li>
+        ) : null}
+        {(['control', 'failure'] as const)
+          .filter((family) => lines.has(family))
+          .map((family) => (
+            <li key={family}>
+              <span className="plegend-line" data-family={family} />
+              <span className="plegend-text">{LINE_LABEL[family]}</span>
+              <span className="plegend-count">{lines.get(family)}</span>
             </li>
           ))}
-          {/*
-            Latent edges are hidden for TWO different reasons, and saying so matters: a
-            control edge is quiet because it converges on a hub, a resource edge because
-            dataflow is 61% of the graph. One shared label claimed a hub existed on flows
-            that have none.
-          */}
-          {latentControl > 0 ? (
-            <li>
-              <span className="plegend-line" data-family="latent" />
-              <span className="plegend-text">hidden until you click the hub</span>
-              <span className="plegend-count">{latentControl}</span>
-            </li>
-          ) : null}
-          {latentData > 0 ? (
-            <li>
-              <span className="plegend-line" data-family="latent" />
-              <span className="plegend-text">shown when you click a step</span>
-              <span className="plegend-count">{latentData}</span>
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
-
-      {statusCounts.size > 0 ? (
-        <ul className="plegend-list">
-          {[...statusCounts].map(([status, count]) => (
-            <li key={status}>
-              <span className="plegend-status">{status}</span>
-              <span className="plegend-count">{count}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {marks.length > 0 ? (
-        <ul className="plegend-list">
-          {marks.map((m) => (
+        {marks.map((m) =>
+          m.key === 'start' || m.key === 'loop' ? (
             <li key={m.key}>
-              <span className="plegend-mark" data-mark={m.key} />
+              <Glyph name={m.key === 'start' ? 'bolt' : 'refresh'} className="plegend-glyph" />
               <span className="plegend-text">{m.label}</span>
             </li>
-          ))}
-        </ul>
+          ) : (
+            <li key={m.key}>
+              <span className="plegend-mark" data-mark={m.key}></span><span className="plegend-text">{m.label}</span>
+            </li>
+          ),
+        )}
+      </ul>
+
+      {chips.size > 0 ? (
+        <>
+          <h4 className="plegend-head">On a card</h4>
+          <ul className="plegend-list">
+            {(Object.keys(CHIP) as BoxChip['kind'][])
+              .filter((kind) => chips.has(kind))
+              .map((kind) => (
+                <li key={kind} data-chip={kind}>
+                  <span className="pdock" data-chip={kind}>
+                    {CHIP[kind].sample}
+                  </span>
+                  <span className="plegend-text">{CHIP[kind].label}</span>
+                  <span className="plegend-count">{chips.get(kind)}</span>
+                </li>
+              ))}
+          </ul>
+        </>
       ) : null}
     </section>
   )

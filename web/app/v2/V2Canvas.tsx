@@ -33,8 +33,10 @@ import { buildPanel, type SectionId } from './canvas/panel/panelModel';
 import { ArrowDefs } from './canvas/render/ArrowDefs';
 import { Stage } from './canvas/render/Stage';
 import type { CanvasViewportHandle } from './canvas/render/viewport';
-import { viewById } from './canvas/views';
-import type { Detail, Direction } from './canvas/views/types';
+import { useStageScene } from './canvas/useStageScene';
+import { groupOfStep } from './canvas/views/controlTopology';
+import { stageId } from './canvas/views/stageCard';
+import type { Direction } from './canvas/views/types';
 import { Controls } from './flow/Controls';
 import { Legend } from './flow/Legend';
 import { groupsFromDefinition } from './groupsFromGraph';
@@ -83,7 +85,6 @@ export function V2Canvas({
   const canvasRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<CanvasViewportHandle | null>(null);
   const [catalog, setCatalog] = useState<FlowDefinitionCatalog | null>(null);
-  const [detail, setDetail] = useState<Detail>('collapsed');
   const [direction, setDirection] = useState<Direction>('tb');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** Auto-focus selects a Step for the reader; only their own click should fade the rest. */
@@ -190,6 +191,9 @@ export function V2Canvas({
 
   /** The Step the run is actually waiting on, which is what an Admin came to see. */
   const blockingStepType = overlay ? (activeStepTypes(overlay)[0] ?? null) : null;
+  // The stages the reader opened in place, each opened or closed without losing their place.
+  const stages = useStageScene({ flow, groups, direction, run: overlay });
+  const { scene, revealStage } = stages;
 
   // Choosing a run should land on where it stopped, once, without fighting later clicks.
   const revealedFor = useRef('');
@@ -200,12 +204,15 @@ export function V2Canvas({
     const step = flow.steps.find((candidate) => candidate.stepType === blockingStepType);
     if (!step) return;
     revealedFor.current = key;
+    // The stage holding where the run waits opens, so its "now" ring is on a Step.
+    const holding = groupOfStep(groups, step.id);
+    if (holding) revealStage(holding.id);
     // Selection only. The zoom is declarative via focusNodeId, so the pane resize that
     // follows the drawer opening refits to the Step instead of racing an imperative call.
     setSelectedId(focusBlockingStep ? step.id : null);
     setSelectedByReader(false);
     setSelectedGroupId(null);
-  }, [blockingStepType, flow, flowId, focusBlockingStep]);
+  }, [blockingStepType, flow, flowId, focusBlockingStep, groups, revealStage]);
 
   // The host closed its drawer, so nothing is being explained any more.
   const firstDeselect = useRef(deselectKey);
@@ -249,16 +256,28 @@ export function V2Canvas({
     });
   }, [blockingStepType, onBand, overlay, selectedStep]);
 
-  const scene = useMemo(() => {
-    if (!flow) return null;
-    return viewById('control').layout(flow, {
-      detail,
-      direction,
-      selectedId,
-      run: overlay,
-      groups,
-    });
-  }, [detail, direction, flow, groups, overlay, selectedId]);
+  const nowNodeId = useMemo(() => {
+    if (!flow || blockingStepType === null) return null;
+    return flow.steps.find((step) => step.stepType === blockingStepType)?.id ?? null;
+  }, [blockingStepType, flow]);
+
+  const { collapseStage, openStage: openStageInPlace } = stages;
+  const closeStage = useCallback(
+    (groupId: string) => {
+      collapseStage(groupId);
+      setSelectedGroupId(null);
+    },
+    [collapseStage],
+  );
+  // Opening a stage marks its band, so the eye lands where the card was.
+  const openStage = useCallback(
+    (boxId: string) => {
+      openStageInPlace(boxId);
+      setSelectedGroupId(groups.find((group) => stageId(group.id) === boxId)?.id ?? null);
+      setSelectedId(null);
+    },
+    [groups, openStageInPlace],
+  );
 
   const selectedRecord = selectedStep && bundle
     ? recordForExecution(bundle, selectedStep.stepType, selectedExecutionId)
@@ -367,9 +386,10 @@ export function V2Canvas({
 
   if (error) return <div className="v2-empty">{error}</div>;
   if (!catalog) return <div className="v2-empty">Loading Flow definition…</div>;
-  if (!selected || !flow || !scene) {
+  if (!selected || !flow) {
     return <div className="v2-empty">No valid Flow Definition Graph 2.0 file for this Flow type.</div>;
   }
+  if (!scene) return <div className="v2-empty">Drawing the Flow…</div>;
 
   const ownsPanel = showStepPanel && panel !== null;
   const canvasStyle = ownsPanel
@@ -380,16 +400,25 @@ export function V2Canvas({
     <div className="pcanvas" ref={canvasRef} style={canvasStyle}>
       <ArrowDefs />
       <div className="pctlbar">
-        <Controls detail={detail} direction={direction} onDetail={setDetail} onDirection={setDirection} />
+        <Controls
+          stages={stages.hasStages ? stages.state : null}
+          direction={direction}
+          onCollapseAll={stages.collapseAll}
+          onExpandAll={stages.expandAll}
+          onDirection={setDirection}
+        />
       </div>
       {runError ? <p className="v2-error v2-run-error">{runError}</p> : null}
       <Stage
         dimUnrelated={selectedByReader}
         focusNodeId={focusNodeId}
+        nowNodeId={nowNodeId}
         handleRef={viewportRef}
         scene={scene}
-        detail={detail}
         direction={direction}
+        onOpenStage={openStage}
+        onCloseStage={closeStage}
+        cue={stages.cue}
         selectedId={selectedId}
         selectedGroupId={selectedGroupId}
         insetRightPx={ownsPanel ? panelWidth : null}
@@ -434,8 +463,12 @@ export function V2Canvas({
             ) : null}
           </div>
         )}
-        fitKey={`${flowType}|${flowId}|${detail}|${direction}|${selected.file}|${overlay?.executions.length ?? 0}|${ownsPanel ? `panel:${Math.round(panelWidth)}` : 'graph'}`}
+        // Opening or closing a stage keeps the reader's place, so it is not part of what refits.
+        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${overlay?.executions.length ?? 0}|${focusNodeId !== null && scene.boxes.some((box) => box.id === focusNodeId) ? 'focus' : 'whole'}|${ownsPanel ? `panel:${Math.round(panelWidth)}` : 'graph'}`}
       />
+      <p className="sr-only" aria-live="polite">
+        {stages.cue?.message}
+      </p>
       {ownsPanel && panel ? (
         <>
           <V2SplitHandle

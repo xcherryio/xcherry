@@ -7,8 +7,9 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import type { JSX } from 'react'
-import type { Detail, Direction } from '../canvas/views/types'
-import { DETAIL_LABEL, DETAILS, DIRECTION_LABEL, DIRECTIONS } from '../canvas/views/types'
+import type { StageState } from '../canvas/useStageScene'
+import type { Direction } from '../canvas/views/types'
+import { DIRECTION_LABEL, DIRECTIONS } from '../canvas/views/types'
 
 /**
  * The control surface, after the research.
@@ -17,14 +18,14 @@ import { DETAIL_LABEL, DETAILS, DIRECTION_LABEL, DIRECTIONS } from '../canvas/vi
  * six overlay checkboxes and two three-way reveal controls. All of that is gone, and none of it was
  * removed for tidiness:
  *
- *  - Detail is TWO positions and explicit, because nine surveyed products expose level-of-detail as
+ *  - View is TWO positions and explicit, because nine surveyed products expose level-of-detail as
  *    a dedicated control while zoom stays geometric, and Copilot Studio's is literally
- *    `Expand/Collapse`.
+ *    `Expand/Collapse`. It closes or opens every stage, and nothing else.
  *  - The overlays went because no surveyed product draws state or transport as a node, and the
  *    measurements agreed: 27 of 29 channels have one consumer and 10 have no publisher at all.
  *  - The arrow mode went with them — with resources gone as nodes there is one answer left.
  *
- * What remains is how much detail and which direction. Definition-versus-run left with the `Showing`
+ * What remains is which stages are open and which direction. Definition-versus-run left with the `Showing`
  * axis: it is the MODE now, and a mode is not a view control.
  *
  * The FLOW PICKER went too, into its own clearly-marked harness control. It is not a product control at
@@ -33,14 +34,17 @@ import { DETAIL_LABEL, DETAILS, DIRECTION_LABEL, DIRECTIONS } from '../canvas/vi
  * label pretending to be a choice.
  */
 export function Controls({
-  detail,
+  stages,
   direction,
-  onDetail,
+  onCollapseAll,
+  onExpandAll,
   onDirection,
 }: {
-  detail: Detail
+  /** Null for a Flow without stages, which has nothing to open or close. */
+  stages: StageState | null
   direction: Direction
-  onDetail: (d: Detail) => void
+  onCollapseAll: () => void
+  onExpandAll: () => void
   onDirection: (d: Direction) => void
 }): JSX.Element {
   const radio = (
@@ -69,22 +73,34 @@ export function Controls({
 
   return (
     <div className="pctl">
-      <div className="pctl-group">
-        <span className="pctl-label">Detail</span>
-        {radio(
-          'Detail',
-          DETAILS.map((d) => ({
-            id: d,
-            label: DETAIL_LABEL[d],
-            title:
-              d === 'collapsed'
-                ? 'Name, role and status only'
-                : 'Adds what it waits for and where it goes. Zoom is separate and purely geometric.',
-          })),
-          detail,
-          (id) => onDetail(id as Detail),
-        )}
-      </div>
+      {stages === null ? null : (
+        // Each starts the view again, so Collapsed is one click back to the opening view.
+        <div className="pctl-group" role="group" aria-label="View">
+          <span className="pctl-label">View</span>
+          <div className="pctl-row">
+            <button
+              type="button"
+              className="pchip"
+              aria-pressed={stages === 'collapsed'}
+              data-on={stages === 'collapsed' ? 'true' : undefined}
+              title="Close every stage and return to the view the canvas opens on"
+              onClick={onCollapseAll}
+            >
+              Collapsed
+            </button>
+            <button
+              type="button"
+              className="pchip"
+              aria-pressed={stages === 'expanded'}
+              data-on={stages === 'expanded' ? 'true' : undefined}
+              title="Open every stage to show all of its steps"
+              onClick={onExpandAll}
+            >
+              Expanded
+            </button>
+          </div>
+        </div>
+      )}
 
       {/*
         THE `Showing` AXIS IS GONE, and its absence is the point.
@@ -95,8 +111,8 @@ export function Controls({
         doing. The lifecycle control in the header is the only thing that changes which, so there is one
         place to look and no way to end up in a state that has to be explained.
 
-        What survives here is what is genuinely about the DRAWING rather than about the flow: how much detail,
-        and which way it runs.
+        What survives here is what is genuinely about the DRAWING rather than about the flow: which stages
+        are open, and which way it runs.
       */}
       <div className="pctl-group">
         <span className="pctl-label">Direction</span>
