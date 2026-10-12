@@ -418,6 +418,8 @@ function Inner({
     [rf, insetRightPx],
   )
 
+  // After the view opens, a resize with a selection only pans that selection back into view.
+  const keepSelectionInView = useRef<() => boolean>(() => false)
   // Read when the view re-opens; re-opening on every run poll would fight the reader.
   const latest = useRef({ scene, direction, nowNodeId, focusNodeId, insetRightPx })
   useEffect(() => {
@@ -429,6 +431,7 @@ function Inner({
     const el = paneRef.current
     if (el === null) return
     let raf = 0
+    let isOpened = false
     const open = (): void => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
@@ -436,6 +439,8 @@ function Inner({
         const paneW = el.clientWidth - (insetRightPx ?? 0)
         const paneH = el.clientHeight
         if (paneW < 8 || paneH < 8) return
+        if (isOpened && keepSelectionInView.current()) return
+        isOpened = true
         const focused = focus === null || focus === undefined ? null : rf.getNode(focus) !== undefined ? focus : null
         if (focused !== null) {
           void rf.fitView({ nodes: [{ id: focused }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 160 })
@@ -483,8 +488,9 @@ function Inner({
   /** Pans the least that shows a rectangle whole; one larger than the pane shows its start. */
   const panToShow = useCallback(
     (r: { x: number; y: number; w: number; h: number }) => {
-      const el = paneRef.current
-      if (el === null) return
+      // The drawing's own box: the pane also holds the padding above it.
+      const el = paneRef.current?.querySelector<HTMLElement>('.react-flow') ?? paneRef.current
+      if (el === null || el === undefined) return
       const { x, y, zoom } = rf.getViewport()
       const margin = 24
       const shift = (start: number, size: number, room: number): number => {
@@ -531,6 +537,13 @@ function Inner({
     return { key, x, y, w, h }
   }, [dimUnrelated, insetRightPx, scene, selectedId])
   const shownSelection = useRef('')
+  useEffect(() => {
+    keepSelectionInView.current = () => {
+      if (selection === null) return false
+      panToShow(selection)
+      return true
+    }
+  })
   useEffect(() => {
     if (selection === null || selection.key === shownSelection.current) return
     const raf = requestAnimationFrame(() => {
