@@ -29,10 +29,10 @@ func StoredFlowID(tenantID string, applicationFlowID string) string {
 
 // ApplicationFlowID strips the tenant prefix from a stored Flow ID.
 // It returns false when storedFlowID belongs to another tenant, which callers treat as not found.
-// With an empty tenant it returns false for any tenant's stored Flow ID.
+// An empty tenant is single-tenant mode, where Flow IDs are never interpreted and are returned unchanged.
 func ApplicationFlowID(tenantID string, storedFlowID string) (string, bool) {
 	if tenantID == "" {
-		return storedFlowID, !strings.HasPrefix(storedFlowID, storedFlowIDPrefix)
+		return storedFlowID, true
 	}
 	prefix := storedFlowIDPrefix + tenantID + ":"
 	if !strings.HasPrefix(storedFlowID, prefix) {
