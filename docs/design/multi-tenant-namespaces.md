@@ -114,7 +114,11 @@ Tenant mode refuses to start when any of these holds:
 - **Tombstones**: `TenantAdminService.TombstoneTenant` adds the tenant ID to one tombstone
   object in the blob store, `<namespace>/_tenancy/tombstones`, written with a conditional
   PUT. Every replica rereads that one object every 10 seconds, whatever the number of
-  tenants. A tombstoned tenant is `PERMISSION_DENIED` on every call within 10 seconds. Offline JWT validation would otherwise accept a valid one-hour token after the
+  tenants. A tombstoned tenant is `PERMISSION_DENIED` on every call within 10 seconds.
+  The tombstone is removed `tombstoneRetention` (default 2 hours, at least the longest
+  credential lifetime) after its purge reported `done`. After that, nothing of the tenant
+  remains and no credential issued before the tombstone is valid, so the ID may be
+  reused. Offline JWT validation would otherwise accept a valid one-hour token after the
   tenant was deleted, so purge requires a tombstone first.
 
 ### Every RPC and its tenant rule
@@ -329,7 +333,8 @@ Pacing:
   because Temporal Cloud runs one batch job per namespace at a time (same source).
 - Visibility is eventually consistent. `done` is reported only after two tenant queries,
   60 seconds apart, both find nothing.
-- Operators should never reuse tenant IDs. A reused ID would see only what purge missed.
+- A tenant ID can be reused only after its tombstone is removed ([Authentication and
+  principals](#authentication-and-principals)). Until then, its credentials are refused.
 
 ### Compatibility
 
@@ -380,7 +385,8 @@ enabled, plus the SDK integration suites:
 - **Limits**: a tenant over a limit gets `RESOURCE_EXHAUSTED` without affecting another
   tenant.
 - **Tombstone and purge**:
-  - a tombstoned tenant's valid token is refused;
+  - a tombstoned tenant's valid token is refused, and the ID is accepted again only after
+    `tombstoneRetention` following `done`;
   - PurgeTenant removes executions, blobs, Stream keys and rows, is idempotent, keeps its
     rate, and reports done only after both empty queries.
 - **Credentials**: an expired, wrongly signed, audience-mismatched or pattern-mismatched
