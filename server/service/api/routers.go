@@ -25,6 +25,7 @@ import (
 	"github.com/superdurable/dex/service/common/log/tag"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -32,18 +33,24 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// maxTenantHeaderListBytes bounds request metadata in multi-tenant mode, leaving room for an 8 KiB credential.
+const maxTenantHeaderListBytes = 32 << 10
+
 // Server hosts FlowService, InternalService, and grpc.health.
+// In multi-tenant mode InternalService moves to a separate internal gRPC server.
 type Server struct {
-	cfg        *config.ApiConfig
-	grpcServer *grpc.Server
-	healthSrv  *health.Server
-	handler    *handler
-	logger     log.Logger
-	readyCheck func(context.Context) error
+	cfg                *config.ApiConfig
+	grpcServer         *grpc.Server
+	internalGrpcServer *grpc.Server
+	healthSrv          *health.Server
+	handler            *handler
+	logger             log.Logger
+	readyCheck         func(context.Context) error
 }
 
 func NewServer(
 	apiCfg *config.ApiConfig,
+	tenancyCfg *config.TenancyConfig,
 	blobStoreCfg *config.BlobStoreConfig,
 	interpreterCfg *config.Interpreter,
 	client uclient.UnifiedClient,
@@ -54,9 +61,12 @@ func NewServer(
 	readyCheck func(context.Context) error,
 	workerPool *workerclient.WorkerClientPool,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
-) *Server {
+) (*Server, error) {
 	if apiCfg == nil {
 		panic("apiCfg must not be nil")
+	}
+	if tenancyCfg == nil {
+		panic("tenancyCfg must not be nil")
 	}
 	if client == nil {
 		panic("client must not be nil")
@@ -103,28 +113,76 @@ func NewServer(
 	healthSrv.SetServingStatus(dexpb.FlowService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
 	healthSrv.SetServingStatus(dexpb.InternalService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
 
-	unaryInterceptors := append(
-		extraUnaryInterceptors,
-		unaryRecover(logger),
-		unaryLog(logger),
-	)
-	grpcServer := grpc.NewServer(
+	serverOptions := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(maxMsg),
 		grpc.MaxSendMsgSize(maxMsg),
-		grpc.ChainUnaryInterceptor(unaryInterceptors...),
-	)
-	dexpb.RegisterFlowServiceServer(grpcServer, handler)
-	dexpb.RegisterInternalServiceServer(grpcServer, handler)
-	healthpb.RegisterHealthServer(grpcServer, healthSrv)
-
-	return &Server{
+	}
+	server := &Server{
 		cfg:        apiCfg,
-		grpcServer: grpcServer,
 		healthSrv:  healthSrv,
 		handler:    handler,
 		logger:     logger,
 		readyCheck: readyCheck,
 	}
+	if !tenancyCfg.IsMultiTenant() {
+		server.grpcServer = grpc.NewServer(append(
+			serverOptions,
+			grpc.ChainUnaryInterceptor(unaryInterceptorChain(nil, extraUnaryInterceptors, logger)...),
+		)...)
+		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
+		dexpb.RegisterInternalServiceServer(server.grpcServer, handler)
+		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
+		return server, nil
+	}
+
+	authenticator, err := tenancy.NewAuthenticator(tenancyCfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	internalToken, err := tenancy.NewInternalTokenFile(tenancyCfg.Internal.TokenFile, logger)
+	if err != nil {
+		return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
+	}
+	// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
+	serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxTenantHeaderListBytes))
+	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator)
+	server.grpcServer = grpc.NewServer(append(
+		serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
+			[]grpc.UnaryServerInterceptor{publicInterceptors.Unary},
+			extraUnaryInterceptors,
+			logger,
+		)...),
+		grpc.ChainStreamInterceptor(publicInterceptors.Stream),
+	)...)
+	dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
+	healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
+
+	server.internalGrpcServer = grpc.NewServer(append(
+		serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
+			[]grpc.UnaryServerInterceptor{tenancy.NewInternalServiceInterceptor(internalToken).Unary},
+			extraUnaryInterceptors,
+			logger,
+		)...),
+	)...)
+	dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
+	healthpb.RegisterHealthServer(server.internalGrpcServer, healthSrv)
+	return server, nil
+}
+
+// HasInternalListener reports whether InternalService must be served by ServeInternal.
+func (s *Server) HasInternalListener() bool {
+	return s.internalGrpcServer != nil
+}
+
+// ServeInternal hosts InternalService on listener. Only multi-tenant mode has an internal server.
+func (s *Server) ServeInternal(listener net.Listener) error {
+	if s.internalGrpcServer == nil {
+		panic("ServeInternal requires multi-tenant mode")
+	}
+	s.logger.Info("InternalService gRPC listening", tag.Address(listener.Addr().String()))
+	return s.internalGrpcServer.Serve(listener)
 }
 
 // Run listens on the configured port.
@@ -164,12 +222,18 @@ func (s *Server) StopServing(timeout time.Duration) {
 	done := make(chan struct{})
 	go func() {
 		s.grpcServer.GracefulStop()
+		if s.internalGrpcServer != nil {
+			s.internalGrpcServer.GracefulStop()
+		}
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(timeout):
 		s.grpcServer.Stop()
+		if s.internalGrpcServer != nil {
+			s.internalGrpcServer.Stop()
+		}
 	}
 }
 
@@ -185,6 +249,18 @@ func (s *Server) setServing(serving bool) {
 	s.healthSrv.SetServingStatus("", st)
 	s.healthSrv.SetServingStatus(dexpb.FlowService_ServiceDesc.ServiceName, st)
 	s.healthSrv.SetServingStatus(dexpb.InternalService_ServiceDesc.ServiceName, st)
+}
+
+// unaryInterceptorChain returns a new chain: recovery outermost, then authorization, extra interceptors and logging.
+func unaryInterceptorChain(
+	authorization []grpc.UnaryServerInterceptor,
+	extra []grpc.UnaryServerInterceptor,
+	logger log.Logger,
+) []grpc.UnaryServerInterceptor {
+	chain := []grpc.UnaryServerInterceptor{unaryRecover(logger)}
+	chain = append(chain, authorization...)
+	chain = append(chain, extra...)
+	return append(chain, unaryLog(logger))
 }
 
 func unaryRecover(logger log.Logger) grpc.UnaryServerInterceptor {

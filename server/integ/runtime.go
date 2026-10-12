@@ -44,6 +44,7 @@ import (
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -58,6 +59,10 @@ type integRuntime struct {
 	defaultFlowConfig *dexpb.FlowConfig
 
 	internalDumpCapture *internalDumpHeaderCapture
+
+	// PublicAddress serves FlowService; InternalAddress serves InternalService only in multi-tenant mode.
+	PublicAddress   string
+	InternalAddress string
 }
 
 type internalDumpHeaderCapture struct {
@@ -251,6 +256,14 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 
 	cfg := createTestConfig(t, testConfig)
 	cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = listener.Addr().String()
+	var internalListener net.Listener
+	if cfg.Tenancy.IsMultiTenant() {
+		internalListener, err = net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		cfg.Tenancy.Internal.Listen = internalListener.Addr().String()
+		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = ""
+		require.NoError(t, cfg.ValidateTenancy())
+	}
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
 	require.NoError(t, err)
 	t.Cleanup(workerPool.Close)
@@ -373,7 +386,10 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		context.Background(),
 		cfg.Interpreter.EffectiveAttributeIndexSyncTimeout(),
 	)
-	err = indexsync.New(&cfg.Interpreter, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
+	// The operator registers indexes outside Dex in multi-tenant mode; the test plays that role.
+	operatorInterpreterConfig := cfg.Interpreter
+	operatorInterpreterConfig.AttributeIndexesManagedExternally = false
+	err = indexsync.New(&operatorInterpreterConfig, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
 	cancelSync()
 	require.NoError(t, err)
 	startInterpreter(t, worker)
@@ -394,6 +410,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	startApiServer(
 		t,
 		listener,
+		internalListener,
 		&cfg,
 		unifiedClient,
 		logger,
@@ -405,17 +422,18 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		newInternalDumpHeaderCaptureInterceptor(internalDumpCapture),
 	)
 
-	connection, err := newDexClientConnection(
-		listener.Addr().String(),
-		cfg.Api.EffectiveGrpcMaxMessageBytes(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, connection.Close())
-	})
+	runtime.PublicAddress = listener.Addr().String()
+	if internalListener != nil {
+		runtime.InternalAddress = internalListener.Addr().String()
+	}
 
 	globalBlobStore = store
-	runtime.FlowClient = dexpb.NewFlowServiceClient(connection)
+	runtime.FlowClient = dexpb.NewFlowServiceClient(newDexClientConnectionWithCredential(
+		t,
+		runtime.PublicAddress,
+		testConfig.Credential,
+		cfg.Api.EffectiveGrpcMaxMessageBytes(),
+	))
 	runtime.UnifiedClient = unifiedClient
 	runtime.BlobStore = store
 	return runtime
@@ -460,9 +478,52 @@ func startInterpreter(t *testing.T, worker interpreterWorker) {
 	require.NoError(t, worker.Start())
 }
 
+// newFlowClientWithCredential dials FlowService; a non-empty credential is sent as a bearer token on every call.
+func newFlowClientWithCredential(t *testing.T, address string, credential string) dexpb.FlowServiceClient {
+	t.Helper()
+	connection := newDexClientConnectionWithCredential(t, address, credential, config.DefaultGrpcMaxMessageBytes)
+	return dexpb.NewFlowServiceClient(connection)
+}
+
+func newDexClientConnectionWithCredential(
+	t *testing.T,
+	address string,
+	credential string,
+	maxMessageBytes int,
+) *grpc.ClientConn {
+	t.Helper()
+	options := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMessageBytes),
+			grpc.MaxCallSendMsgSize(maxMessageBytes),
+		),
+	}
+	if credential != "" {
+		options = append(options, grpc.WithPerRPCCredentials(bearerCredential(credential)))
+	}
+	connection, err := grpc.NewClient(address, options...)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, connection.Close())
+	})
+	return connection
+}
+
+type bearerCredential string
+
+func (credential bearerCredential) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + string(credential)}, nil
+}
+
+func (credential bearerCredential) RequireTransportSecurity() bool {
+	return false
+}
+
 func startApiServer(
 	t *testing.T,
 	listener net.Listener,
+	internalListener net.Listener,
 	cfg *config.Config,
 	unifiedClient uclient.UnifiedClient,
 	logger log.Logger,
@@ -475,8 +536,9 @@ func startApiServer(
 ) {
 	t.Helper()
 
-	server := api.NewServer(
+	server, err := api.NewServer(
 		&cfg.Api,
+		&cfg.Tenancy,
 		&cfg.BlobStore,
 		&cfg.Interpreter,
 		unifiedClient,
@@ -488,18 +550,28 @@ func startApiServer(
 		workerPool,
 		extraUnaryInterceptors...,
 	)
-	serveError := make(chan error, 1)
+	require.NoError(t, err)
+	listeners := []net.Listener{listener}
+	serveError := make(chan error, 2)
 	go func() {
 		serveError <- server.Serve(listener)
 	}()
+	if internalListener != nil {
+		listeners = append(listeners, internalListener)
+		go func() {
+			serveError <- server.ServeInternal(internalListener)
+		}()
+	}
 	t.Cleanup(func() {
 		closeInterpreter()
 		server.GracefulStop(2 * time.Second)
-		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			require.NoError(t, err)
-		}
-		if err := <-serveError; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-			require.NoError(t, err)
+		for _, serverListener := range listeners {
+			if err := serverListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				require.NoError(t, err)
+			}
+			if err := <-serveError; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				require.NoError(t, err)
+			}
 		}
 	})
 }
