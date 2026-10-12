@@ -89,6 +89,25 @@ func TestTenantSearchTemporal(t *testing.T) {
 			`CustomKeywordField = "`+marker+`" OR WorkflowId IN ("`+parentFlowID+`")`, parentFlowID, sharedFlowID)
 	})
 
+	t.Run("STARTS_WITH maps a WorkflowId prefix to the stored form like equality", func(t *testing.T) {
+		requireEventuallyFound(t, pair.alpha, `WorkflowId STARTS_WITH "search-parent-`+marker+`"`, parentFlowID)
+		requireEventuallyFound(t, pair.alpha, `WorkflowId STARTS_WITH "search-`+marker+`"`, sharedFlowID)
+		requireEventuallyFound(t, pair.beta, `WorkflowId STARTS_WITH "search-`+marker+`"`, sharedFlowID)
+		requireEventuallyFound(t, pair.beta, `WorkflowId STARTS_WITH "search-parent-`+marker+`"`)
+	})
+
+	t.Run("backtick-quoted attribute names are normalized before the reserved-name checks", func(t *testing.T) {
+		requireEventuallyFound(t, pair.alpha, "`WorkflowId` = \""+sharedFlowID+"\"", sharedFlowID)
+		for _, query := range []string{
+			"`DexTenantID` = \"beta\"",
+			"`dextenantid` = \"beta\"",
+			"`CustomKeywordField` = \"x\" OR `DexTenantID` = \"beta\"",
+		} {
+			_, err := search(pair.alpha, query)
+			require.Equal(t, codes.InvalidArgument, status.Code(err), "query %q: %v", query, err)
+		}
+	})
+
 	t.Run("SubFlow parents are mapped in queries and out of results", func(t *testing.T) {
 		query := service.SearchAttributeDexParentFlowID + ` = "` + parentFlowID + `"`
 		requireEventuallyFound(t, pair.alpha, query, childFlowID)
