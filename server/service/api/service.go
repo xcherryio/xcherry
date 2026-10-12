@@ -160,8 +160,14 @@ func (s *serviceImpl) StartFlow(
 		return nil, makeInvalidRequestError(err.Error())
 	}
 
+	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), attributes); err != nil {
+		return nil, makeInvalidRequestError(err.Error())
+	}
 	searchAttributes := index.ConvertAttributeWritesToSearchAttributeUpsertMap(attributes)
 	searchAttributes[service.SearchAttributeDexWorkflowType] = req.GetFlowType()
+	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
+		searchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
+	}
 
 	tenantID := tenancy.TenantID(ctx)
 	applicationFlowID, _ := tenancy.ApplicationFlowID(tenantID, req.GetFlowId())
@@ -1139,6 +1145,9 @@ func (s *serviceImpl) SetAttributes(
 	if err := validateAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
+	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), req.GetAttributes()); err != nil {
+		return nil, makeInvalidRequestError(err.Error())
+	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
@@ -1300,8 +1309,18 @@ func (s *serviceImpl) SearchFlows(
 		pageSize = req.GetPageSize()
 	}
 	query := req.GetQuery()
-	if !req.GetIncludeContinuedAsNew() {
-		const currentRuns = `ExecutionStatus != "ContinuedAsNew"`
+	const currentRuns = `ExecutionStatus != "ContinuedAsNew"`
+	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
+		statusClause := currentRuns
+		if req.GetIncludeContinuedAsNew() {
+			statusClause = ""
+		}
+		tenantQuery, err := tenancy.TenantVisibilityQuery(tenantID, query, statusClause)
+		if err != nil {
+			return nil, makeInvalidRequestError(err.Error())
+		}
+		query = tenantQuery
+	} else if !req.GetIncludeContinuedAsNew() {
 		if strings.TrimSpace(query) == "" {
 			query = currentRuns
 		} else {
