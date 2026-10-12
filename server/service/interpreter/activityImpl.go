@@ -190,6 +190,9 @@ func (a *Activities) IWaitForM(
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
+	if err := validateTenantWaitForAttributeWrites(input.GetTenantId(), resp); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
 	if err := a.offloadSubFlowStartInputs(
 		ctx,
 		input.GetTenantId(),
@@ -375,6 +378,9 @@ func (a *Activities) IExecuteM(
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := tenancy.ValidateTenantAttributeWrites(input.GetTenantId(), resp.GetUpsertAttributes()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -879,7 +885,7 @@ func (a *Activities) StartSubFlow(
 	}
 
 	workflowOptions := buildSubFlowStartOptions(
-		condition, flowConfig, parentFlowID, subFlowID, requestID,
+		input.GetTenantId(), condition, flowConfig, parentFlowID, subFlowID, requestID,
 	)
 	workflowInput := &dexpb.InterpreterWorkflowInput{
 		FlowType:                     condition.GetSubFlowType(),
@@ -1056,6 +1062,7 @@ func buildSubFlowConfig(parent, override *dexpb.FlowConfig) (*dexpb.FlowConfig, 
 }
 
 func buildSubFlowStartOptions(
+	tenantID string,
 	condition *dexpb.SubFlowCondition,
 	flowConfig *dexpb.FlowConfig,
 	parentFlowID string,
@@ -1075,6 +1082,9 @@ func buildSubFlowStartOptions(
 	}
 	workflowOptions.SearchAttributes[service.SearchAttributeDexWorkflowType] = condition.GetSubFlowType()
 	workflowOptions.SearchAttributes[service.SearchAttributeDexParentFlowID] = parentFlowID
+	if tenantID != "" {
+		workflowOptions.SearchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
+	}
 	if options.GetFlowStartDelaySeconds() > 0 {
 		workflowOptions.WorkflowStartDelay = ptr.Any(time.Duration(options.GetFlowStartDelaySeconds()) * time.Second)
 	}
@@ -1356,6 +1366,19 @@ func validateWorkerWaitForResponse(
 		return err
 	}
 	return validateWorkerChannelDeletions(resp.GetDeleteFromChannel())
+}
+
+// validateTenantWaitForAttributeWrites refuses tenant index writes in upserts and in SubFlow start Attributes.
+func validateTenantWaitForAttributeWrites(tenantID string, resp *dexpb.InvokeWaitForMethodResponse) error {
+	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
+	for _, condition := range resp.GetWaitingCondition().GetSubFlowConditions() {
+		if err := tenancy.ValidateTenantAttributeWrites(tenantID, condition.GetOptions().GetAttributes()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateExecuteResponse(

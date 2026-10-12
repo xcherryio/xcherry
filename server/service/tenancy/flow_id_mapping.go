@@ -126,6 +126,14 @@ func applicationSearchEntries(
 
 // rewriteFlowIDs applies rewrite to every non-empty Flow ID field and reports whether every rewrite succeeded.
 func rewriteFlowIDs(message protoreflect.Message, rewrite func(string) (string, bool)) bool {
+	if kv, isKV := message.Interface().(*dexpb.KV); isKV && kv.GetKey() == parentFlowIDAttribute &&
+		kv.GetValue().GetStringValue() != "" {
+		rewritten, ok := rewrite(kv.GetValue().GetStringValue())
+		if ok {
+			kv.Value = &dexpb.Value{Kind: &dexpb.Value_StringValue{StringValue: rewritten}}
+		}
+		return ok
+	}
 	isRewritten := true
 	rewrittenFields := map[protoreflect.FieldDescriptor]string{}
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {

@@ -32,6 +32,7 @@ import (
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
+	"github.com/superdurable/dex/service/tenancy"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -67,6 +68,7 @@ type Runtime struct {
 	metricsCloser     io.Closer
 	serveError        chan error
 	indexSynchronizer *indexsync.Synchronizer
+	unifiedClient     uclient.UnifiedClient
 	streamStore       *streamstore.Store
 	shutdownOnce      sync.Once
 }
@@ -156,6 +158,7 @@ func (r *Runtime) createServices() error {
 		return err
 	}
 	r.blobStore = store
+	r.unifiedClient = client
 	r.indexSynchronizer = indexsync.New(&r.cfg.Interpreter, client, r.logger)
 	if r.options.Services.API {
 		r.apiServer, err = api.NewServer(
@@ -179,13 +182,23 @@ func (r *Runtime) createServices() error {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
-	if err := r.indexSynchronizer.Sync(ctx, map[string]dexpb.IndexType{
+	dexIndexes := map[string]dexpb.IndexType{
 		service.SearchAttributeDexWorkflowType: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeDexParentFlowID: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeActiveStepTypes: dexpb.IndexType_INDEX_TYPE_KEYWORD_ARRAY,
-	}); err != nil {
+	}
+	if r.cfg.Tenancy.IsMultiTenant() {
+		dexIndexes[tenancy.SearchAttributeDexTenantID] = dexpb.IndexType_INDEX_TYPE_KEYWORD
+	}
+	if err := r.indexSynchronizer.Sync(ctx, dexIndexes); err != nil {
 		r.shutdown()
 		return fmt.Errorf("sync Dex attribute indexes: %w", err)
+	}
+	if r.cfg.Tenancy.IsMultiTenant() {
+		if err := tenancy.VerifyNamespaceHasOnlyTenantFlows(ctx, r.unifiedClient); err != nil {
+			r.shutdown()
+			return err
+		}
 	}
 	if r.worker != nil {
 		if err := r.worker.Start(); err != nil {

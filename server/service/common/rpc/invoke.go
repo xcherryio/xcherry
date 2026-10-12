@@ -141,6 +141,9 @@ func InvokeWorkerRpc(
 	); err != nil {
 		return nil, err
 	}
+	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
+		return nil, err
+	}
 	service.SetFromStepExecutionIDForStepDecision(
 		resp.GetStepDecision(),
 		service.GetFromStepExecutionIdForRPC(req.GetRpcName()),
