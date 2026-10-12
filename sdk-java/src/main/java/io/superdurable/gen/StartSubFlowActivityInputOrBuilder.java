@@ -59,4 +59,24 @@ public interface StartSubFlowActivityInputOrBuilder extends
    */
   com.google.protobuf.ByteString
       getParentStepExecutionIdBytes();
+
+  /**
+   * <pre>
+   * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 4;</code>
+   * @return The tenantId.
+   */
+  java.lang.String getTenantId();
+  /**
+   * <pre>
+   * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 4;</code>
+   * @return The bytes for tenantId.
+   */
+  com.google.protobuf.ByteString
+      getTenantIdBytes();
 }

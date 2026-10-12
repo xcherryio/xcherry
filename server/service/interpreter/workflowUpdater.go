@@ -218,8 +218,9 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 		ctx,
 		u.activities.IWRPC,
 		&dexpb.InvokeWorkerRPCActivityInput{
-			RpcPrep: rpcPrep,
-			Request: input,
+			RpcPrep:  rpcPrep,
+			Request:  input,
+			TenantId: u.basicInfo.TenantID,
 		},
 	)
 	u.persistenceManager.UnlockKeys(keysToLock)

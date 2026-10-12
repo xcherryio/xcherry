@@ -64,6 +64,7 @@ func (i *Interpreter) StartEngineFlow(
 	basicInfo := service.BasicInfo{
 		FlowType:            input.GetFlowType(),
 		RunStartedTimestamp: runStartedTimestamp,
+		TenantID:            input.GetTenantId(),
 	}
 	flowTimeout := NewFlowTimeout(input)
 	subFlowParentFlowID, parentFlowErr := provider.GetSearchAttributeKeyword(
@@ -193,6 +194,7 @@ func (i *Interpreter) StartEngineFlow(
 	} // end of NOT continueAsNew
 	subFlowTracker := NewSubFlowTracker(
 		provider.GetWorkflowInfo(ctx).WorkflowExecution.ID,
+		input.GetTenantId(),
 		resumeInfos,
 	)
 	stepExecutionRegistry := NewStepExecutionRegistry(
@@ -920,6 +922,7 @@ func (i *Interpreter) processStepExecution(
 
 		activityInput := &dexpb.InvokeWaitForMethodActivityInput{
 			WorkerTarget: flowConfiger.GetWorkerTarget(),
+			TenantId:     basicInfo.TenantID,
 			Request: &dexpb.InvokeWaitForMethodRequest{
 				Context:      executionContext,
 				FlowType:     basicInfo.FlowType,
@@ -985,6 +988,7 @@ func (i *Interpreter) processStepExecution(
 				i.activities,
 				subFlowTracker,
 				stepExeId,
+				basicInfo.TenantID,
 				flowConfiger.Get(),
 				returnedWaitingCondition,
 				&i.sharedConfig.Interpreter.InterpreterActivityConfig,
@@ -1254,6 +1258,7 @@ func (i *Interpreter) invokeExecuteMethod(
 	continueAsNewer.RemoveStepExecutionToResume(stepExeId)
 	activityInput := &dexpb.InvokeExecuteMethodActivityInput{
 		WorkerTarget: flowConfiger.GetWorkerTarget(),
+		TenantId:     basicInfo.TenantID,
 		Request: &dexpb.InvokeExecuteMethodRequest{
 			Context:          executionContext,
 			FlowType:         basicInfo.FlowType,

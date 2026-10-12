@@ -39,4 +39,24 @@ public interface InvokeWaitForMethodActivityInputOrBuilder extends
    * <code>.dex.InvokeWaitForMethodRequest request = 2;</code>
    */
   io.superdurable.gen.InvokeWaitForMethodRequestOrBuilder getRequestOrBuilder();
+
+  /**
+   * <pre>
+   * Tenant of the dispatching Flow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 3;</code>
+   * @return The tenantId.
+   */
+  java.lang.String getTenantId();
+  /**
+   * <pre>
+   * Tenant of the dispatching Flow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 3;</code>
+   * @return The bytes for tenantId.
+   */
+  com.google.protobuf.ByteString
+      getTenantIdBytes();
 }

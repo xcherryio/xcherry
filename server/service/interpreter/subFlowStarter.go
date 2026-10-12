@@ -21,6 +21,7 @@ type SubFlowStarter struct {
 	activities       *Activities
 	tracker          *SubFlowTracker
 	stepExecutionID  string
+	tenantID         string
 	parentFlowConfig *dexpb.FlowConfig
 	condition        *dexpb.WaitingCondition
 	activityConfig   *config.InterpreterActivityConfig
@@ -33,6 +34,7 @@ func NewSubFlowStarter(
 	activities *Activities,
 	tracker *SubFlowTracker,
 	stepExecutionID string,
+	tenantID string,
 	parentFlowConfig *dexpb.FlowConfig,
 	condition *dexpb.WaitingCondition,
 	activityConfig *config.InterpreterActivityConfig,
@@ -45,6 +47,7 @@ func NewSubFlowStarter(
 		activities:       activities,
 		tracker:          tracker,
 		stepExecutionID:  stepExecutionID,
+		tenantID:         tenantID,
 		parentFlowConfig: parentFlowConfig,
 		condition:        condition,
 		activityConfig:   activityConfig,
@@ -75,6 +78,7 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 		Condition:             condition,
 		ParentFlowConfig:      s.parentFlowConfig,
 		ParentStepExecutionId: s.stepExecutionID,
+		TenantId:              s.tenantID,
 	}
 	err := s.provider.ExecuteLocalActivity(&output, ctx, s.activities.StartSubFlow, startInput)
 	if err != nil {
