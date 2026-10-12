@@ -29,7 +29,7 @@ import type { BoxChip, LinkFamily, Scene, Tile } from '../canvas/views/types'
 const TILE_MEANING: [string, string][] = [
   ['person', 'waits for a person'],
   ['door', 'waits for a message from outside'],
-  ['wait', 'waits on something the analyzer could not name'],
+  ['wait', 'waits on something the analyser could not name'],
   ['clock', 'waits for time'],
   ['child', 'waits for child flows'],
   ['spark', 'asks an AI model'],

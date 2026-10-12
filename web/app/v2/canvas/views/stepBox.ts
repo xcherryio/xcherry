@@ -55,25 +55,35 @@ const APPS: Record<string, { name: string; monogram: string }> = {
   linkedin: { name: 'LinkedIn', monogram: 'LI' },
 }
 
-/** Connectors that call a model provider, so their Steps read as AI model work. */
-const MODEL_CONNECTORS: ReadonlySet<string> = new Set(['llm', 'openai'])
+/** The `llm` connector reaches any model provider, so its Steps read as AI model work. */
+const MODEL_CONNECTORS: ReadonlySet<string> = new Set(['llm'])
 
-/** An identifier in sentence-case words, acronyms kept: `RecordAIFailure` reads "Record AI failure". */
-export function inWords(identifier: string): string {
-  const words = identifier
+/** An identifier split into words, acronyms kept; empty when it has no words. */
+function words(identifier: string): string {
+  return identifier
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .split(/[\s_-]+/)
     .filter(Boolean)
     .map((word, index) => (index === 0 || /^[A-Z0-9]{2,}$/.test(word) ? word : word.toLowerCase()))
     .join(' ')
-  return words === '' ? identifier : words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** A Step type as people say it: `RecordAIFailure` reads "Record AI failure". */
+export function inWords(identifier: string): string {
+  const said = words(identifier)
+  return said === '' ? identifier : said.charAt(0).toUpperCase() + said.slice(1)
+}
+
+/** A Flow type or connector id for people: `TextSummaryFlow` reads "Text summary". */
+function processName(flowType: string): string {
+  return words(flowType.replace(/Flow$/, '')) || flowType
 }
 
 function appOf(connectorId: string): { name: string; monogram: string } {
   const known = APPS[connectorId]
   if (known) return known
-  const name = inWords(connectorId)
+  const name = processName(connectorId)
   return {
     name,
     monogram: name
@@ -194,7 +204,7 @@ function chipsOf(flow: PocFlow, step: StepModel, jumps: DockedJump[], arriving: 
     if (subflow.startedByStepId !== step.id) continue
     chips.push({
       kind: 'child',
-      text: `↳ ${inWords(subflow.flowType.replace(/Flow$/, ''))}`,
+      text: `↳ ${processName(subflow.flowType)}`,
       title: `Starts ${subflow.flowType}`,
     })
   }

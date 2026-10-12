@@ -265,13 +265,13 @@ function coverageNotes(flow: PocFlow, isStaged: boolean, stages: number, jumps: 
   const isAnswered = flow.entries.some((entry) => entry.opensGates.length > 0)
   if (gates > 0 && !isAnswered && flow.entries.some((entry) => entry.action !== undefined)) {
     notes.push(
-      `The definition does not say which Actions answer the ${gates} waiting step${gates === 1 ? '' : 's'}: their calls publish through helper functions the analyzer does not follow.`,
+      `The definition does not say which Actions answer the ${gates} waiting step${gates === 1 ? '' : 's'}: their calls publish through helper functions the analyser does not follow.`,
     )
   }
   const unresolved = flow.steps.filter((step) => step.actor === 'unknown').length
   if (unresolved > 0) {
     notes.push(
-      `${unresolved} step${unresolved === 1 ? ' waits' : 's wait'} on something the analyzer could not name; any of them may need a person.`,
+      `${unresolved} step${unresolved === 1 ? ' waits' : 's wait'} on something the analyser could not name; any of them may need a person.`,
     )
   }
   if (flow.dropped.length > 0) notes.push(`${flow.dropped.length} wire elements not modelled.`)

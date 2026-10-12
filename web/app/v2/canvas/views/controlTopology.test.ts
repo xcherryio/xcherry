@@ -74,13 +74,13 @@ describe('control topology stages', () => {
     }
   });
 
-  it('draws the OpenAI Connector Step as AI model work', async () => {
+  it("draws the OpenAI Connector Step with its app's initials and operation", async () => {
     const { flow, groups } = refund();
     const scene = await layout(flow, groups, 'tb', new Set(groups.map((group) => group.id)));
     const connector = scene.boxes.find((box) => box.id === 'step:GenerateCustomerMessageStep');
 
-    expect(connector?.tile).toEqual({ glyph: 'spark', tone: 'accent' });
-    expect(connector?.subtitle).toBe('AI model · create response');
+    expect(connector?.tile).toEqual({ monogram: 'OP', tone: 'app' });
+    expect(connector?.subtitle).toBe('openai · create response');
   });
 });
 
