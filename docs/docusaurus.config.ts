@@ -98,7 +98,19 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/superdurable/dex/tree/main/docs/',
         },
-        blog: false,
+        blog: {
+          path: 'blog',
+          routeBasePath: 'blog',
+          blogTitle: 'Dex blog',
+          blogDescription: 'Build notes, process engineering and lessons from running durable processes with Dex.',
+          blogSidebarTitle: 'Recent posts',
+          blogSidebarCount: 10,
+          showReadingTime: true,
+          onInlineAuthors: 'throw',
+          onUntruncatedBlogPosts: 'throw',
+          // Feed links are rel="alternate" without hreflang, which the site audit reads as a language.
+          feedOptions: {type: null},
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -172,6 +184,11 @@ const config: Config = {
           label: 'GitHub',
           position: 'left',
           target: '_blank',
+        },
+        {
+          to: '/blog',
+          label: 'Blog',
+          position: 'left',
         },
         {
           href: 'https://calendar.google.com/appointments/schedules/AcZssZ0XTgrR4TGKOsS-zcB7tu_xqIaYaM3MQGXraOJccpyUe9LK0Z_FF7ImVSw4g_4UGGfx3ykq81mw',

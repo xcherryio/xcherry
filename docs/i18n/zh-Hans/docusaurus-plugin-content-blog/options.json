@@ -1,0 +1,14 @@
+{
+  "title": {
+    "message": "Dex 博客",
+    "description": "The title for the blog used in SEO"
+  },
+  "description": {
+    "message": "构建笔记、流程工程，以及用 Dex 运行持久流程的经验。",
+    "description": "The description for the blog used in SEO"
+  },
+  "sidebar.title": {
+    "message": "最新文章",
+    "description": "The label for the left sidebar"
+  }
+}
