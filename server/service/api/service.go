@@ -1395,7 +1395,7 @@ func (s *serviceImpl) GetHistoryEvents(
 		NextPageToken:        req.GetNextPageToken(),
 	})
 	if err != nil {
-		return nil, s.handleError(err)
+		return nil, s.handleHistoryReadError(ctx, req.GetFlowId(), req.GetRunId(), err)
 	}
 	if err := s.stepInputPopulator.Populate(
 		ctx,
@@ -1912,6 +1912,19 @@ func waitForCANRetry(
 	case <-timer.C:
 		return nil
 	}
+}
+
+// handleHistoryReadError reports a missing run as NotFound, because some backends answer a history read for an
+// unknown run with an internal error.
+func (s *serviceImpl) handleHistoryReadError(ctx context.Context, flowID string, runID string, err error) error {
+	if s.client.IsNotFoundError(err) {
+		return s.handleError(err)
+	}
+	_, describeErr := s.client.DescribeWorkflowExecution(ctx, flowID, runID, nil)
+	if s.client.IsNotFoundError(describeErr) {
+		return s.handleError(describeErr)
+	}
+	return s.handleError(err)
 }
 
 func (s *serviceImpl) handleError(err error) error {
