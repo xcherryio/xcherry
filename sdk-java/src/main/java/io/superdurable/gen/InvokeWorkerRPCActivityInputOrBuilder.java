@@ -39,4 +39,24 @@ public interface InvokeWorkerRPCActivityInputOrBuilder extends
    * <code>.dex.InvokeRPCRequest request = 2;</code>
    */
   io.superdurable.gen.InvokeRPCRequestOrBuilder getRequestOrBuilder();
+
+  /**
+   * <pre>
+   * Tenant of the Flow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 3;</code>
+   * @return The tenantId.
+   */
+  java.lang.String getTenantId();
+  /**
+   * <pre>
+   * Tenant of the Flow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 3;</code>
+   * @return The bytes for tenantId.
+   */
+  com.google.protobuf.ByteString
+      getTenantIdBytes();
 }

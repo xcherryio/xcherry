@@ -38,6 +38,7 @@ import (
 	"github.com/superdurable/dex/service/common/workerclient"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
+	"github.com/superdurable/dex/service/tenancy"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -159,7 +160,14 @@ func (a *Activities) IWaitForM(
 	}
 	defer release()
 
+	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
+	if err != nil {
+		return nil, err
+	}
+	storedContext := req.Context
+	req.Context = dispatchContext
 	stream, err := client.InvokeWaitForMethod(callCtx, req)
+	req.Context = storedContext
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
@@ -182,11 +190,18 @@ func (a *Activities) IWaitForM(
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
+	if err := validateTenantWaitForAttributeWrites(input.GetTenantId(), resp); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
 	if err := a.offloadSubFlowStartInputs(
 		ctx,
+		input.GetTenantId(),
 		req.GetContext().GetStepExecutionId(),
 		resp.GetWaitingCondition().GetSubFlowConditions(),
 	); err != nil {
+		if errors.Is(err, tenancy.ErrStoredFlowIDTooLong) {
+			return nil, a.newInvalidSubFlowIDError(err)
+		}
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -234,12 +249,13 @@ func (a *Activities) IWaitForM(
 
 func (a *Activities) offloadSubFlowStartInputs(
 	ctx context.Context,
+	tenantID string,
 	stepExecutionID string,
 	conditions []*dexpb.SubFlowCondition,
 ) error {
 	for index, condition := range conditions {
 		parentFlowID, subFlowID, requestID, err := a.subFlowStartIdentity(
-			ctx, stepExecutionID, int32(index),
+			ctx, tenantID, stepExecutionID, int32(index),
 		)
 		if err != nil {
 			return err
@@ -337,7 +353,14 @@ func (a *Activities) IExecuteM(
 	}
 	defer release()
 
+	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
+	if err != nil {
+		return nil, err
+	}
+	storedContext := req.Context
+	req.Context = dispatchContext
 	stream, err := client.InvokeExecuteMethod(callCtx, req)
+	req.Context = storedContext
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
@@ -355,6 +378,9 @@ func (a *Activities) IExecuteM(
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := tenancy.ValidateTenantAttributeWrites(input.GetTenantId(), resp.GetUpsertAttributes()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -778,6 +804,7 @@ func (a *Activities) IWRPC(
 		input.GetRequest().GetRequestId(),
 		&a.cfg.BlobStore,
 		true,
+		input.GetTenantId(),
 	)
 	if err != nil {
 		var oversizedRequest *rpc.WorkerRequestTooLargeError
@@ -815,8 +842,11 @@ func (a *Activities) StartSubFlow(
 		return nil, fmt.Errorf("SubFlow start requires a condition")
 	}
 	parentFlowID, subFlowID, requestID, err := a.subFlowStartIdentity(
-		ctx, input.GetParentStepExecutionId(), condition.GetSubFlowIndex(),
+		ctx, input.GetTenantId(), input.GetParentStepExecutionId(), condition.GetSubFlowIndex(),
 	)
+	if errors.Is(err, tenancy.ErrStoredFlowIDTooLong) {
+		return nil, a.newInvalidSubFlowIDError(err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -855,7 +885,7 @@ func (a *Activities) StartSubFlow(
 	}
 
 	workflowOptions := buildSubFlowStartOptions(
-		condition, flowConfig, parentFlowID, subFlowID, requestID,
+		input.GetTenantId(), condition, flowConfig, parentFlowID, subFlowID, requestID,
 	)
 	workflowInput := &dexpb.InterpreterWorkflowInput{
 		FlowType:                     condition.GetSubFlowType(),
@@ -867,6 +897,7 @@ func (a *Activities) StartSubFlow(
 		InitAttributes:               options.GetAttributes(),
 		Config:                       flowConfig,
 		TimeoutHandlerOptions:        options.GetTimeoutHandlerOptions(),
+		TenantId:                     input.GetTenantId(),
 	}
 	output, err := a.subFlowResolver.Resolve(
 		ctx, condition, subFlowID, requestID, workflowOptions, workflowInput,
@@ -891,6 +922,7 @@ func (a *Activities) StartSubFlow(
 
 func (a *Activities) subFlowStartIdentity(
 	ctx context.Context,
+	tenantID string,
 	stepExecutionID string,
 	subFlowIndex int32,
 ) (string, string, string, error) {
@@ -903,10 +935,14 @@ func (a *Activities) subFlowStartIdentity(
 		return "", "", "", fmt.Errorf("SubFlow start requires a parent Workflow execution")
 	}
 	requestID := parentExecution.RunID + stepExecutionID
-	return parentExecution.ID,
-		service.SubFlowID(parentExecution.ID, stepExecutionID, subFlowIndex),
-		requestID,
-		nil
+	subFlowID, err := tenancy.SubFlowID(tenantID, parentExecution.ID, stepExecutionID, subFlowIndex)
+	if err == nil && tenantID != "" {
+		err = tenancy.ValidateStoredFlowIDLength(subFlowID, a.cfg.Tenancy.EffectiveMaxStoredFlowIDBytes())
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	return parentExecution.ID, subFlowID, requestID, nil
 }
 
 func (a *Activities) ReportSubFlowCompletion(
@@ -1026,6 +1062,7 @@ func buildSubFlowConfig(parent, override *dexpb.FlowConfig) (*dexpb.FlowConfig, 
 }
 
 func buildSubFlowStartOptions(
+	tenantID string,
 	condition *dexpb.SubFlowCondition,
 	flowConfig *dexpb.FlowConfig,
 	parentFlowID string,
@@ -1045,6 +1082,9 @@ func buildSubFlowStartOptions(
 	}
 	workflowOptions.SearchAttributes[service.SearchAttributeDexWorkflowType] = condition.GetSubFlowType()
 	workflowOptions.SearchAttributes[service.SearchAttributeDexParentFlowID] = parentFlowID
+	if tenantID != "" {
+		workflowOptions.SearchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
+	}
 	if options.GetFlowStartDelaySeconds() > 0 {
 		workflowOptions.WorkflowStartDelay = ptr.Any(time.Duration(options.GetFlowStartDelaySeconds()) * time.Second)
 	}
@@ -1326,6 +1366,19 @@ func validateWorkerWaitForResponse(
 		return err
 	}
 	return validateWorkerChannelDeletions(resp.GetDeleteFromChannel())
+}
+
+// validateTenantWaitForAttributeWrites refuses tenant index writes in upserts and in SubFlow start Attributes.
+func validateTenantWaitForAttributeWrites(tenantID string, resp *dexpb.InvokeWaitForMethodResponse) error {
+	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
+	for _, condition := range resp.GetWaitingCondition().GetSubFlowConditions() {
+		if err := tenancy.ValidateTenantAttributeWrites(tenantID, condition.GetOptions().GetAttributes()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateExecuteResponse(
@@ -1877,4 +1930,37 @@ func (a *Activities) emitStepExecuteMethodEvent(
 		StepExecutionId: req.GetContext().GetStepExecutionId(),
 		EventType:       eventType,
 	})
+}
+
+// dispatchWorkerContext returns the Context a Worker sees: the application Flow ID of the input's tenant.
+// A tenant that disagrees with the Flow ID's prefix fails without retry.
+func (a *Activities) dispatchWorkerContext(
+	ctx context.Context,
+	tenantID string,
+	storedContext *dexpb.Context,
+) (*dexpb.Context, error) {
+	applicationFlowID, err := tenancy.DispatchFlowID(tenantID, storedContext.GetFlowId())
+	if err != nil {
+		return nil, a.activityProvider.NewNonRetryableActivityError(
+			dexpb.FlowErrorType_FLOW_ERROR_TYPE_INTERNAL,
+			&dexpb.InternalActivityError{ServerDetail: err.Error()},
+		)
+	}
+	if applicationFlowID == storedContext.GetFlowId() {
+		return storedContext, nil
+	}
+	dispatchContext := proto.Clone(storedContext).(*dexpb.Context)
+	dispatchContext.FlowId = applicationFlowID
+	return dispatchContext, nil
+}
+
+// newInvalidSubFlowIDError fails the Step without retry, because a SubFlow ID never shrinks.
+func (a *Activities) newInvalidSubFlowIDError(err error) error {
+	return a.activityProvider.NewNonRetryableActivityError(
+		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
+		&dexpb.InternalActivityError{
+			WorkerGrpcStatus: int32(codes.InvalidArgument),
+			ServerDetail:     err.Error(),
+		},
+	)
 }

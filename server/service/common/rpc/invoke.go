@@ -22,6 +22,7 @@ import (
 	"github.com/superdurable/dex/service/common/channelmessage"
 	"github.com/superdurable/dex/service/common/utils"
 	"github.com/superdurable/dex/service/common/workerclient"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -45,9 +46,14 @@ func InvokeWorkerRpc(
 	invocationId string,
 	blobStoreCfg *config.BlobStoreConfig,
 	isOutputPersisted bool,
+	tenantID string,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
 	if apiCfg == nil || interpreterActivityCfg == nil {
 		panic("InvokeWorkerRpc requires non-nil config sections")
+	}
+	applicationFlowID, err := tenancy.DispatchFlowID(tenantID, req.GetFlowId())
+	if err != nil {
+		return nil, err
 	}
 
 	workerInput := req.GetInput()
@@ -104,7 +110,7 @@ func InvokeWorkerRpc(
 
 	workerReq := &dexpb.InvokeWorkerRPCRequest{
 		Context: &dexpb.Context{
-			FlowId:               req.GetFlowId(),
+			FlowId:               applicationFlowID,
 			RunId:                rpcPrep.GetRunId(),
 			FlowStartedTimestamp: rpcPrep.GetFlowStartedTimestamp(),
 		},
@@ -133,6 +139,9 @@ func InvokeWorkerRpc(
 		interpreterActivityCfg.EffectiveMinimumStepHeartbeatTimeout(),
 		backendType,
 	); err != nil {
+		return nil, err
+	}
+	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
 		return nil, err
 	}
 	service.SetFromStepExecutionIDForStepDecision(

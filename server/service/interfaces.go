@@ -18,6 +18,8 @@ import (
 type BasicInfo struct {
 	FlowType            string
 	RunStartedTimestamp int64
+	// TenantID is empty in single-tenant mode.
+	TenantID string
 }
 
 // StepExecutionStatus is the interpreter's internal per-step-execution outcome.

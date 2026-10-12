@@ -1396,7 +1396,11 @@ export interface InterpreterWorkflowInput {
   /** When true, ignore start_step_type / step_input / step_options / init_attributes. */
   isResumeFromContinueAsNew: boolean;
   continueAsNewInput: ContinueAsNewInput | undefined;
-  timeoutHandlerOptions: FlowTimeoutHandlerOptions | undefined;
+  timeoutHandlerOptions:
+    | FlowTimeoutHandlerOptions
+    | undefined;
+  /** Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode. */
+  tenantId: string;
 }
 
 export interface InterpreterWorkflowOutput {
@@ -1413,7 +1417,11 @@ export interface BlobStoreCleanupWorkflowOutput {
 
 export interface InvokeWaitForMethodActivityInput {
   workerTarget: WorkerTarget | undefined;
-  request: InvokeWaitForMethodRequest | undefined;
+  request:
+    | InvokeWaitForMethodRequest
+    | undefined;
+  /** Tenant of the dispatching Flow; empty in single-tenant mode. */
+  tenantId: string;
 }
 
 export interface InvokeWaitForMethodActivityOutput {
@@ -1422,7 +1430,11 @@ export interface InvokeWaitForMethodActivityOutput {
 
 export interface InvokeExecuteMethodActivityInput {
   workerTarget: WorkerTarget | undefined;
-  request: InvokeExecuteMethodRequest | undefined;
+  request:
+    | InvokeExecuteMethodRequest
+    | undefined;
+  /** Tenant of the dispatching Flow; empty in single-tenant mode. */
+  tenantId: string;
 }
 
 export interface RecoveryErrorInfo {
@@ -1452,7 +1464,11 @@ export interface DumpFlowForContinueAsNewActivityOutput {
 
 export interface InvokeWorkerRPCActivityInput {
   rpcPrep: PrepareRpcQueryResponse | undefined;
-  request: InvokeRPCRequest | undefined;
+  request:
+    | InvokeRPCRequest
+    | undefined;
+  /** Tenant of the Flow; empty in single-tenant mode. */
+  tenantId: string;
 }
 
 export interface InvokeWorkerRPCActivityOutput {
@@ -1490,6 +1506,8 @@ export interface StartSubFlowActivityInput {
     | undefined;
   /** Source Step; activity context supplies parent Flow and run IDs. */
   parentStepExecutionId: string;
+  /** Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode. */
+  tenantId: string;
 }
 
 export interface StartSubFlowActivityOutput {
@@ -15005,6 +15023,7 @@ function createBaseInterpreterWorkflowInput(): InterpreterWorkflowInput {
     isResumeFromContinueAsNew: false,
     continueAsNewInput: undefined,
     timeoutHandlerOptions: undefined,
+    tenantId: "",
   };
 }
 
@@ -15042,6 +15061,9 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
     }
     if (message.timeoutHandlerOptions !== undefined) {
       FlowTimeoutHandlerOptions.encode(message.timeoutHandlerOptions, writer.uint32(90).fork()).join();
+    }
+    if (message.tenantId !== "") {
+      writer.uint32(98).string(message.tenantId);
     }
     return writer;
   },
@@ -15141,6 +15163,14 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
           message.timeoutHandlerOptions = FlowTimeoutHandlerOptions.decode(reader, reader.uint32());
           continue;
         }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15177,6 +15207,7 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
       (object.timeoutHandlerOptions !== undefined && object.timeoutHandlerOptions !== null)
         ? FlowTimeoutHandlerOptions.fromPartial(object.timeoutHandlerOptions)
         : undefined;
+    message.tenantId = object.tenantId ?? "";
     return message;
   },
 };
@@ -15324,7 +15355,7 @@ export const BlobStoreCleanupWorkflowOutput: MessageFns<BlobStoreCleanupWorkflow
 };
 
 function createBaseInvokeWaitForMethodActivityInput(): InvokeWaitForMethodActivityInput {
-  return { workerTarget: undefined, request: undefined };
+  return { workerTarget: undefined, request: undefined, tenantId: "" };
 }
 
 export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodActivityInput> = {
@@ -15334,6 +15365,9 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
     }
     if (message.request !== undefined) {
       InvokeWaitForMethodRequest.encode(message.request, writer.uint32(18).fork()).join();
+    }
+    if (message.tenantId !== "") {
+      writer.uint32(26).string(message.tenantId);
     }
     return writer;
   },
@@ -15361,6 +15395,14 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
           message.request = InvokeWaitForMethodRequest.decode(reader, reader.uint32());
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15385,6 +15427,7 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
     message.request = (object.request !== undefined && object.request !== null)
       ? InvokeWaitForMethodRequest.fromPartial(object.request)
       : undefined;
+    message.tenantId = object.tenantId ?? "";
     return message;
   },
 };
@@ -15442,7 +15485,7 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
 };
 
 function createBaseInvokeExecuteMethodActivityInput(): InvokeExecuteMethodActivityInput {
-  return { workerTarget: undefined, request: undefined };
+  return { workerTarget: undefined, request: undefined, tenantId: "" };
 }
 
 export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodActivityInput> = {
@@ -15452,6 +15495,9 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
     }
     if (message.request !== undefined) {
       InvokeExecuteMethodRequest.encode(message.request, writer.uint32(18).fork()).join();
+    }
+    if (message.tenantId !== "") {
+      writer.uint32(26).string(message.tenantId);
     }
     return writer;
   },
@@ -15479,6 +15525,14 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
           message.request = InvokeExecuteMethodRequest.decode(reader, reader.uint32());
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15503,6 +15557,7 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
     message.request = (object.request !== undefined && object.request !== null)
       ? InvokeExecuteMethodRequest.fromPartial(object.request)
       : undefined;
+    message.tenantId = object.tenantId ?? "";
     return message;
   },
 };
@@ -15839,7 +15894,7 @@ export const DumpFlowForContinueAsNewActivityOutput: MessageFns<DumpFlowForConti
 };
 
 function createBaseInvokeWorkerRPCActivityInput(): InvokeWorkerRPCActivityInput {
-  return { rpcPrep: undefined, request: undefined };
+  return { rpcPrep: undefined, request: undefined, tenantId: "" };
 }
 
 export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInput> = {
@@ -15849,6 +15904,9 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
     }
     if (message.request !== undefined) {
       InvokeRPCRequest.encode(message.request, writer.uint32(18).fork()).join();
+    }
+    if (message.tenantId !== "") {
+      writer.uint32(26).string(message.tenantId);
     }
     return writer;
   },
@@ -15876,6 +15934,14 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
           message.request = InvokeRPCRequest.decode(reader, reader.uint32());
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15896,6 +15962,7 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
     message.request = (object.request !== undefined && object.request !== null)
       ? InvokeRPCRequest.fromPartial(object.request)
       : undefined;
+    message.tenantId = object.tenantId ?? "";
     return message;
   },
 };
@@ -16201,7 +16268,7 @@ export const SyncAttributeBatchActivityInput: MessageFns<SyncAttributeBatchActiv
 };
 
 function createBaseStartSubFlowActivityInput(): StartSubFlowActivityInput {
-  return { condition: undefined, parentFlowConfig: undefined, parentStepExecutionId: "" };
+  return { condition: undefined, parentFlowConfig: undefined, parentStepExecutionId: "", tenantId: "" };
 }
 
 export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = {
@@ -16214,6 +16281,9 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
     }
     if (message.parentStepExecutionId !== "") {
       writer.uint32(26).string(message.parentStepExecutionId);
+    }
+    if (message.tenantId !== "") {
+      writer.uint32(34).string(message.tenantId);
     }
     return writer;
   },
@@ -16249,6 +16319,14 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
           message.parentStepExecutionId = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -16270,6 +16348,7 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
       ? FlowConfig.fromPartial(object.parentFlowConfig)
       : undefined;
     message.parentStepExecutionId = object.parentStepExecutionId ?? "";
+    message.tenantId = object.tenantId ?? "";
     return message;
   },
 };

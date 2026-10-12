@@ -75,6 +75,11 @@ type (
 		// Internal configures the listener that serves InternalService to the server's own interpreter Workers.
 		// Required in multi mode, where InternalService is never served on the public API listener.
 		Internal TenancyInternalConfig `yaml:"internal"`
+		// MaxStoredFlowIDBytes is the backend's identifier limit, which a tenant's stored Flow ID
+		// (the Flow ID plus the "T:<tenant>:" prefix of up to 36 bytes) must respect. Default 1000, Temporal's
+		// default limit.maxIDLength and the Temporal Cloud limit. Set it to the backend's value when it is lower.
+		// A StartFlow over the limit is INVALID_ARGUMENT; a SubFlow over it fails its Step before any start.
+		MaxStoredFlowIDBytes int `yaml:"maxStoredFlowIDBytes"`
 		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
 		// development. It cannot be set from a configuration file. Default false.
 		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
@@ -146,6 +151,17 @@ type (
 		TokenFile string `yaml:"tokenFile"`
 	}
 )
+
+// DefaultMaxStoredFlowIDBytes is Temporal's default identifier limit.
+const DefaultMaxStoredFlowIDBytes = 1000
+
+// EffectiveMaxStoredFlowIDBytes returns MaxStoredFlowIDBytes or its default.
+func (c TenancyConfig) EffectiveMaxStoredFlowIDBytes() int {
+	if c.MaxStoredFlowIDBytes <= 0 {
+		return DefaultMaxStoredFlowIDBytes
+	}
+	return c.MaxStoredFlowIDBytes
+}
 
 // IsMultiTenant reports whether multi-tenant mode is enabled.
 func (c TenancyConfig) IsMultiTenant() bool {

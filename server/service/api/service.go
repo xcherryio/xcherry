@@ -43,6 +43,7 @@ import (
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -159,10 +160,18 @@ func (s *serviceImpl) StartFlow(
 		return nil, makeInvalidRequestError(err.Error())
 	}
 
+	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), attributes); err != nil {
+		return nil, makeInvalidRequestError(err.Error())
+	}
 	searchAttributes := index.ConvertAttributeWritesToSearchAttributeUpsertMap(attributes)
 	searchAttributes[service.SearchAttributeDexWorkflowType] = req.GetFlowType()
+	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
+		searchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
+	}
 
-	if err := service.ValidateFlowID(req.GetFlowId()); err != nil {
+	tenantID := tenancy.TenantID(ctx)
+	applicationFlowID, _ := tenancy.ApplicationFlowID(tenantID, req.GetFlowId())
+	if err := service.ValidateFlowID(applicationFlowID); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := service.ValidateStepType(req.GetStartStepType()); err != nil {
@@ -261,6 +270,7 @@ func (s *serviceImpl) StartFlow(
 		InitAttributes:               attributes,
 		Config:                       &workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
+		TenantId:                     tenantID,
 	}
 
 	runId, err := s.client.StartInterpreterWorkflow(ctx, workflowOptions, input)
@@ -1135,6 +1145,9 @@ func (s *serviceImpl) SetAttributes(
 	if err := validateAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
+	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), req.GetAttributes()); err != nil {
+		return nil, makeInvalidRequestError(err.Error())
+	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
@@ -1296,8 +1309,18 @@ func (s *serviceImpl) SearchFlows(
 		pageSize = req.GetPageSize()
 	}
 	query := req.GetQuery()
-	if !req.GetIncludeContinuedAsNew() {
-		const currentRuns = `ExecutionStatus != "ContinuedAsNew"`
+	const currentRuns = `ExecutionStatus != "ContinuedAsNew"`
+	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
+		statusClause := currentRuns
+		if req.GetIncludeContinuedAsNew() {
+			statusClause = ""
+		}
+		tenantQuery, err := tenancy.TenantVisibilityQuery(tenantID, query, statusClause)
+		if err != nil {
+			return nil, makeInvalidRequestError(err.Error())
+		}
+		query = tenantQuery
+	} else if !req.GetIncludeContinuedAsNew() {
 		if strings.TrimSpace(query) == "" {
 			query = currentRuns
 		} else {
@@ -1633,6 +1656,7 @@ func (s *serviceImpl) doInvokeRPC(
 		req.GetRequestId(),
 		s.blobStoreCfg,
 		false,
+		tenancy.TenantID(ctx),
 	)
 	if err != nil {
 		return nil, err

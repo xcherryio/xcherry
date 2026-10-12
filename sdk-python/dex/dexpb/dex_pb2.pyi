@@ -2061,7 +2061,7 @@ class ContinueAsNewInput(_message.Message):
     def __init__(self, previous_internal_run_id: _Optional[str] = ...) -> None: ...
 
 class InterpreterWorkflowInput(_message.Message):
-    __slots__ = ("flow_type", "configured_flow_timeout_seconds", "flow_timeout_policy", "start_step_type", "step_input", "step_options", "init_attributes", "config", "is_resume_from_continue_as_new", "continue_as_new_input", "timeout_handler_options")
+    __slots__ = ("flow_type", "configured_flow_timeout_seconds", "flow_timeout_policy", "start_step_type", "step_input", "step_options", "init_attributes", "config", "is_resume_from_continue_as_new", "continue_as_new_input", "timeout_handler_options", "tenant_id")
     FLOW_TYPE_FIELD_NUMBER: _ClassVar[int]
     CONFIGURED_FLOW_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
     FLOW_TIMEOUT_POLICY_FIELD_NUMBER: _ClassVar[int]
@@ -2073,6 +2073,7 @@ class InterpreterWorkflowInput(_message.Message):
     IS_RESUME_FROM_CONTINUE_AS_NEW_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_INPUT_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_HANDLER_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     flow_type: str
     configured_flow_timeout_seconds: int
     flow_timeout_policy: FlowTimeoutPolicy
@@ -2084,7 +2085,8 @@ class InterpreterWorkflowInput(_message.Message):
     is_resume_from_continue_as_new: bool
     continue_as_new_input: ContinueAsNewInput
     timeout_handler_options: FlowTimeoutHandlerOptions
-    def __init__(self, flow_type: _Optional[str] = ..., configured_flow_timeout_seconds: _Optional[int] = ..., flow_timeout_policy: _Optional[_Union[FlowTimeoutPolicy, str]] = ..., start_step_type: _Optional[str] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., step_options: _Optional[_Union[StepOptions, _Mapping]] = ..., init_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., config: _Optional[_Union[FlowConfig, _Mapping]] = ..., is_resume_from_continue_as_new: _Optional[bool] = ..., continue_as_new_input: _Optional[_Union[ContinueAsNewInput, _Mapping]] = ..., timeout_handler_options: _Optional[_Union[FlowTimeoutHandlerOptions, _Mapping]] = ...) -> None: ...
+    tenant_id: str
+    def __init__(self, flow_type: _Optional[str] = ..., configured_flow_timeout_seconds: _Optional[int] = ..., flow_timeout_policy: _Optional[_Union[FlowTimeoutPolicy, str]] = ..., start_step_type: _Optional[str] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., step_options: _Optional[_Union[StepOptions, _Mapping]] = ..., init_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., config: _Optional[_Union[FlowConfig, _Mapping]] = ..., is_resume_from_continue_as_new: _Optional[bool] = ..., continue_as_new_input: _Optional[_Union[ContinueAsNewInput, _Mapping]] = ..., timeout_handler_options: _Optional[_Union[FlowTimeoutHandlerOptions, _Mapping]] = ..., tenant_id: _Optional[str] = ...) -> None: ...
 
 class InterpreterWorkflowOutput(_message.Message):
     __slots__ = ("step_completion_outputs",)
@@ -2105,12 +2107,14 @@ class BlobStoreCleanupWorkflowOutput(_message.Message):
     def __init__(self, total_deleted: _Optional[int] = ...) -> None: ...
 
 class InvokeWaitForMethodActivityInput(_message.Message):
-    __slots__ = ("worker_target", "request")
+    __slots__ = ("worker_target", "request", "tenant_id")
     WORKER_TARGET_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     worker_target: WorkerTarget
     request: InvokeWaitForMethodRequest
-    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ...) -> None: ...
+    tenant_id: str
+    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ...) -> None: ...
 
 class InvokeWaitForMethodActivityOutput(_message.Message):
     __slots__ = ("response",)
@@ -2119,12 +2123,14 @@ class InvokeWaitForMethodActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[InvokeWaitForMethodResponse, _Mapping]] = ...) -> None: ...
 
 class InvokeExecuteMethodActivityInput(_message.Message):
-    __slots__ = ("worker_target", "request")
+    __slots__ = ("worker_target", "request", "tenant_id")
     WORKER_TARGET_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     worker_target: WorkerTarget
     request: InvokeExecuteMethodRequest
-    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ...) -> None: ...
+    tenant_id: str
+    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ...) -> None: ...
 
 class RecoveryErrorInfo(_message.Message):
     __slots__ = ("detail", "error_type")
@@ -2167,12 +2173,14 @@ class DumpFlowForContinueAsNewActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[ContinueAsNewDumpResponse, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityInput(_message.Message):
-    __slots__ = ("rpc_prep", "request")
+    __slots__ = ("rpc_prep", "request", "tenant_id")
     RPC_PREP_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     rpc_prep: PrepareRpcQueryResponse
     request: InvokeRPCRequest
-    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ...) -> None: ...
+    tenant_id: str
+    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityOutput(_message.Message):
     __slots__ = ("response", "request_id")
@@ -2215,14 +2223,16 @@ class SyncAttributeBatchActivityInput(_message.Message):
     def __init__(self, flow_id: _Optional[str] = ..., config_name: _Optional[str] = ..., items: _Optional[_Iterable[_Union[AttributeSyncItem, _Mapping]]] = ...) -> None: ...
 
 class StartSubFlowActivityInput(_message.Message):
-    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id")
+    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id", "tenant_id")
     CONDITION_FIELD_NUMBER: _ClassVar[int]
     PARENT_FLOW_CONFIG_FIELD_NUMBER: _ClassVar[int]
     PARENT_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     condition: SubFlowCondition
     parent_flow_config: FlowConfig
     parent_step_execution_id: str
-    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ...) -> None: ...
+    tenant_id: str
+    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ..., tenant_id: _Optional[str] = ...) -> None: ...
 
 class StartSubFlowActivityOutput(_message.Message):
     __slots__ = ("immediate_flow_result",)
