@@ -190,6 +190,8 @@ type (
 		AttributeStore AttributeStoreConfig `yaml:"attributeStore"`
 		// StreamStore configures best-effort resumable Streams. Default backend is disabled.
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
+		// Tenancy enables multi-tenant namespaces. Default empty is single-tenant mode, unchanged from servers without it.
+		Tenancy TenancyConfig `yaml:"tenancy"`
 	}
 
 	StreamStoreConfig struct {
@@ -554,6 +556,9 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 	if cfg.Interpreter.InterpreterActivityConfig.MinimumStepHeartbeatTimeout < 0 {
 		return nil, fmt.Errorf("interpreter.interpreterActivityConfig.minimumStepHeartbeatTimeout must be non-negative")
+	}
+	if err := cfg.ValidateTenancy(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil

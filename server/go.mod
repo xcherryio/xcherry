@@ -16,7 +16,7 @@ require (
 	github.com/prometheus/client_golang v1.21.1
 	github.com/snowflakedb/gosnowflake/v2 v2.2.0
 	github.com/stretchr/testify v1.11.1
-	github.com/superdurable/dex/blob-cache-go v0.1.0
+	github.com/superdurable/dex/blob-cache-go v0.1.1
 	github.com/uber-go/tally/v4 v4.1.1
 	github.com/uber/cadence-idl v0.0.0-20250616185004-cc6f52f87bc6
 	go.mongodb.org/mongo-driver/v2 v2.9.1
@@ -31,6 +31,7 @@ require (
 
 require (
 	github.com/aws/smithy-go v1.27.4
+	github.com/go-jose/go-jose/v3 v3.0.5
 	github.com/redis/go-redis/v9 v9.22.0
 	go.temporal.io/api v1.63.4
 	go.temporal.io/cloud-sdk v0.19.0
@@ -77,7 +78,6 @@ require (
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect

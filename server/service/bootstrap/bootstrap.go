@@ -92,6 +92,9 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 	if cfg.Interpreter.Temporal != nil && cfg.Interpreter.Cadence != nil {
 		return nil, fmt.Errorf("Temporal and Cadence configs are mutually exclusive")
 	}
+	if err := cfg.ValidateTenancy(); err != nil {
+		return nil, err
+	}
 
 	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
@@ -109,7 +112,7 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 		workerPool: workerPool,
 		logger:     logger,
 		zapLogger:  zapLogger,
-		serveError: make(chan error, 1),
+		serveError: make(chan error, 2),
 	}
 	streamStore, streamStoreErr := streamstore.New(
 		&cfg.StreamStore,
@@ -155,8 +158,9 @@ func (r *Runtime) createServices() error {
 	r.blobStore = store
 	r.indexSynchronizer = indexsync.New(&r.cfg.Interpreter, client, r.logger)
 	if r.options.Services.API {
-		r.apiServer = api.NewServer(
+		r.apiServer, err = api.NewServer(
 			&r.cfg.Api,
+			&r.cfg.Tenancy,
 			&r.cfg.BlobStore,
 			&r.cfg.Interpreter,
 			client,
@@ -167,6 +171,9 @@ func (r *Runtime) createServices() error {
 			nil,
 			r.workerPool,
 		)
+		if err != nil {
+			return fmt.Errorf("create Dex API: %w", err)
+		}
 	}
 	return nil
 }
@@ -185,6 +192,16 @@ func (r *Runtime) Run(ctx context.Context) error {
 			r.shutdown()
 			return err
 		}
+	}
+	if r.apiServer != nil && r.apiServer.HasInternalListener() {
+		internalListener, err := net.Listen("tcp", r.cfg.Tenancy.Internal.Listen)
+		if err != nil {
+			r.shutdown()
+			return fmt.Errorf("listen on tenancy.internal.listen: %w", err)
+		}
+		go func() {
+			r.serveError <- r.apiServer.ServeInternal(internalListener)
+		}()
 	}
 	if r.apiServer != nil {
 		go func() {
