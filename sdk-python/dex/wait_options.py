@@ -94,6 +94,13 @@ class _ClientRequestBudget:
     def has_expired(self) -> bool:
         return self._deadline is not None and monotonic() >= self._deadline
 
+    def is_timeout(self, code: grpc.StatusCode | None) -> bool:
+        # The server can reset the stream with CANCEL as the shared deadline passes.
+        return (
+            code in (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.CANCELLED)
+            and self.has_expired()
+        )
+
     @staticmethod
     def timeout_error(operation: str, flow_id: str) -> RequestTimeoutError:
         return RequestTimeoutError(
