@@ -117,7 +117,7 @@ require (
 	github.com/rs/zerolog v1.28.0 // indirect
 	github.com/snowflakedb/gosnowflake/v2 v2.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/superdurable/dex/blob-cache-go v0.1.0 // indirect
+	github.com/superdurable/dex/blob-cache-go v0.1.1 // indirect
 	github.com/twmb/murmur3 v1.1.5 // indirect
 	github.com/uber-go/mapdecode v1.0.0 // indirect
 	github.com/uber-go/tally v3.3.15+incompatible // indirect
