@@ -48,7 +48,7 @@ export function ChipRows({ rows, onJump }: { rows: BoxChip[][]; onJump: (id: str
                 key={j}
                 className="pdock nodrag nopan"
                 data-chip={chip.kind}
-                title={`${chip.title ? `${chip.title}: ` : ''}goes to ${chip.text.replace(/^↪ /, '')}. Click to show it.`}
+                title={`${chip.title ? `${chip.title}: ` : ''}goes to ${chip.text.replace(/^(↪ |↩ back to )/, '')}. Click to show it.`}
                 onClick={(e) => {
                   e.stopPropagation()
                   onJump(chip.targetId as string)

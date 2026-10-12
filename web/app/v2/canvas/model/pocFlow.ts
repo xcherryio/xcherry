@@ -289,3 +289,51 @@ export function whoActs(flow: PocFlow, step: StepModel): WhoActs {
       return 'waits'
   }
 }
+
+/** Steps only failure transitions reach, directly or via other such Steps; the rest is the main story. */
+export function failureHandling(flow: PocFlow): ReadonlySet<string> {
+  const ids = new Set(flow.steps.map((s) => s.id))
+  const linked = flow.transitions.filter((t) => !t.isSelfLoop && ids.has(t.toStepId))
+  const entered = new Set(linked.map((t) => t.toStepId))
+  const start = flow.steps.find((s) => s.isStart) ?? flow.steps[0]
+  // Main-story roots: the start, Steps an RPC enters, and Steps nothing enters.
+  const roots = [
+    ...(start ? [start.id] : []),
+    ...linked.filter((t) => t.kind === 'transition' && !ids.has(t.fromStepId)).map((t) => t.toStepId),
+    ...flow.steps.filter((s) => !entered.has(s.id)).map((s) => s.id),
+  ]
+  const story = new Set(roots)
+  const queue = [...story]
+  for (let i = 0; i < queue.length; i += 1) {
+    for (const t of linked) {
+      if (t.kind !== 'transition' || t.fromStepId !== queue[i] || story.has(t.toStepId)) continue
+      story.add(t.toStepId)
+      queue.push(t.toStepId)
+    }
+  }
+  return new Set(flow.steps.filter((s) => !story.has(s.id)).map((s) => s.id))
+}
+
+const stories = new WeakMap<PocFlow, PocFlow>()
+
+/** The Flow without its failure handling or any failure transition, as the canvas draws it by default. */
+export function mainStory(flow: PocFlow): PocFlow {
+  const known = stories.get(flow)
+  if (known) return known
+  const hidden = failureHandling(flow)
+  const story: PocFlow = {
+    ...flow,
+    steps: flow.steps.filter((s) => !hidden.has(s.id)),
+    transitions: flow.transitions.filter(
+      (t) => t.kind === 'transition' && !hidden.has(t.fromStepId) && !hidden.has(t.toStepId),
+    ),
+  }
+  stories.set(flow, story)
+  stories.set(story, story)
+  return story
+}
+
+/** The failure transitions that leave a Step, other than one back to itself. */
+export function failureRoutes(flow: PocFlow, stepId: string): Transition[] {
+  return flow.transitions.filter((t) => t.kind === 'failure_transition' && t.fromStepId === stepId && !t.isSelfLoop)
+}

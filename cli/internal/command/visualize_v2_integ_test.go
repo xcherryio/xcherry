@@ -329,6 +329,51 @@ func TestVisualizeV2PreservesDirectiveLineOrderWithoutParameterOrder(t *testing.
 	require.Equal(t, []string{"user", "attribute"}, v2ActionInputSources(graph.V2.Actions[1].Input.Fields))
 }
 
+func TestVisualizeV2WarnsAboutGroupsThatAreNeitherRunNorChoice(t *testing.T) {
+	repositoryRoot := visualizerRepositoryRoot(t)
+	graph, err := flowviz.Analyze(context.Background(), filepath.Join(
+		repositoryRoot,
+		"cli/internal/command/testfixtures/visualization-v2-group-shape/workflow.go",
+	), flowviz.AnalyzeOptions{SchemaVersion: flowviz.SchemaVersionV2})
+	require.NoError(t, err)
+	// A warning never makes the definition invalid.
+	require.True(t, graph.Valid, "%+v", graph.Diagnostics)
+	require.Equal(t, []string{"begin", "decide", "tools", "reply", "wrap-up", "sheet", "failure"}, v2GroupIDs(graph.Groups))
+	warnings := groupShapeWarnings(t, graph.Diagnostics)
+	// The sheet's reads join only through hidden failure handling; a group of handlers is never judged.
+	require.Equal(t, []string{
+		`group "sheet" is neither one run of Steps that lead to each other nor one choice that a single Step makes; ` +
+			"it falls into 2 parts: ReadSheetStep; RereadSheetStep. Split it so that each group does one thing",
+		`group "wrap-up" is neither one run of Steps that lead to each other nor one choice that a single Step makes; ` +
+			"it falls into 2 parts: NotifyOwnerStep; CleanUpStep. Split it so that each group does one thing",
+	}, warnings)
+}
+
+func TestVisualizeV2WarnsAboutTheAgenticRefundFailureGroupOnly(t *testing.T) {
+	repositoryRoot := visualizerRepositoryRoot(t)
+	graph, err := flowviz.Analyze(context.Background(), filepath.Join(
+		repositoryRoot,
+		"examples/go/products/customer-refund/agentic/workflow.go",
+	), flowviz.AnalyzeOptions{SchemaVersion: flowviz.SchemaVersionV2})
+	require.NoError(t, err)
+	warnings := groupShapeWarnings(t, graph.Diagnostics)
+	// Evidence is a choice the agent's decision Step makes, so only the failure handlers warn.
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], `group "failure"`)
+}
+
+func groupShapeWarnings(t *testing.T, diagnostics []flowviz.Diagnostic) []string {
+	t.Helper()
+	warnings := make([]string, 0)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == "v2_step_group_shape" {
+			require.Equal(t, "warning", diagnostic.Severity)
+			warnings = append(warnings, diagnostic.Message)
+		}
+	}
+	return warnings
+}
+
 func TestVisualizeV2RejectsPython(t *testing.T) {
 	repositoryRoot := visualizerRepositoryRoot(t)
 	_, err := flowviz.Analyze(

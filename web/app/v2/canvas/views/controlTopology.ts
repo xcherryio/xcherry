@@ -6,11 +6,12 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-import type { PocFlow, StepModel } from '../model/pocFlow'
+import { failureHandling, failureRoutes, mainStory, type PocFlow, type StepModel } from '../model/pocFlow'
 import { caseLabel } from '../model/routing'
 import { placeGraph } from './elkPlacement'
 import { groupBands } from './groupBands'
 import type { StepGroup } from './groups'
+import { isStageGroup } from './groupShape'
 import { longestPathRanks, mainLines, readingOrder, type GraphEdge } from './mainLine'
 import { rpcCardsLayout } from './rpcCards'
 import { sideLanes } from './sideLanes'
@@ -33,32 +34,31 @@ function populated(flow: PocFlow, groups: StepGroup[]): StepGroup[] {
   return groups.filter((group) => group.stepIds.some((id) => known.has(id)))
 }
 
-function membersOf(flow: PocFlow, group: StepGroup): number {
-  return flow.steps.filter((step) => group.stepIds.includes(step.id)).length
-}
-
-/** A group of two or more Steps is a stage; a one-Step group is always drawn as its Step. */
+/** A run or a choice of two or more Steps is a stage; any other group always shows its Steps. */
 export function hasStages(flow: PocFlow, groups: StepGroup[]): boolean {
-  return populated(flow, groups).some((group) => membersOf(flow, group) >= 2)
+  return populated(flow, groups).some((group) => isStageGroup(flow, group))
 }
 
 export function groupOfStep(groups: StepGroup[], stepId: string): StepGroup | undefined {
   return groups.find((group) => group.stepIds.includes(stepId))
 }
 
-async function layout(flow: PocFlow, opts: ViewOpts): Promise<Scene> {
-  if (flow.steps.length === 0) {
+async function layout(whole: PocFlow, opts: ViewOpts): Promise<Scene> {
+  if (whole.steps.length === 0) {
     // An entity Flow runs only through RPCs, so they are the whole drawing.
-    if (flow.entries.some((entry) => entry.kind === 'rpc')) return rpcCardsLayout(flow, opts)
+    if (whole.entries.some((entry) => entry.kind === 'rpc')) return rpcCardsLayout(whole, opts)
     return { boxes: [], links: [], bands: [], width: 640, height: 200, notes: ['No steps.'] }
   }
+  // Only the main story is laid out; failureDetours.ts draws failure handling on selection.
+  const flow = mainStory(whole)
+  const failuresOf = (stepId: string): number => failureRoutes(whole, stepId).length
   const groups = populated(flow, opts.groups ?? [])
   const open = opts.openStages ?? new Set<string>()
   const isStaged = hasStages(flow, groups)
   const closedGroupOf = (stepId: string): StepGroup | undefined => {
     if (!isStaged) return undefined
     const group = groupOfStep(groups, stepId)
-    return group && !open.has(group.id) && membersOf(flow, group) >= 2 ? group : undefined
+    return group && !open.has(group.id) && isStageGroup(flow, group) ? group : undefined
   }
   const nodeOf = (stepId: string): string => {
     const group = closedGroupOf(stepId)
@@ -128,7 +128,7 @@ async function layout(flow: PocFlow, opts: ViewOpts): Promise<Scene> {
     const step = stepById.get(id)
     if (step) {
       const docked = own.map((jump) => ({ ...jump, label: titleOf(jump.to) }))
-      return stepBox(flow, step, opts, { jumps: docked, arriving: arriving.get(id) ?? 0 })
+      return stepBox(flow, step, opts, { jumps: docked, arriving: arriving.get(id) ?? 0, failures: failuresOf(id) })
     }
     const group = groups.find((g) => stageId(g.id) === id) as StepGroup
     const members = stepOrder.flatMap((stepId) => (nodeOf(stepId) === id ? [stepById.get(stepId) as StepModel] : []))
@@ -156,7 +156,7 @@ async function layout(flow: PocFlow, opts: ViewOpts): Promise<Scene> {
     cases.set(id, label.length > 22 ? `${label.slice(0, 21)}…` : label)
   }
   // Every group drawn as Steps is one ELK container, so its band is one region.
-  const isDrawnOpen = (group: StepGroup): boolean => membersOf(flow, group) < 2 || open.has(group.id)
+  const isDrawnOpen = (group: StepGroup): boolean => !isStageGroup(flow, group) || open.has(group.id)
   const containers = groups.filter(isDrawnOpen).map((group) => ({
     id: `group:${group.id}`,
     members: group.stepIds.filter((id) => stepById.has(id) && nodeOf(id) === id),
@@ -207,7 +207,7 @@ async function layout(flow: PocFlow, opts: ViewOpts): Promise<Scene> {
             ...box,
             label: group.label,
             hue: index % 2,
-            collapsible: membersOf(flow, group) >= 2,
+            collapsible: isStageGroup(flow, group),
           },
         ]
       : []
@@ -218,11 +218,11 @@ async function layout(flow: PocFlow, opts: ViewOpts): Promise<Scene> {
       groups,
       boxes,
       (group) => isDrawnOpen(group) && !placement.boxes.has(`group:${group.id}`),
-      (group) => membersOf(flow, group) >= 2,
+      (group) => isStageGroup(flow, group),
     ),
   ]
   const links = sideLanes(boxes, bands, routed, opts.direction)
-  const notes = coverageNotes(flow, isStaged, groups.length, jumps.length)
+  const notes = coverageNotes(flow, isStaged, groups.length, jumps.length, failureHandling(whole).size)
   if (placement.degraded !== undefined) {
     notes.unshift(
       `The layout engine could not place this flow, so its lines are drawn straight and may cross cards: ${placement.degraded}`,
@@ -249,8 +249,13 @@ function readableCases(edges: GraphEdge[], cases: Map<string, string>): Map<stri
 }
 
 /** Honest notes about what the drawing leaves out or writes as text. */
-function coverageNotes(flow: PocFlow, isStaged: boolean, stages: number, jumps: number): string[] {
+function coverageNotes(flow: PocFlow, isStaged: boolean, stages: number, jumps: number, hidden: number): string[] {
   const notes: string[] = []
+  if (hidden > 0) {
+    notes.push(
+      `${hidden} failure-handling step${hidden === 1 ? ' is' : 's are'} left out: steps only a failure leads to. ⚠ on a step counts the failures that leave it; select the step to see where they go.`,
+    )
+  }
   if (isStaged) {
     notes.push(
       `The definition groups its steps into ${stages} stages. ⊕ opens a stage in place and ⊖ closes it; Expanded opens them all and Collapsed closes them all.`,

@@ -65,6 +65,7 @@ type v2StructField struct {
 func (analyzer *goAnalyzer) analyzeVisualizationV2(flowType string) {
 	attributes := analyzer.collectV2Attributes()
 	analyzer.graph.Groups = analyzer.collectV2Groups()
+	analyzer.diagnoseV2GroupShapes()
 	analyzer.applyV2Explanations()
 	registeredRPCs := analyzer.registeredV2RPCs(flowType)
 	registeredRPCNames := make(map[string]bool, len(registeredRPCs))

@@ -58,8 +58,8 @@ export interface ViewOpts {
   openStages?: ReadonlySet<string>
 }
 
-/** A Step card, a closed stage's card, or an RPC card of a Flow without Steps. */
-export type BoxKind = 'step' | 'stage' | 'rpcCard'
+/** A Step card, a closed stage's card, an RPC card of a Flow without Steps, or a detour pointer. */
+export type BoxKind = 'step' | 'stage' | 'rpcCard' | 'pointer'
 
 /** The palette tones a card part may take. */
 export type Tone = 'attention' | 'door' | 'machine' | 'clock' | 'child' | 'accent' | 'app'
@@ -193,6 +193,12 @@ export interface Box {
   barTitle?: string
   /** The Steps of a closed stage that a run is on, so the stage can carry the "now" ring. */
   holds?: string[]
+  /** Failure transitions that leave this Step, drawn only when it is selected. Stage cards carry none. */
+  failures?: number
+  /** Drawn beside this box, a Step or the stage holding it, as part of its failure detour. */
+  detourOf?: string
+  /** Where a pointer leads: a main-story Step, or the closed stage that holds it. */
+  target?: string
 }
 
 /**

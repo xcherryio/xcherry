@@ -89,7 +89,10 @@ export function stageBox(
   group: StepGroup,
   members: StepModel[],
   opts: ViewOpts,
-  docked: { jumps: { to: string; failure: boolean; label: string }[]; loops: boolean },
+  docked: {
+    jumps: { to: string; failure: boolean; label: string }[]
+    loops: boolean
+  },
 ): Box {
   const chips: BoxChip[] = docked.jumps.map((jump) => ({
     kind: jump.failure ? 'failJump' : 'jump',
