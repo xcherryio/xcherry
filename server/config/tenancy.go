@@ -25,8 +25,7 @@ import (
 const (
 	// TenancyModeSingle serves one namespace for every caller without authentication. It is the default.
 	TenancyModeSingle TenancyMode = "single"
-	// TenancyModeMulti will serve many tenants in one namespace. It is under development: the server refuses it at
-	// startup until tenant isolation of Flow identities, visibility and Worker dispatch is complete.
+	// TenancyModeMulti serves many tenants in one namespace and authenticates every FlowService call.
 	TenancyModeMulti TenancyMode = "multi"
 )
 
@@ -92,9 +91,6 @@ type (
 		// AttributeStores lists the Attribute Stores a tenant's Flow may select. Default empty allows every
 		// configured store, which multi mode requires to be tenant-scoped.
 		AttributeStores []string `yaml:"attributeStores"`
-		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
-		// development. It cannot be set from a configuration file. Default false.
-		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
 		// Fairness sets the engine fairness key of every workflow and activity task to the tenant ID, so the
 		// namespace's task queue serves tenants round-robin. Default false. The namespace must enable task queue
 		// fairness (Temporal Cloud namespace setting, or matching.enableFairness on a self-hosted server).
@@ -138,6 +134,23 @@ type (
 		// The memory backend enforces it per server process; the redis backend enforces it across every server
 		// sharing the Redis, with a per-tenant total key that trimming decreases.
 		MaxStreamBytesPerTenant int64 `yaml:"maxStreamBytesPerTenant"`
+		// StartFlowsPerSecond is a tenant's StartFlow token bucket per server process. Default 20 per second, burst 100.
+		StartFlowsPerSecond TenantRateLimitConfig `yaml:"startFlowsPerSecond"`
+		// WritesPerSecond is a tenant's bucket for InvokeRPC, PublishToChannel, DeleteChannelMessage, SetAttributes
+		// and WriteStream per server process. Default 100 per second, burst 500.
+		WritesPerSecond TenantRateLimitConfig `yaml:"writesPerSecond"`
+		// SearchesPerSecond is a tenant's SearchFlows bucket per server process. Default 1 per second, burst 5.
+		// Temporal Cloud allows 30 visibility calls per second per namespace, shared by every tenant.
+		SearchesPerSecond TenantRateLimitConfig `yaml:"searchesPerSecond"`
+	}
+
+	// TenantRateLimitConfig is one token bucket. With N server replicas the effective rate is N times the setting.
+	// A call over the bucket is RESOURCE_EXHAUSTED.
+	TenantRateLimitConfig struct {
+		// Rate is the sustained calls per second. Zero uses the bucket's default.
+		Rate float64 `yaml:"rate"`
+		// Burst is the bucket size. Zero uses the bucket's default.
+		Burst int `yaml:"burst"`
 	}
 
 	TenantAuthenticatorConfig struct {
@@ -250,9 +263,6 @@ func (c Config) ValidateTenancy() error {
 		if _, found := c.AttributeStore.Stores[name]; !found {
 			return fmt.Errorf("tenancy.attributeStores names unknown Attribute Store %q", name)
 		}
-	}
-	if !c.Tenancy.IsIncompleteMultiTenantModeAllowedForTest {
-		return fmt.Errorf("tenancy.mode multi is under development and not available yet")
 	}
 	return c.Tenancy.validateMultiTenant()
 }
@@ -385,6 +395,17 @@ func (c TenantWakeConfig) EffectiveBudget() time.Duration {
 		return DefaultTenantWakeBudget
 	}
 	return c.Budget
+}
+
+// EffectiveTenantRateLimit returns limit with zero fields replaced by the given defaults.
+func EffectiveTenantRateLimit(limit TenantRateLimitConfig, defaultRate float64, defaultBurst int) TenantRateLimitConfig {
+	if limit.Rate <= 0 {
+		limit.Rate = defaultRate
+	}
+	if limit.Burst <= 0 {
+		limit.Burst = defaultBurst
+	}
+	return limit
 }
 
 // EffectiveMaxStreamCapacityBytes returns MaxStreamCapacityBytes or its 1 MiB default.

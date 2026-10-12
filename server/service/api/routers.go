@@ -161,7 +161,11 @@ func NewServer(
 	server.grpcServer = grpc.NewServer(append(
 		serverOptions,
 		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
-			[]grpc.UnaryServerInterceptor{publicInterceptors.Unary, tenancy.NewFlowIDMapper(tenancyCfg).Unary},
+			[]grpc.UnaryServerInterceptor{
+				publicInterceptors.Unary,
+				tenancy.NewTenantRateLimiter(&tenancyCfg.Limits).Unary,
+				tenancy.NewFlowIDMapper(tenancyCfg).Unary,
+			},
 			extraUnaryInterceptors,
 			logger,
 		)...),

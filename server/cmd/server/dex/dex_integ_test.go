@@ -259,14 +259,11 @@ func serviceCLIContext(t *testing.T, arguments []string) *cli.Context {
 	return cli.NewContext(app, flagSet, nil)
 }
 
-func TestMultiTenantModeRefusesDexWebAndIncompleteStartup(t *testing.T) {
+func TestMultiTenantModeRefusesDexWeb(t *testing.T) {
 	multiTenantConfig := &config.Config{
 		Interpreter: config.Interpreter{Temporal: &config.TemporalConfig{}, AttributeIndexesManagedExternally: true},
 		Tenancy:     config.TenancyConfig{Mode: config.TenancyModeMulti},
 	}
 	_, err := newApplication(multiTenantConfig, serviceSelection{isWebEnabled: true})
 	require.ErrorContains(t, err, "Dex Web is not available in multi-tenant mode")
-
-	_, err = newApplication(multiTenantConfig, serviceSelection{isAPIEnabled: true, isInterpreterEnabled: true})
-	require.ErrorContains(t, err, "under development")
 }
