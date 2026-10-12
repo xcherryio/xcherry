@@ -287,18 +287,9 @@ Tenant mode refuses to start when any of these holds:
   interpreter dispatches by Flow type to the Flow's worker target. A tenant's types never
   reach another tenant's Worker, so Flow types need no prefix: two tenants may both
   define `OrderFlow`.
-- **Dex Web**: today it renders from one directory and lists the whole namespace. In
-  tenant mode it serves **each request for exactly one tenant: the tenant of the
-  credential that request carries**.
-  - The credential arrives in the request's `Authorization` header, set by a trusted
-    embedding proxy that authenticated and authorized the user. Dex Web forwards it on
-    every FlowService call, so the server's tenant rules apply unchanged: lists, searches
-    and actions see only that tenant's Flows.
-  - A request without a valid tenant credential is refused. Dex Web keeps no tenant state
-    between requests and never caches one tenant's data for another.
-  - It renders definitions from `<flowRenderingDirectory>/<tenant>/`.
-  - The browser never needs the credential: the proxy adds it on the server side.
-  - `web.tenant` still pins a deployment to one tenant for single-tenant setups.
+- **Dex Web**: it renders definitions from one directory and lists the whole namespace,
+  so it is **disabled in tenant mode**. Embedding applications that show Flows to their
+  users call the FlowService API with a tenant credential.
 - **dexcli**: it authenticates with a tenant credential like any other client.
 
 ### Timers, Channels, RPCs and schedules
@@ -395,8 +386,7 @@ enabled, plus the SDK integration suites:
 - **Limits**: a tenant over a limit gets `RESOURCE_EXHAUSTED` without affecting another
   tenant.
 - **Tombstone and purge**:
-  - Dex Web in tenant mode serves two tenants' requests with only their own Flows and
-    definitions, and refuses a request without a credential;
+  - Dex Web does not start in tenant mode;
   - a tombstoned tenant's valid token is refused, and the ID is accepted again only after
     `tombstoneRetention` following `done`;
   - PurgeTenant removes executions, blobs, Stream keys and rows, is idempotent, keeps its
@@ -414,7 +404,7 @@ enabled, plus the SDK integration suites:
 
 ## UI/UX
 
-Dex Web in tenant mode serves each request for the one tenant of its credential, which a trusted proxy supplies. No other UI.
+Dex Web is disabled in tenant mode. No other UI.
 
 ## Release plan
 
@@ -424,7 +414,7 @@ Dex Web in tenant mode serves each request for the one tenant of its credential,
 | TENANTID | identity mapping in and out, SubFlow IDs, `tenant_id` in the workflow input, length rules |
 | TENANTSEARCH | `DexTenantID`, AST rewriting, result checks, `SyncAttributeIndexes` refusal |
 | TENANTDISPATCH | worker target resolution and re-check, optional fairness key, dispatch cap, per-tenant pool bound, wake hook with held dispatch |
-| TENANTDATA | blob prefix and `s3KeyPrefix`, cleanup by stored ID, Stream scope and caps, tenant-scoped Attribute Stores, Dex Web per-request tenant mode |
+| TENANTDATA | blob prefix and `s3KeyPrefix`, cleanup by stored ID, Stream scope and caps, tenant-scoped Attribute Stores, Dex Web disabled in tenant mode |
 | TENANTLIMITS | per-tenant token buckets |
 | TENANTPURGE | `TenantAdminService` purge and describe |
 | SDKCREDENTIAL | sdk-go credential option, then the other SDKs |
