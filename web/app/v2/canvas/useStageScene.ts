@@ -12,6 +12,7 @@ import type { RunOverlay } from './model/run'
 import { anchorOf, rectOf, shiftScene, type AnchorRef } from './views/anchor'
 import { controlTopologyView } from './views/controlTopology'
 import type { StepGroup } from './views/groups'
+import { isStageGroup } from './views/groupShape'
 import { stageId } from './views/stageCard'
 import type { Direction, Scene } from './views/types'
 
@@ -64,10 +65,10 @@ export function useStageScene({
     /** Bumped by Collapsed and Expanded, which start the view again. */
     reset: number
   }>(() => ({ open: new Set(), anchor: null, nonce: 0, reset: 0 }))
-  const stageIds = useMemo(() => {
-    const known = new Set(flow?.steps.map((step) => step.id) ?? [])
-    return groups.filter((g) => g.stepIds.filter((id) => known.has(id)).length >= 2).map((g) => g.id)
-  }, [flow, groups])
+  const stageIds = useMemo(
+    () => (flow ? groups.filter((g) => isStageGroup(flow, g)).map((g) => g.id) : []),
+    [flow, groups],
+  )
   const [laid, setLaid] = useState<Laid | null>(null)
   const [cue, setCue] = useState<StageCue | null>(null)
   // Mirrors for the asynchronous layout callback, written only after render.

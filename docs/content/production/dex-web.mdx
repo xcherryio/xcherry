@@ -46,11 +46,13 @@ Unknown or repeated parameters, missing required parameters, and invalid JSON ar
 
 Every registered Step has one group declaration and one explanation declaration. The explanation is one sentence that states what the Step does. Group order follows the first member's registration position in **GetSteps**. Step order within a group also follows **GetSteps**.
 
+A group should do one thing. Make it either one run of Steps that lead to each other, or one choice that a single Step makes between its Steps, such as the tools an agent picks from. The analyzer warns about any other group with **v2_step_group_shape** and names the group's separate parts, so you can split it. The warning does not make the definition invalid.
+
 ## Flow canvas
 
 The **v2** canvas draws one card per Step. The card's icon says who acts at the Step: a person, a message from outside, time, a child Flow, an AI model, an app through a Connector, or the Flow itself.
 
-A group of two or more Steps is a stage. **Collapsed** draws each stage as one card. Select the card or its **⊕** to open the stage in place, and select **⊖** on the open stage to close it. **Expanded** opens every stage. Both buttons also return the view to where the canvas opened.
+A group of two or more Steps that forms one run or one choice is a stage. Any other group shows its Steps in its labeled band instead. **Collapsed** draws each stage as one card. Select the card or its **⊕** to open the stage in place, and select **⊖** on the open stage to close it. **Expanded** opens every stage. Both buttons also return the view to where the canvas opened.
 
 Each Step is drawn with one line in: the transition from the latest Step that leads to it, preferring a Step in its own group. Every other transition is a **↪** chip on the card it leaves. Select a chip to show where it leads. Failure lines are dashed. The Actions that answer a waiting Step, the RPC that starts a Step, and how a Step ends the Flow are also chips on its card.
 

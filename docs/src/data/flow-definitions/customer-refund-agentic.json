@@ -4546,6 +4546,11 @@
         "endLine": 221,
         "endColumn": 5
       }
+    },
+    {
+      "severity": "warning",
+      "code": "v2_step_group_shape",
+      "message": "group \"failure\" is neither one run of Steps that lead to each other nor one choice that a single Step makes; it falls into 5 parts: agenticNonConvergence; agenticNotARefund; agenticBillingFailed; agenticSubscriptionFailed; agenticEmailFailed. Split it so that each group does one thing"
     }
   ],
   "groups": [

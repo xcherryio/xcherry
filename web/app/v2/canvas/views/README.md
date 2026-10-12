@@ -73,8 +73,11 @@ In priority order; a lower rule never breaks a higher one.
 
 ## Stages
 
-A group of two or more Steps is a stage: closed, it is one card (`stageCard.ts`) with ⊕; open, its Steps
-sit in one labelled band with ⊖. Collapsed closes every stage and Expanded opens every one; both start
+A group of two or more Steps that forms one run (its Steps lead to each other) or one choice (a single
+Step leads into each of its parts, like an agent's tools) is a stage (`groupShape.ts`): closed, it is one
+card (`stageCard.ts`) with ⊕; open, its Steps sit in one labelled band with ⊖. Any other group always
+shows its Steps in its band and never folds, because opening it would scatter unrelated pieces; the
+analyzer's `v2_step_group_shape` warning names those pieces so the author can split the group. Collapsed closes every stage and Expanded opens every one; both start
 the view again. A one-Step group is always drawn as its Step in its band. Opening or closing one stage
 keeps the reader's place (`anchor.ts`, `../useStageScene.ts`): the new Scene is moved so the stage's
 leading edge stays where it was. When a run is shown, the stage holding the waiting Step opens.

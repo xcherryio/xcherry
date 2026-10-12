@@ -3,30 +3,38 @@
 exports[`control topology for a Flow with Steps > keeps the geometry of the shipped refund graph collapsed lr 1`] = `
 {
   "boxes": [
-    "step:agenticReceiveRequest 56,228 256x62",
-    "stage:failure 1495,188 288x126",
-    "step:agenticDecision 426,239 256x62",
-    "step:agenticCloseCase 1876,205 256x92",
-    "stage:evidence 775,74 288x126",
-    "stage:control 775,236 288x98",
-    "stage:resolution 1135,222 288x126",
+    "step:agenticReceiveRequest 56,841 256x62",
+    "step:agenticNotARefund 796,836 256x92",
+    "step:agenticDecision 426,224 256x62",
+    "step:agenticCloseCase 1526,627 256x92",
+    "step:agenticNonConvergence 796,724 256x92",
+    "stage:evidence 780,44 288x126",
+    "stage:control 780,206 288x98",
+    "stage:resolution 1145,243 288x148",
+    "step:agenticBillingFailed 796,530 256x92",
+    "step:agenticSubscriptionFailed 796,400 256x110",
+    "step:agenticEmailFailed 796,642 256x62",
   ],
-  "size": "2196x422",
+  "size": "1846x992",
 }
 `;
 
 exports[`control topology for a Flow with Steps > keeps the geometry of the shipped refund graph collapsed tb 1`] = `
 {
   "boxes": [
-    "step:agenticReceiveRequest 303,84 256x62",
-    "stage:failure 317,835 288x126",
-    "step:agenticDecision 346,284 256x62",
-    "step:agenticCloseCase 333,1078 256x92",
-    "stage:evidence 70,439 288x126",
-    "stage:control 394,453 288x98",
-    "stage:resolution 394,637 288x126",
+    "step:agenticReceiveRequest 1785,84 256x62",
+    "step:agenticNotARefund 1828,484 256x92",
+    "step:agenticDecision 380,284 256x62",
+    "step:agenticCloseCase 1276,952 256x92",
+    "step:agenticNonConvergence 1552,484 256x92",
+    "stage:evidence 40,444 288x126",
+    "stage:control 364,478 288x98",
+    "stage:resolution 507,687 288x148",
+    "step:agenticBillingFailed 1000,484 256x92",
+    "step:agenticSubscriptionFailed 724,484 256x110",
+    "step:agenticEmailFailed 1276,508 256x62",
   ],
-  "size": "768x1234",
+  "size": "2148x1108",
 }
 `;
 

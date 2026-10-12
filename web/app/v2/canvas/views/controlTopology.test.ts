@@ -21,16 +21,30 @@ import type { Box, Direction, Scene, ViewOpts } from './types';
 const DIRECTIONS: Direction[] = ['tb', 'lr'];
 
 describe('control topology stages', () => {
-  it('draws each group of two or more Steps as one stage card when collapsed', async () => {
+  it('draws each run or choice of two or more Steps as one stage card when collapsed', async () => {
     const { flow, groups } = refund();
     const scene = await layout(flow, groups, 'tb', new Set());
     const stages = scene.boxes.filter((box) => box.kind === 'stage');
 
-    expect(stages.map((box) => box.title).sort()).toEqual(['Control', 'Evidence', 'Failure', 'Resolution']);
+    // Evidence is a choice the agent's decision Step makes; Control and Resolution are runs.
+    expect(stages.map((box) => box.title).sort()).toEqual(['Control', 'Evidence', 'Resolution']);
     expect(stages.find((box) => box.title === 'Resolution')?.stage?.stepCount).toBe(11);
-    // A one-Step group is drawn as its Step, inside its own labelled band.
-    expect(scene.bands.map((band) => band.label).sort()).toEqual(['Close', 'Intake', 'Reasoning']);
+    // A one-Step group, and Failure's five unrelated handlers, show their Steps in a labelled band.
+    expect(scene.bands.map((band) => band.label).sort()).toEqual(['Close', 'Failure', 'Intake', 'Reasoning']);
     expect(scene.bands.every((band) => !band.collapsible)).toBe(true);
+  });
+
+  it('shows the Steps of a group that is neither a run nor a choice, and never folds it', async () => {
+    const { flow, groups } = refund();
+    const failure = groups.find((group) => group.label === 'Failure') as StepGroup;
+    for (const open of [new Set<string>(), new Set([failure.id])]) {
+      const scene = await layout(flow, groups, 'tb', open);
+      const onScreen = new Set(scene.boxes.map((box) => box.id));
+
+      expect(onScreen.has(stageId(failure.id))).toBe(false);
+      expect(failure.stepIds.every((id) => onScreen.has(id))).toBe(true);
+      expect(scene.bands.filter((band) => band.groupId === failure.id).map((band) => band.collapsible)).toEqual([false]);
+    }
   });
 
   it('draws every open stage as one region with a close control', async () => {
@@ -44,7 +58,6 @@ describe('control topology stages', () => {
       expect(scene.bands.filter((band) => band.collapsible).map((band) => band.label).sort()).toEqual([
         'Control',
         'Evidence',
-        'Failure',
         'Resolution',
       ]);
     }

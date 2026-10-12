@@ -46,11 +46,13 @@ Version 2 directive 使用具名值。同一行内的参数位置没有语义。
 
 每个已注册 Step 都必须有一个 group 声明和一个 explanation 声明。explanation 用一句话说明该 Step 做什么。Group 顺序由第一个成员在 **GetSteps** 中的注册位置决定，组内 Step 顺序也使用 **GetSteps**。
 
+一个 group 应该只做一件事：它要么是一串相互衔接的 Step，要么是由同一个 Step 在其中做出的一次选择，例如 agent 可以挑选的一组工具。对于其他形态的 group，analyzer 会给出 **v2_step_group_shape** 警告，并列出该 group 互不相连的各个部分，方便你拆分。这个警告不会让定义失效。
+
 ## Flow 画布
 
 **v2** 画布为每个 Step 画一张卡片。卡片的图标说明由谁推进这个 Step：一个人、来自外部的消息、时间、子 Flow、AI 模型、通过 Connector 调用的应用，或 Flow 自身。
 
-包含两个或更多 Step 的 group 是一个阶段。**Collapsed** 把每个阶段画成一张卡片。选择这张卡片或它的 **⊕**，阶段会在原位展开；选择展开阶段上的 **⊖** 即可收起。**Expanded** 展开所有阶段。这两个按钮还会把视图恢复到画布打开时的位置。
+由两个或更多 Step 组成、且是一串 Step 或一次选择的 group 是一个阶段。其他 group 会在带标签的区域内直接显示它的各个 Step。**Collapsed** 把每个阶段画成一张卡片。选择这张卡片或它的 **⊕**，阶段会在原位展开；选择展开阶段上的 **⊖** 即可收起。**Expanded** 展开所有阶段。这两个按钮还会把视图恢复到画布打开时的位置。
 
 每个 Step 只画一条进入的线：来自最后一个通向它的 Step 的 transition，并优先选择同一 group 中的 Step。其他 transition 都以 **↪** 标签显示在它离开的卡片上；选择标签即可查看它通向哪里。失败路径用虚线表示。响应等待中 Step 的 Action、启动 Step 的 RPC，以及 Step 如何结束 Flow，也都以标签显示在卡片上。
 
