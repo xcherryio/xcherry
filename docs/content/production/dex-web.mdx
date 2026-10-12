@@ -58,7 +58,7 @@ A group of two or more Steps that forms one run or one choice is a stage. Any ot
 
 Each Step is drawn with one line in: the transition from the latest Step that leads to it, preferring a Step in its own group. Every other transition is a **↪** chip on the card it leaves. Select a chip to show where it leads. The Actions that answer a waiting Step, the RPC that starts a Step, and how a Step ends the Flow are also chips on its card.
 
-The canvas draws the Flow's main story first. The main story is every Step that the Flow reaches on purpose, however rarely. It includes business rejections, failed checks, and Steps that an RPC moves the Flow to. Failure handling is hidden in both **Collapsed** and **Expanded**. The controls bar says how many failure-handling Steps are hidden. A card that a failure transition leaves shows **⚠** and the number of its failure transitions.
+The canvas draws the Flow's main story first. The main story is every Step that the Flow reaches on purpose, however rarely. It includes business rejections, failed checks, and Steps that an RPC moves the Flow to. Failure handling is hidden in both **Collapsed** and **Expanded**. A Step card that a failure transition leaves shows **⚠** and the number of its failure transitions. Stage cards do not show this count, so the collapsed view stays quiet.
 
 Select a card with **⚠** to draw its failure handling beside it. The Steps its failures lead to appear in dashed cards. A failure that goes straight to a main-story Step appears as a dashed **↪** pointer, and **↩** chips lead back to the main story. Nothing else moves. Select anything else to hide the failure handling again.
 

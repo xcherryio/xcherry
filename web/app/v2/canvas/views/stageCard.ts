@@ -92,8 +92,6 @@ export function stageBox(
   docked: {
     jumps: { to: string; failure: boolean; label: string }[]
     loops: boolean
-    /** Failure transitions that leave its Steps, which the card counts. */
-    failures?: number
   },
 ): Box {
   const chips: BoxChip[] = docked.jumps.map((jump) => ({
@@ -120,7 +118,6 @@ export function stageBox(
     isStart: members.some((step) => step.isStart) || undefined,
     pill: run.pill,
     holds: run.holds,
-    failures: docked.failures ? docked.failures : undefined,
     actor: members.some((step) => step.actor === 'external') ? 'external' : undefined,
   }
 }

@@ -1470,11 +1470,6 @@
   right: calc(var(--v2-panel-w, 360px) + 12px);
   max-width: calc(100% - var(--v2-panel-w, 360px) - 24px);
 }
-.pctlbar .pctl-hint {
-  color: var(--p-ink-2);
-  font-size: 12px;
-  white-space: nowrap;
-}
 .pctlbar .pctl-label {
   white-space: nowrap;
 }

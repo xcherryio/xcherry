@@ -193,7 +193,7 @@ export interface Box {
   barTitle?: string
   /** The Steps of a closed stage that a run is on, so the stage can carry the "now" ring. */
   holds?: string[]
-  /** Failure transitions that leave this Step, or the Steps of this stage, drawn only on selection. */
+  /** Failure transitions that leave this Step, drawn only when it is selected. Stage cards carry none. */
   failures?: number
   /** Drawn beside this box, a Step or the stage holding it, as part of its failure detour. */
   detourOf?: string

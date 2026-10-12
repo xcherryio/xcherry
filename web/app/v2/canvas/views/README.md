@@ -52,8 +52,8 @@ across the Flow enter an 11-Step stage), and the worst region hole went from 0.5
 In priority order; a lower rule never breaks a higher one.
 
 1. Nothing is lost. Every Step of the main story and every ordinary transition appears, as a line or
-   as a ↪ chip on the card it leaves. Failure handling waits for a selection and is counted meanwhile
-   (see Failure handling below). A wait the analyzer could not name is drawn as a wait, never as
+   as a ↪ chip on the card it leaves. Failure handling waits for a selection and is counted on the
+   Step cards it leaves (see Failure handling below). A wait the analyzer could not name is drawn as a wait, never as
    automatic.
 2. No line passes under a card (ELK's orthogonal routing; `clear-lines`).
 3. The start comes first and is on screen when the canvas opens.
@@ -139,9 +139,10 @@ every Step that only failure transitions reach, directly or through other such S
 (`failureHandling` in `../model/pocFlow.ts`). A Step that catches its own error and chooses where to go
 makes an ordinary decision and stays in the main story; the analyzer judges groups on the same split.
 
-The layout leaves failure handling and every failure transition out (`mainStory`). A card that a failure
-leaves carries ⚠ and the number of its failure transitions; a stage card counts its Steps'. The controls
-bar says how many Steps are hidden. Collapsed and Expanded never show them.
+The layout leaves failure handling and every failure transition out (`mainStory`). A Step card that a
+failure leaves carries ⚠ and the number of its failure transitions. A stage card carries none, so the
+collapsed view stays quiet, and the controls bar says nothing about failure handling; the legend notes how
+many Steps it leaves out. Collapsed and Expanded never show failure-handling Steps.
 
 Selecting a card with ⚠ draws its detour beside it (`failureDetours.ts`): the Steps its failures lead
 to, dashed, in a clear lane to its right (below it, left-right), and a pointer for a failure that goes

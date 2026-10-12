@@ -135,7 +135,6 @@ async function layout(whole: PocFlow, opts: ViewOpts): Promise<Scene> {
     return stageBox(flow, group, members, opts, {
       jumps: own.map((jump) => ({ to: jump.to, failure: jump.failure, label: titleOf(jump.to) })),
       loops: repeating.has(id),
-      failures: members.reduce((sum, member) => sum + failuresOf(member.id), 0),
     })
   })
 
@@ -254,7 +253,7 @@ function coverageNotes(flow: PocFlow, isStaged: boolean, stages: number, jumps: 
   const notes: string[] = []
   if (hidden > 0) {
     notes.push(
-      `${hidden} failure-handling step${hidden === 1 ? ' is' : 's are'} left out: steps only a failure leads to. ⚠ on a card counts the failures that leave it; select the card to see where they go.`,
+      `${hidden} failure-handling step${hidden === 1 ? ' is' : 's are'} left out: steps only a failure leads to. ⚠ on a step counts the failures that leave it; select the step to see where they go.`,
     )
   }
   if (isStaged) {

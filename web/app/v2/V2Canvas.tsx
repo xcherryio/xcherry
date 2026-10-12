@@ -36,7 +36,6 @@ import type { CanvasViewportHandle } from './canvas/render/viewport';
 import { useStageScene } from './canvas/useStageScene';
 import { groupOfStep } from './canvas/views/controlTopology';
 import { detourMessage, hasDetour, isFailureHandling, runDetourSources, withDetours } from './canvas/views/failureDetours';
-import { failureHandling } from './canvas/model/pocFlow';
 import { stageId } from './canvas/views/stageCard';
 import type { Direction } from './canvas/views/types';
 import { Controls } from './flow/Controls';
@@ -207,7 +206,6 @@ export function V2Canvas({
     const sources = [...new Set([...(overlay ? runDetourSources(flow, overlay) : []), ...(detourFor ? [detourFor] : [])])];
     return withDetours(stages.scene, flow, { direction, run: overlay, groups, openStages: stages.openStages }, sources);
   }, [detourFor, direction, flow, groups, overlay, stages.openStages, stages.scene]);
-  const hiddenFailures = useMemo(() => (flow ? failureHandling(flow).size : 0), [flow]);
   // Nothing selected, so no detour: however the selection was cleared.
   if (selectedId === null && detourFor !== null) setDetourFor(null);
 
@@ -419,7 +417,6 @@ export function V2Canvas({
       <div className="pctlbar">
         <Controls
           stages={stages.hasStages ? stages.state : null}
-          hiddenFailures={hiddenFailures}
           direction={direction}
           onCollapseAll={stages.collapseAll}
           onExpandAll={stages.expandAll}

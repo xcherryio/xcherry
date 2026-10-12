@@ -55,7 +55,7 @@ function RpcCard({ box, selected, onSelect }: { box: Box; selected: boolean; onS
 }
 
 /** The failure count beside a card's title: how many failures leave it, drawn when it is selected. */
-export function FailureCount({ count }: { count: number }): JSX.Element {
+function FailureCount({ count }: { count: number }): JSX.Element {
   const text = `${count} failure route${count === 1 ? '' : 's'} leave${count === 1 ? 's' : ''} here. Select to see where ${count === 1 ? 'it goes' : 'they go'}.`
   return (
     <span className="pcard-failures" title={text} data-failures={count}>
