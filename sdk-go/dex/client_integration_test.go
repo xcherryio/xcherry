@@ -478,6 +478,9 @@ func (service *clientTestFlowService) WaitForStepCompletion(
 	if request.FlowId == "inactive" {
 		return nil, clientTestMissingFlowError()
 	}
+	if request.FlowId == "cancelled-step" {
+		return nil, status.Error(codes.Canceled, "Stream removed (RST_STREAM (Received RST_STREAM with error code 8))")
+	}
 	if request.FlowId == "reattach-step" && len(service.waitStepRequests) == 1 {
 		return nil, clientTestServiceError(
 			codes.DeadlineExceeded,
@@ -1100,6 +1103,21 @@ func TestClientDurableWaitReattachment(t *testing.T) {
 		WaitForStepCompletionOptions{RequestTimeout: time.Second},
 	))
 	require.Empty(t, service.waitStepRequest.RequestId)
+}
+
+func TestClientCancelledWaitWithinRequestBudgetIsServiceError(t *testing.T) {
+	client, _ := newClientIntegration(t)
+	err := client.WaitForStepCompletion(
+		context.Background(),
+		"cancelled-step",
+		StepExecutionID{StepType: GetFinalStepType(clientTestStep{})},
+		WaitForStepCompletionOptions{RequestTimeout: time.Minute},
+	)
+	var timeout *RequestTimeoutError
+	require.False(t, errors.As(err, &timeout), "a cancellation before the budget expires is not a timeout: %v", err)
+	var serviceErr *ServiceError
+	require.ErrorAs(t, err, &serviceErr)
+	require.Equal(t, codes.Canceled, serviceErr.Code)
 }
 
 func newClientIntegration(t *testing.T) (*Client, *clientTestFlowService) {
