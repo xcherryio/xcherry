@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 from typing import Any, cast
 
 import grpc
+import pytest
 from google.protobuf import any_pb2
 from google.rpc import status_pb2
 
@@ -29,6 +31,7 @@ from dex import (
     WaitForStepCompletionOptions,
 )
 from dex.dexpb import dex_pb2 as pb
+from dex.runtime_errors import DexServiceError, RequestTimeoutError
 
 
 class MemoryBlobCache:
@@ -235,3 +238,84 @@ class FakeRpcError(grpc.RpcError):
 
 def _long_poll_timeout() -> FakeRpcError:
     return FakeRpcError()
+
+
+class CancelledRpcError(grpc.RpcError):
+    def code(self) -> grpc.StatusCode:
+        return grpc.StatusCode.CANCELLED
+
+    def details(self) -> str:
+        return "Stream removed (RST_STREAM (Received RST_STREAM with error code 8))"
+
+    def trailing_metadata(self) -> tuple[Any, ...]:
+        return ()
+
+
+class SyncCancelledWaitService:
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = delay_seconds
+
+    def WaitForAttribute(  # noqa: N802
+        self, request: pb.WaitForAttributeRequest, *, timeout: float | None = None
+    ) -> pb.WaitForAttributeResponse:
+        time.sleep(self.delay_seconds)
+        raise CancelledRpcError()
+
+
+class AsyncCancelledWaitService:
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = delay_seconds
+
+    async def WaitForAttribute(  # noqa: N802
+        self, request: pb.WaitForAttributeRequest, *, timeout: float | None = None
+    ) -> pb.WaitForAttributeResponse:
+        await asyncio.sleep(self.delay_seconds)
+        raise CancelledRpcError()
+
+
+def test_cancelled_wait_is_a_timeout_only_after_the_request_budget_expires() -> None:
+    attribute = Attribute("count", int)
+    options = WaitForAttributeOptions("wait-1", timedelta(seconds=1))
+    client = Client(Registry(()), MemoryBlobCache(), ClientOptions("unused:1"))
+    try:
+        client._service = cast(Any, SyncCancelledWaitService(delay_seconds=1.1))
+        with pytest.raises(RequestTimeoutError):
+            client.wait_for_attribute_match(
+                "flow-1", attribute, AttributeMatch.equal_to(1), options
+            )
+        client._service = cast(Any, SyncCancelledWaitService(delay_seconds=0))
+        with pytest.raises(DexServiceError) as remaining_budget_error:
+            client.wait_for_attribute_match(
+                "flow-1", attribute, AttributeMatch.equal_to(1), options
+            )
+        assert not isinstance(remaining_budget_error.value, RequestTimeoutError)
+        assert remaining_budget_error.value.code is grpc.StatusCode.CANCELLED
+    finally:
+        client.close()
+
+
+def test_async_cancelled_wait_is_a_timeout_only_after_the_request_budget_expires() -> (
+    None
+):
+    asyncio.run(_async_cancelled_wait_is_a_timeout_only_after_budget())
+
+
+async def _async_cancelled_wait_is_a_timeout_only_after_budget() -> None:
+    attribute = Attribute("count", int)
+    options = WaitForAttributeOptions("wait-1", timedelta(seconds=1))
+    client = AsyncClient(Registry(()), MemoryBlobCache(), ClientOptions("unused:1"))
+    try:
+        client._service = cast(Any, AsyncCancelledWaitService(delay_seconds=1.1))
+        with pytest.raises(RequestTimeoutError):
+            await client.wait_for_attribute_match(
+                "flow-1", attribute, AttributeMatch.equal_to(1), options
+            )
+        client._service = cast(Any, AsyncCancelledWaitService(delay_seconds=0))
+        with pytest.raises(DexServiceError) as remaining_budget_error:
+            await client.wait_for_attribute_match(
+                "flow-1", attribute, AttributeMatch.equal_to(1), options
+            )
+        assert not isinstance(remaining_budget_error.value, RequestTimeoutError)
+        assert remaining_budget_error.value.code is grpc.StatusCode.CANCELLED
+    finally:
+        await client.close()

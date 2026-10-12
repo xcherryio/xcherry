@@ -67,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -166,6 +167,19 @@ final class ClientExceptionIntegrationTest {
                         .build());
         assertEquals(1, flowService.stepWaitRequest.getRequestTimeoutSeconds());
         assertEquals(3, flowService.stepWaitRequest.getInternalHandlerTimeoutSeconds());
+    }
+
+    @Test
+    void keepsServerCancelledWaitWithinItsRequestBudgetAsServiceError() {
+        final WaitForStepCompletionOptions oneMinute = WaitForStepCompletionOptions.newBuilder()
+                .requestTimeout(Duration.ofSeconds(60))
+                .build();
+        final DexServiceException remaining = assertThrows(
+                DexServiceException.class,
+                () -> client.waitForStepCompletion(
+                        "step-cancelled-within-budget", StepExecutionId.of("WaitingStep", 1), oneMinute));
+        assertFalse(remaining instanceof RequestTimeoutException);
+        assertEquals(Status.Code.CANCELLED, remaining.getCode());
     }
 
     @Test
@@ -505,6 +519,12 @@ final class ClientExceptionIntegrationTest {
                         Status.Code.DEADLINE_EXCEEDED,
                         io.superdurable.gen.ErrorSubStatus.ERROR_SUB_STATUS_LONG_POLL_TIME_OUT,
                         "long poll timed out"));
+                return;
+            }
+            if (request.getFlowId().equals("step-cancelled-within-budget")) {
+                observer.onError(Status.CANCELLED
+                        .withDescription("Stream removed (RST_STREAM (Received RST_STREAM with error code 8))")
+                        .asRuntimeException());
                 return;
             }
             if (request.getFlowId().equals("step-timeout")) {

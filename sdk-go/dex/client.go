@@ -1319,6 +1319,10 @@ func newClientRequestBudget(requestTimeout time.Duration) (*clientRequestBudget,
 	return requestBudget, nil
 }
 
+func (b *clientRequestBudget) hasExpired() bool {
+	return !b.deadline.IsZero() && !time.Now().Before(b.deadline)
+}
+
 func (b *clientRequestBudget) remainingSeconds() (int32, error) {
 	if b.deadline.IsZero() {
 		return 0, nil
@@ -1368,6 +1372,10 @@ func translateDurableWaitRPCError(
 ) error {
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
+	}
+	if status.Code(err) == codes.Canceled && requestBudget.hasExpired() {
+		// The server can reset the stream with CANCEL as the shared deadline passes.
+		return newRequestTimeoutError(op, flowID)
 	}
 	if status.Code(err) == codes.DeadlineExceeded {
 		// Transport deadlines can fire before the matching context timer.
