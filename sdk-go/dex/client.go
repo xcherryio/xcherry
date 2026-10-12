@@ -43,6 +43,9 @@ type ClientOptions struct {
 	WorkerTarget *WorkerTarget
 	// Logger defaults to the shared BlobCache logger.
 	Logger Logger
+	// Credential is sent as a bearer credential with every FlowService call. Default: nil sends none.
+	// A multi-tenant Dex server requires it and derives the caller's tenant from it; see FileCredential.
+	Credential Credential
 }
 
 // Client calls FlowService with registered typed definitions.
@@ -95,7 +98,10 @@ func NewClient(
 	}
 	connection, err := grpc.NewClient(
 		flowServiceAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		append(
+			[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+			credentialDialOptions(options.Credential)...,
+		)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)
