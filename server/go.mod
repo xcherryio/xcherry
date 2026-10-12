@@ -16,7 +16,7 @@ require (
 	github.com/prometheus/client_golang v1.21.1
 	github.com/snowflakedb/gosnowflake/v2 v2.2.0
 	github.com/stretchr/testify v1.11.1
-	github.com/superdurable/dex/blob-cache-go v0.1.0
+	github.com/superdurable/dex/blob-cache-go v0.1.1
 	github.com/uber-go/tally/v4 v4.1.1
 	github.com/uber/cadence-idl v0.0.0-20250616185004-cc6f52f87bc6
 	go.mongodb.org/mongo-driver/v2 v2.9.1
