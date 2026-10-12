@@ -3,8 +3,10 @@
 This private package owns both Flow Definition Graph TypeScript contracts and
 renderers. `FlowDefinitionGraphView` renders Version 1 with its compound layout.
 `ProcessCanvasView` renders Version 2 with ordered group bands, collapsed or
-expanded Step cards, top-down or left-right layout, and selection details. Dex
-Web and product documentation import the same package.
+expanded Step cards, top-down or left-right layout, and selection details for
+product documentation. Dex Web draws Version 2 with its own **v2** canvas
+(`web/app/v2/canvas`) and imports this package for Version 1 and the graph
+types.
 
 Consumers must provide React 19, React Flow, and Dagre. The repository uses a
 local file dependency and preserves symlinks in Vite, Docusaurus, and

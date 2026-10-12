@@ -550,6 +550,24 @@ a {
   min-width: 0;
 }
 
+/* The v2 canvas needs a sized box; its own tokens come from `.v2-shell`. */
+.v2-shell.flow-rendering-canvas {
+  height: min(78vh, 940px);
+  min-height: 640px;
+  overflow: hidden;
+  border: 1px solid var(--p-line);
+  border-radius: 17px;
+}
+
+.flow-rendering-canvas > .pcanvas {
+  height: 100%;
+}
+
+.flow-rendering-children {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
 .flow-rendering-empty p {
   margin: 8px 0 0;
   color: var(--muted);

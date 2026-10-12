@@ -37,7 +37,7 @@ dexcli visualize ./order_flow.py --json
 dexcli dev --flow-rendering-dir ./build
 ```
 
-在 Dex Web 的 **/v1/rendering** 打开 **Flow Rendering**。该页面独立于 Flow 搜索页和运行详情页，用于交互式渲染所选定义图。通过图例可以显示或隐藏控制流、WaitFor、RPC、Attribute、Channel、Stream、SubFlow 及诊断。Flow timeout handler 始终作为 Flow 的一部分显示。Stream 默认隐藏，其他图层默认显示。
+在 Dex Web 的 **/v1/rendering** 打开 **Flow Rendering**。该页面独立于 Flow 搜索页和运行详情页，用于交互式渲染所选定义图。通过图例可以显示或隐藏控制流、WaitFor、RPC、Attribute、Channel、Stream、SubFlow 及诊断。Flow timeout handler 始终作为 Flow 的一部分显示。Stream 默认隐藏，其他图层默认显示。Version 2.0 文件则使用 **v2** 画布绘制，随后列出其 diagnostic。参见 [Dex Web](/production/dex-web#flow-画布)。
 
 当 Dex 带着 JSON 目录启动时，**/v2** 也会在 run 列表右侧渲染当前 Flow type 的 definition。见 [Dex Web](/production/dex-web)。
 

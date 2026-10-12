@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { hydrateBlobs } from '@/lib/blobs';
 import { readResponseJSON } from '@/lib/http';
-import type { FlowDefinitionCatalog, FlowHistoryEvent, FlowSummary } from '@/lib/types';
+import type { FlowDefinitionCatalog, FlowDefinitionEntry, FlowHistoryEvent, FlowSummary } from '@/lib/types';
 import { safeDecode } from './canvas/model/decode';
 import {
   activeStepTypes,
@@ -54,6 +54,7 @@ import {
 export function V2Canvas({
   flowType,
   flowId = '',
+  definition,
   onActionable,
   onBand,
   onStepContext,
@@ -65,6 +66,8 @@ export function V2Canvas({
 }: {
   flowType: string;
   flowId?: string;
+  /** Draws this definition file instead of the catalog's valid one for `flowType`. */
+  definition?: FlowDefinitionEntry;
   /** Bumped by the host to clear the Step selection. */
   deselectKey?: number;
   /** Zoom in on the waiting Step instead of merely panning to it. */
@@ -159,10 +162,10 @@ export function V2Canvas({
   }, [flowId]);
 
   const selected = useMemo(
-    () => catalog?.definitions.find(
-      (definition) => definition.flowName === flowType && definition.schemaVersion === '2.0' && definition.valid,
+    () => definition ?? catalog?.definitions.find(
+      (candidate) => candidate.flowName === flowType && candidate.schemaVersion === '2.0' && candidate.valid,
     ),
-    [catalog, flowType],
+    [catalog, definition, flowType],
   );
 
   const flow = useMemo(() => {
@@ -385,7 +388,7 @@ export function V2Canvas({
   }, []);
 
   if (error) return <div className="v2-empty">{error}</div>;
-  if (!catalog) return <div className="v2-empty">Loading Flow definition…</div>;
+  if (!catalog && !definition) return <div className="v2-empty">Loading Flow definition…</div>;
   if (!selected || !flow) {
     return <div className="v2-empty">No valid Flow Definition Graph 2.0 file for this Flow type.</div>;
   }

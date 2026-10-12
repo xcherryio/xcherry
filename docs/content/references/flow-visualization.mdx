@@ -37,7 +37,7 @@ Start Dex with a directory containing generated JSON files:
 dexcli dev --flow-rendering-dir ./build
 ```
 
-Open **Flow Rendering** at **/v1/rendering**. This page is independent from Flow search and run details. It renders the selected definition interactively. Its legend can show or hide control flow, WaitFor, RPCs, Attributes, Channels, Streams, SubFlows, and diagnostics. Flow timeout handlers are always shown as part of the Flow. Streams are hidden by default. The other layers start visible.
+Open **Flow Rendering** at **/v1/rendering**. This page is independent from Flow search and run details. It renders the selected definition interactively. Its legend can show or hide control flow, WaitFor, RPCs, Attributes, Channels, Streams, SubFlows, and diagnostics. Flow timeout handlers are always shown as part of the Flow. Streams are hidden by default. The other layers start visible. A Version 2.0 file is drawn with the **v2** canvas instead, followed by its diagnostics. See [Dex Web](/production/dex-web#flow-canvas).
 
 When Dex starts with a JSON directory, **v2** at **/v2** also renders the selected Flow type's definition beside the run list. See [Dex Web](/production/dex-web).
 
