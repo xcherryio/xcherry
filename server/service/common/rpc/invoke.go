@@ -46,12 +46,13 @@ func InvokeWorkerRpc(
 	invocationId string,
 	blobStoreCfg *config.BlobStoreConfig,
 	isOutputPersisted bool,
-	tenantID string,
+	tenant tenancy.DispatchTenant,
+	dispatchGate *tenancy.DispatchGate,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
 	if apiCfg == nil || interpreterActivityCfg == nil {
 		panic("InvokeWorkerRpc requires non-nil config sections")
 	}
-	applicationFlowID, err := tenancy.DispatchFlowID(tenantID, req.GetFlowId())
+	applicationFlowID, err := tenancy.DispatchFlowID(tenant.ID, req.GetFlowId())
 	if err != nil {
 		return nil, err
 	}
@@ -93,16 +94,6 @@ func InvokeWorkerRpc(
 	)
 	defer cancel()
 
-	client, callCtx, release, err := pool.Acquire(
-		rpcCtx,
-		rpcPrep.GetWorkerTarget(),
-		req.GetFlowId(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
 	channelInfos := rpcPrep.GetChannelInfos()
 	if channelInfos == nil {
 		channelInfos = map[string]*dexpb.ChannelInfo{}
@@ -129,7 +120,12 @@ func InvokeWorkerRpc(
 		return nil, &WorkerRequestTooLargeError{MaxMessageBytes: apiCfg.EffectiveGrpcMaxMessageBytes()}
 	}
 
-	resp, err := client.InvokeWorkerRPC(callCtx, workerReq)
+	releaseSlot, err := dispatchGate.Admit(rpcCtx, tenant, rpcPrep.GetWorkerTarget(), func() {})
+	if err != nil {
+		return nil, err
+	}
+	defer releaseSlot()
+	resp, err := invokeWorkerRPCWithinWakeBudget(rpcCtx, pool, dispatchGate, tenant, rpcPrep.GetWorkerTarget(), req.GetFlowId(), workerReq)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +137,7 @@ func InvokeWorkerRpc(
 	); err != nil {
 		return nil, err
 	}
-	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
+	if err := tenancy.ValidateTenantAttributeWrites(tenant.ID, resp.GetUpsertAttributes()); err != nil {
 		return nil, err
 	}
 	service.SetFromStepExecutionIDForStepDecision(
@@ -300,4 +296,35 @@ func validateWorkerRpcResponse(
 		return fmt.Errorf("canceling sibling step executions in RPC is not supported")
 	}
 	return nil
+}
+
+// invokeWorkerRPCWithinWakeBudget calls the Worker, redialing an unavailable Worker within the wake budget.
+func invokeWorkerRPCWithinWakeBudget(
+	ctx context.Context,
+	pool *workerclient.WorkerClientPool,
+	dispatchGate *tenancy.DispatchGate,
+	tenant tenancy.DispatchTenant,
+	target *dexpb.WorkerTarget,
+	flowID string,
+	workerReq *dexpb.InvokeWorkerRPCRequest,
+) (*dexpb.InvokeWorkerRPCResponse, error) {
+	hold := dispatchGate.NewWakeHold(tenant, target, func() {})
+	for {
+		client, callCtx, release, err := pool.Acquire(ctx, target, flowID)
+		if err != nil {
+			if hold.ShouldRedial(ctx, err) {
+				continue
+			}
+			return nil, err
+		}
+		resp, err := client.InvokeWorkerRPC(callCtx, workerReq)
+		release()
+		if err != nil && hold.ShouldRedial(ctx, err) {
+			continue
+		}
+		if err == nil {
+			hold.RecordSuccess()
+		}
+		return resp, err
+	}
 }

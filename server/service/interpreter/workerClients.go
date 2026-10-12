@@ -35,6 +35,23 @@ func NewInternalServiceClient(cfg *config.Config) *workerclient.InternalServiceC
 	return internalService
 }
 
+// NewDispatchGate builds the gate that admits tenant dispatches; it admits everything in single-tenant mode.
+func NewDispatchGate(cfg *config.Config) *tenancy.DispatchGate {
+	var internalToken *tenancy.InternalTokenFile
+	if cfg.Tenancy.Wake.URL != "" {
+		internalToken = newInternalToken(cfg)
+	}
+	zapLogger, err := cfg.Log.NewZapLogger()
+	if err != nil {
+		panic(fmt.Sprintf("create dispatch gate logger: %v", err))
+	}
+	gate, err := tenancy.NewDispatchGate(&cfg.Tenancy, internalToken, loggerimpl.NewLogger(zapLogger))
+	if err != nil {
+		panic(fmt.Sprintf("create dispatch gate: %v", err))
+	}
+	return gate
+}
+
 // newInternalToken returns nil in single-tenant mode, where InternalService needs no token.
 func newInternalToken(cfg *config.Config) *tenancy.InternalTokenFile {
 	if !cfg.Tenancy.IsMultiTenant() {

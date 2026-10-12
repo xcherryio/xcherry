@@ -40,6 +40,7 @@ import (
 	"github.com/superdurable/dex/service/interpreter/interfaces"
 	"github.com/superdurable/dex/service/tenancy"
 	"go.temporal.io/sdk/client"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -57,6 +58,7 @@ type Activities struct {
 	subFlowResolver  *SubFlowReuseResolver
 	streamStore      *streamstore.Store
 	metrics          client.MetricsHandler
+	dispatchGate     *tenancy.DispatchGate
 }
 
 func NewActivities(
@@ -89,6 +91,7 @@ func NewActivities(
 		eventHandler:     eventHandler,
 		cfg:              cfg,
 		subFlowResolver:  NewSubFlowReuseResolver(unifiedClient),
+		dispatchGate:     NewDispatchGate(cfg),
 		streamStore:      streamStore,
 		metrics:          metrics,
 	}
@@ -150,24 +153,31 @@ func (a *Activities) IWaitForM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
-	client, callCtx, release, err := a.workerPool.Acquire(
-		ctx,
-		input.GetWorkerTarget(),
-		activityInfo.WorkflowExecution.ID,
-	)
-	if err != nil {
-		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
-	}
-	defer release()
-
 	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
 	if err != nil {
 		return nil, err
 	}
+	tenant := tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()}
+	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	storedContext := req.Context
 	req.Context = dispatchContext
-	stream, err := client.InvokeWaitForMethod(callCtx, req)
+	dispatch, err := openWorkerStream(
+		ctx, a, tenant, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
+			grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
+		) {
+			return client.InvokeWaitForMethod(callCtx, req)
+		},
+	)
 	req.Context = storedContext
+	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
+		return nil, a.newWorkerTargetRefusedError(err)
+	}
+	if err != nil && !dispatch.isOpened {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
+	defer dispatch.release()
+	stream, callCtx := dispatch.stream, dispatch.callCtx
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
@@ -343,24 +353,31 @@ func (a *Activities) IExecuteM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
-	client, callCtx, release, err := a.workerPool.Acquire(
-		ctx,
-		input.GetWorkerTarget(),
-		activityInfo.WorkflowExecution.ID,
-	)
-	if err != nil {
-		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
-	}
-	defer release()
-
 	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
 	if err != nil {
 		return nil, err
 	}
+	tenant := tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()}
+	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	storedContext := req.Context
 	req.Context = dispatchContext
-	stream, err := client.InvokeExecuteMethod(callCtx, req)
+	dispatch, err := openWorkerStream(
+		ctx, a, tenant, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
+			grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
+		) {
+			return client.InvokeExecuteMethod(callCtx, req)
+		},
+	)
 	req.Context = storedContext
+	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
+		return nil, a.newWorkerTargetRefusedError(err)
+	}
+	if err != nil && !dispatch.isOpened {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
+	defer dispatch.release()
+	stream, callCtx := dispatch.stream, dispatch.callCtx
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
@@ -804,8 +821,12 @@ func (a *Activities) IWRPC(
 		input.GetRequest().GetRequestId(),
 		&a.cfg.BlobStore,
 		true,
-		input.GetTenantId(),
+		tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()},
+		a.dispatchGate,
 	)
+	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
+		return nil, a.newWorkerTargetRefusedError(err)
+	}
 	if err != nil {
 		var oversizedRequest *rpc.WorkerRequestTooLargeError
 		if errors.As(err, &oversizedRequest) {
@@ -878,6 +899,12 @@ func (a *Activities) StartSubFlow(
 	if err != nil {
 		return nil, err
 	}
+	if flowConfig.WorkerTarget, err = a.dispatchGate.Policy().Resolve(
+		input.GetTenantClaims(),
+		flowConfig.GetWorkerTarget(),
+	); err != nil {
+		return nil, a.newWorkerTargetRefusedError(err)
+	}
 	for _, storeName := range flowConfig.GetAttributeStoreNames().GetNames() {
 		if !a.attributeStore.HasStore(storeName) {
 			return nil, fmt.Errorf("Attribute Store %q is unavailable", storeName)
@@ -885,7 +912,7 @@ func (a *Activities) StartSubFlow(
 	}
 
 	workflowOptions := buildSubFlowStartOptions(
-		input.GetTenantId(), condition, flowConfig, parentFlowID, subFlowID, requestID,
+		input.GetTenantId(), a.dispatchGate.FairnessKey(input.GetTenantId()), condition, flowConfig, parentFlowID, subFlowID, requestID,
 	)
 	workflowInput := &dexpb.InterpreterWorkflowInput{
 		FlowType:                     condition.GetSubFlowType(),
@@ -898,6 +925,7 @@ func (a *Activities) StartSubFlow(
 		Config:                       flowConfig,
 		TimeoutHandlerOptions:        options.GetTimeoutHandlerOptions(),
 		TenantId:                     input.GetTenantId(),
+		TenantClaims:                 input.GetTenantClaims(),
 	}
 	output, err := a.subFlowResolver.Resolve(
 		ctx, condition, subFlowID, requestID, workflowOptions, workflowInput,
@@ -1063,6 +1091,7 @@ func buildSubFlowConfig(parent, override *dexpb.FlowConfig) (*dexpb.FlowConfig, 
 
 func buildSubFlowStartOptions(
 	tenantID string,
+	fairnessKey string,
 	condition *dexpb.SubFlowCondition,
 	flowConfig *dexpb.FlowConfig,
 	parentFlowID string,
@@ -1085,6 +1114,7 @@ func buildSubFlowStartOptions(
 	if tenantID != "" {
 		workflowOptions.SearchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
 	}
+	workflowOptions.FairnessKey = fairnessKey
 	if options.GetFlowStartDelaySeconds() > 0 {
 		workflowOptions.WorkflowStartDelay = ptr.Any(time.Duration(options.GetFlowStartDelaySeconds()) * time.Second)
 	}
@@ -1960,6 +1990,87 @@ func (a *Activities) newInvalidSubFlowIDError(err error) error {
 		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
 		&dexpb.InternalActivityError{
 			WorkerGrpcStatus: int32(codes.InvalidArgument),
+			ServerDetail:     err.Error(),
+		},
+	)
+}
+
+// workerStreamDispatch is one admitted dispatch with its open stream.
+type workerStreamDispatch[S any] struct {
+	stream   S
+	callCtx  context.Context
+	release  func()
+	isOpened bool
+}
+
+// openWorkerStream admits a tenant's dispatch, then opens the stream, holding an unavailable Worker within the wake
+// budget. isOpened is false when the dispatch failed before a stream call was attempted.
+func openWorkerStream[S any](
+	ctx context.Context,
+	a *Activities,
+	tenant tenancy.DispatchTenant,
+	target *dexpb.WorkerTarget,
+	flowID string,
+	heartbeat func(),
+	open func(dexpb.WorkerServiceClient, context.Context) (S, error),
+) (workerStreamDispatch[S], error) {
+	dispatch := workerStreamDispatch[S]{release: func() {}}
+	releaseSlot, err := a.dispatchGate.Admit(ctx, tenant, target, heartbeat)
+	if err != nil {
+		return dispatch, err
+	}
+	hold := a.dispatchGate.NewWakeHold(tenant, target, heartbeat)
+	for {
+		client, callCtx, releaseConnection, acquireErr := a.workerPool.Acquire(ctx, target, flowID)
+		if acquireErr != nil {
+			if hold.ShouldRedial(ctx, acquireErr) {
+				continue
+			}
+			releaseSlot()
+			return dispatch, acquireErr
+		}
+		stream, openErr := open(client, callCtx)
+		if openErr != nil && hold.ShouldRedial(ctx, openErr) {
+			releaseConnection()
+			continue
+		}
+		if openErr == nil {
+			hold.RecordSuccess()
+		}
+		dispatch.stream, dispatch.callCtx, dispatch.isOpened = stream, callCtx, true
+		dispatch.release = func() {
+			releaseConnection()
+			releaseSlot()
+		}
+		return dispatch, openErr
+	}
+}
+
+// dispatchHeartbeat keeps a waiting dispatch alive without losing the Step's last heartbeat value.
+func (a *Activities) dispatchHeartbeat(
+	ctx context.Context,
+	activityInfo interfaces.ActivityInfo,
+	workerContext *dexpb.Context,
+) func() {
+	if activityInfo.IsLocalActivity {
+		return func() {}
+	}
+	lastHeartbeatValue := workerContext.GetLastHeartbeatValue()
+	return func() {
+		if lastHeartbeatValue == nil {
+			a.activityProvider.RecordHeartbeat(ctx)
+			return
+		}
+		a.activityProvider.RecordHeartbeat(ctx, lastHeartbeatValue)
+	}
+}
+
+// newWorkerTargetRefusedError fails the Step without retry: the tenant may not dispatch to this Worker target.
+func (a *Activities) newWorkerTargetRefusedError(err error) error {
+	return a.activityProvider.NewNonRetryableActivityError(
+		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
+		&dexpb.InternalActivityError{
+			WorkerGrpcStatus: int32(codes.PermissionDenied),
 			ServerDetail:     err.Error(),
 		},
 	)

@@ -22,6 +22,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -47,6 +48,7 @@ func newHandler(
 	attributeStore *attributestore.Manager,
 	streamStore *streamstore.Store,
 	workerPool *workerclient.WorkerClientPool,
+	dispatchGate *tenancy.DispatchGate,
 ) *handler {
 	svc, err := NewApiService(
 		apiCfg,
@@ -59,6 +61,7 @@ func newHandler(
 		attributeStore,
 		streamStore,
 		workerPool,
+		dispatchGate,
 	)
 	if err != nil {
 		panic(err)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
 )
 
@@ -22,6 +23,7 @@ type SubFlowStarter struct {
 	tracker          *SubFlowTracker
 	stepExecutionID  string
 	tenantID         string
+	tenantClaims     map[string]string
 	parentFlowConfig *dexpb.FlowConfig
 	condition        *dexpb.WaitingCondition
 	activityConfig   *config.InterpreterActivityConfig
@@ -34,7 +36,7 @@ func NewSubFlowStarter(
 	activities *Activities,
 	tracker *SubFlowTracker,
 	stepExecutionID string,
-	tenantID string,
+	parentInfo service.BasicInfo,
 	parentFlowConfig *dexpb.FlowConfig,
 	condition *dexpb.WaitingCondition,
 	activityConfig *config.InterpreterActivityConfig,
@@ -47,7 +49,8 @@ func NewSubFlowStarter(
 		activities:       activities,
 		tracker:          tracker,
 		stepExecutionID:  stepExecutionID,
-		tenantID:         tenantID,
+		tenantID:         parentInfo.TenantID,
+		tenantClaims:     parentInfo.TenantClaims,
 		parentFlowConfig: parentFlowConfig,
 		condition:        condition,
 		activityConfig:   activityConfig,
@@ -79,6 +82,7 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 		ParentFlowConfig:      s.parentFlowConfig,
 		ParentStepExecutionId: s.stepExecutionID,
 		TenantId:              s.tenantID,
+		TenantClaims:          s.tenantClaims,
 	}
 	err := s.provider.ExecuteLocalActivity(&output, ctx, s.activities.StartSubFlow, startInput)
 	if err != nil {

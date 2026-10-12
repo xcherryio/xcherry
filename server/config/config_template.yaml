@@ -114,3 +114,9 @@ blobStore:
 #   internal:
 #     listen: 127.0.0.1:8803
 #     tokenFile: /etc/dex/internal-token
+#   workerTarget:
+#     default: 'worker.{{ .namespace }}.svc.cluster.local:9000'
+#     allowed: 'worker\.{{ quote .namespace }}\.svc\.cluster\.local:9000'
+#   wake: {url: http://operator.example/worker-wake, budget: 120s}
+#   limits: {maxConcurrentDispatchesPerTenant: 32}
+#   fairness: false

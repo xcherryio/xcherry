@@ -289,6 +289,9 @@ func (t *temporalClient) StartInterpreterWorkflow(
 		Memo:                                     memo,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}
+	if options.FairnessKey != "" {
+		workflowOptions.Priority = realtemporal.Priority{FairnessKey: options.FairnessKey}
+	}
 
 	if options.IdReusePolicy != nil {
 		workflowIdReusePolicy, err := mapToTemporalWorkflowIdReusePolicy(*options.IdReusePolicy)
