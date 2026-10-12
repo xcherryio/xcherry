@@ -2,7 +2,16 @@
   "extends": "@docusaurus/tsconfig",
   "compilerOptions": {
     "baseUrl": ".",
-    "preserveSymlinks": true
+    "preserveSymlinks": true,
+    "paths": {
+      "@site/*": ["./*"],
+      "@dex-web-v2/*": ["../web/app/v2/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "@xyflow/react": ["./node_modules/@xyflow/react"],
+      "elkjs/*": ["./node_modules/elkjs/*"],
+      "@superdurable/flow-definition-renderer": ["./node_modules/@superdurable/flow-definition-renderer/src/index.ts"]
+    }
   },
   "include": ["src/", "docusaurus.config.ts", "sidebars.ts"]
 }

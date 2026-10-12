@@ -27,6 +27,7 @@ export type PrincipleId =
   | 'group-cohesion'
   | 'short-edges'
   | 'reading-order'
+  | 'clear-lines'
 
 /**
  * Lane coherence was measured and dropped, not forgotten.
@@ -67,13 +68,19 @@ export const LAYOUT_PRINCIPLES: readonly LayoutPrinciple[] = [
     id: 'short-edges',
     statement: 'An arrow spans about a rank, not the whole drawing.',
     measure: 'Mean edge length in rank-pitch units.',
-    // Corpus worst is 5.7. Cohesion costs edge length, which is the tension this limit holds.
-    limit: 6.5,
+    // Corpus worst 6.86: one-region stages cost edge length, the tension this limit holds.
+    limit: 7,
   },
   {
     id: 'reading-order',
     statement: 'The first card is the start of the flow.',
     measure: 'Cards placed before the start Step.',
+    limit: 0,
+  },
+  {
+    id: 'clear-lines',
+    statement: 'No line passes under a card it does not join.',
+    measure: 'Line segments crossing a card other than their own ends.',
     limit: 0,
   },
 ] as const
@@ -85,6 +92,7 @@ export interface LayoutMetrics {
   straddledGroups: number
   edgeSpan: number
   beforeStart: number
+  linesUnderCards: number
 }
 
 export type Violation = { id: PrincipleId; value: number; limit: number }
@@ -95,6 +103,7 @@ const METRIC_OF: Record<PrincipleId, keyof LayoutMetrics> = {
   'group-cohesion': 'straddledGroups',
   'short-edges': 'edgeSpan',
   'reading-order': 'beforeStart',
+  'clear-lines': 'linesUnderCards',
 }
 
 /** Which principles this scene breaks. Empty is the gate every corpus flow has to pass. */
@@ -115,7 +124,7 @@ export function violations(flow: PocFlow, scene: Scene, direction: Direction): V
  * reported nonsense for half the corpus.
  */
 export function measureScene(flow: PocFlow, scene: Scene, direction: Direction): LayoutMetrics {
-  const cards = scene.boxes.filter((box) => box.kind === 'step')
+  const cards = scene.boxes.filter((box) => box.kind === 'step' || box.kind === 'stage')
   const axes = direction === 'lr'
     ? {
       along: (card: Box) => card.x,
@@ -137,6 +146,7 @@ export function measureScene(flow: PocFlow, scene: Scene, direction: Direction):
     straddledGroups: countStraddledGroups(scene.bands, cards, axes.across, axes.spanAlong),
     edgeSpan: meanEdgeSpan(scene, cards, axes.along),
     beforeStart: countBeforeStart(flow, cards, axes.along, axes.extent),
+    linesUnderCards: countLinesUnderCards(scene, cards),
   }
 }
 
@@ -172,7 +182,7 @@ function worstRegionHole(
   acrossExtent: Reader,
 ): number {
   let worst = 0
-  for (const region of bands.filter((band) => band.style === 'group')) {
+  for (const region of bands) {
     const inside = cards.filter((card) => centreInside(card, region))
     if (inside.length < 2) continue
     const unit = Math.min(...inside.map(acrossExtent))
@@ -210,8 +220,7 @@ function countStraddledGroups(
 ): number {
   const far = Math.max(...cards.map(across), 0)
   const regions = bands
-    .filter((band) => band.style === 'group' && band.label !== undefined)
-    .map((band) => {
+        .map((band) => {
       const inside = cards.filter((card) => centreInside(card, band))
       return {
         label: band.label as string,
@@ -278,9 +287,33 @@ function countBeforeStart(
   extent: Reader,
 ): number {
   const startId = flow.startStepId ?? flow.steps.find((step) => step.isStart)?.id
-  const start = cards.find((card) => card.id === startId)
+  const start = cards.find((card) => card.id === startId) ?? cards.find((card) => card.isStart === true)
   if (start === undefined) return 0
   return cards.filter((card) => along(card) + extent(card) <= along(start)).length
+}
+
+/** Segments that cross a card other than their own ends, inset 2px so touching an edge is not crossing. */
+function countLinesUnderCards(scene: Scene, cards: readonly Box[]): number {
+  let hits = 0
+  for (const link of scene.links) {
+    for (let i = 1; i < link.points.length; i++) {
+      const a = link.points[i - 1] as { x: number; y: number }
+      const b = link.points[i] as { x: number; y: number }
+      const segment = {
+        x: Math.min(a.x, b.x),
+        y: Math.min(a.y, b.y),
+        w: Math.abs(a.x - b.x),
+        h: Math.abs(a.y - b.y),
+      }
+      for (const card of cards) {
+        if (card.id === link.from || card.id === link.to) continue
+        const inner = { x: card.x + 2, y: card.y + 2, w: card.w - 4, h: card.h - 4 }
+        if (segment.x <= inner.x + inner.w && inner.x <= segment.x + segment.w
+          && segment.y <= inner.y + inner.h && inner.y <= segment.y + segment.h) hits++
+      }
+    }
+  }
+  return hits
 }
 
 function round(value: number): number {

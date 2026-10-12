@@ -574,9 +574,17 @@ collapsed Mini Map uses a visible Show Mini Map button.
 Each graph fits the complete definition into the viewport when it first loads
 and after its visible layers change.
 
-Flow Definition Graph 2.0 on **v1** Flow Rendering uses Process Canvas. **v2**
-renders the same JSON with the Control Topology canvas. Version 1 continues to
-use the original definition renderer on **v1**.
+Flow Definition Graph 2.0 on **v1** Flow Rendering and on **v2** both render
+with the Control Topology canvas; Flow Rendering draws the definition alone,
+then its diagnostics and child Flow links. Version 1 continues to use the
+original definition renderer on **v1**.
+
+The **v2** canvas lays out with `elkjs` (pinned, EPL-2.0), loaded only with the
+canvas. Each Step is drawn with one line in; every other transition is a ↪ chip
+on the card it leaves. A `dex:group` of two or more Steps is a stage that
+**Collapsed** draws as one card and **Expanded** opens; ⊕ and ⊖ open and close
+one stage in place. Its drawing rules and guardrails are in
+[`app/v2/canvas/views/README.md`](app/v2/canvas/views/README.md).
 
 The graph contract, compound layout, React components, and styles live in the
 shared [`flow-definition-renderer`](../packages/flow-definition-renderer)

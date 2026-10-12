@@ -6,12 +6,14 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import { READABLE_ZOOM } from '../views/elkPlacement'
+
 /**
  * Zoom is PURELY GEOMETRIC. It scales the picture and nothing else.
  *
  * There used to be a four-tier ladder derived from the zoom level, with hysteresis to stop it
  * strobing at a boundary. It is gone. Level of detail is now an explicit two-position control
- * (see `Detail` in `views/types.ts`), which is what nine surveyed products do — Copilot Studio
+ * (Collapsed and Expanded stages), which is what nine surveyed products do — Copilot Studio
  * lists `Expand/Collapse` as toolbar item 1 and zoom as items 2-3, LangGraph puts detail on a
  * slider decoupled from the canvas, and n8n ties nothing to zoom but a single threshold for group
  * descriptions.
@@ -32,6 +34,9 @@ export const FIT_MAX_ZOOM = 1.7
 
 /** Focus on one Step zooms in properly — the point is to read it without reaching for zoom. */
 export const FOCUS_ZOOM = 1.45
+
+/** The canvas opens on the whole Flow only at a readable size; a larger one opens on its start. */
+export const OPEN_FLOOR = READABLE_ZOOM
 
 /**
  * Edge contrast RISES as you zoom out.
@@ -59,4 +64,15 @@ export function edgeContrastBoost(zoom: number): number {
 export function chromeCompensation(zoom: number): number {
   if (!Number.isFinite(zoom) || zoom >= 1) return 1
   return Math.min(2.6, 1 / Math.max(zoom, 0.2))
+}
+
+const PADDING = { top: '8%', bottom: '4%', left: '4%', right: '4%' } as const
+
+/** The right padding reserves the overlaid panel's share of the pane, so nothing draws under it. */
+export function fitOptions(insetRightPx: number | null | undefined, paneWidth: number) {
+  const right: `${number}%` =
+    insetRightPx == null || insetRightPx <= 0 || paneWidth <= 0
+      ? PADDING.right
+      : `${Math.min(58, Math.max(18, (insetRightPx / paneWidth) * 100 + 4))}%`
+  return { padding: { ...PADDING, right }, minZoom: OPEN_FLOOR, maxZoom: FIT_MAX_ZOOM } as const
 }

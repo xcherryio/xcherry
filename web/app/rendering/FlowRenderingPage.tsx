@@ -7,9 +7,11 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import { useEffect, useMemo, useState } from 'react';
-import { FlowDefinitionGraphView, ProcessCanvasView } from '@superdurable/flow-definition-renderer';
+import { FlowDefinitionGraphView } from '@superdurable/flow-definition-renderer';
 import { readResponseJSON } from '@/lib/http';
-import type { FlowDefinitionCatalog } from '@/lib/types';
+import type { FlowDefinitionCatalog, FlowDefinitionEntry } from '@/lib/types';
+import { V2Canvas } from '../v2/V2Canvas';
+import '../v2/css/v2.css';
 
 export function FlowRenderingPage() {
   const [catalog, setCatalog] = useState<FlowDefinitionCatalog | null>(null);
@@ -110,7 +112,7 @@ export function FlowRenderingPage() {
           <div className="flow-rendering-graph">
             {selected && (
               selected.graph.schemaVersion === '2.0' ? (
-                <ProcessCanvasView key={selected.id} graph={selected.graph} subFlowLinks={subFlowLinks} />
+                <DefinitionCanvas key={selected.id} definition={selected} subFlowLinks={subFlowLinks} />
               ) : (
                 <FlowDefinitionGraphView
                   key={selected.id}
@@ -124,6 +126,45 @@ export function FlowRenderingPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** A Version 2.0 file drawn with the **v2** canvas, then its diagnostics and child Flow links. */
+function DefinitionCanvas({
+  definition,
+  subFlowLinks,
+}: {
+  definition: FlowDefinitionEntry;
+  subFlowLinks: Record<string, string>;
+}) {
+  const children = definition.graph.nodes.filter((node) => subFlowLinks[node.id] !== undefined);
+  return (
+    <>
+      <div className="v2-shell flow-rendering-canvas">
+        <V2Canvas flowType={definition.flowName} definition={definition} />
+      </div>
+      {children.length > 0 && (
+        <p className="flow-rendering-children">
+          Starts{' '}
+          {children.map((node, index) => (
+            <span key={node.id}>
+              {index > 0 ? ', ' : ''}
+              <a href={subFlowLinks[node.id]}>{node.name}</a>
+            </span>
+          ))}
+        </p>
+      )}
+      {definition.graph.diagnostics.length > 0 && (
+        <div className="flow-definition-diagnostics">
+          {definition.graph.diagnostics.map((diagnostic, index) => (
+            <div className={`flow-definition-diagnostic is-${diagnostic.severity}`} key={`${diagnostic.code}-${index}`}>
+              <b>{diagnostic.code}</b>
+              <span>{diagnostic.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

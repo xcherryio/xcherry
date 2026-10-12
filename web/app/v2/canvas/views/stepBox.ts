@@ -7,111 +7,151 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import type { AgentRole } from '../model/agentic'
-import type { Actor, PocFlow, StepModel } from '../model/pocFlow'
-import { discriminantOf, fanOutOf } from '../model/routing'
-import type { PhaseStatus } from '../model/run'
-import type { CardToken, Reason } from '../model/run'
+import { answeringEntries, whoActs, type Branch, type PocFlow, type StepModel, type WhoActs } from '../model/pocFlow'
+import { fanOutOf } from '../model/routing'
 import {
   barDecode,
   cardStatus,
-  cardToken,
   executionsOf,
+  isExecutedRun,
+  isOpenStatus,
   reasonLine,
   runStateFor,
   terminalReason,
+  type PhaseStatus,
+  type RunState,
 } from '../model/run'
-import type { Box, BoxRow, ViewOpts } from './types'
+import type { GraphEdge } from './mainLine'
+import type { Box, BoxChip, RunPill, Tile, Tone, ViewOpts } from './types'
 
 /**
- * The Step card, shared by every view that draws Steps.
- *
- * THE RULE, taken from every product surveyed: a node carries IDENTITY plus ONE STATUS TOKEN, and
- * the only extra text is a TYPE — never a value. n8n shows an operation subtitle, Airflow shows the
- * operator name, Zapier shows the app event. None of them puts a parameter, an expression or a
- * datum on a node; all of that is one click away in a panel that does not displace the graph.
- *
- * So this card no longer renders guards. It used to show `context.has_timer_fired()` and
- * `not (context.has_ti…` — source code on a canvas — which is the single least legible thing the
- * POC did. The Execute section now says WHERE the step can go, not WHY; the why is on the edge
- * label when you select an edge, and in the detail panel.
- *
- * Height is a function of the Step's own ANATOMY and the detail level, never of the zoom
- * transform. That keeps size structural, so changing detail is a repaint of known geometry rather
- * than an unpredictable reflow.
+ * The Step card: a tile for who acts or which app runs, the Step in words, and docked chips.
+ * Heights follow `canvas.css`; change them together.
  */
 
-/**
- * 250, because the 200 measurement was taken at a title size that no longer exists.
- *
- * 200 was derived honestly and the arithmetic is preserved here, because it has to be redone rather
- * than discarded. At the light theme's 13px/700 title, measured with real font metrics over all 121
- * Step nodes in the shipped corpus, titles ran p50 76px, p90 136px, max 178px; a 200px card leaves
- * 180px of content, so every title fitted, 192 clipped one and 184 clipped two.
- *
- * The canvas type then went up 1.2x. Text scales with it: that corpus now runs about p50 88px, p90
- * 157px, max 205px -- and 205 does not fit in 180, so the widest Step in the corpus would clip at 200.
- * That is the defect this fixes, not a preference for roomier cards.
- *
- * 250 leaves 230px of content, so the 205px worst case fits with 25px spare. The two cards that get
- * less than the full width were re-checked at the new size: a start Step spends 18px on its band
- * (canvas.css), leaving 212px against a widest start title of ~157px; and a card carrying the
- * `needs you` badge loses ~74px to it, but the badge is run-only and never appears in the definition
- * view this was measured against.
- *
- * Nothing in the layout engine holds it up in either direction -- the layoutQuality gate was clean from
- * 244 down to 160 at the old type size, and is clean at 250 now. `edgeSpan` worsens as boxes widen,
- * which is the cost this spends and the limit that reports it.
- */
-export const STEP_W = 250
+const STEP_W = 256
+/** Padding, a 34px tile and two text lines. */
+const HEAD_H = 62
+const TITLE_LINE_H = 18
+/** Characters of the 13.5px semibold title that fit beside the tile. */
+const TITLE_CHARS = 23
+const CHIP_ROW_H = 22
+const CHIPS_PAD = 8
+/** Inside width for chips: the card less its 12px padding each side. */
+const CHIP_ROOM = STEP_W - 24
+const REASON_H = 24
+const BAR_H = 10
 
-/**
- * Height the reason strip needs: 3 padding-top + 1 border-top + 14 line (10.5px at 1.35) + 2 flex gap,
- * rounded up. Measured against the DOM after the first two guesses clipped it — the same analytic
- * height bug has now bitten three times, always taking the LAST element with it, so it is pinned by a
- * test rather than trusted.
- */
-export const REASON_H = 26
-
-const CONDITION_GLYPH: Record<string, string> = {
-  channel: '✉',
-  timer: '⏱',
-  subflow: '↳',
-  unknown: '?',
+/** Connector ids people know by another name, and the letters their tile shows. */
+const APPS: Record<string, { name: string; monogram: string }> = {
+  github: { name: 'GitHub', monogram: 'GH' },
+  gmail: { name: 'Gmail', monogram: 'GM' },
+  slack: { name: 'Slack', monogram: 'SL' },
+  'google-drive': { name: 'Google Drive', monogram: 'GD' },
+  'google-sheets': { name: 'Google Sheets', monogram: 'GS' },
+  'google-calendar': { name: 'Google Calendar', monogram: 'GC' },
+  notion: { name: 'Notion', monogram: 'NO' },
+  stripe: { name: 'Stripe', monogram: 'ST' },
+  hubspot: { name: 'HubSpot', monogram: 'HS' },
+  linkedin: { name: 'LinkedIn', monogram: 'LI' },
 }
 
-/** What a Step IS, in the subtitle slot. The type, in plain words. */
-const ROLE_PHRASE: Record<Actor, string> = {
-  external: 'waits for someone, then runs',
-  clock: 'waits for time, then runs',
-  child: 'starts child flows, then runs',
-  unknown: 'waits, then runs',
-  machine: 'runs',
+/** The `llm` connector reaches any model provider, so its Steps read as AI model work. */
+const MODEL_CONNECTORS: ReadonlySet<string> = new Set(['llm'])
+
+/** An identifier split into words, acronyms kept; empty when it has no words. */
+function words(identifier: string): string {
+  return identifier
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word, index) => (index === 0 || /^[A-Z0-9]{2,}$/.test(word) ? word : word.toLowerCase()))
+    .join(' ')
+}
+
+/** A Step type as people say it: `RecordAIFailure` reads "Record AI failure". */
+export function inWords(identifier: string): string {
+  const said = words(identifier)
+  return said === '' ? identifier : said.charAt(0).toUpperCase() + said.slice(1)
+}
+
+/** A Flow type or connector id for people: `TextSummaryFlow` reads "Text summary". */
+function processName(flowType: string): string {
+  return words(flowType.replace(/Flow$/, '')) || flowType
+}
+
+function appOf(connectorId: string): { name: string; monogram: string } {
+  const known = APPS[connectorId]
+  if (known) return known
+  const name = processName(connectorId)
+  return {
+    name,
+    monogram: name
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 2)
+      .toUpperCase(),
+  }
+}
+
+/** What people call the service a connector reaches. */
+export function connectorName(connectorId: string): string {
+  return MODEL_CONNECTORS.has(connectorId) ? 'AI model' : appOf(connectorId).name
+}
+
+const WHO_TILE: Record<WhoActs, Tile> = {
+  person: { glyph: 'person', tone: 'attention' },
+  outside: { glyph: 'door', tone: 'door' },
+  machine: { glyph: 'cpu', tone: 'machine' },
+  clock: { glyph: 'clock', tone: 'clock' },
+  child: { glyph: 'child', tone: 'child' },
+  waits: { glyph: 'wait', tone: 'attention' },
+}
+
+/** A Step's tile: its app when a connector runs it, otherwise who acts. */
+export function tileOf(flow: PocFlow, step: StepModel): Tile {
+  const who = whoActs(flow, step)
+  if (who === 'machine' && step.connector) {
+    return MODEL_CONNECTORS.has(step.connector.connectorId)
+      ? { glyph: 'spark', tone: 'accent' }
+      : { monogram: appOf(step.connector.connectorId).monogram, tone: 'app' }
+  }
+  return WHO_TILE[who]
+}
+
+function subtitleOf(flow: PocFlow, step: StepModel): { text: string; tone: Tone } {
+  const who = whoActs(flow, step)
+  const hasTimer = (step.waitFor?.conditions ?? []).some((c) => c.kind === 'timer')
+  if (who === 'machine' && step.connector) {
+    const operation = inWords(step.connector.operationId).toLowerCase()
+    const isModel = MODEL_CONNECTORS.has(step.connector.connectorId)
+    return { text: `${connectorName(step.connector.connectorId)} · ${operation}`, tone: isModel ? 'accent' : 'machine' }
+  }
+  switch (who) {
+    case 'person':
+      return { text: hasTimer ? 'Waits for a person or time' : 'Waits for a person', tone: 'attention' }
+    case 'outside':
+      return { text: hasTimer ? 'Waits for a message or time' : 'Waits for a message', tone: 'door' }
+    case 'clock':
+      return { text: 'Waits for time', tone: 'clock' }
+    case 'child':
+      return { text: 'Waits for child flows', tone: 'child' }
+    case 'waits':
+      return { text: 'Waits · not reported', tone: 'attention' }
+    case 'machine':
+      return { text: 'Automatic', tone: 'machine' }
+  }
 }
 
 /**
- * The two branching shapes, as marks on the card.
- *
- * Both glyphs are from Geometric Shapes, the same block as the `■` the close rows already use, so
- * neither depends on a font the app has not already proved it can render.
- *
- * `▮` IS UML's FORK: the spec draws one as "a short heavy bar", and this is the closest a text glyph
- * gets. `◇` is UML's choice pseudostate. Borrowing the two notations means the marks are learnable
- * from any diagram the reader has met before, and it keeps the distinction in SHAPE rather than in
- * colour — colour on this canvas already means who must act, and the branching shape is orthogonal
- * to that.
- */
-const FORK_GLYPH = '▮'
-const CHOICE_GLYPH = '◇'
-
-/**
- * WHAT AN AGENT STEP IS, in one row, in plain words.
+ * WHAT AN AGENT STEP IS, in one chip, in plain words.
  *
  * The decision step gets a filled diamond against the choice row's hollow one: UML's choice pseudostate
  * says "one of these paths", and filling it says "and something decided WHICH at run time". That is the
  * distinction the whole feature turns on, and it is a shape difference so it survives at thumbnail size
  * and under any colour deficiency.
  *
- * `capability` gets NO ROW. Eight cards each captioned "a thing the agent can do" is furniture — being
+ * `capability` gets NO CHIP. Eight cards each captioned "a thing the agent can do" is furniture — being
  * reachable from the decision step already says it, and the decision card says it for all of them.
  */
 const AGENT_ROLE_ROW: Partial<Record<AgentRole, { glyph: string; text: string }>> = {
@@ -120,16 +160,16 @@ const AGENT_ROLE_ROW: Partial<Record<AgentRole, { glyph: string; text: string }>
   intake: { glyph: '⬡', text: 'where the request arrives' },
 }
 
-const CLOSE_TEXT: Record<string, string> = {
-  complete: 'completes the flow',
-  fail: 'fails the flow',
-  deadEnd: 'stops this branch',
-  completeIfChannelsEmpty: 'completes if the queues are empty',
+/** How a Step ends the Flow: certainly when every branch closes this way, otherwise as one outcome. */
+const ENDS: Record<NonNullable<Branch['closes']>, { kind: BoxChip['kind']; always: string; may: string }> = {
+  complete: { kind: 'ends', always: '✓ completes', may: '✓ can complete' },
+  completeIfChannelsEmpty: { kind: 'ends', always: '✓ completes if queues are empty', may: '✓ can complete' },
+  deadEnd: { kind: 'stops', always: '■ stops this branch', may: '■ can stop this branch' },
+  fail: { kind: 'fails', always: '✕ fails the flow', may: '✕ can fail the flow' },
 }
 
-function targetName(flow: PocFlow, stepId: string): string {
-  return flow.steps.find((s) => s.id === stepId)?.label ?? stepId.replace(/^step:/, '')
-}
+/** A jump docked to its source, titled with where it leads: a Step, or a closed stage. */
+export type DockedJump = GraphEdge & { label: string }
 
 /**
  * Which entry points answer this Step's gate.
@@ -140,380 +180,202 @@ function targetName(flow: PocFlow, stepId: string): string {
  * fit on two rows of the step that is actually waiting.
  */
 export function answeredBy(flow: PocFlow, step: StepModel): string[] {
-  const channels = new Set(
-    (step.waitFor?.conditions ?? [])
-      .filter((c) => c.kind === 'channel' && c.resourceId !== undefined)
-      .map((c) => c.resourceId as string),
-  )
-  if (channels.size === 0) return []
-  const out = new Set<string>()
-  for (const entry of flow.entries) {
-    for (const gate of entry.opensGates) {
-      if (channels.has(gate.channelId)) out.add(entry.name)
-    }
-  }
-  return [...out]
+  return [...new Set(answeringEntries(flow, step).map((entry) => entry.name))]
 }
 
-export interface StepContent {
-  rows: BoxRow[]
-  sections: { label: string; rows: BoxRow[] }[]
-  badge?: string
-  status?: string
-  subtitle: string
-  height: number
-  bar?: { status: PhaseStatus; count: number }[]
-  barTitle?: string
-  emphasis?: 'active' | 'failed' | 'planned'
-  token?: CardToken
-  reason?: Reason
-  /** BPMN's loop marker: this step can transition to itself. */
-  loops?: boolean
-  /** Which kind of shared failure target this is, when it is one. */
-  recovery?: { glyph: string; title: string }
-}
-
-export function stepContent(flow: PocFlow, step: StepModel, opts: ViewOpts): StepContent {
-  const run = opts.run === null ? null : runStateFor(opts.run, step.stepType)
-
-  /**
-   * The ACTIVE step shows what it is waiting on regardless of the detail control.
-   *
-   * A targeted exception, not a general one. During a run the single actionable fact is what the open
-   * step needs, and making someone expand to find it is the mistake Copilot Studio's docs complain
-   * about when they tell you to collapse the activity map at every turn. The control still governs
-   * every other card, so this does not quietly take the setting away.
-   */
-  const isOpen =
-    run !== null && !run.planned && ['waiting', 'running', 'pending'].includes(cardStatus(run.current))
-  const expanded = opts.detail === 'expanded' || isOpen
-  const rows: BoxRow[] = []
-  const sections: StepContent['sections'] = []
-
-  if (run !== null && run.planned) {
-    // Named by a completed execution's decision, but not started. Drawn because a run that cannot
-    // say what is next is permanently one step behind.
-    rows.push({ glyph: '·', text: 'not started yet', tone: 'quiet' })
-  }
-
-  if (run !== null && !run.planned) {
-    const e = run.current
-    // Attempts and the failure message moved INTO the reason line — a card that states the same fact
-    // twice is how it grows into a panel. Only genuinely additive rows survive here.
-    if (e.fromStepExecutionId?.startsWith('__rpc/') === true) {
-      rows.push({
-        glyph: '⬡',
-        text: `started by ${e.fromStepExecutionId.replace('__rpc/', '')}`,
-        tone: 'quiet',
-      })
-    }
-  }
-
-  /**
-   * WHICH BRANCHING SHAPE this Step is, when it is either. Both rows are `rows` rather than sections,
-   * so they show at BOTH detail levels — the fact changes what the reader believes about execution,
-   * and it must not be something you have to expand a card to find.
-   *
-   * THE FAN-OUT IS THE ONE THAT NEEDS MARKING. Measured across the fixtures: of the 14 steps with more
-   * than one possible next step, 13 take one path and 1 takes all of them. A step that chooses already
-   * declares itself by carrying a guard on every branch, while a step that runs everything looked
-   * identical to a two-way conditional. That is the asymmetry the mark exists to fix. Both rows can
-   * appear together rather than one instead of the other: a Step with both a `goToMany` and guarded
-   * branches is doing both things, and suppressing either would misreport it.
-   *
-   * THE CARD IS THE ONLY PLACE EITHER FACT IS SAID. Putting the case values on the edges as well was
-   * built and removed — in both real switches the value names its own destination, so the label
-   * restated the card it pointed at. So this row carries the whole hoist, and the values stay in the
-   * panel with the guards.
-   *
-   * It says the path DEPENDS ON the name rather than that the name decides every path, because a
-   * strict majority is the bar and RecoveryGate has one branch that tests something else. See
-   * `model/routing`.
-   */
-  const fanOut = fanOutOf(step)
-  if (fanOut > 0) {
-    rows.push({
-      glyph: FORK_GLYPH,
-      text: fanOut === 2 ? 'both paths run' : `all ${fanOut} paths run`,
-      tone: 'quiet',
+/** Docked chips in reading order: role, who answers, how it starts, where it jumps, how it ends. */
+function chipsOf(flow: PocFlow, step: StepModel, jumps: DockedJump[], arriving: number): BoxChip[] {
+  const chips: BoxChip[] = []
+  const role = step.agentRole === undefined ? undefined : AGENT_ROLE_ROW[step.agentRole]
+  if (role !== undefined) chips.push({ kind: 'role', text: `${role.glyph} ${role.text}` })
+  const answers = answeringEntries(flow, step)
+  for (const entry of answers.slice(0, 4)) {
+    chips.push({
+      kind: 'answer',
+      text: entry.action?.label ?? inWords(entry.name),
+      title: `${entry.name} answers this step`,
     })
   }
-  const routesOn = discriminantOf(step)
-  /**
-   * ON AN AGENT DECISION STEP, THE ROLE ROW REPLACES THE DISCRIMINANT ROW.
-   *
-   * Both are true — it does route on `action` — but "the path depends on action" describes a switch
-   * statement, and this is not one: nobody wrote the value. Saying "the agent decides here" is the more
-   * useful of two true sentences, and printing both would invite the reader to look for where `action` is
-   * set, which is the wrong mental model of the thing.
-   */
-  if (routesOn !== null && step.agentRole !== 'decision') {
-    rows.push({ glyph: CHOICE_GLYPH, text: `the path depends on ${routesOn}`, tone: 'quiet' })
+  if (answers.length > 4) chips.push({ kind: 'answer', text: `+${answers.length - 4} more` })
+  for (const entry of flow.entries) {
+    if (!entry.branches.some((b) => b.targets.some((t) => t.stepId === step.id))) continue
+    chips.push({ kind: 'entry', text: `⚡ ${inWords(entry.name)}`, title: `The call ${entry.name} starts this step` })
   }
-  const roleRow = step.agentRole === undefined ? undefined : AGENT_ROLE_ROW[step.agentRole]
-  if (roleRow !== undefined) {
-    rows.push({ glyph: roleRow.glyph, text: roleRow.text, tone: 'quiet' })
+  for (const subflow of flow.subflows) {
+    if (subflow.startedByStepId !== step.id) continue
+    chips.push({
+      kind: 'child',
+      text: `↳ ${processName(subflow.flowType)}`,
+      title: `Starts ${subflow.flowType}`,
+    })
   }
-
-  if (expanded && step.waitFor !== null) {
-    const waitRows: BoxRow[] = []
-    // During a run, which condition WON is load-bearing: Dex consumes only from the selected
-    // condition and leaves the losing branches queued, so "waiting on A or B" without saying which
-    // fired misreports durable state.
-    const won = new Set(
-      run !== null && !run.planned
-        ? (run.current.waitFor?.conditions ?? []).filter((c) => c.satisfied).map((c) => c.label)
-        : [],
+  // A fork starts every path at once, which lines alone cannot tell from a choice.
+  const fanOut = fanOutOf(step)
+  if (fanOut > 0) chips.push({ kind: 'fork', text: fanOut === 2 ? '▮ both paths run' : `▮ all ${fanOut} paths run` })
+  if (arriving > 3) {
+    chips.push({ kind: 'inbound', text: `← ${arriving} steps lead here`, title: 'One of them is drawn as a line' })
+  }
+  for (const jump of jumps) {
+    const text = `↪ ${jump.label}`
+    chips.push(
+      jump.failure
+        ? { kind: 'failJump', text, targetId: jump.to, title: 'On failure' }
+        : { kind: 'jump', text, targetId: jump.to },
     )
-    for (const c of step.waitFor.conditions) {
-      if (c.kind === 'timer') continue
-      waitRows.push({
-        glyph: won.has(c.label) ? '✔' : (CONDITION_GLYPH[c.kind] ?? '?'),
-        // The identifier, verbatim. This is the handle somebody has to publish to, so inventing
-        // prose for it would misrepresent what has to happen.
-        text: won.has(c.label) ? `${c.label} — this one arrived` : c.label,
-        tone: c.kind === 'channel' ? 'normal' : 'quiet',
-      })
-    }
-    // Who can answer it — the synthesized join. Only a gate has one.
-    for (const name of answeredBy(flow, step)) {
-      waitRows.push({ glyph: '⬡', text: `answered through ${name}`, tone: 'quiet' })
-    }
-    // The timer last, because it is the reassurance rather than the ask: it says the flow is not
-    // stuck forever. Dify models exactly this as a first-class timeout edge.
-    const timers = step.waitFor.conditions.filter((c) => c.kind === 'timer')
-    if (timers.length > 0) {
-      waitRows.push({
-        glyph: '⏱',
-        text:
-          waitRows.length > 0
-            ? `or ${timers.map((t) => t.label).join(' or ')}, then it moves on`
-            : `waits ${timers.map((t) => t.label).join(' or ')}`,
-        tone: 'quiet',
-      })
-    }
-    if (step.waitFor.conditions.length === 0) {
-      waitRows.push({ glyph: '?', text: 'not reported by the analyser', tone: 'warn' })
-    }
-    if (waitRows.length > 0) sections.push({ label: 'Waits for', rows: waitRows })
   }
-
-  if (expanded) {
-    // WHERE it can go. Not why. Duplicate targets collapse — several guards reaching one place is
-    // one arrow on the canvas and a count in the panel.
-    const targets = new Map<string, string | undefined>()
-    const closes = new Set<string>()
-    for (const b of step.execute.branches) {
-      for (const t of b.targets) targets.set(t.stepId, t.multiplicity)
-      if (b.closes !== undefined) closes.add(b.closes)
-    }
-    const goRows: BoxRow[] = []
-    for (const [stepId, mult] of targets) {
-      goRows.push({
-        glyph: '→',
-        text: targetName(flow, stepId) + (mult ?? ''),
-        tone: stepId === step.id ? 'quiet' : 'normal',
-      })
-    }
-    for (const c of closes) {
-      goRows.push({ glyph: '■', text: CLOSE_TEXT[c] ?? c, tone: 'quiet' })
-    }
-    if (goRows.length > 0) sections.push({ label: 'Then goes to', rows: goRows })
+  const branches = step.execute.branches
+  for (const close of new Set(branches.flatMap((b) => (b.closes ? [b.closes] : [])))) {
+    const isAlways = branches.every((b) => b.closes === close)
+    chips.push({ kind: ENDS[close].kind, text: isAlways ? ENDS[close].always : ENDS[close].may })
   }
+  return chips
+}
 
-  /**
-   * "needs you" means NOW during a run, and "ever" only in the definition.
-   *
-   * A gate whose wait has already been satisfied is running, not asking — and a badge that shouts for
-   * attention on a step that is quietly working is the always-on-map mistake. Same "now versus ever"
-   * distinction view F already applies when it filters to open gates. In definition mode the badge
-   * stays, because there it is a true statement about the Step's nature.
-   */
-  const waitPending = run !== null && !run.planned && ['waiting', 'pending'].includes(run.current.waitFor?.status ?? '')
-  // BPMN's loop marker. A self-transition is 21-of-96 across the corpus, so it is common enough that
-  // it has to read at a glance rather than by following a line.
-  const loops = flow.transitions.some((t) => t.isSelfLoop && t.fromStepId === step.id)
-  const needsYouNow = run === null || waitPending
-  const badge =
-    step.actor === 'external' && needsYouNow
-      ? 'needs you'
-      : step.isHub
-        ? `${step.inboundCount} steps return here`
-        : step.recoveryRole === 'sink' || step.recoveryRole === 'dispatcher'
-          ? `catches ${step.inboundFailureCount} failures`
-          : undefined
+/** A chip's width at the 10.5px chip size: about 6px a character plus padding. */
+function chipWidth(chip: BoxChip, room: number): number {
+  return Math.min(room, Math.ceil(chip.text.length * 6.1) + 16)
+}
 
-  /**
-   * The recovery mark, which says WHICH KIND of failure target this is.
-   *
-   * Dex has no recovery Step type — the whole primitive is one per-Step
-   * `on_execute_failure_proceed_to(X)`, so a Step becomes a failure target only by being named by
-   * others, and all the multiplicity lands on the receiving side. The three roles that produces want
-   * different things said about them, and a count alone does not distinguish the two that matter:
-   * whether the flow STOPS here or CARRIES ON from here.
-   *
-   * Drawn as a second mark rather than folded into the badge, because a gate can also be a dispatcher
-   * and the badge can only hold one fact.
-   */
+export function packChips(chips: BoxChip[], room = CHIP_ROOM): BoxChip[][] {
+  const rows: BoxChip[][] = []
+  let row: BoxChip[] = []
+  let used = 0
+  for (const chip of chips) {
+    const w = chipWidth(chip, room)
+    if (row.length > 0 && used + w > room) {
+      rows.push(row)
+      row = []
+      used = 0
+    }
+    row.push(chip)
+    used += w + 4
+  }
+  if (row.length > 0) rows.push(row)
+  return rows
+}
+
+/** Lines a title takes beside the tile: one, or two when its words do not fit. */
+function titleLines(title: string, chars = TITLE_CHARS): 1 | 2 {
+  let line = 0
+  let lines = 1
+  for (const word of title.split(' ')) {
+    const need = line === 0 ? word.length : line + 1 + word.length
+    if (need > chars && line > 0) {
+      lines += 1
+      line = word.length
+    } else line = need
+  }
+  return lines > 1 ? 2 : 1
+}
+
+const PILL_TEXT: Record<PhaseStatus, string> = {
+  notStarted: 'Not started',
+  pending: 'Waiting',
+  waiting: 'Waiting',
+  running: 'Running',
+  completed: '✓ Done',
+  failed: '✕ Failed',
+  canceled: 'Canceled',
+}
+
+function pillOf(run: RunState | null, isPerson: boolean): RunPill | undefined {
+  if (run === null) return undefined
+  if (!isExecutedRun(run)) return { status: 'planned', text: 'Next' }
+  const status = cardStatus(run.current)
+  const base = (status === 'waiting' || status === 'pending') && isPerson ? 'Waiting for you' : PILL_TEXT[status]
+  return { status, text: run.count > 1 ? `${base} ×${run.count}` : base }
+}
+
+/** The title a reader sees: the analyzer's display name, or the Step type in words. */
+export function stepTitle(step: StepModel): string {
+  return step.label === step.stepType ? inWords(step.stepType) : step.label
+}
+
+/**
+ * The recovery mark, which says WHICH KIND of failure target this is.
+ *
+ * Dex has no recovery Step type — the whole primitive is one per-Step
+ * `on_execute_failure_proceed_to(X)`, so a Step becomes a failure target only by being named by
+ * others, and all the multiplicity lands on the receiving side. The three roles that produces want
+ * different things said about them, and a count alone does not distinguish the two that matter:
+ * whether the flow STOPS here or CARRIES ON from here.
+ *
+ * Drawn as a second mark rather than folded into the run pill, because a gate can also be a dispatcher
+ * and the pill can only hold one fact.
+ */
+function recoveryMark(flow: PocFlow, step: StepModel): Box['recovery'] {
   const onward = flow.transitions.filter(
     (t) => t.fromStepId === step.id && t.kind !== 'failure_transition' && t.toStepId !== step.id,
   ).length
-  const recovery =
-    step.recoveryRole === 'sink'
-      ? {
-          glyph: '⇥',
-          title: `Catches failures from ${step.inboundFailureCount} steps, and the flow stops here`,
-        }
-      : step.recoveryRole === 'dispatcher'
-        ? {
-            glyph: '⇉',
-            title: step.hasUniformFailurePolicy
-              ? `Every step that can fail routes here (${step.inboundFailureCount}), and it can send the flow onward to ${onward} — click to reveal both`
-              : `Catches failures from ${step.inboundFailureCount} steps, and can send the flow onward to ${onward} — click to reveal where`,
-          }
-        : undefined
-
-  /**
-   * Height is computed analytically, not measured — no ResizeObserver, no two-pass render, so a
-   * Scene lays out identically in a test and in the browser.
-   *
-   * The figures below track `poc.css` and were corrected once against the real DOM: the first pass
-   * under-measured by about 8px per card, which silently clipped the last row of the last section.
-   * If a rule there changes a font size, line height or padding, change the matching number here.
-   *
-   *   14  .pbox padding (7 top + 7 bottom)
-   *   18  .pbox-title at 12.5px
-   *   15  .pbox-meta at 10.5px
-   *    2  flex gap
-   *   21  per section: 4 margin + 3 padding + 1 border + 13 label
-   *   17  per row at 11px / 1.5
-   */
-  /**
-   * The bar appears only when it shows a MIX.
-   *
-   * A single solid segment says nothing the "ran N times" row does not already say, so four
-   * successes in a row got a decorative block. It earns its place exactly when the outcomes differed
-   * — which is the case a count alone cannot express, and the reason Airflow's version has a 2px
-   * floor per segment.
-   */
-  const bar = run !== null && !run.planned && run.bar.length > 1 ? run.bar : undefined
-
-  // The two-cell token, and the count that rides beside it.
-  const all = opts.run === null ? [] : executionsOf(opts.run, step.stepType)
-  const token: CardToken | undefined =
-    run === null || run.planned ? undefined : cardToken(run.current, all)
-
-  /**
-   * The reason line. Blocked or failed only, so a healthy Step carries no strip and a green run reads
-   * quiet — and a surprising terminal decision (deadEnd, forceFail, forceComplete*) is named, while an
-   * ordinary goTo never is.
-   */
-  const reason: Reason | undefined =
-    run === null || run.planned
-      ? undefined
-      : (reasonLine(run.current, opts.run?.now ?? 0) ??
-        terminalReason(run.current.decisionType) ??
-        undefined)
-
-  const barTitle =
-    bar === undefined || opts.run === null ? undefined : barDecode(bar, all)
-
-  /**
-   * The count beside the token. SUPPRESSED at N≤1 — three products landed on that independently
-   * (n8n `iterations > 1`, Airflow's Try Number, Inngest's Attempt badge), so `×1` never renders and
-   * the token alone speaks for a single execution.
-   *
-   * But we deliberately BREAK n8n's second suppression, which hides the count entirely on an errored
-   * node: for a Step absorbing 16 of 27 transitions, "ran 4 times, 1 failed" and "ran 4 times, 4
-   * failed" are different incidents and the card has to distinguish them.
-   */
-  const failed = run === null || run.planned ? 0 : (run.bar.find((b) => b.status === 'failed')?.count ?? 0)
-  const status =
-    run === null
-      ? undefined
-      : run.planned
-        ? 'next'
-        : run.count <= 1
-          ? undefined
-          : `×${run.count}${failed > 0 ? ` · ${failed} failed` : ''}`
-
-  const emphasis: StepContent['emphasis'] =
-    run === null
-      ? undefined
-      : run.planned
-        ? 'planned'
-        : cardStatus(run.current) === 'failed'
-          ? 'failed'
-          : isOpen
-            ? 'active'
-            : undefined
-
-  const height = Math.max(
-    CARD_MIN_H,
-    anatomyHeight(rows.length, sections) + (bar === undefined ? 0 : 13) + (reason === undefined ? 0 : REASON_H),
-  )
-
-  return { rows, sections, badge, status, bar, barTitle, emphasis, token, reason, loops, recovery, subtitle: ROLE_PHRASE[step.actor], height }
+  if (step.recoveryRole === 'sink') {
+    return { glyph: '⇥', title: `Catches failures from ${step.inboundFailureCount} steps, and the flow stops here` }
+  }
+  if (step.recoveryRole === 'dispatcher') {
+    return {
+      glyph: '⇉',
+      title: step.hasUniformFailurePolicy
+        ? `Every step that can fail routes here (${step.inboundFailureCount}), and it can send the flow onward to ${onward}`
+        : `Catches failures from ${step.inboundFailureCount} steps, and can send the flow onward to ${onward}`,
+    }
+  }
+  return undefined
 }
 
-export const CARD_MIN_H = 62
-
-/** The height a `.pbox` card needs for its head, rows, and sections. */
-export function anatomyHeight(rowCount: number, sections: { rows: unknown[] }[]): number {
-  /*
-   * Scaled with the type, 1.2x, because every one of these is a measurement OF the type: `head` is a
-   * title line over a subtitle line, a row is one line of row text, a section is a label over its rows.
-   * Leaving them while the CSS grew would have clipped the text the card is sized to hold.
-   */
-  const head = 59
-  const sectionsH = sections.reduce((acc, s) => acc + 28 + s.rows.length * 20, 0)
-  return head + rowCount * 20 + sectionsH
-}
-
+/** A Step's card at the origin; the layout moves it. */
 export function stepBox(
   flow: PocFlow,
   step: StepModel,
   opts: ViewOpts,
-  x: number,
-  y: number,
+  docked: { jumps: DockedJump[]; arriving: number },
 ): Box {
-  const c = stepContent(flow, step, opts)
+  const overlay = opts.run
+  const run = overlay === null ? null : runStateFor(overlay, step.stepType)
+  const executed = isExecutedRun(run) ? run : null
+  const status = executed === null ? null : cardStatus(executed.current)
+  const title = stepTitle(step)
+  const chips = packChips(chipsOf(flow, step, docked.jumps, docked.arriving))
+  const bar = executed !== null && executed.bar.length > 1 ? executed.bar : undefined
+  const reason =
+    executed === null
+      ? undefined
+      : (reasonLine(executed.current, overlay?.now ?? 0) ?? terminalReason(executed.current.decisionType) ?? undefined)
+  const subtitle = subtitleOf(flow, step)
+  const h =
+    HEAD_H +
+    (titleLines(title) - 1) * TITLE_LINE_H +
+    (chips.length > 0 ? chips.length * CHIP_ROW_H + CHIPS_PAD : 0) +
+    (reason === undefined ? 0 : REASON_H) +
+    (bar === undefined ? 0 : BAR_H)
   return {
     id: step.id,
-    x,
-    y,
+    x: 0,
+    y: 0,
     w: STEP_W,
-    h: c.height,
+    h,
     kind: 'step',
-    title: step.label,
-    ...(step.isConnectorStep ? { icon: 'connector' as const } : {}),
-    subtitle: c.subtitle,
+    title,
+    identity: step.stepType,
+    subtitle: subtitle.text,
+    subtitleTone: subtitle.tone,
+    tile: tileOf(flow, step),
     actor: step.actor,
     ...(step.agentRole === undefined ? {} : { agentRole: step.agentRole }),
-    status: c.status,
-    token: c.token,
-    reason: c.reason,
-    barTitle: c.barTitle,
-    rows: c.rows,
-    sections: c.sections,
-    badge: c.badge,
-    loops: c.loops,
-    recovery: c.recovery,
-    bar: c.bar,
-    /**
-     * Where the Flow begins is known before any run, so it does not queue for the emphasis slot.
-     * It used to, and it lost: `c.emphasis` is set whenever the Step is planned, failed, or the one
-     * being awaited, so the start mark went missing on exactly the Steps a reader was watching.
-     */
+    chips,
+    pill: pillOf(run, whoActs(flow, step) === 'person'),
+    reason,
+    bar,
+    barTitle:
+      bar === undefined || overlay === null ? undefined : barDecode(bar, executionsOf(overlay, step.stepType)),
+    loops: flow.transitions.some((t) => t.isSelfLoop && t.fromStepId === step.id),
+    recovery: recoveryMark(flow, step),
     isStart: step.isStart || undefined,
-    /**
-     * During a run, run state wins the emphasis slot.
-     *
-     * A hub is a claim about the DEFINITION and is still true, but "this failed" or "this is what we
-     * are waiting on" is what a reader needs at that moment. Only a CONTROL hub gets the structural
-     * warning anyway — a compensation target collecting failures is correct saga structure, not a
-     * drawing problem.
-     */
-    emphasis: c.emphasis ?? (step.isHub ? 'hub' : undefined),
+    emphasis:
+      run?.planned === true
+        ? 'planned'
+        : status === 'failed'
+          ? 'failed'
+          : status !== null && isOpenStatus(status)
+            ? 'active'
+            : undefined,
   }
 }

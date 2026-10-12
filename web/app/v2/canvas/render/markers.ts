@@ -22,20 +22,11 @@ import type { Link } from '../views/types'
  * Exported and exhaustive over `Link['family']` so that adding a family without giving it an arrowhead
  * is a type error rather than a silently directionless edge — which is precisely the state every edge
  * on this canvas was in until now.
- *
- * `gate` is a legacy alias for `rpc`: both are BPMN message flow, and one style for both is the point.
  */
 export const EDGE_MARKER: Record<Link['family'], string> = {
   // Sequence flow: the flow proceeds. Hue comes from CSS, so these share one definition.
   control: 'p-arrow-solid',
   failure: 'p-arrow-solid',
-  wait: 'p-arrow-solid',
-  subflow: 'p-arrow-solid',
-  // Association: a resource touch, drawn with BPMN's weakest arrowhead.
-  resource: 'p-arrow-open',
-  // Message flow: the outside world reaching in. `gate` is a legacy alias for the same thing.
-  rpc: 'p-arrow-hollow',
-  gate: 'p-arrow-hollow',
 }
 
 /** The source-end marker, used only by message flow. BPMN's small hollow circle. */

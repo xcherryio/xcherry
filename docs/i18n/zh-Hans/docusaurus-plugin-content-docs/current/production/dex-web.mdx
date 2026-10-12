@@ -46,6 +46,16 @@ Version 2 directive 使用具名值。同一行内的参数位置没有语义。
 
 每个已注册 Step 都必须有一个 group 声明和一个 explanation 声明。explanation 用一句话说明该 Step 做什么。Group 顺序由第一个成员在 **GetSteps** 中的注册位置决定，组内 Step 顺序也使用 **GetSteps**。
 
+## Flow 画布
+
+**v2** 画布为每个 Step 画一张卡片。卡片的图标说明由谁推进这个 Step：一个人、来自外部的消息、时间、子 Flow、AI 模型、通过 Connector 调用的应用，或 Flow 自身。
+
+包含两个或更多 Step 的 group 是一个阶段。**Collapsed** 把每个阶段画成一张卡片。选择这张卡片或它的 **⊕**，阶段会在原位展开；选择展开阶段上的 **⊖** 即可收起。**Expanded** 展开所有阶段。这两个按钮还会把视图恢复到画布打开时的位置。
+
+每个 Step 只画一条进入的线：来自最后一个通向它的 Step 的 transition，并优先选择同一 group 中的 Step。其他 transition 都以 **↪** 标签显示在它离开的卡片上；选择标签即可查看它通向哪里。失败路径用虚线表示。响应等待中 Step 的 Action、启动 Step 的 RPC，以及 Step 如何结束 Flow，也都以标签显示在卡片上。
+
+选择一个运行后，包含等待中 Step 的阶段会自动展开，该 Step 会加上外框并标注 **now**。
+
 ## 启动 Flow
 
 当所选 definition 包含自动生成的 start schema 时，Run 工作区会显示 **Start Flow**。弹窗要求填写 Flow ID、明文 Worker gRPC address 和 start input。它支持嵌套 object、array、string-key map、enum、boolean、datetime、optional field 和显式 null。固定数组保持声明的长度。Integer 在浏览器中一直保存为十进制文本，到序列化时才写入 JSON，因此 int64 不会损失精度。

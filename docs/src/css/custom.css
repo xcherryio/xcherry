@@ -653,6 +653,38 @@ summary:focus-visible {
   min-height: 520px;
 }
 
+/* Dex Web's Flow canvas for Version 2.0 definitions; its colours come from `.v2-shell`. */
+.docs-flow-canvas,
+.v2-shell.docs-flow-canvas {
+  height: min(78vh, 900px);
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+
+.docs-flow-canvas > .pcanvas {
+  height: 100%;
+}
+
+.docs-flow-definition-graph.is-expanded .v2-shell.docs-flow-canvas {
+  height: calc(100vh - 190px);
+  min-height: 520px;
+}
+
+.docs-flow-canvas-selection {
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.docs-flow-canvas-selection code {
+  margin-left: 8px;
+}
+
+.docs-flow-canvas-selection p {
+  margin: 4px 0 0;
+}
+
 .theme-doc-markdown h1,
 .theme-doc-markdown h2,
 .theme-doc-markdown h3,

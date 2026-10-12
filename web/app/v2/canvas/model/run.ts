@@ -155,6 +155,16 @@ export interface PlannedRunState {
 
 export type RunState = StepRunState | PlannedRunState
 
+/** Narrows a run state to one with executions, also where `strictNullChecks` is off. */
+export function isExecutedRun(run: RunState | null): run is StepRunState {
+  return run !== null && !run.planned
+}
+
+/** Still in progress: blocked on its WaitFor, or running. */
+export function isOpenStatus(status: PhaseStatus): boolean {
+  return status === 'waiting' || status === 'running' || status === 'pending'
+}
+
 /**
  * The status a whole Step card shows, from its two phases.
  *

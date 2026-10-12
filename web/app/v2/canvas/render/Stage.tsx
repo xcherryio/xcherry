@@ -9,8 +9,10 @@
 import {
   Background,
   BackgroundVariant,
+  BaseEdge,
   Controls,
   type Edge,
+  type EdgeProps,
   Handle,
   type Node,
   type NodeProps,
@@ -28,21 +30,25 @@ import {
   useState,
   type JSX,
   type KeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type Ref,
 } from 'react'
-import type { Box, Detail, Direction, Link, Scene } from '../views/types'
+import { placementKey } from '../views/anchor'
+import type { Box, Direction, Scene } from '../views/types'
+import { Glyph } from './Glyph'
 import { LEGEND_BOX_H, LEGEND_W, legendAnchor } from './legendAnchor'
 import type { CanvasViewportHandle } from './viewport'
-import { EDGE_MARKER, RPC_TAIL } from './markers'
+import { EDGE_MARKER } from './markers'
 import { NodeBox } from './NodeBox'
+import { labelPoint, roundedPath, type Point } from './routedPath'
+import { StageBox } from './StageBox'
 import {
   chromeCompensation,
   edgeContrastBoost,
-  FIT_MAX_ZOOM,
+  fitOptions,
   FOCUS_ZOOM,
   MAX_ZOOM,
   MIN_ZOOM,
+  OPEN_FLOOR,
 } from './zoom'
 import '@xyflow/react/dist/style.css'
 
@@ -54,6 +60,19 @@ import '@xyflow/react/dist/style.css'
  * viewport.
  */
 
+type BoxData = {
+  box: Box
+  selected: boolean
+  hovered: boolean
+  referenced: boolean
+  now: boolean
+  onSelect?: (id: string, additive: boolean) => void
+  onHover?: (id: string | null) => void
+  onInspect?: (id: string) => void
+  onOpen: (id: string) => void
+  onJump: (id: string) => void
+}
+
 /**
  * Handles live here, not in `NodeBox`.
  *
@@ -61,90 +80,84 @@ import '@xyflow/react/dist/style.css'
  * which is exactly what happened on the first run: correct geometry, correct edge list, and not one
  * arrow on screen.
  *
- * Two named channels: control flow routes vertically, everything else sideways, so a failure path
- * or a gate link never competes with a transition for the same anchor.
+ * The routed edge draws the layout's own path, so these are anchors only.
  */
 function BoxNode({ data }: NodeProps): JSX.Element {
-  const d = data as unknown as {
-    box: Box
-    selected: boolean
-    hovered: boolean
-    referenced: boolean
-    onSelect?: (id: string, additive: boolean) => void
-    onHover?: (id: string | null) => void
-    onInspect?: (id: string) => void
-  }
+  const d = data as unknown as BoxData
   return (
     <>
-      <Handle type="target" id="v" position={Position.Top} className="phandle" />
-      <Handle type="target" id="h" position={Position.Left} className="phandle" />
-      {/*
-        Far-side target faces, so an edge can arrive from BEHIND a node instead of tunnelling through
-        the one in front of it. Used by `route: 'around'`.
-      */}
-      <Handle type="target" id="vb" position={Position.Bottom} className="phandle" />
-      <Handle type="target" id="hr" position={Position.Right} className="phandle" />
-      <NodeBox
-        box={d.box}
-        selected={d.selected}
-        hovered={d.hovered}
-        referenced={d.referenced}
-        onSelect={d.onSelect}
-        onHover={d.onHover}
-        onInspect={d.onInspect}
-      />
-      <Handle type="source" id="v" position={Position.Bottom} className="phandle" />
-      <Handle type="source" id="h" position={Position.Right} className="phandle" />
+      <Handle type="target" position={Position.Top} className="phandle" />
+      {d.box.kind === 'stage' ? (
+        <StageBox box={d.box} now={d.now} onOpen={d.onOpen} onJump={d.onJump} />
+      ) : (
+        <NodeBox
+          box={d.box}
+          selected={d.selected}
+          hovered={d.hovered}
+          referenced={d.referenced}
+          now={d.now}
+          onSelect={d.onSelect}
+          onHover={d.onHover}
+          onInspect={d.onInspect}
+          onJump={d.onJump}
+        />
+      )}
+      {d.now ? (
+        <span className="pnow-tag" aria-hidden="true">
+          now
+        </span>
+      ) : null}
+      <Handle type="source" position={Position.Bottom} className="phandle" />
     </>
   )
 }
 
+/** An open stage's band: its label selects the group and its ⊖ closes the stage into one card. */
 function BandNode({ data }: NodeProps): JSX.Element {
   const d = data as unknown as {
-    id: string
-    label?: string
-    style: 'lane' | 'frame' | 'group'
-    tone?: string
-    hue?: number
+    groupId: string
+    label: string
+    hue: number
     w: number
     h: number
-    selected?: boolean
-    onSelect?: (id: string, additive: boolean) => void
+    selected: boolean
+    collapsible: boolean
+    onPick: (groupId: string, additive: boolean) => void
+    onClose: (groupId: string) => void
   }
-  /**
-   * A group band is a TAP TARGET, and only in the space outside the cards.
-   *
-   * Cards sit above it, so a click on a Step still reaches the Step; a click on the label strip or the
-   * padding around the members reaches the group. That gesture is what lets a group's description leave
-   * the sidebar — "tell me about this region" becomes something you do on the drawing rather than
-   * another block of prose beside it.
-   */
-  const clickable = d.style === 'group' && d.onSelect !== undefined
-  // The modifier has to reach the caller, exactly as it does for a card: a region IS an entity, so
-  // Cmd-clicking one must reference it. Dropping the event here meant a band could only ever open its panel.
-  const additive = (e: { metaKey: boolean; ctrlKey: boolean }): boolean => e.metaKey || e.ctrlKey
   return (
     <div
-      className={`pband pband-${d.style}${clickable ? ' pband-tap' : ''}`}
-      data-tone={d.tone}
-      data-hue={d.hue === undefined ? undefined : d.hue % 6}
+      className="pband pband-group"
+      data-hue={d.hue}
+      data-band={d.groupId}
       data-selected={d.selected ? 'true' : undefined}
       style={{ width: d.w, height: d.h }}
-      {...(clickable
-        ? {
-            role: 'button',
-            tabIndex: 0,
-            title: `${d.label ?? 'Group'} — click for what this region is`,
-            onClick: (e: ReactMouseEvent<HTMLDivElement>) => d.onSelect?.(d.id, additive(e)),
-            onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return
-              e.preventDefault()
-              d.onSelect?.(d.id, additive(e))
-            },
-          }
-        : {})}
     >
-      {d.label ? <span className="pband-label">{d.label}</span> : null}
+      <span
+        role="button"
+        tabIndex={0}
+        className="pband-label"
+        title={`${d.label}: the steps this stage groups`}
+        onClick={(e) => d.onPick(d.groupId, e.metaKey || e.ctrlKey)}
+        onKeyDown={(e: KeyboardEvent<HTMLSpanElement>) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          d.onPick(d.groupId, e.metaKey || e.ctrlKey)
+        }}
+      >
+        {d.label}
+      </span>
+      {d.collapsible ? (
+        <button
+          type="button"
+          className="pband-close nodrag nopan"
+          aria-label={`Close ${d.label} into one card`}
+          title={`Close ${d.label} into one card`}
+          onClick={() => d.onClose(d.groupId)}
+        >
+          <Glyph name="minusCircle" />
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -161,51 +174,91 @@ function LegendNode({ data }: NodeProps): JSX.Element {
   return <div className="plegend-node nodrag nopan">{d.render()}</div>
 }
 
+type RoutedEdgeData = { points: Point[]; labelAt?: Point }
+
+/** A line the layout routed, drawn as given rather than between handles. */
+function RoutedEdge({
+  id,
+  data,
+  markerEnd,
+  label,
+  labelStyle,
+  labelBgStyle,
+}: EdgeProps<Edge<RoutedEdgeData>>): JSX.Element | null {
+  const points = data?.points ?? []
+  if (points.length < 2) return null
+  const at = data?.labelAt ?? labelPoint(points)
+  return (
+    <BaseEdge
+      id={id}
+      path={roundedPath(points, 10)}
+      markerEnd={markerEnd}
+      label={label}
+      labelX={at.x}
+      labelY={at.y}
+      labelStyle={labelStyle}
+      labelBgStyle={labelBgStyle}
+      labelBgPadding={[4, 2]}
+      labelBgBorderRadius={4}
+      interactionWidth={14}
+    />
+  )
+}
+
 const NODE_TYPES = { pbox: BoxNode, band: BandNode, legend: LegendNode }
 
-/**
- * THE FIT PADDING, with the right-hand panel's width subtracted.
- *
- * The panel is an absolute overlay ON TOP of the React Flow pane, so the pane's width includes the area
- * underneath it and `fitView` fits to a viewport a quarter wider than what you can actually see. That was a
- * documented gap while the panel only opened on a click; in run mode it opens by default, so the execution
- * map was being drawn correctly and running off under the panel every time.
- *
- * Asymmetric padding fixes it without relaying out the pane: `right` reserves the occluded strip, so the
- * fit is against the visible area. A percentage rather than the pixel width because the pane's width varies
- * with the chat split, and 26% is `.ppan`'s 360px against a typical canvas pane.
- */
-/**
- * `top` clears the fixture picker, which is an absolute overlay at the top of the pane rather than part of
- * the layout — so a fit that used an even padding put the first Step underneath it.
- */
-const FIT_BASE = {
-  padding: { top: '8%', bottom: '4%', left: '4%', right: '4%' },
-  minZoom: MIN_ZOOM,
-  maxZoom: FIT_MAX_ZOOM,
-} as const
+const EDGE_TYPES = { routed: RoutedEdge }
 
-function fitOptions(insetRightPx: number | null | undefined, paneWidth: number) {
-  if (insetRightPx == null || insetRightPx <= 0 || paneWidth <= 0) return FIT_BASE
-  const rightPct = Math.min(58, Math.max(18, (insetRightPx / paneWidth) * 100 + 4))
-  return {
-    padding: { top: '8%', bottom: '4%', left: '4%', right: `${rightPct}%` },
-    minZoom: MIN_ZOOM,
-    maxZoom: FIT_MAX_ZOOM,
-  } as const
+/** After a stage opens or closes: what takes focus and what to bring into view. */
+type StageCue = {
+  focusId: string | null
+  reveal: { x: number; y: number; w: number; h: number } | null
+  nonce: number
+}
+
+type StageProps = {
+  scene: Scene
+  /** Which way the Flow reads, for where a too-large drawing opens. */
+  direction: Direction
+  selectedId: string | null
+  hoveredId?: string | null
+  referencedIds?: readonly string[]
+  onSelect?: (id: string | null, additive: boolean) => void
+  onHover?: (id: string | null) => void
+  onInspect?: (id: string) => void
+  legend?: () => JSX.Element
+  dimUnrelated?: boolean
+  /** When set, the view centres this node at reading zoom instead of opening on the whole Flow. */
+  focusNodeId?: string | null
+  /** The Step, or the stage holding it, that the shown run is at now. */
+  nowNodeId?: string | null
+  handleRef?: Ref<CanvasViewportHandle>
+  /** A band label selects its group. `additive` is Cmd (macOS) or Ctrl. */
+  onSelectGroup?: (id: string | null, additive: boolean) => void
+  selectedGroupId?: string | null
+  onOpenStage?: (stageBoxId: string) => void
+  onCloseStage?: (groupId: string) => void
+  cue?: StageCue | null
+  interactive: boolean
+  insetRightPx?: number | null
+  /** Changing this re-opens the view; opening a stage keeps the reader's place, so it is not part of it. */
+  fitKey: string
 }
 
 function Inner({
   scene,
-  detail,
   direction,
   dimUnrelated = true,
   focusNodeId,
+  nowNodeId = null,
   insetRightPx,
   legend,
   handleRef,
   onSelectGroup,
   selectedGroupId,
+  onOpenStage,
+  onCloseStage,
+  cue = null,
   selectedId,
   hoveredId,
   referencedIds,
@@ -214,50 +267,7 @@ function Inner({
   onInspect,
   interactive,
   fitKey,
-}: {
-  scene: Scene
-  detail: Detail
-  /** Needed for edge routing: which axis the ranks advance along swaps with it. */
-  direction: Direction
-  selectedId: string | null
-  /**
-   * The entity the pointer is over, wherever it is — a card here, or a chip in the transcript.
-   *
-   * A PROP, not a context read at the leaf, which is a deliberate trade. Reading it inside `NodeBox`
-   * would confine a chat-side hover to one card's re-render, but it would also make the canvas layer
-   * import the app's hooks, and that layer depending only on react/@xyflow/dagre is what let it move out
-   * of the harness in one piece. A hover re-renders ~20 nodes of pure geometry; the boundary is worth
-   * more than the frames.
-   */
-  hoveredId?: string | null
-  /** Ids the composer is carrying. Marked on the card so a list built by clicking can be checked. */
-  referencedIds?: readonly string[]
-  onSelect?: (id: string | null, additive: boolean) => void
-  onHover?: (id: string | null) => void
-  /** "enumerate every execution of this StepType" — raised by the segmented bar. */
-  onInspect?: (id: string) => void
-  /** Rendered as a node at the diagram's top-left, so it zooms and pans with the drawing. */
-  legend?: () => JSX.Element
-  /** False when the selection was made for the reader, so the graph is not faded for them. */
-  dimUnrelated?: boolean
-  /** When set, fit targets this node at reading zoom instead of the whole graph. */
-  focusNodeId?: string | null
-  /** Publishes fit and zoom so a keyboard shortcut has something to drive. */
-  handleRef?: Ref<CanvasViewportHandle>
-  /** A click inside a group band's own space, outside any card. `additive` is Cmd (macOS) or Ctrl. */
-  onSelectGroup?: (id: string | null, additive: boolean) => void
-  selectedGroupId?: string | null
-  interactive: boolean
-  /**
-   * Pixel width of the right-hand panel overlay, or null when none is open.
-   *
-   * A prop rather than something measured, because only the app knows a panel is open — and measuring the
-   * overlay from in here would make the renderer depend on the shape of the thing overlaying it.
-   */
-  insetRightPx?: number | null
-  /** Changing this refits the view. Deliberately NOT the zoom, or fit would fight the user. */
-  fitKey: string
-}): JSX.Element {
+}: StageProps): JSX.Element {
   const rf = useReactFlow()
   const paneRef = useRef<HTMLDivElement | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
@@ -266,32 +276,37 @@ function Inner({
     if (selectedId !== null) setSelectedLinkId(null)
   }, [selectedId])
 
+  /** A jump chip selects where it leads at a readable size; a jump into a closed stage opens it. */
+  const jump = useCallback(
+    (id: string) => {
+      const node = rf.getNode(id)
+      if (node === undefined) return
+      const kind = (node.data as BoxData | undefined)?.box.kind
+      if (kind === 'step') onSelect?.(id, false)
+      if (kind === 'stage') onOpenStage?.(id)
+      void rf.setCenter(node.position.x + (node.width ?? 0) / 2, node.position.y + (node.height ?? 0) / 2, {
+        zoom: Math.max(rf.getZoom(), OPEN_FLOOR),
+        duration: 220,
+      })
+    },
+    [onOpenStage, onSelect, rf],
+  )
+  const openStage = useCallback((id: string) => onOpenStage?.(id), [onOpenStage])
+  const closeStage = useCallback((groupId: string) => onCloseStage?.(groupId), [onCloseStage])
+  const pickBand = useCallback(
+    (groupId: string, additive: boolean) => onSelectGroup?.(groupId, additive),
+    [onSelectGroup],
+  )
+
+  // Sizes come from the Scene, so fitting never measures unrendered nodes.
   const nodes = useMemo<Node[]>(() => {
-    /**
-     * Dimensions are declared, not measured. The Scene already knows every box's size, and React
-     * Flow needs sizes to compute the bounds `fitView` works from — left to measure the DOM it fits
-     * against zero-size nodes on first paint.
-     */
     const bands: Node[] = scene.bands.map((b) => ({
       id: `band:${b.id}`,
       type: 'band',
       position: { x: b.x, y: b.y },
       width: b.w,
       height: b.h,
-      data: {
-        id: b.id,
-        label: b.label,
-        style: b.style,
-        tone: b.tone,
-        hue: b.hue,
-        w: b.w,
-        h: b.h,
-        selected: b.id === selectedGroupId,
-        onSelect:
-          b.style === 'group'
-            ? (id: string, additive: boolean) => onSelectGroup?.(id, additive)
-            : undefined,
-      },
+      data: { ...b, selected: b.groupId === selectedGroupId, onPick: pickBand, onClose: closeStage },
       draggable: false,
       selectable: false,
       zIndex: 0,
@@ -308,26 +323,17 @@ function Inner({
         selected: b.id === selectedId,
         hovered: b.id === hoveredId,
         referenced: referencedIds !== undefined && referencedIds.includes(b.id),
+        now: nowNodeId !== null && (b.id === nowNodeId || (b.holds ?? []).includes(nowNodeId)),
         onSelect: (id: string, additive: boolean) => onSelect?.(id, additive),
         onHover: (id: string | null) => onHover?.(id),
         onInspect: (id: string) => onInspect?.(id),
-      },
+        onOpen: openStage,
+        onJump: jump,
+      } satisfies BoxData,
       draggable: false,
       zIndex: 2,
       style: { zIndex: 2 },
     }))
-    /**
-     * Above and left of everything else, so it never covers a Step. Width is declared and height is
-     * left to be measured — the pane already refits on resize, which is what settles it.
-     */
-    /**
-     * BOTTOM-RIGHT of the drawing, bottom-aligned with the lowest box.
-     *
-     * Beside the content rather than over it, and anchored to the content's own extent rather than to
-     * the window — so it reads as part of the drawing and moves when the drawing does. Anchoring the
-     * BOTTOM is what makes it look placed rather than attached: a legend whose top is pinned drifts
-     * away from the flow as the flow gets shorter.
-     */
     const legendNode: Node[] = []
     const anchor = legendAnchor(scene.boxes, scene.bands)
     if (legend !== undefined && anchor !== undefined) {
@@ -350,156 +356,49 @@ function Inner({
     selectedId,
     hoveredId,
     referencedIds,
+    nowNodeId,
     onSelect,
     onHover,
     onInspect,
     selectedGroupId,
-    onSelectGroup,
+    pickBand,
+    closeStage,
+    openStage,
+    jump,
     legend,
   ])
 
-  const edges = useMemo<Edge[]>(() => {
-    const present = new Map(scene.boxes.map((b) => [b.id, b]))
-    /**
-     * Which handle channel an edge uses.
-     *
-     * Control flow goes vertically, because that is the reading direction. Failure paths ALWAYS go
-     * sideways — that is the routing fix that let recovery stop being a toggle: a failure edge runs
-     * down a side gutter instead of reaching backwards across the happy path. Self-loops and
-     * upward edges go sideways for the same reason.
-     */
-    /**
-     * Which handles an edge leaves and enters by.
-     *
-     * A SELF-LOOP leaves the RIGHT face and re-enters the TOP one. It used to use the same channel for
-     * both ends, which on one node means right-handle to left-handle — a path with nowhere to go, so
-     * React Flow collapsed it to a stub and 21 self-loops in the corpus were effectively invisible.
-     * Different faces give smoothstep a real corner to route around, which is how n8n draws a
-     * loop-back and how Step Functions draws a retry: an arc that visibly leaves and returns.
-     */
-    const lr = direction === 'lr'
-    const handles = (l: Link): { source: string; target: string } => {
-      const a = present.get(l.from)
-      const b = present.get(l.to)
-      if (a !== undefined && b !== undefined && a.id === b.id) {
-        return { source: 'h', target: 'v' }
-      }
-      /**
-       * AROUND, not through. An external call with several targets in one row has to get past the
-       * nearest of them to reach the rest, and running straight across meant the segment that emerged
-       * between two cards read as an edge BETWEEN them — a relationship that does not exist, which is
-       * worse than a crossing. So it leaves by the along-axis face and arrives at the far side.
-       */
-      if (l.route === 'around') {
-        return lr ? { source: 'h', target: 'hr' } : { source: 'v', target: 'vb' }
-      }
-      // Explicitly routed aside by the view because it would otherwise tunnel under the cards
-      // between its endpoints.
-      /**
-       * The CROSS channel is whichever one the ranks do not advance along — sideways top-down, and
-       * vertical left-right. It was hardcoded to `h`, which top-down is correct and left-right is the
-       * FORWARD channel, so every edge meant to go around instead ran along the ranks and straight
-       * through them. The real book pipeline made that visible: 25 tunnelling edges left-right, because
-       * eight failure paths converge on one recovery gate from all over a twelve-rank chain.
-       */
-      const cross: 'v' | 'h' = lr ? 'v' : 'h'
-      if (l.route === 'side') return { source: cross, target: cross }
-      /**
-       * A MESSAGE FLOW ALWAYS TRAVELS IN THE GUTTER, whatever the vertical distance.
-       *
-       * The pennant lives in the across-axis gutter — left of the column top-down, above it
-       * left-right — so its edge has to run ALONG the ranks inside that gutter until it is level with
-       * its target, then turn in. That is the cross channel in both directions.
-       *
-       * This used to be positional, like a control edge, which was fine while every pennant sat beside
-       * its one target. The real book pipeline broke it: one `approve` opens gates nine rows apart, so
-       * `forward` was true for the distant ones, they left by the BOTTOM face aiming at the target's
-       * TOP, and the horizontal leg of that path crossed the whole column of cards.
-       */
-      if (l.family !== 'control') {
-        return { source: cross, target: cross }
-      }
-      if (a === undefined || b === undefined) return { source: 'v', target: 'v' }
-      /**
-       * FORWARD is measured on the axis the ranks advance along, which swaps with the direction. This
-       * used to test `b.y > a.y` unconditionally — a top-down assumption. Left-right it made an edge
-       * between two ranks at different across positions exit the BOTTOM face and enter the TOP one,
-       * cutting through whatever sat between; the tunnelling metric caught 3 on the agent flow.
-       */
-      const forward = lr ? b.x > a.x + 8 : b.y > a.y + 8
-      // Forward runs along the ranks; anything else takes the other channel and goes around.
-      const ch: 'v' | 'h' = forward ? (lr ? 'h' : 'v') : lr ? 'v' : 'h'
-      return { source: ch, target: ch }
-    }
-    return scene.links
-      .filter((l) => present.has(l.from) && present.has(l.to))
-      .filter((l) => {
-        // Latent links are in the scene but quiet until an endpoint is selected. One Step in the
-        // real flow absorbs 16 of 27 transitions; drawing them all is a star nobody can trace.
-        if (l.latent !== true) return true
-        return selectedId !== null && (l.from === selectedId || l.to === selectedId)
-      })
-      .map((l) => {
-        const lit = selectedId !== null && (l.from === selectedId || l.to === selectedId)
-        const picked = l.id === selectedLinkId
-        const h = handles(l)
+  const edges = useMemo<Edge<RoutedEdgeData>[]>(
+    () =>
+      scene.links.map((l) => {
+        const isLit = selectedId !== null && (l.from === selectedId || l.to === selectedId)
+        const isPicked = l.id === selectedLinkId
+        const isDim = dimUnrelated && selectedId !== null && !isLit && !isPicked
         return {
           id: l.id,
           source: l.from,
           target: l.to,
-          sourceHandle: h.source,
-          targetHandle: h.target,
-          type: 'smoothstep',
-          /**
-           * DIRECTION. Every edge had none until now — the graph was a set of bare lines, which is the
-           * one thing a control view cannot afford to leave to inference.
-           *
-           * Filled for flow inside the process, hollow-plus-source-circle for a message from outside:
-           * BPMN's sequence-flow / message-flow distinction, which is a SHAPE difference and therefore
-           * survives the compare grid's thumbnails and any colour deficiency.
-           *
-           * A BARE ID, not `url(#id)`. React Flow wraps a string marker in `url(#…)` itself, so the
-           * wrapped form became `url('#url(#p-arrow-rpc)')` — a valid attribute pointing at nothing,
-           * which fails silently: no error, no warning, just edges with no arrowheads.
-           */
+          type: 'routed',
+          data: { points: l.points, ...(l.label?.at ? { labelAt: l.label.at } : {}) },
           markerEnd: EDGE_MARKER[l.family],
-          markerStart: l.family === 'rpc' || l.family === 'gate' ? RPC_TAIL : undefined,
-          // Above the band nodes, which are opaque and would otherwise cover the edges.
-          selected: picked,
-          zIndex: picked ? 2 : 1,
-          // Colour and width come from CSS so the zoom compensation variable can reach them
-          // without re-rendering React on every wheel tick.
-          /**
-           * `pedge-path` is the live execution map's strongest signal, and it OUTRANKS the dim class: an
-           * edge the run took stays bright even while a selection is dimming everything else, because
-           * "where has this run been" must not be erasable by clicking a card.
-           */
-          className: `pedge pedge-${l.family}${l.selfLoop === true ? ' pedge-loop' : ''}${l.onPath === undefined ? '' : ' pedge-path'}${lit || picked ? ' pedge-lit' : ''}${dimUnrelated && selectedId !== null && !lit && !picked && l.onPath === undefined ? ' pedge-dim' : ''}`,
-          /**
-           * The LABEL only — never `detail`. `detail` holds the full guard text for the panel, and
-           * printing it here put source expressions back on the canvas by the side door.
-           *
-           * And only while LIT. An always-on variant was tried for case values and removed: the edge
-           * runs through its own label, and in our data the value names its destination anyway. See
-           * `views/shared.ts`.
-           */
-          label: lit ? l.label : undefined,
-          labelStyle: { fill: 'var(--p-ink-1)', fontSize: 10 },
+          selected: isPicked,
+          zIndex: isPicked || isLit ? 2 : 1,
+          className: `pedge pedge-${l.family}${isLit || isPicked ? ' pedge-lit' : ''}${isDim ? ' pedge-dim' : ''}`,
+          // A case value always shows; a merged-condition count only while an end is selected.
+          label: l.label && (l.label.always || isLit || isPicked) ? l.label.text : undefined,
+          labelStyle: { fill: 'var(--p-ink-1)', fontSize: 10.5, fontWeight: 500 },
           labelBgStyle: { fill: 'var(--p-surface-2)' },
         }
-      })
-  }, [scene, selectedId, selectedLinkId, direction])
+      }),
+    [scene, selectedId, selectedLinkId, dimUnrelated],
+  )
 
-  /**
-   * The imperative handle. `reveal` pans the minimum distance that brings a node into view, which is the
-   * one operation React Flow does not offer directly.
-   */
   useImperativeHandle(
     handleRef,
     () => ({
       zoomIn: () => void rf.zoomIn({ duration: 120 }),
       zoomOut: () => void rf.zoomOut({ duration: 120 }),
-      fit: () => void rf.fitView(fitOptions(insetRightPx, paneRef.current?.clientWidth ?? 0)),
+      fit: () => void rf.fitView({ ...fitOptions(insetRightPx, paneRef.current?.clientWidth ?? 0), minZoom: MIN_ZOOM }),
       zoom: () => rf.getZoom(),
       focus: (nodeId: string) => {
         const id = rf.getNode(nodeId) !== undefined ? nodeId : `band:${nodeId}`
@@ -507,12 +406,6 @@ function Inner({
         void rf.fitView({ nodes: [{ id }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 260 })
       },
       reveal: (nodeId: string) => {
-        /**
-         * A BAND IS REGISTERED UNDER A PREFIX, and resolving that is this function's job rather than the
-         * caller's. Stage is the only minter of React Flow node ids and it gives bands `band:<id>` while
-         * boxes keep their bare id — so a caller passing a band's scene id got `undefined` here and every
-         * region reveal silently did nothing. Callers pass a SCENE id; only this file knows what became of it.
-         */
         const id = rf.getNode(nodeId) !== undefined ? nodeId : `band:${nodeId}`
         if (rf.getNode(id) === undefined) return
         void rf.fitView({ nodes: [{ id }], padding: 0.4, maxZoom: rf.getZoom(), duration: 160 })
@@ -521,36 +414,49 @@ function Inner({
     [rf, insetRightPx],
   )
 
-  const focusNodeIdRef = useRef(focusNodeId)
-  useEffect(() => { focusNodeIdRef.current = focusNodeId }, [focusNodeId])
+  // Read when the view re-opens; re-opening on every run poll would fight the reader.
+  const latest = useRef({ scene, direction, nowNodeId, focusNodeId })
+  useEffect(() => {
+    latest.current = { scene, direction, nowNodeId, focusNodeId }
+  })
 
-  /**
-   * Refit when the thing being shown changes — never on zoom.
-   *
-   * Driven by a ResizeObserver rather than a timer: a timer is a guess about when the browser has
-   * sized the container, and the guess was wrong twice as the layout got deeper.
-   */
+  // Re-open when what is shown changes, never on zoom; a ResizeObserver knows when the pane is sized.
   useEffect(() => {
     const el = paneRef.current
     if (el === null) return
     let raf = 0
-    const refit = () => {
+    const open = (): void => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
-        if (el.clientWidth < 8 || el.clientHeight < 8) return
-        const focusId = focusNodeIdRef.current ?? null
-        const resolved = focusId === null
-          ? null
-          : (rf.getNode(focusId) !== undefined ? focusId : `band:${focusId}`)
-        if (resolved !== null && rf.getNode(resolved) !== undefined) {
-          void rf.fitView({ nodes: [{ id: resolved }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 160 })
+        const paneW = el.clientWidth - (insetRightPx ?? 0)
+        const paneH = el.clientHeight
+        if (paneW < 8 || paneH < 8) return
+        const { scene: shown, direction: reading, nowNodeId: now, focusNodeId: focus } = latest.current
+        const focused = focus === null || focus === undefined ? null : rf.getNode(focus) !== undefined ? focus : null
+        if (focused !== null) {
+          void rf.fitView({ nodes: [{ id: focused }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 160 })
           return
         }
-        void rf.fitView({ ...fitOptions(insetRightPx, el.clientWidth), duration: 160 })
+        const zoomToFit = Math.min((paneW * 0.92) / shown.width, (paneH * 0.9) / shown.height)
+        if (zoomToFit >= OPEN_FLOOR || shown.boxes.length === 0) {
+          void rf.fitView({ ...fitOptions(insetRightPx, el.clientWidth), duration: 160 })
+          return
+        }
+        // Too large to read whole: open at the readable floor with the start, or "now", in view.
+        const anchor =
+          shown.boxes.find((b) => now !== null && (b.id === now || (b.holds ?? []).includes(now))) ??
+          shown.boxes.find((b) => b.isStart) ??
+          (shown.boxes[0] as Box)
+        const zoom = OPEN_FLOOR
+        const across = (span: number, room: number, at: number): number =>
+          span * zoom <= room ? (room - span * zoom) / 2 : Math.min(32, room / 2 - at * zoom)
+        const x = reading === 'lr' ? 32 - anchor.x * zoom : across(shown.width, paneW, anchor.x + anchor.w / 2)
+        const y = reading === 'lr' ? across(shown.height, paneH, anchor.y + anchor.h / 2) : 24 - anchor.y * zoom
+        void rf.setViewport({ x, y, zoom }, { duration: 160 })
       })
     }
-    refit()
-    const ro = new ResizeObserver(refit)
+    open()
+    const ro = new ResizeObserver(open)
     ro.observe(el)
     return () => {
       cancelAnimationFrame(raf)
@@ -560,14 +466,6 @@ function Inner({
        is part of the fit, so a panel opening or resize has to refit rather than leave the drawing under it. */
   }, [rf, fitKey, insetRightPx, focusNodeId])
 
-  /**
-   * Zoom compensation, written to CSS custom properties rather than React state.
-   *
-   * This fires on every wheel event. Through state it would re-render every node and edge mid-
-   * gesture; as a style property on one element it is a single mutation the compositor handles.
-   * Borrowed from n8n, which uses exactly this to keep edge strokes and labels from vanishing as
-   * the graph shrinks.
-   */
   const applyZoomVars = useCallback((zoom: number) => {
     const el = paneRef.current
     if (el === null || !Number.isFinite(zoom)) return
@@ -579,19 +477,63 @@ function Inner({
     applyZoomVars(rf.getZoom())
   }, [applyZoomVars, rf, fitKey])
 
+  // After a stage opens or closes: focus what the reader acted on and pan just enough to show it.
+  const appliedCue = useRef(0)
+  useEffect(() => {
+    if (cue === null || cue.nonce === appliedCue.current) return
+    const raf = requestAnimationFrame(() => {
+      appliedCue.current = cue.nonce
+      const el = paneRef.current
+      if (cue.focusId !== null) {
+        el?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(cue.focusId)}"] [role="button"]`)
+          ?.focus({ preventScroll: true })
+      }
+      if (cue.reveal === null || el === null) return
+      const { x, y, zoom } = rf.getViewport()
+      const r = cue.reveal
+      const margin = 24
+      // Per axis: a box that fits moves the least that shows it; a larger one shows its start.
+      const shift = (start: number, size: number, room: number): number => {
+        const a = start * zoom
+        const b = a + size * zoom
+        if (b - a > room - 2 * margin) return margin - a
+        if (a < margin) return margin - a
+        if (b > room - margin) return room - margin - b
+        return 0
+      }
+      const dx = shift(r.x + x / zoom, r.w, el.clientWidth - (insetRightPx ?? 0))
+      const dy = shift(r.y + y / zoom, r.h, el.clientHeight)
+      if (dx !== 0 || dy !== 0) void rf.setViewport({ x: x + dx, y: y + dy, zoom }, { duration: 280 })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [cue, insetRightPx, rf])
+
+  // While cards glide to new places, the lines between them fade out and back.
+  const placed = placementKey(scene)
+  const [observedPlacement, setObservedPlacement] = useState(placed)
+  const [isMoving, setMoving] = useState(false)
+  if (observedPlacement !== placed) {
+    setObservedPlacement(placed)
+    setMoving(true)
+  }
+  useEffect(() => {
+    if (!isMoving) return
+    const timer = window.setTimeout(() => setMoving(false), 300)
+    return () => window.clearTimeout(timer)
+  }, [isMoving])
+
   const handleMove = useCallback(
     (_: unknown, viewport: { zoom: number }) => applyZoomVars(viewport.zoom),
     [applyZoomVars],
   )
 
   return (
-    <div className="pstage-pane" ref={paneRef} data-detail={detail}>
+    <div className="pstage-pane" ref={paneRef} data-relayout={isMoving ? 'true' : undefined}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
-        fitView
-        fitViewOptions={fitOptions(insetRightPx, paneRef.current?.clientWidth ?? 0)}
+        edgeTypes={EDGE_TYPES}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
         nodesDraggable={false}
@@ -620,36 +562,7 @@ function Inner({
   )
 }
 
-export function Stage(props: {
-  /** Pixel width of the right-hand panel overlay, or null when none is open. */
-  insetRightPx?: number | null
-  scene: Scene
-  detail: Detail
-  /** Needed for edge routing: which axis the ranks advance along swaps with it. */
-  direction: Direction
-  selectedId: string | null
-  /** See `Inner`: the entity under the pointer, from either pane. */
-  hoveredId?: string | null
-  /** Ids the composer is carrying. Marked on the card so a list built by clicking can be checked. */
-  referencedIds?: readonly string[]
-  onSelect?: (id: string | null, additive: boolean) => void
-  onHover?: (id: string | null) => void
-  /** "enumerate every execution of this StepType" — raised by the segmented bar. */
-  onInspect?: (id: string) => void
-  /** Rendered as a node at the diagram's top-left, so it zooms and pans with the drawing. */
-  legend?: () => JSX.Element
-  /** Publishes fit and zoom so a keyboard shortcut has something to drive. */
-  /** False when the selection was made for the reader, so the graph is not faded for them. */
-  dimUnrelated?: boolean
-  /** When set, fit targets this node at reading zoom instead of the whole graph. */
-  focusNodeId?: string | null
-  handleRef?: Ref<CanvasViewportHandle>
-  /** A click inside a group band's own space, outside any card. `additive` is Cmd (macOS) or Ctrl. */
-  onSelectGroup?: (id: string | null, additive: boolean) => void
-  selectedGroupId?: string | null
-  interactive?: boolean
-  fitKey: string
-}): JSX.Element {
+export function Stage(props: Omit<StageProps, 'interactive'> & { interactive?: boolean }): JSX.Element {
   const { interactive = true, ...rest } = props
   return (
     <div className="pstage">

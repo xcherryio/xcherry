@@ -8,7 +8,6 @@
 
 import type { EntryModel, EntryView, PocFlow, ResourceModel, ResourceRef } from '../model/pocFlow'
 import { resourceById } from '../model/pocFlow'
-import { anatomyHeight, CARD_MIN_H } from './stepBox'
 import type { Box, BoxRow, Scene, ViewOpts } from './types'
 import { boundsOf } from './types'
 
@@ -20,16 +19,22 @@ export const RPC_CARD_W = 280
 const CARD_GAP = 34
 const MARGIN = 34
 
+const CARD_MIN_H = 62
+
+/** The height an RPC card needs for its head and rows. */
+function anatomyHeight(rowCount: number): number {
+  /*
+   * Scaled with the type, 1.2x, because every one of these is a measurement OF the type: `head` is a
+   * title line over a subtitle line, a row is one line of row text, a section is a label over its rows.
+   * Leaving them while the CSS grew would have clipped the text the card is sized to hold.
+   */
+  const head = 59
+  return head + rowCount * 20
+}
+
 type Access = ResourceRef['access']
 
 const ACCESS_ORDER: Access[] = ['read', 'write', 'publish', 'lock']
-
-const ACCESS_SECTION: Record<Access, string> = {
-  read: 'Reads',
-  write: 'Writes',
-  publish: 'Publishes to',
-  lock: 'Locks',
-}
 
 const ACCESS_VERB: Record<Access, string> = {
   read: 'reads',
@@ -66,7 +71,6 @@ interface AccessedResource {
 export interface RpcCardContent {
   subtitle: string
   rows: BoxRow[]
-  sections: { label: string; rows: BoxRow[] }[]
   rpcRole?: 'action' | 'view'
   height: number
 }
@@ -126,10 +130,9 @@ function readingRank(entry: EntryModel, access: Map<Access, AccessedResource[]>)
   return changesState(access) ? 1 : 2
 }
 
-export function rpcCardContent(flow: PocFlow, entry: EntryModel, opts: ViewOpts): RpcCardContent {
+export function rpcCardContent(flow: PocFlow, entry: EntryModel): RpcCardContent {
   const access = resourcesByAccess(flow, entry)
   const rows: BoxRow[] = []
-  const sections: RpcCardContent['sections'] = []
 
   if (entry.action !== undefined) {
     const permission = entry.action.requiredPermission
@@ -139,21 +142,8 @@ export function rpcCardContent(flow: PocFlow, entry: EntryModel, opts: ViewOpts)
       tone: 'quiet',
     })
   }
-  // Collapsed says each access kind in one row; Expanded lists one resource per row.
-  for (const [kind, resources] of access) {
-    if (opts.detail === 'expanded') {
-      sections.push({
-        label: ACCESS_SECTION[kind],
-        rows: resources.map((resource) => ({
-          glyph: ACCESS_GLYPH[kind],
-          text: resource.name,
-          ...(resource.kindName === undefined ? {} : { trail: resource.kindName }),
-        })),
-      })
-    } else {
-      rows.push(accessRow(kind, resources))
-    }
-  }
+  // One row per access kind; the panel lists every resource.
+  for (const [kind, resources] of access) rows.push(accessRow(kind, resources))
 
   const subtitle =
     entry.action !== undefined
@@ -173,9 +163,8 @@ export function rpcCardContent(flow: PocFlow, entry: EntryModel, opts: ViewOpts)
   return {
     subtitle,
     rows,
-    sections,
     ...(rpcRole === undefined ? {} : { rpcRole }),
-    height: Math.max(CARD_MIN_H, anatomyHeight(rows.length, sections) + borderH),
+    height: Math.max(CARD_MIN_H, anatomyHeight(rows.length) + borderH),
   }
 }
 
@@ -186,7 +175,7 @@ export function rpcCardsLayout(flow: PocFlow, opts: ViewOpts): Scene {
     .map((entry) => ({
       entry,
       rank: readingRank(entry, resourcesByAccess(flow, entry)),
-      content: rpcCardContent(flow, entry, opts),
+      content: rpcCardContent(flow, entry),
     }))
     .sort((a, b) => a.rank - b.rank || a.entry.name.localeCompare(b.entry.name))
   const lr = opts.direction === 'lr'
@@ -208,7 +197,6 @@ export function rpcCardsLayout(flow: PocFlow, opts: ViewOpts): Scene {
         title: entry.name,
         subtitle: content.subtitle,
         rows: content.rows,
-        sections: content.sections,
         ...(content.rpcRole === undefined ? {} : { rpcRole: content.rpcRole }),
       })
       at += (lr ? content.height : RPC_CARD_W) + CARD_GAP

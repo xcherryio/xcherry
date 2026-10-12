@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - 'docs/**'
+      - 'packages/flow-definition-renderer/**'
+      - 'web/app/v2/**'
       - '.github/workflows/deploy-docs.yml'
   push:
     branches:
       - main
     paths:
       - 'docs/**'
+      - 'packages/flow-definition-renderer/**'
+      - 'web/app/v2/**'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 

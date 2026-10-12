@@ -50,7 +50,8 @@ export interface StepGroup {
   /** Why these belong together. Sidebar only, never on the canvas. */
   reason: string
   /** StepTypes, not ids — the mock is written against the source vocabulary, not our id scheme. */
-  stepTypes: string[]
+  stepTypes: string[]  /** Member Step ids, which the canvas lays out by. */
+  stepIds: string[]
 }
 
 /**

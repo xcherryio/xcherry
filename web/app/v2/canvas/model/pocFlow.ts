@@ -261,3 +261,31 @@ export function stepById(flow: PocFlow, id: string): StepModel | undefined {
 export function resourceById(flow: PocFlow, id: string): ResourceModel | undefined {
   return flow.resources.find((r) => r.id === id)
 }
+
+/** Who acts at a Step; an unresolved wait stays a wait, never machine work. */
+export type WhoActs = 'person' | 'outside' | 'machine' | 'clock' | 'child' | 'waits'
+
+/** The entries that publish to a Channel this Step waits on. */
+export function answeringEntries(flow: PocFlow, step: StepModel): EntryModel[] {
+  const channels = new Set(
+    (step.waitFor?.conditions ?? []).flatMap((c) =>
+      c.kind === 'channel' && c.resourceId !== undefined ? [c.resourceId] : [],
+    ),
+  )
+  return flow.entries.filter((entry) => entry.opensGates.some((gate) => channels.has(gate.channelId)))
+}
+
+export function whoActs(flow: PocFlow, step: StepModel): WhoActs {
+  switch (step.actor) {
+    case 'external':
+      return answeringEntries(flow, step).some((entry) => entry.action !== undefined) ? 'person' : 'outside'
+    case 'clock':
+      return 'clock'
+    case 'child':
+      return 'child'
+    case 'machine':
+      return 'machine'
+    case 'unknown':
+      return 'waits'
+  }
+}
