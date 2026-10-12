@@ -118,6 +118,7 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 	}
 	streamStore, streamStoreErr := streamstore.New(
 		&cfg.StreamStore,
+		&cfg.Tenancy,
 		logger.WithTags(tag.Service("stream-store")),
 	)
 	if streamStoreErr != nil {

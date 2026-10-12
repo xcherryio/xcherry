@@ -306,7 +306,7 @@ func TestReceiveExecuteMethodDropsDisabledStreamWrite(t *testing.T) {
 
 func newActivityStreamStore(t *testing.T, backend config.StreamStoreBackend) *streamstore.Store {
 	t.Helper()
-	store, err := streamstore.New(&config.StreamStoreConfig{Backend: backend}, commonlog.NewNoop())
+	store, err := streamstore.New(&config.StreamStoreConfig{Backend: backend}, &config.TenancyConfig{}, commonlog.NewNoop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store

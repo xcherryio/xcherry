@@ -43,6 +43,10 @@ type DexServiceTestConfig struct {
 	GrpcMaxMessageBytes                    int
 	// UseBuiltInDefaultWorkflowConfig lets a test exercise package defaults.
 	UseBuiltInDefaultWorkflowConfig bool
+	// S3KeyPrefix is the S3 storage's object key prefix when S3TestThreshold is set.
+	S3KeyPrefix string
+	// TenantCleanupConfirmationDelay overrides the blob cleanup confirmation delay of tenant paths.
+	TenantCleanupConfirmationDelay time.Duration
 	// Tenancy enables multi-tenant mode; the runtime assigns the internal listener address.
 	Tenancy *config.TenancyConfig
 	// Credential is sent as a bearer token by the runtime's FlowClient.
@@ -124,6 +128,7 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 					S3Region:    "us-east-1",
 					S3AccessKey: "minioadmin",
 					S3SecretKey: "minioadmin",
+					S3KeyPrefix: testCfg.S3KeyPrefix,
 				},
 			},
 		}
@@ -148,5 +153,6 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 			}},
 		}
 	}
+	cfg.BlobStore.TenantCleanupConfirmationDelay = testCfg.TenantCleanupConfirmationDelay
 	return cfg
 }

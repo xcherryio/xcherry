@@ -22,15 +22,18 @@ import (
 )
 
 type memoryBackend struct {
-	cfg *config.StreamStoreConfig
+	cfg           *config.StreamStoreConfig
+	isMultiTenant bool
 
-	mutex   sync.Mutex
-	ready   *sync.Cond
-	scopes  map[streamScope]*memoryScope
-	pending map[streamScope]*memoryTrimState
-	closed  bool
-	stop    chan struct{}
-	wait    sync.WaitGroup
+	mutex  sync.Mutex
+	ready  *sync.Cond
+	scopes map[streamScope]*memoryScope
+	// tenantBytes are the charged bytes buffered per tenant in this process; the empty tenant is single-tenant.
+	tenantBytes map[string]int64
+	pending     map[streamScope]*memoryTrimState
+	closed      bool
+	stop        chan struct{}
+	wait        sync.WaitGroup
 }
 
 type memoryScope struct {
@@ -69,15 +72,17 @@ type memoryTrimTask struct {
 	generation uint64
 }
 
-func newMemoryBackend(cfg *config.StreamStoreConfig) *memoryBackend {
+func newMemoryBackend(cfg *config.StreamStoreConfig, isMultiTenant bool) *memoryBackend {
 	if cfg == nil {
 		panic("Memory Stream Store config must not be nil")
 	}
 	backend := &memoryBackend{
-		cfg:     cfg,
-		scopes:  make(map[streamScope]*memoryScope),
-		pending: make(map[streamScope]*memoryTrimState),
-		stop:    make(chan struct{}),
+		cfg:           cfg,
+		isMultiTenant: isMultiTenant,
+		scopes:        make(map[streamScope]*memoryScope),
+		tenantBytes:   make(map[string]int64),
+		pending:       make(map[streamScope]*memoryTrimState),
+		stop:          make(chan struct{}),
 	}
 	backend.ready = sync.NewCond(&backend.mutex)
 	for workerIndex := 0; workerIndex < cfg.EffectiveTrimWorkers(); workerIndex++ {
@@ -119,16 +124,19 @@ func (b *memoryBackend) Write(ctx context.Context, input backendWriteInput) erro
 	if b.closed {
 		return ErrUnavailable
 	}
-	scopeID := streamScope{
-		flowType:   input.input.FlowType,
-		streamName: input.input.StreamName,
-	}
+	scopeID := newStreamScope(b.isMultiTenant, input.input.FlowType, input.input.StreamName, input.input.FlowID)
 	scope := b.scopeLocked(scopeID)
 	if scope.totalBytes >= input.capacityBytes ||
 		input.chargedBytes > input.capacityBytes-scope.totalBytes {
 		b.scheduleTrimLocked(scopeID, input.baseTrimTargetBytes)
 		return ErrCapacityExceeded
 	}
+	if scopeID.tenantID != "" && input.maxTenantBytes > 0 &&
+		b.tenantBytes[scopeID.tenantID]+input.chargedBytes > input.maxTenantBytes {
+		b.scheduleTrimLocked(scopeID, input.baseTrimTargetBytes)
+		return ErrCapacityExceeded
+	}
+	b.tenantBytes[scopeID.tenantID] += input.chargedBytes
 	entry := scope.append(
 		input.input.FlowID,
 		input.input.Source,
@@ -162,7 +170,7 @@ func (b *memoryBackend) Read(
 			b.mutex.Unlock()
 			return nil, ErrUnavailable
 		}
-		scopeID := streamScope{flowType: flowType, streamName: streamName}
+		scopeID := newStreamScope(b.isMultiTenant, flowType, streamName, flowID)
 		scope := b.scopeLocked(scopeID)
 		instance := scope.instance(flowID)
 		entry := instance.after(cursorMilliseconds, cursorSequence)
@@ -202,7 +210,7 @@ func (b *memoryBackend) List(
 	if b.closed {
 		return nil, false, ErrUnavailable
 	}
-	scope := b.scopes[streamScope{flowType: flowType, streamName: streamName}]
+	scope := b.scopes[newStreamScope(b.isMultiTenant, flowType, streamName, flowID)]
 	if scope == nil {
 		return nil, false, nil
 	}
@@ -279,7 +287,12 @@ func (b *memoryBackend) trim(task memoryTrimTask) {
 			return
 		}
 		scope := b.scopes[task.scope]
-		isComplete := scope == nil || scope.trim(task.target, b.cfg.EffectiveBackgroundTrimBatchSize())
+		isComplete := true
+		if scope != nil {
+			var trimmedBytes int64
+			isComplete, trimmedBytes = scope.trim(task.target, b.cfg.EffectiveBackgroundTrimBatchSize())
+			b.releaseTenantBytesLocked(task.scope.tenantID, trimmedBytes)
+		}
 		if scope != nil && scope.isEmpty() {
 			delete(b.scopes, task.scope)
 		}
@@ -407,8 +420,10 @@ func (s *memoryScope) instance(flowID string) *memoryInstance {
 	return instance
 }
 
-func (s *memoryScope) trim(targetBytes int64, batchSize int) bool {
+// trim reports whether the scope reached targetBytes, and the bytes it removed.
+func (s *memoryScope) trim(targetBytes int64, batchSize int) (bool, int64) {
 	trimmedMessages := 0
+	var trimmedBytes int64
 	for s.totalBytes > targetBytes && trimmedMessages < batchSize && len(s.fifo) > 0 {
 		entry := s.fifo[0]
 		s.fifo[0] = nil
@@ -423,12 +438,20 @@ func (s *memoryScope) trim(targetBytes int64, batchSize int) bool {
 			delete(s.instances, entry.flowID)
 		}
 		s.totalBytes -= entry.chargedBytes
+		trimmedBytes += entry.chargedBytes
 		if s.totalBytes < 0 {
 			panic("Memory Stream Store charged bytes became negative")
 		}
 		trimmedMessages++
 	}
-	return s.totalBytes <= targetBytes || len(s.fifo) == 0
+	return s.totalBytes <= targetBytes || len(s.fifo) == 0, trimmedBytes
+}
+
+func (b *memoryBackend) releaseTenantBytesLocked(tenantID string, trimmedBytes int64) {
+	b.tenantBytes[tenantID] -= trimmedBytes
+	if b.tenantBytes[tenantID] <= 0 {
+		delete(b.tenantBytes, tenantID)
+	}
 }
 
 func (s *memoryScope) isEmpty() bool {

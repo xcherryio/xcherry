@@ -13,11 +13,15 @@ package blobstore
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/superdurable/dex/service"
 )
 
 const (
@@ -31,12 +35,26 @@ var (
 )
 
 type WorkflowPath struct {
+	// FlowID is the stored Flow ID, rebuilt with its tenant prefix for a tenant path.
 	FlowID string
 	RunID  string
+	// TenantID is set for a tenant path, <tenant>/<yymmdd>$<escaped application Flow ID>[$<run ID>].
+	TenantID string
 }
 
+// ErrInvalidTenantSegment reports a tenant path whose tenant segment is not a valid tenant ID.
+var ErrInvalidTenantSegment = errors.New("invalid tenant segment in workflow path")
+
+var tenantSegmentPattern = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
+
 func ParseWorkflowPath(workflowPath string) (WorkflowPath, error) {
-	parts := strings.Split(workflowPath, "$")
+	tenantID, flowPath, isTenantPath := strings.Cut(workflowPath, "/")
+	if !isTenantPath {
+		flowPath, tenantID = tenantID, ""
+	} else if !tenantSegmentPattern.MatchString(tenantID) {
+		return WorkflowPath{}, fmt.Errorf("%w: %q", ErrInvalidTenantSegment, workflowPath)
+	}
+	parts := strings.Split(flowPath, "$")
 	if len(parts) != 2 && len(parts) != 3 {
 		return WorkflowPath{}, fmt.Errorf("invalid workflow path: %s", workflowPath)
 	}
@@ -47,16 +65,25 @@ func ParseWorkflowPath(workflowPath string) (WorkflowPath, error) {
 	if err != nil {
 		return WorkflowPath{}, fmt.Errorf("decode flow ID: %w", err)
 	}
-	if len(parts) == 2 {
-		return WorkflowPath{FlowID: flowID}, nil
+	parsed := WorkflowPath{FlowID: service.TenantStoredFlowID(tenantID, flowID), TenantID: tenantID}
+	if len(parts) == 3 {
+		if parsed.RunID, err = decodeOpaquePathPart(parts[2]); err != nil {
+			return WorkflowPath{}, fmt.Errorf("decode run ID: %w", err)
+		}
 	}
-	runID, err := decodeOpaquePathPart(parts[2])
-	if err != nil {
-		return WorkflowPath{}, fmt.Errorf("decode run ID: %w", err)
-	}
-	return WorkflowPath{FlowID: flowID, RunID: runID}, nil
+	return parsed, nil
 }
 
+// workflowDirectory returns <yymmdd>$<escaped Flow ID>; in multi-tenant mode a tenant's stored Flow ID is placed
+// under a <tenant>/ segment. Single-tenant mode never interprets the Flow ID.
+func workflowDirectory(isMultiTenant bool, storageDate string, flowID string) string {
+	if tenantID, applicationFlowID, ok := service.SplitTenantStoredFlowID(flowID); isMultiTenant && ok {
+		return tenantID + "/" + storageDate + "$" + encodeFlowIDPathPart(applicationFlowID)
+	}
+	return storageDate + "$" + encodeFlowIDPathPart(flowID)
+}
+
+// StepEventInputPath returns the single-tenant path of a Step event input.
 func StepEventInputPath(
 	runStarted time.Time,
 	flowID string,
@@ -64,15 +91,28 @@ func StepEventInputPath(
 	stepExecutionID string,
 	method string,
 ) string {
-	workflowPath := strings.Join([]string{
-		formatBlobStorageDate(runStarted),
-		encodeFlowIDPathPart(flowID),
-		encodeOpaquePathPart(runID),
-	}, "$")
+	return stepEventInputPath(false, runStarted, flowID, runID, stepExecutionID, method)
+}
+
+func stepEventInputPath(
+	isMultiTenant bool,
+	runStarted time.Time,
+	flowID string,
+	runID string,
+	stepExecutionID string,
+	method string,
+) string {
+	workflowPath := workflowDirectory(isMultiTenant, formatBlobStorageDate(runStarted), flowID) + "$" +
+		encodeOpaquePathPart(runID)
 	return strings.Join([]string{workflowPath, encodeOpaquePathPart(stepExecutionID), method + ".pb"}, "/")
 }
 
+// ValueObjectPath returns the single-tenant path of a value object.
 func ValueObjectPath(flowID string, locator string) (string, error) {
+	return valueObjectPath(false, flowID, locator)
+}
+
+func valueObjectPath(isMultiTenant bool, flowID string, locator string) (string, error) {
 	if flowID == "" {
 		return "", fmt.Errorf("Blob locator requires a Flow ID")
 	}
@@ -93,7 +133,7 @@ func ValueObjectPath(flowID string, locator string) (string, error) {
 			return "", fmt.Errorf("invalid Blob object ID %q", objectID)
 		}
 	}
-	return formatBlobStorageDate(writeDate) + "$" + encodeFlowIDPathPart(flowID) + "/" + objectID, nil
+	return workflowDirectory(isMultiTenant, formatBlobStorageDate(writeDate), flowID) + "/" + objectID, nil
 }
 
 func encodeFlowIDPathPart(flowID string) string {
@@ -240,7 +280,8 @@ type BlobStore interface {
 		method string,
 	) ([]byte, bool, error)
 	// DeleteWorkflowObjects will delete all the objects of the workflowId
-	// workflowPath is yymmdd$escapedFlowId, where yymmdd is needed to compose the path
+	// workflowPath is yymmdd$escapedFlowId, where yymmdd is needed to compose the path,
+	// or <tenant>/yymmdd$escapedFlowId for a tenant's Flow
 	DeleteWorkflowObjects(ctx context.Context, storeId, workflowPath string) error
 	// ListWorkflowPaths will list the workflowPaths ( yymmdd$escapedFlowId ) as CommonPrefixes from S3
 	// It uses of delimiter "/" before the object ID to get all the CommonPrefixes
@@ -256,9 +297,15 @@ type BlobStore interface {
 type ListObjectPathsInput struct {
 	StoreId           string
 	ContinuationToken *string
+	// TenantID lists the workflow paths under one tenant segment instead of the namespace root.
+	TenantID string
 }
 
 type ListObjectPathsOutput struct {
 	ContinuationToken *string
-	WorkflowPaths     []string
+	// WorkflowPaths are relative to the namespace; under a tenant they start with <tenant>/.
+	WorkflowPaths []string
+	// TenantSegments are the tenant directories found at the namespace root. Callers list each with TenantID.
+	// A segment is reported as found, whether or not it is a valid tenant ID.
+	TenantSegments []string
 }

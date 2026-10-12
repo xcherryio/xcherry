@@ -275,7 +275,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	attributeStore, err := attributestore.NewManager(context.Background(), &cfg.AttributeStore, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, attributeStore.Close()) })
-	streamStore, err := streamstore.New(&cfg.StreamStore, logger)
+	streamStore, err := streamstore.New(&cfg.StreamStore, &cfg.Tenancy, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, streamStore.Close()) })
 
@@ -296,6 +296,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		store, err = blobstore.NewBlobStore(
 			s3Client,
 			testNamespace,
+			cfg.Tenancy.IsMultiTenant(),
 			&cfg.BlobStore,
 			logger,
 			client.MetricsNopHandler,
@@ -340,6 +341,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		store, err = blobstore.NewBlobStore(
 			s3Client,
 			domain,
+			false,
 			&cfg.BlobStore,
 			logger,
 			client.MetricsNopHandler,

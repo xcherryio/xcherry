@@ -21,10 +21,7 @@ const storedFlowIDPrefix = "T:"
 
 // StoredFlowID returns the engine identifier of an application Flow ID. An empty tenant leaves it unchanged.
 func StoredFlowID(tenantID string, applicationFlowID string) string {
-	if tenantID == "" {
-		return applicationFlowID
-	}
-	return storedFlowIDPrefix + tenantID + ":" + applicationFlowID
+	return service.TenantStoredFlowID(tenantID, applicationFlowID)
 }
 
 // ApplicationFlowID strips the tenant prefix from a stored Flow ID.

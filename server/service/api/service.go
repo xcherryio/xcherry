@@ -221,7 +221,7 @@ func (s *serviceImpl) StartFlow(
 	if err := interpreterconfig.ValidateFlowConfig(&workflowConfig); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
-	if err := s.validateAttributeStoreNames(workflowConfig.GetAttributeStoreNames()); err != nil {
+	if err := s.validateAttributeStoreNames(ctx, workflowConfig.GetAttributeStoreNames()); err != nil {
 		return nil, err
 	}
 	resolvedTarget, err := s.dispatchGate.Policy().Resolve(tenancy.TenantClaims(ctx), workflowConfig.GetWorkerTarget())
@@ -1020,7 +1020,7 @@ func (s *serviceImpl) UpdateFlowConfig(
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if req.GetFlowConfig().AttributeStoreNames != nil {
-		if err := s.validateAttributeStoreNames(req.GetFlowConfig().GetAttributeStoreNames()); err != nil {
+		if err := s.validateAttributeStoreNames(ctx, req.GetFlowConfig().GetAttributeStoreNames()); err != nil {
 			return nil, err
 		}
 	}
@@ -1097,7 +1097,7 @@ func (s *serviceImpl) StopFlow(ctx context.Context, req *dexpb.StopFlowRequest) 
 	return &emptypb.Empty{}, nil
 }
 
-func (s *serviceImpl) validateAttributeStoreNames(names *dexpb.AttributeStoreNames) error {
+func (s *serviceImpl) validateAttributeStoreNames(ctx context.Context, names *dexpb.AttributeStoreNames) error {
 	if names == nil {
 		return nil
 	}
@@ -1111,6 +1111,9 @@ func (s *serviceImpl) validateAttributeStoreNames(names *dexpb.AttributeStoreNam
 		}
 		if !s.attributeStore.HasStore(name) {
 			return makeInvalidRequestError(fmt.Sprintf("unknown Attribute Store %q", name))
+		}
+		if !s.dispatchGate.IsAttributeStoreAllowed(tenancy.TenantID(ctx), name) {
+			return makeInvalidRequestError(fmt.Sprintf("Attribute Store %q is not available to tenants", name))
 		}
 		seenNames[name] = struct{}{}
 	}

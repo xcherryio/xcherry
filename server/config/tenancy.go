@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"text/template"
 	"time"
 	"unicode"
@@ -87,6 +88,9 @@ type (
 		Wake TenantWakeConfig `yaml:"wake"`
 		// Limits bound what one tenant can use of a shared server.
 		Limits TenantLimitsConfig `yaml:"limits"`
+		// AttributeStores lists the Attribute Stores a tenant's Flow may select. Default empty allows every
+		// configured store, which multi mode requires to be tenant-scoped.
+		AttributeStores []string `yaml:"attributeStores"`
 		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
 		// development. It cannot be set from a configuration file. Default false.
 		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
@@ -125,6 +129,12 @@ type (
 		// dispatches per server process. A dispatch over the cap waits for a slot without counting an attempt.
 		// Default 32.
 		MaxConcurrentDispatchesPerTenant int `yaml:"maxConcurrentDispatchesPerTenant"`
+		// MaxStreamCapacityBytes caps the Stream capacity that a tenant's write may request. Default 1 MiB.
+		MaxStreamCapacityBytes int64 `yaml:"maxStreamCapacityBytes"`
+		// MaxStreamBytesPerTenant caps one tenant's buffered Stream bytes across all its Streams. Default 8 MiB.
+		// The memory backend enforces it per server process; the redis backend enforces it across every server
+		// sharing the Redis, with a per-tenant total key that trimming decreases.
+		MaxStreamBytesPerTenant int64 `yaml:"maxStreamBytesPerTenant"`
 	}
 
 	TenantAuthenticatorConfig struct {
@@ -225,8 +235,18 @@ func (c Config) ValidateTenancy() error {
 	if !c.Interpreter.AttributeIndexesManagedExternally {
 		return fmt.Errorf("tenancy.mode multi requires interpreter.attributeIndexesManagedExternally")
 	}
-	if len(c.AttributeStore.Stores) > 0 {
-		return fmt.Errorf("tenancy.mode multi does not support Attribute Stores yet")
+	for name, store := range c.AttributeStore.Stores {
+		if store.Type != AttributeStoreTypePostgres && store.Type != AttributeStoreTypeMySQL {
+			return fmt.Errorf("tenancy.mode multi supports only postgres and mysql Attribute Stores; %q is %s", name, store.Type)
+		}
+		if store.TenantColumn == "" {
+			return fmt.Errorf("tenancy.mode multi requires attributeStore.stores.%s.tenantColumn", name)
+		}
+	}
+	for _, name := range c.Tenancy.AttributeStores {
+		if _, found := c.AttributeStore.Stores[name]; !found {
+			return fmt.Errorf("tenancy.attributeStores names unknown Attribute Store %q", name)
+		}
 	}
 	if !c.Tenancy.IsIncompleteMultiTenantModeAllowedForTest {
 		return fmt.Errorf("tenancy.mode multi is under development and not available yet")
@@ -308,6 +328,22 @@ func (c TenantWakeConfig) EffectiveBudget() time.Duration {
 		return DefaultTenantWakeBudget
 	}
 	return c.Budget
+}
+
+// EffectiveMaxStreamCapacityBytes returns MaxStreamCapacityBytes or its 1 MiB default.
+func (c TenantLimitsConfig) EffectiveMaxStreamCapacityBytes() int64 {
+	if c.MaxStreamCapacityBytes <= 0 {
+		return 1 << 20
+	}
+	return c.MaxStreamCapacityBytes
+}
+
+// EffectiveMaxStreamBytesPerTenant returns MaxStreamBytesPerTenant or its 8 MiB default.
+func (c TenantLimitsConfig) EffectiveMaxStreamBytesPerTenant() int64 {
+	if c.MaxStreamBytesPerTenant <= 0 {
+		return 8 << 20
+	}
+	return c.MaxStreamBytesPerTenant
 }
 
 // EffectiveMaxConcurrentDispatchesPerTenant returns the cap or its default.
@@ -539,4 +575,9 @@ func isTenantRuneRange(low rune, high rune) bool {
 
 func isTenantRune(candidate rune) bool {
 	return isTenantRuneRange(candidate, candidate)
+}
+
+// IsAttributeStoreAllowed reports whether a tenant's Flow may select the named Attribute Store.
+func (c TenancyConfig) IsAttributeStoreAllowed(name string) bool {
+	return len(c.AttributeStores) == 0 || slices.Contains(c.AttributeStores, name)
 }
