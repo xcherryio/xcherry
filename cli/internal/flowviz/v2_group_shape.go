@@ -18,11 +18,17 @@ type stepLink struct {
 	to   string
 }
 
-// diagnoseV2GroupShapes warns about a group that is neither a run of linked Steps nor one choice.
+// diagnoseV2GroupShapes warns about a group whose main-story Steps are neither a run of linked Steps nor one choice.
 func (analyzer *goAnalyzer) diagnoseV2GroupShapes() {
-	links := stepLinks(analyzer.graph)
+	links, failureHandling := mainStory(analyzer.graph)
 	for _, group := range analyzer.graph.Groups {
-		parts := stepGroupParts(group.StepIDs, links)
+		stepIDs := make([]string, 0, len(group.StepIDs))
+		for _, stepID := range group.StepIDs {
+			if !failureHandling[stepID] {
+				stepIDs = append(stepIDs, stepID)
+			}
+		}
+		parts := stepGroupParts(stepIDs, links)
 		if len(parts) < 2 || isOneChoice(parts, links) {
 			continue
 		}
@@ -49,8 +55,9 @@ func (analyzer *goAnalyzer) diagnoseV2GroupShapes() {
 	}
 }
 
-// stepLinks returns every transition and failure transition between two different Steps.
-func stepLinks(graph *Graph) []stepLink {
+// mainStory returns the ordinary transitions between two different main-story Steps, and the
+// failure-handling Steps: those that only failure transitions reach, directly or through each other.
+func mainStory(graph *Graph) ([]stepLink, map[string]bool) {
 	parents := make(map[string]string, len(graph.Nodes))
 	isStep := make(map[string]bool, len(graph.Nodes))
 	for _, node := range graph.Nodes {
@@ -68,19 +75,77 @@ func stepLinks(graph *Graph) []stepLink {
 		}
 		return ""
 	}
-	links := make([]stepLink, 0)
+	stepIDs := make([]string, 0, len(graph.Nodes))
+	start := ""
+	for _, node := range graph.Nodes {
+		if node.Kind != "step" {
+			continue
+		}
+		stepIDs = append(stepIDs, node.ID)
+		if start == "" && (node.Start || node.ID == graph.Flow.StartStepID) {
+			start = node.ID
+		}
+	}
+	if start == "" && len(stepIDs) > 0 {
+		start = stepIDs[0]
+	}
+	// Main-story roots: the start, Steps an RPC enters, and Steps nothing enters.
+	ordinary := make([]stepLink, 0)
+	entered := make(map[string]bool)
+	roots := make([]string, 0)
+	if start != "" {
+		roots = append(roots, start)
+	}
 	for _, edge := range graph.Edges {
 		if edge.Kind != "transition" && edge.Kind != "failure_transition" {
 			continue
 		}
 		from := owningStep(edge.From)
 		to := owningStep(edge.To)
-		if from == "" || to == "" || from == to {
+		if to == "" || from == to {
 			continue
 		}
-		links = append(links, stepLink{from: from, to: to})
+		entered[to] = true
+		switch {
+		case edge.Kind != "transition":
+		case from == "":
+			roots = append(roots, to)
+		default:
+			ordinary = append(ordinary, stepLink{from: from, to: to})
+		}
 	}
-	return links
+	for _, stepID := range stepIDs {
+		if !entered[stepID] {
+			roots = append(roots, stepID)
+		}
+	}
+	story := make(map[string]bool, len(stepIDs))
+	for _, root := range roots {
+		story[root] = true
+	}
+	for queue := roots; len(queue) > 0; {
+		at := queue[0]
+		queue = queue[1:]
+		for _, link := range ordinary {
+			if link.from == at && !story[link.to] {
+				story[link.to] = true
+				queue = append(queue, link.to)
+			}
+		}
+	}
+	failureHandling := make(map[string]bool)
+	for _, stepID := range stepIDs {
+		if !story[stepID] {
+			failureHandling[stepID] = true
+		}
+	}
+	links := make([]stepLink, 0, len(ordinary))
+	for _, link := range ordinary {
+		if story[link.from] && story[link.to] {
+			links = append(links, link)
+		}
+	}
+	return links, failureHandling
 }
 
 // stepGroupParts returns the group's Steps split into the parts its inner transitions join, in group order.

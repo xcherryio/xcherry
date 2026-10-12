@@ -10,6 +10,7 @@ import type { JSX } from 'react'
 import type { Box } from '../views/types'
 import { ChipRows, keyActivates, RunPillView, StartPill, TileView } from './CardParts'
 import { Glyph } from './Glyph'
+import { FailureCount } from './NodeBox'
 
 /** A closed stage's card; activating it opens the stage in place. Measurements are `views/stageCard.ts`'s. */
 export function StageBox({
@@ -50,6 +51,7 @@ export function StageBox({
             <Glyph name="refresh" />
           </span>
         ) : null}
+        {box.failures ? <FailureCount count={box.failures} /> : null}
         <span className="pstage-count">
           {stage.stepCount} step{stage.stepCount === 1 ? '' : 's'}
         </span>

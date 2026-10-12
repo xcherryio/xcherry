@@ -48,15 +48,23 @@ Every registered Step has one group declaration and one explanation declaration.
 
 A group should do one thing. Make it either one run of Steps that lead to each other, or one choice that a single Step makes between its Steps, such as the tools an agent picks from. The analyzer warns about any other group with **v2_step_group_shape** and names the group's separate parts, so you can split it. The warning does not make the definition invalid.
 
+The analyzer judges a group by its main story only. A failure-handling Step is a Step that only failure transitions reach, directly or through other failure-handling Steps. A record of exhausted retries and a repair after a crash are examples. These Steps belong to no group on the canvas, and failure transitions never join a group. Failure-handling Steps do not need a group of their own.
+
 ## Flow canvas
 
 The **v2** canvas draws one card per Step. The card's icon says who acts at the Step: a person, a message from outside, time, a child Flow, an AI model, an app through a Connector, or the Flow itself.
 
 A group of two or more Steps that forms one run or one choice is a stage. Any other group shows its Steps in its labeled band instead. **Collapsed** draws each stage as one card. Select the card or its **⊕** to open the stage in place, and select **⊖** on the open stage to close it. **Expanded** opens every stage. Both buttons also return the view to where the canvas opened.
 
-Each Step is drawn with one line in: the transition from the latest Step that leads to it, preferring a Step in its own group. Every other transition is a **↪** chip on the card it leaves. Select a chip to show where it leads. Failure lines are dashed. The Actions that answer a waiting Step, the RPC that starts a Step, and how a Step ends the Flow are also chips on its card.
+Each Step is drawn with one line in: the transition from the latest Step that leads to it, preferring a Step in its own group. Every other transition is a **↪** chip on the card it leaves. Select a chip to show where it leads. The Actions that answer a waiting Step, the RPC that starts a Step, and how a Step ends the Flow are also chips on its card.
 
-When you select a run, the stage that holds the waiting Step opens, and the Step is ringed and labeled **now**.
+The canvas draws the Flow's main story first. The main story is every Step that the Flow reaches on purpose, however rarely. It includes business rejections, failed checks, and Steps that an RPC moves the Flow to. Failure handling is hidden in both **Collapsed** and **Expanded**. The controls bar says how many failure-handling Steps are hidden. A card that a failure transition leaves shows **⚠** and the number of its failure transitions.
+
+Select a card with **⚠** to draw its failure handling beside it. The Steps its failures lead to appear in dashed cards. A failure that goes straight to a main-story Step appears as a dashed **↪** pointer, and **↩** chips lead back to the main story. Nothing else moves. Select anything else to hide the failure handling again.
+
+A Step that catches its own error and then chooses the next Step makes an ordinary decision, so it stays in the main story. To hide that handling, return the error so the Step's failure route runs.
+
+When you select a run, the stage that holds the waiting Step opens, and the Step is ringed and labeled **now**. Failure handling that the run went through is drawn beside the Step that failed into it.
 
 ## Start Flow
 

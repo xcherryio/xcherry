@@ -35,6 +35,7 @@ import { DIRECTION_LABEL, DIRECTIONS } from '../canvas/views/types'
  */
 export function Controls({
   stages,
+  hiddenFailures = 0,
   direction,
   onCollapseAll,
   onExpandAll,
@@ -42,6 +43,8 @@ export function Controls({
 }: {
   /** Null for a Flow without stages, which has nothing to open or close. */
   stages: StageState | null
+  /** Failure-handling Steps left out of every view until a Step failing into them is selected. */
+  hiddenFailures?: number
   direction: Direction
   onCollapseAll: () => void
   onExpandAll: () => void
@@ -101,6 +104,14 @@ export function Controls({
           </div>
         </div>
       )}
+      {hiddenFailures > 0 ? (
+        <span
+          className="pctl-hint"
+          title="Steps only a failure leads to. Select a step marked ⚠ to see where its failures go."
+        >
+          ⚠ {hiddenFailures} failure-handling step{hiddenFailures === 1 ? '' : 's'} hidden
+        </span>
+      ) : null}
 
       {/*
         THE `Showing` AXIS IS GONE, and its absence is the point.

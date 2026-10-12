@@ -331,11 +331,15 @@ function Inner({
         onJump: jump,
       } satisfies BoxData,
       draggable: false,
-      zIndex: 2,
-      style: { zIndex: 2 },
+      // A failure detour sits above the drawing and its legend, beside the card it opened from.
+      zIndex: b.detourOf === undefined ? 2 : 4,
+      style: { zIndex: b.detourOf === undefined ? 2 : 4 },
     }))
     const legendNode: Node[] = []
-    const anchor = legendAnchor(scene.boxes, scene.bands)
+    const anchor = legendAnchor(
+      scene.boxes.filter((b) => b.detourOf === undefined),
+      scene.bands,
+    )
     if (legend !== undefined && anchor !== undefined) {
       legendNode.push({
         id: '__legend',
@@ -415,9 +419,9 @@ function Inner({
   )
 
   // Read when the view re-opens; re-opening on every run poll would fight the reader.
-  const latest = useRef({ scene, direction, nowNodeId, focusNodeId })
+  const latest = useRef({ scene, direction, nowNodeId, focusNodeId, insetRightPx })
   useEffect(() => {
-    latest.current = { scene, direction, nowNodeId, focusNodeId }
+    latest.current = { scene, direction, nowNodeId, focusNodeId, insetRightPx }
   })
 
   // Re-open when what is shown changes, never on zoom; a ResizeObserver knows when the pane is sized.
@@ -428,10 +432,10 @@ function Inner({
     const open = (): void => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        const { scene: shown, direction: reading, nowNodeId: now, focusNodeId: focus, insetRightPx } = latest.current
         const paneW = el.clientWidth - (insetRightPx ?? 0)
         const paneH = el.clientHeight
         if (paneW < 8 || paneH < 8) return
-        const { scene: shown, direction: reading, nowNodeId: now, focusNodeId: focus } = latest.current
         const focused = focus === null || focus === undefined ? null : rf.getNode(focus) !== undefined ? focus : null
         if (focused !== null) {
           void rf.fitView({ nodes: [{ id: focused }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 160 })
@@ -462,9 +466,8 @@ function Inner({
       cancelAnimationFrame(raf)
       ro.disconnect()
     }
-    /* `insetRightPx` is a dependency because it changes what "fits" MEANS: the reserved strip on the right
-       is part of the fit, so a panel opening or resize has to refit rather than leave the drawing under it. */
-  }, [rf, fitKey, insetRightPx, focusNodeId])
+    /* The Step panel never refits the view: the reader keeps their place, and the selection pans clear. */
+  }, [rf, fitKey, focusNodeId])
 
   const applyZoomVars = useCallback((zoom: number) => {
     const el = paneRef.current
@@ -477,22 +480,13 @@ function Inner({
     applyZoomVars(rf.getZoom())
   }, [applyZoomVars, rf, fitKey])
 
-  // After a stage opens or closes: focus what the reader acted on and pan just enough to show it.
-  const appliedCue = useRef(0)
-  useEffect(() => {
-    if (cue === null || cue.nonce === appliedCue.current) return
-    const raf = requestAnimationFrame(() => {
-      appliedCue.current = cue.nonce
+  /** Pans the least that shows a rectangle whole; one larger than the pane shows its start. */
+  const panToShow = useCallback(
+    (r: { x: number; y: number; w: number; h: number }) => {
       const el = paneRef.current
-      if (cue.focusId !== null) {
-        el?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(cue.focusId)}"] [role="button"]`)
-          ?.focus({ preventScroll: true })
-      }
-      if (cue.reveal === null || el === null) return
+      if (el === null) return
       const { x, y, zoom } = rf.getViewport()
-      const r = cue.reveal
       const margin = 24
-      // Per axis: a box that fits moves the least that shows it; a larger one shows its start.
       const shift = (start: number, size: number, room: number): number => {
         const a = start * zoom
         const b = a + size * zoom
@@ -504,9 +498,47 @@ function Inner({
       const dx = shift(r.x + x / zoom, r.w, el.clientWidth - (insetRightPx ?? 0))
       const dy = shift(r.y + y / zoom, r.h, el.clientHeight)
       if (dx !== 0 || dy !== 0) void rf.setViewport({ x: x + dx, y: y + dy, zoom }, { duration: 280 })
+    },
+    [insetRightPx, rf],
+  )
+
+  // After a stage opens or closes: focus what the reader acted on and pan just enough to show it.
+  const appliedCue = useRef(0)
+  useEffect(() => {
+    if (cue === null || cue.nonce === appliedCue.current) return
+    const raf = requestAnimationFrame(() => {
+      appliedCue.current = cue.nonce
+      if (cue.focusId !== null) {
+        paneRef.current
+          ?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(cue.focusId)}"] [role="button"]`)
+          ?.focus({ preventScroll: true })
+      }
+      if (cue.reveal !== null) panToShow(cue.reveal)
     })
     return () => cancelAnimationFrame(raf)
-  }, [cue, insetRightPx, rf])
+  }, [cue, panToShow])
+
+  // Pan once per reader selection to show it and its failure detour beside the Step panel.
+  const selection = useMemo(() => {
+    if (!dimUnrelated || selectedId === null) return null
+    const parts = scene.boxes.filter((b) => b.id === selectedId || b.detourOf === selectedId)
+    if (parts.length === 0) return null
+    const x = Math.min(...parts.map((b) => b.x))
+    const y = Math.min(...parts.map((b) => b.y))
+    const w = Math.max(...parts.map((b) => b.x + b.w)) - x
+    const h = Math.max(...parts.map((b) => b.y + b.h)) - y
+    const key = `${selectedId}@${Math.round(x)},${Math.round(y)},${Math.round(w)},${Math.round(h)}|${insetRightPx ?? 0}`
+    return { key, x, y, w, h }
+  }, [dimUnrelated, insetRightPx, scene, selectedId])
+  const shownSelection = useRef('')
+  useEffect(() => {
+    if (selection === null || selection.key === shownSelection.current) return
+    const raf = requestAnimationFrame(() => {
+      shownSelection.current = selection.key
+      panToShow(selection)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [selection, panToShow])
 
   // While cards glide to new places, the lines between them fade out and back.
   const placed = placementKey(scene)

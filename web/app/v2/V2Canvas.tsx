@@ -35,6 +35,8 @@ import { Stage } from './canvas/render/Stage';
 import type { CanvasViewportHandle } from './canvas/render/viewport';
 import { useStageScene } from './canvas/useStageScene';
 import { groupOfStep } from './canvas/views/controlTopology';
+import { detourMessage, hasDetour, isFailureHandling, runDetourSources, withDetours } from './canvas/views/failureDetours';
+import { failureHandling } from './canvas/model/pocFlow';
 import { stageId } from './canvas/views/stageCard';
 import type { Direction } from './canvas/views/types';
 import { Controls } from './flow/Controls';
@@ -196,7 +198,18 @@ export function V2Canvas({
   const blockingStepType = overlay ? (activeStepTypes(overlay)[0] ?? null) : null;
   // The stages the reader opened in place, each opened or closed without losing their place.
   const stages = useStageScene({ flow, groups, direction, run: overlay });
-  const { scene, revealStage } = stages;
+  const { revealStage } = stages;
+  /** The Step whose failure detour is drawn: the last selected Step that can fail. */
+  const [detourFor, setDetourFor] = useState<string | null>(null);
+  /** The main story, with the failure detours of the selected Step and of every one the run went through. */
+  const scene = useMemo(() => {
+    if (stages.scene === null || !flow) return stages.scene;
+    const sources = [...new Set([...(overlay ? runDetourSources(flow, overlay) : []), ...(detourFor ? [detourFor] : [])])];
+    return withDetours(stages.scene, flow, { direction, run: overlay, groups, openStages: stages.openStages }, sources);
+  }, [detourFor, direction, flow, groups, overlay, stages.openStages, stages.scene]);
+  const hiddenFailures = useMemo(() => (flow ? failureHandling(flow).size : 0), [flow]);
+  // Nothing selected, so no detour: however the selection was cleared.
+  if (selectedId === null && detourFor !== null) setDetourFor(null);
 
   // Choosing a run should land on where it stopped, once, without fighting later clicks.
   const revealedFor = useRef('');
@@ -208,7 +221,7 @@ export function V2Canvas({
     if (!step) return;
     revealedFor.current = key;
     // The stage holding where the run waits opens, so its "now" ring is on a Step.
-    const holding = groupOfStep(groups, step.id);
+    const holding = isFailureHandling(flow, step.id) ? undefined : groupOfStep(groups, step.id);
     if (holding) revealStage(holding.id);
     // Selection only. The zoom is declarative via focusNodeId, so the pane resize that
     // follows the drawer opening refits to the Step instead of racing an imperative call.
@@ -223,6 +236,7 @@ export function V2Canvas({
     if (deselectKey === firstDeselect.current) return;
     setSelectedId(null);
     setSelectedGroupId(null);
+    setDetourFor(null);
   }, [deselectKey]);
 
   const focusNodeId = useMemo(() => {
@@ -400,11 +414,12 @@ export function V2Canvas({
     : undefined;
 
   return (
-    <div className="pcanvas" ref={canvasRef} style={canvasStyle}>
+    <div className="pcanvas" ref={canvasRef} style={canvasStyle} data-panel={ownsPanel ? 'true' : undefined}>
       <ArrowDefs />
       <div className="pctlbar">
         <Controls
           stages={stages.hasStages ? stages.state : null}
+          hiddenFailures={hiddenFailures}
           direction={direction}
           onCollapseAll={stages.collapseAll}
           onExpandAll={stages.expandAll}
@@ -434,6 +449,8 @@ export function V2Canvas({
         onSelect={(id) => {
           setSelectedId(id);
           setSelectedByReader(id !== null);
+          // Selecting a Step that can fail draws its detour; selecting inside the detour keeps it.
+          if (id === null || !isFailureHandling(flow, id)) setDetourFor(id !== null && hasDetour(flow, id) ? id : null);
           setSelectedGroupId(null);
           setSelectedExecutionId(null);
           setInspectSection(null);
@@ -466,11 +483,14 @@ export function V2Canvas({
             ) : null}
           </div>
         )}
-        // Opening or closing a stage keeps the reader's place, so it is not part of what refits.
-        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${overlay?.executions.length ?? 0}|${focusNodeId !== null && scene.boxes.some((box) => box.id === focusNodeId) ? 'focus' : 'whole'}|${ownsPanel ? `panel:${Math.round(panelWidth)}` : 'graph'}`}
+        // Opening or closing a stage, or the Step panel, keeps the reader's place, so neither refits.
+        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${overlay?.executions.length ?? 0}|${focusNodeId !== null && scene.boxes.some((box) => box.id === focusNodeId) ? 'focus' : 'whole'}`}
       />
       <p className="sr-only" aria-live="polite">
         {stages.cue?.message}
+      </p>
+      <p className="sr-only" aria-live="polite">
+        {detourFor ? detourMessage(flow, detourFor) : ''}
       </p>
       {ownsPanel && panel ? (
         <>

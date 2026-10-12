@@ -338,9 +338,12 @@ func TestVisualizeV2WarnsAboutGroupsThatAreNeitherRunNorChoice(t *testing.T) {
 	require.NoError(t, err)
 	// A warning never makes the definition invalid.
 	require.True(t, graph.Valid, "%+v", graph.Diagnostics)
-	require.Equal(t, []string{"begin", "decide", "tools", "reply", "wrap-up"}, v2GroupIDs(graph.Groups))
+	require.Equal(t, []string{"begin", "decide", "tools", "reply", "wrap-up", "sheet", "failure"}, v2GroupIDs(graph.Groups))
 	warnings := groupShapeWarnings(t, graph.Diagnostics)
+	// The sheet's reads join only through hidden failure handling; a group of handlers is never judged.
 	require.Equal(t, []string{
+		`group "sheet" is neither one run of Steps that lead to each other nor one choice that a single Step makes; ` +
+			"it falls into 2 parts: ReadSheetStep; RereadSheetStep. Split it so that each group does one thing",
 		`group "wrap-up" is neither one run of Steps that lead to each other nor one choice that a single Step makes; ` +
 			"it falls into 2 parts: NotifyOwnerStep; CleanUpStep. Split it so that each group does one thing",
 	}, warnings)

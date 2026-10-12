@@ -169,7 +169,21 @@ const ENDS: Record<NonNullable<Branch['closes']>, { kind: BoxChip['kind']; alway
 }
 
 /** A jump docked to its source, titled with where it leads: a Step, or a closed stage. */
-export type DockedJump = GraphEdge & { label: string }
+export type DockedJump = GraphEdge & {
+  label: string
+  /** Leaves a failure detour for the main story. */
+  exit?: boolean
+}
+
+/** What the layout docks to a Step card instead of drawing. */
+export interface Docked {
+  jumps: DockedJump[]
+  arriving: number
+  /** Failure transitions that leave the Step; the card counts them and selecting it draws them. */
+  failures?: number
+  /** In a failure detour: the other Steps whose failures this one also catches. */
+  alsoCatches?: number
+}
 
 /**
  * Which entry points answer this Step's gate.
@@ -184,7 +198,7 @@ export function answeredBy(flow: PocFlow, step: StepModel): string[] {
 }
 
 /** Docked chips in reading order: role, who answers, how it starts, where it jumps, how it ends. */
-function chipsOf(flow: PocFlow, step: StepModel, jumps: DockedJump[], arriving: number): BoxChip[] {
+function chipsOf(flow: PocFlow, step: StepModel, { jumps, arriving, alsoCatches = 0 }: Docked): BoxChip[] {
   const chips: BoxChip[] = []
   const role = step.agentRole === undefined ? undefined : AGENT_ROLE_ROW[step.agentRole]
   if (role !== undefined) chips.push({ kind: 'role', text: `${role.glyph} ${role.text}` })
@@ -215,8 +229,15 @@ function chipsOf(flow: PocFlow, step: StepModel, jumps: DockedJump[], arriving: 
   if (arriving > 3) {
     chips.push({ kind: 'inbound', text: `← ${arriving} steps lead here`, title: 'One of them is drawn as a line' })
   }
+  if (alsoCatches > 0) {
+    chips.push({
+      kind: 'inbound',
+      text: `← also catches ${alsoCatches} other step${alsoCatches === 1 ? '' : 's'}`,
+      title: 'Other steps fail into this one too',
+    })
+  }
   for (const jump of jumps) {
-    const text = `↪ ${jump.label}`
+    const text = jump.exit ? `↩ back to ${jump.label}` : `↪ ${jump.label}`
     chips.push(
       jump.failure
         ? { kind: 'failJump', text, targetId: jump.to, title: 'On failure' }
@@ -253,6 +274,9 @@ export function packChips(chips: BoxChip[], room = CHIP_ROOM): BoxChip[][] {
   if (row.length > 0) rows.push(row)
   return rows
 }
+
+/** Characters a title gives up to the ⚠ count beside it. */
+const FAILURES_CHARS = 4
 
 /** Lines a title takes beside the tile: one, or two when its words do not fit. */
 function titleLines(title: string, chars = TITLE_CHARS): 1 | 2 {
@@ -326,14 +350,15 @@ export function stepBox(
   flow: PocFlow,
   step: StepModel,
   opts: ViewOpts,
-  docked: { jumps: DockedJump[]; arriving: number },
+  docked: Docked,
 ): Box {
   const overlay = opts.run
   const run = overlay === null ? null : runStateFor(overlay, step.stepType)
   const executed = isExecutedRun(run) ? run : null
   const status = executed === null ? null : cardStatus(executed.current)
   const title = stepTitle(step)
-  const chips = packChips(chipsOf(flow, step, docked.jumps, docked.arriving))
+  const chips = packChips(chipsOf(flow, step, docked))
+  const failures = docked.failures ?? 0
   const bar = executed !== null && executed.bar.length > 1 ? executed.bar : undefined
   const reason =
     executed === null
@@ -342,7 +367,7 @@ export function stepBox(
   const subtitle = subtitleOf(flow, step)
   const h =
     HEAD_H +
-    (titleLines(title) - 1) * TITLE_LINE_H +
+    (titleLines(title, failures > 0 ? TITLE_CHARS - FAILURES_CHARS : TITLE_CHARS) - 1) * TITLE_LINE_H +
     (chips.length > 0 ? chips.length * CHIP_ROW_H + CHIPS_PAD : 0) +
     (reason === undefined ? 0 : REASON_H) +
     (bar === undefined ? 0 : BAR_H)
@@ -368,6 +393,7 @@ export function stepBox(
       bar === undefined || overlay === null ? undefined : barDecode(bar, executionsOf(overlay, step.stepType)),
     loops: flow.transitions.some((t) => t.isSelfLoop && t.fromStepId === step.id),
     recovery: recoveryMark(flow, step),
+    failures: failures > 0 ? failures : undefined,
     isStart: step.isStart || undefined,
     emphasis:
       run?.planned === true

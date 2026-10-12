@@ -6,13 +6,14 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-import type { PocFlow } from '../model/pocFlow'
+import { mainStory, type PocFlow } from '../model/pocFlow'
 import type { StepGroup } from './groups'
 
 /** Only a run or a choice opens as one stage; the analyzer's group-shape warning applies the same test. */
 
-/** Returns the group's Steps split into the parts its inner transitions join, in group order. */
-export function groupParts(flow: PocFlow, group: StepGroup): string[][] {
+/** Returns the group's main-story Steps split into the parts its ordinary inner transitions join, in group order. */
+export function groupParts(whole: PocFlow, group: StepGroup): string[][] {
+  const flow = mainStory(whole)
   const known = new Set(flow.steps.map((step) => step.id))
   const members = group.stepIds.filter((id) => known.has(id))
   const root = new Map(members.map((id) => [id, id]))
@@ -45,9 +46,9 @@ function isOneChoice(flow: PocFlow, parts: string[][]): boolean {
   return [...(first ?? [])].some((source) => rest.every((sources) => sources.has(source)))
 }
 
-/** Whether a group is drawn as a stage: two or more Steps forming one run or one choice. */
+/** Whether a group is drawn as a stage: two or more main-story Steps forming one run or one choice. */
 export function isStageGroup(flow: PocFlow, group: StepGroup): boolean {
   const parts = groupParts(flow, group)
   const steps = parts.reduce((count, part) => count + part.length, 0)
-  return steps >= 2 && (parts.length === 1 || isOneChoice(flow, parts))
+  return steps >= 2 && (parts.length === 1 || isOneChoice(mainStory(flow), parts))
 }

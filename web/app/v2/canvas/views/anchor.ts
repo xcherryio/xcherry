@@ -69,5 +69,9 @@ export function shiftScene(scene: Scene, offset: Point): Scene {
 
 /** Where every card sits, so a re-read that moved nothing animates nothing. */
 export function placementKey(scene: Scene): string {
-  return scene.boxes.map((b) => `${b.id}@${Math.round(b.x)},${Math.round(b.y)}`).join('|')
+  // A failure detour opens beside its Step without moving anything, so its cards are not counted.
+  return scene.boxes
+    .filter((b) => b.detourOf === undefined)
+    .map((b) => `${b.id}@${Math.round(b.x)},${Math.round(b.y)}`)
+    .join('|')
 }

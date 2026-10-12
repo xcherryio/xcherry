@@ -51,8 +51,10 @@ across the Flow enter an 11-Step stage), and the worst region hole went from 0.5
 
 In priority order; a lower rule never breaks a higher one.
 
-1. Nothing is hidden. Every Step and every transition appears, as a line or as a ↪ chip on the card it
-   leaves. A wait the analyzer could not name is drawn as a wait, never as automatic.
+1. Nothing is lost. Every Step of the main story and every ordinary transition appears, as a line or
+   as a ↪ chip on the card it leaves. Failure handling waits for a selection and is counted meanwhile
+   (see Failure handling below). A wait the analyzer could not name is drawn as a wait, never as
+   automatic.
 2. No line passes under a card (ELK's orthogonal routing; `clear-lines`).
 3. The start comes first and is on screen when the canvas opens.
 4. Status is never colour alone: every state has words or a glyph.
@@ -77,7 +79,9 @@ A group of two or more Steps that forms one run (its Steps lead to each other) o
 Step leads into each of its parts, like an agent's tools) is a stage (`groupShape.ts`): closed, it is one
 card (`stageCard.ts`) with ⊕; open, its Steps sit in one labelled band with ⊖. Any other group always
 shows its Steps in its band and never folds, because opening it would scatter unrelated pieces; the
-analyzer's `v2_step_group_shape` warning names those pieces so the author can split the group. Collapsed closes every stage and Expanded opens every one; both start
+analyzer's `v2_step_group_shape` warning names those pieces so the author can split the group. Both
+judge the main story only: a failure-handling Step belongs to no stage, and a failure transition joins
+nothing. Collapsed closes every stage and Expanded opens every one; both start
 the view again. A one-Step group is always drawn as its Step in its band. Opening or closing one stage
 keeps the reader's place (`anchor.ts`, `../useStageScene.ts`): the new Scene is moved so the stage's
 leading edge stays where it was. When a run is shown, the stage holding the waiting Step opens.
@@ -86,7 +90,7 @@ leading edge stays where it was. When a run is shown, the stage holding the wait
 
 A Step's main line comes from the source ranked closest before it (`longestPathRanks`), so a chain reads
 straight, a shared finish is drawn from the end of the work, and a shortcut is a chip. A source in the
-Step's own group wins, then ordinary transitions over failures, then reading order, then source order.
+Step's own group wins, then reading order, then source order. Failure transitions are not in the drawing.
 The decoder sorts transitions by source position, because the analyzer lists edges by node id. The
 choice therefore does not change with the edge order on the wire, nor when code moves down the file.
 
@@ -127,3 +131,22 @@ Porting a second FDG 2.0 Flow is the way to widen that, not loosening a limit.
   every edge sat at the library default.
 - **`nodesep`/`ranksep` are inert here.** This layout takes only within-rank order from dagre.
   Setting them looks like a spacing fix and changes nothing; `rankBase` is the real lever.
+## Failure handling
+
+The canvas draws the main story first: every Step the Flow reaches on purpose, however rarely,
+including business rejections, failed checks and Steps an RPC moves the Flow to. Failure handling is
+every Step that only failure transitions reach, directly or through other such Steps
+(`failureHandling` in `../model/pocFlow.ts`). A Step that catches its own error and chooses where to go
+makes an ordinary decision and stays in the main story; the analyzer judges groups on the same split.
+
+The layout leaves failure handling and every failure transition out (`mainStory`). A card that a failure
+leaves carries ⚠ and the number of its failure transitions; a stage card counts its Steps'. The controls
+bar says how many Steps are hidden. Collapsed and Expanded never show them.
+
+Selecting a card with ⚠ draws its detour beside it (`failureDetours.ts`): the Steps its failures lead
+to, dashed, in a clear lane to its right (below it, left-right), and a pointer for a failure that goes
+straight to a main-story Step drawn elsewhere. The way back is a ↩ chip. Nothing already drawn moves:
+the detour slides along the card's side, or out past the cards level with it, until it covers no card,
+and the view pans just enough to show it beside the Step panel, which never refits the view. Selecting a
+Step inside the detour keeps it; selecting anything else closes it. A run that went through failure
+handling draws that detour without a click, from the Step that failed into it.

@@ -30,6 +30,11 @@ func (*GroupShapeFlow) GetSteps() []dex.StepDef {
 		dex.DefineStep(SaveReplyStep{}),
 		dex.DefineStep(NotifyOwnerStep{}),
 		dex.DefineStep(CleanUpStep{}),
+		dex.DefineStep(ReadSheetStep{}),
+		dex.DefineStep(RereadSheetStep{}),
+		dex.DefineStep(RecordSheetFailureStep{}),
+		dex.DefineStep(RecordReplyFailureStep{}),
+		dex.DefineStep(RecordSaveFailureStep{}),
 	}
 }
 
@@ -70,8 +75,11 @@ type BeginStep struct {
 }
 
 func (BeginStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
-	if input.Path == "clean" {
+	switch input.Path {
+	case "clean":
 		return dex.GoTo(CleanUpStep{}, input), nil
+	case "sheet":
+		return dex.GoTo(ReadSheetStep{}, input), nil
 	}
 	return dex.GoTo(DecideStep{}, input), nil
 }
@@ -88,6 +96,8 @@ func (DecideStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecisi
 		return dex.GoTo(LookUpOrderStep{}, input), nil
 	case "history":
 		return dex.GoTo(SearchHistoryStep{}, input), nil
+	case "reread":
+		return dex.GoTo(RereadSheetStep{}, input), nil
 	}
 	return dex.GoTo(WriteReplyStep{}, input), nil
 }
@@ -118,6 +128,10 @@ type WriteReplyStep struct {
 	dex.StepDefaultsNoWaitFor[GroupShapeInput]
 }
 
+func (WriteReplyStep) GetStepOptions() *dex.StepOptions {
+	return &dex.StepOptions{ExecuteFailure: dex.ProceedToOnExecuteFailure(RecordReplyFailureStep{}, nil)}
+}
+
 func (WriteReplyStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
 	return dex.GoTo(SaveReplyStep{}, input), nil
 }
@@ -126,6 +140,10 @@ func (WriteReplyStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDe
 // dex:explanation text:"Save the written reply."
 type SaveReplyStep struct {
 	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (SaveReplyStep) GetStepOptions() *dex.StepOptions {
+	return &dex.StepOptions{ExecuteFailure: dex.ProceedToOnExecuteFailure(RecordSaveFailureStep{}, nil)}
 }
 
 func (SaveReplyStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
@@ -150,4 +168,66 @@ type CleanUpStep struct {
 
 func (CleanUpStep) Execute(_ dex.Context, _ GroupShapeInput) (*dex.StepDecision, error) {
 	return dex.GracefulComplete("cleaned"), nil
+}
+
+// Only the shared failure handler joins the sheet's two reads, so the group falls into two parts.
+
+// dex:group group-id:sheet group-label:"Sheet"
+// dex:explanation text:"Read the sheet before deciding."
+type ReadSheetStep struct {
+	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (ReadSheetStep) GetStepOptions() *dex.StepOptions {
+	return &dex.StepOptions{ExecuteFailure: dex.ProceedToOnExecuteFailure(RecordSheetFailureStep{}, nil)}
+}
+
+func (ReadSheetStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
+	return dex.GoTo(DecideStep{}, input), nil
+}
+
+// dex:group group-id:sheet group-label:"Sheet"
+// dex:explanation text:"Read the sheet again before the reply."
+type RereadSheetStep struct {
+	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (RereadSheetStep) GetStepOptions() *dex.StepOptions {
+	return &dex.StepOptions{ExecuteFailure: dex.ProceedToOnExecuteFailure(RecordSheetFailureStep{}, nil)}
+}
+
+func (RereadSheetStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
+	return dex.GoTo(WriteReplyStep{}, input), nil
+}
+
+// dex:group group-id:sheet group-label:"Sheet"
+// dex:explanation text:"Record that the sheet could not be read."
+type RecordSheetFailureStep struct {
+	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (RecordSheetFailureStep) Execute(_ dex.Context, input GroupShapeInput) (*dex.StepDecision, error) {
+	return dex.GoTo(WriteReplyStep{}, input), nil
+}
+
+// Failure handlers need no group of their own; one that has one is never judged, so no warning.
+
+// dex:group group-id:failure group-label:"Failure"
+// dex:explanation text:"Record that the reply could not be written."
+type RecordReplyFailureStep struct {
+	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (RecordReplyFailureStep) Execute(_ dex.Context, _ GroupShapeInput) (*dex.StepDecision, error) {
+	return dex.GracefulComplete("reply failed"), nil
+}
+
+// dex:group group-id:failure group-label:"Failure"
+// dex:explanation text:"Record that the reply could not be saved."
+type RecordSaveFailureStep struct {
+	dex.StepDefaultsNoWaitFor[GroupShapeInput]
+}
+
+func (RecordSaveFailureStep) Execute(_ dex.Context, _ GroupShapeInput) (*dex.StepDecision, error) {
+	return dex.GracefulComplete("save failed"), nil
 }
