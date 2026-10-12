@@ -29,6 +29,7 @@ private static final long serialVersionUID = 0L;
   }
   private StartSubFlowActivityInput() {
     parentStepExecutionId_ = "";
+    tenantId_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -149,6 +150,53 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int TENANT_ID_FIELD_NUMBER = 4;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object tenantId_ = "";
+  /**
+   * <pre>
+   * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 4;</code>
+   * @return The tenantId.
+   */
+  @java.lang.Override
+  public java.lang.String getTenantId() {
+    java.lang.Object ref = tenantId_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      tenantId_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 4;</code>
+   * @return The bytes for tenantId.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getTenantIdBytes() {
+    java.lang.Object ref = tenantId_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      tenantId_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -172,6 +220,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(parentStepExecutionId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, parentStepExecutionId_);
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 4, tenantId_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -186,6 +237,9 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(parentStepExecutionId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, parentStepExecutionId_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(4, tenantId_);
     }
     return size;
   }
@@ -223,6 +277,8 @@ private static final long serialVersionUID = 0L;
     }
     if (!getParentStepExecutionId()
         .equals(other.getParentStepExecutionId())) return false;
+    if (!getTenantId()
+        .equals(other.getTenantId())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -244,6 +300,8 @@ private static final long serialVersionUID = 0L;
     }
     hash = (37 * hash) + PARENT_STEP_EXECUTION_ID_FIELD_NUMBER;
     hash = (53 * hash) + getParentStepExecutionId().hashCode();
+    hash = (37 * hash) + TENANT_ID_FIELD_NUMBER;
+    hash = (53 * hash) + getTenantId().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -393,6 +451,7 @@ private static final long serialVersionUID = 0L;
         parentFlowConfigBuilder_ = null;
       }
       parentStepExecutionId_ = "";
+      tenantId_ = "";
       return this;
     }
 
@@ -442,6 +501,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.parentStepExecutionId_ = parentStepExecutionId_;
       }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.tenantId_ = tenantId_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -466,6 +528,11 @@ private static final long serialVersionUID = 0L;
       if (!other.getParentStepExecutionId().isEmpty()) {
         parentStepExecutionId_ = other.parentStepExecutionId_;
         bitField0_ |= 0x00000004;
+        onChanged();
+      }
+      if (!other.getTenantId().isEmpty()) {
+        tenantId_ = other.tenantId_;
+        bitField0_ |= 0x00000008;
         onChanged();
       }
       this.mergeUnknownFields(other.getUnknownFields());
@@ -513,6 +580,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 26
+            case 34: {
+              tenantId_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 34
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -860,6 +932,98 @@ private static final long serialVersionUID = 0L;
       checkByteStringIsUtf8(value);
       parentStepExecutionId_ = value;
       bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object tenantId_ = "";
+    /**
+     * <pre>
+     * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+     * </pre>
+     *
+     * <code>string tenant_id = 4;</code>
+     * @return The tenantId.
+     */
+    public java.lang.String getTenantId() {
+      java.lang.Object ref = tenantId_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        tenantId_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+     * </pre>
+     *
+     * <code>string tenant_id = 4;</code>
+     * @return The bytes for tenantId.
+     */
+    public com.google.protobuf.ByteString
+        getTenantIdBytes() {
+      java.lang.Object ref = tenantId_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        tenantId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+     * </pre>
+     *
+     * <code>string tenant_id = 4;</code>
+     * @param value The tenantId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTenantId(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      tenantId_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+     * </pre>
+     *
+     * <code>string tenant_id = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTenantId() {
+      tenantId_ = getDefaultInstance().getTenantId();
+      bitField0_ = (bitField0_ & ~0x00000008);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+     * </pre>
+     *
+     * <code>string tenant_id = 4;</code>
+     * @param value The bytes for tenantId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTenantIdBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      tenantId_ = value;
+      bitField0_ |= 0x00000008;
       onChanged();
       return this;
     }

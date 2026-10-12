@@ -1353,6 +1353,8 @@ message InterpreterWorkflowInput {
   bool is_resume_from_continue_as_new = 9;
   ContinueAsNewInput continue_as_new_input = 10;
   FlowTimeoutHandlerOptions timeout_handler_options = 11;
+  // Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
+  string tenant_id = 12;
 }
 
 message InterpreterWorkflowOutput {
@@ -1370,6 +1372,8 @@ message BlobStoreCleanupWorkflowOutput {
 message InvokeWaitForMethodActivityInput {
   WorkerTarget worker_target = 1;
   InvokeWaitForMethodRequest request = 2;
+  // Tenant of the dispatching Flow; empty in single-tenant mode.
+  string tenant_id = 3;
 }
 
 message InvokeWaitForMethodActivityOutput {
@@ -1379,6 +1383,8 @@ message InvokeWaitForMethodActivityOutput {
 message InvokeExecuteMethodActivityInput {
   WorkerTarget worker_target = 1;
   InvokeExecuteMethodRequest request = 2;
+  // Tenant of the dispatching Flow; empty in single-tenant mode.
+  string tenant_id = 3;
 }
 
 message RecoveryErrorInfo {
@@ -1409,6 +1415,8 @@ message DumpFlowForContinueAsNewActivityOutput {
 message InvokeWorkerRPCActivityInput {
   PrepareRpcQueryResponse rpc_prep = 1;
   InvokeRPCRequest request = 2;
+  // Tenant of the Flow; empty in single-tenant mode.
+  string tenant_id = 3;
 }
 
 message InvokeWorkerRPCActivityOutput {
@@ -1442,6 +1450,8 @@ message StartSubFlowActivityInput {
   FlowConfig parent_flow_config = 2;
   // Source Step; activity context supplies parent Flow and run IDs.
   string parent_step_execution_id = 3;
+  // Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+  string tenant_id = 4;
 }
 
 message StartSubFlowActivityOutput {

@@ -159,4 +159,24 @@ public interface InterpreterWorkflowInputOrBuilder extends
    * <code>.dex.FlowTimeoutHandlerOptions timeout_handler_options = 11;</code>
    */
   io.superdurable.gen.FlowTimeoutHandlerOptionsOrBuilder getTimeoutHandlerOptionsOrBuilder();
+
+  /**
+   * <pre>
+   * Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 12;</code>
+   * @return The tenantId.
+   */
+  java.lang.String getTenantId();
+  /**
+   * <pre>
+   * Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>string tenant_id = 12;</code>
+   * @return The bytes for tenantId.
+   */
+  com.google.protobuf.ByteString
+      getTenantIdBytes();
 }

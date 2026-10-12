@@ -152,6 +152,8 @@ func newTenancyTestEnvironment(t *testing.T) *tenancyTestEnvironment {
 			{Kind: config.TenantOperatorKindStaticToken, SHA256: sha256Hex(environment.OperatorToken)},
 		},
 		Internal: config.TenancyInternalConfig{TokenFile: environment.InternalTokenFile},
+		// The repository's integration Temporal sets limit.maxIDLength to 255.
+		MaxStoredFlowIDBytes: 255,
 	}
 	return environment
 }

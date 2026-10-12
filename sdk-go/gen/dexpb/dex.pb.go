@@ -10990,8 +10990,10 @@ type InterpreterWorkflowInput struct {
 	IsResumeFromContinueAsNew bool                       `protobuf:"varint,9,opt,name=is_resume_from_continue_as_new,json=isResumeFromContinueAsNew,proto3" json:"is_resume_from_continue_as_new,omitempty"`
 	ContinueAsNewInput        *ContinueAsNewInput        `protobuf:"bytes,10,opt,name=continue_as_new_input,json=continueAsNewInput,proto3" json:"continue_as_new_input,omitempty"`
 	TimeoutHandlerOptions     *FlowTimeoutHandlerOptions `protobuf:"bytes,11,opt,name=timeout_handler_options,json=timeoutHandlerOptions,proto3" json:"timeout_handler_options,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
+	TenantId      string `protobuf:"bytes,12,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InterpreterWorkflowInput) Reset() {
@@ -11099,6 +11101,13 @@ func (x *InterpreterWorkflowInput) GetTimeoutHandlerOptions() *FlowTimeoutHandle
 		return x.TimeoutHandlerOptions
 	}
 	return nil
+}
+
+func (x *InterpreterWorkflowInput) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
 }
 
 type InterpreterWorkflowOutput struct {
@@ -11234,9 +11243,11 @@ func (x *BlobStoreCleanupWorkflowOutput) GetTotalDeleted() int32 {
 }
 
 type InvokeWaitForMethodActivityInput struct {
-	state         protoimpl.MessageState      `protogen:"open.v1"`
-	WorkerTarget  *WorkerTarget               `protobuf:"bytes,1,opt,name=worker_target,json=workerTarget,proto3" json:"worker_target,omitempty"`
-	Request       *InvokeWaitForMethodRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	state        protoimpl.MessageState      `protogen:"open.v1"`
+	WorkerTarget *WorkerTarget               `protobuf:"bytes,1,opt,name=worker_target,json=workerTarget,proto3" json:"worker_target,omitempty"`
+	Request      *InvokeWaitForMethodRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	// Tenant of the dispatching Flow; empty in single-tenant mode.
+	TenantId      string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11285,6 +11296,13 @@ func (x *InvokeWaitForMethodActivityInput) GetRequest() *InvokeWaitForMethodRequ
 	return nil
 }
 
+func (x *InvokeWaitForMethodActivityInput) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
 type InvokeWaitForMethodActivityOutput struct {
 	state         protoimpl.MessageState       `protogen:"open.v1"`
 	Response      *InvokeWaitForMethodResponse `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
@@ -11330,9 +11348,11 @@ func (x *InvokeWaitForMethodActivityOutput) GetResponse() *InvokeWaitForMethodRe
 }
 
 type InvokeExecuteMethodActivityInput struct {
-	state         protoimpl.MessageState      `protogen:"open.v1"`
-	WorkerTarget  *WorkerTarget               `protobuf:"bytes,1,opt,name=worker_target,json=workerTarget,proto3" json:"worker_target,omitempty"`
-	Request       *InvokeExecuteMethodRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	state        protoimpl.MessageState      `protogen:"open.v1"`
+	WorkerTarget *WorkerTarget               `protobuf:"bytes,1,opt,name=worker_target,json=workerTarget,proto3" json:"worker_target,omitempty"`
+	Request      *InvokeExecuteMethodRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	// Tenant of the dispatching Flow; empty in single-tenant mode.
+	TenantId      string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11379,6 +11399,13 @@ func (x *InvokeExecuteMethodActivityInput) GetRequest() *InvokeExecuteMethodRequ
 		return x.Request
 	}
 	return nil
+}
+
+func (x *InvokeExecuteMethodActivityInput) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
 }
 
 type RecoveryErrorInfo struct {
@@ -11642,9 +11669,11 @@ func (x *DumpFlowForContinueAsNewActivityOutput) GetResponse() *ContinueAsNewDum
 }
 
 type InvokeWorkerRPCActivityInput struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	RpcPrep       *PrepareRpcQueryResponse `protobuf:"bytes,1,opt,name=rpc_prep,json=rpcPrep,proto3" json:"rpc_prep,omitempty"`
-	Request       *InvokeRPCRequest        `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	state   protoimpl.MessageState   `protogen:"open.v1"`
+	RpcPrep *PrepareRpcQueryResponse `protobuf:"bytes,1,opt,name=rpc_prep,json=rpcPrep,proto3" json:"rpc_prep,omitempty"`
+	Request *InvokeRPCRequest        `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	// Tenant of the Flow; empty in single-tenant mode.
+	TenantId      string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11691,6 +11720,13 @@ func (x *InvokeWorkerRPCActivityInput) GetRequest() *InvokeRPCRequest {
 		return x.Request
 	}
 	return nil
+}
+
+func (x *InvokeWorkerRPCActivityInput) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
 }
 
 type InvokeWorkerRPCActivityOutput struct {
@@ -11960,8 +11996,10 @@ type StartSubFlowActivityInput struct {
 	ParentFlowConfig *FlowConfig            `protobuf:"bytes,2,opt,name=parent_flow_config,json=parentFlowConfig,proto3" json:"parent_flow_config,omitempty"`
 	// Source Step; activity context supplies parent Flow and run IDs.
 	ParentStepExecutionId string `protobuf:"bytes,3,opt,name=parent_step_execution_id,json=parentStepExecutionId,proto3" json:"parent_step_execution_id,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
+	TenantId      string `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StartSubFlowActivityInput) Reset() {
@@ -12011,6 +12049,13 @@ func (x *StartSubFlowActivityInput) GetParentFlowConfig() *FlowConfig {
 func (x *StartSubFlowActivityInput) GetParentStepExecutionId() string {
 	if x != nil {
 		return x.ParentStepExecutionId
+	}
+	return ""
+}
+
+func (x *StartSubFlowActivityInput) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
 	}
 	return ""
 }
@@ -13917,7 +13962,7 @@ const file_dex_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
 	"\x05value\x18\x02 \x01(\v2\x12.dex.ChannelValuesR\x05value:\x028\x01\"M\n" +
 	"\x12ContinueAsNewInput\x127\n" +
-	"\x18previous_internal_run_id\x18\x01 \x01(\tR\x15previousInternalRunId\"\x9c\x05\n" +
+	"\x18previous_internal_run_id\x18\x01 \x01(\tR\x15previousInternalRunId\"\xb9\x05\n" +
 	"\x18InterpreterWorkflowInput\x12\x1b\n" +
 	"\tflow_type\x18\x01 \x01(\tR\bflowType\x12E\n" +
 	"\x1fconfigured_flow_timeout_seconds\x18\x02 \x01(\x05R\x1cconfiguredFlowTimeoutSeconds\x12F\n" +
@@ -13932,21 +13977,24 @@ const file_dex_proto_rawDesc = "" +
 	"\x1eis_resume_from_continue_as_new\x18\t \x01(\bR\x19isResumeFromContinueAsNew\x12J\n" +
 	"\x15continue_as_new_input\x18\n" +
 	" \x01(\v2\x17.dex.ContinueAsNewInputR\x12continueAsNewInput\x12V\n" +
-	"\x17timeout_handler_options\x18\v \x01(\v2\x1e.dex.FlowTimeoutHandlerOptionsR\x15timeoutHandlerOptions\"n\n" +
+	"\x17timeout_handler_options\x18\v \x01(\v2\x1e.dex.FlowTimeoutHandlerOptionsR\x15timeoutHandlerOptions\x12\x1b\n" +
+	"\ttenant_id\x18\f \x01(\tR\btenantId\"n\n" +
 	"\x19InterpreterWorkflowOutput\x12Q\n" +
 	"\x17step_completion_outputs\x18\x01 \x03(\v2\x19.dex.StepCompletionOutputR\x15stepCompletionOutputs\":\n" +
 	"\x1dBlobStoreCleanupWorkflowInput\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\tR\astoreId\"E\n" +
 	"\x1eBlobStoreCleanupWorkflowOutput\x12#\n" +
-	"\rtotal_deleted\x18\x01 \x01(\x05R\ftotalDeleted\"\x95\x01\n" +
+	"\rtotal_deleted\x18\x01 \x01(\x05R\ftotalDeleted\"\xb2\x01\n" +
 	" InvokeWaitForMethodActivityInput\x126\n" +
 	"\rworker_target\x18\x01 \x01(\v2\x11.dex.WorkerTargetR\fworkerTarget\x129\n" +
-	"\arequest\x18\x02 \x01(\v2\x1f.dex.InvokeWaitForMethodRequestR\arequest\"a\n" +
+	"\arequest\x18\x02 \x01(\v2\x1f.dex.InvokeWaitForMethodRequestR\arequest\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"a\n" +
 	"!InvokeWaitForMethodActivityOutput\x12<\n" +
-	"\bresponse\x18\x01 \x01(\v2 .dex.InvokeWaitForMethodResponseR\bresponse\"\x95\x01\n" +
+	"\bresponse\x18\x01 \x01(\v2 .dex.InvokeWaitForMethodResponseR\bresponse\"\xb2\x01\n" +
 	" InvokeExecuteMethodActivityInput\x126\n" +
 	"\rworker_target\x18\x01 \x01(\v2\x11.dex.WorkerTargetR\fworkerTarget\x129\n" +
-	"\arequest\x18\x02 \x01(\v2\x1f.dex.InvokeExecuteMethodRequestR\arequest\"J\n" +
+	"\arequest\x18\x02 \x01(\v2\x1f.dex.InvokeExecuteMethodRequestR\arequest\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"J\n" +
 	"\x11RecoveryErrorInfo\x12\x16\n" +
 	"\x06detail\x18\x01 \x01(\tR\x06detail\x12\x1d\n" +
 	"\n" +
@@ -13962,10 +14010,11 @@ const file_dex_proto_rawDesc = "" +
 	"%DumpFlowForContinueAsNewActivityInput\x127\n" +
 	"\arequest\x18\x01 \x01(\v2\x1d.dex.ContinueAsNewDumpRequestR\arequest\"d\n" +
 	"&DumpFlowForContinueAsNewActivityOutput\x12:\n" +
-	"\bresponse\x18\x01 \x01(\v2\x1e.dex.ContinueAsNewDumpResponseR\bresponse\"\x88\x01\n" +
+	"\bresponse\x18\x01 \x01(\v2\x1e.dex.ContinueAsNewDumpResponseR\bresponse\"\xa5\x01\n" +
 	"\x1cInvokeWorkerRPCActivityInput\x127\n" +
 	"\brpc_prep\x18\x01 \x01(\v2\x1c.dex.PrepareRpcQueryResponseR\arpcPrep\x12/\n" +
-	"\arequest\x18\x02 \x01(\v2\x15.dex.InvokeRPCRequestR\arequest\"x\n" +
+	"\arequest\x18\x02 \x01(\v2\x15.dex.InvokeRPCRequestR\arequest\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"x\n" +
 	"\x1dInvokeWorkerRPCActivityOutput\x128\n" +
 	"\bresponse\x18\x01 \x01(\v2\x1c.dex.InvokeWorkerRPCResponseR\bresponse\x12\x1d\n" +
 	"\n" +
@@ -13984,11 +14033,12 @@ const file_dex_proto_rawDesc = "" +
 	"\aflow_id\x18\x01 \x01(\tR\x06flowId\x12\x1f\n" +
 	"\vconfig_name\x18\x02 \x01(\tR\n" +
 	"configName\x12,\n" +
-	"\x05items\x18\x03 \x03(\v2\x16.dex.AttributeSyncItemR\x05items\"\xc8\x01\n" +
+	"\x05items\x18\x03 \x03(\v2\x16.dex.AttributeSyncItemR\x05items\"\xe5\x01\n" +
 	"\x19StartSubFlowActivityInput\x123\n" +
 	"\tcondition\x18\x01 \x01(\v2\x15.dex.SubFlowConditionR\tcondition\x12=\n" +
 	"\x12parent_flow_config\x18\x02 \x01(\v2\x0f.dex.FlowConfigR\x10parentFlowConfig\x127\n" +
-	"\x18parent_step_execution_id\x18\x03 \x01(\tR\x15parentStepExecutionId\"a\n" +
+	"\x18parent_step_execution_id\x18\x03 \x01(\tR\x15parentStepExecutionId\x12\x1b\n" +
+	"\ttenant_id\x18\x04 \x01(\tR\btenantId\"a\n" +
 	"\x1aStartSubFlowActivityOutput\x12C\n" +
 	"\x15immediate_flow_result\x18\x01 \x01(\v2\x0f.dex.FlowResultR\x13immediateFlowResult\"r\n" +
 	"\x1eSubFlowCompletionSignalRequest\x12\x1e\n" +

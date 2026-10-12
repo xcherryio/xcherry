@@ -43,6 +43,7 @@ import (
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -162,7 +163,9 @@ func (s *serviceImpl) StartFlow(
 	searchAttributes := index.ConvertAttributeWritesToSearchAttributeUpsertMap(attributes)
 	searchAttributes[service.SearchAttributeDexWorkflowType] = req.GetFlowType()
 
-	if err := service.ValidateFlowID(req.GetFlowId()); err != nil {
+	tenantID := tenancy.TenantID(ctx)
+	applicationFlowID, _ := tenancy.ApplicationFlowID(tenantID, req.GetFlowId())
+	if err := service.ValidateFlowID(applicationFlowID); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := service.ValidateStepType(req.GetStartStepType()); err != nil {
@@ -261,6 +264,7 @@ func (s *serviceImpl) StartFlow(
 		InitAttributes:               attributes,
 		Config:                       &workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
+		TenantId:                     tenantID,
 	}
 
 	runId, err := s.client.StartInterpreterWorkflow(ctx, workflowOptions, input)
@@ -1633,6 +1637,7 @@ func (s *serviceImpl) doInvokeRPC(
 		req.GetRequestId(),
 		s.blobStoreCfg,
 		false,
+		tenancy.TenantID(ctx),
 	)
 	if err != nil {
 		return nil, err
