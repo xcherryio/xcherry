@@ -43,6 +43,10 @@ type DexServiceTestConfig struct {
 	GrpcMaxMessageBytes                    int
 	// UseBuiltInDefaultWorkflowConfig lets a test exercise package defaults.
 	UseBuiltInDefaultWorkflowConfig bool
+	// Tenancy enables multi-tenant mode; the runtime assigns the internal listener address.
+	Tenancy *config.TenancyConfig
+	// Credential is sent as a bearer token by the runtime's FlowClient.
+	Credential string
 	// LazyLoading overrides BlobStore.LazyLoading.
 	// Nil uses EffectiveLazyLoading default (true).
 	LazyLoading *bool
@@ -88,6 +92,10 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 		},
 	}
 	cfg.AttributeStore = testCfg.AttributeStore
+	if testCfg.Tenancy != nil {
+		cfg.Tenancy = *testCfg.Tenancy
+		cfg.Interpreter.AttributeIndexesManagedExternally = true
+	}
 	cfg.StreamStore = testCfg.StreamStore
 	switch testCfg.BackendType {
 	case service.BackendTypeTemporal:

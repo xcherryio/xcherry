@@ -25,6 +25,7 @@ import (
 	"github.com/superdurable/dex/service/common/log/tag"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -33,17 +34,20 @@ import (
 )
 
 // Server hosts FlowService, InternalService, and grpc.health.
+// In multi-tenant mode InternalService moves to a separate internal gRPC server.
 type Server struct {
-	cfg        *config.ApiConfig
-	grpcServer *grpc.Server
-	healthSrv  *health.Server
-	handler    *handler
-	logger     log.Logger
-	readyCheck func(context.Context) error
+	cfg                *config.ApiConfig
+	grpcServer         *grpc.Server
+	internalGrpcServer *grpc.Server
+	healthSrv          *health.Server
+	handler            *handler
+	logger             log.Logger
+	readyCheck         func(context.Context) error
 }
 
 func NewServer(
 	apiCfg *config.ApiConfig,
+	tenancyCfg *config.TenancyConfig,
 	blobStoreCfg *config.BlobStoreConfig,
 	interpreterCfg *config.Interpreter,
 	client uclient.UnifiedClient,
@@ -54,9 +58,12 @@ func NewServer(
 	readyCheck func(context.Context) error,
 	workerPool *workerclient.WorkerClientPool,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
-) *Server {
+) (*Server, error) {
 	if apiCfg == nil {
 		panic("apiCfg must not be nil")
+	}
+	if tenancyCfg == nil {
+		panic("tenancyCfg must not be nil")
 	}
 	if client == nil {
 		panic("client must not be nil")
@@ -103,28 +110,77 @@ func NewServer(
 	healthSrv.SetServingStatus(dexpb.FlowService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
 	healthSrv.SetServingStatus(dexpb.InternalService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
 
-	unaryInterceptors := append(
+	serverOptions := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(maxMsg),
+		grpc.MaxSendMsgSize(maxMsg),
+	}
+	commonInterceptors := append(
 		extraUnaryInterceptors,
 		unaryRecover(logger),
 		unaryLog(logger),
 	)
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMsg),
-		grpc.MaxSendMsgSize(maxMsg),
-		grpc.ChainUnaryInterceptor(unaryInterceptors...),
-	)
-	dexpb.RegisterFlowServiceServer(grpcServer, handler)
-	dexpb.RegisterInternalServiceServer(grpcServer, handler)
-	healthpb.RegisterHealthServer(grpcServer, healthSrv)
-
-	return &Server{
+	server := &Server{
 		cfg:        apiCfg,
-		grpcServer: grpcServer,
 		healthSrv:  healthSrv,
 		handler:    handler,
 		logger:     logger,
 		readyCheck: readyCheck,
 	}
+	if !tenancyCfg.IsMultiTenant() {
+		server.grpcServer = grpc.NewServer(append(
+			serverOptions,
+			grpc.ChainUnaryInterceptor(commonInterceptors...),
+		)...)
+		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
+		dexpb.RegisterInternalServiceServer(server.grpcServer, handler)
+		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
+		return server, nil
+	}
+
+	authenticator, err := tenancy.NewAuthenticator(tenancyCfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	internalToken, err := tenancy.NewInternalTokenFile(tenancyCfg.Internal.TokenFile, logger)
+	if err != nil {
+		return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
+	}
+	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator)
+	server.grpcServer = grpc.NewServer(append(
+		serverOptions,
+		grpc.ChainUnaryInterceptor(append(
+			[]grpc.UnaryServerInterceptor{publicInterceptors.Unary},
+			commonInterceptors...,
+		)...),
+		grpc.ChainStreamInterceptor(publicInterceptors.Stream),
+	)...)
+	dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
+	healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
+
+	server.internalGrpcServer = grpc.NewServer(append(
+		serverOptions,
+		grpc.ChainUnaryInterceptor(append(
+			[]grpc.UnaryServerInterceptor{tenancy.NewInternalServiceInterceptor(internalToken).Unary},
+			commonInterceptors...,
+		)...),
+	)...)
+	dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
+	healthpb.RegisterHealthServer(server.internalGrpcServer, healthSrv)
+	return server, nil
+}
+
+// HasInternalListener reports whether InternalService must be served by ServeInternal.
+func (s *Server) HasInternalListener() bool {
+	return s.internalGrpcServer != nil
+}
+
+// ServeInternal hosts InternalService on listener. Only multi-tenant mode has an internal server.
+func (s *Server) ServeInternal(listener net.Listener) error {
+	if s.internalGrpcServer == nil {
+		panic("ServeInternal requires multi-tenant mode")
+	}
+	s.logger.Info("InternalService gRPC listening", tag.Address(listener.Addr().String()))
+	return s.internalGrpcServer.Serve(listener)
 }
 
 // Run listens on the configured port.
@@ -164,12 +220,18 @@ func (s *Server) StopServing(timeout time.Duration) {
 	done := make(chan struct{})
 	go func() {
 		s.grpcServer.GracefulStop()
+		if s.internalGrpcServer != nil {
+			s.internalGrpcServer.GracefulStop()
+		}
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(timeout):
 		s.grpcServer.Stop()
+		if s.internalGrpcServer != nil {
+			s.internalGrpcServer.Stop()
+		}
 	}
 }
 

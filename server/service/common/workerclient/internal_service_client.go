@@ -19,6 +19,7 @@ import (
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/grpctarget"
+	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -30,11 +31,18 @@ type InternalServiceClient struct {
 	conn   *grpc.ClientConn
 	client dexpb.InternalServiceClient
 	header metadata.MD
-	closed bool
+	// internalToken is nil in single-tenant mode.
+	internalToken *tenancy.InternalTokenFile
+	closed        bool
 }
 
 // NewInternalServiceClient creates the continue-as-new dump client.
-func NewInternalServiceClient(target string, cfg *config.Config) (*InternalServiceClient, error) {
+// internalToken is nil in single-tenant mode; otherwise every call carries it as a bearer credential.
+func NewInternalServiceClient(
+	target string,
+	cfg *config.Config,
+	internalToken *tenancy.InternalTokenFile,
+) (*InternalServiceClient, error) {
 	if cfg == nil {
 		panic("workerclient: config must not be nil")
 	}
@@ -61,9 +69,10 @@ func NewInternalServiceClient(target string, cfg *config.Config) (*InternalServi
 		return nil, err
 	}
 	return &InternalServiceClient{
-		conn:   conn,
-		client: dexpb.NewInternalServiceClient(conn),
-		header: metadata.New(cfg.Worker.DefaultHeaders),
+		conn:          conn,
+		client:        dexpb.NewInternalServiceClient(conn),
+		header:        metadata.New(cfg.Worker.DefaultHeaders),
+		internalToken: internalToken,
 	}, nil
 }
 
@@ -76,10 +85,15 @@ func (i *InternalServiceClient) Client(
 	if i.closed || i.client == nil {
 		return nil, ctx, fmt.Errorf("workerclient: internal client closed")
 	}
-	if len(i.header) == 0 {
+	header := i.header
+	if i.internalToken != nil {
+		header = header.Copy()
+		header.Set("authorization", "Bearer "+string(i.internalToken.Token()))
+	}
+	if len(header) == 0 {
 		return i.client, ctx, nil
 	}
-	return i.client, metadata.NewOutgoingContext(ctx, i.header), nil
+	return i.client, metadata.NewOutgoingContext(ctx, header), nil
 }
 
 // Close closes the InternalService connection.
