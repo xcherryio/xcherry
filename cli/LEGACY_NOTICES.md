@@ -45,3 +45,18 @@ holders. Those notices and their accompanying licenses remain in force.
 
 Dependencies not copied into this repository remain governed by the license
 distributed with each dependency.
+
+## elkjs (Eclipse Layout Kernel)
+
+Dex Web lays out Flow Definition Graphs with elkjs 0.11.1, the Eclipse Layout
+Kernel compiled to JavaScript.
+
+- Copyright (c) 2017 Kiel University and others.
+- Licensed under the Eclipse Public License 2.0. The license text is in
+  `LICENSES/EPL-2.0.txt` and at https://www.eclipse.org/legal/epl-2.0/.
+- Source code: https://github.com/kieler/elkjs/tree/0.11.1, also published as
+  the npm package https://www.npmjs.com/package/elkjs/v/0.11.1.
+
+elkjs is distributed unmodified, as part of the Dex Web bundle that `dexcli`,
+the Dex Server image and the documentation site include. The Sustainable Use
+License 1.0 does not apply to it.
