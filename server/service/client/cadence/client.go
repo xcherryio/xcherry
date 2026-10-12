@@ -312,6 +312,10 @@ func (t *cadenceClient) CancelWorkflow(ctx context.Context, workflowID string, r
 	return t.cClient.CancelWorkflow(ctx, workflowID, runID)
 }
 
+func (t *cadenceClient) DeleteWorkflowExecution(context.Context, string, string) error {
+	return fmt.Errorf("deleting a workflow execution is not supported on Cadence")
+}
+
 func (t *cadenceClient) TerminateWorkflow(ctx context.Context, workflowID string, runID string, reason string) error {
 	var reasonStr string
 	if reason == "" {

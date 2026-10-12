@@ -729,3 +729,56 @@ func (b *blobStoreImpl) objectKey(storage config.BlobStoreConfigEntry, path stri
 	}
 	return b.pathPrefix + path
 }
+
+func (b *blobStoreImpl) ReadTenancyRecord(ctx context.Context) ([]byte, string, error) {
+	key := b.objectKey(b.activeStorage, tenancyRecordPath)
+	if b.activeStorage.StorageType == config.StorageTypeLocal {
+		return readLocalObjectWithVersion(ctx, b.activeStorage.LocalDirectory, key)
+	}
+	if b.s3Client == nil {
+		return nil, "", errors.New("S3 client is not configured")
+	}
+	return getS3ObjectWithVersion(ctx, b.s3Client, b.activeStorage.S3Bucket, key)
+}
+
+func (b *blobStoreImpl) WriteTenancyRecord(ctx context.Context, data []byte, version string) error {
+	key := b.objectKey(b.activeStorage, tenancyRecordPath)
+	if b.activeStorage.StorageType == config.StorageTypeLocal {
+		return writeLocalObjectIfVersion(ctx, b.activeStorage.LocalDirectory, key, data, version)
+	}
+	if b.s3Client == nil {
+		return errors.New("S3 client is not configured")
+	}
+	return putS3ObjectIfVersion(ctx, b.s3Client, b.activeStorage.S3Bucket, key, data, version)
+}
+
+func (b *blobStoreImpl) DeleteTenantObjects(ctx context.Context, tenantID string, limit int) (int, error) {
+	if !tenantSegmentPattern.MatchString(tenantID) {
+		return 0, fmt.Errorf("%w: %q", ErrInvalidTenantSegment, tenantID)
+	}
+	storeIDs := make([]string, 0, len(b.supportedStore))
+	for storeID := range b.supportedStore {
+		storeIDs = append(storeIDs, storeID)
+	}
+	sort.Strings(storeIDs)
+	deleted := 0
+	for _, storeID := range storeIDs {
+		if deleted >= limit {
+			break
+		}
+		storage := b.supportedStore[storeID]
+		prefix := b.objectKey(storage, tenantID+"/")
+		var count int
+		var err error
+		if storage.StorageType == config.StorageTypeLocal {
+			count, err = deleteLocalObjectsUnderDirectory(ctx, storage.LocalDirectory, prefix, limit-deleted)
+		} else if b.s3Client != nil {
+			count, err = deleteS3ObjectsUnderPrefix(ctx, b.s3Client, storage.S3Bucket, prefix, limit-deleted)
+		}
+		deleted += count
+		if err != nil {
+			return deleted, fmt.Errorf("delete tenant objects in %s: %w", storeID, err)
+		}
+	}
+	return deleted, nil
+}

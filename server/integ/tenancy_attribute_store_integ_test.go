@@ -67,6 +67,8 @@ func TestAttributeSyncTenantScopedStoreTemporal(t *testing.T) {
 	pair := startTenantPair(t, func(testConfig *DexServiceTestConfig) {
 		testConfig.AttributeStore = config.AttributeStoreConfig{Stores: stores}
 		testConfig.Tenancy.AttributeStores = []string{"reporting"}
+		testConfig.Tenancy.TombstoneRefreshInterval = time.Second
+		testConfig.Tenancy.PurgeConfirmationDelay = time.Second
 	})
 	startWithStore := func(client dexpb.FlowServiceClient, target *dexpb.WorkerTarget, flowID, storeName, message string) error {
 		_, err := client.StartFlow(ctx, &dexpb.StartFlowRequest{
@@ -103,4 +105,27 @@ func TestAttributeSyncTenantScopedStoreTemporal(t *testing.T) {
 
 	err = startWithStore(pair.alpha, pair.alphaTarget, "refused-"+uuid.NewString(), "other", "x")
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "a store outside tenancy.attributeStores is refused: %v", err)
+
+	operator := dexpb.NewTenantAdminServiceClient(newDexClientConnectionWithCredential(
+		t, pair.runtime.PublicAddress, pair.environment.OperatorToken, config.DefaultGrpcMaxMessageBytes,
+	))
+	_, err = operator.TombstoneTenant(ctx, &dexpb.TombstoneTenantRequest{TenantId: "alpha"})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		response, purgeErr := operator.PurgeTenant(ctx, &dexpb.PurgeTenantRequest{TenantId: "alpha"})
+		require.NoError(t, purgeErr)
+		return response.GetDone()
+	}, 60*time.Second, 500*time.Millisecond)
+	var remaining []string
+	rows, err := database.QueryContext(ctx, fmt.Sprintf(
+		`SELECT tenant_id FROM public.%s WHERE flow_id = $1`, tables["reporting"],
+	), flowID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var tenantID string
+		require.NoError(t, rows.Scan(&tenantID))
+		remaining = append(remaining, tenantID)
+	}
+	require.NoError(t, rows.Close())
+	require.Equal(t, []string{"beta"}, remaining, "the purge deletes only the purged tenant's rows")
 }

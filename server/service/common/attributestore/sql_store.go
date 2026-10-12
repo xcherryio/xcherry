@@ -618,6 +618,23 @@ func (s *sqlStore) buildUpsert(
 	return s.dialect.buildUpsert(snapshot, keyValues, columnNames, values)
 }
 
+// deleteTenantRows removes a tenant's rows from the store table and its AttributeMap tables in one transaction.
+func (s *sqlStore) deleteTenantRows(ctx context.Context, tenantID string) error {
+	if s.cfg.TenantColumn == "" {
+		return nil
+	}
+	statements := []sqlStatement{s.tenantDeleteStatement(s.table, tenantID)}
+	for _, reference := range s.mapTables {
+		statements = append(statements, s.tenantDeleteStatement(reference, tenantID))
+	}
+	return s.execute(ctx, statements)
+}
+
+func (s *sqlStore) tenantDeleteStatement(reference tableReference, tenantID string) sqlStatement {
+	query, arguments := s.dialect.buildKeyedDelete(reference, []string{s.cfg.TenantColumn}, []string{tenantID})
+	return sqlStatement{query: query, arguments: arguments}
+}
+
 func (s *sqlStore) close() error {
 	return redactStorageSecret(s.db.Close(), s.cfg.DSN)
 }

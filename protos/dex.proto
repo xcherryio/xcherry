@@ -121,6 +121,16 @@ service WorkerService {
 }
 
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+// TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
+// Every RPC names its tenant explicitly and never returns Flow data.
+service TenantAdminService {
+  // Refuses every credential of the tenant within the tombstone refresh interval. Idempotent.
+  rpc TombstoneTenant(TombstoneTenantRequest) returns (TombstoneTenantResponse);
+  // Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true.
+  rpc PurgeTenant(PurgeTenantRequest) returns (PurgeTenantResponse);
+  rpc DescribeTenant(DescribeTenantRequest) returns (DescribeTenantResponse);
+}
+
 service InternalService {
   rpc DumpFlowForContinueAsNew(ContinueAsNewDumpRequest) returns (ContinueAsNewDumpResponse);
 }
@@ -1574,4 +1584,42 @@ message InvokeRpcUpdateResult {
 
 message StepExecutionNumbers {
   repeated int32 numbers = 1;
+}
+
+message TenantAdminState {
+  string tenant_id = 1;
+  bool is_tombstoned = 2;
+  google.protobuf.Timestamp tombstoned_time = 3;
+  // Set when a purge has found nothing left in two queries a confirmation delay apart.
+  google.protobuf.Timestamp purge_done_time = 4;
+  // After this time the tombstone is removed and the tenant ID may be reused.
+  google.protobuf.Timestamp tombstone_expiry_time = 5;
+}
+
+message TombstoneTenantRequest {
+  string tenant_id = 1;
+}
+
+message TombstoneTenantResponse {
+  TenantAdminState state = 1;
+}
+
+message PurgeTenantRequest {
+  string tenant_id = 1;
+}
+
+message PurgeTenantResponse {
+  TenantAdminState state = 1;
+  int32 terminated_executions = 2;
+  int32 deleted_executions = 3;
+  int32 deleted_blob_objects = 4;
+  bool done = 5;
+}
+
+message DescribeTenantRequest {
+  string tenant_id = 1;
+}
+
+message DescribeTenantResponse {
+  TenantAdminState state = 1;
 }

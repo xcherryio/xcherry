@@ -1001,6 +1001,41 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_dex_StepExecutionNumbers_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_TenantAdminState_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_TenantAdminState_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_TombstoneTenantRequest_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_TombstoneTenantRequest_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_TombstoneTenantResponse_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_TombstoneTenantResponse_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_PurgeTenantRequest_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_PurgeTenantRequest_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_PurgeTenantResponse_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_PurgeTenantResponse_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_DescribeTenantRequest_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_DescribeTenantRequest_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_dex_DescribeTenantResponse_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_dex_DescribeTenantResponse_fieldAccessorTable;
 
   public static com.google.protobuf.Descriptors.FileDescriptor
       getDescriptor() {
@@ -1778,185 +1813,208 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       "_executions\030\004 \003(\0132\035.dex.ActiveStepExecut" +
       "ionState\"A\n\025InvokeRpcUpdateResult\022(\n\010res" +
       "ponse\030\001 \001(\0132\026.dex.InvokeRPCResponse\"\'\n\024S" +
-      "tepExecutionNumbers\022\017\n\007numbers\030\001 \003(\005*\313\001\n" +
-      "\tIndexType\022\032\n\026INDEX_TYPE_UNSPECIFIED\020\000\022\026" +
-      "\n\022INDEX_TYPE_KEYWORD\020\001\022\023\n\017INDEX_TYPE_TEX" +
-      "T\020\002\022\034\n\030INDEX_TYPE_KEYWORD_ARRAY\020\003\022\022\n\016IND" +
-      "EX_TYPE_INT\020\004\022\025\n\021INDEX_TYPE_DOUBLE\020\005\022\023\n\017" +
-      "INDEX_TYPE_BOOL\020\006\022\027\n\023INDEX_TYPE_DATETIME" +
-      "\020\007*\274\001\n\032WaitForMethodFailurePolicy\022.\n*WAI" +
-      "T_FOR_METHOD_FAILURE_POLICY_UNSPECIFIED\020" +
-      "\000\0227\n3WAIT_FOR_METHOD_FAILURE_POLICY_FAIL" +
-      "_FLOW_ON_FAILURE\020\001\0225\n1WAIT_FOR_METHOD_FA" +
-      "ILURE_POLICY_PROCEED_ON_FAILURE\020\002*\320\001\n\032Ex" +
-      "ecuteMethodFailurePolicy\022-\n)EXECUTE_METH" +
-      "OD_FAILURE_POLICY_UNSPECIFIED\020\000\022E\nAEXECU" +
-      "TE_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_EX" +
-      "ECUTE_METHOD_FAILURE\020\001\022<\n8EXECUTE_METHOD" +
-      "_FAILURE_POLICY_PROCEED_TO_CONFIGURED_ST" +
-      "EP\020\002*\346\001\n\rIdReusePolicy\022\037\n\033ID_REUSE_POLIC" +
-      "Y_UNSPECIFIED\020\000\0227\n3ID_REUSE_POLICY_ALLOW" +
-      "_IF_PREVIOUS_EXISTS_ABNORMALLY\020\001\022\'\n#ID_R" +
-      "EUSE_POLICY_ALLOW_IF_NO_RUNNING\020\002\022\"\n\036ID_" +
-      "REUSE_POLICY_DISALLOW_REUSE\020\003\022.\n*ID_REUS" +
-      "E_POLICY_ALLOW_TERMINATE_IF_RUNNING\020\004*\317\001" +
-      "\n\024ActiveStepSearchMode\022\'\n#ACTIVE_STEP_SE" +
-      "ARCH_MODE_UNSPECIFIED\020\000\022+\n\'ACTIVE_STEP_S" +
-      "EARCH_MODE_ENABLED_FOR_ALL\020\001\022;\n7ACTIVE_S" +
-      "TEP_SEARCH_MODE_ENABLED_FOR_STEPS_WITH_W" +
-      "AIT_FOR\020\002\022$\n ACTIVE_STEP_SEARCH_MODE_DIS" +
-      "ABLED\020\003*f\n\016StepDurability\022\037\n\033STEP_DURABI" +
-      "LITY_UNSPECIFIED\020\000\022\030\n\024STEP_DURABILITY_SY" +
-      "NC\020\001\022\031\n\025STEP_DURABILITY_ASYNC\020\002*\227\001\n\021Flow" +
-      "TimeoutPolicy\022#\n\037FLOW_TIMEOUT_POLICY_UNS" +
-      "PECIFIED\020\000\022\034\n\030FLOW_TIMEOUT_POLICY_FAIL\020\001",
-      "\022\036\n\032FLOW_TIMEOUT_POLICY_CANCEL\020\002\022\037\n\033FLOW" +
-      "_TIMEOUT_POLICY_HANDLER\020\003*h\n\010StopType\022\031\n" +
-      "\025STOP_TYPE_UNSPECIFIED\020\000\022\024\n\020STOP_TYPE_CA" +
-      "NCEL\020\001\022\027\n\023STOP_TYPE_TERMINATE\020\002\022\022\n\016STOP_" +
-      "TYPE_FAIL\020\003*\200\002\n\nFlowStatus\022\033\n\027FLOW_STATU" +
-      "S_UNSPECIFIED\020\000\022\027\n\023FLOW_STATUS_RUNNING\020\001" +
-      "\022\031\n\025FLOW_STATUS_COMPLETED\020\002\022\026\n\022FLOW_STAT" +
-      "US_FAILED\020\003\0221\n-FLOW_STATUS_SERVER_SIDE_T" +
-      "IMEOUT_INTERNAL_ONLY\020\004\022\032\n\026FLOW_STATUS_TE" +
-      "RMINATED\020\005\022\030\n\024FLOW_STATUS_CANCELED\020\006\022 \n\034" +
-      "FLOW_STATUS_CONTINUED_AS_NEW\020\007*\236\002\n\rFlowE" +
-      "rrorType\022\037\n\033FLOW_ERROR_TYPE_UNSPECIFIED\020" +
-      "\000\022.\n*FLOW_ERROR_TYPE_STEP_DECISION_FAILI" +
-      "NG_FLOW\020\001\022+\n\'FLOW_ERROR_TYPE_CLIENT_API_" +
-      "FAILING_FLOW\020\002\022#\n\037FLOW_ERROR_TYPE_WORKER" +
-      "_API_FAIL\020\003\022*\n&FLOW_ERROR_TYPE_INVALID_U" +
-      "SER_FLOW_CODE\020\004\022 \n\034FLOW_ERROR_TYPE_FLOW_" +
-      "TIMEOUT\020\005\022\034\n\030FLOW_ERROR_TYPE_INTERNAL\020\006*" +
-      "\223\001\n\026PendingStepMethodPhase\022)\n%PENDING_ST" +
-      "EP_METHOD_PHASE_UNSPECIFIED\020\000\022\'\n#PENDING" +
-      "_STEP_METHOD_PHASE_SCHEDULED\020\001\022%\n!PENDIN" +
-      "G_STEP_METHOD_PHASE_STARTED\020\002*q\n\017ActiveS" +
-      "tepPhase\022!\n\035ACTIVE_STEP_PHASE_UNSPECIFIE" +
-      "D\020\000\022\034\n\030ACTIVE_STEP_PHASE_ACTIVE\020\001\022\035\n\031ACT" +
-      "IVE_STEP_PHASE_WAITING\020\002*\275\001\n\rFlowResetTy" +
-      "pe\022\037\n\033FLOW_RESET_TYPE_UNSPECIFIED\020\000\022\035\n\031F" +
-      "LOW_RESET_TYPE_BEGINNING\020\001\022&\n\"FLOW_RESET" +
-      "_TYPE_HISTORY_EVENT_TIME\020\002\022\035\n\031FLOW_RESET" +
-      "_TYPE_STEP_TYPE\020\003\022%\n!FLOW_RESET_TYPE_STE" +
-      "P_EXECUTION_ID\020\004*\206\001\n\023FlowResetStepMethod" +
-      "\022&\n\"FLOW_RESET_STEP_METHOD_UNSPECIFIED\020\000" +
-      "\022#\n\037FLOW_RESET_STEP_METHOD_WAIT_FOR\020\001\022\"\n" +
-      "\036FLOW_RESET_STEP_METHOD_EXECUTE\020\002*\306\002\n\026At" +
-      "tributeMatchOperator\022(\n$ATTRIBUTE_MATCH_" +
-      "OPERATOR_UNSPECIFIED\020\000\022\"\n\036ATTRIBUTE_MATC" +
-      "H_OPERATOR_EQUAL\020\001\022&\n\"ATTRIBUTE_MATCH_OP" +
-      "ERATOR_NOT_EQUAL\020\002\022)\n%ATTRIBUTE_MATCH_OP" +
-      "ERATOR_GREATER_THAN\020\003\0222\n.ATTRIBUTE_MATCH" +
-      "_OPERATOR_GREATER_THAN_OR_EQUAL\020\004\022&\n\"ATT" +
-      "RIBUTE_MATCH_OPERATOR_LESS_THAN\020\005\022/\n+ATT" +
-      "RIBUTE_MATCH_OPERATOR_LESS_THAN_OR_EQUAL" +
-      "\020\006*\315\002\n\016ErrorSubStatus\022 \n\034ERROR_SUB_STATU" +
-      "S_UNSPECIFIED\020\000\022\"\n\036ERROR_SUB_STATUS_UNCA" +
-      "TEGORIZED\020\001\022)\n%ERROR_SUB_STATUS_FLOW_ALR" +
-      "EADY_STARTED\020\002\022$\n ERROR_SUB_STATUS_FLOW_" +
-      "NOT_EXISTS\020\003\022%\n!ERROR_SUB_STATUS_WORKER_" +
-      "API_ERROR\020\004\022\'\n#ERROR_SUB_STATUS_LONG_POL" +
-      "L_TIME_OUT\020\005\022.\n*ERROR_SUB_STATUS_CHANNEL" +
-      "_MESSAGE_NOT_FOUND\020\006\022$\n ERROR_SUB_STATUS" +
-      "_REQUEST_TIMEOUT\020\007*\213\002\n\021CloseDecisionType" +
-      "\022#\n\037CLOSE_DECISION_TYPE_UNSPECIFIED\020\000\0228\n" +
-      "4CLOSE_DECISION_TYPE_FORCE_COMPLETE_ON_C" +
-      "HANNELS_EMPTY\020\001\022)\n%CLOSE_DECISION_TYPE_G" +
-      "RACEFUL_COMPLETE\020\002\022&\n\"CLOSE_DECISION_TYP" +
-      "E_FORCE_COMPLETE\020\003\022\"\n\036CLOSE_DECISION_TYP" +
-      "E_FORCE_FAIL\020\004\022 \n\034CLOSE_DECISION_TYPE_DE" +
-      "AD_END\020\005*\310\001\n\024WaitingConditionType\022&\n\"WAI" +
-      "TING_CONDITION_TYPE_UNSPECIFIED\020\000\022(\n$WAI" +
-      "TING_CONDITION_TYPE_ALL_COMPLETED\020\001\022(\n$W" +
-      "AITING_CONDITION_TYPE_ANY_COMPLETED\020\002\0224\n" +
-      "0WAITING_CONDITION_TYPE_ANY_COMBINATION_" +
-      "COMPLETED\020\003*\307\001\n\022SubFlowReusePolicy\022%\n!SU" +
-      "B_FLOW_REUSE_POLICY_UNSPECIFIED\020\000\022 \n\034SUB" +
-      "_FLOW_REUSE_POLICY_ATTACH\020\001\022>\n:SUB_FLOW_" +
-      "REUSE_POLICY_RESTART_IF_PREVIOUS_EXITS_A" +
-      "BNORMALLY\020\002\022(\n$SUB_FLOW_REUSE_POLICY_ALW" +
-      "AYS_RESTART\020\003*q\n\017ConditionStatus\022 \n\034COND" +
-      "ITION_STATUS_UNSPECIFIED\020\000\022\034\n\030CONDITION_" +
-      "STATUS_WAITING\020\001\022\036\n\032CONDITION_STATUS_COM" +
-      "PLETED\020\002*\243\001\n\023InternalTimerStatus\022%\n!INTE" +
-      "RNAL_TIMER_STATUS_UNSPECIFIED\020\000\022!\n\035INTER" +
-      "NAL_TIMER_STATUS_PENDING\020\001\022\037\n\033INTERNAL_T" +
-      "IMER_STATUS_FIRED\020\002\022!\n\035INTERNAL_TIMER_ST" +
-      "ATUS_SKIPPED\020\003*\351\002\n\017UpdateErrorType\022!\n\035UP" +
-      "DATE_ERROR_TYPE_UNSPECIFIED\020\000\022/\n+UPDATE_" +
-      "ERROR_TYPE_CONTINUE_AS_NEW_PREEMPTED\020\001\022&" +
-      "\n\"UPDATE_ERROR_TYPE_INVALID_ARGUMENT\020\002\022)" +
-      "\n%UPDATE_ERROR_TYPE_FAILED_PRECONDITION\020" +
-      "\003\022\'\n#UPDATE_ERROR_TYPE_DEADLINE_EXCEEDED" +
-      "\020\004\022.\n*UPDATE_ERROR_TYPE_RPC_ACQUIRE_LOCK" +
-      "_FAILURE\020\005\022%\n!UPDATE_ERROR_TYPE_SERVER_I" +
-      "NTERNAL\020\006\022/\n+UPDATE_ERROR_TYPE_CHANNEL_M" +
-      "ESSAGE_NOT_FOUND\020\007*\315\001\n\037SubFlowCompletion" +
-      "DeliveryStatus\0223\n/SUB_FLOW_COMPLETION_DE" +
-      "LIVERY_STATUS_UNSPECIFIED\020\000\0221\n-SUB_FLOW_" +
-      "COMPLETION_DELIVERY_STATUS_DELIVERED\020\001\022B" +
-      "\n>SUB_FLOW_COMPLETION_DELIVERY_STATUS_PA" +
-      "RENT_CLOSED_OR_NOT_FOUND\020\0022\226\017\n\013FlowServi" +
-      "ce\0228\n\rGetServerInfo\022\026.google.protobuf.Em" +
-      "pty\032\017.dex.ServerInfo\022:\n\tStartFlow\022\025.dex." +
-      "StartFlowRequest\032\026.dex.StartFlowResponse" +
-      "\022H\n\020PublishToChannel\022\034.dex.PublishToChan" +
-      "nelRequest\032\026.google.protobuf.Empty\022U\n\022Ge" +
-      "tChannelMessages\022\036.dex.GetChannelMessage" +
-      "sRequest\032\037.dex.GetChannelMessagesRespons" +
-      "e\022P\n\024DeleteChannelMessage\022 .dex.DeleteCh" +
-      "annelMessageRequest\032\026.google.protobuf.Em" +
-      "pty\022>\n\013WriteStream\022\027.dex.WriteStreamRequ" +
-      "est\032\026.google.protobuf.Empty\022=\n\nReadStrea" +
-      "m\022\026.dex.ReadStreamRequest\032\027.dex.ReadStre" +
-      "amResponse\022U\n\022ListStreamMessages\022\036.dex.L" +
-      "istStreamMessagesRequest\032\037.dex.ListStrea" +
-      "mMessagesResponse\0228\n\010StopFlow\022\024.dex.Stop" +
-      "FlowRequest\032\026.google.protobuf.Empty\022F\n\rG" +
-      "etAttributes\022\031.dex.GetAttributesRequest\032" +
-      "\032.dex.GetAttributesResponse\022B\n\rSetAttrib" +
-      "utes\022\031.dex.SetAttributesRequest\032\026.google" +
-      ".protobuf.Empty\022:\n\tLoadBlobs\022\025.dex.LoadB" +
-      "lobsRequest\032\026.dex.LoadBlobsResponse\0227\n\013W" +
-      "aitForFlow\022\027.dex.WaitForFlowRequest\032\017.de" +
-      "x.FlowResult\022@\n\013SearchFlows\022\027.dex.Search" +
-      "FlowsRequest\032\030.dex.SearchFlowsResponse\022W" +
-      "\n\024SyncAttributeIndexes\022\036.dex.SyncAttribu" +
-      "teIndexRequest\032\037.dex.SyncAttributeIndexR" +
-      "esponse\022I\n\016GetFlowSummary\022\032.dex.GetFlowS" +
-      "ummaryRequest\032\033.dex.GetFlowSummaryRespon" +
-      "se\022O\n\020GetHistoryEvents\022\034.dex.GetHistoryE" +
-      "ventsRequest\032\035.dex.GetHistoryEventsRespo" +
-      "nse\022X\n\023WaitForHistoryEvent\022\037.dex.WaitFor" +
-      "HistoryEventRequest\032 .dex.WaitForHistory" +
-      "EventResponse\022C\n\014GetFlowState\022\030.dex.GetF" +
-      "lowStateRequest\032\031.dex.GetFlowStateRespon" +
-      "se\022:\n\tResetFlow\022\025.dex.ResetFlowRequest\032\026" +
-      ".dex.ResetFlowResponse\022:\n\tInvokeRPC\022\025.de" +
-      "x.InvokeRPCRequest\032\026.dex.InvokeRPCRespon" +
-      "se\022:\n\tSkipTimer\022\025.dex.SkipTimerRequest\032\026" +
-      ".google.protobuf.Empty\022H\n\020UpdateFlowConf" +
-      "ig\022\034.dex.UpdateFlowConfigRequest\032\026.googl" +
-      "e.protobuf.Empty\022^\n\025WaitForStepCompletio" +
-      "n\022!.dex.WaitForStepCompletionRequest\032\".d" +
-      "ex.WaitForStepCompletionResponse\022O\n\020Wait" +
-      "ForAttribute\022\034.dex.WaitForAttributeReque" +
-      "st\032\035.dex.WaitForAttributeResponse\022P\n\024Tri" +
-      "ggerContinueAsNew\022 .dex.TriggerContinueA" +
-      "sNewRequest\032\026.google.protobuf.Empty\0226\n\013H" +
-      "ealthCheck\022\026.google.protobuf.Empty\032\017.dex" +
-      ".HealthInfo2\221\002\n\rWorkerService\022X\n\023InvokeW" +
-      "aitForMethod\022\037.dex.InvokeWaitForMethodRe" +
-      "quest\032\036.dex.InvokeWaitForMethodOutput0\001\022" +
-      "X\n\023InvokeExecuteMethod\022\037.dex.InvokeExecu" +
-      "teMethodRequest\032\036.dex.InvokeExecuteMetho" +
-      "dOutput0\001\022L\n\017InvokeWorkerRPC\022\033.dex.Invok" +
-      "eWorkerRPCRequest\032\034.dex.InvokeWorkerRPCR" +
-      "esponse2l\n\017InternalService\022Y\n\030DumpFlowFo" +
-      "rContinueAsNew\022\035.dex.ContinueAsNewDumpRe" +
-      "quest\032\036.dex.ContinueAsNewDumpResponseB!\n" +
-      "\023io.superdurable.genB\010DexProtoP\001b\006proto3"
+      "tepExecutionNumbers\022\017\n\007numbers\030\001 \003(\005\"\341\001\n" +
+      "\020TenantAdminState\022\021\n\ttenant_id\030\001 \001(\t\022\025\n\r" +
+      "is_tombstoned\030\002 \001(\010\0223\n\017tombstoned_time\030\003" +
+      " \001(\0132\032.google.protobuf.Timestamp\0223\n\017purg" +
+      "e_done_time\030\004 \001(\0132\032.google.protobuf.Time" +
+      "stamp\0229\n\025tombstone_expiry_time\030\005 \001(\0132\032.g" +
+      "oogle.protobuf.Timestamp\"+\n\026TombstoneTen" +
+      "antRequest\022\021\n\ttenant_id\030\001 \001(\t\"?\n\027Tombsto" +
+      "neTenantResponse\022$\n\005state\030\001 \001(\0132\025.dex.Te" +
+      "nantAdminState\"\'\n\022PurgeTenantRequest\022\021\n\t" +
+      "tenant_id\030\001 \001(\t\"\242\001\n\023PurgeTenantResponse\022" +
+      "$\n\005state\030\001 \001(\0132\025.dex.TenantAdminState\022\035\n" +
+      "\025terminated_executions\030\002 \001(\005\022\032\n\022deleted_" +
+      "executions\030\003 \001(\005\022\034\n\024deleted_blob_objects" +
+      "\030\004 \001(\005\022\014\n\004done\030\005 \001(\010\"*\n\025DescribeTenantRe" +
+      "quest\022\021\n\ttenant_id\030\001 \001(\t\">\n\026DescribeTena" +
+      "ntResponse\022$\n\005state\030\001 \001(\0132\025.dex.TenantAd" +
+      "minState*\313\001\n\tIndexType\022\032\n\026INDEX_TYPE_UNS" +
+      "PECIFIED\020\000\022\026\n\022INDEX_TYPE_KEYWORD\020\001\022\023\n\017IN" +
+      "DEX_TYPE_TEXT\020\002\022\034\n\030INDEX_TYPE_KEYWORD_AR" +
+      "RAY\020\003\022\022\n\016INDEX_TYPE_INT\020\004\022\025\n\021INDEX_TYPE_" +
+      "DOUBLE\020\005\022\023\n\017INDEX_TYPE_BOOL\020\006\022\027\n\023INDEX_T" +
+      "YPE_DATETIME\020\007*\274\001\n\032WaitForMethodFailureP" +
+      "olicy\022.\n*WAIT_FOR_METHOD_FAILURE_POLICY_" +
+      "UNSPECIFIED\020\000\0227\n3WAIT_FOR_METHOD_FAILURE" +
+      "_POLICY_FAIL_FLOW_ON_FAILURE\020\001\0225\n1WAIT_F" +
+      "OR_METHOD_FAILURE_POLICY_PROCEED_ON_FAIL" +
+      "URE\020\002*\320\001\n\032ExecuteMethodFailurePolicy\022-\n)" +
+      "EXECUTE_METHOD_FAILURE_POLICY_UNSPECIFIE" +
+      "D\020\000\022E\nAEXECUTE_METHOD_FAILURE_POLICY_FAI" +
+      "L_FLOW_ON_EXECUTE_METHOD_FAILURE\020\001\022<\n8EX" +
+      "ECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_C",
+      "ONFIGURED_STEP\020\002*\346\001\n\rIdReusePolicy\022\037\n\033ID" +
+      "_REUSE_POLICY_UNSPECIFIED\020\000\0227\n3ID_REUSE_" +
+      "POLICY_ALLOW_IF_PREVIOUS_EXISTS_ABNORMAL" +
+      "LY\020\001\022\'\n#ID_REUSE_POLICY_ALLOW_IF_NO_RUNN" +
+      "ING\020\002\022\"\n\036ID_REUSE_POLICY_DISALLOW_REUSE\020" +
+      "\003\022.\n*ID_REUSE_POLICY_ALLOW_TERMINATE_IF_" +
+      "RUNNING\020\004*\317\001\n\024ActiveStepSearchMode\022\'\n#AC" +
+      "TIVE_STEP_SEARCH_MODE_UNSPECIFIED\020\000\022+\n\'A" +
+      "CTIVE_STEP_SEARCH_MODE_ENABLED_FOR_ALL\020\001" +
+      "\022;\n7ACTIVE_STEP_SEARCH_MODE_ENABLED_FOR_" +
+      "STEPS_WITH_WAIT_FOR\020\002\022$\n ACTIVE_STEP_SEA" +
+      "RCH_MODE_DISABLED\020\003*f\n\016StepDurability\022\037\n" +
+      "\033STEP_DURABILITY_UNSPECIFIED\020\000\022\030\n\024STEP_D" +
+      "URABILITY_SYNC\020\001\022\031\n\025STEP_DURABILITY_ASYN" +
+      "C\020\002*\227\001\n\021FlowTimeoutPolicy\022#\n\037FLOW_TIMEOU" +
+      "T_POLICY_UNSPECIFIED\020\000\022\034\n\030FLOW_TIMEOUT_P" +
+      "OLICY_FAIL\020\001\022\036\n\032FLOW_TIMEOUT_POLICY_CANC" +
+      "EL\020\002\022\037\n\033FLOW_TIMEOUT_POLICY_HANDLER\020\003*h\n" +
+      "\010StopType\022\031\n\025STOP_TYPE_UNSPECIFIED\020\000\022\024\n\020" +
+      "STOP_TYPE_CANCEL\020\001\022\027\n\023STOP_TYPE_TERMINAT" +
+      "E\020\002\022\022\n\016STOP_TYPE_FAIL\020\003*\200\002\n\nFlowStatus\022\033" +
+      "\n\027FLOW_STATUS_UNSPECIFIED\020\000\022\027\n\023FLOW_STAT" +
+      "US_RUNNING\020\001\022\031\n\025FLOW_STATUS_COMPLETED\020\002\022" +
+      "\026\n\022FLOW_STATUS_FAILED\020\003\0221\n-FLOW_STATUS_S" +
+      "ERVER_SIDE_TIMEOUT_INTERNAL_ONLY\020\004\022\032\n\026FL" +
+      "OW_STATUS_TERMINATED\020\005\022\030\n\024FLOW_STATUS_CA" +
+      "NCELED\020\006\022 \n\034FLOW_STATUS_CONTINUED_AS_NEW" +
+      "\020\007*\236\002\n\rFlowErrorType\022\037\n\033FLOW_ERROR_TYPE_" +
+      "UNSPECIFIED\020\000\022.\n*FLOW_ERROR_TYPE_STEP_DE" +
+      "CISION_FAILING_FLOW\020\001\022+\n\'FLOW_ERROR_TYPE" +
+      "_CLIENT_API_FAILING_FLOW\020\002\022#\n\037FLOW_ERROR" +
+      "_TYPE_WORKER_API_FAIL\020\003\022*\n&FLOW_ERROR_TY" +
+      "PE_INVALID_USER_FLOW_CODE\020\004\022 \n\034FLOW_ERRO" +
+      "R_TYPE_FLOW_TIMEOUT\020\005\022\034\n\030FLOW_ERROR_TYPE" +
+      "_INTERNAL\020\006*\223\001\n\026PendingStepMethodPhase\022)" +
+      "\n%PENDING_STEP_METHOD_PHASE_UNSPECIFIED\020" +
+      "\000\022\'\n#PENDING_STEP_METHOD_PHASE_SCHEDULED" +
+      "\020\001\022%\n!PENDING_STEP_METHOD_PHASE_STARTED\020" +
+      "\002*q\n\017ActiveStepPhase\022!\n\035ACTIVE_STEP_PHAS" +
+      "E_UNSPECIFIED\020\000\022\034\n\030ACTIVE_STEP_PHASE_ACT" +
+      "IVE\020\001\022\035\n\031ACTIVE_STEP_PHASE_WAITING\020\002*\275\001\n" +
+      "\rFlowResetType\022\037\n\033FLOW_RESET_TYPE_UNSPEC" +
+      "IFIED\020\000\022\035\n\031FLOW_RESET_TYPE_BEGINNING\020\001\022&" +
+      "\n\"FLOW_RESET_TYPE_HISTORY_EVENT_TIME\020\002\022\035" +
+      "\n\031FLOW_RESET_TYPE_STEP_TYPE\020\003\022%\n!FLOW_RE" +
+      "SET_TYPE_STEP_EXECUTION_ID\020\004*\206\001\n\023FlowRes" +
+      "etStepMethod\022&\n\"FLOW_RESET_STEP_METHOD_U" +
+      "NSPECIFIED\020\000\022#\n\037FLOW_RESET_STEP_METHOD_W" +
+      "AIT_FOR\020\001\022\"\n\036FLOW_RESET_STEP_METHOD_EXEC" +
+      "UTE\020\002*\306\002\n\026AttributeMatchOperator\022(\n$ATTR" +
+      "IBUTE_MATCH_OPERATOR_UNSPECIFIED\020\000\022\"\n\036AT" +
+      "TRIBUTE_MATCH_OPERATOR_EQUAL\020\001\022&\n\"ATTRIB" +
+      "UTE_MATCH_OPERATOR_NOT_EQUAL\020\002\022)\n%ATTRIB" +
+      "UTE_MATCH_OPERATOR_GREATER_THAN\020\003\0222\n.ATT" +
+      "RIBUTE_MATCH_OPERATOR_GREATER_THAN_OR_EQ" +
+      "UAL\020\004\022&\n\"ATTRIBUTE_MATCH_OPERATOR_LESS_T" +
+      "HAN\020\005\022/\n+ATTRIBUTE_MATCH_OPERATOR_LESS_T" +
+      "HAN_OR_EQUAL\020\006*\315\002\n\016ErrorSubStatus\022 \n\034ERR" +
+      "OR_SUB_STATUS_UNSPECIFIED\020\000\022\"\n\036ERROR_SUB" +
+      "_STATUS_UNCATEGORIZED\020\001\022)\n%ERROR_SUB_STA" +
+      "TUS_FLOW_ALREADY_STARTED\020\002\022$\n ERROR_SUB_" +
+      "STATUS_FLOW_NOT_EXISTS\020\003\022%\n!ERROR_SUB_ST" +
+      "ATUS_WORKER_API_ERROR\020\004\022\'\n#ERROR_SUB_STA" +
+      "TUS_LONG_POLL_TIME_OUT\020\005\022.\n*ERROR_SUB_ST" +
+      "ATUS_CHANNEL_MESSAGE_NOT_FOUND\020\006\022$\n ERRO" +
+      "R_SUB_STATUS_REQUEST_TIMEOUT\020\007*\213\002\n\021Close" +
+      "DecisionType\022#\n\037CLOSE_DECISION_TYPE_UNSP" +
+      "ECIFIED\020\000\0228\n4CLOSE_DECISION_TYPE_FORCE_C" +
+      "OMPLETE_ON_CHANNELS_EMPTY\020\001\022)\n%CLOSE_DEC" +
+      "ISION_TYPE_GRACEFUL_COMPLETE\020\002\022&\n\"CLOSE_" +
+      "DECISION_TYPE_FORCE_COMPLETE\020\003\022\"\n\036CLOSE_" +
+      "DECISION_TYPE_FORCE_FAIL\020\004\022 \n\034CLOSE_DECI" +
+      "SION_TYPE_DEAD_END\020\005*\310\001\n\024WaitingConditio" +
+      "nType\022&\n\"WAITING_CONDITION_TYPE_UNSPECIF" +
+      "IED\020\000\022(\n$WAITING_CONDITION_TYPE_ALL_COMP" +
+      "LETED\020\001\022(\n$WAITING_CONDITION_TYPE_ANY_CO" +
+      "MPLETED\020\002\0224\n0WAITING_CONDITION_TYPE_ANY_" +
+      "COMBINATION_COMPLETED\020\003*\307\001\n\022SubFlowReuse" +
+      "Policy\022%\n!SUB_FLOW_REUSE_POLICY_UNSPECIF" +
+      "IED\020\000\022 \n\034SUB_FLOW_REUSE_POLICY_ATTACH\020\001\022" +
+      ">\n:SUB_FLOW_REUSE_POLICY_RESTART_IF_PREV" +
+      "IOUS_EXITS_ABNORMALLY\020\002\022(\n$SUB_FLOW_REUS" +
+      "E_POLICY_ALWAYS_RESTART\020\003*q\n\017ConditionSt" +
+      "atus\022 \n\034CONDITION_STATUS_UNSPECIFIED\020\000\022\034" +
+      "\n\030CONDITION_STATUS_WAITING\020\001\022\036\n\032CONDITIO" +
+      "N_STATUS_COMPLETED\020\002*\243\001\n\023InternalTimerSt" +
+      "atus\022%\n!INTERNAL_TIMER_STATUS_UNSPECIFIE" +
+      "D\020\000\022!\n\035INTERNAL_TIMER_STATUS_PENDING\020\001\022\037" +
+      "\n\033INTERNAL_TIMER_STATUS_FIRED\020\002\022!\n\035INTER" +
+      "NAL_TIMER_STATUS_SKIPPED\020\003*\351\002\n\017UpdateErr" +
+      "orType\022!\n\035UPDATE_ERROR_TYPE_UNSPECIFIED\020" +
+      "\000\022/\n+UPDATE_ERROR_TYPE_CONTINUE_AS_NEW_P" +
+      "REEMPTED\020\001\022&\n\"UPDATE_ERROR_TYPE_INVALID_" +
+      "ARGUMENT\020\002\022)\n%UPDATE_ERROR_TYPE_FAILED_P" +
+      "RECONDITION\020\003\022\'\n#UPDATE_ERROR_TYPE_DEADL" +
+      "INE_EXCEEDED\020\004\022.\n*UPDATE_ERROR_TYPE_RPC_" +
+      "ACQUIRE_LOCK_FAILURE\020\005\022%\n!UPDATE_ERROR_T" +
+      "YPE_SERVER_INTERNAL\020\006\022/\n+UPDATE_ERROR_TY" +
+      "PE_CHANNEL_MESSAGE_NOT_FOUND\020\007*\315\001\n\037SubFl" +
+      "owCompletionDeliveryStatus\0223\n/SUB_FLOW_C" +
+      "OMPLETION_DELIVERY_STATUS_UNSPECIFIED\020\000\022" +
+      "1\n-SUB_FLOW_COMPLETION_DELIVERY_STATUS_D" +
+      "ELIVERED\020\001\022B\n>SUB_FLOW_COMPLETION_DELIVE" +
+      "RY_STATUS_PARENT_CLOSED_OR_NOT_FOUND\020\0022\226" +
+      "\017\n\013FlowService\0228\n\rGetServerInfo\022\026.google" +
+      ".protobuf.Empty\032\017.dex.ServerInfo\022:\n\tStar" +
+      "tFlow\022\025.dex.StartFlowRequest\032\026.dex.Start" +
+      "FlowResponse\022H\n\020PublishToChannel\022\034.dex.P" +
+      "ublishToChannelRequest\032\026.google.protobuf" +
+      ".Empty\022U\n\022GetChannelMessages\022\036.dex.GetCh" +
+      "annelMessagesRequest\032\037.dex.GetChannelMes" +
+      "sagesResponse\022P\n\024DeleteChannelMessage\022 ." +
+      "dex.DeleteChannelMessageRequest\032\026.google" +
+      ".protobuf.Empty\022>\n\013WriteStream\022\027.dex.Wri" +
+      "teStreamRequest\032\026.google.protobuf.Empty\022" +
+      "=\n\nReadStream\022\026.dex.ReadStreamRequest\032\027." +
+      "dex.ReadStreamResponse\022U\n\022ListStreamMess" +
+      "ages\022\036.dex.ListStreamMessagesRequest\032\037.d" +
+      "ex.ListStreamMessagesResponse\0228\n\010StopFlo" +
+      "w\022\024.dex.StopFlowRequest\032\026.google.protobu" +
+      "f.Empty\022F\n\rGetAttributes\022\031.dex.GetAttrib" +
+      "utesRequest\032\032.dex.GetAttributesResponse\022" +
+      "B\n\rSetAttributes\022\031.dex.SetAttributesRequ" +
+      "est\032\026.google.protobuf.Empty\022:\n\tLoadBlobs" +
+      "\022\025.dex.LoadBlobsRequest\032\026.dex.LoadBlobsR" +
+      "esponse\0227\n\013WaitForFlow\022\027.dex.WaitForFlow" +
+      "Request\032\017.dex.FlowResult\022@\n\013SearchFlows\022" +
+      "\027.dex.SearchFlowsRequest\032\030.dex.SearchFlo" +
+      "wsResponse\022W\n\024SyncAttributeIndexes\022\036.dex" +
+      ".SyncAttributeIndexRequest\032\037.dex.SyncAtt" +
+      "ributeIndexResponse\022I\n\016GetFlowSummary\022\032." +
+      "dex.GetFlowSummaryRequest\032\033.dex.GetFlowS" +
+      "ummaryResponse\022O\n\020GetHistoryEvents\022\034.dex" +
+      ".GetHistoryEventsRequest\032\035.dex.GetHistor" +
+      "yEventsResponse\022X\n\023WaitForHistoryEvent\022\037" +
+      ".dex.WaitForHistoryEventRequest\032 .dex.Wa" +
+      "itForHistoryEventResponse\022C\n\014GetFlowStat" +
+      "e\022\030.dex.GetFlowStateRequest\032\031.dex.GetFlo" +
+      "wStateResponse\022:\n\tResetFlow\022\025.dex.ResetF" +
+      "lowRequest\032\026.dex.ResetFlowResponse\022:\n\tIn" +
+      "vokeRPC\022\025.dex.InvokeRPCRequest\032\026.dex.Inv" +
+      "okeRPCResponse\022:\n\tSkipTimer\022\025.dex.SkipTi" +
+      "merRequest\032\026.google.protobuf.Empty\022H\n\020Up" +
+      "dateFlowConfig\022\034.dex.UpdateFlowConfigReq" +
+      "uest\032\026.google.protobuf.Empty\022^\n\025WaitForS" +
+      "tepCompletion\022!.dex.WaitForStepCompletio" +
+      "nRequest\032\".dex.WaitForStepCompletionResp" +
+      "onse\022O\n\020WaitForAttribute\022\034.dex.WaitForAt" +
+      "tributeRequest\032\035.dex.WaitForAttributeRes" +
+      "ponse\022P\n\024TriggerContinueAsNew\022 .dex.Trig" +
+      "gerContinueAsNewRequest\032\026.google.protobu" +
+      "f.Empty\0226\n\013HealthCheck\022\026.google.protobuf" +
+      ".Empty\032\017.dex.HealthInfo2\221\002\n\rWorkerServic" +
+      "e\022X\n\023InvokeWaitForMethod\022\037.dex.InvokeWai" +
+      "tForMethodRequest\032\036.dex.InvokeWaitForMet" +
+      "hodOutput0\001\022X\n\023InvokeExecuteMethod\022\037.dex" +
+      ".InvokeExecuteMethodRequest\032\036.dex.Invoke" +
+      "ExecuteMethodOutput0\001\022L\n\017InvokeWorkerRPC" +
+      "\022\033.dex.InvokeWorkerRPCRequest\032\034.dex.Invo" +
+      "keWorkerRPCResponse2\357\001\n\022TenantAdminServi" +
+      "ce\022L\n\017TombstoneTenant\022\033.dex.TombstoneTen" +
+      "antRequest\032\034.dex.TombstoneTenantResponse" +
+      "\022@\n\013PurgeTenant\022\027.dex.PurgeTenantRequest" +
+      "\032\030.dex.PurgeTenantResponse\022I\n\016DescribeTe" +
+      "nant\022\032.dex.DescribeTenantRequest\032\033.dex.D" +
+      "escribeTenantResponse2l\n\017InternalService" +
+      "\022Y\n\030DumpFlowForContinueAsNew\022\035.dex.Conti" +
+      "nueAsNewDumpRequest\032\036.dex.ContinueAsNewD" +
+      "umpResponseB!\n\023io.superdurable.genB\010DexP" +
+      "rotoP\001b\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -3136,6 +3194,48 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_dex_StepExecutionNumbers_descriptor,
         new java.lang.String[] { "Numbers", });
+    internal_static_dex_TenantAdminState_descriptor =
+      getDescriptor().getMessageType(171);
+    internal_static_dex_TenantAdminState_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_TenantAdminState_descriptor,
+        new java.lang.String[] { "TenantId", "IsTombstoned", "TombstonedTime", "PurgeDoneTime", "TombstoneExpiryTime", });
+    internal_static_dex_TombstoneTenantRequest_descriptor =
+      getDescriptor().getMessageType(172);
+    internal_static_dex_TombstoneTenantRequest_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_TombstoneTenantRequest_descriptor,
+        new java.lang.String[] { "TenantId", });
+    internal_static_dex_TombstoneTenantResponse_descriptor =
+      getDescriptor().getMessageType(173);
+    internal_static_dex_TombstoneTenantResponse_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_TombstoneTenantResponse_descriptor,
+        new java.lang.String[] { "State", });
+    internal_static_dex_PurgeTenantRequest_descriptor =
+      getDescriptor().getMessageType(174);
+    internal_static_dex_PurgeTenantRequest_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_PurgeTenantRequest_descriptor,
+        new java.lang.String[] { "TenantId", });
+    internal_static_dex_PurgeTenantResponse_descriptor =
+      getDescriptor().getMessageType(175);
+    internal_static_dex_PurgeTenantResponse_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_PurgeTenantResponse_descriptor,
+        new java.lang.String[] { "State", "TerminatedExecutions", "DeletedExecutions", "DeletedBlobObjects", "Done", });
+    internal_static_dex_DescribeTenantRequest_descriptor =
+      getDescriptor().getMessageType(176);
+    internal_static_dex_DescribeTenantRequest_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_DescribeTenantRequest_descriptor,
+        new java.lang.String[] { "TenantId", });
+    internal_static_dex_DescribeTenantResponse_descriptor =
+      getDescriptor().getMessageType(177);
+    internal_static_dex_DescribeTenantResponse_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_dex_DescribeTenantResponse_descriptor,
+        new java.lang.String[] { "State", });
     descriptor.resolveAllFeaturesImmutable();
     com.google.protobuf.EmptyProto.getDescriptor();
     com.google.protobuf.DurationProto.getDescriptor();

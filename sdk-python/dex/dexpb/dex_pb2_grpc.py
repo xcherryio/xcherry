@@ -1537,9 +1537,177 @@ class WorkerService:
             _registered_method=True)
 
 
-class InternalServiceStub:
+class TenantAdminServiceStub:
     """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
+    Every RPC names its tenant explicitly and never returns Flow data.
     """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.TombstoneTenant = channel.unary_unary(
+                '/dex.TenantAdminService/TombstoneTenant',
+                request_serializer=dex__pb2.TombstoneTenantRequest.SerializeToString,
+                response_deserializer=dex__pb2.TombstoneTenantResponse.FromString,
+                _registered_method=True)
+        self.PurgeTenant = channel.unary_unary(
+                '/dex.TenantAdminService/PurgeTenant',
+                request_serializer=dex__pb2.PurgeTenantRequest.SerializeToString,
+                response_deserializer=dex__pb2.PurgeTenantResponse.FromString,
+                _registered_method=True)
+        self.DescribeTenant = channel.unary_unary(
+                '/dex.TenantAdminService/DescribeTenant',
+                request_serializer=dex__pb2.DescribeTenantRequest.SerializeToString,
+                response_deserializer=dex__pb2.DescribeTenantResponse.FromString,
+                _registered_method=True)
+
+
+class TenantAdminServiceServicer:
+    """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
+    Every RPC names its tenant explicitly and never returns Flow data.
+    """
+
+    def TombstoneTenant(self, request, context):
+        """Refuses every credential of the tenant within the tombstone refresh interval. Idempotent.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PurgeTenant(self, request, context):
+        """Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DescribeTenant(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_TenantAdminServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'TombstoneTenant': grpc.unary_unary_rpc_method_handler(
+                    servicer.TombstoneTenant,
+                    request_deserializer=dex__pb2.TombstoneTenantRequest.FromString,
+                    response_serializer=dex__pb2.TombstoneTenantResponse.SerializeToString,
+            ),
+            'PurgeTenant': grpc.unary_unary_rpc_method_handler(
+                    servicer.PurgeTenant,
+                    request_deserializer=dex__pb2.PurgeTenantRequest.FromString,
+                    response_serializer=dex__pb2.PurgeTenantResponse.SerializeToString,
+            ),
+            'DescribeTenant': grpc.unary_unary_rpc_method_handler(
+                    servicer.DescribeTenant,
+                    request_deserializer=dex__pb2.DescribeTenantRequest.FromString,
+                    response_serializer=dex__pb2.DescribeTenantResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'dex.TenantAdminService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('dex.TenantAdminService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class TenantAdminService:
+    """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
+    Every RPC names its tenant explicitly and never returns Flow data.
+    """
+
+    @staticmethod
+    def TombstoneTenant(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dex.TenantAdminService/TombstoneTenant',
+            dex__pb2.TombstoneTenantRequest.SerializeToString,
+            dex__pb2.TombstoneTenantResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PurgeTenant(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dex.TenantAdminService/PurgeTenant',
+            dex__pb2.PurgeTenantRequest.SerializeToString,
+            dex__pb2.PurgeTenantResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DescribeTenant(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dex.TenantAdminService/DescribeTenant',
+            dex__pb2.DescribeTenantRequest.SerializeToString,
+            dex__pb2.DescribeTenantResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class InternalServiceStub:
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -1555,8 +1723,7 @@ class InternalServiceStub:
 
 
 class InternalServiceServicer:
-    """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def DumpFlowForContinueAsNew(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -1581,8 +1748,7 @@ def add_InternalServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class InternalService:
-    """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
     def DumpFlowForContinueAsNew(request,

@@ -112,6 +112,27 @@ func (b *memoryBackend) Close() error {
 	return nil
 }
 
+func (b *memoryBackend) DeleteTenant(ctx context.Context, tenantID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	for scopeID, scope := range b.scopes {
+		if scopeID.tenantID != tenantID {
+			continue
+		}
+		for _, instance := range scope.instances {
+			close(instance.notify)
+			instance.notify = make(chan struct{})
+		}
+		delete(b.scopes, scopeID)
+		delete(b.pending, scopeID)
+	}
+	delete(b.tenantBytes, tenantID)
+	return nil
+}
+
 func (b *memoryBackend) Write(ctx context.Context, input backendWriteInput) error {
 	if err := ctx.Err(); err != nil {
 		return err
