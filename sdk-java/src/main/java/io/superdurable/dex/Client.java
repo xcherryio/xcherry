@@ -936,8 +936,7 @@ public final class Client implements AutoCloseable {
             } catch (LongPollTimeoutException timeout) {
                 // Reattach to the same logical wait.
             } catch (DexServiceException failure) {
-                if (failure.getCode() == io.grpc.Status.Code.DEADLINE_EXCEEDED
-                        && requestBudget.hasExpired()) {
+                if (requestBudget.isTimeout(failure.getCode())) {
                     throw new RequestTimeoutException(
                             io.grpc.Status.Code.DEADLINE_EXCEEDED,
                             "request timed out",
@@ -1041,8 +1040,7 @@ public final class Client implements AutoCloseable {
             } catch (LongPollTimeoutException timeout) {
                 // Reattach to the same logical wait.
             } catch (DexServiceException failure) {
-                if (failure.getCode() == io.grpc.Status.Code.DEADLINE_EXCEEDED
-                        && requestBudget.hasExpired()) {
+                if (requestBudget.isTimeout(failure.getCode())) {
                     throw new RequestTimeoutException(
                             io.grpc.Status.Code.DEADLINE_EXCEEDED,
                             "request timed out",
@@ -1391,6 +1389,12 @@ public final class Client implements AutoCloseable {
                     (remainingNanos + TimeUnit.SECONDS.toNanos(1) - 1)
                             / TimeUnit.SECONDS.toNanos(1));
             return new ClientRequestAttempt(remainingSeconds, remainingNanos);
+        }
+
+        // The server can reset the stream with CANCEL as the shared deadline passes.
+        private boolean isTimeout(final io.grpc.Status.Code code) {
+            return (code == io.grpc.Status.Code.DEADLINE_EXCEEDED || code == io.grpc.Status.Code.CANCELLED)
+                    && hasExpired();
         }
 
         private boolean hasExpired() {

@@ -821,10 +821,7 @@ class AsyncClient:
             except LongPollTimeoutError:
                 continue
             except DexServiceError as error:
-                if (
-                    error.code is grpc.StatusCode.DEADLINE_EXCEEDED
-                    and request_budget.has_expired()
-                ):
+                if request_budget.is_timeout(error.code):
                     raise request_budget.timeout_error(
                         "wait_for_step_completion", flow_id
                     ) from error
@@ -984,10 +981,7 @@ class AsyncClient:
             except LongPollTimeoutError:
                 continue
             except DexServiceError as error:
-                if (
-                    error.code is grpc.StatusCode.DEADLINE_EXCEEDED
-                    and request_budget.has_expired()
-                ):
+                if request_budget.is_timeout(error.code):
                     raise request_budget.timeout_error(
                         "wait_for_attribute_match", flow_id
                     ) from error
