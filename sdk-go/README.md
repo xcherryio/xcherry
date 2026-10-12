@@ -632,6 +632,14 @@ Client methods target the current run by sending an empty run ID. This follows
 Continue-as-New automatically. `StartFlow` and `TimeTravel` return run IDs for
 diagnostics, while normal calls need only the flow ID.
 
+`ClientOptions.Credential` and `WorkerOptions.Credential` send a bearer
+credential with every FlowService call. A multi-tenant Dex server requires one
+and derives the caller's tenant from it. `dex.FileCredential(path)` reads a
+token file, such as a projected service account token, and rereads it when it
+changes; an emptied or missing file fails calls instead of sending a stale
+token. The Worker sends its credential with startup index verification and
+blob hydration.
+
 `ClientOptions.WorkerTarget` is the default advertised target for StartFlow.
 A per-call `ConfigOverride.WorkerTarget` takes precedence. UpdateFlowConfig does
 not inherit the Client default.
