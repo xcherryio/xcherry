@@ -257,12 +257,15 @@ export function withDetours(scene: Scene, flow: PocFlow, opts: ViewOpts, sources
     }
     if (items.length === 0) continue
 
-    const span = items.reduce((sum, item) => sum + (lr ? item.w : item.h), 0) + STACK_GAP * (items.length - 1)
+    // Top-down, a short first item drops so the line from the card's side reaches it level.
+    const lead = lr ? 0 : Math.max(0, Math.min(anchor.h / 2, SIDE_Y) - Math.min(items[0].h / 2, SIDE_Y))
+    const span =
+      lead + items.reduce((sum, item) => sum + (lr ? item.w : item.h), 0) + STACK_GAP * (items.length - 1)
     const across = Math.max(...items.map((item) => (lr ? item.h : item.w)))
     const at = placeBeside(anchor, lr ? { w: span, h: across } : { w: across, h: span }, boxes, scene.bands, lr)
     // Left of its card, a detour hugs the card's side.
     const flushRight = !lr && at.x < anchor.x
-    let next = lr ? at.x : at.y
+    let next = lr ? at.x : at.y + lead
     for (const item of items) {
       if (lr) Object.assign(item, { x: next, y: at.y })
       else Object.assign(item, { x: flushRight ? at.x + across - item.w : at.x, y: next })
