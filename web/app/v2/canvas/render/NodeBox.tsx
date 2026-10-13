@@ -54,6 +54,34 @@ function RpcCard({ box, selected, onSelect }: { box: Box; selected: boolean; onS
   )
 }
 
+/** The failure count beside a card's title: how many failures leave it, drawn when it is selected. */
+function FailureCount({ count }: { count: number }): JSX.Element {
+  const text = `${count} failure route${count === 1 ? '' : 's'} leave${count === 1 ? 's' : ''} here. Select to see where ${count === 1 ? 'it goes' : 'they go'}.`
+  return (
+    <span className="pcard-failures" title={text} data-failures={count}>
+      ⚠ {count}
+    </span>
+  )
+}
+
+/** In a failure detour: a failure that goes straight to a main-story Step drawn elsewhere. */
+function Pointer({ box, onJump }: { box: Box; onJump?: (id: string) => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="pdetour-pointer nodrag nopan"
+      data-kind="pointer"
+      title={`On failure: goes to ${box.title.replace(/^↪ /, '')}. Click to show it.`}
+      style={{ width: `${box.w}px`, height: `${box.h}px` }}
+      onClick={() => {
+        if (box.target !== undefined) onJump?.(box.target)
+      }}
+    >
+      {box.title}
+    </button>
+  )
+}
+
 export function NodeBox({
   box,
   selected,
@@ -78,6 +106,7 @@ export function NodeBox({
   onJump?: (id: string) => void
 }): JSX.Element {
   if (box.kind === 'rpcCard') return <RpcCard box={box} selected={selected} onSelect={onSelect} />
+  if (box.kind === 'pointer') return <Pointer box={box} onJump={onJump} />
   const activate = (e: { metaKey: boolean; ctrlKey: boolean }): void => onSelect?.(box.id, isAdditive(e))
   return (
     <div
@@ -94,7 +123,8 @@ export function NodeBox({
       data-selected={selected ? 'true' : undefined}
       data-hover={hovered === true ? 'true' : undefined}
       data-ref={referenced === true ? 'true' : undefined}
-      aria-label={`${box.title}${box.subtitle ? `, ${box.subtitle}` : ''}${box.pill ? `, ${box.pill.text}` : ''}${now ? ', now' : ''}`}
+      data-detour={box.detourOf !== undefined ? 'true' : undefined}
+      aria-label={`${box.title}${box.subtitle ? `, ${box.subtitle}` : ''}${box.pill ? `, ${box.pill.text}` : ''}${now ? ', now' : ''}${box.failures ? `, ${box.failures} failure route${box.failures === 1 ? '' : 's'}` : ''}${box.detourOf !== undefined ? ', failure handling' : ''}`}
       title={box.identity}
       style={{ width: `${box.w}px`, height: `${box.h}px` }}
       onClick={activate}
@@ -126,6 +156,7 @@ export function NodeBox({
             <Glyph name="refresh" />
           </span>
         ) : null}
+        {box.failures ? <FailureCount count={box.failures} /> : null}
         {box.recovery ? (
           <span className="pcard-recovery" title={box.recovery.title}>
             {box.recovery.glyph}

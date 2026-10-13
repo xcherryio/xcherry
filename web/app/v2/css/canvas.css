@@ -1465,6 +1465,11 @@
   align-items: center;
   gap: 5px;
 }
+/* Beside the Step panel while it is open, never under it. */
+.pcanvas[data-panel='true'] > .pctlbar {
+  right: calc(var(--v2-panel-w, 360px) + 12px);
+  max-width: calc(100% - var(--v2-panel-w, 360px) - 24px);
+}
 .pctlbar .pctl-label {
   white-space: nowrap;
 }
@@ -3265,6 +3270,11 @@
 .pcard[data-actor='child'] {
   border-color: var(--hue-child-line);
 }
+/* Failure handling, drawn beside the Step that fails into it. */
+.pcard[data-detour='true'] {
+  border-style: dashed;
+  border-color: var(--hue-danger-line);
+}
 /* Run state outranks who acts. */
 .pcard[data-emphasis='active'] {
   border-color: var(--hue-progress-line);
@@ -3373,6 +3383,42 @@
   color: var(--hue-danger-line);
   font-size: 14px;
   line-height: 1;
+}
+/* How many failures leave a card; selecting it draws them beside it. */
+.pcard-failures {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  border: 1px solid var(--hue-danger-line);
+  border-radius: 999px;
+  padding: 0 5px;
+  color: var(--hue-danger-ink);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  white-space: nowrap;
+}
+/* A failure that goes straight to a main-story Step drawn elsewhere. */
+.pdetour-pointer {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px dashed var(--hue-danger-line);
+  border-radius: 999px;
+  background: var(--hue-danger-fill);
+  color: var(--hue-danger-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.pdetour-pointer:hover {
+  outline: 1px solid var(--p-ink-3);
+}
+.pdetour-pointer:focus-visible {
+  outline: 2px solid var(--color-focus);
 }
 
 /* Tones: colour repeats what the glyph or the words already say. */

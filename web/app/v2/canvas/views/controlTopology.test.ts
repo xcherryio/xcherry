@@ -11,7 +11,7 @@ import refundGraph from '../../../../../docs/src/data/flow-definitions/customer-
 import { groupsFromDefinition } from '../../groupsFromGraph';
 import { safeDecode } from '../model/decode';
 import type { FlowDefinitionGraph } from '../model/fdg';
-import type { PocFlow } from '../model/pocFlow';
+import { failureHandling, mainStory, type PocFlow } from '../model/pocFlow';
 import { controlTopologyView } from './controlTopology';
 import type { StepGroup } from './groups';
 import { longestPathRanks, mainLines, readingOrder, type GraphEdge } from './mainLine';
@@ -21,16 +21,32 @@ import type { Box, Direction, Scene, ViewOpts } from './types';
 const DIRECTIONS: Direction[] = ['tb', 'lr'];
 
 describe('control topology stages', () => {
-  it('draws each group of two or more Steps as one stage card when collapsed', async () => {
+  it('draws each run or choice of two or more Steps as one stage card when collapsed', async () => {
     const { flow, groups } = refund();
     const scene = await layout(flow, groups, 'tb', new Set());
     const stages = scene.boxes.filter((box) => box.kind === 'stage');
 
-    expect(stages.map((box) => box.title).sort()).toEqual(['Control', 'Evidence', 'Failure', 'Resolution']);
+    // Evidence is a choice the agent's decision Step makes; Control and Resolution are runs.
+    expect(stages.map((box) => box.title).sort()).toEqual(['Control', 'Evidence', 'Resolution']);
     expect(stages.find((box) => box.title === 'Resolution')?.stage?.stepCount).toBe(11);
-    // A one-Step group is drawn as its Step, inside its own labelled band.
-    expect(scene.bands.map((band) => band.label).sort()).toEqual(['Close', 'Intake', 'Reasoning']);
+    // A one-Step group, and Failure's five unrelated handlers, show their Steps in a labelled band.
+    expect(scene.bands.map((band) => band.label).sort()).toEqual(['Close', 'Failure', 'Intake', 'Reasoning']);
     expect(scene.bands.every((band) => !band.collapsible)).toBe(true);
+  });
+
+  it('shows the Steps of a group that is neither a run nor a choice, and never folds it', async () => {
+    const { flow, groups } = refund();
+    const failure = groups.find((group) => group.label === 'Failure') as StepGroup;
+    const hidden = failureHandling(flow);
+    for (const open of [new Set<string>(), new Set([failure.id])]) {
+      const scene = await layout(flow, groups, 'tb', open);
+      const onScreen = new Set(scene.boxes.map((box) => box.id));
+
+      expect(onScreen.has(stageId(failure.id))).toBe(false);
+      // Its failure-handling Steps wait for a selection; the rest always show.
+      expect(failure.stepIds.filter((id) => !onScreen.has(id)).sort()).toEqual([...hidden].sort());
+      expect(scene.bands.filter((band) => band.groupId === failure.id).map((band) => band.collapsible)).toEqual([false]);
+    }
   });
 
   it('draws every open stage as one region with a close control', async () => {
@@ -44,7 +60,6 @@ describe('control topology stages', () => {
       expect(scene.bands.filter((band) => band.collapsible).map((band) => band.label).sort()).toEqual([
         'Control',
         'Evidence',
-        'Failure',
         'Resolution',
       ]);
     }
@@ -88,7 +103,7 @@ describe('control topology main lines', () => {
   it('draws every Step that something leads to with exactly one line in', async () => {
     const { flow, groups } = refund();
     const scene = await layout(flow, groups, 'tb', new Set(groups.map((group) => group.id)));
-    const led = new Set(flow.transitions.filter((t) => !t.isSelfLoop).map((t) => t.toStepId));
+    const led = new Set(mainStory(flow).transitions.filter((t) => !t.isSelfLoop).map((t) => t.toStepId));
     led.delete(flow.startStepId as string);
 
     for (const id of led) {
@@ -108,7 +123,7 @@ describe('control topology main lines', () => {
         return group === undefined ? stepId : stageId(group.id);
       };
       const expected = new Set(
-        flow.transitions
+        mainStory(flow).transitions
           .filter((t) => main.has(t.id) && nodeOf(t.fromStepId) !== nodeOf(t.toStepId))
           .map((t) => `${nodeOf(t.fromStepId)}->${nodeOf(t.toStepId)}`),
       );
@@ -122,7 +137,9 @@ describe('control topology main lines', () => {
     const { flow, groups } = refund();
     const scene = await layout(flow, groups, 'tb', new Set(groups.map((group) => group.id)));
     const drawn = new Set(scene.links.map((link) => `${link.from}->${link.to}`));
-    const jumps = flow.transitions.filter((t) => !t.isSelfLoop && !drawn.has(`${t.fromStepId}->${t.toStepId}`));
+    const jumps = mainStory(flow).transitions.filter(
+      (t) => !t.isSelfLoop && !drawn.has(`${t.fromStepId}->${t.toStepId}`),
+    );
     const chips = scene.boxes.flatMap((box) =>
       (box.chips ?? []).flat().filter((chip) => chip.targetId !== undefined).map((chip) => `${box.id}->${chip.targetId}`));
 
@@ -339,7 +356,8 @@ function views(groups: StepGroup[]): { label: string; open: ReadonlySet<string> 
   ];
 }
 
-function stepMainLines(flow: PocFlow, groups: StepGroup[]): Set<string> {
+function stepMainLines(whole: PocFlow, groups: StepGroup[]): Set<string> {
+  const flow = mainStory(whole);
   const ids = new Set(flow.steps.map((step) => step.id));
   const edges: GraphEdge[] = flow.transitions
     .filter((t) => ids.has(t.fromStepId) && ids.has(t.toStepId))
