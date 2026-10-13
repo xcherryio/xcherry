@@ -243,3 +243,30 @@ export function useCamera({
 
   return { isEntered, delays, panToShow, setOwner }
 }
+
+/** The last settled drawing and its "now", kept on screen while the next one is on its way. */
+export function useSettledDrawing(isSettled: boolean, scene: Scene, nowNodeId: string | null) {
+  const [held, setHeld] = useState({ scene, nowNodeId })
+  if (isSettled && (held.scene !== scene || held.nowNodeId !== nowNodeId)) setHeld({ scene, nowNodeId })
+  return isSettled ? { scene, nowNodeId } : held
+}
+
+/** Within one subject, the run moving on to its next Step travels the line between them, once. */
+export function useRunTravel(scene: Scene, subjectKey: string, nowNodeId: string | null, isEntered: boolean) {
+  const [travel, setTravel] = useState<{ linkId: string; nonce: number } | null>(null)
+  const [traced, setTraced] = useState({ subject: subjectKey, now: nowNodeId })
+  if (traced.subject !== subjectKey || traced.now !== nowNodeId) {
+    const from = traced.now === null ? undefined : boxShowing(scene, traced.now)?.id
+    const to = nowNodeId === null ? undefined : boxShowing(scene, nowNodeId)?.id
+    const link =
+      traced.subject === subjectKey && isEntered ? scene.links.find((l) => l.from === from && l.to === to) : undefined
+    if (link !== undefined) setTravel({ linkId: link.id, nonce: (travel?.nonce ?? 0) + 1 })
+    setTraced({ subject: subjectKey, now: nowNodeId })
+  }
+  useEffect(() => {
+    if (travel === null) return undefined
+    const timer = window.setTimeout(() => setTravel(null), 1400)
+    return () => window.clearTimeout(timer)
+  }, [travel])
+  return travel
+}

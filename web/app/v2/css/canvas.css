@@ -353,6 +353,20 @@
   background: var(--p-surface-1);
   min-width: 0;
   min-height: 0;
+  /* Slides in beside the canvas instead of appearing over it. */
+  animation: panel-in 200ms var(--ease-glide) backwards;
+}
+@keyframes panel-in {
+  from {
+    opacity: 0.4;
+    translate: 10px 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ppan,
+  .rdw {
+    animation: none;
+  }
 }
 .ppan-head {
   display: flex;

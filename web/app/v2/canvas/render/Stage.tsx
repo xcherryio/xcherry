@@ -46,12 +46,13 @@ import {
   boxShowing,
   cameraMotion,
   cameraRoom,
+  entranceStyle,
   focusView,
   polylineLength,
-  type EntranceDelays,
+  TRAVEL_ARRIVAL_MS,
   type FramingNeighbours,
 } from './camera'
-import { useCamera } from './useCamera'
+import { useCamera, useRunTravel, useSettledDrawing } from './useCamera'
 import { chromeCompensation, edgeContrastBoost, FIT_MAX_ZOOM, fitOptions, MAX_ZOOM, MIN_ZOOM, OPEN_FLOOR } from './zoom'
 import '@xyflow/react/dist/style.css'
 
@@ -227,19 +228,6 @@ const EDGE_TYPES = { routed: RoutedEdge }
 
 const NO_NEIGHBOURS: FramingNeighbours = { near: [], twoAway: [] }
 
-/** A card the run just reached rings once the travelling head arrives. */
-const TRAVEL_ARRIVAL_MS = 560
-
-/** Entrance and arrival timing for one element, as the stylesheet's custom properties. */
-function entranceStyle(delays: EntranceDelays | null, id: string, arrivalMs?: number): CSSProperties {
-  const style: Record<string, string> = {}
-  const enter = delays?.get(id)
-  if (enter !== undefined) style['--enter-delay'] = `${enter}ms`
-  if (arrivalMs !== undefined) style['--arrive-delay'] = `${arrivalMs}ms`
-  else if (enter !== undefined) style['--arrive-delay'] = `${enter + 260}ms`
-  return style as CSSProperties
-}
-
 /** After a stage opens or closes: what takes focus and what to bring into view. */
 type StageCue = {
   focusId: string | null
@@ -309,12 +297,7 @@ function Inner({
   const paneRef = useRef<HTMLDivElement | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
   // Hold the last settled drawing, so a run still loading never draws half-way states.
-  const [held, setHeld] = useState({ scene: latestScene, nowNodeId: latestNowNodeId })
-  if (isSettled && (held.scene !== latestScene || held.nowNodeId !== latestNowNodeId)) {
-    setHeld({ scene: latestScene, nowNodeId: latestNowNodeId })
-  }
-  const scene = isSettled ? latestScene : held.scene
-  const nowNodeId = isSettled ? latestNowNodeId : held.nowNodeId
+  const { scene, nowNodeId } = useSettledDrawing(isSettled, latestScene, latestNowNodeId)
 
   useEffect(() => {
     if (selectedId !== null) setSelectedLinkId(null)
@@ -365,21 +348,7 @@ function Inner({
     [onSelectGroup],
   )
 
-  // Within one subject, the run moving on to the next Step travels the line between them.
-  const [travel, setTravel] = useState<{ linkId: string; nonce: number } | null>(null)
-  const [traced, setTraced] = useState({ subject: fitKey, now: nowNodeId })
-  if (traced.subject !== fitKey || traced.now !== nowNodeId) {
-    const from = traced.now === null ? undefined : boxShowing(scene, traced.now)?.id
-    const to = nowNodeId === null ? undefined : boxShowing(scene, nowNodeId)?.id
-    const link = traced.subject === fitKey && isEntered ? scene.links.find((l) => l.from === from && l.to === to) : undefined
-    if (link !== undefined) setTravel({ linkId: link.id, nonce: (travel?.nonce ?? 0) + 1 })
-    setTraced({ subject: fitKey, now: nowNodeId })
-  }
-  useEffect(() => {
-    if (travel === null) return undefined
-    const timer = window.setTimeout(() => setTravel(null), 1400)
-    return () => window.clearTimeout(timer)
-  }, [travel])
+  const travel = useRunTravel(scene, fitKey, nowNodeId, isEntered)
 
   // Sizes come from the Scene, so fitting never measures unrendered nodes.
   const nodes = useMemo<Node[]>(() => {

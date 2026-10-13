@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import type { CSSProperties } from 'react'
 import { joinedSteps, type PocFlow } from '../model/pocFlow'
 import { groupOfStep } from '../views/controlTopology'
 import type { StepGroup } from '../views/groups'
@@ -273,4 +274,17 @@ export function polylineLength(points: readonly { x: number; y: number }[]): num
     length += Math.hypot(b.x - a.x, b.y - a.y)
   }
   return Math.ceil(length) + 2
+}
+
+/** A card the run just reached rings once the travelling head arrives. */
+export const TRAVEL_ARRIVAL_MS = 560
+
+/** Entrance and arrival timing for one element, as the stylesheet's custom properties. */
+export function entranceStyle(delays: EntranceDelays | null, id: string, arrivalMs?: number): CSSProperties {
+  const style: Record<string, string> = {}
+  const enter = delays?.get(id)
+  if (enter !== undefined) style['--enter-delay'] = `${enter}ms`
+  if (arrivalMs !== undefined) style['--arrive-delay'] = `${arrivalMs}ms`
+  else if (enter !== undefined) style['--arrive-delay'] = `${enter + 260}ms`
+  return style as CSSProperties
 }
