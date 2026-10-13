@@ -158,12 +158,6 @@ func TestTenantSearchTemporal(t *testing.T) {
 		require.Equal(t, codes.InvalidArgument, status.Code(err), "error: %v", err)
 	})
 
-	t.Run("SyncAttributeIndexes stays refused", func(t *testing.T) {
-		_, err := pair.alpha.SyncAttributeIndexes(ctx, &dexpb.SyncAttributeIndexRequest{
-			AttributeIndexes: map[string]dexpb.IndexType{"CustomKeywordField": dexpb.IndexType_INDEX_TYPE_KEYWORD},
-		})
-		require.Equal(t, codes.PermissionDenied, status.Code(err), "error: %v", err)
-	})
 }
 
 // TestTenantModeRefusesSingleTenantFlowsTemporal shows multi-tenant startup refuses a namespace with untagged Flows.

@@ -12,7 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/superdurable/dex/config"
@@ -21,6 +23,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 	"go.uber.org/yarpc/yarpcerrors"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,6 +31,9 @@ import (
 const (
 	initialPollInterval = 200 * time.Millisecond
 	maximumPollInterval = time.Second
+	// registeredIndexCacheTTL bounds verification calls to the backend; a just-registered index may be reported
+	// missing for up to this long.
+	registeredIndexCacheTTL = 60 * time.Second
 )
 
 // Client manages backend attribute indexes.
@@ -44,6 +50,11 @@ type Synchronizer struct {
 	logger log.Logger
 	// Cadence mutates shared search-attribute state unsafely during concurrent registrations.
 	syncSlot chan struct{}
+
+	registeredFetches singleflight.Group
+	registeredMu      sync.Mutex
+	registered        map[string]dexpb.IndexType
+	registeredAt      time.Time
 }
 
 // New creates an attribute index synchronizer.
@@ -65,6 +76,81 @@ func New(interpreterCfg *config.Interpreter, client Client, logger log.Logger) *
 	}
 	synchronizer.syncSlot <- struct{}{}
 	return synchronizer
+}
+
+// VerifyRegistered checks that each requested index exists with its type, without creating anything. A missing
+// index is FAILED_PRECONDITION, and a wrong type or a reserved name is INVALID_ARGUMENT; each error names the index.
+// The registered indexes are cached for registeredIndexCacheTTL across callers.
+func (s *Synchronizer) VerifyRegistered(
+	ctx context.Context,
+	requested map[string]dexpb.IndexType,
+	reservedNames []string,
+) error {
+	if err := validateRequestedIndexes(requested); err != nil {
+		return err
+	}
+	for _, reservedName := range reservedNames {
+		if _, isRequested := requested[reservedName]; isRequested {
+			return serviceerrors.InvalidArgument(
+				dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+				fmt.Sprintf("attribute index %q is reserved by the server", reservedName),
+			).ToGRPCError()
+		}
+	}
+	if len(requested) == 0 {
+		return nil
+	}
+	existing, err := s.cachedRegisteredIndexes(ctx)
+	if err != nil {
+		return backendError(err)
+	}
+	names := make([]string, 0, len(requested))
+	for name := range requested {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		existingType, found := existing[name]
+		if !found {
+			return serviceerrors.NewErrorAndStatus(
+				codes.FailedPrecondition,
+				dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+				fmt.Sprintf("attribute index %q is not registered; the operator must register it", name),
+			).ToGRPCError()
+		}
+		if expectedType := s.client.NormalizeAttributeIndexType(requested[name]); existingType != expectedType {
+			return serviceerrors.InvalidArgument(
+				dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+				fmt.Sprintf("attribute index %q has type %s; declared %s", name, existingType, expectedType),
+			).ToGRPCError()
+		}
+	}
+	return nil
+}
+
+// cachedRegisteredIndexes lists the namespace's indexes at most once per TTL, shared by every caller.
+func (s *Synchronizer) cachedRegisteredIndexes(ctx context.Context) (map[string]dexpb.IndexType, error) {
+	s.registeredMu.Lock()
+	if s.registered != nil && time.Since(s.registeredAt) < registeredIndexCacheTTL {
+		registered := s.registered
+		s.registeredMu.Unlock()
+		return registered, nil
+	}
+	s.registeredMu.Unlock()
+	result, err, _ := s.registeredFetches.Do("registered", func() (interface{}, error) {
+		registered, err := s.client.ListAttributeIndexes(context.WithoutCancel(ctx))
+		if err != nil {
+			return nil, err
+		}
+		s.registeredMu.Lock()
+		s.registered, s.registeredAt = registered, time.Now()
+		s.registeredMu.Unlock()
+		return registered, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]dexpb.IndexType), nil
 }
 
 // Sync creates missing indexes and waits until the backend reports them.

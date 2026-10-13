@@ -66,7 +66,6 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 				}},
 				Internal:     TenancyInternalConfig{Listen: "127.0.0.1:8803", TokenFile: "/etc/dex/internal-token"},
 				WorkerTarget: TenantWorkerTargetConfig{Allowed: `^worker\.{{ quote .tenant }}:9000$`},
-				IsIncompleteMultiTenantModeAllowedForTest: true,
 			},
 		}
 	}
@@ -103,9 +102,6 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 			cfg.Tenancy.WorkerTarget.Allowed = `{{ printf "%s" .tenant }}`
 		},
 		"unknown mode": func(cfg *Config) { cfg.Tenancy.Mode = "shared" },
-		"multi mode while under development": func(cfg *Config) {
-			cfg.Tenancy.IsIncompleteMultiTenantModeAllowedForTest = false
-		},
 		"jwt operator without its issuer": func(cfg *Config) {
 			cfg.Tenancy.Operators = []TenantOperatorConfig{{
 				Kind: TenantOperatorKindJWT, Issuer: "https://issuer.example", Subject: "operator",

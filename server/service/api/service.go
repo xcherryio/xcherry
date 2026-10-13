@@ -56,6 +56,15 @@ const (
 	waitForAttributeUpdateIDNamespace      = "wait-for-attribute:"
 )
 
+// tenantReservedIndexNames are the server-owned search attributes a tenant may not declare.
+var tenantReservedIndexNames = []string{
+	service.SearchAttributeDexWorkflowType,
+	service.SearchAttributeDexParentFlowID,
+	service.SearchAttributeActiveStepTypes,
+	service.SearchAttributeDexWorkQueuePermissions,
+	tenancy.SearchAttributeDexTenantID,
+}
+
 var errWaitRequestDeadlineExceeded = errors.New("wait request deadline exceeded")
 
 type serviceImpl struct {
@@ -1365,6 +1374,12 @@ func (s *serviceImpl) SyncAttributeIndexes(
 ) (*dexpb.SyncAttributeIndexResponse, error) {
 	if req == nil {
 		return nil, makeInvalidRequestError("request is required")
+	}
+	if tenancy.TenantID(ctx) != "" {
+		if err := s.indexSynchronizer.VerifyRegistered(ctx, req.GetAttributeIndexes(), tenantReservedIndexNames); err != nil {
+			return nil, err
+		}
+		return &dexpb.SyncAttributeIndexResponse{}, nil
 	}
 	if err := s.indexSynchronizer.Sync(ctx, req.GetAttributeIndexes()); err != nil {
 		return nil, err

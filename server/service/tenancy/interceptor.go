@@ -91,11 +91,6 @@ func (i *PublicServiceInterceptors) authenticate(ctx context.Context) (*Principa
 func authorizePublicMethod(principal *Principal, fullMethod string) error {
 	switch principal.Kind {
 	case PrincipalKindTenant:
-		if fullMethod == dexpb.FlowService_SyncAttributeIndexes_FullMethodName {
-			return permissionDenied(
-				"attribute indexes are registered by the operator in multi-tenant mode",
-			)
-		}
 		if isServiceMethod(fullMethod, dexpb.FlowService_ServiceDesc.ServiceName) {
 			return nil
 		}

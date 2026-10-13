@@ -155,6 +155,12 @@ func newTenancyTestEnvironment(t *testing.T) *tenancyTestEnvironment {
 		// The repository's integration Temporal sets limit.maxIDLength to 255.
 		MaxStoredFlowIDBytes: 255,
 		WorkerTarget:         config.TenantWorkerTargetConfig{Allowed: `127\.0\.0\.1:[0-9]+`},
+		// Tests poll freely; TestTenantRateLimitsTemporal sets tight buckets itself.
+		Limits: config.TenantLimitsConfig{
+			StartFlowsPerSecond: config.TenantRateLimitConfig{Rate: 1000, Burst: 1000},
+			WritesPerSecond:     config.TenantRateLimitConfig{Rate: 1000, Burst: 1000},
+			SearchesPerSecond:   config.TenantRateLimitConfig{Rate: 1000, Burst: 1000},
+		},
 	}
 	return environment
 }
