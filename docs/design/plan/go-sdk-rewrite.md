@@ -559,6 +559,7 @@ type WorkerOptions struct {
 	AttributeIndexSyncTimeout time.Duration
 	Logger             Logger
 	Credential         Credential
+	GrpcMaxMessageBytes int
 }
 
 // Credential supplies the bearer credential sent with every FlowService call.
@@ -660,6 +661,13 @@ An empty `FlowServiceAddress` uses `localhost:8801`. Before binding, the Worker
 uses this plaintext target to synchronize the Registry's Indexed Attributes.
 It also uses the target for private `LoadBlobs` calls. The synchronization
 deadline defaults to two minutes when `AttributeIndexSyncTimeout` is zero.
+
+`GrpcMaxMessageBytes` limits every message on the WorkerService listener and on
+the private FlowService connection. Zero uses `DefaultGrpcMaxMessageBytes`
+(32 MiB, the Dex server default); negative values are invalid. When a
+`LoadBlobs` response exceeds a gRPC message limit, hydration splits the batch in
+half and retries, so N uncached blobs take at most 2N-1 calls. A single blob
+that does not fit returns `BlobMessageTooLargeError`.
 
 The caller owns the shared BlobCache. Stopping the Worker does not purge or
 close it. The Worker owns and closes only its private FlowService connection.
@@ -1206,9 +1214,11 @@ internal response hydrator:
 
 ```go
 type ClientOptions struct {
-	FlowServiceAddress string
-	WorkerTarget       *WorkerTarget
-	Logger             Logger
+	FlowServiceAddress  string
+	WorkerTarget        *WorkerTarget
+	Logger              Logger
+	Credential          Credential
+	GrpcMaxMessageBytes int
 }
 
 func NewClient(
@@ -1222,6 +1232,9 @@ func (client *Client) Close() error
 An empty `FlowServiceAddress` uses `localhost:8801`. It is a plaintext gRPC dial
 target. Phase 5 does not expose generated clients, `grpc.ClientConn`, dial
 options, TLS credentials, or an HTTP URL.
+
+`GrpcMaxMessageBytes` limits every message on the Client connection. Zero uses
+`DefaultGrpcMaxMessageBytes` (32 MiB); negative values are invalid.
 
 `WorkerTarget` is the default advertised target for every StartFlow call made
 by the Client. Nil omits the default. A non-nil value requires a non-empty

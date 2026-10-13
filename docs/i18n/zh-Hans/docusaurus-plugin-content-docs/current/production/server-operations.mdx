@@ -121,9 +121,13 @@ Flow history。加载已有状态时，可能需要读取已有的 Blob object�
 
 完整 Worker 请求超过 **api.grpcMaxMessageBytes** 时，Dex 会在调用 Worker 前拒绝该请求。
 
-SDK Worker 的 gRPC 接收上限默认为 4 MiB。**api.grpcMaxMessageBytes** 控制 Dex server 的上限，
-默认值为 16 MiB；增大此配置不会提高 Worker 的接收上限。包含已加载状态和 metadata 的完整
-Worker 请求必须同时满足这两个上限。超过任一上限时，都会返回 **FailedPrecondition**，
+**api.grpcMaxMessageBytes** 控制 Dex server 各 listener 以及 server 调用 Worker 时的上限，
+默认值为 32 MiB。一条消息包含一个或多个应用值，以及已加载状态、批量条目和 metadata 等
+外层开销。应让该上限比最大的应用值高出明确的余量。默认值为不超过 16 MiB 的值保留 16 MiB 余量。
+
+每个 SDK 使用自己的上限，增大 server 上限不会提高 SDK 的上限。Go SDK 的 Client 和 Worker
+默认上限为 32 MiB，可通过 **GrpcMaxMessageBytes** 修改。其他 SDK Worker 的 gRPC 接收上限
+默认为 4 MiB。包含已加载状态和 metadata 的完整 Worker 请求必须同时满足这两个上限。超过任一上限时，都会返回 **FailedPrecondition**，
 其中 **SubStatus** 为 **WORKER_API_ERROR**，**OriginalWorkerErrorStatus** 为
 **ResourceExhausted**（8）。事务和非事务 RPC 使用相同错误。事务请求被 Dex 的大小检查
 拒绝时，不会重试。
