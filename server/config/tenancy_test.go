@@ -72,6 +72,11 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 	}
 	valid := validConfig()
 	require.NoError(t, valid.ValidateTenancy())
+	for _, allowed := range []string{`{{ .tenant | quote }}:9000`, `literal-only:9000`} {
+		quotedPipe := validConfig()
+		quotedPipe.Tenancy.WorkerTarget.Allowed = allowed
+		require.NoError(t, quotedPipe.ValidateTenancy(), allowed)
+	}
 	require.NoError(t, Config{}.ValidateTenancy(), "single-tenant mode needs no tenancy settings")
 
 	refusals := map[string]func(*Config){
@@ -79,12 +84,25 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 			cfg.Interpreter.Temporal = nil
 			cfg.Interpreter.Cadence = &CadenceConfig{}
 		},
-		"indexes managed by Dex": func(cfg *Config) { cfg.Interpreter.AttributeIndexesManagedExternally = false },
-		"Attribute Store":        func(cfg *Config) { cfg.AttributeStore.Stores = map[string]AttributeStoreConfigEntry{"rows": {}} },
-		"no authenticator":       func(cfg *Config) { cfg.Tenancy.Authenticators = nil },
-		"no internal listener":   func(cfg *Config) { cfg.Tenancy.Internal.Listen = "" },
-		"no internal token":      func(cfg *Config) { cfg.Tenancy.Internal.TokenFile = "" },
-		"unknown mode":           func(cfg *Config) { cfg.Tenancy.Mode = "shared" },
+		"indexes managed by Dex":   func(cfg *Config) { cfg.Interpreter.AttributeIndexesManagedExternally = false },
+		"Attribute Store":          func(cfg *Config) { cfg.AttributeStore.Stores = map[string]AttributeStoreConfigEntry{"rows": {}} },
+		"no authenticator":         func(cfg *Config) { cfg.Tenancy.Authenticators = nil },
+		"no internal listener":     func(cfg *Config) { cfg.Tenancy.Internal.Listen = "" },
+		"no internal token":        func(cfg *Config) { cfg.Tenancy.Internal.TokenFile = "" },
+		"no allowed worker target": func(cfg *Config) { cfg.Tenancy.WorkerTarget.Allowed = "" },
+		"unquoted claim in allowed": func(cfg *Config) {
+			cfg.Tenancy.WorkerTarget.Allowed = `^worker\.{{ .tenant }}:9000$`
+		},
+		"partly quoted claims in allowed": func(cfg *Config) {
+			cfg.Tenancy.WorkerTarget.Allowed = `{{ quote .tenant }}\.{{ .namespace }}`
+		},
+		"conditional in allowed": func(cfg *Config) {
+			cfg.Tenancy.WorkerTarget.Allowed = `{{ if .tenant }}{{ quote .tenant }}{{ end }}`
+		},
+		"other function in allowed": func(cfg *Config) {
+			cfg.Tenancy.WorkerTarget.Allowed = `{{ printf "%s" .tenant }}`
+		},
+		"unknown mode": func(cfg *Config) { cfg.Tenancy.Mode = "shared" },
 		"multi mode while under development": func(cfg *Config) {
 			cfg.Tenancy.IsIncompleteMultiTenantModeAllowedForTest = false
 		},

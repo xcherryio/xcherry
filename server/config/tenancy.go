@@ -17,6 +17,7 @@ import (
 	"regexp/syntax"
 	"slices"
 	"text/template"
+	"text/template/parse"
 	"time"
 	"unicode"
 )
@@ -107,7 +108,9 @@ type (
 		Default string `yaml:"default"`
 		// Allowed is a Go template rendered with the principal's claims into a regular expression that must match
 		// the whole requested Worker address, for example '^worker\.{{ .namespace }}\.svc\.cluster\.local:9000$'.
-		// The template function quote escapes a claim for use in the expression. Required in multi mode.
+		// Every claim must pass through the template function quote, which escapes it for use in the expression,
+		// for example '^worker\.{{ quote .namespace }}:9000$'; the server refuses to start otherwise, so a claim
+		// value with regular expression metacharacters can never widen the pattern. Required in multi mode.
 		// The persisted target of every dispatch is matched again, so a configuration change takes effect for
 		// running Flows. Set it to exactly one stable endpoint per tenant for the strictest isolation.
 		Allowed string `yaml:"allowed"`
@@ -305,7 +308,61 @@ func (c TenantWorkerTargetConfig) validate() error {
 			return fmt.Errorf("tenancy.workerTarget.%s: %w", name, err)
 		}
 	}
+	allowed, err := NewTenantClaimTemplate("allowed", c.Allowed)
+	if err != nil {
+		return err
+	}
+	if err := requireQuotedClaims(allowed.Tree.Root); err != nil {
+		return fmt.Errorf("tenancy.workerTarget.allowed: %w", err)
+	}
 	return nil
+}
+
+// requireQuotedClaims refuses an allowed template unless every action is a claim passed through quote, such as
+// {{ quote .namespace }} or {{ .namespace | quote }}, so a claim value can never widen the pattern.
+func requireQuotedClaims(node parse.Node) error {
+	switch typed := node.(type) {
+	case *parse.ListNode:
+		for _, child := range typed.Nodes {
+			if err := requireQuotedClaims(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *parse.TextNode:
+		return nil
+	case *parse.ActionNode:
+		if isQuotedClaimPipe(typed.Pipe) {
+			return nil
+		}
+		return fmt.Errorf("%s must be a claim passed through quote, such as {{ quote .tenant }}", typed)
+	default:
+		return fmt.Errorf("%s is not allowed; use only text and quoted claims", node)
+	}
+}
+
+func isQuotedClaimPipe(pipe *parse.PipeNode) bool {
+	if pipe == nil || len(pipe.Decl) > 0 {
+		return false
+	}
+	var arguments []parse.Node
+	switch len(pipe.Cmds) {
+	case 1:
+		arguments = pipe.Cmds[0].Args
+	case 2:
+		if len(pipe.Cmds[0].Args) != 1 || len(pipe.Cmds[1].Args) != 1 {
+			return false
+		}
+		arguments = []parse.Node{pipe.Cmds[1].Args[0], pipe.Cmds[0].Args[0]}
+	default:
+		return false
+	}
+	if len(arguments) != 2 {
+		return false
+	}
+	function, isIdentifier := arguments[0].(*parse.IdentifierNode)
+	field, isField := arguments[1].(*parse.FieldNode)
+	return isIdentifier && function.Ident == "quote" && isField && len(field.Ident) == 1
 }
 
 // NewTenantClaimTemplate parses a template rendered with principal claims; a missing claim fails rendering.

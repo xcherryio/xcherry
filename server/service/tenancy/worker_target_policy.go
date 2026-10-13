@@ -9,11 +9,13 @@
 package tenancy
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/superdurable/dex/config"
@@ -27,6 +29,8 @@ var ErrWorkerTargetNotAllowed = errors.New("worker target is not allowed for thi
 type WorkerTargetPolicy struct {
 	defaultTarget *template.Template
 	allowed       *template.Template
+	// compiledAllowed caches each rendered pattern, so dispatches do not recompile it.
+	compiledAllowed *boundedRegexpCache
 }
 
 // NewWorkerTargetPolicy returns nil in single-tenant mode, where any Worker target is accepted.
@@ -41,7 +45,7 @@ func NewWorkerTargetPolicy(cfg *config.TenancyConfig) (*WorkerTargetPolicy, erro
 	if err != nil {
 		return nil, err
 	}
-	policy := &WorkerTargetPolicy{allowed: allowed}
+	policy := &WorkerTargetPolicy{allowed: allowed, compiledAllowed: newBoundedRegexpCache(maxCompiledAllowedPatterns)}
 	if cfg.WorkerTarget.Default != "" {
 		if policy.defaultTarget, err = config.NewTenantClaimTemplate("default", cfg.WorkerTarget.Default); err != nil {
 			return nil, err
@@ -81,7 +85,7 @@ func (p *WorkerTargetPolicy) Check(claims map[string]string, target *dexpb.Worke
 	if err := p.allowed.Execute(&pattern, claims); err != nil {
 		return fmt.Errorf("%w: render the allowed pattern: %v", ErrWorkerTargetNotAllowed, err)
 	}
-	allowed, err := regexp.Compile(`^(?:` + pattern.String() + `)$`)
+	allowed, err := p.compiledAllowed.compile(`^(?:` + pattern.String() + `)$`)
 	if err != nil {
 		return fmt.Errorf("%w: the allowed pattern is invalid: %v", ErrWorkerTargetNotAllowed, err)
 	}
@@ -98,4 +102,50 @@ func TenantClaims(ctx context.Context) map[string]string {
 		return nil
 	}
 	return principal.Claims
+}
+
+// maxCompiledAllowedPatterns bounds the per-process cache of rendered allowed patterns, one per distinct claims set.
+const maxCompiledAllowedPatterns = 10_000
+
+// boundedRegexpCache keeps compiled expressions by source, evicting the least recently used.
+type boundedRegexpCache struct {
+	capacity int
+	mu       sync.Mutex
+	entries  map[string]*list.Element
+	recency  *list.List
+}
+
+type compiledRegexpEntry struct {
+	source   string
+	compiled *regexp.Regexp
+}
+
+func newBoundedRegexpCache(capacity int) *boundedRegexpCache {
+	return &boundedRegexpCache{capacity: capacity, entries: map[string]*list.Element{}, recency: list.New()}
+}
+
+func (c *boundedRegexpCache) compile(source string) (*regexp.Regexp, error) {
+	c.mu.Lock()
+	if element, ok := c.entries[source]; ok {
+		c.recency.MoveToFront(element)
+		compiled := element.Value.(*compiledRegexpEntry).compiled
+		c.mu.Unlock()
+		return compiled, nil
+	}
+	c.mu.Unlock()
+	compiled, err := regexp.Compile(source)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[source]; !ok {
+		c.entries[source] = c.recency.PushFront(&compiledRegexpEntry{source: source, compiled: compiled})
+		if c.recency.Len() > c.capacity {
+			oldest := c.recency.Back()
+			c.recency.Remove(oldest)
+			delete(c.entries, oldest.Value.(*compiledRegexpEntry).source)
+		}
+	}
+	return compiled, nil
 }
