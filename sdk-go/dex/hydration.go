@@ -13,12 +13,14 @@ package dex
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -156,35 +158,14 @@ func (hydrator *valueHydratorImpl) hydrateBlobValues(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	entries := make([]*dexpb.LoadBlobRequestEntry, 0, len(misses))
-	for _, miss := range misses {
-		entries = append(entries, &dexpb.LoadBlobRequestEntry{
-			FlowId:    miss.flowID,
-			BlobValue: miss.blobIDValue,
-		})
-	}
-	response, err := hydrator.client.LoadBlobs(ctx, &dexpb.LoadBlobsRequest{
-		Entries: entries,
-	})
+	values, err := hydrator.loadBlobValues(ctx, misses)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		return newWorkerFailure(
-			codes.Internal,
-			fmt.Errorf("dex: LoadBlobs: %w", err),
-		)
-	}
-	if response == nil {
-		return newWorkerFailure(
-			codes.Internal,
-			fmt.Errorf("dex: LoadBlobs returned a nil response"),
-		)
+		return err
 	}
 	omittedFlowIDs := make([]string, 0)
 	omittedBlobsByFlow := make(map[string][]string)
 	for _, miss := range misses {
-		if _, found := response.Values[miss.blobID.value]; !found {
+		if _, found := values[miss.blobID.value]; !found {
 			if _, found := omittedBlobsByFlow[miss.flowID]; !found {
 				omittedFlowIDs = append(omittedFlowIDs, miss.flowID)
 			}
@@ -210,7 +191,7 @@ func (hydrator *valueHydratorImpl) hydrateBlobValues(
 		return newWorkerFailure(codes.Internal, omissionError)
 	}
 	for _, miss := range misses {
-		concrete := response.Values[miss.blobID.value]
+		concrete := values[miss.blobID.value]
 		if err := validateHydratedValue(miss.blobID, concrete); err != nil {
 			return newWorkerFailure(codes.Internal, err)
 		}
@@ -218,6 +199,64 @@ func (hydrator *valueHydratorImpl) hydrateBlobValues(
 		hydrator.storeCached(miss.flowID, miss.blobIDValue, miss.blobID, concrete)
 	}
 	return nil
+}
+
+// loadBlobValues returns the hydrated values keyed by blob ID.
+// A batch whose response exceeds a gRPC message size limit is split in half,
+// so N misses take at most 2N-1 LoadBlobs calls.
+// It returns a BlobMessageTooLargeError when one blob alone exceeds the limit.
+func (hydrator *valueHydratorImpl) loadBlobValues(
+	ctx context.Context,
+	misses []*pendingBlob,
+) (map[string]*dexpb.Value, error) {
+	entries := make([]*dexpb.LoadBlobRequestEntry, 0, len(misses))
+	for _, miss := range misses {
+		entries = append(entries, &dexpb.LoadBlobRequestEntry{
+			FlowId:    miss.flowID,
+			BlobValue: miss.blobIDValue,
+		})
+	}
+	response, err := hydrator.client.LoadBlobs(ctx, &dexpb.LoadBlobsRequest{
+		Entries: entries,
+	})
+	if err == nil {
+		if response == nil {
+			return nil, newWorkerFailure(
+				codes.Internal,
+				fmt.Errorf("dex: LoadBlobs returned a nil response"),
+			)
+		}
+		return response.Values, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if !isGrpcMessageSizeError(err) {
+		return nil, newWorkerFailure(
+			codes.Internal,
+			fmt.Errorf("dex: LoadBlobs: %w", err),
+		)
+	}
+	if len(misses) == 1 {
+		return nil, newWorkerFailure(codes.ResourceExhausted, &BlobMessageTooLargeError{
+			FlowID: misses[0].flowID,
+			BlobID: misses[0].blobID.value,
+			Err:    err,
+		})
+	}
+	half := len(misses) / 2
+	values, err := hydrator.loadBlobValues(ctx, misses[:half])
+	if err != nil {
+		return nil, err
+	}
+	secondValues, err := hydrator.loadBlobValues(ctx, misses[half:])
+	if err != nil {
+		return nil, err
+	}
+	merged := make(map[string]*dexpb.Value, len(values)+len(secondValues))
+	maps.Copy(merged, values)
+	maps.Copy(merged, secondValues)
+	return merged, nil
 }
 
 func (hydrator *valueHydratorImpl) loadCached(
@@ -268,6 +307,15 @@ func (hydrator *valueHydratorImpl) storeCached(
 	if !cached {
 		hydrator.logger.Debug("blob cache rejected entry", "blob_id", blobID.value)
 	}
+}
+
+// gRPC reports a message size violation as RESOURCE_EXHAUSTED without details; Dex errors carry details.
+func isGrpcMessageSizeError(err error) bool {
+	rpcStatus, ok := status.FromError(err)
+	return ok &&
+		rpcStatus.Code() == codes.ResourceExhausted &&
+		len(rpcStatus.Details()) == 0 &&
+		strings.Contains(rpcStatus.Message(), "larger than max")
 }
 
 func flowBlobCacheKey(flowID string, blobID string) string {
