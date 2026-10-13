@@ -12,6 +12,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service/tenantadmin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -42,10 +44,12 @@ type Server struct {
 	cfg                *config.ApiConfig
 	grpcServer         *grpc.Server
 	internalGrpcServer *grpc.Server
-	healthSrv          *health.Server
-	handler            *handler
-	logger             log.Logger
-	readyCheck         func(context.Context) error
+	// tombstones is nil in single-tenant mode.
+	tombstones *tenancy.TombstoneRegistry
+	healthSrv  *health.Server
+	handler    *handler
+	logger     log.Logger
+	readyCheck func(context.Context) error
 }
 
 func NewServer(
@@ -157,7 +161,17 @@ func NewServer(
 	}
 	// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
 	serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxTenantHeaderListBytes))
-	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator)
+	tombstones, err := tenancy.NewTombstoneRegistry(
+		tenancyCfg,
+		store,
+		func(err error) bool { return errors.Is(err, blobstore.ErrTenancyRecordConflict) },
+		logger,
+	)
+	if err != nil {
+		return nil, err
+	}
+	server.tombstones = tombstones
+	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator, tombstones)
 	server.grpcServer = grpc.NewServer(append(
 		serverOptions,
 		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
@@ -172,6 +186,9 @@ func NewServer(
 		grpc.ChainStreamInterceptor(publicInterceptors.Stream),
 	)...)
 	dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
+	dexpb.RegisterTenantAdminServiceServer(server.grpcServer, tenantadmin.NewService(
+		tenancyCfg, client, store, streamStore, attributeStore, tombstones,
+	))
 	healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
 
 	server.internalGrpcServer = grpc.NewServer(append(
@@ -255,6 +272,9 @@ func (s *Server) StopServing(timeout time.Duration) {
 
 func (s *Server) Close() {
 	s.handler.close()
+	if s.tombstones != nil {
+		s.tombstones.Close()
+	}
 }
 
 func (s *Server) setServing(serving bool) {

@@ -64,6 +64,7 @@ type Store struct {
 
 type backend interface {
 	Close() error
+	DeleteTenant(context.Context, string) error
 	Write(context.Context, backendWriteInput) error
 	Read(context.Context, string, string, string, string) (*Message, error)
 	List(context.Context, string, string, string, string, int32) ([]*Message, bool, error)
@@ -128,6 +129,14 @@ func New(cfg *config.StreamStoreConfig, tenancy *config.TenancyConfig, logger lo
 		panic("validated Stream Store backend was not handled")
 	}
 	return store, nil
+}
+
+// DeleteTenant removes every Stream of a tenant. Readers waiting on them see their Streams end empty.
+func (s *Store) DeleteTenant(ctx context.Context, tenantID string) error {
+	if s.backend == nil || tenantID == "" {
+		return nil
+	}
+	return s.backend.DeleteTenant(ctx, tenantID)
 }
 
 func (s *Store) Close() error {
@@ -223,6 +232,30 @@ func (s *Store) List(
 		return nil, false, err
 	}
 	return s.backend.List(ctx, flowType, flowID, streamName, beforeMessageID, pageSize)
+}
+
+func (b *redisBackend) DeleteTenant(ctx context.Context, tenantID string) error {
+	iterator := b.client.Scan(ctx, 0, "dex:stream:v1:t:"+tenantID+":*", 1000).Iterator()
+	keys := make([]string, 0, 1000)
+	for iterator.Next(ctx) {
+		keys = append(keys, iterator.Val())
+		if len(keys) == cap(keys) {
+			if err := b.client.Del(ctx, keys...).Err(); err != nil {
+				return fmt.Errorf("delete tenant Stream keys: %w", err)
+			}
+			keys = keys[:0]
+		}
+	}
+	if err := iterator.Err(); err != nil {
+		return fmt.Errorf("scan tenant Stream keys: %w", err)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := b.client.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("delete tenant Stream keys: %w", err)
+	}
+	return nil
 }
 
 func (b *redisBackend) Close() error {

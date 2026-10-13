@@ -292,6 +292,14 @@ type BlobStore interface {
 	//  1. It doesn't count across two days(so expect test to fail if you happen to run the test across day boundary :)
 	//  2. Only count less than 1000 objects(because it only make one API call to S3 which return at most 1000 objects)
 	CountWorkflowObjectsForTesting(ctx context.Context, flowID string) (int64, error)
+	// ReadTenancyRecord returns the multi-tenant record of the namespace and its version; both empty when absent.
+	ReadTenancyRecord(ctx context.Context) ([]byte, string, error)
+	// WriteTenancyRecord writes the record if it still has version, or is absent when version is empty.
+	// It returns ErrTenancyRecordConflict when another writer changed the record first.
+	WriteTenancyRecord(ctx context.Context, data []byte, version string) error
+	// DeleteTenantObjects deletes at most limit objects under the tenant's prefix in every storage and returns
+	// how many it deleted.
+	DeleteTenantObjects(ctx context.Context, tenantID string, limit int) (int, error)
 }
 
 type ListObjectPathsInput struct {

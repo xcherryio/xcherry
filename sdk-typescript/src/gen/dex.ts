@@ -1664,6 +1664,48 @@ export interface StepExecutionNumbers {
   numbers: number[];
 }
 
+export interface TenantAdminState {
+  tenantId: string;
+  isTombstoned: boolean;
+  tombstonedTime:
+    | Date
+    | undefined;
+  /** Set when a purge has found nothing left in two queries a confirmation delay apart. */
+  purgeDoneTime:
+    | Date
+    | undefined;
+  /** After this time the tombstone is removed and the tenant ID may be reused. */
+  tombstoneExpiryTime: Date | undefined;
+}
+
+export interface TombstoneTenantRequest {
+  tenantId: string;
+}
+
+export interface TombstoneTenantResponse {
+  state: TenantAdminState | undefined;
+}
+
+export interface PurgeTenantRequest {
+  tenantId: string;
+}
+
+export interface PurgeTenantResponse {
+  state: TenantAdminState | undefined;
+  terminatedExecutions: number;
+  deletedExecutions: number;
+  deletedBlobObjects: number;
+  done: boolean;
+}
+
+export interface DescribeTenantRequest {
+  tenantId: string;
+}
+
+export interface DescribeTenantResponse {
+  state: TenantAdminState | undefined;
+}
+
 function createBaseServerInfo(): ServerInfo {
   return { serverVersion: "", minimumSupportedProtocolVersion: 0, currentProtocolVersion: 0 };
 }
@@ -18366,6 +18408,436 @@ export const StepExecutionNumbers: MessageFns<StepExecutionNumbers> = {
   },
 };
 
+function createBaseTenantAdminState(): TenantAdminState {
+  return {
+    tenantId: "",
+    isTombstoned: false,
+    tombstonedTime: undefined,
+    purgeDoneTime: undefined,
+    tombstoneExpiryTime: undefined,
+  };
+}
+
+export const TenantAdminState: MessageFns<TenantAdminState> = {
+  encode(message: TenantAdminState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tenantId !== "") {
+      writer.uint32(10).string(message.tenantId);
+    }
+    if (message.isTombstoned !== false) {
+      writer.uint32(16).bool(message.isTombstoned);
+    }
+    if (message.tombstonedTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.tombstonedTime), writer.uint32(26).fork()).join();
+    }
+    if (message.purgeDoneTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.purgeDoneTime), writer.uint32(34).fork()).join();
+    }
+    if (message.tombstoneExpiryTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.tombstoneExpiryTime), writer.uint32(42).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TenantAdminState {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseTenantAdminState();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.isTombstoned = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tombstonedTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.purgeDoneTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.tombstoneExpiryTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<TenantAdminState>, I>>(base?: I): TenantAdminState {
+    return TenantAdminState.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TenantAdminState>, I>>(object: I): TenantAdminState {
+    const message = createBaseTenantAdminState();
+    message.tenantId = object.tenantId ?? "";
+    message.isTombstoned = object.isTombstoned ?? false;
+    message.tombstonedTime = object.tombstonedTime ?? undefined;
+    message.purgeDoneTime = object.purgeDoneTime ?? undefined;
+    message.tombstoneExpiryTime = object.tombstoneExpiryTime ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTombstoneTenantRequest(): TombstoneTenantRequest {
+  return { tenantId: "" };
+}
+
+export const TombstoneTenantRequest: MessageFns<TombstoneTenantRequest> = {
+  encode(message: TombstoneTenantRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tenantId !== "") {
+      writer.uint32(10).string(message.tenantId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TombstoneTenantRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseTombstoneTenantRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<TombstoneTenantRequest>, I>>(base?: I): TombstoneTenantRequest {
+    return TombstoneTenantRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TombstoneTenantRequest>, I>>(object: I): TombstoneTenantRequest {
+    const message = createBaseTombstoneTenantRequest();
+    message.tenantId = object.tenantId ?? "";
+    return message;
+  },
+};
+
+function createBaseTombstoneTenantResponse(): TombstoneTenantResponse {
+  return { state: undefined };
+}
+
+export const TombstoneTenantResponse: MessageFns<TombstoneTenantResponse> = {
+  encode(message: TombstoneTenantResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.state !== undefined) {
+      TenantAdminState.encode(message.state, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TombstoneTenantResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseTombstoneTenantResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.state = TenantAdminState.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<TombstoneTenantResponse>, I>>(base?: I): TombstoneTenantResponse {
+    return TombstoneTenantResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TombstoneTenantResponse>, I>>(object: I): TombstoneTenantResponse {
+    const message = createBaseTombstoneTenantResponse();
+    message.state = (object.state !== undefined && object.state !== null)
+      ? TenantAdminState.fromPartial(object.state)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePurgeTenantRequest(): PurgeTenantRequest {
+  return { tenantId: "" };
+}
+
+export const PurgeTenantRequest: MessageFns<PurgeTenantRequest> = {
+  encode(message: PurgeTenantRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tenantId !== "") {
+      writer.uint32(10).string(message.tenantId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PurgeTenantRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePurgeTenantRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PurgeTenantRequest>, I>>(base?: I): PurgeTenantRequest {
+    return PurgeTenantRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PurgeTenantRequest>, I>>(object: I): PurgeTenantRequest {
+    const message = createBasePurgeTenantRequest();
+    message.tenantId = object.tenantId ?? "";
+    return message;
+  },
+};
+
+function createBasePurgeTenantResponse(): PurgeTenantResponse {
+  return { state: undefined, terminatedExecutions: 0, deletedExecutions: 0, deletedBlobObjects: 0, done: false };
+}
+
+export const PurgeTenantResponse: MessageFns<PurgeTenantResponse> = {
+  encode(message: PurgeTenantResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.state !== undefined) {
+      TenantAdminState.encode(message.state, writer.uint32(10).fork()).join();
+    }
+    if (message.terminatedExecutions !== 0) {
+      writer.uint32(16).int32(message.terminatedExecutions);
+    }
+    if (message.deletedExecutions !== 0) {
+      writer.uint32(24).int32(message.deletedExecutions);
+    }
+    if (message.deletedBlobObjects !== 0) {
+      writer.uint32(32).int32(message.deletedBlobObjects);
+    }
+    if (message.done !== false) {
+      writer.uint32(40).bool(message.done);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PurgeTenantResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePurgeTenantResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.state = TenantAdminState.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.terminatedExecutions = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.deletedExecutions = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.deletedBlobObjects = reader.int32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.done = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PurgeTenantResponse>, I>>(base?: I): PurgeTenantResponse {
+    return PurgeTenantResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PurgeTenantResponse>, I>>(object: I): PurgeTenantResponse {
+    const message = createBasePurgeTenantResponse();
+    message.state = (object.state !== undefined && object.state !== null)
+      ? TenantAdminState.fromPartial(object.state)
+      : undefined;
+    message.terminatedExecutions = object.terminatedExecutions ?? 0;
+    message.deletedExecutions = object.deletedExecutions ?? 0;
+    message.deletedBlobObjects = object.deletedBlobObjects ?? 0;
+    message.done = object.done ?? false;
+    return message;
+  },
+};
+
+function createBaseDescribeTenantRequest(): DescribeTenantRequest {
+  return { tenantId: "" };
+}
+
+export const DescribeTenantRequest: MessageFns<DescribeTenantRequest> = {
+  encode(message: DescribeTenantRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tenantId !== "") {
+      writer.uint32(10).string(message.tenantId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DescribeTenantRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDescribeTenantRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.tenantId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<DescribeTenantRequest>, I>>(base?: I): DescribeTenantRequest {
+    return DescribeTenantRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DescribeTenantRequest>, I>>(object: I): DescribeTenantRequest {
+    const message = createBaseDescribeTenantRequest();
+    message.tenantId = object.tenantId ?? "";
+    return message;
+  },
+};
+
+function createBaseDescribeTenantResponse(): DescribeTenantResponse {
+  return { state: undefined };
+}
+
+export const DescribeTenantResponse: MessageFns<DescribeTenantResponse> = {
+  encode(message: DescribeTenantResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.state !== undefined) {
+      TenantAdminState.encode(message.state, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DescribeTenantResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDescribeTenantResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.state = TenantAdminState.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<DescribeTenantResponse>, I>>(base?: I): DescribeTenantResponse {
+    return DescribeTenantResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DescribeTenantResponse>, I>>(object: I): DescribeTenantResponse {
+    const message = createBaseDescribeTenantResponse();
+    message.state = (object.state !== undefined && object.state !== null)
+      ? TenantAdminState.fromPartial(object.state)
+      : undefined;
+    return message;
+  },
+};
+
 /** Hosted by Dex server; SDKs call these RPCs. */
 export type FlowServiceService = typeof FlowServiceService;
 export const FlowServiceService = {
@@ -19163,7 +19635,115 @@ export const WorkerServiceClient = makeGenericClientConstructor(
   serviceName: string;
 };
 
-/** Server-internal only (interpreter CAN activity → API). Not SDK-facing. */
+/**
+ * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+ * TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
+ * Every RPC names its tenant explicitly and never returns Flow data.
+ */
+export type TenantAdminServiceService = typeof TenantAdminServiceService;
+export const TenantAdminServiceService = {
+  /** Refuses every credential of the tenant within the tombstone refresh interval. Idempotent. */
+  tombstoneTenant: {
+    path: "/dex.TenantAdminService/TombstoneTenant" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: TombstoneTenantRequest): Buffer =>
+      Buffer.from(TombstoneTenantRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): TombstoneTenantRequest => TombstoneTenantRequest.decode(value),
+    responseSerialize: (value: TombstoneTenantResponse): Buffer =>
+      Buffer.from(TombstoneTenantResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): TombstoneTenantResponse => TombstoneTenantResponse.decode(value),
+  },
+  /** Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true. */
+  purgeTenant: {
+    path: "/dex.TenantAdminService/PurgeTenant" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PurgeTenantRequest): Buffer => Buffer.from(PurgeTenantRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PurgeTenantRequest => PurgeTenantRequest.decode(value),
+    responseSerialize: (value: PurgeTenantResponse): Buffer => Buffer.from(PurgeTenantResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): PurgeTenantResponse => PurgeTenantResponse.decode(value),
+  },
+  describeTenant: {
+    path: "/dex.TenantAdminService/DescribeTenant" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: DescribeTenantRequest): Buffer =>
+      Buffer.from(DescribeTenantRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): DescribeTenantRequest => DescribeTenantRequest.decode(value),
+    responseSerialize: (value: DescribeTenantResponse): Buffer =>
+      Buffer.from(DescribeTenantResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): DescribeTenantResponse => DescribeTenantResponse.decode(value),
+  },
+} as const;
+
+export interface TenantAdminServiceServer extends UntypedServiceImplementation {
+  /** Refuses every credential of the tenant within the tombstone refresh interval. Idempotent. */
+  tombstoneTenant: handleUnaryCall<TombstoneTenantRequest, TombstoneTenantResponse>;
+  /** Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true. */
+  purgeTenant: handleUnaryCall<PurgeTenantRequest, PurgeTenantResponse>;
+  describeTenant: handleUnaryCall<DescribeTenantRequest, DescribeTenantResponse>;
+}
+
+export interface TenantAdminServiceClient extends Client {
+  /** Refuses every credential of the tenant within the tombstone refresh interval. Idempotent. */
+  tombstoneTenant(
+    request: TombstoneTenantRequest,
+    callback: (error: ServiceError | null, response: TombstoneTenantResponse) => void,
+  ): ClientUnaryCall;
+  tombstoneTenant(
+    request: TombstoneTenantRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: TombstoneTenantResponse) => void,
+  ): ClientUnaryCall;
+  tombstoneTenant(
+    request: TombstoneTenantRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: TombstoneTenantResponse) => void,
+  ): ClientUnaryCall;
+  /** Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true. */
+  purgeTenant(
+    request: PurgeTenantRequest,
+    callback: (error: ServiceError | null, response: PurgeTenantResponse) => void,
+  ): ClientUnaryCall;
+  purgeTenant(
+    request: PurgeTenantRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: PurgeTenantResponse) => void,
+  ): ClientUnaryCall;
+  purgeTenant(
+    request: PurgeTenantRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: PurgeTenantResponse) => void,
+  ): ClientUnaryCall;
+  describeTenant(
+    request: DescribeTenantRequest,
+    callback: (error: ServiceError | null, response: DescribeTenantResponse) => void,
+  ): ClientUnaryCall;
+  describeTenant(
+    request: DescribeTenantRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: DescribeTenantResponse) => void,
+  ): ClientUnaryCall;
+  describeTenant(
+    request: DescribeTenantRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: DescribeTenantResponse) => void,
+  ): ClientUnaryCall;
+}
+
+export const TenantAdminServiceClient = makeGenericClientConstructor(
+  TenantAdminServiceService,
+  "dex.TenantAdminService",
+) as unknown as {
+  new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): TenantAdminServiceClient;
+  service: typeof TenantAdminServiceService;
+  serviceName: string;
+};
+
 export type InternalServiceService = typeof InternalServiceService;
 export const InternalServiceService = {
   dumpFlowForContinueAsNew: {

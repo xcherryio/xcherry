@@ -3,9 +3,6 @@ package io.superdurable.gen;
 import static io.grpc.MethodDescriptor.generateFullMethodName;
 
 /**
- * <pre>
- * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
- * </pre>
  */
 @javax.annotation.Generated(
     value = "by gRPC proto compiler (version 1.69.1)",
@@ -94,9 +91,6 @@ public final class InternalServiceGrpc {
   }
 
   /**
-   * <pre>
-   * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-   * </pre>
    */
   public interface AsyncService {
 
@@ -110,9 +104,6 @@ public final class InternalServiceGrpc {
 
   /**
    * Base class for the server implementation of the service InternalService.
-   * <pre>
-   * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-   * </pre>
    */
   public static abstract class InternalServiceImplBase
       implements io.grpc.BindableService, AsyncService {
@@ -124,9 +115,6 @@ public final class InternalServiceGrpc {
 
   /**
    * A stub to allow clients to do asynchronous rpc calls to service InternalService.
-   * <pre>
-   * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-   * </pre>
    */
   public static final class InternalServiceStub
       extends io.grpc.stub.AbstractAsyncStub<InternalServiceStub> {
@@ -152,9 +140,6 @@ public final class InternalServiceGrpc {
 
   /**
    * A stub to allow clients to do synchronous rpc calls to service InternalService.
-   * <pre>
-   * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-   * </pre>
    */
   public static final class InternalServiceBlockingStub
       extends io.grpc.stub.AbstractBlockingStub<InternalServiceBlockingStub> {
@@ -179,9 +164,6 @@ public final class InternalServiceGrpc {
 
   /**
    * A stub to allow clients to do ListenableFuture-style rpc calls to service InternalService.
-   * <pre>
-   * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-   * </pre>
    */
   public static final class InternalServiceFutureStub
       extends io.grpc.stub.AbstractFutureStub<InternalServiceFutureStub> {

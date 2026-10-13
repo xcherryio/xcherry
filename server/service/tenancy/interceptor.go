@@ -32,13 +32,14 @@ const (
 // PublicServiceInterceptors authenticate every public API call and allow each principal only on its own service.
 type PublicServiceInterceptors struct {
 	authenticator *Authenticator
+	tombstones    *TombstoneRegistry
 }
 
-func NewPublicServiceInterceptors(authenticator *Authenticator) *PublicServiceInterceptors {
-	if authenticator == nil {
-		panic("authenticator must not be nil")
+func NewPublicServiceInterceptors(authenticator *Authenticator, tombstones *TombstoneRegistry) *PublicServiceInterceptors {
+	if authenticator == nil || tombstones == nil {
+		panic("authenticator and tombstones must not be nil")
 	}
-	return &PublicServiceInterceptors{authenticator: authenticator}
+	return &PublicServiceInterceptors{authenticator: authenticator, tombstones: tombstones}
 }
 
 func (i *PublicServiceInterceptors) Unary(
@@ -84,6 +85,9 @@ func (i *PublicServiceInterceptors) authenticate(ctx context.Context) (*Principa
 	principal, err := i.authenticator.Authenticate(ctx, credential)
 	if err != nil {
 		return nil, unauthenticated("the credential is not valid")
+	}
+	if principal.Kind == PrincipalKindTenant && i.tombstones.IsTombstoned(principal.TenantID) {
+		return nil, permissionDenied("the tenant is deleted")
 	}
 	return principal, nil
 }

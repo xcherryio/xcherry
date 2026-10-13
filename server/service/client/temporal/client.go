@@ -366,6 +366,14 @@ func (t *temporalClient) TerminateWorkflow(ctx context.Context, workflowID strin
 	return t.tClient.TerminateWorkflow(ctx, workflowID, runID, reasonStr)
 }
 
+func (t *temporalClient) DeleteWorkflowExecution(ctx context.Context, workflowID string, runID string) error {
+	_, err := t.tClient.WorkflowService().DeleteWorkflowExecution(ctx, &workflowservice.DeleteWorkflowExecutionRequest{
+		Namespace:         t.namespace,
+		WorkflowExecution: &common.WorkflowExecution{WorkflowId: workflowID, RunId: runID},
+	})
+	return err
+}
+
 func (t *temporalClient) ListWorkflow(
 	ctx context.Context, request *uclient.ListWorkflowExecutionsRequest,
 ) (*uclient.ListWorkflowExecutionsResponse, error) {

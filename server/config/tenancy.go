@@ -91,6 +91,16 @@ type (
 		// AttributeStores lists the Attribute Stores a tenant's Flow may select. Default empty allows every
 		// configured store, which multi mode requires to be tenant-scoped.
 		AttributeStores []string `yaml:"attributeStores"`
+		// TombstoneRefreshInterval is how often every server rereads the namespace's tombstone record. A tombstoned
+		// tenant's credentials are refused within this interval. Default 10s.
+		TombstoneRefreshInterval time.Duration `yaml:"tombstoneRefreshInterval"`
+		// TombstoneRetention is how long a tombstone stays after its tenant's purge reported done; afterwards the
+		// tenant ID may be reused. It must be at least the longest lifetime of a credential issued to the tenant,
+		// because JWTs are verified offline. Default 2h.
+		TombstoneRetention time.Duration `yaml:"tombstoneRetention"`
+		// PurgeConfirmationDelay separates the two empty tenant queries a purge needs before it reports done, which
+		// guards against visibility lag. Default 60s.
+		PurgeConfirmationDelay time.Duration `yaml:"purgeConfirmationDelay"`
 		// Fairness sets the engine fairness key of every workflow and activity task to the tenant ID, so the
 		// namespace's task queue serves tenants round-robin. Default false. The namespace must enable task queue
 		// fairness (Temporal Cloud namespace setting, or matching.enableFairness on a self-hosted server).
@@ -134,6 +144,9 @@ type (
 		// The memory backend enforces it per server process; the redis backend enforces it across every server
 		// sharing the Redis, with a per-tenant total key that trimming decreases.
 		MaxStreamBytesPerTenant int64 `yaml:"maxStreamBytesPerTenant"`
+		// PurgeExecutionsPerSecond paces the executions PurgeTenant terminates or deletes, per server process.
+		// Default 10, so a purge takes only a small share of the namespace's engine actions.
+		PurgeExecutionsPerSecond float64 `yaml:"purgeExecutionsPerSecond"`
 		// StartFlowsPerSecond is a tenant's StartFlow token bucket per server process. Default 20 per second, burst 100.
 		StartFlowsPerSecond TenantRateLimitConfig `yaml:"startFlowsPerSecond"`
 		// WritesPerSecond is a tenant's bucket for InvokeRPC, PublishToChannel, DeleteChannelMessage, SetAttributes
@@ -247,6 +260,9 @@ func (c Config) ValidateTenancy() error {
 	}
 	if c.Interpreter.Cadence != nil {
 		return fmt.Errorf("tenancy.mode multi does not support the Cadence backend")
+	}
+	if !c.BlobStore.EffectiveEnabled() {
+		return fmt.Errorf("tenancy.mode multi requires blobStore, which holds the tenant tombstones")
 	}
 	if !c.Interpreter.AttributeIndexesManagedExternally {
 		return fmt.Errorf("tenancy.mode multi requires interpreter.attributeIndexesManagedExternally")
@@ -406,6 +422,36 @@ func EffectiveTenantRateLimit(limit TenantRateLimitConfig, defaultRate float64, 
 		limit.Burst = defaultBurst
 	}
 	return limit
+}
+
+// EffectiveTombstoneRefreshInterval returns TombstoneRefreshInterval or its 10s default.
+func (c TenancyConfig) EffectiveTombstoneRefreshInterval() time.Duration {
+	return durationOrDefault(c.TombstoneRefreshInterval, 10*time.Second)
+}
+
+// EffectiveTombstoneRetention returns TombstoneRetention or its 2h default.
+func (c TenancyConfig) EffectiveTombstoneRetention() time.Duration {
+	return durationOrDefault(c.TombstoneRetention, 2*time.Hour)
+}
+
+// EffectivePurgeConfirmationDelay returns PurgeConfirmationDelay or its 60s default.
+func (c TenancyConfig) EffectivePurgeConfirmationDelay() time.Duration {
+	return durationOrDefault(c.PurgeConfirmationDelay, 60*time.Second)
+}
+
+// EffectivePurgeExecutionsPerSecond returns PurgeExecutionsPerSecond or its default of 10.
+func (c TenantLimitsConfig) EffectivePurgeExecutionsPerSecond() float64 {
+	if c.PurgeExecutionsPerSecond <= 0 {
+		return 10
+	}
+	return c.PurgeExecutionsPerSecond
+}
+
+func durationOrDefault(value time.Duration, defaultValue time.Duration) time.Duration {
+	if value <= 0 {
+		return defaultValue
+	}
+	return value
 }
 
 // EffectiveMaxStreamCapacityBytes returns MaxStreamCapacityBytes or its 1 MiB default.

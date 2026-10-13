@@ -2465,3 +2465,61 @@ class StepExecutionNumbers(_message.Message):
     NUMBERS_FIELD_NUMBER: _ClassVar[int]
     numbers: _containers.RepeatedScalarFieldContainer[int]
     def __init__(self, numbers: _Optional[_Iterable[int]] = ...) -> None: ...
+
+class TenantAdminState(_message.Message):
+    __slots__ = ("tenant_id", "is_tombstoned", "tombstoned_time", "purge_done_time", "tombstone_expiry_time")
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    IS_TOMBSTONED_FIELD_NUMBER: _ClassVar[int]
+    TOMBSTONED_TIME_FIELD_NUMBER: _ClassVar[int]
+    PURGE_DONE_TIME_FIELD_NUMBER: _ClassVar[int]
+    TOMBSTONE_EXPIRY_TIME_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    is_tombstoned: bool
+    tombstoned_time: _timestamp_pb2.Timestamp
+    purge_done_time: _timestamp_pb2.Timestamp
+    tombstone_expiry_time: _timestamp_pb2.Timestamp
+    def __init__(self, tenant_id: _Optional[str] = ..., is_tombstoned: _Optional[bool] = ..., tombstoned_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., purge_done_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tombstone_expiry_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
+class TombstoneTenantRequest(_message.Message):
+    __slots__ = ("tenant_id",)
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
+
+class TombstoneTenantResponse(_message.Message):
+    __slots__ = ("state",)
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    state: TenantAdminState
+    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ...) -> None: ...
+
+class PurgeTenantRequest(_message.Message):
+    __slots__ = ("tenant_id",)
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
+
+class PurgeTenantResponse(_message.Message):
+    __slots__ = ("state", "terminated_executions", "deleted_executions", "deleted_blob_objects", "done")
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    TERMINATED_EXECUTIONS_FIELD_NUMBER: _ClassVar[int]
+    DELETED_EXECUTIONS_FIELD_NUMBER: _ClassVar[int]
+    DELETED_BLOB_OBJECTS_FIELD_NUMBER: _ClassVar[int]
+    DONE_FIELD_NUMBER: _ClassVar[int]
+    state: TenantAdminState
+    terminated_executions: int
+    deleted_executions: int
+    deleted_blob_objects: int
+    done: bool
+    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ..., terminated_executions: _Optional[int] = ..., deleted_executions: _Optional[int] = ..., deleted_blob_objects: _Optional[int] = ..., done: _Optional[bool] = ...) -> None: ...
+
+class DescribeTenantRequest(_message.Message):
+    __slots__ = ("tenant_id",)
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
+
+class DescribeTenantResponse(_message.Message):
+    __slots__ = ("state",)
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    state: TenantAdminState
+    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ...) -> None: ...

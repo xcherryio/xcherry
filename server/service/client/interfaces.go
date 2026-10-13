@@ -41,6 +41,8 @@ type UnifiedClient interface {
 	SignalWorkflow(ctx context.Context, workflowID string, runID string, signalName string, arg interface{}) error
 	CancelWorkflow(ctx context.Context, workflowID string, runID string) error
 	TerminateWorkflow(ctx context.Context, workflowID string, runID string, reason string) error
+	// DeleteWorkflowExecution removes a closed or open execution and its history. Temporal only.
+	DeleteWorkflowExecution(ctx context.Context, workflowID string, runID string) error
 	ListWorkflow(ctx context.Context, request *ListWorkflowExecutionsRequest) (*ListWorkflowExecutionsResponse, error)
 	QueryWorkflow(
 		ctx context.Context, valuePtr interface{}, workflowID string, runID string, queryType string,
