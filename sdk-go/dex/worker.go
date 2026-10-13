@@ -23,7 +23,6 @@ import (
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -56,6 +55,14 @@ type WorkerOptions struct {
 	// Credential is sent as a bearer credential with the Worker's FlowService calls: startup index
 	// verification and blob hydration. Default: nil sends none. A multi-tenant Dex server requires it.
 	Credential Credential
+	// GrpcMaxMessageBytes limits every gRPC message the Worker sends or receives, in bytes.
+	// Zero uses DefaultGrpcMaxMessageBytes (32 MiB). Negative values are invalid.
+	// It applies to the WorkerService listener, which receives Step and RPC invocations from Dex
+	// and returns their results, and to the Worker's FlowService connection, including each
+	// LoadBlobs response used to hydrate values. The Dex server applies its own
+	// api.grpcMaxMessageBytes, and the smaller limit wins.
+	// Keep it above the largest application value plus headroom for the message envelope.
+	GrpcMaxMessageBytes int
 }
 
 // Worker hosts registered Flows over the private WorkerService protocol.
@@ -101,7 +108,7 @@ const (
 //
 // registry supplies definitions and cache hydrates large values. It panics when
 // registry or cache is nil. It validates listener, advertised target,
-// FlowService address, and synchronization timeout, then creates the private gRPC
+// FlowService address, synchronization timeout, and GrpcMaxMessageBytes, then creates the private gRPC
 // server and FlowService connection without starting the listener. The returned
 // Worker owns that connection; Start or Stop closes it.
 func NewWorker(
@@ -119,19 +126,23 @@ func NewWorker(
 	if err != nil {
 		return nil, err
 	}
+	maxMessageBytes, err := resolveGrpcMaxMessageBytes(options.GrpcMaxMessageBytes)
+	if err != nil {
+		return nil, err
+	}
 	flowConn, err := grpc.NewClient(
 		flowServiceAddress,
-		append(
-			[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
-			credentialDialOptions(options.Credential)...,
-		)...,
+		flowServiceDialOptions(options.Credential, maxMessageBytes)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)
 	}
 
 	logger := resolveLogger(options.Logger, cache.Logger())
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(maxMessageBytes),
+		grpc.MaxSendMsgSize(maxMessageBytes),
+	)
 	flowService := dexpb.NewFlowServiceClient(flowConn)
 	service := newWorkerService(
 		registry,
