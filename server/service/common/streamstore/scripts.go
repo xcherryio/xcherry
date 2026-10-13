@@ -34,6 +34,8 @@ type writeScriptInput struct {
 	trimTriggerBytes       int64
 	baseTrimTargetBytes    int64
 	messageTrimTargetBytes int64
+	// maxTenantBytes caps the tenant's charged bytes across all its Streams; zero disables the check.
+	maxTenantBytes int64
 }
 
 type writeScriptOutput struct {
@@ -79,6 +81,7 @@ func runWriteScript(
 		input.keys.fifo,
 		input.keys.chargedBytes,
 		input.keys.instance,
+		input.keys.tenantChargedBytesOrScope(),
 	},
 		input.source,
 		input.payload,
@@ -87,6 +90,7 @@ func runWriteScript(
 		input.trimTriggerBytes,
 		input.baseTrimTargetBytes,
 		input.messageTrimTargetBytes,
+		input.maxTenantBytes,
 	).Result()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -138,11 +142,16 @@ func runTrimScript(
 	client *redis.Client,
 	input trimScriptInput,
 ) (trimScriptOutput, error) {
+	isTenantScope := 0
+	if input.keys.tenantChargedBytes != "" {
+		isTenantScope = 1
+	}
 	result, err := trimRedisScript.Run(ctx, client, []string{
 		input.keys.fifo,
 		input.keys.chargedBytes,
 		input.keys.lease,
-	}, input.targetBytes, input.batchSize, input.leaseOwner).Result()
+		input.keys.tenantChargedBytesOrScope(),
+	}, input.targetBytes, input.batchSize, input.leaseOwner, isTenantScope).Result()
 	if err != nil {
 		return trimScriptOutput{}, fmt.Errorf("trim Redis Stream: %w", err)
 	}
@@ -253,15 +262,24 @@ local capacity = tonumber(ARGV[4])
 local trigger = tonumber(ARGV[5])
 local baseTarget = tonumber(ARGV[6])
 local messageTarget = tonumber(ARGV[7])
+local maxTenant = tonumber(ARGV[8])
+local tenantChargedKey = KEYS[4]
 
 local currentTotal = tonumber(redis.call('GET', chargedKey) or '0')
 if currentTotal + charge > capacity then
   return {currentTotal, 1, baseTarget, 1}
 end
+if maxTenant > 0 then
+  local tenantTotal = tonumber(redis.call('GET', tenantChargedKey) or '0')
+  if tenantTotal + charge > maxTenant then
+    return {currentTotal, 1, baseTarget, 1}
+  end
+end
 
 local entryID = redis.call('XADD', fifoKey, '*', 'i', instanceKey, 'c', charge)
 redis.call('XADD', instanceKey, entryID, 'v', payload, 's', source)
 local total = redis.call('INCRBY', chargedKey, charge)
+if maxTenant > 0 then redis.call('INCRBY', tenantChargedKey, charge) end
 local needsTrim = 0
 if total >= trigger then needsTrim = 1 end
 return {total, needsTrim, messageTarget, 0}
@@ -274,6 +292,8 @@ local leaseKey = KEYS[3]
 local target = tonumber(ARGV[1])
 local trimLimit = tonumber(ARGV[2])
 local owner = ARGV[3]
+local isTenantScope = tonumber(ARGV[4])
+local tenantChargedKey = KEYS[4]
 
 if redis.call('GET', leaseKey) ~= owner then return {-1, 0} end
 local total = tonumber(redis.call('GET', chargedKey) or '0')
@@ -296,6 +316,9 @@ while total > target and trimmed < trimLimit do
     if redis.call('XLEN', oldInstance) == 0 then redis.call('DEL', oldInstance) end
   end
   redis.call('XDEL', fifoKey, oldID)
+  if isTenantScope == 1 then
+    if redis.call('DECRBY', tenantChargedKey, oldCharge) <= 0 then redis.call('DEL', tenantChargedKey) end
+  end
   total = redis.call('DECRBY', chargedKey, oldCharge)
   if total < 0 then
     total = 0

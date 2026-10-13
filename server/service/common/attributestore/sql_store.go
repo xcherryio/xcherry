@@ -28,6 +28,7 @@ import (
 	_ "github.com/snowflakedb/gosnowflake/v2"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 )
@@ -127,8 +128,8 @@ func initializeSQLStore(
 	database *sql.DB,
 ) (*sqlStore, error) {
 	entry := &sqlStore{cfg: cfg, dialect: dialect, db: database, logger: logger}
-	if cfg.RowKey != "" {
-		rowKey, err := parseRowKeyTemplate(cfg.RowKey)
+	if rowKeyText := effectiveRowKey(cfg); rowKeyText != "" {
+		rowKey, err := parseRowKeyTemplate(rowKeyText)
 		if err != nil {
 			return nil, err
 		}
@@ -639,4 +640,13 @@ func (t *tableSchema) keyValues(flowID string) ([]string, bool) {
 
 func (t *tableSchema) isKeyColumn(name string) bool {
 	return slices.Contains(t.keyColumns(), name)
+}
+
+// effectiveRowKey prepends the tenant column to the row key of a tenant-scoped store, whose rows are keyed by the
+// stored Flow ID T:<tenant>:<application Flow ID>.
+func effectiveRowKey(cfg config.AttributeStoreConfigEntry) string {
+	if cfg.TenantColumn == "" {
+		return cfg.RowKey
+	}
+	return service.TenantStoredFlowID("{"+cfg.TenantColumn+"}", cfg.RowKey)
 }

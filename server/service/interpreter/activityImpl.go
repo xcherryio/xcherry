@@ -906,7 +906,8 @@ func (a *Activities) StartSubFlow(
 		return nil, a.newWorkerTargetRefusedError(err)
 	}
 	for _, storeName := range flowConfig.GetAttributeStoreNames().GetNames() {
-		if !a.attributeStore.HasStore(storeName) {
+		if !a.attributeStore.HasStore(storeName) ||
+			!a.dispatchGate.IsAttributeStoreAllowed(input.GetTenantId(), storeName) {
 			return nil, fmt.Errorf("Attribute Store %q is unavailable", storeName)
 		}
 	}
@@ -1122,52 +1123,151 @@ func buildSubFlowStartOptions(
 }
 
 // CleanupBlobsAfterAllRunsDeleted deletes blobs after the backend removes every run.
+// A tenant path is deleted only after two NotFound answers for its stored Flow ID, a confirmation delay apart.
 func (a *Activities) CleanupBlobsAfterAllRunsDeleted(
 	ctx context.Context, input *dexpb.CleanupBlobStoreActivityInput,
 ) (*dexpb.CleanupBlobStoreActivityOutput, error) {
-	store := a.blobStore
-	provider := a.activityProvider
-	logger := provider.GetLogger(ctx)
+	logger := a.activityProvider.GetLogger(ctx)
 	logger.Info("CleanupBlobsAfterAllRunsDeleted started")
-	client := a.unifiedClient
+	cleanup := &blobCleanup{activities: a, ctx: ctx, storeID: input.GetStoreId(), logger: logger}
+	tenantSegments, err := cleanup.cleanDirectory("")
+	if err != nil {
+		return nil, err
+	}
+	if !a.cfg.Tenancy.IsMultiTenant() {
+		tenantSegments = nil
+	}
+	for _, tenantSegment := range tenantSegments {
+		if !config.TenantIDPattern.MatchString(tenantSegment) {
+			logger.Warn("CleanupBlobsAfterAllRunsDeleted skipped an invalid tenant segment", "segment", tenantSegment)
+			continue
+		}
+		if _, err := cleanup.cleanDirectory(tenantSegment); err != nil {
+			return nil, err
+		}
+	}
+	if err := cleanup.deleteConfirmedTenantPaths(); err != nil {
+		return nil, err
+	}
+	logger.Info("CleanupBlobsAfterAllRunsDeleted completed", "totalDeleted", cleanup.totalDeleted)
+	return &dexpb.CleanupBlobStoreActivityOutput{TotalDeleted: cleanup.totalDeleted}, nil
+}
 
+// blobCleanup is one run of the blob cleanup activity.
+type blobCleanup struct {
+	activities      *Activities
+	ctx             context.Context
+	storeID         string
+	logger          interfaces.UnifiedLogger
+	totalDeleted    int32
+	pendingTenant   []blobstore.WorkflowPath
+	pendingPaths    []string
+	firstNotFoundAt time.Time
+}
+
+// cleanDirectory handles every workflow path of the namespace root or of one tenant, and returns the root's
+// tenant segments.
+func (c *blobCleanup) cleanDirectory(tenantID string) ([]string, error) {
+	var tenantSegments []string
 	var continueToken *string
-	var totalDeleted int32
 	for {
-		listOutput, err := store.ListWorkflowPaths(ctx, blobstore.ListObjectPathsInput{
-			StoreId:           input.GetStoreId(),
+		listOutput, err := c.activities.blobStore.ListWorkflowPaths(c.ctx, blobstore.ListObjectPathsInput{
+			StoreId:           c.storeID,
 			ContinuationToken: continueToken,
+			TenantID:          tenantID,
 		})
 		if err != nil {
 			return nil, err
 		}
-		continueToken = listOutput.ContinuationToken
+		tenantSegments = append(tenantSegments, listOutput.TenantSegments...)
 		for _, workflowPath := range listOutput.WorkflowPaths {
-			parsedPath, parseErr := blobstore.ParseWorkflowPath(workflowPath)
-			if parseErr != nil {
-				logger.Info("CleanupBlobsAfterAllRunsDeleted skipped workflow path", "path", workflowPath)
-				continue
-			}
-			_, err := client.DescribeWorkflowExecution(ctx, parsedPath.FlowID, parsedPath.RunID, nil)
-			if client.IsNotFoundError(err) {
-				if err := store.DeleteWorkflowObjects(ctx, input.GetStoreId(), workflowPath); err != nil {
-					logger.Error("CleanupBlobsAfterAllRunsDeleted failed to delete workflow objects", "workflowPath", workflowPath, "error", err)
-					return nil, err
-				}
-				totalDeleted++
-				logger.Info("CleanupBlobsAfterAllRunsDeleted deleted workflow objects", "workflowPath", workflowPath)
-			} else if err != nil {
-				logger.Error("CleanupBlobsAfterAllRunsDeleted failed to describe workflow", "workflowPath", workflowPath, "error", err)
+			if err := c.cleanWorkflowPath(workflowPath); err != nil {
 				return nil, err
 			}
-			provider.RecordHeartbeat(ctx)
+			c.activities.activityProvider.RecordHeartbeat(c.ctx)
 		}
+		continueToken = listOutput.ContinuationToken
 		if continueToken == nil {
-			break
+			return tenantSegments, nil
 		}
 	}
-	logger.Info("CleanupBlobsAfterAllRunsDeleted completed", "totalDeleted", totalDeleted)
-	return &dexpb.CleanupBlobStoreActivityOutput{TotalDeleted: totalDeleted}, nil
+}
+
+func (c *blobCleanup) cleanWorkflowPath(workflowPath string) error {
+	parsedPath, err := blobstore.ParseWorkflowPath(workflowPath)
+	if err != nil {
+		c.logger.Info("CleanupBlobsAfterAllRunsDeleted skipped workflow path", "path", workflowPath, "error", err)
+		return nil
+	}
+	isNotFound, err := c.isFlowNotFound(parsedPath)
+	if err != nil || !isNotFound {
+		return err
+	}
+	if parsedPath.TenantID == "" {
+		return c.delete(workflowPath)
+	}
+	if c.firstNotFoundAt.IsZero() {
+		c.firstNotFoundAt = time.Now()
+	}
+	c.pendingTenant = append(c.pendingTenant, parsedPath)
+	c.pendingPaths = append(c.pendingPaths, workflowPath)
+	return nil
+}
+
+// deleteConfirmedTenantPaths waits out the confirmation delay, heartbeating, and deletes the tenant paths whose
+// stored Flow ID is still NotFound, which guards against visibility lag.
+func (c *blobCleanup) deleteConfirmedTenantPaths() error {
+	if len(c.pendingTenant) == 0 {
+		return nil
+	}
+	confirmAt := c.firstNotFoundAt.Add(c.activities.cfg.BlobStore.EffectiveTenantCleanupConfirmationDelay())
+	for wait := time.Until(confirmAt); wait > 0; wait = time.Until(confirmAt) {
+		timer := time.NewTimer(min(wait, 5*time.Second))
+		select {
+		case <-c.ctx.Done():
+			timer.Stop()
+			return c.ctx.Err()
+		case <-timer.C:
+		}
+		c.activities.activityProvider.RecordHeartbeat(c.ctx)
+	}
+	for i, parsedPath := range c.pendingTenant {
+		isNotFound, err := c.isFlowNotFound(parsedPath)
+		if err != nil {
+			return err
+		}
+		if !isNotFound {
+			continue
+		}
+		if err := c.delete(c.pendingPaths[i]); err != nil {
+			return err
+		}
+		c.activities.activityProvider.RecordHeartbeat(c.ctx)
+	}
+	return nil
+}
+
+func (c *blobCleanup) isFlowNotFound(parsedPath blobstore.WorkflowPath) (bool, error) {
+	client := c.activities.unifiedClient
+	_, err := client.DescribeWorkflowExecution(c.ctx, parsedPath.FlowID, parsedPath.RunID, nil)
+	if client.IsNotFoundError(err) {
+		return true, nil
+	}
+	if err != nil {
+		c.logger.Error("CleanupBlobsAfterAllRunsDeleted failed to describe workflow", "flowID", parsedPath.FlowID, "error", err)
+		return false, err
+	}
+	return false, nil
+}
+
+func (c *blobCleanup) delete(workflowPath string) error {
+	if err := c.activities.blobStore.DeleteWorkflowObjects(c.ctx, c.storeID, workflowPath); err != nil {
+		c.logger.Error("CleanupBlobsAfterAllRunsDeleted failed to delete workflow objects", "workflowPath", workflowPath, "error", err)
+		return err
+	}
+	c.totalDeleted++
+	c.logger.Info("CleanupBlobsAfterAllRunsDeleted deleted workflow objects", "workflowPath", workflowPath)
+	return nil
 }
 
 func (a *Activities) hydrateWorkerRequestValues(

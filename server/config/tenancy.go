@@ -15,7 +15,9 @@ import (
 	"net/url"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"text/template"
+	"text/template/parse"
 	"time"
 	"unicode"
 )
@@ -87,6 +89,9 @@ type (
 		Wake TenantWakeConfig `yaml:"wake"`
 		// Limits bound what one tenant can use of a shared server.
 		Limits TenantLimitsConfig `yaml:"limits"`
+		// AttributeStores lists the Attribute Stores a tenant's Flow may select. Default empty allows every
+		// configured store, which multi mode requires to be tenant-scoped.
+		AttributeStores []string `yaml:"attributeStores"`
 		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
 		// development. It cannot be set from a configuration file. Default false.
 		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
@@ -103,7 +108,9 @@ type (
 		Default string `yaml:"default"`
 		// Allowed is a Go template rendered with the principal's claims into a regular expression that must match
 		// the whole requested Worker address, for example '^worker\.{{ .namespace }}\.svc\.cluster\.local:9000$'.
-		// The template function quote escapes a claim for use in the expression. Required in multi mode.
+		// Every claim must pass through the template function quote, which escapes it for use in the expression,
+		// for example '^worker\.{{ quote .namespace }}:9000$'; the server refuses to start otherwise, so a claim
+		// value with regular expression metacharacters can never widen the pattern. Required in multi mode.
 		// The persisted target of every dispatch is matched again, so a configuration change takes effect for
 		// running Flows. Set it to exactly one stable endpoint per tenant for the strictest isolation.
 		Allowed string `yaml:"allowed"`
@@ -125,6 +132,12 @@ type (
 		// dispatches per server process. A dispatch over the cap waits for a slot without counting an attempt.
 		// Default 32.
 		MaxConcurrentDispatchesPerTenant int `yaml:"maxConcurrentDispatchesPerTenant"`
+		// MaxStreamCapacityBytes caps the Stream capacity that a tenant's write may request. Default 1 MiB.
+		MaxStreamCapacityBytes int64 `yaml:"maxStreamCapacityBytes"`
+		// MaxStreamBytesPerTenant caps one tenant's buffered Stream bytes across all its Streams. Default 8 MiB.
+		// The memory backend enforces it per server process; the redis backend enforces it across every server
+		// sharing the Redis, with a per-tenant total key that trimming decreases.
+		MaxStreamBytesPerTenant int64 `yaml:"maxStreamBytesPerTenant"`
 	}
 
 	TenantAuthenticatorConfig struct {
@@ -225,8 +238,18 @@ func (c Config) ValidateTenancy() error {
 	if !c.Interpreter.AttributeIndexesManagedExternally {
 		return fmt.Errorf("tenancy.mode multi requires interpreter.attributeIndexesManagedExternally")
 	}
-	if len(c.AttributeStore.Stores) > 0 {
-		return fmt.Errorf("tenancy.mode multi does not support Attribute Stores yet")
+	for name, store := range c.AttributeStore.Stores {
+		if store.Type != AttributeStoreTypePostgres && store.Type != AttributeStoreTypeMySQL {
+			return fmt.Errorf("tenancy.mode multi supports only postgres and mysql Attribute Stores; %q is %s", name, store.Type)
+		}
+		if store.TenantColumn == "" {
+			return fmt.Errorf("tenancy.mode multi requires attributeStore.stores.%s.tenantColumn", name)
+		}
+	}
+	for _, name := range c.Tenancy.AttributeStores {
+		if _, found := c.AttributeStore.Stores[name]; !found {
+			return fmt.Errorf("tenancy.attributeStores names unknown Attribute Store %q", name)
+		}
 	}
 	if !c.Tenancy.IsIncompleteMultiTenantModeAllowedForTest {
 		return fmt.Errorf("tenancy.mode multi is under development and not available yet")
@@ -285,7 +308,61 @@ func (c TenantWorkerTargetConfig) validate() error {
 			return fmt.Errorf("tenancy.workerTarget.%s: %w", name, err)
 		}
 	}
+	allowed, err := NewTenantClaimTemplate("allowed", c.Allowed)
+	if err != nil {
+		return err
+	}
+	if err := requireQuotedClaims(allowed.Tree.Root); err != nil {
+		return fmt.Errorf("tenancy.workerTarget.allowed: %w", err)
+	}
 	return nil
+}
+
+// requireQuotedClaims refuses an allowed template unless every action is a claim passed through quote, such as
+// {{ quote .namespace }} or {{ .namespace | quote }}, so a claim value can never widen the pattern.
+func requireQuotedClaims(node parse.Node) error {
+	switch typed := node.(type) {
+	case *parse.ListNode:
+		for _, child := range typed.Nodes {
+			if err := requireQuotedClaims(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *parse.TextNode:
+		return nil
+	case *parse.ActionNode:
+		if isQuotedClaimPipe(typed.Pipe) {
+			return nil
+		}
+		return fmt.Errorf("%s must be a claim passed through quote, such as {{ quote .tenant }}", typed)
+	default:
+		return fmt.Errorf("%s is not allowed; use only text and quoted claims", node)
+	}
+}
+
+func isQuotedClaimPipe(pipe *parse.PipeNode) bool {
+	if pipe == nil || len(pipe.Decl) > 0 {
+		return false
+	}
+	var arguments []parse.Node
+	switch len(pipe.Cmds) {
+	case 1:
+		arguments = pipe.Cmds[0].Args
+	case 2:
+		if len(pipe.Cmds[0].Args) != 1 || len(pipe.Cmds[1].Args) != 1 {
+			return false
+		}
+		arguments = []parse.Node{pipe.Cmds[1].Args[0], pipe.Cmds[0].Args[0]}
+	default:
+		return false
+	}
+	if len(arguments) != 2 {
+		return false
+	}
+	function, isIdentifier := arguments[0].(*parse.IdentifierNode)
+	field, isField := arguments[1].(*parse.FieldNode)
+	return isIdentifier && function.Ident == "quote" && isField && len(field.Ident) == 1
 }
 
 // NewTenantClaimTemplate parses a template rendered with principal claims; a missing claim fails rendering.
@@ -308,6 +385,22 @@ func (c TenantWakeConfig) EffectiveBudget() time.Duration {
 		return DefaultTenantWakeBudget
 	}
 	return c.Budget
+}
+
+// EffectiveMaxStreamCapacityBytes returns MaxStreamCapacityBytes or its 1 MiB default.
+func (c TenantLimitsConfig) EffectiveMaxStreamCapacityBytes() int64 {
+	if c.MaxStreamCapacityBytes <= 0 {
+		return 1 << 20
+	}
+	return c.MaxStreamCapacityBytes
+}
+
+// EffectiveMaxStreamBytesPerTenant returns MaxStreamBytesPerTenant or its 8 MiB default.
+func (c TenantLimitsConfig) EffectiveMaxStreamBytesPerTenant() int64 {
+	if c.MaxStreamBytesPerTenant <= 0 {
+		return 8 << 20
+	}
+	return c.MaxStreamBytesPerTenant
 }
 
 // EffectiveMaxConcurrentDispatchesPerTenant returns the cap or its default.
@@ -539,4 +632,9 @@ func isTenantRuneRange(low rune, high rune) bool {
 
 func isTenantRune(candidate rune) bool {
 	return isTenantRuneRange(candidate, candidate)
+}
+
+// IsAttributeStoreAllowed reports whether a tenant's Flow may select the named Attribute Store.
+func (c TenancyConfig) IsAttributeStoreAllowed(name string) bool {
+	return len(c.AttributeStores) == 0 || slices.Contains(c.AttributeStores, name)
 }

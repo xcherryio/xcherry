@@ -649,29 +649,29 @@ func TestStreamStoreMemoryResumeTokenSurvivesProcessRestartBestEffort(t *testing
 func TestStreamStoreBackendConfiguration(t *testing.T) {
 	require.Equal(t, int32(1000), (&config.StreamStoreConfig{}).EffectiveMaxListMessagesPageSize())
 	require.Equal(t, int32(17), (&config.StreamStoreConfig{MaxReadMessages: 17}).EffectiveMaxListMessagesPageSize())
-	disabledStore, err := streamstore.New(&config.StreamStoreConfig{}, log.NewNoop())
+	disabledStore, err := streamstore.New(&config.StreamStoreConfig{}, &config.TenancyConfig{}, log.NewNoop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, disabledStore.Close()) })
 	disabledInput := streamInput("flow-a", "disabled", 0, "value")
 	disabledInput.StreamCapacityBytes = 1024
 	require.ErrorIs(t, disabledStore.Write(context.Background(), disabledInput), streamstore.ErrDisabled)
 
-	_, err = streamstore.New(&config.StreamStoreConfig{RedisURL: streamTestRedisURL}, log.NewNoop())
+	_, err = streamstore.New(&config.StreamStoreConfig{RedisURL: streamTestRedisURL}, &config.TenancyConfig{}, log.NewNoop())
 	require.ErrorContains(t, err, "redisURL requires redis backend")
 	_, err = streamstore.New(&config.StreamStoreConfig{
 		Backend:  config.StreamStoreBackendMemory,
 		RedisURL: streamTestRedisURL,
-	}, log.NewNoop())
+	}, &config.TenancyConfig{}, log.NewNoop())
 	require.ErrorContains(t, err, "memory backend does not use redisURL")
 	_, err = streamstore.New(&config.StreamStoreConfig{
 		Backend: config.StreamStoreBackendRedis,
-	}, log.NewNoop())
+	}, &config.TenancyConfig{}, log.NewNoop())
 	require.ErrorContains(t, err, "redis backend requires redisURL")
 	_, err = streamstore.New(&config.StreamStoreConfig{
 		Backend: "unsupported",
-	}, log.NewNoop())
+	}, &config.TenancyConfig{}, log.NewNoop())
 	require.ErrorContains(t, err, "unsupported stream store backend")
-	_, err = streamstore.New(&config.StreamStoreConfig{MaxReadMessages: -1}, log.NewNoop())
+	_, err = streamstore.New(&config.StreamStoreConfig{MaxReadMessages: -1}, &config.TenancyConfig{}, log.NewNoop())
 	require.ErrorContains(t, err, "maxReadMessages must be positive")
 }
 
@@ -1107,7 +1107,7 @@ func BenchmarkStreamStoreWrite(b *testing.B) {
 				TrimWorkers:        2,
 				TrimTriggerPercent: 90,
 				TrimTargetPercent:  80,
-			}, log.NewNoop())
+			}, &config.TenancyConfig{}, log.NewNoop())
 			require.NoError(b, err)
 			defer func() { require.NoError(b, store.Close()) }()
 			streamName := "benchmark-" + newRequestID()
@@ -1150,7 +1150,7 @@ func newMemoryStreamTestStore(t testing.TB) *streamstore.Store {
 		BackgroundTrimBatchSize:       256,
 		TrimBatchYieldTime:            100 * time.Microsecond,
 		TrimWorkers:                   4,
-	}, log.NewNoop())
+	}, &config.TenancyConfig{}, log.NewNoop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store
@@ -1161,7 +1161,7 @@ func newStreamTestStoreWithConfig(
 	streamStoreConfig config.StreamStoreConfig,
 ) (*streamstore.Store, *redis.Client) {
 	t.Helper()
-	store, err := streamstore.New(&streamStoreConfig, log.NewNoop())
+	store, err := streamstore.New(&streamStoreConfig, &config.TenancyConfig{}, log.NewNoop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store, newStreamRedisClient(t)

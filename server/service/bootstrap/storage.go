@@ -35,6 +35,7 @@ func (r *Runtime) createBlobStore(
 	return blobstore.NewBlobStore(
 		s3Client,
 		namespace,
+		r.cfg.Tenancy.IsMultiTenant(),
 		&r.cfg.BlobStore,
 		r.logger,
 		metrics,

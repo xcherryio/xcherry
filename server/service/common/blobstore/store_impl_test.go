@@ -95,7 +95,7 @@ func createTestBlobStoreWithCache(t *testing.T, cacheConfig config.BlobCacheConf
 
 	logger, err := loggerimpl.NewDevelopment()
 	assert.NoError(t, err)
-	blobStore, err := NewBlobStore(s3Client, testNamespace, &storeConfig, logger, client.MetricsNopHandler)
+	blobStore, err := NewBlobStore(s3Client, testNamespace, false, &storeConfig, logger, client.MetricsNopHandler)
 	assert.NoError(t, err)
 	assert.NotNil(t, blobStore)
 	t.Cleanup(func() { assert.NoError(t, blobStore.Close()) })

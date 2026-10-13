@@ -43,6 +43,7 @@ const base36Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 type blobStoreImpl struct {
 	s3Client                    *s3.Client
 	pathPrefix                  string // the Temporal namespace or Cadence domain + "/"
+	isMultiTenant               bool
 	activeStorage               config.BlobStoreConfigEntry
 	supportedStore              map[string]config.BlobStoreConfigEntry // storeId as key
 	logger                      log.Logger
@@ -60,9 +61,11 @@ type blobStoreImpl struct {
 	blobCacheErrorCounter       client.MetricsCounter
 }
 
+// NewBlobStore builds the store; in multi-tenant mode a tenant's objects are placed under its tenant segment.
 func NewBlobStore(
 	s3Client *s3.Client,
 	temporalOrCadenceNamespace string,
+	isMultiTenant bool,
 	storeConfig *config.BlobStoreConfig,
 	logger log.Logger,
 	metrics client.MetricsHandler,
@@ -123,6 +126,7 @@ func NewBlobStore(
 	return &blobStoreImpl{
 		s3Client:                    s3Client,
 		pathPrefix:                  temporalOrCadenceNamespace + "/",
+		isMultiTenant:               isMultiTenant,
 		activeStorage:               *activeStorage,
 		supportedStore:              supportedStores,
 		logger:                      logger,
@@ -157,7 +161,7 @@ func (b *blobStoreImpl) WriteObject(
 		return "", "", err
 	}
 	locator = writeDate + "/" + objectID
-	path, err := ValueObjectPath(flowID, locator)
+	path, err := valueObjectPath(b.isMultiTenant, flowID, locator)
 	if err != nil {
 		return "", "", err
 	}
@@ -208,7 +212,7 @@ func (b *blobStoreImpl) WriteStepEventInput(
 	method string,
 	data []byte,
 ) error {
-	path := StepEventInputPath(runStarted, flowID, runID, stepExecutionID, method)
+	path := stepEventInputPath(b.isMultiTenant, runStarted, flowID, runID, stepExecutionID, method)
 	if err := b.writeObject(ctx, b.activeStorage, path, data); err != nil {
 		b.writeObjectErrorCounter.Inc(1)
 		return fmt.Errorf("write step event input: %w", err)
@@ -232,7 +236,7 @@ func (b *blobStoreImpl) ReadStepEventInput(
 	stepExecutionID string,
 	method string,
 ) ([]byte, bool, error) {
-	path := StepEventInputPath(runStarted, flowID, runID, stepExecutionID, method)
+	path := stepEventInputPath(b.isMultiTenant, runStarted, flowID, runID, stepExecutionID, method)
 	storeIDs := make([]string, 0, len(b.supportedStore))
 	for storeID := range b.supportedStore {
 		if storeID != b.activeStorage.StorageId {
@@ -268,9 +272,9 @@ func (b *blobStoreImpl) writeObject(
 		if b.s3Client == nil {
 			return errors.New("S3 client is not configured")
 		}
-		return putObject(ctx, b.s3Client, storage.S3Bucket, b.pathPrefix+path, data)
+		return putObject(ctx, b.s3Client, storage.S3Bucket, b.objectKey(storage, path), data)
 	case config.StorageTypeLocal:
-		return writeLocalObject(ctx, storage.LocalDirectory, b.pathPrefix+path, data)
+		return writeLocalObject(ctx, storage.LocalDirectory, b.objectKey(storage, path), data)
 	default:
 		return fmt.Errorf("unsupported blob storage type %q", storage.StorageType)
 	}
@@ -324,7 +328,7 @@ func writeHashBytes(hasher hash.Hash, data []byte) error {
 }
 
 func (b *blobStoreImpl) ReadObject(ctx context.Context, storeID, flowID, locator string) ([]byte, error) {
-	path, err := ValueObjectPath(flowID, locator)
+	path, err := valueObjectPath(b.isMultiTenant, flowID, locator)
 	if err != nil {
 		return nil, err
 	}
@@ -446,9 +450,9 @@ func (b *blobStoreImpl) readObject(
 		if b.s3Client == nil {
 			return nil, errors.New("S3 client is not configured")
 		}
-		return getObject(ctx, b.s3Client, storage.S3Bucket, b.pathPrefix+path)
+		return getObject(ctx, b.s3Client, storage.S3Bucket, b.objectKey(storage, path))
 	case config.StorageTypeLocal:
-		return readLocalObject(ctx, storage.LocalDirectory, b.pathPrefix+path)
+		return readLocalObject(ctx, storage.LocalDirectory, b.objectKey(storage, path))
 	default:
 		return nil, fmt.Errorf("unsupported blob storage type %q", storage.StorageType)
 	}
@@ -508,7 +512,7 @@ func getObject(ctx context.Context, client *s3.Client, bucketName, key string) (
 func (b *blobStoreImpl) CountWorkflowObjectsForTesting(ctx context.Context, flowID string) (int64, error) {
 	// Create the prefix to match objects for this Flow for today.
 	yymmdd := formatBlobStorageDate(time.Now())
-	prefix := fmt.Sprintf("%s%s$%s/", b.pathPrefix, yymmdd, encodeFlowIDPathPart(flowID))
+	prefix := b.objectKey(b.activeStorage, workflowDirectory(b.isMultiTenant, yymmdd, flowID)+"/")
 	if b.activeStorage.StorageType == config.StorageTypeLocal {
 		return countLocalObjects(ctx, b.activeStorage.LocalDirectory, prefix)
 	}
@@ -537,7 +541,7 @@ func (b *blobStoreImpl) DeleteWorkflowObjects(ctx context.Context, storeId, work
 		if err := deleteLocalWorkflowObjects(
 			ctx,
 			storeConfig.LocalDirectory,
-			b.pathPrefix+workflowPath,
+			b.objectKey(storeConfig, workflowPath),
 		); err != nil {
 			return err
 		}
@@ -551,7 +555,7 @@ func (b *blobStoreImpl) DeleteWorkflowObjects(ctx context.Context, storeId, work
 	}
 
 	// Construct the prefix for all objects of this workflow
-	prefix := fmt.Sprintf("%s%s/", b.pathPrefix, workflowPath)
+	prefix := b.objectKey(storeConfig, workflowPath+"/")
 
 	// Paginate through all objects and delete them in batches
 	var continuationToken *string
@@ -668,51 +672,60 @@ func (b *blobStoreImpl) ListWorkflowPaths(ctx context.Context, input ListObjectP
 	if !ok {
 		return nil, fmt.Errorf("%w for %s", errStoreNotFound, input.StoreId)
 	}
+	relativeDirectory := ""
+	if input.TenantID != "" {
+		relativeDirectory = input.TenantID + "/"
+	}
+	var names []string
+	var continuationToken *string
 	if storeConfig.StorageType == config.StorageTypeLocal {
-		return listLocalWorkflowPaths(
+		output, err := listLocalWorkflowPaths(
 			ctx,
 			storeConfig.LocalDirectory,
-			strings.TrimSuffix(b.pathPrefix, "/"),
+			strings.TrimSuffix(b.objectKey(storeConfig, relativeDirectory), "/"),
 			input.ContinuationToken,
 		)
-	}
-	if b.s3Client == nil {
-		return nil, errors.New("S3 client is not configured")
-	}
-
-	listInput := &s3.ListObjectsV2Input{
-		Bucket:    aws.String(storeConfig.S3Bucket),
-		Prefix:    aws.String(b.pathPrefix),
-		Delimiter: aws.String("/"),
-	}
-
-	// Set continuation token if provided
-	if input.ContinuationToken != nil {
-		listInput.ContinuationToken = input.ContinuationToken
-	}
-
-	result, err := b.s3Client.ListObjectsV2(ctx, listInput)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract workflow paths from common prefixes
-	workflowPaths := make([]string, 0, len(result.CommonPrefixes))
-	for _, commonPrefix := range result.CommonPrefixes {
-		if commonPrefix.Prefix != nil {
-			// Remove the pathPrefix to get the workflow path (yymmdd$escapedFlowId)
-			prefixStr := *commonPrefix.Prefix
-			if strings.HasPrefix(prefixStr, b.pathPrefix) {
-				workflowPath := strings.TrimPrefix(prefixStr, b.pathPrefix)
-				// Remove trailing "/" if present
-				workflowPath = strings.TrimSuffix(workflowPath, "/")
-				workflowPaths = append(workflowPaths, workflowPath)
+		if err != nil {
+			return nil, err
+		}
+		names, continuationToken = output.WorkflowPaths, output.ContinuationToken
+	} else {
+		if b.s3Client == nil {
+			return nil, errors.New("S3 client is not configured")
+		}
+		listPrefix := b.objectKey(storeConfig, relativeDirectory)
+		result, err := b.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(storeConfig.S3Bucket),
+			Prefix:            aws.String(listPrefix),
+			Delimiter:         aws.String("/"),
+			ContinuationToken: input.ContinuationToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, commonPrefix := range result.CommonPrefixes {
+			if commonPrefix.Prefix != nil && strings.HasPrefix(*commonPrefix.Prefix, listPrefix) {
+				names = append(names, strings.TrimSuffix(strings.TrimPrefix(*commonPrefix.Prefix, listPrefix), "/"))
 			}
 		}
+		continuationToken = result.NextContinuationToken
 	}
+	output := &ListObjectPathsOutput{ContinuationToken: continuationToken}
+	for _, name := range names {
+		// Workflow directories always contain "$"; a root directory without one is a tenant segment.
+		if input.TenantID == "" && !strings.Contains(name, "$") {
+			output.TenantSegments = append(output.TenantSegments, name)
+			continue
+		}
+		output.WorkflowPaths = append(output.WorkflowPaths, relativeDirectory+name)
+	}
+	return output, nil
+}
 
-	return &ListObjectPathsOutput{
-		ContinuationToken: result.NextContinuationToken,
-		WorkflowPaths:     workflowPaths,
-	}, nil
+// objectKey returns the storage key of a namespace-relative path: <s3KeyPrefix><namespace>/<path> for S3.
+func (b *blobStoreImpl) objectKey(storage config.BlobStoreConfigEntry, path string) string {
+	if storage.StorageType == config.StorageTypeS3 {
+		return storage.S3KeyPrefix + b.pathPrefix + path
+	}
+	return b.pathPrefix + path
 }

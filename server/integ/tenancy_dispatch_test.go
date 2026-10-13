@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -448,4 +449,28 @@ func TestTenantFairnessKeyTemporal(t *testing.T) {
 	description, err := temporalClient.DescribeWorkflowExecution(ctx, tenancy.StoredFlowID("alpha", flowID), "")
 	require.NoError(t, err)
 	require.Equal(t, "alpha", description.GetWorkflowExecutionInfo().GetPriority().GetFairnessKey())
+}
+
+// TestTenantWorkerTargetClaimMetacharactersTemporal shows a quoted claim with regular expression metacharacters
+// matches only itself, so it cannot widen the allowed pattern.
+func TestTenantWorkerTargetClaimMetacharactersTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	tenants := startDispatchTenants(t, nil, newDispatchProbeHandler(), "")
+	wideClaimToken := tenants.environment.AddStaticTokenWithClaims(t, "gamma",
+		map[string]string{"worker": `127\.0\.0\.1:[0-9]+`})
+	gamma := newFlowClientWithCredential(t, tenants.runtime.PublicAddress, wideClaimToken)
+	require.Eventually(t, func() bool {
+		_, err := gamma.GetServerInfo(ctx, &emptypb.Empty{})
+		return err == nil
+	}, 10*time.Second, 200*time.Millisecond, "the reloaded token file accepts gamma's token")
+
+	for _, target := range []*dexpb.WorkerTarget{tenants.alphaTarget, tenants.betaTarget} {
+		err := startDispatchProbe(ctx, gamma, "wide-claim-"+uuid.NewString(), dispatchProbeStep, target, nil)
+		require.Equal(t, codes.PermissionDenied, status.Code(err),
+			"a claim value is matched literally, so it does not allow %s: %v", target.GetAddress(), err)
+	}
 }

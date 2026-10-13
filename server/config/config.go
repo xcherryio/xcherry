@@ -242,6 +242,9 @@ type (
 		SupportedStorages []BlobStoreConfigEntry `yaml:"supportedStorages"`
 		// HistoryRetentionInDays must match the Temporal/Cadence history retention. Default 0; configure it explicitly.
 		HistoryRetentionInDays int `yaml:"historyRetentionInDays"`
+		// TenantCleanupConfirmationDelay separates the two NotFound answers that blob cleanup requires before deleting
+		// a tenant's workflow path, which guards against visibility lag. Default 60s. Must not be negative.
+		TenantCleanupConfirmationDelay time.Duration `yaml:"tenantCleanupConfirmationDelay"`
 		// BlobCache configures the S3 Attribute disk cache. Default disabled because Directory is empty. Immutable after startup.
 		BlobCache BlobCacheConfig `yaml:"blobCache"`
 	}
@@ -279,6 +282,11 @@ type (
 		TableName string `yaml:"tableName"`
 		// FlowIDColumn stores Flow IDs in Databricks and Snowflake. Default empty is invalid for warehouse stores. Immutable after startup.
 		FlowIDColumn string `yaml:"flowIdColumn"`
+		// TenantColumn makes a PostgreSQL or MySQL store tenant-scoped for multi-tenant namespaces: the server writes
+		// the tenant ID into this column and splits the application Flow ID with RowKey, which is then required, for
+		// example rowKey "{flow_id}". The table's primary key must be exactly TenantColumn and the RowKey columns.
+		// Required for every store in multi-tenant mode. Default empty. Immutable after startup.
+		TenantColumn string `yaml:"tenantColumn"`
 		// DatabaseName selects the MongoDB database. Default empty is invalid for MongoDB stores. Immutable after startup.
 		DatabaseName string `yaml:"databaseName"`
 		// CollectionName selects the existing MongoDB collection. Default empty is invalid for MongoDB stores. Immutable after startup.
@@ -339,6 +347,11 @@ type (
 		S3AccessKey string `yaml:"s3AccessKey"`
 		// S3SecretKey is the optional static S3 secret access key. Default empty with S3AccessKey empty uses the AWS credential chain. Set both or neither. Immutable after startup.
 		S3SecretKey string `yaml:"s3SecretKey"`
+		// S3KeyPrefix is prepended to every object key of this S3 storage, before the namespace. Default empty.
+		// It must not start with "/". Use it to place Dex objects under a bucket prefix that access policies scope,
+		// for example "dex/". With multi-tenant namespaces, keys are <s3KeyPrefix><namespace>/<tenant>/..., so each
+		// tenant has one prefix that a policy can scope and a purge can delete. Immutable after startup.
+		S3KeyPrefix string `yaml:"s3KeyPrefix"`
 		// CleanupStrategy controls automatic blob cleanup. Default type is afterAllRunsDeleted; zero frequency disables scheduling.
 		CleanupStrategy CleanupStrategy `yaml:"cleanupStrategy"`
 	}
@@ -878,6 +891,17 @@ func (c BlobStoreConfig) EffectiveAsyncStepInputSnapshotsEnabled() bool {
 }
 
 // Validate checks Blob Store identifier, credentials and cache settings.
+// DefaultTenantCleanupConfirmationDelay separates the two NotFound answers required before a tenant path is deleted.
+const DefaultTenantCleanupConfirmationDelay = 60 * time.Second
+
+// EffectiveTenantCleanupConfirmationDelay returns TenantCleanupConfirmationDelay or its default.
+func (c BlobStoreConfig) EffectiveTenantCleanupConfirmationDelay() time.Duration {
+	if c.TenantCleanupConfirmationDelay <= 0 {
+		return DefaultTenantCleanupConfirmationDelay
+	}
+	return c.TenantCleanupConfirmationDelay
+}
+
 func (c BlobStoreConfig) Validate() error {
 	if c.EffectiveAsyncStepInputSnapshotsEnabled() && !c.EffectiveEnabled() {
 		return fmt.Errorf("blobStore asyncStepInputSnapshotsEnabled requires blobStore.enabled")
@@ -888,6 +912,9 @@ func (c BlobStoreConfig) Validate() error {
 	for _, storage := range c.SupportedStorages {
 		if storage.StorageType == StorageTypeS3 && (storage.S3AccessKey == "") != (storage.S3SecretKey == "") {
 			return fmt.Errorf("blobStore S3 access key and secret key must both be configured or both omitted")
+		}
+		if strings.HasPrefix(storage.S3KeyPrefix, "/") {
+			return fmt.Errorf("blobStore s3KeyPrefix must not start with /")
 		}
 	}
 	return c.BlobCache.Validate()
@@ -998,6 +1025,9 @@ func (c AttributeStoreConfig) Validate() error {
 		}
 		if store.Type.IsWarehouse() && store.hasRelationalOptions() {
 			return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey, columnNaming and attributeMaps", name)
+		}
+		if store.TenantColumn != "" && (store.Type.IsWarehouse() || store.RowKey == "") {
+			return fmt.Errorf("attribute store %q tenantColumn requires a mysql or postgres store with rowKey", name)
 		}
 		if !store.ColumnNaming.IsSupported() {
 			return fmt.Errorf("attribute store %q has unsupported columnNaming %q", name, store.ColumnNaming)

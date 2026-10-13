@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/superdurable/dex/config"
+	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 )
@@ -44,9 +45,20 @@ type trimState struct {
 	isRunning   bool
 }
 
+// streamScope is the budget scope of a Stream: the Flow type and Stream name, within one tenant.
 type streamScope struct {
+	tenantID   string
 	flowType   string
 	streamName string
+}
+
+// newStreamScope derives the tenant from a server-minted stored Flow ID in multi-tenant mode only.
+func newStreamScope(isMultiTenant bool, flowType string, streamName string, flowID string) streamScope {
+	scope := streamScope{flowType: flowType, streamName: streamName}
+	if isMultiTenant {
+		scope.tenantID, _, _ = service.SplitTenantStoredFlowID(flowID)
+	}
+	return scope
 }
 
 type trimTask struct {
@@ -82,13 +94,12 @@ func newTrimCoordinator(
 	return coordinator
 }
 
-func (c *trimCoordinator) Schedule(flowType string, streamName string, targetBytes int64) {
+func (c *trimCoordinator) Schedule(scope streamScope, targetBytes int64) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.closed {
 		return
 	}
-	scope := streamScope{flowType: flowType, streamName: streamName}
 	state := c.pending[scope]
 	if state == nil {
 		state = &trimState{targetBytes: targetBytes}
@@ -168,7 +179,7 @@ func (c *trimCoordinator) finishTask(task trimTask) {
 }
 
 func (c *trimCoordinator) trim(scope streamScope, targetBytes int64) error {
-	keys := streamKeys(scope.flowType, scope.streamName, "")
+	keys := streamKeys(scope, "")
 	leaseOwner := c.ownerID + ":" + uuid.NewString()
 	for {
 		if c.isClosed() {

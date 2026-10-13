@@ -79,3 +79,27 @@ func validateIdentifierCharacters(identifierName string, value string) error {
 	}
 	return nil
 }
+
+const tenantStoredFlowIDPrefix = "T:"
+
+// TenantStoredFlowID returns the engine identifier of a tenant's application Flow ID. An empty tenant leaves it
+// unchanged.
+func TenantStoredFlowID(tenantID string, applicationFlowID string) string {
+	if tenantID == "" {
+		return applicationFlowID
+	}
+	return tenantStoredFlowIDPrefix + tenantID + ":" + applicationFlowID
+}
+
+// SplitTenantStoredFlowID returns the tenant and application Flow ID of a server-minted tenant stored Flow ID.
+// It returns false for a Flow ID without a tenant prefix. Callers must not use it to authorize a request.
+func SplitTenantStoredFlowID(storedFlowID string) (string, string, bool) {
+	if !strings.HasPrefix(storedFlowID, tenantStoredFlowIDPrefix) {
+		return "", "", false
+	}
+	tenantID, applicationFlowID, found := strings.Cut(storedFlowID[len(tenantStoredFlowIDPrefix):], ":")
+	if !found || tenantID == "" {
+		return "", "", false
+	}
+	return tenantID, applicationFlowID, true
+}

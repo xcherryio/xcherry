@@ -56,6 +56,7 @@ type DispatchGate struct {
 	logger          log.Logger
 	isMultiTenant   bool
 	isFairness      bool
+	tenancyCfg      *config.TenancyConfig
 	mu              sync.Mutex
 	slotsByTenant   map[string]*tenantDispatchSlots
 	lastWakeByKey   map[wakeNotificationKey]time.Time
@@ -98,6 +99,7 @@ func NewDispatchGate(
 		logger:        logger,
 		isMultiTenant: cfg.IsMultiTenant(),
 		isFairness:    cfg.IsMultiTenant() && cfg.Fairness,
+		tenancyCfg:    cfg,
 		slotsByTenant: map[string]*tenantDispatchSlots{},
 		lastWakeByKey: map[wakeNotificationKey]time.Time{},
 	}, nil
@@ -109,6 +111,11 @@ func (g *DispatchGate) FairnessKey(tenantID string) string {
 		return ""
 	}
 	return tenantID
+}
+
+// IsAttributeStoreAllowed reports whether a Flow of tenantID may select the named Attribute Store.
+func (g *DispatchGate) IsAttributeStoreAllowed(tenantID string, name string) bool {
+	return tenantID == "" || g.tenancyCfg.IsAttributeStoreAllowed(name)
 }
 
 // Policy returns the worker target policy, nil in single-tenant mode.

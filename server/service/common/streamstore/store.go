@@ -23,6 +23,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/log"
 	"google.golang.org/protobuf/proto"
 )
@@ -57,6 +58,7 @@ type Message struct {
 
 type Store struct {
 	cfg     *config.StreamStoreConfig
+	tenancy *config.TenancyConfig
 	backend backend
 }
 
@@ -75,11 +77,15 @@ type backendWriteInput struct {
 	trimTriggerBytes       int64
 	baseTrimTargetBytes    int64
 	messageTrimTargetBytes int64
+	// maxTenantBytes caps a tenant's buffered bytes: per process in the memory backend, across the namespace's
+	// shared Redis in the redis backend. Zero means no cap.
+	maxTenantBytes int64
 }
 
 type redisBackend struct {
-	client      *redis.Client
-	coordinator *trimCoordinator
+	client        *redis.Client
+	coordinator   *trimCoordinator
+	isMultiTenant bool
 }
 
 type resumeToken struct {
@@ -90,8 +96,9 @@ type resumeToken struct {
 	MessageID  string `json:"i"`
 }
 
-func New(cfg *config.StreamStoreConfig, logger log.Logger) (*Store, error) {
-	if cfg == nil {
+// New builds the Stream Store; in multi-tenant mode Streams are scoped and limited per tenant.
+func New(cfg *config.StreamStoreConfig, tenancy *config.TenancyConfig, logger log.Logger) (*Store, error) {
+	if cfg == nil || tenancy == nil {
 		panic("Stream Store config must not be nil")
 	}
 	if logger == nil {
@@ -100,12 +107,12 @@ func New(cfg *config.StreamStoreConfig, logger log.Logger) (*Store, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	store := &Store{cfg: cfg}
+	store := &Store{cfg: cfg, tenancy: tenancy}
 	switch cfg.EffectiveBackend() {
 	case config.StreamStoreBackendDisabled:
 		return store, nil
 	case config.StreamStoreBackendMemory:
-		store.backend = newMemoryBackend(cfg)
+		store.backend = newMemoryBackend(cfg, tenancy.IsMultiTenant())
 	case config.StreamStoreBackendRedis:
 		options, err := redis.ParseURL(cfg.RedisURL)
 		if err != nil {
@@ -113,8 +120,9 @@ func New(cfg *config.StreamStoreConfig, logger log.Logger) (*Store, error) {
 		}
 		client := redis.NewClient(options)
 		store.backend = &redisBackend{
-			client:      client,
-			coordinator: newTrimCoordinator(cfg, client, logger),
+			client:        client,
+			coordinator:   newTrimCoordinator(cfg, client, logger),
+			isMultiTenant: tenancy.IsMultiTenant(),
 		}
 	default:
 		panic("validated Stream Store backend was not handled")
@@ -140,6 +148,11 @@ func (s *Store) Write(ctx context.Context, input WriteInput) error {
 	if int64(len(payload)) > s.cfg.EffectiveMaxMessageBytes() {
 		return ErrMessageTooLarge
 	}
+	var maxTenantBytes int64
+	if _, _, isTenantFlow := service.SplitTenantStoredFlowID(input.FlowID); isTenantFlow && s.tenancy.IsMultiTenant() {
+		input.StreamCapacityBytes = min(input.StreamCapacityBytes, s.tenancy.Limits.EffectiveMaxStreamCapacityBytes())
+		maxTenantBytes = s.tenancy.Limits.EffectiveMaxStreamBytesPerTenant()
+	}
 	chargedBytes, err := s.chargedBytes(input, len(payload))
 	if err != nil {
 		return err
@@ -158,6 +171,7 @@ func (s *Store) Write(ctx context.Context, input WriteInput) error {
 		trimTriggerBytes:       trimTrigger,
 		baseTrimTargetBytes:    baseTrimTarget,
 		messageTrimTargetBytes: messageTrimTarget,
+		maxTenantBytes:         maxTenantBytes,
 	})
 }
 
@@ -218,7 +232,7 @@ func (b *redisBackend) Close() error {
 
 func (b *redisBackend) Write(ctx context.Context, input backendWriteInput) error {
 	scriptOutput, err := runWriteScript(ctx, b.client, writeScriptInput{
-		keys:                   streamKeys(input.input.FlowType, input.input.StreamName, input.input.FlowID),
+		keys:                   streamKeys(newStreamScope(b.isMultiTenant, input.input.FlowType, input.input.StreamName, input.input.FlowID), input.input.FlowID),
 		source:                 input.input.Source,
 		payload:                input.payload,
 		chargedBytes:           input.chargedBytes,
@@ -226,14 +240,14 @@ func (b *redisBackend) Write(ctx context.Context, input backendWriteInput) error
 		trimTriggerBytes:       input.trimTriggerBytes,
 		baseTrimTargetBytes:    input.baseTrimTargetBytes,
 		messageTrimTargetBytes: input.messageTrimTargetBytes,
+		maxTenantBytes:         input.maxTenantBytes,
 	})
 	if err != nil {
 		return err
 	}
 	if scriptOutput.needsTrim {
 		b.coordinator.Schedule(
-			input.input.FlowType,
-			input.input.StreamName,
+			newStreamScope(b.isMultiTenant, input.input.FlowType, input.input.StreamName, input.input.FlowID),
 			scriptOutput.trimTargetBytes,
 		)
 	}
@@ -259,7 +273,7 @@ func (b *redisBackend) Read(
 		panic("Stream read context requires a deadline")
 	}
 	result, err := b.client.XRead(ctx, &redis.XReadArgs{
-		Streams: []string{streamKeys(flowType, streamName, flowID).instance, messageID},
+		Streams: []string{streamKeys(newStreamScope(b.isMultiTenant, flowType, streamName, flowID), flowID).instance, messageID},
 		Count:   1,
 		Block:   time.Until(deadline),
 	}).Result()
@@ -293,7 +307,7 @@ func (b *redisBackend) List(
 	}
 	redisMessages, err := b.client.XRevRangeN(
 		ctx,
-		streamKeys(flowType, streamName, flowID).instance,
+		streamKeys(newStreamScope(b.isMultiTenant, flowType, streamName, flowID), flowID).instance,
 		start,
 		"-",
 		int64(pageSize)+1,
@@ -443,18 +457,38 @@ type redisKeys struct {
 	chargedBytes string
 	instance     string
 	lease        string
+	// tenantChargedBytes totals a tenant's charged bytes across its Streams; empty without a tenant.
+	tenantChargedBytes string
 }
 
-func streamKeys(flowType string, streamName string, flowID string) redisKeys {
-	streamScope := fmt.Sprintf("%d:%s%d:%s", len(flowType), flowType, len(streamName), streamName)
-	streamDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(streamScope)))
+// tenantChargedBytesOrScope returns a key every script call can name; without a tenant the scripts ignore it.
+func (k redisKeys) tenantChargedBytesOrScope() string {
+	if k.tenantChargedBytes == "" {
+		return k.chargedBytes
+	}
+	return k.tenantChargedBytes
+}
+
+// streamKeys places a tenant's keys under dex:stream:v1:t:<tenant>:, so the tenant's keys share one prefix.
+func streamKeys(scope streamScope, flowID string) redisKeys {
+	scopeText := fmt.Sprintf(
+		"%d:%s%d:%s", len(scope.flowType), scope.flowType, len(scope.streamName), scope.streamName,
+	)
+	streamDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(scopeText)))
 	base := "dex:stream:v1:" + streamDigest
+	tenantChargedBytes := ""
+	if scope.tenantID != "" {
+		tenantPrefix := "dex:stream:v1:t:" + scope.tenantID + ":"
+		base = tenantPrefix + streamDigest
+		tenantChargedBytes = tenantPrefix + "charged-total"
+	}
 	flowDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(flowID)))
 	return redisKeys{
-		fifo:         base + ":fifo",
-		chargedBytes: base + ":charged",
-		instance:     base + ":instance:" + flowDigest,
-		lease:        base + ":trim-lease",
+		fifo:               base + ":fifo",
+		chargedBytes:       base + ":charged",
+		instance:           base + ":instance:" + flowDigest,
+		lease:              base + ":trim-lease",
+		tenantChargedBytes: tenantChargedBytes,
 	}
 }
 
