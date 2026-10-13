@@ -58,8 +58,9 @@ const (
 	DefaultWebPort = 8802
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
-	// DefaultGrpcMaxMessageBytes is 16 MiB so that large attributes can be transported.
-	DefaultGrpcMaxMessageBytes = 16 * 1024 * 1024
+	// DefaultGrpcMaxMessageBytes is 32 MiB so that application values up to 16 MiB keep 16 MiB of headroom
+	// for the request or response envelope, such as loaded state, batch entries, and metadata.
+	DefaultGrpcMaxMessageBytes = 32 * 1024 * 1024
 	// DefaultWorkerConnectionIdleTimeout is how long an idle WorkerService conn may sit unused before eviction.
 	DefaultWorkerConnectionIdleTimeout = 10 * time.Minute
 	// DefaultMaxWorkerConnections caps the WorkerService dial pool; positive required at runtime.
@@ -361,7 +362,9 @@ type (
 		Port int `yaml:"port"`
 		// MaxWaitSeconds caps transport long polls. Zero uses DefaultMaxWaitSeconds (60). Positive values are the cap. Negatives are invalid. It does not limit Temporal Update handlers.
 		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
-		// GrpcMaxMessageBytes is MaxRecv/MaxSend for FlowService, InternalService, and WorkerService clients. Default 16 MiB. Must be positive and larger than continue-as-new page size plus overhead.
+		// GrpcMaxMessageBytes is MaxRecv/MaxSend for FlowService, InternalService, and WorkerService clients. Default 32 MiB. Must be positive and larger than continue-as-new page size plus overhead.
+		// Zero or negative uses the default. Keep it above the largest application value plus envelope headroom; the default leaves 16 MiB for values up to 16 MiB.
+		// SDK Clients and Workers apply their own limit (the Go SDK's GrpcMaxMessageBytes also defaults to 32 MiB); the smaller limit of each hop applies.
 		GrpcMaxMessageBytes int `yaml:"grpcMaxMessageBytes"`
 		// UseTemporalSynchronousUpdateForAllRPCs routes non-locking Temporal RPCs through synchronous Updates. Default false because Temporal limits concurrent Updates. Enabling trades that capacity for validator rejection and atomic effect commits. Locking Temporal RPCs always use Updates.
 		UseTemporalSynchronousUpdateForAllRPCs bool `yaml:"useTemporalSynchronousUpdateForAllRPCs"`

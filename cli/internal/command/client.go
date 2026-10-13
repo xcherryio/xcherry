@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const defaultMaxMessageBytes = 16 << 20
+const defaultMaxMessageBytes = 32 << 20
 
 type flowService struct {
 	connection *grpc.ClientConn
