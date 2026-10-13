@@ -64,7 +64,8 @@ func TestValidateTenancyRefusesUnsafeMultiTenantServers(t *testing.T) {
 					Kind: TenantAuthenticatorKindStaticTokens,
 					File: "/etc/dex/tenant-tokens.yaml",
 				}},
-				Internal: TenancyInternalConfig{Listen: "127.0.0.1:8803", TokenFile: "/etc/dex/internal-token"},
+				Internal:     TenancyInternalConfig{Listen: "127.0.0.1:8803", TokenFile: "/etc/dex/internal-token"},
+				WorkerTarget: TenantWorkerTargetConfig{Allowed: `^worker\.{{ quote .tenant }}:9000$`},
 				IsIncompleteMultiTenantModeAllowedForTest: true,
 			},
 		}

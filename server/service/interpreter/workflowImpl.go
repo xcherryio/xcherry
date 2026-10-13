@@ -65,6 +65,7 @@ func (i *Interpreter) StartEngineFlow(
 		FlowType:            input.GetFlowType(),
 		RunStartedTimestamp: runStartedTimestamp,
 		TenantID:            input.GetTenantId(),
+		TenantClaims:        input.GetTenantClaims(),
 	}
 	flowTimeout := NewFlowTimeout(input)
 	subFlowParentFlowID, parentFlowErr := provider.GetSearchAttributeKeyword(
@@ -923,6 +924,7 @@ func (i *Interpreter) processStepExecution(
 		activityInput := &dexpb.InvokeWaitForMethodActivityInput{
 			WorkerTarget: flowConfiger.GetWorkerTarget(),
 			TenantId:     basicInfo.TenantID,
+			TenantClaims: basicInfo.TenantClaims,
 			Request: &dexpb.InvokeWaitForMethodRequest{
 				Context:      executionContext,
 				FlowType:     basicInfo.FlowType,
@@ -988,7 +990,7 @@ func (i *Interpreter) processStepExecution(
 				i.activities,
 				subFlowTracker,
 				stepExeId,
-				basicInfo.TenantID,
+				basicInfo,
 				flowConfiger.Get(),
 				returnedWaitingCondition,
 				&i.sharedConfig.Interpreter.InterpreterActivityConfig,
@@ -1259,6 +1261,7 @@ func (i *Interpreter) invokeExecuteMethod(
 	activityInput := &dexpb.InvokeExecuteMethodActivityInput{
 		WorkerTarget: flowConfiger.GetWorkerTarget(),
 		TenantId:     basicInfo.TenantID,
+		TenantClaims: basicInfo.TenantClaims,
 		Request: &dexpb.InvokeExecuteMethodRequest{
 			Context:          executionContext,
 			FlowType:         basicInfo.FlowType,

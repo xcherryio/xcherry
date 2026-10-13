@@ -1401,6 +1401,13 @@ export interface InterpreterWorkflowInput {
     | undefined;
   /** Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode. */
   tenantId: string;
+  /** Verified claims of the starting tenant principal, used to check worker targets at every dispatch. */
+  tenantClaims: { [key: string]: string };
+}
+
+export interface InterpreterWorkflowInput_TenantClaimsEntry {
+  key: string;
+  value: string;
 }
 
 export interface InterpreterWorkflowOutput {
@@ -1422,6 +1429,13 @@ export interface InvokeWaitForMethodActivityInput {
     | undefined;
   /** Tenant of the dispatching Flow; empty in single-tenant mode. */
   tenantId: string;
+  /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
+  tenantClaims: { [key: string]: string };
+}
+
+export interface InvokeWaitForMethodActivityInput_TenantClaimsEntry {
+  key: string;
+  value: string;
 }
 
 export interface InvokeWaitForMethodActivityOutput {
@@ -1435,6 +1449,13 @@ export interface InvokeExecuteMethodActivityInput {
     | undefined;
   /** Tenant of the dispatching Flow; empty in single-tenant mode. */
   tenantId: string;
+  /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
+  tenantClaims: { [key: string]: string };
+}
+
+export interface InvokeExecuteMethodActivityInput_TenantClaimsEntry {
+  key: string;
+  value: string;
 }
 
 export interface RecoveryErrorInfo {
@@ -1469,6 +1490,13 @@ export interface InvokeWorkerRPCActivityInput {
     | undefined;
   /** Tenant of the Flow; empty in single-tenant mode. */
   tenantId: string;
+  /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
+  tenantClaims: { [key: string]: string };
+}
+
+export interface InvokeWorkerRPCActivityInput_TenantClaimsEntry {
+  key: string;
+  value: string;
 }
 
 export interface InvokeWorkerRPCActivityOutput {
@@ -1508,6 +1536,13 @@ export interface StartSubFlowActivityInput {
   parentStepExecutionId: string;
   /** Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode. */
   tenantId: string;
+  /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
+  tenantClaims: { [key: string]: string };
+}
+
+export interface StartSubFlowActivityInput_TenantClaimsEntry {
+  key: string;
+  value: string;
 }
 
 export interface StartSubFlowActivityOutput {
@@ -15024,6 +15059,7 @@ function createBaseInterpreterWorkflowInput(): InterpreterWorkflowInput {
     continueAsNewInput: undefined,
     timeoutHandlerOptions: undefined,
     tenantId: "",
+    tenantClaims: {},
   };
 }
 
@@ -15065,6 +15101,9 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
     if (message.tenantId !== "") {
       writer.uint32(98).string(message.tenantId);
     }
+    globalThis.Object.entries(message.tenantClaims).forEach(([key, value]: [string, string]) => {
+      InterpreterWorkflowInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(106).fork()).join();
+    });
     return writer;
   },
 
@@ -15171,6 +15210,17 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
           message.tenantId = reader.string();
           continue;
         }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          const entry13 = InterpreterWorkflowInput_TenantClaimsEntry.decode(reader, reader.uint32());
+          if (entry13.value !== undefined) {
+            message.tenantClaims[entry13.key] = entry13.value;
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15208,6 +15258,77 @@ export const InterpreterWorkflowInput: MessageFns<InterpreterWorkflowInput> = {
         ? FlowTimeoutHandlerOptions.fromPartial(object.timeoutHandlerOptions)
         : undefined;
     message.tenantId = object.tenantId ?? "";
+    message.tenantClaims = (globalThis.Object.entries(object.tenantClaims ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseInterpreterWorkflowInput_TenantClaimsEntry(): InterpreterWorkflowInput_TenantClaimsEntry {
+  return { key: "", value: "" };
+}
+
+export const InterpreterWorkflowInput_TenantClaimsEntry: MessageFns<InterpreterWorkflowInput_TenantClaimsEntry> = {
+  encode(message: InterpreterWorkflowInput_TenantClaimsEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InterpreterWorkflowInput_TenantClaimsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInterpreterWorkflowInput_TenantClaimsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<InterpreterWorkflowInput_TenantClaimsEntry>, I>>(
+    base?: I,
+  ): InterpreterWorkflowInput_TenantClaimsEntry {
+    return InterpreterWorkflowInput_TenantClaimsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InterpreterWorkflowInput_TenantClaimsEntry>, I>>(
+    object: I,
+  ): InterpreterWorkflowInput_TenantClaimsEntry {
+    const message = createBaseInterpreterWorkflowInput_TenantClaimsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };
@@ -15355,7 +15476,7 @@ export const BlobStoreCleanupWorkflowOutput: MessageFns<BlobStoreCleanupWorkflow
 };
 
 function createBaseInvokeWaitForMethodActivityInput(): InvokeWaitForMethodActivityInput {
-  return { workerTarget: undefined, request: undefined, tenantId: "" };
+  return { workerTarget: undefined, request: undefined, tenantId: "", tenantClaims: {} };
 }
 
 export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodActivityInput> = {
@@ -15369,6 +15490,10 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
     if (message.tenantId !== "") {
       writer.uint32(26).string(message.tenantId);
     }
+    globalThis.Object.entries(message.tenantClaims).forEach(([key, value]: [string, string]) => {
+      InvokeWaitForMethodActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
+        .join();
+    });
     return writer;
   },
 
@@ -15403,6 +15528,17 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
           message.tenantId = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          const entry4 = InvokeWaitForMethodActivityInput_TenantClaimsEntry.decode(reader, reader.uint32());
+          if (entry4.value !== undefined) {
+            message.tenantClaims[entry4.key] = entry4.value;
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15428,6 +15564,82 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
       ? InvokeWaitForMethodRequest.fromPartial(object.request)
       : undefined;
     message.tenantId = object.tenantId ?? "";
+    message.tenantClaims = (globalThis.Object.entries(object.tenantClaims ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseInvokeWaitForMethodActivityInput_TenantClaimsEntry(): InvokeWaitForMethodActivityInput_TenantClaimsEntry {
+  return { key: "", value: "" };
+}
+
+export const InvokeWaitForMethodActivityInput_TenantClaimsEntry: MessageFns<
+  InvokeWaitForMethodActivityInput_TenantClaimsEntry
+> = {
+  encode(
+    message: InvokeWaitForMethodActivityInput_TenantClaimsEntry,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InvokeWaitForMethodActivityInput_TenantClaimsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInvokeWaitForMethodActivityInput_TenantClaimsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<InvokeWaitForMethodActivityInput_TenantClaimsEntry>, I>>(
+    base?: I,
+  ): InvokeWaitForMethodActivityInput_TenantClaimsEntry {
+    return InvokeWaitForMethodActivityInput_TenantClaimsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InvokeWaitForMethodActivityInput_TenantClaimsEntry>, I>>(
+    object: I,
+  ): InvokeWaitForMethodActivityInput_TenantClaimsEntry {
+    const message = createBaseInvokeWaitForMethodActivityInput_TenantClaimsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };
@@ -15485,7 +15697,7 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
 };
 
 function createBaseInvokeExecuteMethodActivityInput(): InvokeExecuteMethodActivityInput {
-  return { workerTarget: undefined, request: undefined, tenantId: "" };
+  return { workerTarget: undefined, request: undefined, tenantId: "", tenantClaims: {} };
 }
 
 export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodActivityInput> = {
@@ -15499,6 +15711,10 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
     if (message.tenantId !== "") {
       writer.uint32(26).string(message.tenantId);
     }
+    globalThis.Object.entries(message.tenantClaims).forEach(([key, value]: [string, string]) => {
+      InvokeExecuteMethodActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
+        .join();
+    });
     return writer;
   },
 
@@ -15533,6 +15749,17 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
           message.tenantId = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          const entry4 = InvokeExecuteMethodActivityInput_TenantClaimsEntry.decode(reader, reader.uint32());
+          if (entry4.value !== undefined) {
+            message.tenantClaims[entry4.key] = entry4.value;
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15558,6 +15785,82 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
       ? InvokeExecuteMethodRequest.fromPartial(object.request)
       : undefined;
     message.tenantId = object.tenantId ?? "";
+    message.tenantClaims = (globalThis.Object.entries(object.tenantClaims ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseInvokeExecuteMethodActivityInput_TenantClaimsEntry(): InvokeExecuteMethodActivityInput_TenantClaimsEntry {
+  return { key: "", value: "" };
+}
+
+export const InvokeExecuteMethodActivityInput_TenantClaimsEntry: MessageFns<
+  InvokeExecuteMethodActivityInput_TenantClaimsEntry
+> = {
+  encode(
+    message: InvokeExecuteMethodActivityInput_TenantClaimsEntry,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InvokeExecuteMethodActivityInput_TenantClaimsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInvokeExecuteMethodActivityInput_TenantClaimsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<InvokeExecuteMethodActivityInput_TenantClaimsEntry>, I>>(
+    base?: I,
+  ): InvokeExecuteMethodActivityInput_TenantClaimsEntry {
+    return InvokeExecuteMethodActivityInput_TenantClaimsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InvokeExecuteMethodActivityInput_TenantClaimsEntry>, I>>(
+    object: I,
+  ): InvokeExecuteMethodActivityInput_TenantClaimsEntry {
+    const message = createBaseInvokeExecuteMethodActivityInput_TenantClaimsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };
@@ -15894,7 +16197,7 @@ export const DumpFlowForContinueAsNewActivityOutput: MessageFns<DumpFlowForConti
 };
 
 function createBaseInvokeWorkerRPCActivityInput(): InvokeWorkerRPCActivityInput {
-  return { rpcPrep: undefined, request: undefined, tenantId: "" };
+  return { rpcPrep: undefined, request: undefined, tenantId: "", tenantClaims: {} };
 }
 
 export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInput> = {
@@ -15908,6 +16211,10 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
     if (message.tenantId !== "") {
       writer.uint32(26).string(message.tenantId);
     }
+    globalThis.Object.entries(message.tenantClaims).forEach(([key, value]: [string, string]) => {
+      InvokeWorkerRPCActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
+        .join();
+    });
     return writer;
   },
 
@@ -15942,6 +16249,17 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
           message.tenantId = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          const entry4 = InvokeWorkerRPCActivityInput_TenantClaimsEntry.decode(reader, reader.uint32());
+          if (entry4.value !== undefined) {
+            message.tenantClaims[entry4.key] = entry4.value;
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15963,6 +16281,82 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
       ? InvokeRPCRequest.fromPartial(object.request)
       : undefined;
     message.tenantId = object.tenantId ?? "";
+    message.tenantClaims = (globalThis.Object.entries(object.tenantClaims ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseInvokeWorkerRPCActivityInput_TenantClaimsEntry(): InvokeWorkerRPCActivityInput_TenantClaimsEntry {
+  return { key: "", value: "" };
+}
+
+export const InvokeWorkerRPCActivityInput_TenantClaimsEntry: MessageFns<
+  InvokeWorkerRPCActivityInput_TenantClaimsEntry
+> = {
+  encode(
+    message: InvokeWorkerRPCActivityInput_TenantClaimsEntry,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InvokeWorkerRPCActivityInput_TenantClaimsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInvokeWorkerRPCActivityInput_TenantClaimsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<InvokeWorkerRPCActivityInput_TenantClaimsEntry>, I>>(
+    base?: I,
+  ): InvokeWorkerRPCActivityInput_TenantClaimsEntry {
+    return InvokeWorkerRPCActivityInput_TenantClaimsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InvokeWorkerRPCActivityInput_TenantClaimsEntry>, I>>(
+    object: I,
+  ): InvokeWorkerRPCActivityInput_TenantClaimsEntry {
+    const message = createBaseInvokeWorkerRPCActivityInput_TenantClaimsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };
@@ -16268,7 +16662,13 @@ export const SyncAttributeBatchActivityInput: MessageFns<SyncAttributeBatchActiv
 };
 
 function createBaseStartSubFlowActivityInput(): StartSubFlowActivityInput {
-  return { condition: undefined, parentFlowConfig: undefined, parentStepExecutionId: "", tenantId: "" };
+  return {
+    condition: undefined,
+    parentFlowConfig: undefined,
+    parentStepExecutionId: "",
+    tenantId: "",
+    tenantClaims: {},
+  };
 }
 
 export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = {
@@ -16285,6 +16685,9 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
     if (message.tenantId !== "") {
       writer.uint32(34).string(message.tenantId);
     }
+    globalThis.Object.entries(message.tenantClaims).forEach(([key, value]: [string, string]) => {
+      StartSubFlowActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(42).fork()).join();
+    });
     return writer;
   },
 
@@ -16327,6 +16730,17 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
           message.tenantId = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          const entry5 = StartSubFlowActivityInput_TenantClaimsEntry.decode(reader, reader.uint32());
+          if (entry5.value !== undefined) {
+            message.tenantClaims[entry5.key] = entry5.value;
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -16349,6 +16763,80 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
       : undefined;
     message.parentStepExecutionId = object.parentStepExecutionId ?? "";
     message.tenantId = object.tenantId ?? "";
+    message.tenantClaims = (globalThis.Object.entries(object.tenantClaims ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseStartSubFlowActivityInput_TenantClaimsEntry(): StartSubFlowActivityInput_TenantClaimsEntry {
+  return { key: "", value: "" };
+}
+
+export const StartSubFlowActivityInput_TenantClaimsEntry: MessageFns<StartSubFlowActivityInput_TenantClaimsEntry> = {
+  encode(
+    message: StartSubFlowActivityInput_TenantClaimsEntry,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StartSubFlowActivityInput_TenantClaimsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStartSubFlowActivityInput_TenantClaimsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<StartSubFlowActivityInput_TenantClaimsEntry>, I>>(
+    base?: I,
+  ): StartSubFlowActivityInput_TenantClaimsEntry {
+    return StartSubFlowActivityInput_TenantClaimsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StartSubFlowActivityInput_TenantClaimsEntry>, I>>(
+    object: I,
+  ): StartSubFlowActivityInput_TenantClaimsEntry {
+    const message = createBaseStartSubFlowActivityInput_TenantClaimsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };

@@ -20,6 +20,8 @@ type BasicInfo struct {
 	RunStartedTimestamp int64
 	// TenantID is empty in single-tenant mode.
 	TenantID string
+	// TenantClaims are the verified claims of the starting tenant principal.
+	TenantClaims map[string]string
 }
 
 // StepExecutionStatus is the interpreter's internal per-step-execution outcome.

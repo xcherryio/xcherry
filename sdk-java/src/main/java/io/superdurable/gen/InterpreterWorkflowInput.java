@@ -45,6 +45,18 @@ private static final long serialVersionUID = 0L;
     return io.superdurable.gen.DexProto.internal_static_dex_InterpreterWorkflowInput_descriptor;
   }
 
+  @SuppressWarnings({"rawtypes"})
+  @java.lang.Override
+  protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+      int number) {
+    switch (number) {
+      case 13:
+        return internalGetTenantClaims();
+      default:
+        throw new RuntimeException(
+            "Invalid map field number: " + number);
+    }
+  }
   @java.lang.Override
   protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internalGetFieldAccessorTable() {
@@ -394,6 +406,101 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int TENANT_CLAIMS_FIELD_NUMBER = 13;
+  private static final class TenantClaimsDefaultEntryHolder {
+    static final com.google.protobuf.MapEntry<
+        java.lang.String, java.lang.String> defaultEntry =
+            com.google.protobuf.MapEntry
+            .<java.lang.String, java.lang.String>newDefaultInstance(
+                io.superdurable.gen.DexProto.internal_static_dex_InterpreterWorkflowInput_TenantClaimsEntry_descriptor, 
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "",
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "");
+  }
+  @SuppressWarnings("serial")
+  private com.google.protobuf.MapField<
+      java.lang.String, java.lang.String> tenantClaims_;
+  private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+  internalGetTenantClaims() {
+    if (tenantClaims_ == null) {
+      return com.google.protobuf.MapField.emptyMapField(
+          TenantClaimsDefaultEntryHolder.defaultEntry);
+    }
+    return tenantClaims_;
+  }
+  public int getTenantClaimsCount() {
+    return internalGetTenantClaims().getMap().size();
+  }
+  /**
+   * <pre>
+   * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+   */
+  @java.lang.Override
+  public boolean containsTenantClaims(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    return internalGetTenantClaims().getMap().containsKey(key);
+  }
+  /**
+   * Use {@link #getTenantClaimsMap()} instead.
+   */
+  @java.lang.Override
+  @java.lang.Deprecated
+  public java.util.Map<java.lang.String, java.lang.String> getTenantClaims() {
+    return getTenantClaimsMap();
+  }
+  /**
+   * <pre>
+   * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+   */
+  @java.lang.Override
+  public java.util.Map<java.lang.String, java.lang.String> getTenantClaimsMap() {
+    return internalGetTenantClaims().getMap();
+  }
+  /**
+   * <pre>
+   * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+   */
+  @java.lang.Override
+  public /* nullable */
+java.lang.String getTenantClaimsOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetTenantClaims().getMap();
+    return map.containsKey(key) ? map.get(key) : defaultValue;
+  }
+  /**
+   * <pre>
+   * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+   */
+  @java.lang.Override
+  public java.lang.String getTenantClaimsOrThrow(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetTenantClaims().getMap();
+    if (!map.containsKey(key)) {
+      throw new java.lang.IllegalArgumentException();
+    }
+    return map.get(key);
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -444,6 +551,12 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 12, tenantId_);
     }
+    com.google.protobuf.GeneratedMessage
+      .serializeStringMapTo(
+        output,
+        internalGetTenantClaims(),
+        TenantClaimsDefaultEntryHolder.defaultEntry,
+        13);
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -497,6 +610,16 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(12, tenantId_);
+    }
+    for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
+         : internalGetTenantClaims().getMap().entrySet()) {
+      com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+      tenantClaims__ = TenantClaimsDefaultEntryHolder.defaultEntry.newBuilderForType()
+          .setKey(entry.getKey())
+          .setValue(entry.getValue())
+          .buildPartial();
+      size += com.google.protobuf.CodedOutputStream
+          .computeMessageSize(13, tenantClaims__);
     }
     return size;
   }
@@ -560,6 +683,8 @@ private static final long serialVersionUID = 0L;
     }
     if (!getTenantId()
         .equals(other.getTenantId())) return false;
+    if (!internalGetTenantClaims().equals(
+        other.internalGetTenantClaims())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -608,6 +733,10 @@ private static final long serialVersionUID = 0L;
     }
     hash = (37 * hash) + TENANT_ID_FIELD_NUMBER;
     hash = (53 * hash) + getTenantId().hashCode();
+    if (!internalGetTenantClaims().getMap().isEmpty()) {
+      hash = (37 * hash) + TENANT_CLAIMS_FIELD_NUMBER;
+      hash = (53 * hash) + internalGetTenantClaims().hashCode();
+    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -717,6 +846,28 @@ private static final long serialVersionUID = 0L;
       return io.superdurable.gen.DexProto.internal_static_dex_InterpreterWorkflowInput_descriptor;
     }
 
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 13:
+          return internalGetTenantClaims();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMutableMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 13:
+          return internalGetMutableTenantClaims();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -788,6 +939,7 @@ private static final long serialVersionUID = 0L;
         timeoutHandlerOptionsBuilder_ = null;
       }
       tenantId_ = "";
+      internalGetMutableTenantClaims().clear();
       return this;
     }
 
@@ -883,6 +1035,10 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000800) != 0)) {
         result.tenantId_ = tenantId_;
       }
+      if (((from_bitField0_ & 0x00001000) != 0)) {
+        result.tenantClaims_ = internalGetTenantClaims();
+        result.tenantClaims_.makeImmutable();
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -963,6 +1119,9 @@ private static final long serialVersionUID = 0L;
         bitField0_ |= 0x00000800;
         onChanged();
       }
+      internalGetMutableTenantClaims().mergeFrom(
+          other.internalGetTenantClaims());
+      bitField0_ |= 0x00001000;
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -1067,6 +1226,15 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000800;
               break;
             } // case 98
+            case 106: {
+              com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+              tenantClaims__ = input.readMessage(
+                  TenantClaimsDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
+              internalGetMutableTenantClaims().getMutableMap().put(
+                  tenantClaims__.getKey(), tenantClaims__.getValue());
+              bitField0_ |= 0x00001000;
+              break;
+            } // case 106
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2290,6 +2458,161 @@ private static final long serialVersionUID = 0L;
       tenantId_ = value;
       bitField0_ |= 0x00000800;
       onChanged();
+      return this;
+    }
+
+    private com.google.protobuf.MapField<
+        java.lang.String, java.lang.String> tenantClaims_;
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetTenantClaims() {
+      if (tenantClaims_ == null) {
+        return com.google.protobuf.MapField.emptyMapField(
+            TenantClaimsDefaultEntryHolder.defaultEntry);
+      }
+      return tenantClaims_;
+    }
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetMutableTenantClaims() {
+      if (tenantClaims_ == null) {
+        tenantClaims_ = com.google.protobuf.MapField.newMapField(
+            TenantClaimsDefaultEntryHolder.defaultEntry);
+      }
+      if (!tenantClaims_.isMutable()) {
+        tenantClaims_ = tenantClaims_.copy();
+      }
+      bitField0_ |= 0x00001000;
+      onChanged();
+      return tenantClaims_;
+    }
+    public int getTenantClaimsCount() {
+      return internalGetTenantClaims().getMap().size();
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    @java.lang.Override
+    public boolean containsTenantClaims(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      return internalGetTenantClaims().getMap().containsKey(key);
+    }
+    /**
+     * Use {@link #getTenantClaimsMap()} instead.
+     */
+    @java.lang.Override
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String> getTenantClaims() {
+      return getTenantClaimsMap();
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    @java.lang.Override
+    public java.util.Map<java.lang.String, java.lang.String> getTenantClaimsMap() {
+      return internalGetTenantClaims().getMap();
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    @java.lang.Override
+    public /* nullable */
+java.lang.String getTenantClaimsOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetTenantClaims().getMap();
+      return map.containsKey(key) ? map.get(key) : defaultValue;
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    @java.lang.Override
+    public java.lang.String getTenantClaimsOrThrow(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetTenantClaims().getMap();
+      if (!map.containsKey(key)) {
+        throw new java.lang.IllegalArgumentException();
+      }
+      return map.get(key);
+    }
+    public Builder clearTenantClaims() {
+      bitField0_ = (bitField0_ & ~0x00001000);
+      internalGetMutableTenantClaims().getMutableMap()
+          .clear();
+      return this;
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    public Builder removeTenantClaims(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      internalGetMutableTenantClaims().getMutableMap()
+          .remove(key);
+      return this;
+    }
+    /**
+     * Use alternate mutation accessors instead.
+     */
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String>
+        getMutableTenantClaims() {
+      bitField0_ |= 0x00001000;
+      return internalGetMutableTenantClaims().getMutableMap();
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    public Builder putTenantClaims(
+        java.lang.String key,
+        java.lang.String value) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      if (value == null) { throw new NullPointerException("map value"); }
+      internalGetMutableTenantClaims().getMutableMap()
+          .put(key, value);
+      bitField0_ |= 0x00001000;
+      return this;
+    }
+    /**
+     * <pre>
+     * Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; tenant_claims = 13;</code>
+     */
+    public Builder putAllTenantClaims(
+        java.util.Map<java.lang.String, java.lang.String> values) {
+      internalGetMutableTenantClaims().getMutableMap()
+          .putAll(values);
+      bitField0_ |= 0x00001000;
       return this;
     }
 

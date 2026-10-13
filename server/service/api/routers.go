@@ -96,6 +96,21 @@ func NewServer(
 		readyCheck = func(context.Context) error { return nil }
 	}
 
+	var internalToken *tenancy.InternalTokenFile
+	if tenancyCfg.IsMultiTenant() {
+		var err error
+		if internalToken, err = tenancy.NewInternalTokenFile(tenancyCfg.Internal.TokenFile, logger); err != nil {
+			return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
+		}
+	}
+	var wakeToken *tenancy.InternalTokenFile
+	if tenancyCfg.Wake.URL != "" {
+		wakeToken = internalToken
+	}
+	dispatchGate, err := tenancy.NewDispatchGate(tenancyCfg, wakeToken, logger)
+	if err != nil {
+		return nil, err
+	}
 	handler := newHandler(
 		apiCfg,
 		blobStoreCfg,
@@ -106,6 +121,7 @@ func NewServer(
 		attributeStore,
 		streamStore,
 		workerPool,
+		dispatchGate,
 	)
 	maxMsg := apiCfg.EffectiveGrpcMaxMessageBytes()
 	healthSrv := health.NewServer()
@@ -138,10 +154,6 @@ func NewServer(
 	authenticator, err := tenancy.NewAuthenticator(tenancyCfg, logger)
 	if err != nil {
 		return nil, err
-	}
-	internalToken, err := tenancy.NewInternalTokenFile(tenancyCfg.Internal.TokenFile, logger)
-	if err != nil {
-		return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
 	}
 	// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
 	serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxTenantHeaderListBytes))

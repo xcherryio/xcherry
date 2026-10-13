@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"text/template"
+	"time"
 	"unicode"
 )
 
@@ -80,9 +81,50 @@ type (
 		// default limit.maxIDLength and the Temporal Cloud limit. Set it to the backend's value when it is lower.
 		// A StartFlow over the limit is INVALID_ARGUMENT; a SubFlow over it fails its Step before any start.
 		MaxStoredFlowIDBytes int `yaml:"maxStoredFlowIDBytes"`
+		// WorkerTarget decides which Worker addresses each tenant's Flows may dispatch to. Required in multi mode.
+		WorkerTarget TenantWorkerTargetConfig `yaml:"workerTarget"`
+		// Wake optionally asks an operator endpoint to start a tenant's idle Worker. Default empty disables it.
+		Wake TenantWakeConfig `yaml:"wake"`
+		// Limits bound what one tenant can use of a shared server.
+		Limits TenantLimitsConfig `yaml:"limits"`
 		// IsIncompleteMultiTenantModeAllowedForTest lets integration tests start multi mode while it is under
 		// development. It cannot be set from a configuration file. Default false.
 		IsIncompleteMultiTenantModeAllowedForTest bool `yaml:"-"`
+		// Fairness sets the engine fairness key of every workflow and activity task to the tenant ID, so the
+		// namespace's task queue serves tenants round-robin. Default false. The namespace must enable task queue
+		// fairness (Temporal Cloud namespace setting, or matching.enableFairness on a self-hosted server).
+		Fairness bool `yaml:"fairness"`
+	}
+
+	TenantWorkerTargetConfig struct {
+		// Default is a Go template rendered with the principal's claims and used as the Worker address when a
+		// start or SubFlow requests none, for example 'worker.{{ .namespace }}.svc.cluster.local:9000'.
+		// Default empty: a Flow must name a target.
+		Default string `yaml:"default"`
+		// Allowed is a Go template rendered with the principal's claims into a regular expression that must match
+		// the whole requested Worker address, for example '^worker\.{{ .namespace }}\.svc\.cluster\.local:9000$'.
+		// The template function quote escapes a claim for use in the expression. Required in multi mode.
+		// The persisted target of every dispatch is matched again, so a configuration change takes effect for
+		// running Flows. Set it to exactly one stable endpoint per tenant for the strictest isolation.
+		Allowed string `yaml:"allowed"`
+	}
+
+	TenantWakeConfig struct {
+		// URL receives a POST {"tenant", "target", "kind"} with the internal token as bearer credential:
+		// kind "wake" when a dispatch finds its Worker unavailable, at most once per target per 10 seconds, and
+		// kind "active" after a successful dispatch, at most once per target per minute. Default empty disables it.
+		// The hook is best effort; a failed POST is logged.
+		URL string `yaml:"url"`
+		// Budget is how long a dispatch to an unavailable Worker is held, redialing every 2 seconds, before the
+		// attempt fails into the Step's retry policy. Holding does not count an attempt. Default 120s.
+		Budget time.Duration `yaml:"budget"`
+	}
+
+	TenantLimitsConfig struct {
+		// MaxConcurrentDispatchesPerTenant bounds one tenant's concurrent WaitFor, Execute and Worker RPC
+		// dispatches per server process. A dispatch over the cap waits for a slot without counting an attempt.
+		// Default 32.
+		MaxConcurrentDispatchesPerTenant int `yaml:"maxConcurrentDispatchesPerTenant"`
 	}
 
 	TenantAuthenticatorConfig struct {
@@ -220,7 +262,60 @@ func (c TenancyConfig) validateMultiTenant() error {
 	if c.Internal.TokenFile == "" {
 		return fmt.Errorf("tenancy.internal.tokenFile is required in multi mode")
 	}
+	if err := c.WorkerTarget.validate(); err != nil {
+		return err
+	}
+	if c.Wake.URL != "" {
+		if _, err := url.ParseRequestURI(c.Wake.URL); err != nil {
+			return fmt.Errorf("tenancy.wake.url: %w", err)
+		}
+	}
+	if c.Wake.Budget < 0 || c.Limits.MaxConcurrentDispatchesPerTenant < 0 {
+		return fmt.Errorf("tenancy.wake.budget and tenancy.limits must not be negative")
+	}
 	return nil
+}
+
+func (c TenantWorkerTargetConfig) validate() error {
+	if c.Allowed == "" {
+		return fmt.Errorf("tenancy.workerTarget.allowed is required in multi mode")
+	}
+	for name, workerTargetTemplate := range map[string]string{"default": c.Default, "allowed": c.Allowed} {
+		if _, err := NewTenantClaimTemplate(name, workerTargetTemplate); err != nil {
+			return fmt.Errorf("tenancy.workerTarget.%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// NewTenantClaimTemplate parses a template rendered with principal claims; a missing claim fails rendering.
+func NewTenantClaimTemplate(name string, text string) (*template.Template, error) {
+	return template.New(name).
+		Option("missingkey=error").
+		Funcs(template.FuncMap{"quote": regexp.QuoteMeta}).
+		Parse(text)
+}
+
+// DefaultTenantWakeBudget is how long a dispatch to an unavailable Worker is held by default.
+const DefaultTenantWakeBudget = 120 * time.Second
+
+// DefaultMaxConcurrentDispatchesPerTenant is the default per-tenant dispatch cap per process.
+const DefaultMaxConcurrentDispatchesPerTenant = 32
+
+// EffectiveBudget returns Budget or its default.
+func (c TenantWakeConfig) EffectiveBudget() time.Duration {
+	if c.Budget <= 0 {
+		return DefaultTenantWakeBudget
+	}
+	return c.Budget
+}
+
+// EffectiveMaxConcurrentDispatchesPerTenant returns the cap or its default.
+func (c TenantLimitsConfig) EffectiveMaxConcurrentDispatchesPerTenant() int {
+	if c.MaxConcurrentDispatchesPerTenant <= 0 {
+		return DefaultMaxConcurrentDispatchesPerTenant
+	}
+	return c.MaxConcurrentDispatchesPerTenant
 }
 
 func (c TenantAuthenticatorConfig) validate() error {

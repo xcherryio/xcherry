@@ -1355,6 +1355,8 @@ message InterpreterWorkflowInput {
   FlowTimeoutHandlerOptions timeout_handler_options = 11;
   // Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
   string tenant_id = 12;
+  // Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
+  map<string, string> tenant_claims = 13;
 }
 
 message InterpreterWorkflowOutput {
@@ -1374,6 +1376,8 @@ message InvokeWaitForMethodActivityInput {
   InvokeWaitForMethodRequest request = 2;
   // Tenant of the dispatching Flow; empty in single-tenant mode.
   string tenant_id = 3;
+  // Claims of the Flow's tenant principal; empty in single-tenant mode.
+  map<string, string> tenant_claims = 4;
 }
 
 message InvokeWaitForMethodActivityOutput {
@@ -1385,6 +1389,8 @@ message InvokeExecuteMethodActivityInput {
   InvokeExecuteMethodRequest request = 2;
   // Tenant of the dispatching Flow; empty in single-tenant mode.
   string tenant_id = 3;
+  // Claims of the Flow's tenant principal; empty in single-tenant mode.
+  map<string, string> tenant_claims = 4;
 }
 
 message RecoveryErrorInfo {
@@ -1417,6 +1423,8 @@ message InvokeWorkerRPCActivityInput {
   InvokeRPCRequest request = 2;
   // Tenant of the Flow; empty in single-tenant mode.
   string tenant_id = 3;
+  // Claims of the Flow's tenant principal; empty in single-tenant mode.
+  map<string, string> tenant_claims = 4;
 }
 
 message InvokeWorkerRPCActivityOutput {
@@ -1452,6 +1460,8 @@ message StartSubFlowActivityInput {
   string parent_step_execution_id = 3;
   // Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
   string tenant_id = 4;
+  // Claims of the Flow's tenant principal; empty in single-tenant mode.
+  map<string, string> tenant_claims = 5;
 }
 
 message StartSubFlowActivityOutput {

@@ -79,4 +79,58 @@ public interface StartSubFlowActivityInputOrBuilder extends
    */
   com.google.protobuf.ByteString
       getTenantIdBytes();
+
+  /**
+   * <pre>
+   * Claims of the Flow's tenant principal; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 5;</code>
+   */
+  int getTenantClaimsCount();
+  /**
+   * <pre>
+   * Claims of the Flow's tenant principal; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 5;</code>
+   */
+  boolean containsTenantClaims(
+      java.lang.String key);
+  /**
+   * Use {@link #getTenantClaimsMap()} instead.
+   */
+  @java.lang.Deprecated
+  java.util.Map<java.lang.String, java.lang.String>
+  getTenantClaims();
+  /**
+   * <pre>
+   * Claims of the Flow's tenant principal; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 5;</code>
+   */
+  java.util.Map<java.lang.String, java.lang.String>
+  getTenantClaimsMap();
+  /**
+   * <pre>
+   * Claims of the Flow's tenant principal; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 5;</code>
+   */
+  /* nullable */
+java.lang.String getTenantClaimsOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue);
+  /**
+   * <pre>
+   * Claims of the Flow's tenant principal; empty in single-tenant mode.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; tenant_claims = 5;</code>
+   */
+  java.lang.String getTenantClaimsOrThrow(
+      java.lang.String key);
 }

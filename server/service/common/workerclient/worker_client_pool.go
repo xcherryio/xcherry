@@ -30,6 +30,18 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+// NoWorkerAddressError reports a worker target that currently resolves to no address.
+type NoWorkerAddressError struct {
+	err error
+}
+
+func (e *NoWorkerAddressError) Error() string { return e.err.Error() }
+
+func (e *NoWorkerAddressError) Unwrap() error { return e.err }
+
+// IsNoWorkerAddress lets callers that cannot import this package recognize the error.
+func (e *NoWorkerAddressError) IsNoWorkerAddress() bool { return true }
+
 type hostResolver interface {
 	LookupHost(context.Context, string) ([]string, error)
 }
@@ -254,7 +266,7 @@ func (p *WorkerClientPool) resolveHeadlessTarget(ctx context.Context, target str
 	}
 	resolvedHosts, err := p.resolver.LookupHost(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("workerclient: resolve headless target %q: %w", target, err)
+		return nil, &NoWorkerAddressError{err: fmt.Errorf("workerclient: resolve headless target %q: %w", target, err)}
 	}
 	unique := make(map[string]struct{}, len(resolvedHosts))
 	for _, resolvedHost := range resolvedHosts {
@@ -264,7 +276,7 @@ func (p *WorkerClientPool) resolveHeadlessTarget(ctx context.Context, target str
 		unique[net.JoinHostPort(resolvedHost, port)] = struct{}{}
 	}
 	if len(unique) == 0 {
-		return nil, fmt.Errorf("workerclient: headless target %q resolved no IP addresses", target)
+		return nil, &NoWorkerAddressError{err: fmt.Errorf("workerclient: headless target %q resolved no IP addresses", target)}
 	}
 	addresses := make([]string, 0, len(unique))
 	for address := range unique {
@@ -300,7 +312,7 @@ func (p *WorkerClientPool) selectAddress(
 	}
 	resolved, ok := p.headless[target]
 	if !ok || len(resolved.addresses) == 0 {
-		return "", fmt.Errorf("workerclient: headless target %q has no resolved addresses", target)
+		return "", &NoWorkerAddressError{err: fmt.Errorf("workerclient: headless target %q has no resolved addresses", target)}
 	}
 	key := stickyKey{target: target, flowID: flowID}
 	if element, ok := p.sticky[key]; ok {
@@ -377,7 +389,7 @@ func (p *WorkerClientPool) nextFailoverAddress(
 	}
 	resolved, ok := p.headless[target]
 	if !ok || len(resolved.addresses) == 0 {
-		return "", fmt.Errorf("workerclient: headless target %q has no resolved addresses", target)
+		return "", &NoWorkerAddressError{err: fmt.Errorf("workerclient: headless target %q has no resolved addresses", target)}
 	}
 	start := 0
 	for index, address := range resolved.addresses {

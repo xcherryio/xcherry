@@ -154,6 +154,7 @@ func newTenancyTestEnvironment(t *testing.T) *tenancyTestEnvironment {
 		Internal: config.TenancyInternalConfig{TokenFile: environment.InternalTokenFile},
 		// The repository's integration Temporal sets limit.maxIDLength to 255.
 		MaxStoredFlowIDBytes: 255,
+		WorkerTarget:         config.TenantWorkerTargetConfig{Allowed: `127\.0\.0\.1:[0-9]+`},
 	}
 	return environment
 }
@@ -222,10 +223,22 @@ func signTestJWT(t *testing.T, signingKey *rsa.PrivateKey, keyID string, claims 
 // AddStaticToken appends a token for tenantID to the static token file and returns it.
 func (environment *tenancyTestEnvironment) AddStaticToken(t *testing.T, tenantID string) string {
 	t.Helper()
+	return environment.AddStaticTokenWithClaims(t, tenantID, map[string]string{"namespace": "apps-" + tenantID})
+}
+
+// AddStaticTokenWithClaims appends a token for tenantID with the given claims and returns it.
+func (environment *tenancyTestEnvironment) AddStaticTokenWithClaims(
+	t *testing.T,
+	tenantID string,
+	claims map[string]string,
+) string {
+	t.Helper()
 	token := "static-" + uuid.NewString()
+	encodedClaims, err := json.Marshal(claims)
+	require.NoError(t, err)
 	environment.staticTokenLines = append(
 		environment.staticTokenLines,
-		fmt.Sprintf("  - sha256: %s\n    tenant: %s\n    claims: {namespace: apps-%s}\n", sha256Hex(token), tenantID, tenantID),
+		fmt.Sprintf("  - sha256: %s\n    tenant: %s\n    claims: %s\n", sha256Hex(token), tenantID, encodedClaims),
 	)
 	environment.WriteStaticTokens(t)
 	return token

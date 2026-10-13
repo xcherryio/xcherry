@@ -71,6 +71,7 @@ type serviceImpl struct {
 	attributeStore     *attributestore.Manager
 	indexSynchronizer  *indexsync.Synchronizer
 	streamStore        *streamstore.Store
+	dispatchGate       *tenancy.DispatchGate
 }
 
 func NewApiService(
@@ -84,8 +85,9 @@ func NewApiService(
 	attributeStore *attributestore.Manager,
 	streamStore *streamstore.Store,
 	workerPool *workerclient.WorkerClientPool,
+	dispatchGate *tenancy.DispatchGate,
 ) (ApiService, error) {
-	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil {
+	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || dispatchGate == nil {
 		panic("API service requires non-nil config sections")
 	}
 	if client == nil || logger == nil || workerPool == nil || attributeStore == nil || streamStore == nil || taskQueue == "" {
@@ -107,6 +109,7 @@ func NewApiService(
 		attributeStore:     attributeStore,
 		indexSynchronizer:  indexsync.New(interpreterCfg, client, logger),
 		streamStore:        streamStore,
+		dispatchGate:       dispatchGate,
 	}, nil
 }
 
@@ -221,7 +224,11 @@ func (s *serviceImpl) StartFlow(
 	if err := s.validateAttributeStoreNames(workflowConfig.GetAttributeStoreNames()); err != nil {
 		return nil, err
 	}
-	workerTarget, err := grpctarget.NormalizeWorkerTarget(workflowConfig.GetWorkerTarget())
+	resolvedTarget, err := s.dispatchGate.Policy().Resolve(tenancy.TenantClaims(ctx), workflowConfig.GetWorkerTarget())
+	if err != nil {
+		return nil, workerTargetRefusedError(err)
+	}
+	workerTarget, err := grpctarget.NormalizeWorkerTarget(resolvedTarget)
 	if err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
@@ -237,6 +244,7 @@ func (s *serviceImpl) StartFlow(
 			},
 		},
 		IdReusePolicy: ptr.Any(dexpb.IdReusePolicy_ID_REUSE_POLICY_DISALLOW_REUSE),
+		FairnessKey:   s.dispatchGate.FairnessKey(tenantID),
 	}
 	ignoreAlreadyStartedError := false
 	if startOptions != nil {
@@ -271,6 +279,7 @@ func (s *serviceImpl) StartFlow(
 		Config:                       &workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
 		TenantId:                     tenantID,
+		TenantClaims:                 tenancy.TenantClaims(ctx),
 	}
 
 	runId, err := s.client.StartInterpreterWorkflow(ctx, workflowOptions, input)
@@ -1016,6 +1025,12 @@ func (s *serviceImpl) UpdateFlowConfig(
 		}
 	}
 	if req.GetFlowConfig().GetWorkerTarget() != nil {
+		if err := s.dispatchGate.Policy().Check(
+			tenancy.TenantClaims(ctx),
+			req.GetFlowConfig().GetWorkerTarget(),
+		); err != nil {
+			return nil, workerTargetRefusedError(err)
+		}
 		workerTarget, err := grpctarget.NormalizeWorkerTarget(req.GetFlowConfig().GetWorkerTarget())
 		if err != nil {
 			return nil, makeInvalidRequestError(err.Error())
@@ -1656,7 +1671,8 @@ func (s *serviceImpl) doInvokeRPC(
 		req.GetRequestId(),
 		s.blobStoreCfg,
 		false,
-		tenancy.TenantID(ctx),
+		tenancy.DispatchTenant{ID: tenancy.TenantID(ctx), Claims: tenancy.TenantClaims(ctx)},
+		s.dispatchGate,
 	)
 	if err != nil {
 		return nil, err
@@ -2032,6 +2048,15 @@ func waitContextStatus(err error) error {
 		return status.Error(codes.Canceled, err.Error())
 	}
 	return serviceerrors.DeadlineExceededLongPoll(err.Error()).ToGRPCError()
+}
+
+// workerTargetRefusedError reports a Worker target the tenant may not use.
+func workerTargetRefusedError(err error) error {
+	return serviceerrors.NewErrorAndStatus(
+		codes.PermissionDenied,
+		dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+		err.Error(),
+	).ToGRPCError()
 }
 
 func makeInvalidRequestError(details string) error {

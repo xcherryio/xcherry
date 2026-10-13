@@ -92,6 +92,8 @@ type StartWorkflowOptions struct {
 	SearchAttributes   map[string]interface{}
 	Memo               map[string]interface{}
 	WorkflowStartDelay *time.Duration
+	// FairnessKey groups the workflow's tasks and its activities' tasks for task queue fairness. Empty disables it.
+	FairnessKey string
 }
 
 type ListWorkflowExecutionsRequest struct {
