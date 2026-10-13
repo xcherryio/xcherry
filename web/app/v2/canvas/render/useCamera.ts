@@ -16,6 +16,7 @@ import {
   entranceDuration,
   focusView,
   isBoxInView,
+  NO_FRAMING_NEIGHBOURS,
   openingView,
   prefersReducedMotion,
   type CameraView,
@@ -47,7 +48,7 @@ export function useCamera({
   isSettled,
   subjectKey,
   targetId,
-  targetNeighbours,
+  targetNeighbours = NO_FRAMING_NEIGHBOURS,
   insetRightPx,
   wholeMaxZoom,
   fitWhole,
@@ -64,7 +65,7 @@ export function useCamera({
   subjectKey: string
   /** The Step to frame: a focus, else the run's current Step. */
   targetId: string | null
-  targetNeighbours: FramingNeighbours
+  targetNeighbours?: FramingNeighbours
   insetRightPx: number | null | undefined
   wholeMaxZoom: number
   fitWhole: () => void

@@ -277,14 +277,17 @@ export function polylineLength(points: readonly { x: number; y: number }[]): num
 }
 
 /** A card the run just reached rings once the travelling head arrives. */
-export const TRAVEL_ARRIVAL_MS = 560
+const TRAVEL_ARRIVAL_MS = 560
 
-/** Entrance and arrival timing for one element, as the stylesheet's custom properties. */
-export function entranceStyle(delays: EntranceDelays | null, id: string, arrivalMs?: number): CSSProperties {
+/** No Steps to keep in view around the framed one. */
+export const NO_FRAMING_NEIGHBOURS: FramingNeighbours = { near: [], twoAway: [] }
+
+/** Entrance and arrival timing for one element; a travel target rings when the head arrives. */
+export function entranceStyle(delays: EntranceDelays | null, id: string, isTravelTarget = false): CSSProperties {
   const style: Record<string, string> = {}
   const enter = delays?.get(id)
   if (enter !== undefined) style['--enter-delay'] = `${enter}ms`
-  if (arrivalMs !== undefined) style['--arrive-delay'] = `${arrivalMs}ms`
+  if (isTravelTarget) style['--arrive-delay'] = `${TRAVEL_ARRIVAL_MS}ms`
   else if (enter !== undefined) style['--arrive-delay'] = `${enter + 260}ms`
   return style as CSSProperties
 }

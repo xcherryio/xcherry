@@ -31,7 +31,7 @@ import { DetailPanel } from './canvas/panel/DetailPanel';
 import { useWebCatalog } from './WebCatalogProvider';
 import { buildPanel, type SectionId } from './canvas/panel/panelModel';
 import { ArrowDefs } from './canvas/render/ArrowDefs';
-import { framingNeighbours } from './canvas/render/camera';
+import { framingNeighbours, NO_FRAMING_NEIGHBOURS } from './canvas/render/camera';
 import { Stage } from './canvas/render/Stage';
 import type { CanvasViewportHandle } from './canvas/render/viewport';
 import { useStageScene } from './canvas/useStageScene';
@@ -291,7 +291,7 @@ export function V2Canvas({
   /** What the camera keeps in view around the focus, or "now": the cards of Steps one and two transitions away. */
   const targetNeighbours = useMemo(() => {
     const target = focusNodeId ?? nowNodeId;
-    if (!flow || !scene || target === null) return { near: [], twoAway: [] };
+    if (!flow || !scene || target === null) return NO_FRAMING_NEIGHBOURS;
     return framingNeighbours(flow, groups, scene, target);
   }, [flow, focusNodeId, groups, nowNodeId, scene]);
 

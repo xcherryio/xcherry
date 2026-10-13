@@ -49,7 +49,6 @@ import {
   entranceStyle,
   focusView,
   polylineLength,
-  TRAVEL_ARRIVAL_MS,
   type FramingNeighbours,
 } from './camera'
 import { useCamera, useRunTravel, useSettledDrawing } from './useCamera'
@@ -226,7 +225,6 @@ const NODE_TYPES = { pbox: BoxNode, band: BandNode, legend: LegendNode }
 
 const EDGE_TYPES = { routed: RoutedEdge }
 
-const NO_NEIGHBOURS: FramingNeighbours = { near: [], twoAway: [] }
 
 /** After a stage opens or closes: what takes focus and what to bring into view. */
 type StageCue = {
@@ -289,7 +287,7 @@ function Inner({
   interactive,
   fitKey,
   isSettled = true,
-  targetNeighbours = NO_NEIGHBOURS,
+  targetNeighbours,
   scene: latestScene,
   nowNodeId: latestNowNodeId = null,
 }: StageProps): JSX.Element {
@@ -390,7 +388,7 @@ function Inner({
       zIndex: b.detourOf === undefined ? 2 : 4,
       style: {
         zIndex: b.detourOf === undefined ? 2 : 4,
-        ...entranceStyle(delays, b.id, travelledTo === b.id ? TRAVEL_ARRIVAL_MS : undefined),
+        ...entranceStyle(delays, b.id, travelledTo === b.id),
       },
     }))
     const legendNode: Node[] = []
