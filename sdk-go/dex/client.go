@@ -45,9 +45,10 @@ type ClientOptions struct {
 	// Credential is sent as a bearer credential with every FlowService call. Default: nil sends none.
 	// A multi-tenant Dex server requires it and derives the caller's tenant from it; see FileCredential.
 	Credential Credential
-	// GrpcMaxMessageBytes limits every gRPC message this Client sends or receives, in bytes.
-	// Zero uses DefaultGrpcMaxMessageBytes (32 MiB). Negative values are invalid.
-	// It bounds InvokeRPC results, state reads, and each LoadBlobs response used to hydrate values.
+	// GrpcMaxMessageBytes limits the gRPC messages this Client receives, in bytes, such as
+	// InvokeRPC results, state reads, and each LoadBlobs response used to hydrate values.
+	// Zero uses DefaultGrpcMaxMessageBytes (32 MiB) and keeps gRPC's unlimited send limit.
+	// A positive value also limits the messages the Client sends. Negative values are invalid.
 	// The Dex server applies its own api.grpcMaxMessageBytes, and the smaller limit wins.
 	// Keep it above the largest application value plus headroom for the message envelope.
 	GrpcMaxMessageBytes int
@@ -102,13 +103,13 @@ func NewClient(
 	if err != nil {
 		return nil, err
 	}
-	maxMessageBytes, err := resolveGrpcMaxMessageBytes(options.GrpcMaxMessageBytes)
+	messageLimits, err := resolveGrpcMessageLimits(options.GrpcMaxMessageBytes)
 	if err != nil {
 		return nil, err
 	}
 	connection, err := grpc.NewClient(
 		flowServiceAddress,
-		flowServiceDialOptions(options.Credential, maxMessageBytes)...,
+		messageLimits.flowServiceDialOptions(options.Credential)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)

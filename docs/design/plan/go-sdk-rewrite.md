@@ -662,9 +662,10 @@ uses this plaintext target to synchronize the Registry's Indexed Attributes.
 It also uses the target for private `LoadBlobs` calls. The synchronization
 deadline defaults to two minutes when `AttributeIndexSyncTimeout` is zero.
 
-`GrpcMaxMessageBytes` limits every message on the WorkerService listener and on
-the private FlowService connection. Zero uses `DefaultGrpcMaxMessageBytes`
-(32 MiB, the Dex server default); negative values are invalid. When a
+`GrpcMaxMessageBytes` limits received messages on the WorkerService listener and
+on the private FlowService connection. Zero uses `DefaultGrpcMaxMessageBytes`
+(32 MiB, the Dex server default) and keeps gRPC's unlimited send limit; a
+positive value also limits sent messages. Negative values are invalid. When a
 `LoadBlobs` response exceeds a gRPC message limit, hydration splits the batch in
 half and retries, so N uncached blobs take at most 2N-1 calls. A single blob
 that does not fit returns `BlobMessageTooLargeError`.
@@ -1233,8 +1234,9 @@ An empty `FlowServiceAddress` uses `localhost:8801`. It is a plaintext gRPC dial
 target. Phase 5 does not expose generated clients, `grpc.ClientConn`, dial
 options, TLS credentials, or an HTTP URL.
 
-`GrpcMaxMessageBytes` limits every message on the Client connection. Zero uses
-`DefaultGrpcMaxMessageBytes` (32 MiB); negative values are invalid.
+`GrpcMaxMessageBytes` limits received messages on the Client connection. Zero
+uses `DefaultGrpcMaxMessageBytes` (32 MiB) and keeps gRPC's unlimited send
+limit; a positive value also limits sent messages. Negative values are invalid.
 
 `WorkerTarget` is the default advertised target for every StartFlow call made
 by the Client. Nil omits the default. A non-nil value requires a non-empty

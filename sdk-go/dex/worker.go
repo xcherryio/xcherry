@@ -55,11 +55,11 @@ type WorkerOptions struct {
 	// Credential is sent as a bearer credential with the Worker's FlowService calls: startup index
 	// verification and blob hydration. Default: nil sends none. A multi-tenant Dex server requires it.
 	Credential Credential
-	// GrpcMaxMessageBytes limits every gRPC message the Worker sends or receives, in bytes.
-	// Zero uses DefaultGrpcMaxMessageBytes (32 MiB). Negative values are invalid.
-	// It applies to the WorkerService listener, which receives Step and RPC invocations from Dex
-	// and returns their results, and to the Worker's FlowService connection, including each
-	// LoadBlobs response used to hydrate values. The Dex server applies its own
+	// GrpcMaxMessageBytes limits the gRPC messages the Worker receives, in bytes: Step and RPC
+	// invocations on the WorkerService listener and FlowService responses such as each LoadBlobs
+	// response used to hydrate values. Zero uses DefaultGrpcMaxMessageBytes (32 MiB) and keeps
+	// gRPC's unlimited send limit. A positive value also limits the messages the Worker sends,
+	// including Step and RPC results. Negative values are invalid. The Dex server applies its own
 	// api.grpcMaxMessageBytes, and the smaller limit wins.
 	// Keep it above the largest application value plus headroom for the message envelope.
 	GrpcMaxMessageBytes int
@@ -126,23 +126,20 @@ func NewWorker(
 	if err != nil {
 		return nil, err
 	}
-	maxMessageBytes, err := resolveGrpcMaxMessageBytes(options.GrpcMaxMessageBytes)
+	messageLimits, err := resolveGrpcMessageLimits(options.GrpcMaxMessageBytes)
 	if err != nil {
 		return nil, err
 	}
 	flowConn, err := grpc.NewClient(
 		flowServiceAddress,
-		flowServiceDialOptions(options.Credential, maxMessageBytes)...,
+		messageLimits.flowServiceDialOptions(options.Credential)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)
 	}
 
 	logger := resolveLogger(options.Logger, cache.Logger())
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes),
-		grpc.MaxSendMsgSize(maxMessageBytes),
-	)
+	grpcServer := grpc.NewServer(messageLimits.workerServiceServerOptions()...)
 	flowService := dexpb.NewFlowServiceClient(flowConn)
 	service := newWorkerService(
 		registry,

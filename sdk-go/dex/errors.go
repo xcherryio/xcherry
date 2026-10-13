@@ -175,8 +175,8 @@ func (e *AttributeNotFoundError) Error() string {
 // the limit. Raise the smaller limit above the value size plus envelope headroom, or
 // split the value across several Attributes or AttributeMap instances.
 //
-// A Client call returns this error wrapped in a ServiceError. A Worker reports it as a
-// RESOURCE_EXHAUSTED Step or RPC failure.
+// A Client call returns this error wrapped in a ServiceError. A Worker reports it as an
+// INTERNAL Step or RPC failure whose detail contains this message.
 //
 //	var tooLarge *dex.BlobMessageTooLargeError
 //	if errors.As(err, &tooLarge) {

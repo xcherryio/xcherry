@@ -238,7 +238,7 @@ func (hydrator *valueHydratorImpl) loadBlobValues(
 		)
 	}
 	if len(misses) == 1 {
-		return nil, newWorkerFailure(codes.ResourceExhausted, &BlobMessageTooLargeError{
+		return nil, newWorkerFailure(codes.Internal, &BlobMessageTooLargeError{
 			FlowID: misses[0].flowID,
 			BlobID: misses[0].blobID.value,
 			Err:    err,

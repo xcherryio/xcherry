@@ -13,6 +13,7 @@ package dex_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -287,7 +288,10 @@ func TestPublicContractsCompile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{Logger: logger})
+	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
+		Logger:              logger,
+		GrpcMaxMessageBytes: dex.DefaultGrpcMaxMessageBytes,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,11 +299,15 @@ func TestPublicContractsCompile(t *testing.T) {
 		t.Fatal("worker target was not derived from the bind address")
 	}
 	client, err := dex.NewClient(registry, cache, dex.ClientOptions{
-		WorkerTarget: worker.WorkerTarget(),
-		Logger:       logger,
+		WorkerTarget:        worker.WorkerTarget(),
+		Logger:              logger,
+		GrpcMaxMessageBytes: dex.DefaultGrpcMaxMessageBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := dex.NewClient(registry, cache, dex.ClientOptions{GrpcMaxMessageBytes: -1}); err == nil {
+		t.Fatal("negative GrpcMaxMessageBytes was accepted")
 	}
 	_, err = client.StartFlow(
 		context.Background(),
@@ -547,3 +555,19 @@ var _ func(
 	string,
 	dex.SearchFlowsOptions,
 ) (dex.SearchFlowsPage, error) = (*dex.Client).SearchFlowsWithOptions
+
+func TestBlobMessageTooLargeErrorSupportsErrorsAs(t *testing.T) {
+	tooLarge := error(&dex.ServiceError{Op: "LoadBlobs", Code: codes.ResourceExhausted})
+	tooLarge = fmt.Errorf("hydrate: %w", &dex.BlobMessageTooLargeError{
+		FlowID: "flow-id",
+		BlobID: "blob-id",
+		Err:    tooLarge,
+	})
+	var target *dex.BlobMessageTooLargeError
+	if !errors.As(tooLarge, &target) {
+		t.Fatal("blob message size error does not support errors.As")
+	}
+	if target.FlowID != "flow-id" || target.BlobID != "blob-id" {
+		t.Fatalf("unexpected blob identity: %#v", target)
+	}
+}

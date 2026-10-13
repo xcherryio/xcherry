@@ -147,7 +147,7 @@ metadata. Keep the limit above the largest application value by an explicit
 margin. The default leaves 16 MiB of headroom for values up to 16 MiB.
 
 Each SDK applies its own limit, and increasing the server limit does not raise
-it. Go SDK Clients and Workers default to 32 MiB and accept
+it. Go SDK Clients and Workers default to a 32 MiB receive limit and accept
 **GrpcMaxMessageBytes** to change it. Other SDK Workers default to a 4 MiB gRPC
 receive limit. The complete Worker request must fit both limits, including
 loaded state and metadata. A request exceeding either limit returns
