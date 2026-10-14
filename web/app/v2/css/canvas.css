@@ -353,6 +353,20 @@
   background: var(--p-surface-1);
   min-width: 0;
   min-height: 0;
+  /* Slides in beside the canvas instead of appearing over it. */
+  animation: panel-in 200ms var(--ease-glide) backwards;
+}
+@keyframes panel-in {
+  from {
+    opacity: 0.4;
+    translate: 10px 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ppan,
+  .rdw {
+    animation: none;
+  }
 }
 .ppan-head {
   display: flex;
@@ -3741,33 +3755,142 @@ button.pdock:focus-visible {
 
 /* Cards glide to new places when a stage opens; lines fade out while they move. */
 .pstage-pane .react-flow__node {
-  transition: transform 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: transform var(--dur-layout) var(--ease-glide);
 }
+/* Each card swells into place as the entrance trace reaches it. */
 .pstage-pane .react-flow__node > * {
-  animation: pcard-in 220ms ease-out;
+  animation: pcard-in 260ms var(--ease-glide) var(--enter-delay, 0ms) backwards;
+}
+/* The run's Step rings in once the trace or the travelling head reaches it. */
+.pstage-pane .react-flow__node > [data-now='true'] {
+  animation:
+    pcard-in 260ms var(--ease-glide) var(--enter-delay, 0ms) backwards,
+    pnow-arrive 700ms var(--ease-glide) var(--arrive-delay, 0ms) backwards;
+}
+.pstage-pane .react-flow__node > .pnow-tag {
+  animation-delay: var(--arrive-delay, 0ms);
+}
+/* A line draws out of the card it leaves; a dashed failure line fades in. */
+.pstage-pane .react-flow__edge-path {
+  animation: pedge-draw 300ms var(--ease-glide) var(--enter-delay, 0ms) backwards;
+}
+.pstage-pane .pedge-failure .react-flow__edge-path {
+  animation-name: pedge-fade;
 }
 .pstage-pane .react-flow__edges,
 .pstage-pane .react-flow__edgelabel-renderer {
-  transition: opacity 160ms ease 200ms;
+  transition: opacity 160ms ease;
 }
 .pstage-pane[data-relayout='true'] .react-flow__edges,
 .pstage-pane[data-relayout='true'] .react-flow__edgelabel-renderer {
   opacity: 0;
   transition: opacity 80ms ease;
 }
+/* While the next run loads, the last one dims in place instead of moving. */
+.pstage-pane .react-flow__viewport {
+  transition: opacity 160ms ease;
+}
+.pstage-pane[data-pending='true'] .react-flow__viewport {
+  opacity: 0.55;
+  transition: opacity 200ms ease 150ms;
+}
+.pstage-wait {
+  position: absolute;
+  inset: 50% 0 auto;
+  z-index: 5;
+  margin: 0;
+  color: var(--p-ink-2);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+  animation: pedge-fade 200ms ease 200ms backwards;
+}
 @keyframes pcard-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  60% {
+    scale: 1.012;
+  }
+}
+@keyframes pnow-arrive {
+  from {
+    outline-color: transparent;
+    outline-offset: 14px;
+  }
+}
+@keyframes pedge-draw {
+  from {
+    opacity: 0;
+    stroke-dasharray: var(--len) var(--len);
+    stroke-dashoffset: var(--len);
+  }
+  to {
+    stroke-dasharray: var(--len) var(--len);
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pedge-fade {
   from {
     opacity: 0;
   }
 }
+
+/* The run moving on: a head with a fading trail travels the line, like the running mark. */
+.pedge-travel path {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-linecap: round;
+  pointer-events: none;
+}
+.pedge-travel .pedge-travel-trail {
+  stroke-width: calc(4px * var(--zoom-comp));
+  stroke-dasharray: 56px var(--len);
+  opacity: 0.3;
+  animation: pedge-travel-trail 640ms var(--ease-breathe) both;
+}
+.pedge-travel .pedge-travel-head {
+  stroke-width: calc(9px * var(--zoom-comp));
+  stroke-dasharray: 0.1px var(--len);
+  animation: pedge-travel-head 640ms var(--ease-breathe) both;
+}
+@keyframes pedge-travel-trail {
+  from {
+    stroke-dashoffset: 56px;
+  }
+  to {
+    stroke-dashoffset: calc(56px - var(--len));
+  }
+}
+@keyframes pedge-travel-head {
+  from {
+    stroke-dashoffset: 0.1px;
+  }
+  to {
+    stroke-dashoffset: calc(0.1px - var(--len));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pstage-pane .react-flow__node,
-  .pstage-pane .react-flow__edges {
+  .pstage-pane .react-flow__edges,
+  .pstage-pane .react-flow__viewport {
     transition: none;
   }
   .pstage-pane .react-flow__node > *,
+  .pstage-pane .react-flow__node > [data-now='true'],
+  .pstage-pane .react-flow__edge-path,
   .pcard-pill[data-status='running'] {
     animation: none;
+  }
+  .pedge-travel {
+    display: none;
+  }
+  /* Nothing glides, so the lines have no reason to step aside. */
+  .pstage-pane[data-relayout='true'] .react-flow__edges,
+  .pstage-pane[data-relayout='true'] .react-flow__edgelabel-renderer {
+    opacity: 1;
   }
 }
 

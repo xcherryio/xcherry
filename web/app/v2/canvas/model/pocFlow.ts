@@ -333,6 +333,17 @@ export function mainStory(flow: PocFlow): PocFlow {
   return story
 }
 
+/** Steps a transition joins to a Step, either way, other than the Step itself. */
+export function joinedSteps(flow: PocFlow, stepId: string): string[] {
+  const joined = new Set<string>()
+  for (const t of flow.transitions) {
+    if (t.fromStepId === stepId) joined.add(t.toStepId)
+    if (t.toStepId === stepId) joined.add(t.fromStepId)
+  }
+  joined.delete(stepId)
+  return [...joined]
+}
+
 /** The failure transitions that leave a Step, other than one back to itself. */
 export function failureRoutes(flow: PocFlow, stepId: string): Transition[] {
   return flow.transitions.filter((t) => t.kind === 'failure_transition' && t.fromStepId === stepId && !t.isSelfLoop)

@@ -45,6 +45,8 @@ interface Laid {
   /** The direction and reset it was laid out for; a new one refits the view. */
   view: string
   offset: Point
+  /** What it was laid out from; the drawing is settled while these are still the inputs. */
+  inputs: readonly unknown[]
 }
 
 export function useStageScene({
@@ -91,7 +93,7 @@ export function useStageScene({
       applied.current = request.nonce
       const at = anchor ? anchorOf(next, anchor.to, direction) : undefined
       if (anchor && at) offset = { x: anchor.from.x - at.x, y: anchor.from.y - at.y }
-      setLaid({ scene: next, view, offset })
+      setLaid({ scene: next, view, offset, inputs: [direction, flow, groups, request, run] })
       if (anchor) {
         const shown = shiftScene(next, offset)
         const opened = anchor.opened
@@ -114,6 +116,8 @@ export function useStageScene({
   }, [direction, flow, groups, request, run])
 
   const scene = useMemo(() => (laid ? shiftScene(laid.scene, laid.offset) : null), [laid])
+  const inputs = [direction, flow, groups, request, run]
+  const isSettled = laid !== null && laid.inputs.every((input, i) => input === inputs[i])
 
   /** Opens a stage in place from its card, growing from the card's leading edge. */
   const openStage = useCallback(
@@ -174,6 +178,7 @@ export function useStageScene({
   return {
     scene,
     view: laid?.view ?? '',
+    isSettled,
     openStages: request.open,
     hasStages: stageIds.length > 0,
     state,

@@ -32,9 +32,6 @@ export const MAX_ZOOM = 2.2
  */
 export const FIT_MAX_ZOOM = 1.7
 
-/** Focus on one Step zooms in properly — the point is to read it without reaching for zoom. */
-export const FOCUS_ZOOM = 1.45
-
 /** The canvas opens on the whole Flow only at a readable size; a larger one opens on its start. */
 export const OPEN_FLOOR = READABLE_ZOOM
 

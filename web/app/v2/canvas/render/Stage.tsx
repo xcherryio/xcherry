@@ -28,6 +28,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type KeyboardEvent,
   type Ref,
@@ -42,14 +43,16 @@ import { NodeBox } from './NodeBox'
 import { labelPoint, roundedPath, type Point } from './routedPath'
 import { StageBox } from './StageBox'
 import {
-  chromeCompensation,
-  edgeContrastBoost,
-  fitOptions,
-  FOCUS_ZOOM,
-  MAX_ZOOM,
-  MIN_ZOOM,
-  OPEN_FLOOR,
-} from './zoom'
+  boxShowing,
+  cameraMotion,
+  cameraRoom,
+  entranceStyle,
+  focusView,
+  polylineLength,
+  type FramingNeighbours,
+} from './camera'
+import { useCamera, useRunTravel, useSettledDrawing } from './useCamera'
+import { chromeCompensation, edgeContrastBoost, FIT_MAX_ZOOM, fitOptions, MAX_ZOOM, MIN_ZOOM, OPEN_FLOOR } from './zoom'
 import '@xyflow/react/dist/style.css'
 
 /**
@@ -174,12 +177,13 @@ function LegendNode({ data }: NodeProps): JSX.Element {
   return <div className="plegend-node nodrag nopan">{d.render()}</div>
 }
 
-type RoutedEdgeData = { points: Point[]; labelAt?: Point }
+type RoutedEdgeData = { points: Point[]; labelAt?: Point; travel?: number }
 
 /** A line the layout routed, drawn as given rather than between handles. */
 function RoutedEdge({
   id,
   data,
+  style,
   markerEnd,
   label,
   labelStyle,
@@ -188,10 +192,14 @@ function RoutedEdge({
   const points = data?.points ?? []
   if (points.length < 2) return null
   const at = data?.labelAt ?? labelPoint(points)
+  const path = roundedPath(points, 10)
+  const length = { '--len': `${polylineLength(points)}px` } as CSSProperties
   return (
+    <>
     <BaseEdge
       id={id}
-      path={roundedPath(points, 10)}
+      path={path}
+      style={{ ...style, ...length }}
       markerEnd={markerEnd}
       label={label}
       labelX={at.x}
@@ -202,12 +210,21 @@ function RoutedEdge({
       labelBgBorderRadius={4}
       interactionWidth={14}
     />
+      {data?.travel ? (
+        // The run moving on along this line: a head with a fading trail, like the running mark.
+        <g key={data.travel} className="pedge-travel" aria-hidden="true">
+          <path d={path} className="pedge-travel-trail" style={length} />
+          <path d={path} className="pedge-travel-head" style={length} />
+        </g>
+      ) : null}
+    </>
   )
 }
 
 const NODE_TYPES = { pbox: BoxNode, band: BandNode, legend: LegendNode }
 
 const EDGE_TYPES = { routed: RoutedEdge }
+
 
 /** After a stage opens or closes: what takes focus and what to bring into view. */
 type StageCue = {
@@ -243,14 +260,16 @@ type StageProps = {
   insetRightPx?: number | null
   /** Changing this re-opens the view; opening a stage keeps the reader's place, so it is not part of it. */
   fitKey: string
+  /** False while the drawing is on its way; the last settled one stays on screen meanwhile. */
+  isSettled?: boolean
+  /** Steps a transition joins to the focus, or to "now", which its framing keeps in view. */
+  targetNeighbours?: FramingNeighbours
 }
 
 function Inner({
-  scene,
   direction,
   dimUnrelated = true,
   focusNodeId,
-  nowNodeId = null,
   insetRightPx,
   legend,
   handleRef,
@@ -267,14 +286,42 @@ function Inner({
   onInspect,
   interactive,
   fitKey,
+  isSettled = true,
+  targetNeighbours,
+  scene: latestScene,
+  nowNodeId: latestNowNodeId = null,
 }: StageProps): JSX.Element {
   const rf = useReactFlow()
   const paneRef = useRef<HTMLDivElement | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
+  // Hold the last settled drawing, so a run still loading never draws half-way states.
+  const { scene, nowNodeId } = useSettledDrawing(isSettled, latestScene, latestNowNodeId)
 
   useEffect(() => {
     if (selectedId !== null) setSelectedLinkId(null)
   }, [selectedId])
+
+  const fitWhole = useCallback(() => {
+    const el = paneRef.current?.querySelector<HTMLElement>('.react-flow') ?? paneRef.current
+    void rf.fitView({ ...fitOptions(insetRightPx, el?.clientWidth ?? 0), minZoom: MIN_ZOOM, ...cameraMotion() })
+  }, [insetRightPx, rf])
+  // After the view opens, a resize with a selection only pans that selection back into view.
+  const keepSelectionInView = useRef<() => boolean>(() => false)
+  const camera = useCamera({
+    viewport: rf,
+    paneRef,
+    scene,
+    direction,
+    isSettled,
+    subjectKey: fitKey,
+    targetId: focusNodeId ?? nowNodeId,
+    targetNeighbours,
+    insetRightPx,
+    wholeMaxZoom: FIT_MAX_ZOOM,
+    fitWhole,
+    keepSelectionInView: () => keepSelectionInView.current(),
+  })
+  const { delays, isEntered, panToShow, setOwner } = camera
 
   /** A jump chip selects where it leads at a readable size; a jump into a closed stage opens it. */
   const jump = useCallback(
@@ -284,12 +331,13 @@ function Inner({
       const kind = (node.data as BoxData | undefined)?.box.kind
       if (kind === 'step') onSelect?.(id, false)
       if (kind === 'stage') onOpenStage?.(id)
+      setOwner('reader')
       void rf.setCenter(node.position.x + (node.width ?? 0) / 2, node.position.y + (node.height ?? 0) / 2, {
         zoom: Math.max(rf.getZoom(), OPEN_FLOOR),
-        duration: 220,
+        ...cameraMotion(),
       })
     },
-    [onOpenStage, onSelect, rf],
+    [onOpenStage, onSelect, rf, setOwner],
   )
   const openStage = useCallback((id: string) => onOpenStage?.(id), [onOpenStage])
   const closeStage = useCallback((groupId: string) => onCloseStage?.(groupId), [onCloseStage])
@@ -298,8 +346,13 @@ function Inner({
     [onSelectGroup],
   )
 
+  const travel = useRunTravel(scene, fitKey, nowNodeId, isEntered)
+
   // Sizes come from the Scene, so fitting never measures unrendered nodes.
   const nodes = useMemo<Node[]>(() => {
+    // Nothing is drawn until the camera has framed it, so the drawing enters in place.
+    if (!isEntered) return []
+    const travelledTo = travel === null ? undefined : scene.links.find((l) => l.id === travel.linkId)?.to
     const bands: Node[] = scene.bands.map((b) => ({
       id: `band:${b.id}`,
       type: 'band',
@@ -310,7 +363,7 @@ function Inner({
       draggable: false,
       selectable: false,
       zIndex: 0,
-      style: { zIndex: 0 },
+      style: { zIndex: 0, ...entranceStyle(delays, `band:${b.id}`) },
     }))
     const boxes: Node[] = scene.boxes.map((b) => ({
       id: b.id,
@@ -333,7 +386,10 @@ function Inner({
       draggable: false,
       // A failure detour sits above the drawing and its legend, beside the card it opened from.
       zIndex: b.detourOf === undefined ? 2 : 4,
-      style: { zIndex: b.detourOf === undefined ? 2 : 4 },
+      style: {
+        zIndex: b.detourOf === undefined ? 2 : 4,
+        ...entranceStyle(delays, b.id, travelledTo === b.id),
+      },
     }))
     const legendNode: Node[] = []
     const anchor = legendAnchor(
@@ -351,7 +407,7 @@ function Inner({
         draggable: false,
         selectable: false,
         zIndex: 3,
-        style: { zIndex: 3, width: LEGEND_W, height: LEGEND_BOX_H },
+        style: { zIndex: 3, width: LEGEND_W, height: LEGEND_BOX_H, ...entranceStyle(delays, '__legend') },
       })
     }
     return [...bands, ...boxes, ...legendNode]
@@ -370,11 +426,14 @@ function Inner({
     openStage,
     jump,
     legend,
+    isEntered,
+    delays,
+    travel,
   ])
 
   const edges = useMemo<Edge<RoutedEdgeData>[]>(
     () =>
-      scene.links.map((l) => {
+      (isEntered ? scene.links : []).map((l) => {
         const isLit = selectedId !== null && (l.from === selectedId || l.to === selectedId)
         const isPicked = l.id === selectedLinkId
         const isDim = dimUnrelated && selectedId !== null && !isLit && !isPicked
@@ -383,7 +442,12 @@ function Inner({
           source: l.from,
           target: l.to,
           type: 'routed',
-          data: { points: l.points, ...(l.label?.at ? { labelAt: l.label.at } : {}) },
+          data: {
+            points: l.points,
+            ...(l.label?.at ? { labelAt: l.label.at } : {}),
+            ...(travel?.linkId === l.id ? { travel: travel.nonce } : {}),
+          },
+          style: entranceStyle(delays, l.id),
           markerEnd: EDGE_MARKER[l.family],
           selected: isPicked,
           zIndex: isPicked || isLit ? 2 : 1,
@@ -394,85 +458,41 @@ function Inner({
           labelBgStyle: { fill: 'var(--p-surface-2)' },
         }
       }),
-    [scene, selectedId, selectedLinkId, dimUnrelated],
+    [scene, selectedId, selectedLinkId, dimUnrelated, isEntered, delays, travel],
   )
 
   useImperativeHandle(
     handleRef,
     () => ({
-      zoomIn: () => void rf.zoomIn({ duration: 120 }),
-      zoomOut: () => void rf.zoomOut({ duration: 120 }),
-      fit: () => void rf.fitView({ ...fitOptions(insetRightPx, paneRef.current?.clientWidth ?? 0), minZoom: MIN_ZOOM }),
+      zoomIn: () => {
+        setOwner('reader')
+        void rf.zoomIn(cameraMotion(200))
+      },
+      zoomOut: () => {
+        setOwner('reader')
+        void rf.zoomOut(cameraMotion(200))
+      },
+      fit: () => {
+        setOwner('fit')
+        fitWhole()
+      },
       zoom: () => rf.getZoom(),
       focus: (nodeId: string) => {
-        const id = rf.getNode(nodeId) !== undefined ? nodeId : `band:${nodeId}`
-        if (rf.getNode(id) === undefined) return
-        void rf.fitView({ nodes: [{ id }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 260 })
+        const el = paneRef.current?.querySelector<HTMLElement>('.react-flow')
+        if (el === null || el === undefined) return
+        const room = cameraRoom(el.clientWidth, el.clientHeight, insetRightPx)
+        const framed = focusView(scene, nodeId, { near: [], twoAway: [] }, room, FIT_MAX_ZOOM)
+        if (framed === null) return
+        setOwner('camera')
+        void rf.setViewport(framed.view, cameraMotion())
       },
       reveal: (nodeId: string) => {
-        const id = rf.getNode(nodeId) !== undefined ? nodeId : `band:${nodeId}`
-        if (rf.getNode(id) === undefined) return
-        void rf.fitView({ nodes: [{ id }], padding: 0.4, maxZoom: rf.getZoom(), duration: 160 })
+        const box = boxShowing(scene, nodeId)
+        if (box !== undefined) panToShow(box)
       },
     }),
-    [rf, insetRightPx],
+    [fitWhole, insetRightPx, panToShow, rf, scene, setOwner],
   )
-
-  // After the view opens, a resize with a selection only pans that selection back into view.
-  const keepSelectionInView = useRef<() => boolean>(() => false)
-  // Read when the view re-opens; re-opening on every run poll would fight the reader.
-  const latest = useRef({ scene, direction, nowNodeId, focusNodeId, insetRightPx })
-  useEffect(() => {
-    latest.current = { scene, direction, nowNodeId, focusNodeId, insetRightPx }
-  })
-
-  // Re-open when what is shown changes, never on zoom; a ResizeObserver knows when the pane is sized.
-  useEffect(() => {
-    const el = paneRef.current
-    if (el === null) return
-    let raf = 0
-    let isOpened = false
-    const open = (): void => {
-      cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(() => {
-        const { scene: shown, direction: reading, nowNodeId: now, focusNodeId: focus, insetRightPx } = latest.current
-        const paneW = el.clientWidth - (insetRightPx ?? 0)
-        const paneH = el.clientHeight
-        if (paneW < 8 || paneH < 8) return
-        if (isOpened && keepSelectionInView.current()) return
-        isOpened = true
-        const focused = focus === null || focus === undefined ? null : rf.getNode(focus) !== undefined ? focus : null
-        if (focused !== null) {
-          void rf.fitView({ nodes: [{ id: focused }], padding: 0.45, maxZoom: FOCUS_ZOOM, duration: 160 })
-          return
-        }
-        const zoomToFit = Math.min((paneW * 0.92) / shown.width, (paneH * 0.9) / shown.height)
-        if (zoomToFit >= OPEN_FLOOR || shown.boxes.length === 0) {
-          void rf.fitView({ ...fitOptions(insetRightPx, el.clientWidth), duration: 160 })
-          return
-        }
-        // Too large to read whole: open at the readable floor with the start, or "now", in view.
-        const anchor =
-          shown.boxes.find((b) => now !== null && (b.id === now || (b.holds ?? []).includes(now))) ??
-          shown.boxes.find((b) => b.isStart) ??
-          (shown.boxes[0] as Box)
-        const zoom = OPEN_FLOOR
-        const across = (span: number, room: number, at: number): number =>
-          span * zoom <= room ? (room - span * zoom) / 2 : Math.min(32, room / 2 - at * zoom)
-        const x = reading === 'lr' ? 32 - anchor.x * zoom : across(shown.width, paneW, anchor.x + anchor.w / 2)
-        const y = reading === 'lr' ? across(shown.height, paneH, anchor.y + anchor.h / 2) : 24 - anchor.y * zoom
-        void rf.setViewport({ x, y, zoom }, { duration: 160 })
-      })
-    }
-    open()
-    const ro = new ResizeObserver(open)
-    ro.observe(el)
-    return () => {
-      cancelAnimationFrame(raf)
-      ro.disconnect()
-    }
-    /* The Step panel never refits the view: the reader keeps their place, and the selection pans clear. */
-  }, [rf, fitKey, focusNodeId])
 
   const applyZoomVars = useCallback((zoom: number) => {
     const el = paneRef.current
@@ -484,29 +504,6 @@ function Inner({
   useEffect(() => {
     applyZoomVars(rf.getZoom())
   }, [applyZoomVars, rf, fitKey])
-
-  /** Pans the least that shows a rectangle whole; one larger than the pane shows its start. */
-  const panToShow = useCallback(
-    (r: { x: number; y: number; w: number; h: number }) => {
-      // The drawing's own box: the pane also holds the padding above it.
-      const el = paneRef.current?.querySelector<HTMLElement>('.react-flow') ?? paneRef.current
-      if (el === null || el === undefined) return
-      const { x, y, zoom } = rf.getViewport()
-      const margin = 24
-      const shift = (start: number, size: number, room: number): number => {
-        const a = start * zoom
-        const b = a + size * zoom
-        if (b - a > room - 2 * margin) return margin - a
-        if (a < margin) return margin - a
-        if (b > room - margin) return room - margin - b
-        return 0
-      }
-      const dx = shift(r.x + x / zoom, r.w, el.clientWidth - (insetRightPx ?? 0))
-      const dy = shift(r.y + y / zoom, r.h, el.clientHeight)
-      if (dx !== 0 || dy !== 0) void rf.setViewport({ x: x + dx, y: y + dy, zoom }, { duration: 280 })
-    },
-    [insetRightPx, rf],
-  )
 
   // After a stage opens or closes: focus what the reader acted on and pan just enough to show it.
   const appliedCue = useRef(0)
@@ -559,11 +556,12 @@ function Inner({
   const [isMoving, setMoving] = useState(false)
   if (observedPlacement !== placed) {
     setObservedPlacement(placed)
-    setMoving(true)
+    // Before the entrance nothing is drawn, so nothing moves.
+    if (isEntered) setMoving(true)
   }
   useEffect(() => {
     if (!isMoving) return
-    const timer = window.setTimeout(() => setMoving(false), 300)
+    const timer = window.setTimeout(() => setMoving(false), 320)
     return () => window.clearTimeout(timer)
   }, [isMoving])
 
@@ -573,7 +571,12 @@ function Inner({
   )
 
   return (
-    <div className="pstage-pane" ref={paneRef} data-relayout={isMoving ? 'true' : undefined}>
+    <div
+      className="pstage-pane"
+      ref={paneRef}
+      data-relayout={isMoving ? 'true' : undefined}
+      data-pending={isEntered && !isSettled ? 'true' : undefined}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -591,6 +594,10 @@ function Inner({
         preventScrolling={interactive}
         proOptions={{ hideAttribution: true }}
         onMove={handleMove}
+        onMoveEnd={(event) => {
+          // Only the reader's own pan or zoom carries an event; it takes the view over from the camera.
+          if (event) setOwner('reader')
+        }}
         onPaneClick={() => {
           setSelectedLinkId(null)
           onSelect?.(null, false)
@@ -601,7 +608,24 @@ function Inner({
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={26} size={1} />
-        {interactive ? <Controls showInteractive={false} /> : null}
+        {isEntered ? null : (
+          <p className="pstage-wait" role="status">
+            Drawing the Flow…
+          </p>
+        )}
+        {interactive ? (
+          <Controls
+            showInteractive={false}
+            fitViewOptions={{
+              ...fitOptions(insetRightPx, paneRef.current?.clientWidth ?? 0),
+              minZoom: MIN_ZOOM,
+              ...cameraMotion(),
+            }}
+            onFitView={() => setOwner('fit')}
+            onZoomIn={() => setOwner('reader')}
+            onZoomOut={() => setOwner('reader')}
+          />
+        ) : null}
       </ReactFlow>
     </div>
   )

@@ -586,6 +586,22 @@ on the card it leaves. A `dex:group` of two or more Steps is a stage that
 one stage in place. Its drawing rules and guardrails are in
 [`app/v2/canvas/views/README.md`](app/v2/canvas/views/README.md).
 
+The **v2** canvas draws nothing until its layout and the selected run have
+loaded, then shows them framed; it never flies in from a default view. A
+focused Step, or the Step the run is at, is framed with the card of every Step
+a transition joins to it, whether drawn as a line or as a ↪ chip. The framing
+never zooms past the cards' drawn size, and never below the readable zoom. It
+widens to Steps two transitions away, or to the whole Flow, while that keeps at
+least 80% of the Step's size. When the joined Steps cannot all fit at the
+readable zoom, the nearest ones that fit stay in view. A new drawing traces in
+from its start: each card swells in as the trace reaches it along the lines,
+and each line draws out of its card. Another run, a stage, **Collapsed**,
+**Expanded** or a new direction moves the cards and the view together in one
+eased motion; while the next run loads, the last one dims in place. A run that
+moves on while open sends a head along the line to its next Step, and the
+"now" ring lands there. Once the reader pans or zooms, the view stays theirs.
+Reduced-motion settings turn the motion off.
+
 The graph contract, compound layout, React components, and styles live in the
 shared [`flow-definition-renderer`](../packages/flow-definition-renderer)
 package. Product docs import the same renderer for checked-in Python example
