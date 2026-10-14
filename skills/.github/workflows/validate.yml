@@ -1,7 +1,6 @@
 name: Validate
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -56,6 +55,3 @@ jobs:
       - name: Validate CLI and Server baselines
         run: |
           python3 script/check-upstream-baselines.py --dex-root upstream-dex-cli
-      - name: Enforce release metadata
-        if: github.event_name == 'pull_request'
-        run: python3 script/check-package.py --base-ref "${{ github.event.pull_request.base.sha }}"

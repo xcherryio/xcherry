@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.37.0 - 2026-10-14
+
+- Move Dex Skills development and validation to superdurable/dex `skills/`. The dex-skills repository is a read-only mirror and remains the plugin installation and release source. Remove the mirror pull request template and its obsolete package check.
+- Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.37.0.
+
 ## 0.36.0 - RELEASE_DATE
 
 - Describe Step group shapes in the Go FDG authoring reference. A group of two or more Steps does one thing: one run, where ordinary transitions inside the group join all of its Steps, or one choice, where one Step outside the group leads into every part, such as an agent's decision Step and its tools. Dex Web folds only such a group into a stage that opens in place and shows any other group's Steps in its band; the analyzer warns about it with `v2_step_group_shape`, which names the parts and never makes a definition invalid. The diagnostics table gains the row.
