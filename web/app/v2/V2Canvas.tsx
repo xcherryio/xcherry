@@ -63,6 +63,7 @@ export function V2Canvas({
   onSummary,
   onTick,
   deselectKey = 0,
+  refocusKey = 0,
   focusBlockingStep = false,
   showStepPanel = true,
 }: {
@@ -72,6 +73,8 @@ export function V2Canvas({
   definition?: FlowDefinitionEntry;
   /** Bumped by the host to clear the Step selection. */
   deselectKey?: number;
+  /** Bumped when the open run is picked again: the reader's selection goes and the view returns to the run. */
+  refocusKey?: number;
   /** Zoom in on the waiting Step instead of merely panning to it. */
   focusBlockingStep?: boolean;
   /** False when the host renders step detail itself, so the canvas keeps its width. */
@@ -214,10 +217,20 @@ export function V2Canvas({
   // Nothing selected, so no detour: however the selection was cleared.
   if (selectedId === null && detourFor !== null) setDetourFor(null);
 
+  // Picking the open run again drops the reader's selection before the run's Step is revealed below.
+  const firstRefocus = useRef(refocusKey);
+  useEffect(() => {
+    if (refocusKey === firstRefocus.current) return;
+    setSelectedId(null);
+    setSelectedByReader(false);
+    setSelectedGroupId(null);
+    setDetourFor(null);
+  }, [refocusKey]);
+
   // Choosing a run should land on where it stopped, once, without fighting later clicks.
   const revealedFor = useRef('');
   const [revealedKey, setRevealedKey] = useState('');
-  const revealKey = `${flowId}|${blockingStepType}|${String(focusBlockingStep)}`;
+  const revealKey = `${flowId}|${blockingStepType}|${String(focusBlockingStep)}|${refocusKey}`;
   useEffect(() => {
     if (!flow || blockingStepType === null) return;
     const key = revealKey;
@@ -504,7 +517,7 @@ export function V2Canvas({
           </div>
         )}
         // Opening or closing a stage, or the Step panel, keeps the reader's place, so neither refits.
-        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}`}
+        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${refocusKey}`}
       />
       <p className="sr-only" aria-live="polite">
         {stages.cue?.message}
