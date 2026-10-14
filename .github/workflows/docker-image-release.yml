@@ -15,6 +15,11 @@ on:
         description: "Docker image tag (e.g. v1.0.0)"
         required: true
         type: string
+      dry_run:
+        description: Build both architectures without pushing images
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   docker:
@@ -47,6 +52,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Login to Docker Hub
+        if: ${{ !inputs.dry_run }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -70,8 +76,83 @@ jobs:
         with:
           context: .
           file: ./server/Dockerfile
-          push: true
+          push: ${{ !inputs.dry_run }}
           platforms: linux/arm64,linux/amd64
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/dex-server:${{ steps.meta.outputs.tag }}
           build-args: |
             SERVER_VERSION=${{ steps.meta.outputs.tag }}
+
+  all-in-one:
+    runs-on: ubuntu-latest
+    if: >
+      inputs.version != '' ||
+      startsWith(github.event.release.tag_name, 'server/v')
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve image metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            image_tag="${RELEASE_TAG#server/}"
+          else
+            image_tag="v${INPUT_VERSION#v}"
+          fi
+          if [[ ! "${image_tag}" =~ ^v([0-9]+\.[0-9]+)\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "Invalid Docker image version: ${image_tag}" >&2
+            exit 1
+          fi
+          image_minor="${BASH_REMATCH[1]}"
+          {
+            echo "tag=${image_tag}"
+            echo "minor=${image_minor}"
+            echo "commit=${GITHUB_SHA}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Login to Docker Hub
+        if: ${{ !inputs.dry_run }}
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Verify all-in-one runtime version
+        env:
+          IMAGE_VERSION: ${{ steps.meta.outputs.tag }}
+          IMAGE_COMMIT: ${{ steps.meta.outputs.commit }}
+          IMAGE_BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+        run: |
+          docker build \
+            --build-arg "VERSION=${IMAGE_VERSION}" \
+            --build-arg "COMMIT=${IMAGE_COMMIT}" \
+            --build-arg "BUILD_DATE=${IMAGE_BUILD_DATE}" \
+            --file server/all-in-one/Dockerfile \
+            --tag dex-server-all-in-one-release-check \
+            .
+          runtime_version="$(docker run --rm dex-server-all-in-one-release-check version)"
+          [[ "${runtime_version}" == *"${IMAGE_VERSION}"* ]] || {
+            echo "All-in-one runtime version does not match ${IMAGE_VERSION}: ${runtime_version}" >&2
+            exit 1
+          }
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./server/all-in-one/Dockerfile
+          push: ${{ !inputs.dry_run }}
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            superdurable/dex-server-all-in-one:${{ steps.meta.outputs.tag }}
+            superdurable/dex-server-all-in-one:${{ steps.meta.outputs.minor }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+          provenance: mode=max
+          sbom: true
