@@ -132,6 +132,12 @@ class ChangedComponentsIntegrationTest(unittest.TestCase):
         self.assertEqual(values["server_baseline"], "server/v0.1.0")
         self.assertEqual(values["server_tag"], "server/v1.2.3")
 
+    def test_all_in_one_change_triggers_server_only(self) -> None:
+        self.change("server/all-in-one/go.mod")
+        result, values = self.plan()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_selected(values, "server")
+
     def test_historical_server_tag_remains_a_valid_baseline(self) -> None:
         self.change("server/main.go")
         self.git("tag", "server-v0.2.0")
