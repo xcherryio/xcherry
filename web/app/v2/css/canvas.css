@@ -3887,6 +3887,11 @@ button.pdock:focus-visible {
   .pedge-travel {
     display: none;
   }
+  /* Nothing glides, so the lines have no reason to step aside. */
+  .pstage-pane[data-relayout='true'] .react-flow__edges,
+  .pstage-pane[data-relayout='true'] .react-flow__edgelabel-renderer {
+    opacity: 1;
+  }
 }
 
 /* The legend's census rows. */
