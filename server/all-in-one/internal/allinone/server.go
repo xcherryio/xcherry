@@ -15,8 +15,8 @@ import (
 	"log/slog"
 
 	"github.com/superdurable/dex/service/bootstrap"
-	_ "github.com/superdurable/temporal-server/common/persistence/sql/sqlplugin/postgresql"
-	"github.com/superdurable/temporal-server/temporal"
+	_ "github.com/superdurable/xtemporal/common/persistence/sql/sqlplugin/postgresql"
+	"github.com/superdurable/xtemporal/temporal"
 )
 
 func Run(ctx context.Context, cfg *Config) error {
