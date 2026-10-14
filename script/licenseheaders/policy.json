@@ -30,7 +30,8 @@
   ],
   "excluded_prefixes": [
     "docs",
-    "examples"
+    "examples",
+    "skills"
   ],
   "retained_license_prefixes": {
     "examples/go": "mit",

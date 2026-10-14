@@ -1,0 +1,20 @@
+{
+  "name": "superdurable",
+  "interface": {
+    "displayName": "Super Durable"
+  },
+  "plugins": [
+    {
+      "name": "superdurable-dex",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

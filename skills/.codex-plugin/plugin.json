@@ -1,0 +1,42 @@
+{
+  "name": "superdurable-dex",
+  "version": "0.36.0",
+  "description": "Build Dex process products in a repository-backed coding workspace.",
+  "author": {
+    "name": "Super Durable",
+    "url": "https://superdurable.io"
+  },
+  "homepage": "https://docs.superdurable.io/build-with-ai/dex-developer-skill",
+  "repository": "https://github.com/superdurable/dex-skills",
+  "license": "MIT",
+  "keywords": [
+    "dex",
+    "durable-execution",
+    "workflow",
+    "connectors",
+    "ai-platform",
+    "coding-agent"
+  ],
+  "skills": "./",
+  "hooks": "./hooks/codex.json",
+  "interface": {
+    "displayName": "Dex",
+    "shortDescription": "Build Dex apps in a coding workspace",
+    "longDescription": "Developer skills for a coding-agent host with a writable repository or project workspace. Dex App Builder owns end-to-end product work, while Dex SDK and Dex Connector Contributor handle matching standalone specialist requests. Without repository and command access, the plugin supports planning and handoff only.",
+    "developerName": "Super Durable",
+    "category": "Productivity",
+    "capabilities": [
+      "Guidance"
+    ],
+    "websiteURL": "https://docs.superdurable.io/build-with-ai/dex-developer-skill",
+    "defaultPrompt": [
+      "Discover, design, and build this Dex process application.",
+      "Add <XYZ> to Dex official connector library.",
+      "Design a reliable Dex Flow for this application.",
+      "Prototype and build this Dex workflow."
+    ],
+    "brandColor": "#78C51C",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}
