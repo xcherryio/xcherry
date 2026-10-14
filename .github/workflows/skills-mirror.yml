@@ -43,8 +43,14 @@ jobs:
         env:
           DEX_COMMIT: ${{ github.sha }}
           DRY_RUN: ${{ inputs.dry_run }}
+          DEX_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+
+          if [[ "${DEX_REF}" != 'refs/heads/main' ]]; then
+            echo "Dex ref ${DEX_REF} is not main; forcing dry run."
+            DRY_RUN=true
+          fi
 
           target_tree="$(git -C dex rev-parse "${DEX_COMMIT}:skills")"
           mirror_tree="$(git -C mirror rev-parse 'HEAD^{tree}')"
@@ -63,6 +69,10 @@ jobs:
           if [[ "${mirror_tree}" != "${expected_tree}" ]]; then
             echo "Skills mirror drift: mirror HEAD tree ${mirror_tree} differs from expected Dex tree ${expected_tree}. Restore the mirror or investigate direct edits before syncing." >&2
             exit 1
+          fi
+          if [[ -n "${last_dex_commit}" ]] && ! git -C dex merge-base --is-ancestor "${last_dex_commit}" "${DEX_COMMIT}"; then
+            echo "Skipping stale Dex commit ${DEX_COMMIT}: mirror already synced ${last_dex_commit}, which is not its ancestor."
+            exit 0
           fi
 
           rsync -a --delete --exclude=.git dex/skills/ mirror/
