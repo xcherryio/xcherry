@@ -1,5 +1,9 @@
 # Dex Skills
 
+> This repository is a read-only mirror of
+> [superdurable/dex `skills/`](https://github.com/superdurable/dex/tree/main/skills).
+> Contribute changes in superdurable/dex.
+
 Dex Skills is the official agent-skill monorepo for building with
 [Superdurable Dex](https://docs.superdurable.io). One `superdurable-dex` plugin
 ships three skills for Codex, Claude Code, and Cursor:

@@ -1,5 +1,9 @@
 # Contributing
 
+The source of truth is [superdurable/dex `skills/`](https://github.com/superdurable/dex/tree/main/skills).
+Contribute there; the `superdurable/dex-skills` mirror accepts no pull requests.
+Dex runs the validators in [Skills CI](https://github.com/superdurable/dex/blob/main/.github/workflows/skills-ci.yml).
+
 This repository publishes one plugin with three root-level skills:
 
 - `dex-sdk` owns public Dex SDK implementation guidance and its Core and
@@ -75,6 +79,7 @@ version where the format supports a version.
   backward-compatible capabilities.
 - Increment MAJOR for incompatible plugin or skill identity changes.
 
-After a pull request lands on `main`, the Release workflow validates the full
-package and creates `v<version>` from the matching changelog section. If the tag
-already exists, the workflow skips release creation.
+After a pull request lands on Dex `main`, the skills mirror syncs the package.
+The mirror's Release workflow validates it and creates `v<version>` from the
+matching changelog section. If the tag already exists, the workflow skips
+release creation.

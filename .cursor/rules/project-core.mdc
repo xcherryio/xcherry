@@ -30,21 +30,23 @@ one requires equivalent updates to all three in the same commit.
 
 When adding, removing, renaming, or materially changing an application-visible
 API, primitive, feature, design pattern, or operational semantic, update
-`superdurable/dex-skills` in the same work item. Pure internal
+Dex `skills/` in the same work item. Merging `skills/` to main automatically
+syncs it to the read-only `superdurable/dex-skills` mirror, which publishes the
+skill release. Pure internal
 refactors and fixes that preserve application behavior do not trigger this rule.
 
 Commit Dex first. After that change is included in a published Dex release,
-advance the skill repository's `DEX_BASELINE` to that exact release tag,
+advance `skills/DEX_BASELINE` to that exact release tag,
 refresh pinned source links, update affected core and all five language
 references, and update the version, changelog, and plugin manifests. Never use
 a branch name or commit SHA for `DEX_BASELINE` or pinned source links. Run every
-skill repository validator before completion.
+skill validator before completion.
 
 If no release tag contains the Dex change yet, report the release as the
-blocker. Do not update the skill from an unreleased commit.
+blocker. Do not update `skills/` from an unreleased commit.
 
-If the skill repository is unavailable or contains work that cannot be safely
-merged, do not mark the feature complete. Report the blocker explicitly.
+If the skills mirror is unavailable or contains work that cannot be safely
+synced, do not mark the feature complete. Report the blocker explicitly.
 
 ## No Downstream Product Information
 

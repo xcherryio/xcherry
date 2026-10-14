@@ -972,12 +972,6 @@ def check_agent_rules() -> None:
     for removed in ("TEMPLATE_BASELINE", "template baseline workflow"):
         if removed in normalized_agents:
             fail(f"repository agent rules must not restore: {removed}")
-    pull_request_template = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text()
-    if "Dex-AI-Platform-PR:" in pull_request_template:
-        fail("pull request template must not require a paired repository")
-    if "quick_validate.py" not in pull_request_template:
-        fail("pull request template must require skill validation")
-
     for removed in (
         ROOT / "TEMPLATE_BASELINE",
         ROOT / "script" / "update-template-baseline.py",

@@ -5,6 +5,10 @@ alwaysApply: true
 
 # Dex Skills Repository Instructions
 
+The source of truth is superdurable/dex `skills/`. The read-only
+`superdurable/dex-skills` mirror accepts no pull requests. Dex runs the
+validators in `.github/workflows/skills-ci.yml`.
+
 This repository publishes one `superdurable-dex` plugin for Codex, Claude Code,
 and Cursor. Its only public skills are `dex-sdk`, `dex-app-builder`, and
 `dex-connector-contributor`, stored directly at the repository root.
