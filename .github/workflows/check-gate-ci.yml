@@ -79,6 +79,9 @@ jobs:
               - '.github/workflows/release-changed-components.yml'
               - '.github/workflows/release-tooling-ci.yml'
               - 'CONTRIBUTING.md'
+            skills:
+              - 'skills/**'
+              - '.github/workflows/skills-ci.yml'
             copyright:
               - 'server/**'
               - 'cli/**'
@@ -117,6 +120,7 @@ jobs:
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
+          FILTER_SKILLS: ${{ steps.filter.outputs.skills }}
           FILTER_COPYRIGHT: ${{ steps.filter.outputs.copyright }}
         run: |
           set -euo pipefail
@@ -155,6 +159,7 @@ jobs:
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")
+            [[ "$FILTER_SKILLS" == "true" ]] && expected+=("Skills CI")
             [[ "$FILTER_COPYRIGHT" == "true" ]] && expected+=("Copyright")
           fi
 

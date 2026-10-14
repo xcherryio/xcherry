@@ -1,0 +1,18 @@
+{
+  "name": "superdurable",
+  "owner": {
+    "name": "Super Durable"
+  },
+  "metadata": {
+    "description": "Official skills for building with Superdurable Dex"
+  },
+  "plugins": [
+    {
+      "name": "superdurable-dex",
+      "source": "./",
+      "description": "App Builder-led Dex development in a repository-backed coding workspace.",
+      "version": "0.36.0",
+      "logo": "assets/logo.png"
+    }
+  ]
+}
