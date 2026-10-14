@@ -253,7 +253,7 @@ type StageProps = {
   onInspect?: (id: string) => void
   legend?: () => JSX.Element
   dimUnrelated?: boolean
-  /** When set, the view centres this node at reading zoom instead of opening on the whole Flow. */
+  /** When set, the view frames this node with its neighbours instead of opening on the whole Flow. */
   focusNodeId?: string | null
   /** The Step, or the stage holding it, that the shown run is at now. */
   nowNodeId?: string | null
@@ -322,7 +322,7 @@ function Inner({
     direction,
     isSettled,
     subjectKey: fitKey,
-    targetId: focusNodeId ?? nowNodeId,
+    targetId: focusNodeId ?? null,
     targetNeighbours,
     insetRightPx,
     wholeMaxZoom: FIT_MAX_ZOOM,

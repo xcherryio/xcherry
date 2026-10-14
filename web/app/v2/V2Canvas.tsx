@@ -301,12 +301,19 @@ export function V2Canvas({
     return flow.steps.find((step) => step.stepType === blockingStepType)?.id ?? null;
   }, [blockingStepType, flow]);
 
-  /** What the camera keeps in view around the focus, or "now": the cards of Steps one and two transitions away. */
+  // Picking a run frames its Step; Collapsed, Expanded or a new direction then return to the opening view.
+  const runPick = `${flowId}|${refocusKey}`;
+  const [picked, setPicked] = useState({ runPick, view: stages.view, isLeft: false });
+  if (picked.runPick !== runPick) setPicked({ runPick, view: stages.view, isLeft: false });
+  else if (picked.view === '' && stages.view !== '') setPicked({ ...picked, view: stages.view });
+  else if (!picked.isLeft && stages.view !== picked.view) setPicked({ ...picked, isLeft: true });
+  const frameStepId = picked.isLeft ? null : (focusNodeId ?? nowNodeId);
+
+  /** What the camera keeps in view around the framed Step: the cards of Steps one and two transitions away. */
   const targetNeighbours = useMemo(() => {
-    const target = focusNodeId ?? nowNodeId;
-    if (!flow || !scene || target === null) return NO_FRAMING_NEIGHBOURS;
-    return framingNeighbours(flow, groups, scene, target);
-  }, [flow, focusNodeId, groups, nowNodeId, scene]);
+    if (!flow || !scene || frameStepId === null) return NO_FRAMING_NEIGHBOURS;
+    return framingNeighbours(flow, groups, scene, frameStepId);
+  }, [flow, frameStepId, groups, scene]);
 
   const { collapseStage, openStage: openStageInPlace } = stages;
   const closeStage = useCallback(
@@ -462,7 +469,7 @@ export function V2Canvas({
         isSettled={isSettled}
         targetNeighbours={targetNeighbours}
         dimUnrelated={selectedByReader}
-        focusNodeId={focusNodeId}
+        focusNodeId={frameStepId}
         nowNodeId={nowNodeId}
         handleRef={viewportRef}
         scene={scene}
