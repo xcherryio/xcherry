@@ -26,3 +26,7 @@ The [skills/](skills/) module contains the Dex Skills source.
 ## Quick start
 
 See [Quick start](https://docs.superdurable.io/quick-start) on docs.superdurable.io.
+
+## Modules
+
+- [`server/all-in-one/`](server/all-in-one/README.md): builds Dex Server and its backend in one image.

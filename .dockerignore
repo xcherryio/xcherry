@@ -1,3 +1,5 @@
+.git
+.github
 cli/dexcli
 cli/internal/command/testfixtures/registered-type-names/mainpackage/mainpackage
 server/dex-server
@@ -19,3 +21,4 @@ sdk-python/coverage/
 sdk-go/coverage/
 server/coverage/
 server/coverage-raw/
+server/all-in-one/bin/

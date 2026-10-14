@@ -2707,6 +2707,69 @@
       "legacy_path": null,
       "legacy_paths": []
     },
+    "server/all-in-one/cmd/dex-server-all-in-one/main.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/cmd/temporal-sql-tool/main.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/config.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/config_test.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/database.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/healthcheck.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/namespace.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/internal/allinone/server.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
+    "server/all-in-one/test/e2e/main.go": {
+      "baseline_hash": null,
+      "classification": "new",
+      "legacy_licenses": [],
+      "legacy_path": null,
+      "legacy_paths": []
+    },
     "server/cmd/server/dex/dex.go": {
       "baseline_hash": "b8d1147a24cca443b231b98a434305c63c2cf6ab8fa1de7a6a54c2c3d6ea09d9",
       "classification": "mixed",
