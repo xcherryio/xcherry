@@ -3770,11 +3770,11 @@ button.pdock:focus-visible {
 .pstage-pane .react-flow__node > .pnow-tag {
   animation-delay: var(--arrive-delay, 0ms);
 }
-/* A line draws out of the card it leaves; a dashed failure line fades in. */
-.pstage-pane .react-flow__edge-path {
+/* During the entrance only, a line draws out of the card it leaves; a dashed failure line fades in. */
+.pstage-pane[data-entering='true'] .react-flow__edge-path {
   animation: pedge-draw 300ms var(--ease-glide) var(--enter-delay, 0ms) backwards;
 }
-.pstage-pane .pedge-failure .react-flow__edge-path {
+.pstage-pane[data-entering='true'] .pedge-failure .react-flow__edge-path {
   animation-name: pedge-fade;
 }
 .pstage-pane .react-flow__edges,

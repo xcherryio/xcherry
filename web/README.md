@@ -597,7 +597,10 @@ readable zoom, the nearest ones that fit stay in view. A new drawing traces in
 from its start: each card swells in as the trace reaches it along the lines,
 and each line draws out of its card. Another run, a stage, **Collapsed**,
 **Expanded** or a new direction moves the cards and the view together in one
-eased motion; while the next run loads, the last one dims in place. A run that
+eased motion; while the next run loads, the last one dims in place. Picking the
+open run again frames its Step once more and drops the reader's selection;
+**Collapsed**, **Expanded** and a new direction return to the opening view
+instead, until the run is picked again. A run that
 moves on while open sends a head along the line to its next Step, and the
 "now" ring lands there. Once the reader pans or zooms, the view stays theirs.
 Reduced-motion settings turn the motion off.

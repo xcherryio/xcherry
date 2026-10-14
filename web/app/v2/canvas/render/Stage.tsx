@@ -115,6 +115,14 @@ function BoxNode({ data }: NodeProps): JSX.Element {
   )
 }
 
+/** Declared anchors, so lines survive rebuilt nodes: React Flow forgets measured handles on each new node object. */
+function anchorHandles(w: number, h: number): NonNullable<Node['handles']> {
+  return [
+    { type: 'target', position: Position.Top, x: w / 2, y: 0, width: 1, height: 1 },
+    { type: 'source', position: Position.Bottom, x: w / 2, y: h, width: 1, height: 1 },
+  ]
+}
+
 /** An open stage's band: its label selects the group and its ⊖ closes the stage into one card. */
 function BandNode({ data }: NodeProps): JSX.Element {
   const d = data as unknown as {
@@ -245,7 +253,7 @@ type StageProps = {
   onInspect?: (id: string) => void
   legend?: () => JSX.Element
   dimUnrelated?: boolean
-  /** When set, the view centres this node at reading zoom instead of opening on the whole Flow. */
+  /** When set, the view frames this node with its neighbours instead of opening on the whole Flow. */
   focusNodeId?: string | null
   /** The Step, or the stage holding it, that the shown run is at now. */
   nowNodeId?: string | null
@@ -314,7 +322,7 @@ function Inner({
     direction,
     isSettled,
     subjectKey: fitKey,
-    targetId: focusNodeId ?? nowNodeId,
+    targetId: focusNodeId ?? null,
     targetNeighbours,
     insetRightPx,
     wholeMaxZoom: FIT_MAX_ZOOM,
@@ -371,6 +379,7 @@ function Inner({
       position: { x: b.x, y: b.y },
       width: b.w,
       height: b.h,
+      handles: anchorHandles(b.w, b.h),
       data: {
         box: b,
         selected: b.id === selectedId,
@@ -576,6 +585,7 @@ function Inner({
       ref={paneRef}
       data-relayout={isMoving ? 'true' : undefined}
       data-pending={isEntered && !isSettled ? 'true' : undefined}
+      data-entering={delays !== null ? 'true' : undefined}
     >
       <ReactFlow
         nodes={nodes}
