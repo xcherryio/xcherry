@@ -1,0 +1,21 @@
+{
+  "name": "superdurable-dex",
+  "version": "0.37.0",
+  "description": "Build Dex process products in a repository-backed coding workspace.",
+  "author": {
+    "name": "Super Durable",
+    "url": "https://superdurable.io"
+  },
+  "homepage": "https://docs.superdurable.io/build-with-ai/dex-developer-skill",
+  "repository": "https://github.com/superdurable/dex-skills",
+  "license": "MIT",
+  "hooks": "./hooks/claude.json",
+  "keywords": [
+    "dex",
+    "durable-execution",
+    "workflow",
+    "connectors",
+    "ai-platform",
+    "coding-agent"
+  ]
+}

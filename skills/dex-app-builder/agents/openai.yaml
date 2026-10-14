@@ -1,0 +1,6 @@
+interface:
+  display_name: "Dex App Builder"
+  short_description: "Design and build Dex AI process applications"
+  default_prompt: "Use $dex-app-builder as the primary workflow to discover, design, and build a Dex process application."
+policy:
+  allow_implicit_invocation: true

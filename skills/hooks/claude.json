@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/version-check.mjs",
+              "--client",
+              "claude"
+            ],
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -62,3 +62,4 @@ sdk-typescript/coverage/
 # Logs / local
 *.log
 test.log
+server/all-in-one/bin/
