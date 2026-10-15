@@ -182,11 +182,12 @@ func (r *Runtime) createServices() error {
 		if !r.options.Services.API && r.options.Services.Matching {
 			serviceName = "matching"
 		}
-		r.apiServer, err = api.NewServerWithMatching(
+		r.apiServer, err = api.NewServerWithMatchingAccess(
 			&r.cfg.Api,
 			&r.cfg.Auth,
 			&r.cfg.Internal,
 			&r.cfg.Worker.Wake,
+			r.cfg.Matching,
 			&r.cfg.BlobStore,
 			&r.cfg.Interpreter,
 			client,

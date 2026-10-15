@@ -1172,6 +1172,8 @@ message WorkerErrorResponse {
   string error_type = 2;
   string stack_trace = 3;
   int32 retry_after_seconds = 4;
+  // Pull Workers set the gRPC code push mode would return; push mode uses its transport status.
+  int32 grpc_status = 5;
 }
 
 message InternalActivityError {
@@ -1732,6 +1734,8 @@ message PrepareRpcQueryResponse {
   repeated string loaded_attribute_map_instances = 8;
   repeated string loaded_channel_names = 9;
   repeated string loaded_channel_map_instances = 10;
+  // Selects the last Worker queue for API-direct RPC dispatch.
+  string dex_task_queue = 11;
 }
 
 message TimerInfo {

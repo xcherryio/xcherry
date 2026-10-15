@@ -24,6 +24,7 @@ import (
 	"github.com/superdurable/dex/service/interpreter/cont"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
 	"github.com/superdurable/dex/service/interpreter/timers"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -143,6 +144,7 @@ func (i *Interpreter) StartEngineFlow(
 			outputCollector,
 			timerProcessor,
 			attributeSynchronizer,
+			previous.GetDexTaskQueue(),
 		)
 	} else {
 		channelStore = NewChannelStore()
@@ -189,6 +191,7 @@ func (i *Interpreter) StartEngineFlow(
 			outputCollector,
 			timerProcessor,
 			attributeSynchronizer,
+			"",
 		)
 	} // end of NOT continueAsNew
 	subFlowTracker := NewSubFlowTracker(
@@ -936,6 +939,11 @@ func (i *Interpreter) processStepExecution(
 				LoadedChannelMapInstances:   selection.ChannelMapInstances,
 			},
 		}
+		if flowConfiger.GetWorkerTarget().GetIsPullMode() {
+			activityInput.DexTaskQueue = continueAsNewer.DexTaskQueue()
+			activityInput.DispatchWait = durationpb.New(i.matchingConfig().DispatchWait)
+			activityInput.StickyWait = durationpb.New(i.matchingConfig().StickyWait)
+		}
 		var activityOutput dexpb.InvokeWaitForMethodActivityOutput
 		waitForMethErr = provider.ExecuteActivity(
 			&activityOutput,
@@ -971,6 +979,7 @@ func (i *Interpreter) processStepExecution(
 			channelStore.DeleteAll(activityOutput.Response.GetDeleteFromChannel())
 			channelStore.ProcessPublishing(activityOutput.Response.GetPublishToChannel())
 			stepExeLocals = activityOutput.Response.GetUpsertStepExeLocals()
+			continueAsNewer.RecordServedByAppWorkerID(activityOutput.GetServedByAppWorkerId())
 
 		}
 
@@ -1273,6 +1282,11 @@ func (i *Interpreter) invokeExecuteMethod(
 			LoadedChannelMapInstances:   selection.ChannelMapInstances,
 		},
 	}
+	if flowConfiger.GetWorkerTarget().GetIsPullMode() {
+		activityInput.DexTaskQueue = continueAsNewer.DexTaskQueue()
+		activityInput.DispatchWait = durationpb.New(i.matchingConfig().DispatchWait)
+		activityInput.StickyWait = durationpb.New(i.matchingConfig().StickyWait)
+	}
 	var activityOutput dexpb.InvokeExecuteMethodActivityOutput
 	exeMethErr := provider.ExecuteActivity(
 		&activityOutput,
@@ -1307,8 +1321,16 @@ func (i *Interpreter) invokeExecuteMethod(
 	}
 	channelStore.DeleteAll(executeResponse.GetDeleteFromChannel())
 	channelStore.ProcessPublishing(executeResponse.GetPublishToChannel())
+	continueAsNewer.RecordServedByAppWorkerID(activityOutput.GetServedByAppWorkerId())
 
 	return executeResponse.GetStepDecision(), service.StepExecutionStatusCompleted, nil
+}
+
+func (i *Interpreter) matchingConfig() config.MatchingConfig {
+	if i.sharedConfig.Matching == nil {
+		return config.MatchingConfig{}.WithDefaults()
+	}
+	return i.sharedConfig.Matching.WithDefaults()
 }
 
 func stepMethodOptions(options interfaces.ActivityOptions) *dexpb.StepMethodOptions {

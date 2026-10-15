@@ -20,6 +20,7 @@ import (
 	"github.com/superdurable/dex/service/common/attributestore"
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/event"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/interpreter"
@@ -81,6 +82,7 @@ func NewInterpreterWorker(
 		cfg,
 		streamStore,
 		metrics,
+		pulldispatch.NewDispatcher(internal),
 	)
 	workflowInterpreter := interpreter.NewInterpreter(cfg, activities)
 	return &InterpreterWorker{

@@ -8,7 +8,10 @@
 
 package interfaces
 
-import "github.com/superdurable/dex/gen/dexpb"
+import (
+	"github.com/superdurable/dex/gen/dexpb"
+	"google.golang.org/protobuf/proto"
+)
 
 func IsStepActivityInput(input interface{}) bool {
 	switch input.(type) {
@@ -53,21 +56,9 @@ func waitForActivityInputWithAttemptContext(
 	if request == nil {
 		panic("step activity request required")
 	}
-	return &dexpb.InvokeWaitForMethodActivityInput{
-		WorkerTarget: input.GetWorkerTarget(),
-		Request: &dexpb.InvokeWaitForMethodRequest{
-			Context:                     stepActivityContextForFallback(request.GetContext(), previousAttempts, firstAttemptTimestamp),
-			FlowType:                    request.GetFlowType(),
-			StepType:                    request.GetStepType(),
-			StepInput:                   request.GetStepInput(),
-			Attributes:                  request.GetAttributes(),
-			ChannelInfos:                request.GetChannelInfos(),
-			LoadedChannelMessages:       request.GetLoadedChannelMessages(),
-			LoadedAttributeMapInstances: request.GetLoadedAttributeMapInstances(),
-			LoadedChannelNames:          request.GetLoadedChannelNames(),
-			LoadedChannelMapInstances:   request.GetLoadedChannelMapInstances(),
-		},
-	}
+	fallbackInput := proto.Clone(input).(*dexpb.InvokeWaitForMethodActivityInput)
+	fallbackInput.Request.Context = stepActivityContextForFallback(fallbackInput.Request.GetContext(), previousAttempts, firstAttemptTimestamp)
+	return fallbackInput
 }
 
 func executeActivityInputWithAttemptContext(
@@ -79,23 +70,9 @@ func executeActivityInputWithAttemptContext(
 	if request == nil {
 		panic("step activity request required")
 	}
-	return &dexpb.InvokeExecuteMethodActivityInput{
-		WorkerTarget: input.GetWorkerTarget(),
-		Request: &dexpb.InvokeExecuteMethodRequest{
-			Context:                     stepActivityContextForFallback(request.GetContext(), previousAttempts, firstAttemptTimestamp),
-			FlowType:                    request.GetFlowType(),
-			StepType:                    request.GetStepType(),
-			StepInput:                   request.GetStepInput(),
-			Attributes:                  request.GetAttributes(),
-			StepExeLocals:               request.GetStepExeLocals(),
-			ConditionResults:            request.GetConditionResults(),
-			ChannelInfos:                request.GetChannelInfos(),
-			LoadedChannelMessages:       request.GetLoadedChannelMessages(),
-			LoadedAttributeMapInstances: request.GetLoadedAttributeMapInstances(),
-			LoadedChannelNames:          request.GetLoadedChannelNames(),
-			LoadedChannelMapInstances:   request.GetLoadedChannelMapInstances(),
-		},
-	}
+	fallbackInput := proto.Clone(input).(*dexpb.InvokeExecuteMethodActivityInput)
+	fallbackInput.Request.Context = stepActivityContextForFallback(fallbackInput.Request.GetContext(), previousAttempts, firstAttemptTimestamp)
+	return fallbackInput
 }
 
 func stepActivityContextForFallback(
@@ -106,14 +83,7 @@ func stepActivityContextForFallback(
 	if workerContext == nil {
 		panic("step activity Context required")
 	}
-	return &dexpb.Context{
-		FlowId:                workerContext.GetFlowId(),
-		RunId:                 workerContext.GetRunId(),
-		FlowStartedTimestamp:  workerContext.GetFlowStartedTimestamp(),
-		StepExecutionId:       workerContext.GetStepExecutionId(),
-		FirstAttemptTimestamp: firstAttemptTimestamp,
-		Attempt:               previousAttempts,
-		FromStepExecutionId:   workerContext.GetFromStepExecutionId(),
-		RecoveryError:         workerContext.GetRecoveryError(),
-	}
+	workerContext.FirstAttemptTimestamp = firstAttemptTimestamp
+	workerContext.Attempt = previousAttempts
+	return workerContext
 }

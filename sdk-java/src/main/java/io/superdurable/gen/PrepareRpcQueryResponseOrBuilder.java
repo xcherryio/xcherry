@@ -221,4 +221,24 @@ io.superdurable.gen.ChannelValues defaultValue);
    */
   com.google.protobuf.ByteString
       getLoadedChannelMapInstancesBytes(int index);
+
+  /**
+   * <pre>
+   * Selects the last Worker queue for API-direct RPC dispatch.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 11;</code>
+   * @return The dexTaskQueue.
+   */
+  java.lang.String getDexTaskQueue();
+  /**
+   * <pre>
+   * Selects the last Worker queue for API-direct RPC dispatch.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 11;</code>
+   * @return The bytes for dexTaskQueue.
+   */
+  com.google.protobuf.ByteString
+      getDexTaskQueueBytes();
 }

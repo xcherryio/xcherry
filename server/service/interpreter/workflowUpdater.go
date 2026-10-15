@@ -24,6 +24,7 @@ import (
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/interpreter/cont"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -192,6 +193,7 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 	}
 
 	rpcPrep := &dexpb.PrepareRpcQueryResponse{
+		DexTaskQueue:                u.continueAsNewer.DexTaskQueue(),
 		Attributes:                  attributes,
 		RunId:                       info.WorkflowExecution.RunID,
 		FlowStartedTimestamp:        info.WorkflowStartTime.Unix(),
@@ -213,14 +215,21 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 	}
 	ctx = u.provider.WithActivityOptions(ctx, activityOptions)
 	var activityOutput dexpb.InvokeWorkerRPCActivityOutput
+	activityInput := &dexpb.InvokeWorkerRPCActivityInput{
+		RpcPrep: rpcPrep,
+		Request: input,
+	}
+	if u.flowConfiger.GetWorkerTarget().GetIsPullMode() {
+		settings := u.activities.matchingConfig()
+		activityInput.DexTaskQueue = u.continueAsNewer.DexTaskQueue()
+		activityInput.DispatchWait = durationpb.New(settings.LocalDispatchWait)
+		activityInput.StickyWait = durationpb.New(settings.LocalStickyWait)
+	}
 	err = u.provider.ExecuteLocalActivity(
 		&activityOutput,
 		ctx,
 		u.activities.IWRPC,
-		&dexpb.InvokeWorkerRPCActivityInput{
-			RpcPrep: rpcPrep,
-			Request: input,
-		},
+		activityInput,
 	)
 	u.persistenceManager.UnlockKeys(keysToLock)
 	if err != nil {
@@ -248,6 +257,7 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 		return nil, err
 	}
 	u.stepRequestQueue.AddStepStartRequests(decision.GetNextSteps())
+	u.continueAsNewer.RecordServedByAppWorkerID(activityOutput.GetServedByAppWorkerId())
 	u.continueAsNewCounter.IncSyncUpdateReceived()
 	return &dexpb.InvokeRpcUpdateResult{
 		Response: &dexpb.InvokeRPCResponse{Output: response.GetOutput()},

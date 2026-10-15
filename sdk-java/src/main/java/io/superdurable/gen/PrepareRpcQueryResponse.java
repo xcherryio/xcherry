@@ -37,6 +37,7 @@ private static final long serialVersionUID = 0L;
         com.google.protobuf.LazyStringArrayList.emptyList();
     loadedChannelMapInstances_ =
         com.google.protobuf.LazyStringArrayList.emptyList();
+    dexTaskQueue_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -497,6 +498,53 @@ io.superdurable.gen.ChannelValues defaultValue) {
     return loadedChannelMapInstances_.getByteString(index);
   }
 
+  public static final int DEX_TASK_QUEUE_FIELD_NUMBER = 11;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object dexTaskQueue_ = "";
+  /**
+   * <pre>
+   * Selects the last Worker queue for API-direct RPC dispatch.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 11;</code>
+   * @return The dexTaskQueue.
+   */
+  @java.lang.Override
+  public java.lang.String getDexTaskQueue() {
+    java.lang.Object ref = dexTaskQueue_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      dexTaskQueue_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * Selects the last Worker queue for API-direct RPC dispatch.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 11;</code>
+   * @return The bytes for dexTaskQueue.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getDexTaskQueueBytes() {
+    java.lang.Object ref = dexTaskQueue_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      dexTaskQueue_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -546,6 +594,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
     }
     for (int i = 0; i < loadedChannelMapInstances_.size(); i++) {
       com.google.protobuf.GeneratedMessage.writeString(output, 10, loadedChannelMapInstances_.getRaw(i));
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 11, dexTaskQueue_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -618,6 +669,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
       size += dataSize;
       size += 1 * getLoadedChannelMapInstancesList().size();
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(11, dexTaskQueue_);
+    }
     return size;
   }
   @java.lang.Override
@@ -665,6 +719,8 @@ io.superdurable.gen.ChannelValues defaultValue) {
         .equals(other.getLoadedChannelNamesList())) return false;
     if (!getLoadedChannelMapInstancesList()
         .equals(other.getLoadedChannelMapInstancesList())) return false;
+    if (!getDexTaskQueue()
+        .equals(other.getDexTaskQueue())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -711,6 +767,8 @@ io.superdurable.gen.ChannelValues defaultValue) {
       hash = (37 * hash) + LOADED_CHANNEL_MAP_INSTANCES_FIELD_NUMBER;
       hash = (53 * hash) + getLoadedChannelMapInstancesList().hashCode();
     }
+    hash = (37 * hash) + DEX_TASK_QUEUE_FIELD_NUMBER;
+    hash = (53 * hash) + getDexTaskQueue().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -898,6 +956,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
           com.google.protobuf.LazyStringArrayList.emptyList();
       loadedChannelMapInstances_ =
           com.google.protobuf.LazyStringArrayList.emptyList();
+      dexTaskQueue_ = "";
       return this;
     }
 
@@ -977,6 +1036,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
       if (((from_bitField0_ & 0x00000200) != 0)) {
         loadedChannelMapInstances_.makeImmutable();
         result.loadedChannelMapInstances_ = loadedChannelMapInstances_;
+      }
+      if (((from_bitField0_ & 0x00000400) != 0)) {
+        result.dexTaskQueue_ = dexTaskQueue_;
       }
       result.bitField0_ |= to_bitField0_;
     }
@@ -1069,6 +1131,11 @@ io.superdurable.gen.ChannelValues defaultValue) {
           ensureLoadedChannelMapInstancesIsMutable();
           loadedChannelMapInstances_.addAll(other.loadedChannelMapInstances_);
         }
+        onChanged();
+      }
+      if (!other.getDexTaskQueue().isEmpty()) {
+        dexTaskQueue_ = other.dexTaskQueue_;
+        bitField0_ |= 0x00000400;
         onChanged();
       }
       this.mergeUnknownFields(other.getUnknownFields());
@@ -1165,6 +1232,11 @@ io.superdurable.gen.ChannelValues defaultValue) {
               loadedChannelMapInstances_.add(input.readStringRequireUtf8());
               break;
             } // case 82
+            case 90: {
+              dexTaskQueue_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000400;
+              break;
+            } // case 90
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2358,6 +2430,98 @@ io.superdurable.gen.ChannelValues defaultValue) {
       ensureLoadedChannelMapInstancesIsMutable();
       loadedChannelMapInstances_.add(value);
       bitField0_ |= 0x00000200;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object dexTaskQueue_ = "";
+    /**
+     * <pre>
+     * Selects the last Worker queue for API-direct RPC dispatch.
+     * </pre>
+     *
+     * <code>string dex_task_queue = 11;</code>
+     * @return The dexTaskQueue.
+     */
+    public java.lang.String getDexTaskQueue() {
+      java.lang.Object ref = dexTaskQueue_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        dexTaskQueue_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Selects the last Worker queue for API-direct RPC dispatch.
+     * </pre>
+     *
+     * <code>string dex_task_queue = 11;</code>
+     * @return The bytes for dexTaskQueue.
+     */
+    public com.google.protobuf.ByteString
+        getDexTaskQueueBytes() {
+      java.lang.Object ref = dexTaskQueue_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        dexTaskQueue_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Selects the last Worker queue for API-direct RPC dispatch.
+     * </pre>
+     *
+     * <code>string dex_task_queue = 11;</code>
+     * @param value The dexTaskQueue to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDexTaskQueue(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      dexTaskQueue_ = value;
+      bitField0_ |= 0x00000400;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Selects the last Worker queue for API-direct RPC dispatch.
+     * </pre>
+     *
+     * <code>string dex_task_queue = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearDexTaskQueue() {
+      dexTaskQueue_ = getDefaultInstance().getDexTaskQueue();
+      bitField0_ = (bitField0_ & ~0x00000400);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Selects the last Worker queue for API-direct RPC dispatch.
+     * </pre>
+     *
+     * <code>string dex_task_queue = 11;</code>
+     * @param value The bytes for dexTaskQueue to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDexTaskQueueBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      dexTaskQueue_ = value;
+      bitField0_ |= 0x00000400;
       onChanged();
       return this;
     }

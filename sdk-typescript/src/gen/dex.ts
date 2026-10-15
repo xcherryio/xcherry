@@ -1221,6 +1221,8 @@ export interface WorkerErrorResponse {
   errorType: string;
   stackTrace: string;
   retryAfterSeconds: number;
+  /** Pull Workers set the gRPC code push mode would return; push mode uses its transport status. */
+  grpcStatus: number;
 }
 
 export interface InternalActivityError {
@@ -1793,6 +1795,8 @@ export interface PrepareRpcQueryResponse {
   loadedAttributeMapInstances: string[];
   loadedChannelNames: string[];
   loadedChannelMapInstances: string[];
+  /** Selects the last Worker queue for API-direct RPC dispatch. */
+  dexTaskQueue: string;
 }
 
 export interface PrepareRpcQueryResponse_ChannelInfosEntry {
@@ -11908,7 +11912,7 @@ export const ServiceErrorResponse: MessageFns<ServiceErrorResponse> = {
 };
 
 function createBaseWorkerErrorResponse(): WorkerErrorResponse {
-  return { detail: "", errorType: "", stackTrace: "", retryAfterSeconds: 0 };
+  return { detail: "", errorType: "", stackTrace: "", retryAfterSeconds: 0, grpcStatus: 0 };
 }
 
 export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
@@ -11924,6 +11928,9 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
     }
     if (message.retryAfterSeconds !== 0) {
       writer.uint32(32).int32(message.retryAfterSeconds);
+    }
+    if (message.grpcStatus !== 0) {
+      writer.uint32(40).int32(message.grpcStatus);
     }
     return writer;
   },
@@ -11967,6 +11974,14 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
           message.retryAfterSeconds = reader.int32();
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.grpcStatus = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11985,6 +12000,7 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
     message.errorType = object.errorType ?? "";
     message.stackTrace = object.stackTrace ?? "";
     message.retryAfterSeconds = object.retryAfterSeconds ?? 0;
+    message.grpcStatus = object.grpcStatus ?? 0;
     return message;
   },
 };
@@ -18569,6 +18585,7 @@ function createBasePrepareRpcQueryResponse(): PrepareRpcQueryResponse {
     loadedAttributeMapInstances: [],
     loadedChannelNames: [],
     loadedChannelMapInstances: [],
+    dexTaskQueue: "",
   };
 }
 
@@ -18607,6 +18624,9 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
     }
     for (const v of message.loadedChannelMapInstances) {
       writer.uint32(82).string(v!);
+    }
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(90).string(message.dexTaskQueue);
     }
     return writer;
   },
@@ -18704,6 +18724,14 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
           message.loadedChannelMapInstances.push(reader.string());
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18749,6 +18777,7 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
     message.loadedAttributeMapInstances = object.loadedAttributeMapInstances?.map((e) => e) || [];
     message.loadedChannelNames = object.loadedChannelNames?.map((e) => e) || [];
     message.loadedChannelMapInstances = object.loadedChannelMapInstances?.map((e) => e) || [];
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
     return message;
   },
 };

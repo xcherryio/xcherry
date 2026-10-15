@@ -9473,8 +9473,10 @@ type WorkerErrorResponse struct {
 	ErrorType         string                 `protobuf:"bytes,2,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
 	StackTrace        string                 `protobuf:"bytes,3,opt,name=stack_trace,json=stackTrace,proto3" json:"stack_trace,omitempty"`
 	RetryAfterSeconds int32                  `protobuf:"varint,4,opt,name=retry_after_seconds,json=retryAfterSeconds,proto3" json:"retry_after_seconds,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Pull Workers set the gRPC code push mode would return; push mode uses its transport status.
+	GrpcStatus    int32 `protobuf:"varint,5,opt,name=grpc_status,json=grpcStatus,proto3" json:"grpc_status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkerErrorResponse) Reset() {
@@ -9531,6 +9533,13 @@ func (x *WorkerErrorResponse) GetStackTrace() string {
 func (x *WorkerErrorResponse) GetRetryAfterSeconds() int32 {
 	if x != nil {
 		return x.RetryAfterSeconds
+	}
+	return 0
+}
+
+func (x *WorkerErrorResponse) GetGrpcStatus() int32 {
+	if x != nil {
+		return x.GrpcStatus
 	}
 	return 0
 }
@@ -14010,8 +14019,10 @@ type PrepareRpcQueryResponse struct {
 	LoadedAttributeMapInstances []string                  `protobuf:"bytes,8,rep,name=loaded_attribute_map_instances,json=loadedAttributeMapInstances,proto3" json:"loaded_attribute_map_instances,omitempty"`
 	LoadedChannelNames          []string                  `protobuf:"bytes,9,rep,name=loaded_channel_names,json=loadedChannelNames,proto3" json:"loaded_channel_names,omitempty"`
 	LoadedChannelMapInstances   []string                  `protobuf:"bytes,10,rep,name=loaded_channel_map_instances,json=loadedChannelMapInstances,proto3" json:"loaded_channel_map_instances,omitempty"`
-	unknownFields               protoimpl.UnknownFields
-	sizeCache                   protoimpl.SizeCache
+	// Selects the last Worker queue for API-direct RPC dispatch.
+	DexTaskQueue  string `protobuf:"bytes,11,opt,name=dex_task_queue,json=dexTaskQueue,proto3" json:"dex_task_queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PrepareRpcQueryResponse) Reset() {
@@ -14112,6 +14123,13 @@ func (x *PrepareRpcQueryResponse) GetLoadedChannelMapInstances() []string {
 		return x.LoadedChannelMapInstances
 	}
 	return nil
+}
+
+func (x *PrepareRpcQueryResponse) GetDexTaskQueue() string {
+	if x != nil {
+		return x.DexTaskQueue
+	}
+	return ""
 }
 
 type TimerInfo struct {
@@ -15135,14 +15153,16 @@ const file_dex_proto_rawDesc = "" +
 	"\x1coriginal_worker_error_detail\x18\x03 \x01(\tR\x19originalWorkerErrorDetail\x12;\n" +
 	"\x1aoriginal_worker_error_type\x18\x04 \x01(\tR\x17originalWorkerErrorType\x12?\n" +
 	"\x1coriginal_worker_error_status\x18\x05 \x01(\x05R\x19originalWorkerErrorStatus\x12H\n" +
-	"!original_worker_error_stack_trace\x18\x06 \x01(\tR\x1doriginalWorkerErrorStackTrace\"\x9d\x01\n" +
+	"!original_worker_error_stack_trace\x18\x06 \x01(\tR\x1doriginalWorkerErrorStackTrace\"\xbe\x01\n" +
 	"\x13WorkerErrorResponse\x12\x16\n" +
 	"\x06detail\x18\x01 \x01(\tR\x06detail\x12\x1d\n" +
 	"\n" +
 	"error_type\x18\x02 \x01(\tR\terrorType\x12\x1f\n" +
 	"\vstack_trace\x18\x03 \x01(\tR\n" +
 	"stackTrace\x12.\n" +
-	"\x13retry_after_seconds\x18\x04 \x01(\x05R\x11retryAfterSeconds\"\xa7\x01\n" +
+	"\x13retry_after_seconds\x18\x04 \x01(\x05R\x11retryAfterSeconds\x12\x1f\n" +
+	"\vgrpc_status\x18\x05 \x01(\x05R\n" +
+	"grpcStatus\"\xa7\x01\n" +
 	"\x15InternalActivityError\x12#\n" +
 	"\rserver_detail\x18\x01 \x01(\tR\fserverDetail\x12,\n" +
 	"\x12worker_grpc_status\x18\x02 \x01(\x05R\x10workerGrpcStatus\x12;\n" +
@@ -15543,7 +15563,7 @@ const file_dex_proto_rawDesc = "" +
 	"\x16PrepareRpcQueryRequest\x12?\n" +
 	"\x1cload_attribute_map_instances\x18\x01 \x03(\tR\x19loadAttributeMapInstances\x12,\n" +
 	"\x12load_channel_names\x18\x02 \x03(\tR\x10loadChannelNames\x12;\n" +
-	"\x1aload_channel_map_instances\x18\x03 \x03(\tR\x17loadChannelMapInstances\"\x93\x06\n" +
+	"\x1aload_channel_map_instances\x18\x03 \x03(\tR\x17loadChannelMapInstances\"\xb9\x06\n" +
 	"\x17PrepareRpcQueryResponse\x12'\n" +
 	"\n" +
 	"attributes\x18\x01 \x03(\v2\a.dex.KVR\n" +
@@ -15557,7 +15577,8 @@ const file_dex_proto_rawDesc = "" +
 	"\x1eloaded_attribute_map_instances\x18\b \x03(\tR\x1bloadedAttributeMapInstances\x120\n" +
 	"\x14loaded_channel_names\x18\t \x03(\tR\x12loadedChannelNames\x12?\n" +
 	"\x1cloaded_channel_map_instances\x18\n" +
-	" \x03(\tR\x19loadedChannelMapInstances\x1aQ\n" +
+	" \x03(\tR\x19loadedChannelMapInstances\x12$\n" +
+	"\x0edex_task_queue\x18\v \x01(\tR\fdexTaskQueue\x1aQ\n" +
 	"\x11ChannelInfosEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12&\n" +
 	"\x05value\x18\x02 \x01(\v2\x10.dex.ChannelInfoR\x05value:\x028\x01\x1a\\\n" +

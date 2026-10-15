@@ -36,6 +36,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 	"github.com/superdurable/dex/service/common/ptr"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/retry"
 	"github.com/superdurable/dex/service/common/rpc"
 	"github.com/superdurable/dex/service/common/streamstore"
@@ -72,6 +73,8 @@ type serviceImpl struct {
 	indexSynchronizer  *indexsync.Synchronizer
 	streamStore        *streamstore.Store
 	wakeNotifier       *wake.Notifier
+	pullDispatcher     pulldispatch.Dispatcher
+	matchingCfg        *config.MatchingConfig
 }
 
 func NewApiService(
@@ -87,7 +90,29 @@ func NewApiService(
 	workerPool *workerclient.WorkerClientPool,
 	wakeNotifier *wake.Notifier,
 ) (ApiService, error) {
-	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || wakeNotifier == nil {
+	return NewApiServiceWithPull(
+		apiCfg, blobStoreCfg, interpreterCfg, client, taskQueue, logger,
+		store, attributeStore, streamStore, workerPool, wakeNotifier,
+		pulldispatch.NewUnavailableDispatcher(), nil,
+	)
+}
+
+func NewApiServiceWithPull(
+	apiCfg *config.ApiConfig,
+	blobStoreCfg *config.BlobStoreConfig,
+	interpreterCfg *config.Interpreter,
+	client uclient.UnifiedClient,
+	taskQueue string,
+	logger log.Logger,
+	store blobstore.BlobStore,
+	attributeStore *attributestore.Manager,
+	streamStore *streamstore.Store,
+	workerPool *workerclient.WorkerClientPool,
+	wakeNotifier *wake.Notifier,
+	pullDispatcher pulldispatch.Dispatcher,
+	matchingCfg *config.MatchingConfig,
+) (ApiService, error) {
+	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || wakeNotifier == nil || pullDispatcher == nil {
 		panic("API service requires non-nil config sections")
 	}
 	if client == nil || logger == nil || workerPool == nil || attributeStore == nil || streamStore == nil || taskQueue == "" {
@@ -110,6 +135,8 @@ func NewApiService(
 		indexSynchronizer:  indexsync.New(interpreterCfg, client, logger),
 		streamStore:        streamStore,
 		wakeNotifier:       wakeNotifier,
+		pullDispatcher:     pullDispatcher,
+		matchingCfg:        matchingCfg,
 	}, nil
 }
 
@@ -1625,7 +1652,7 @@ func (s *serviceImpl) doInvokeRPC(
 	); err != nil {
 		return nil, err
 	}
-	workerResponse, err := rpc.InvokeWorkerRpc(
+	workerResponse, _, err := rpc.InvokeWorkerRpc(
 		ctx,
 		s.workerPool,
 		&preparation,
@@ -1638,6 +1665,9 @@ func (s *serviceImpl) doInvokeRPC(
 		s.blobStoreCfg,
 		false,
 		s.wakeNotifier,
+		s.pullDispatcher,
+		s.matchingCfg,
+		false,
 	)
 	if err != nil {
 		return nil, err

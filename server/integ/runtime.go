@@ -40,8 +40,11 @@ import (
 	"github.com/superdurable/dex/service/indexsync"
 	"github.com/superdurable/dex/service/interpreter/cadence"
 	"github.com/superdurable/dex/service/interpreter/temporal"
+	"github.com/superdurable/dex/service/matching"
+	"github.com/superdurable/dex/service/membership"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -532,12 +535,26 @@ func startApiServer(
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) {
 	t.Helper()
+	var matchingEngine *matching.Engine
+	var matchingMonitor *membership.Monitor
+	if cfg.Matching != nil {
+		var err error
+		matchingMonitor, err = membership.NewMonitor(nil, []membership.Role{membership.RoleMatching}, "", nil, zap.NewNop())
+		require.NoError(t, err)
+		require.NoError(t, matchingMonitor.Start(context.Background()))
+		matchingEngine, err = matching.NewEngine(cfg.Matching, zap.NewNop(), matchingMonitor,
+			func(context.Context, string) (dexpb.MatchingServiceClient, error) {
+				return nil, fmt.Errorf("unexpected remote matching owner in single-server test")
+			})
+		require.NoError(t, err)
+	}
 
-	server, err := api.NewServerWithAccess(
+	server, err := api.NewServerWithMatchingAccess(
 		&cfg.Api,
 		&cfg.Auth,
 		&cfg.Internal,
 		&cfg.Worker.Wake,
+		cfg.Matching,
 		&cfg.BlobStore,
 		&cfg.Interpreter,
 		unifiedClient,
@@ -547,6 +564,7 @@ func startApiServer(
 		streamStore,
 		func(context.Context) error { return nil },
 		workerPool,
+		matchingEngine,
 		extraUnaryInterceptors...,
 	)
 	require.NoError(t, err)
@@ -564,6 +582,10 @@ func startApiServer(
 	t.Cleanup(func() {
 		closeInterpreter()
 		server.GracefulStop(2 * time.Second)
+		if matchingEngine != nil {
+			matchingEngine.Close()
+			matchingMonitor.Stop()
+		}
 		for _, serverListener := range listeners {
 			if err := serverListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				require.NoError(t, err)

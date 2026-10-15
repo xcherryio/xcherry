@@ -24,6 +24,7 @@ import (
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/matching"
@@ -47,6 +48,7 @@ type Server struct {
 	internalGrpcServer *grpc.Server
 	healthSrv          *health.Server
 	handler            *handler
+	pullClient         *workerclient.InternalServiceClient
 	logger             log.Logger
 	readyCheck         func(context.Context) error
 }
@@ -118,6 +120,29 @@ func NewServerWithMatching(
 	matchingEngine *matching.Engine,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
+	return NewServerWithMatchingAccess(apiCfg, authCfg, internalCfg, wakeCfg, nil, blobStoreCfg, interpreterCfg,
+		client, logger, store, attributeStore, streamStore, readyCheck, workerPool, matchingEngine, extraUnaryInterceptors...)
+}
+
+// NewServerWithMatchingAccess configures pull dispatch waits alongside API access.
+func NewServerWithMatchingAccess(
+	apiCfg *config.ApiConfig,
+	authCfg *config.AuthConfig,
+	internalCfg *config.InternalConfig,
+	wakeCfg *config.WakeConfig,
+	matchingCfg *config.MatchingConfig,
+	blobStoreCfg *config.BlobStoreConfig,
+	interpreterCfg *config.Interpreter,
+	client uclient.UnifiedClient,
+	logger log.Logger,
+	store blobstore.BlobStore,
+	attributeStore *attributestore.Manager,
+	streamStore *streamstore.Store,
+	readyCheck func(context.Context) error,
+	workerPool *workerclient.WorkerClientPool,
+	matchingEngine *matching.Engine,
+	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
+) (*Server, error) {
 	if apiCfg == nil {
 		panic("apiCfg must not be nil")
 	}
@@ -169,6 +194,13 @@ func NewServerWithMatching(
 		generalWakeToken = generalInternalToken
 	}
 	wakeNotifier := wake.NewNotifier(wakeCfg, generalWakeToken, logger)
+	internalClientConfig := &config.Config{Api: *apiCfg, Auth: *authCfg, Internal: *internalCfg, Interpreter: *interpreterCfg}
+	pullClient, err := workerclient.NewInternalServiceClient(
+		internalClientConfig.GetInternalServiceTargetWithDefault(), internalClientConfig, generalInternalToken,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create matching client: %w", err)
+	}
 	handler := newHandler(
 		apiCfg,
 		blobStoreCfg,
@@ -180,6 +212,8 @@ func NewServerWithMatching(
 		streamStore,
 		workerPool,
 		wakeNotifier,
+		pulldispatch.NewDispatcher(pullClient),
+		matchingCfg,
 	)
 	maxMsg := apiCfg.EffectiveGrpcMaxMessageBytes()
 	healthSrv := health.NewServer()
@@ -199,6 +233,7 @@ func NewServerWithMatching(
 		cfg:        apiCfg,
 		healthSrv:  healthSrv,
 		handler:    handler,
+		pullClient: pullClient,
 		logger:     logger,
 		readyCheck: readyCheck,
 	}
@@ -217,6 +252,7 @@ func NewServerWithMatching(
 	if publicEnabled && authCfg.IsEnabled() {
 		authenticator, err := auth.NewAuthenticator(authCfg, logger)
 		if err != nil {
+			pullClient.Close()
 			return nil, err
 		}
 		// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
@@ -331,6 +367,7 @@ func (s *Server) StopServing(timeout time.Duration) {
 
 func (s *Server) Close() {
 	s.handler.close()
+	s.pullClient.Close()
 }
 
 func (s *Server) setServing(serving bool) {

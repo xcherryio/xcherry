@@ -20,6 +20,7 @@ import (
 	"github.com/superdurable/dex/service/common/attributestore"
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/log"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/wake"
@@ -49,8 +50,10 @@ func newHandler(
 	streamStore *streamstore.Store,
 	workerPool *workerclient.WorkerClientPool,
 	wakeNotifier *wake.Notifier,
+	pullDispatcher pulldispatch.Dispatcher,
+	matchingCfg *config.MatchingConfig,
 ) *handler {
-	svc, err := NewApiService(
+	svc, err := NewApiServiceWithPull(
 		apiCfg,
 		blobStoreCfg,
 		interpreterCfg,
@@ -62,6 +65,8 @@ func newHandler(
 		streamStore,
 		workerPool,
 		wakeNotifier,
+		pullDispatcher,
+		matchingCfg,
 	)
 	if err != nil {
 		panic(err)

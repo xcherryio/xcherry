@@ -95,6 +95,26 @@ func (i *InternalServiceClient) Client(
 	return i.client, metadata.NewOutgoingContext(ctx, header), nil
 }
 
+// MatchingClient returns the matching client with internal authentication.
+func (i *InternalServiceClient) MatchingClient(
+	ctx context.Context,
+) (dexpb.MatchingServiceClient, context.Context, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed || i.conn == nil {
+		return nil, ctx, fmt.Errorf("workerclient: internal client closed")
+	}
+	header := i.header
+	if i.internalToken != nil {
+		header = header.Copy()
+		header.Set("authorization", "Bearer "+i.internalToken.Token())
+	}
+	if len(header) != 0 {
+		ctx = metadata.NewOutgoingContext(ctx, header)
+	}
+	return dexpb.NewMatchingServiceClient(i.conn), ctx, nil
+}
+
 // Close closes the InternalService connection.
 func (i *InternalServiceClient) Close() {
 	i.mu.Lock()
