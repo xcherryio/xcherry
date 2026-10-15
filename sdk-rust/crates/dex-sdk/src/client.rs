@@ -88,13 +88,17 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::Service`] if runtime or endpoint initialization fails. The transport
-    /// connects lazily, so server availability is checked by the first operation.
+    /// Returns [`SdkError::Service`] if runtime or endpoint initialization fails, or
+    /// [`SdkError::FlowDefinition`] for an invalid Worker target. The transport connects lazily,
+    /// so server availability is checked by the first operation.
     pub fn try_new(
         registry: Registry,
         blob_cache: Arc<BlobCache>,
         options: ClientOptions,
     ) -> SdkResult<Self> {
+        if let Some(target) = options.worker_target_value() {
+            target.validate()?;
+        }
         let runtime = Runtime::new().map_err(service_error)?;
         let endpoint = Endpoint::from_shared(endpoint_address(options.server_address_value()))
             .map_err(service_error)?;
@@ -1192,6 +1196,9 @@ pub(crate) fn map_flow_config(
     let target = config
         .and_then(|config| config.worker_target.as_ref())
         .or(default_target);
+    if let Some(target) = target {
+        target.validate()?;
+    }
     Ok(ProtoFlowConfig {
         active_step_search_mode: config
             .and_then(|config| config.active_step_search_mode)
@@ -1247,7 +1254,7 @@ fn map_worker_target(target: &WorkerTarget) -> ProtoWorkerTarget {
     ProtoWorkerTarget {
         address: target.address().to_string(),
         is_headless_address: target.is_headless(),
-        is_pull_mode: false,
+        is_pull_mode: target.is_pull(),
     }
 }
 

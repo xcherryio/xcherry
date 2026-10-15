@@ -64,7 +64,10 @@ impl FlowConfig {
         self
     }
 
-    /// Routes future Step and RPC invocations to this WorkerService target.
+    /// Routes future Step and RPC invocations to this Worker target.
+    ///
+    /// Use [`WorkerTarget::pull`] for a pull Worker. Invalid combinations return
+    /// [`crate::SdkError::FlowDefinition`] when the configuration is sent.
     pub fn worker_target(mut self, value: WorkerTarget) -> Self {
         self.worker_target = Some(value);
         self

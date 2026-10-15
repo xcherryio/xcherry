@@ -30,6 +30,7 @@ use crate::server_protocol::{negotiate_server_protocol, server_info_request_erro
 use crate::value_hydrator::ValueHydrator;
 use crate::worker_dispatcher::WorkerDispatcher;
 use crate::worker_output::WorkerResponseStream;
+use crate::worker_pull::PullWorker;
 use crate::{BlobCache, HandlerError, Registry, SdkError, SdkResult, WorkerOptions, WorkerTarget};
 
 // Keep the complete worker error status below default gRPC trailer limits after
@@ -45,11 +46,12 @@ const CREATED: u8 = 0;
 const RUNNING: u8 = 1;
 const STOPPED: u8 = 2;
 
-/// Hosts registered Flow Step and RPC handlers over application WorkerService.
+/// Hosts registered Flow Step and RPC handlers through a listener or outbound task streams.
 ///
 /// A Worker owns an internal Tokio runtime and is one-shot. [`Self::start`] negotiates the Server
-/// protocol, synchronizes Attribute indexes, then blocks while serving gRPC. Call [`Self::stop`]
-/// from another thread to request graceful shutdown.
+/// protocol, synchronizes Attribute indexes, then blocks while serving. Call [`Self::stop`]
+/// from another thread to request graceful shutdown. Pull mode runs at most the configured number
+/// of handlers concurrently and does not bind a listener. See [`crate::PullWorkerOptions`].
 ///
 /// # Examples
 ///
@@ -71,7 +73,8 @@ pub struct Worker {
     flow_service: FlowServiceClient<Channel>,
     attribute_indexes: HashMap<String, i32>,
     attribute_index_sync_timeout: std::time::Duration,
-    bind_address: SocketAddr,
+    bind_address: Option<SocketAddr>,
+    pull: Option<PullWorker>,
     worker_target: WorkerTarget,
     shutdown: watch::Sender<bool>,
     state: AtomicU8,
@@ -90,12 +93,13 @@ impl Worker {
             .unwrap_or_else(|error| panic!("cannot create Rust Worker: {error}"))
     }
 
-    /// Creates a one-shot Worker without binding its listener.
+    /// Creates a one-shot Worker without binding a listener during construction.
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::FlowDefinition`] for invalid Worker options or Service for runtime and
-    /// endpoint initialization failures. The Dex connection is lazy.
+    /// Returns [`SdkError::FlowDefinition`] for invalid Worker options, including conflicting pull
+    /// and listening settings, or Service for runtime and endpoint initialization failures. The Dex
+    /// connection is lazy.
     pub fn try_new(
         registry: Registry,
         blob_cache: Arc<BlobCache>,
@@ -107,29 +111,70 @@ impl Worker {
                 message: "attribute index sync timeout must be positive".to_string(),
             });
         }
-        let bind_address = options
-            .bind_address_value()
-            .parse::<SocketAddr>()
-            .map_err(|error| SdkError::FlowDefinition {
-                message: format!("invalid Worker bind address: {error}"),
-            })?;
-        let worker_target = options.worker_target_value().cloned().unwrap_or_else(|| {
-            let host = if bind_address.ip().is_unspecified() {
-                "127.0.0.1".to_string()
-            } else {
-                bind_address.ip().to_string()
-            };
-            WorkerTarget::new(format!("{host}:{}", bind_address.port()))
-        });
+        if let Some(target) = options.worker_target_value() {
+            target.validate()?;
+        }
+        if options.pull_value().is_some()
+            && (options.has_bind_address() || options.worker_target_value().is_some())
+        {
+            return Err(SdkError::FlowDefinition {
+                message: "pull Worker cannot configure a bind address or advertised Worker target"
+                    .to_string(),
+            });
+        }
+        if options.pull_value().is_none()
+            && options
+                .worker_target_value()
+                .is_some_and(WorkerTarget::is_pull)
+        {
+            return Err(SdkError::FlowDefinition {
+                message: "pull Worker target requires pull Worker options".to_string(),
+            });
+        }
+        let bind_address = if options.pull_value().is_some() {
+            None
+        } else {
+            Some(
+                options
+                    .bind_address_value()
+                    .parse::<SocketAddr>()
+                    .map_err(|error| SdkError::FlowDefinition {
+                        message: format!("invalid Worker bind address: {error}"),
+                    })?,
+            )
+        };
+        let worker_target = if let Some(bind_address) = bind_address {
+            options.worker_target_value().cloned().unwrap_or_else(|| {
+                let host = if bind_address.ip().is_unspecified() {
+                    "127.0.0.1".to_string()
+                } else {
+                    bind_address.ip().to_string()
+                };
+                WorkerTarget::new(format!("{host}:{}", bind_address.port()))
+            })
+        } else {
+            WorkerTarget::pull()
+        };
         let endpoint = Endpoint::from_shared(endpoint_address(options.server_address_value()))
             .map_err(service_error)?;
         let flow_service = {
             let _runtime_guard = runtime.enter();
             FlowServiceClient::new(endpoint.connect_lazy())
         };
+        let pull_channel = {
+            let _runtime_guard = runtime.enter();
+            options
+                .pull_value()
+                .map(|_| crate::worker_pull::outbound_task_channel(endpoint.clone()))
+        };
         let attribute_indexes = registry.attribute_indexes().clone();
         let hydrator = ValueHydrator::new(flow_service.clone(), blob_cache);
         let dispatcher = WorkerDispatcher::new(registry, hydrator);
+        let pull = options
+            .pull_value()
+            .zip(pull_channel)
+            .map(|(options, channel)| PullWorker::new(options, &dispatcher, channel))
+            .transpose()?;
         let (shutdown, _) = watch::channel(false);
         Ok(Self {
             runtime,
@@ -138,6 +183,7 @@ impl Worker {
             attribute_indexes,
             attribute_index_sync_timeout: options.attribute_index_sync_timeout_value(),
             bind_address,
+            pull,
             worker_target,
             shutdown,
             state: AtomicU8::new(CREATED),
@@ -145,12 +191,19 @@ impl Worker {
         })
     }
 
-    /// Returns the resolved WorkerService target that Clients should advertise to Dex.
+    /// Returns the resolved target that Clients should advertise to Dex.
+    ///
+    /// Pull mode returns a pull target with no address. The value is also suitable for a
+    /// [`crate::FlowConfig`] override on a StartFlow or SubFlow.
     pub fn worker_target(&self) -> &WorkerTarget {
         &self.worker_target
     }
 
     /// Negotiates protocol, synchronizes Attribute indexes, and serves until stopped or failed.
+    ///
+    /// In pull mode, stream errors are logged and retried. After [`Self::stop`], this method drains
+    /// active handlers for the configured timeout, cancels any remaining handlers, and waits for
+    /// them to return. Call this method only once, on a dedicated thread.
     ///
     /// # Errors
     ///
@@ -209,22 +262,33 @@ impl Worker {
                 return Err(service_error(elapsed));
             }
         }
-        let result = self.runtime.block_on(
-            Server::builder()
-                .add_service(WorkerServiceServer::new(self.service.clone()))
-                .serve_with_shutdown(self.bind_address, async move {
-                    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-                }),
-        );
+        let result = if let Some(pull) = &self.pull {
+            self.runtime.block_on(pull.run(shutdown))
+        } else {
+            self.runtime
+                .block_on(
+                    Server::builder()
+                        .add_service(WorkerServiceServer::new(self.service.clone()))
+                        .serve_with_shutdown(
+                            self.bind_address.expect("listening Worker address"),
+                            async move {
+                                while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
+                            },
+                        ),
+                )
+                .map_err(service_error)
+        };
         self.state.store(STOPPED, Ordering::Release);
-        result.map_err(service_error)
+        result
     }
 
     /// Requests shutdown of a running Worker and returns immediately.
     ///
     /// Calling `stop` before or after `start` is safe; [`Self::start`] observes the shutdown signal.
+    /// Pull mode first drains active handlers. After the drain timeout it cancels them, and
+    /// [`Self::start`] waits for their return. Stop is idempotent.
     pub fn stop(&self) {
-        let _ = self.shutdown.send(true);
+        self.shutdown.send_replace(true);
     }
 }
 
@@ -283,7 +347,7 @@ struct GoogleRpcStatus {
     details: Vec<Any>,
 }
 
-fn worker_status(error: HandlerError) -> Status {
+pub(crate) fn worker_error_response(error: HandlerError) -> WorkerErrorResponse {
     let message = truncate_worker_failure_field(
         &error.to_string(),
         MAX_WORKER_ERROR_DETAIL_BYTES,
@@ -299,13 +363,18 @@ fn worker_status(error: HandlerError) -> Status {
         MAX_WORKER_STACK_TRACE_BYTES,
         STACK_TRACE_TRUNCATION_MARKER,
     );
-    let worker_error = WorkerErrorResponse {
+    WorkerErrorResponse {
         detail: message.clone(),
         error_type,
         stack_trace,
         retry_after_seconds: error.retry_after_seconds(),
         grpc_status: Code::Unknown as i32,
-    };
+    }
+}
+
+pub(crate) fn worker_status(error: HandlerError) -> Status {
+    let worker_error = worker_error_response(error);
+    let message = worker_error.detail.clone();
     let status = GoogleRpcStatus {
         code: Code::Unknown as i32,
         message: message.clone(),

@@ -135,6 +135,17 @@ impl Registry {
             })
     }
 
+    pub(crate) fn flow_types(&self) -> Vec<String> {
+        let mut flow_types = self
+            .inner
+            .flows
+            .keys()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        flow_types.sort();
+        flow_types
+    }
+
     pub(crate) fn rpc_with_flow(&self, name: &str) -> SdkResult<(&RegisteredFlow, &RegisteredRpc)> {
         let mut matched = None;
         for flow in self.inner.flows.values() {

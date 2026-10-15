@@ -59,6 +59,8 @@ mod persistence_set_attributes_workflow;
 mod persistence_test;
 #[path = "integ/persistence_workflow.rs"]
 mod persistence_workflow;
+#[path = "integ/pull_worker_test.rs"]
+mod pull_worker_test;
 #[path = "integ/reset_test.rs"]
 mod reset_test;
 #[path = "integ/reset_workflow.rs"]

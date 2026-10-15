@@ -11,12 +11,17 @@
 set -euo pipefail
 
 coverage=false
+pull_only=false
 if [[ "${1:-}" == "--coverage" ]]; then
   coverage=true
   shift
 fi
+if [[ "${1:-}" == "--pull" ]]; then
+  pull_only=true
+  shift
+fi
 if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--coverage]" >&2
+  echo "usage: $0 [--coverage] [--pull]" >&2
   exit 2
 fi
 
@@ -96,10 +101,15 @@ if $coverage; then
   cargo llvm-cov report -p dex-sdk --lcov --output-path coverage/lcov.info
   cargo llvm-cov report -p dex-sdk --html --output-dir coverage
 else
-  DEX_SERVER_ADDRESS="$dex_address" cargo test -p dex-sdk \
-    --test integ \
-    --test cross_sdk \
-    -- \
-    --ignored \
-    --test-threads=1
+  if $pull_only; then
+    DEX_SERVER_ADDRESS="$dex_address" cargo test --locked -p dex-sdk \
+      --test integ pull_worker_test -- --ignored --test-threads=1
+  else
+    DEX_SERVER_ADDRESS="$dex_address" cargo test -p dex-sdk \
+      --test integ \
+      --test cross_sdk \
+      -- \
+      --ignored \
+      --test-threads=1
+  fi
 fi

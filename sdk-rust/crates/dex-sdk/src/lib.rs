@@ -52,6 +52,7 @@ mod worker;
 mod worker_dispatcher;
 mod worker_options;
 mod worker_output;
+mod worker_pull;
 
 pub use attribute::{Attribute, AttributeIndex, AttributeLock, AttributeMap, AttributeMapLoad};
 pub use attribute_match::AttributeMatch;
@@ -89,6 +90,6 @@ pub use value::Value;
 pub use wait::{Condition, ConditionCombination, Wait};
 pub use wait_options::{WaitForAttributeOptions, WaitForStepCompletionOptions};
 pub use worker::Worker;
-pub use worker_options::{WorkerOptions, WorkerTarget};
+pub use worker_options::{PullWorkerOptions, WorkerOptions, WorkerTarget};
 
 pub(crate) use value::short_type_name;

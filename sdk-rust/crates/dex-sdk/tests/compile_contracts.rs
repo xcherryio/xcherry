@@ -90,3 +90,21 @@ fn rpc_invoke_options_builders_and_client_calls_compile() {
 
     let _ = calls_compile;
 }
+
+#[test]
+fn pull_worker_options_and_targets_compile() {
+    let _target = dex_sdk::WorkerTarget::pull();
+    assert!(_target.is_pull());
+    let _worker_options = dex_sdk::WorkerOptions::new().pull(
+        dex_sdk::PullWorkerOptions::new()
+            .max_concurrent_tasks(8)
+            .idle_streams_per_queue(2)
+            .app_worker_id("rust-worker-1")
+            .stop_drain_timeout(std::time::Duration::from_secs(15)),
+    );
+    let _client_options = dex_sdk::ClientOptions::new().worker_target(_target.clone());
+    let _start_options = dex_sdk::StartFlowOptions::new()
+        .config_override(dex_sdk::FlowConfig::new().worker_target(_target.clone()));
+    let _sub_flow_options = dex_sdk::SubFlowOptions::new()
+        .config_override(dex_sdk::FlowConfig::new().worker_target(_target));
+}

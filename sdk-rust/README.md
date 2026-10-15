@@ -280,6 +280,58 @@ handlers should emit heartbeats or Stream messages while polling
 `Context::is_cancelled`. Cancellation becomes observable when the Worker
 response stream closes.
 
+### Pull mode
+
+Set `WorkerOptions::pull` to open outbound task streams instead of a WorkerService
+listener. Advertise `worker.worker_target().clone()` through
+`ClientOptions::worker_target`, or use `FlowConfig::worker_target` in a
+`StartFlowOptions` or `SubFlowOptions` override for one Flow. Pull mode cannot
+be combined with a bind address or an advertised listening target.
+
+```rust
+let worker = Worker::try_new(
+    registry.clone(),
+    cache.clone(),
+    WorkerOptions::new()
+        .server_address("dex.example:8801")
+        .pull(PullWorkerOptions::new()
+            .max_concurrent_tasks(8)
+            .idle_streams_per_queue(1)),
+)?;
+let client = Client::try_new(
+    registry,
+    cache,
+    ClientOptions::new()
+        .server_address("dex.example:8801")
+        .worker_target(worker.worker_target().clone()),
+)?;
+```
+
+The Worker polls its sticky queue and every registered Flow type queue. Flow
+type names must be unique within a Dex server. The task limit defaults to the
+CPU count, and each queue keeps one idle stream by default. A stream runs one
+task at a time. At capacity, the Worker rejects an assignment for reassignment.
+The generated app Worker ID uses the first nonempty `DEX_WORKER_INSTANCE`,
+`POD_NAME`, or `HOSTNAME` value, or the system hostname, plus eight random
+base32 characters. An override must identify one Worker process, change after
+restart, contain 1–63 ASCII letters, digits, dots, underscores, or hyphens,
+and differ from every registered Flow type.
+
+The Worker reconnects after stream failures and drains an active task before a
+server-directed reconnect. Registration failures back off; an older server
+without pull support logs one explicit error and retries. `Worker::start`
+returns startup errors, while later polling failures are logged and retried.
+The Worker may hold up to
+`(1 + number of Flow types) * (idleStreamsPerQueue + maxConcurrentTasks)`
+streams because busy streams are kept alongside each queue's idle streams.
+Size both options within the server's per-Worker stream cap (256 by default)
+and per-queue stream limits.
+
+`Worker::stop` begins a graceful drain. After 30 seconds by default, the Worker
+cancels active handlers; `Worker::start` waits for them to return before it
+exits. Set `PullWorkerOptions::stop_drain_timeout` to change that deadline.
+Handlers should check `Context::is_cancelled` during interruptible work.
+
 ### Step progress and Streams
 
 WaitFor and Execute handlers can send progress before returning:
@@ -475,7 +527,7 @@ restricted to `main` and requires the `CRATES_IO_TOKEN` repository secret.
 ## Server protocol compatibility
 
 Worker startup calls `GetServerInfo`, negotiates the highest common protocol,
-synchronizes Attribute indexes, and then binds WorkerService. The initial Rust
+synchronizes Attribute indexes, and then binds WorkerService or starts pull polling. The initial Rust
 SDK interval is `[1,1]`. Missing information, invalid or disjoint intervals, and
 RPC failures stop startup before binding. The negotiated protocol is retained
 for future protocol-specific paths.
