@@ -26,7 +26,6 @@ import (
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -46,6 +45,13 @@ type ClientOptions struct {
 	// Credential is sent as a bearer credential with every FlowService call. Default: nil sends none.
 	// A multi-tenant Dex server requires it and derives the caller's tenant from it; see FileCredential.
 	Credential Credential
+	// GrpcMaxMessageBytes limits the gRPC messages this Client receives, in bytes, such as
+	// InvokeRPC results, state reads, and each LoadBlobs response used to hydrate values.
+	// Zero uses DefaultGrpcMaxMessageBytes (32 MiB) and keeps gRPC's unlimited send limit.
+	// A positive value also limits the messages the Client sends. Negative values are invalid.
+	// The Dex server applies its own api.grpcMaxMessageBytes, and the smaller limit wins.
+	// Keep it above the largest application value plus headroom for the message envelope.
+	GrpcMaxMessageBytes int
 }
 
 // Client calls FlowService with registered typed definitions.
@@ -79,7 +85,8 @@ type Client struct {
 // registry supplies the validated definitions and cache hydrates large values. The
 // Client connects lazily to ClientOptions.FlowServiceAddress, which defaults to
 // localhost:8801. It panics when registry or cache is nil. It returns an error when
-// an address or worker target is invalid, or the gRPC client cannot be created.
+// an address, worker target, or GrpcMaxMessageBytes is invalid, or the gRPC client
+// cannot be created.
 // The caller owns the returned Client and must call Close.
 func NewClient(
 	registry *Registry,
@@ -96,12 +103,13 @@ func NewClient(
 	if err != nil {
 		return nil, err
 	}
+	messageLimits, err := resolveGrpcMessageLimits(options.GrpcMaxMessageBytes)
+	if err != nil {
+		return nil, err
+	}
 	connection, err := grpc.NewClient(
 		flowServiceAddress,
-		append(
-			[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
-			credentialDialOptions(options.Credential)...,
-		)...,
+		messageLimits.flowServiceDialOptions(options.Credential)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)

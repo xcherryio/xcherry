@@ -161,6 +161,55 @@ func (e *AttributeNotFoundError) Error() string {
 	)
 }
 
+// BlobMessageTooLargeError reports a blob value that alone exceeds a gRPC message size limit.
+//
+// Dex stores large Attribute, Channel, and RPC values as blobs and the SDK hydrates
+// them with LoadBlobs. The SDK first requests every uncached blob in one LoadBlobs
+// call. When that response exceeds a gRPC message size limit, the SDK splits the
+// request in half and retries each half, so the batch size never needs tuning. This
+// error means a single blob still does not fit in one response.
+//
+// The limit that rejected the response is either the SDK's GrpcMaxMessageBytes on
+// ClientOptions or WorkerOptions, or the Dex server's api.grpcMaxMessageBytes. Err
+// keeps gRPC's RESOURCE_EXHAUSTED status, whose message states the response size and
+// the limit. Raise the smaller limit above the value size plus envelope headroom, or
+// split the value across several Attributes or AttributeMap instances.
+//
+// A Client call returns this error wrapped in a ServiceError. A Worker reports it as an
+// INTERNAL Step or RPC failure whose detail contains this message.
+//
+//	var tooLarge *dex.BlobMessageTooLargeError
+//	if errors.As(err, &tooLarge) {
+//		log.Printf("Flow %s blob %s exceeds the gRPC limit: %v",
+//			tooLarge.FlowID, tooLarge.BlobID, tooLarge.Err)
+//	}
+type BlobMessageTooLargeError struct {
+	// FlowID is the Flow ID that owns the blob.
+	FlowID string
+	// BlobID is the Dex blob ID of the value that did not fit.
+	BlobID string
+	// Err is the gRPC RESOURCE_EXHAUSTED status returned for the single-blob LoadBlobs call.
+	Err error
+}
+
+// Error identifies the Flow ID, blob ID, and gRPC size failure.
+func (e *BlobMessageTooLargeError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"dex: blob %q of Flow ID %q exceeds the gRPC message size limit: %v",
+		e.BlobID,
+		e.FlowID,
+		e.Err,
+	)
+}
+
+// Unwrap returns the gRPC RESOURCE_EXHAUSTED status.
+func (e *BlobMessageTooLargeError) Unwrap() error {
+	return e.Err
+}
+
 // ServiceError reports a FlowService failure.
 type ServiceError struct {
 	// Op is the SDK operation that failed.
