@@ -17,7 +17,7 @@ import (
 	"time"
 
 	dexconfig "github.com/superdurable/dex/config"
-	temporalconfig "github.com/superdurable/temporal-server/common/config"
+	temporalconfig "github.com/superdurable/xtemporal/common/config"
 )
 
 const (

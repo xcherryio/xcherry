@@ -11,8 +11,8 @@ package main
 import (
 	"os"
 
-	_ "github.com/superdurable/temporal-server/common/persistence/sql/sqlplugin/postgresql"
-	"github.com/superdurable/temporal-server/tools/sql"
+	_ "github.com/superdurable/xtemporal/common/persistence/sql/sqlplugin/postgresql"
+	"github.com/superdurable/xtemporal/tools/sql"
 )
 
 func main() {
