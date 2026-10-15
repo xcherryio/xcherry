@@ -40,6 +40,14 @@ worker:
   workerServiceRequestMaxAttempts: 3
   # gRPC status codes that trigger failover between resolved headless endpoints.
   headlessFailoverStatusCodes: [14, 4, 2]
+# Configure membership only when multiple Dex instances share one cluster.
+# membership:
+#   listen: 0.0.0.0:6833
+#   broadcastAddress: "" # Defaults to the first private IPv4; peers reach this address at the listen port.
+#   refreshInterval: 10s
+#   seeds:
+#     dnsName: dex-headless.dex.svc.cluster.local:6833
+#     # static: ["10.0.0.1:6833", "10.0.0.2:6833"]
 interpreter:
   # Bounds backend index creation and propagation checks. Existing indexes return immediately.
   attributeIndexSyncTimeout: 2m

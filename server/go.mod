@@ -31,8 +31,11 @@ require (
 
 require (
 	github.com/aws/smithy-go v1.27.4
+	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da
 	github.com/go-jose/go-jose/v3 v3.0.5
 	github.com/redis/go-redis/v9 v9.22.0
+	github.com/temporalio/ringpop-go v0.1.0
+	github.com/temporalio/tchannel-go v1.22.1
 	go.temporal.io/api v1.63.4
 	go.temporal.io/cloud-sdk v0.19.0
 	golang.org/x/sync v0.22.0
@@ -62,6 +65,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.0 // indirect
+	github.com/cactus/go-statsd-client/statsd v0.0.0-20200423205355-cb0885a1018c // indirect
 	github.com/coreos/go-oidc/v3 v3.5.0 // indirect
 	github.com/danieljoos/wincred v1.2.2 // indirect
 	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_amd64 v1.0.0 // indirect
@@ -107,7 +111,10 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/rcrowley/go-metrics v0.0.0-20181016184325-3113b8401b8a // indirect
 	github.com/rs/zerolog v1.28.0 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/uber-common/bark v1.2.1 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
@@ -156,7 +163,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/dig v1.10.0 // indirect
 	go.uber.org/fx v1.13.1 // indirect
-	go.uber.org/multierr v1.6.0 // indirect
+	go.uber.org/multierr v1.7.0 // indirect
 	go.uber.org/net/metrics v1.3.0 // indirect
 	go.uber.org/thriftrw v1.29.2 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0

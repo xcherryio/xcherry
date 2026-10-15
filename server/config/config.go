@@ -56,6 +56,10 @@ const (
 	DefaultWebBindAddress = "0.0.0.0"
 	// DefaultWebPort is the default Dex Web HTTP bind port.
 	DefaultWebPort = 8802
+	// DefaultMembershipListen binds ringpop on every interface, outside the all-in-one backend port ranges.
+	DefaultMembershipListen = "0.0.0.0:6833"
+	// DefaultMembershipRefreshInterval re-resolves DNS seeds and refreshes role rings every ten seconds.
+	DefaultMembershipRefreshInterval = 10 * time.Second
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
 	// DefaultGrpcMaxMessageBytes is 16 MiB so that large attributes can be transported.
@@ -182,6 +186,8 @@ type (
 		Web WebConfig `yaml:"web"`
 		// Worker configures shared WorkerService clients. Immutable after startup.
 		Worker WorkerConfig `yaml:"worker"`
+		// Membership configures optional multi-instance discovery. Nil uses an in-process single-member ring. Immutable after startup.
+		Membership *MembershipConfig `yaml:"membership"`
 		// Interpreter selects Temporal or Cadence and worker activity settings. Exactly one of Temporal/Cadence must be set.
 		Interpreter Interpreter `yaml:"interpreter"`
 		// BlobStore offloads large Attribute payloads above ThresholdInBytes. Default enabled.
@@ -192,6 +198,24 @@ type (
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
 		// Tenancy enables multi-tenant namespaces. Default empty is single-tenant mode, unchanged from servers without it.
 		Tenancy TenancyConfig `yaml:"tenancy"`
+	}
+
+	MembershipConfig struct {
+		// Listen binds the ringpop TChannel listener. Default 0.0.0.0:6833. Its port is advertised with BroadcastAddress.
+		Listen string `yaml:"listen"`
+		// BroadcastAddress is the reachable IPv4 address advertised to peers. Default first private IPv4; it must differ from a wildcard bind address.
+		BroadcastAddress string `yaml:"broadcastAddress"`
+		// Seeds selects DNS or static peer addresses. Default empty, which starts a cluster containing only this listener.
+		Seeds MembershipSeedsConfig `yaml:"seeds"`
+		// RefreshInterval re-resolves DNS seeds and role membership. Default 10s. Must be positive when set.
+		RefreshInterval time.Duration `yaml:"refreshInterval"`
+	}
+
+	MembershipSeedsConfig struct {
+		// DNSName resolves a headless service's host:port to peer addresses. Default empty. Mutually exclusive with Static.
+		DNSName string `yaml:"dnsName"`
+		// Static lists peer host:port addresses. Default empty. Mutually exclusive with DNSName.
+		Static []string `yaml:"static"`
 	}
 
 	StreamStoreConfig struct {
@@ -591,6 +615,11 @@ func NewConfig(configPath string) (*Config, error) {
 	if err := cfg.validateRetryPolicies(); err != nil {
 		return nil, err
 	}
+	if cfg.Membership != nil {
+		if err := cfg.Membership.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Interpreter.InterpreterActivityConfig.MinimumStepHeartbeatTimeout < 0 {
 		return nil, fmt.Errorf("interpreter.interpreterActivityConfig.minimumStepHeartbeatTimeout must be non-negative")
 	}
@@ -599,6 +628,49 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// EffectiveListen returns the configured ringpop bind address or its default.
+func (c MembershipConfig) EffectiveListen() string {
+	if c.Listen == "" {
+		return DefaultMembershipListen
+	}
+	return c.Listen
+}
+
+// EffectiveRefreshInterval returns the configured DNS and ring refresh interval or its default.
+func (c MembershipConfig) EffectiveRefreshInterval() time.Duration {
+	if c.RefreshInterval == 0 {
+		return DefaultMembershipRefreshInterval
+	}
+	return c.RefreshInterval
+}
+
+// Validate checks membership listener, advertised address, and seed configuration.
+func (c MembershipConfig) Validate() error {
+	if _, _, err := net.SplitHostPort(c.EffectiveListen()); err != nil {
+		return fmt.Errorf("membership.listen must be host:port: %w", err)
+	}
+	if c.BroadcastAddress != "" && net.ParseIP(c.BroadcastAddress) == nil {
+		return fmt.Errorf("membership.broadcastAddress must be an IP address")
+	}
+	if c.RefreshInterval < 0 {
+		return fmt.Errorf("membership.refreshInterval must be positive")
+	}
+	if c.Seeds.DNSName != "" && len(c.Seeds.Static) != 0 {
+		return fmt.Errorf("membership.seeds.dnsName and static are mutually exclusive")
+	}
+	if c.Seeds.DNSName != "" {
+		if _, _, err := net.SplitHostPort(c.Seeds.DNSName); err != nil {
+			return fmt.Errorf("membership.seeds.dnsName must be host:port: %w", err)
+		}
+	}
+	for _, address := range c.Seeds.Static {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("membership.seeds.static address must be host:port: %w", err)
+		}
+	}
+	return nil
 }
 
 // ValidateTemporalConnection checks Temporal connection settings.
