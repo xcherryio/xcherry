@@ -180,15 +180,21 @@ type FlowTimeoutHandlerOptions struct {
 // Use Pull with a pull Worker, or Address with a listening Worker. A Flow type
 // must be unique within a Dex server when Pull is enabled.
 //
-//	target := &dex.WorkerTarget{Pull: true}
-//	options := dex.StartFlowOptions{ConfigOverride: &dex.FlowConfig{WorkerTarget: target}}
-//	_ = options
+//	client, err := dex.NewClient(registry, cache, dex.ClientOptions{
+//		WorkerTarget: &dex.WorkerTarget{Pull: true},
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	defer client.Close()
+//	_, err = client.StartFlow(ctx, orderFlow, "order-42", orderInput, dex.StartFlowOptions{})
+//	return err
 type WorkerTarget struct {
-	// Address is the advertised plaintext gRPC target, normally host:port.
+	// Address is the advertised plaintext gRPC target, normally host:port. Empty selects pull only when Pull is true.
 	Address string
-	// Headless bypasses service discovery and requires a direct host:port target.
+	// Headless bypasses service discovery and requires a direct host:port target. Default: false.
 	Headless bool
-	// Pull dispatches through the server's Worker task queues. It cannot be combined with Address or Headless.
+	// Pull dispatches through the server's Worker task queues. Default: false. It cannot be combined with Address or Headless.
 	Pull bool
 }
 

@@ -10,6 +10,8 @@ package dex
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"regexp"
 	"sync"
@@ -21,11 +23,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type pullTestServer struct {
 	dexpb.UnimplementedWorkerTaskServiceServer
-	registered chan *pullTestStream
+	registered          chan *pullTestStream
+	mu                  sync.Mutex
+	reconnectFirst      bool
+	firstReconnectQueue chan string
 }
 
 type pullTestStream struct {
@@ -42,6 +48,14 @@ func (server *pullTestServer) PollWorkerTask(stream dexpb.WorkerTaskService_Poll
 		return err
 	}
 	registered := &pullTestStream{stream: stream, registration: first.GetRegister(), frames: make(chan *dexpb.PollWorkerTaskRequest, 16), abort: make(chan struct{})}
+	server.mu.Lock()
+	shouldReconnect := server.reconnectFirst
+	server.reconnectFirst = false
+	server.mu.Unlock()
+	if shouldReconnect {
+		server.firstReconnectQueue <- registered.registration.Queue
+		return stream.Send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: "owner moved"}}})
+	}
 	if err := stream.Send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{}}}); err != nil {
 		return err
 	}
@@ -75,6 +89,9 @@ func (server *pullTestServer) PollWorkerTask(stream dexpb.WorkerTaskService_Poll
 				return stream.Context().Err()
 			}
 		case err := <-receiveError:
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
 			return err
 		case <-registered.abort:
 			return status.Error(codes.Unavailable, "test stream failure")
@@ -95,7 +112,7 @@ func startPullTestServer(t *testing.T) (string, *pullTestServer) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	grpcServer := grpc.NewServer()
-	service := &pullTestServer{registered: make(chan *pullTestStream, 32)}
+	service := &pullTestServer{registered: make(chan *pullTestStream, 32), firstReconnectQueue: make(chan string, 1)}
 	dexpb.RegisterWorkerTaskServiceServer(grpcServer, service)
 	dexpb.RegisterFlowServiceServer(grpcServer, &workerSyncFlowService{})
 	serveResult := make(chan error, 1)
@@ -171,7 +188,7 @@ func TestWorkerPullTaskFramesAndReconnect(t *testing.T) {
 		var received *dexpb.PollWorkerTaskRequest
 		select {
 		case received = <-queueStream.frames:
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 			worker.pull.mu.Lock()
 			for active := range worker.pull.streams {
 				active.mu.Lock()
@@ -248,6 +265,10 @@ func TestWorkerPullGeneratedIdentityAndTargetValidation(t *testing.T) {
 	require.Error(t, validateWorkerTarget(WorkerTarget{Pull: true, Address: "localhost:8803"}))
 	require.Error(t, validateWorkerTarget(WorkerTarget{Pull: true, Headless: true}))
 	require.Error(t, validateAppWorkerID("bad/id"))
+	_, err = newWorkerForTest(t, []Flow{workerFlow}, WorkerOptions{WorkerTarget: WorkerTarget{Pull: true}})
+	require.ErrorContains(t, err, "WorkerOptions.Pull")
+	_, err = newWorkerForTest(t, []Flow{workerFlow}, WorkerOptions{Pull: &PullWorkerOptions{StopDrainTimeout: -time.Second}})
+	require.ErrorContains(t, err, "StopDrainTimeout")
 	_, _, startOptions, err := mapStartFlowOptions(StartFlowOptions{ConfigOverride: &FlowConfig{WorkerTarget: &WorkerTarget{Pull: true}}})
 	require.NoError(t, err)
 	require.True(t, startOptions.FlowConfigOverride.WorkerTarget.IsPullMode)
@@ -269,11 +290,13 @@ func TestWorkerPullCancelCapacityAndStopDrain(t *testing.T) {
 	require.NoError(t, err)
 	started := make(chan error, 1)
 	go func() { started <- worker.Start() }()
-	var queueStream *pullTestStream
-	for queueStream == nil {
+	var queueStream, stickyStream *pullTestStream
+	for queueStream == nil || stickyStream == nil {
 		candidate := awaitPullRegistration(t, server)
 		if candidate.registration.Queue == GetFinalFlowType(flow) {
 			queueStream = candidate
+		} else if candidate.registration.Queue == "blocking-worker-12345678" {
+			stickyStream = candidate
 		}
 	}
 	input := mustEncodeWorkerTestValue(t, struct{}{})
@@ -291,11 +314,13 @@ func TestWorkerPullCancelCapacityAndStopDrain(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RPC did not start")
 	}
-	require.NoError(t, queueStream.send(makeTask("overflow")))
-	rejected := awaitPullFrame(t, queueStream).GetReject()
+	require.NoError(t, stickyStream.send(makeTask("overflow")))
+	rejected := awaitPullFrame(t, stickyStream).GetReject()
 	require.NotNil(t, rejected)
 	require.Equal(t, "overflow", rejected.TaskId)
 	require.Equal(t, dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY, rejected.Reason)
+	require.NoError(t, stickyStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Ping{Ping: &dexpb.PollWorkerTaskPing{}}}))
+	require.NotNil(t, awaitPullFrame(t, stickyStream).GetPong())
 	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_CancelTask{CancelTask: &dexpb.PollWorkerTaskCancelTask{TaskId: "blocking-1"}}}))
 	frame := awaitPullFrame(t, queueStream).GetTaskFrame()
 	require.NotNil(t, frame.GetWorkerError())
@@ -311,6 +336,11 @@ func TestWorkerPullCancelCapacityAndStopDrain(t *testing.T) {
 	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go func() { stopResult <- worker.Stop(stopCtx) }()
+	require.Eventually(t, func() bool {
+		worker.pull.mu.Lock()
+		defer worker.pull.mu.Unlock()
+		return worker.pull.isStopping && worker.pull.busyTasks == 1
+	}, 5*time.Second, time.Millisecond)
 	select {
 	case err := <-stopResult:
 		t.Fatalf("Stop returned before task completed: %v", err)
@@ -319,6 +349,92 @@ func TestWorkerPullCancelCapacityAndStopDrain(t *testing.T) {
 	close(flow.release)
 	require.NotNil(t, awaitPullFrame(t, queueStream).GetTaskFrame().GetRpc())
 	require.NoError(t, <-stopResult)
+	require.NoError(t, <-started)
+}
+
+func TestWorkerPullForcedStopWaitsForHandler(t *testing.T) {
+	address, server := startPullTestServer(t)
+	flow := &workerBlockingFlow{entered: make(chan struct{}), release: make(chan struct{})}
+	worker, err := newWorkerForTest(t, []Flow{flow}, WorkerOptions{FlowServiceAddress: address, Pull: &PullWorkerOptions{MaxConcurrentTasks: 1, AppWorkerID: "force-stop-worker-12345678"}})
+	require.NoError(t, err)
+	started := make(chan error, 1)
+	go func() { started <- worker.Start() }()
+	var queueStream *pullTestStream
+	for queueStream == nil {
+		candidate := awaitPullRegistration(t, server)
+		if candidate.registration.Queue == GetFinalFlowType(flow) {
+			queueStream = candidate
+		}
+	}
+	request := &dexpb.InvokeWorkerRPCRequest{Context: workerRPCContext(), FlowType: GetFinalFlowType(flow), RpcName: "Block", Input: mustEncodeWorkerTestValue(t, struct{}{})}
+	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Task{Task: &dexpb.PollWorkerTask{TaskId: "forced", Request: &dexpb.PollWorkerTask_Rpc{Rpc: request}}}}))
+	select {
+	case <-flow.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RPC did not start")
+	}
+	stopCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, worker.Stop(stopCtx), context.Canceled)
+	worker.pull.mu.Lock()
+	require.Equal(t, 0, worker.pull.busyTasks)
+	worker.pull.mu.Unlock()
+	require.NoError(t, <-started)
+}
+
+func TestWorkerPullReconnectBeforeRegistered(t *testing.T) {
+	address, server := startPullTestServer(t)
+	server.mu.Lock()
+	server.reconnectFirst = true
+	server.mu.Unlock()
+	worker, err := newWorkerForTest(t, []Flow{workerFlow}, WorkerOptions{FlowServiceAddress: address, Pull: &PullWorkerOptions{MaxConcurrentTasks: 1, AppWorkerID: "first-reconnect-12345678"}})
+	require.NoError(t, err)
+	started := make(chan error, 1)
+	begin := time.Now()
+	go func() { started <- worker.Start() }()
+	var reconnectQueue string
+	select {
+	case reconnectQueue = <-server.firstReconnectQueue:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not request reconnect")
+	}
+	var registered *pullTestStream
+	for registered == nil {
+		candidate := awaitPullRegistration(t, server)
+		if candidate.registration.Queue == reconnectQueue {
+			registered = candidate
+		}
+	}
+	require.GreaterOrEqual(t, time.Since(begin), 90*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, worker.Stop(stopCtx))
+	require.NoError(t, <-started)
+}
+
+func TestWorkerPullTaskDeadlineCancelsHandler(t *testing.T) {
+	address, server := startPullTestServer(t)
+	flow := &workerBlockingFlow{entered: make(chan struct{}), release: make(chan struct{})}
+	worker, err := newWorkerForTest(t, []Flow{flow}, WorkerOptions{FlowServiceAddress: address, Pull: &PullWorkerOptions{MaxConcurrentTasks: 1, AppWorkerID: "deadline-worker-12345678"}})
+	require.NoError(t, err)
+	started := make(chan error, 1)
+	go func() { started <- worker.Start() }()
+	var queueStream *pullTestStream
+	for queueStream == nil {
+		candidate := awaitPullRegistration(t, server)
+		if candidate.registration.Queue == GetFinalFlowType(flow) {
+			queueStream = candidate
+		}
+	}
+	request := &dexpb.InvokeWorkerRPCRequest{Context: workerRPCContext(), FlowType: GetFinalFlowType(flow), RpcName: "Block", Input: mustEncodeWorkerTestValue(t, struct{}{})}
+	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Task{Task: &dexpb.PollWorkerTask{TaskId: "deadline", Deadline: timestamppb.New(time.Now().Add(-time.Second)), Request: &dexpb.PollWorkerTask_Rpc{Rpc: request}}}}))
+	frame := awaitPullFrame(t, queueStream).GetTaskFrame()
+	require.NotNil(t, frame.GetWorkerError())
+	require.Contains(t, frame.GetWorkerError().Detail, "deadline exceeded")
+	awaitPullTaskCompletion(t, worker)
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, worker.Stop(stopCtx))
 	require.NoError(t, <-started)
 }
 

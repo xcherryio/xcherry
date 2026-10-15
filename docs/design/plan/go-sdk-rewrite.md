@@ -607,7 +607,7 @@ credential to every FlowService call. A Dex server with authentication enabled
 requires it on every public API call.
 
 Pull Workers set `WorkerOptions.Pull` with `MaxConcurrentTasks`,
-`IdleStreamsPerQueue`, and optional `AppWorkerID`. They connect outbound through
+`IdleStreamsPerQueue`, optional `AppWorkerID`, and `StopDrainTimeout`. They connect outbound through
 `FlowServiceAddress`, using the same `Credential`, without opening the local
 listener. `Worker.WorkerTarget()` returns `{Pull: true}`. A Client or per-Flow
 `FlowConfig.WorkerTarget` can advertise that value; `StartFlowOptions` and

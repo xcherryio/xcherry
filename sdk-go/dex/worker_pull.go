@@ -25,6 +25,7 @@ import (
 
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -36,11 +37,13 @@ type pullWorker struct {
 	queues              []string
 	maxConcurrentTasks  int
 	idleStreamsPerQueue int
+	stopDrainTimeout    time.Duration
 	sdkVersion          string
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	mu                  sync.Mutex
 	streams             map[*pullStream]struct{}
+	streamWG            sync.WaitGroup
 	busyTasks           int
 	isStopping          bool
 	wake                chan struct{}
@@ -48,19 +51,19 @@ type pullWorker struct {
 }
 
 type pullStream struct {
-	worker      *pullWorker
-	queue       string
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	sendMu      sync.Mutex
-	stream      dexpb.WorkerTaskService_PollWorkerTaskClient
-	taskID      string
-	taskCancel  context.CancelFunc
-	taskDone    chan struct{}
-	isBusy      bool
-	isDraining  bool
-	isPreferred bool
+	worker       *pullWorker
+	queue        string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	sendMu       sync.Mutex
+	stream       dexpb.WorkerTaskService_PollWorkerTaskClient
+	isSendClosed bool
+	taskID       string
+	taskCancel   context.CancelFunc
+	taskFinished chan struct{}
+	isBusy       bool
+	isDraining   bool
 }
 
 func newPullWorker(registry *Registry, service *workerService, conn *grpc.ClientConn, options PullWorkerOptions, sdkVersion string) (*pullWorker, error) {
@@ -77,6 +80,13 @@ func newPullWorker(registry *Registry, service *workerService, conn *grpc.Client
 	}
 	if idleStreamsPerQueue == 0 {
 		idleStreamsPerQueue = 1
+	}
+	stopDrainTimeout := options.StopDrainTimeout
+	if stopDrainTimeout < 0 {
+		return nil, fmt.Errorf("dex: StopDrainTimeout must not be negative")
+	}
+	if stopDrainTimeout == 0 {
+		stopDrainTimeout = 30 * time.Second
 	}
 	appWorkerID := options.AppWorkerID
 	if appWorkerID == "" {
@@ -103,7 +113,7 @@ func newPullWorker(registry *Registry, service *workerService, conn *grpc.Client
 	return &pullWorker{
 		service: service, client: dexpb.NewWorkerTaskServiceClient(conn), appWorkerID: appWorkerID,
 		flowTypes: flowTypes, queues: append([]string{appWorkerID}, flowTypes...),
-		maxConcurrentTasks: maxConcurrentTasks, idleStreamsPerQueue: idleStreamsPerQueue, sdkVersion: sdkVersion,
+		maxConcurrentTasks: maxConcurrentTasks, idleStreamsPerQueue: idleStreamsPerQueue, stopDrainTimeout: stopDrainTimeout, sdkVersion: sdkVersion,
 		ctx: ctx, cancel: cancel, streams: make(map[*pullStream]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}, nil
 }
@@ -159,7 +169,10 @@ func validateAppWorkerID(appWorkerID string) error {
 }
 
 func (worker *pullWorker) run() {
-	defer close(worker.done)
+	defer func() {
+		worker.streamWG.Wait()
+		close(worker.done)
+	}()
 	worker.reconcile()
 	for {
 		select {
@@ -205,45 +218,33 @@ func (worker *pullWorker) reconcile() {
 		idle := 0
 		for stream := range worker.streams {
 			stream.mu.Lock()
-			isIdle := !stream.isBusy && !stream.isDraining
+			isIdle := !stream.isBusy
 			stream.mu.Unlock()
 			if stream.queue == queue && isIdle {
 				idle++
 			}
 		}
 		desired := worker.idleStreamsPerQueue
-		if worker.busyTasks >= worker.maxConcurrentTasks {
-			desired = 0
-		}
 		for idle < desired {
 			streamCtx, cancel := context.WithCancel(worker.ctx)
 			stream := &pullStream{worker: worker, queue: queue, ctx: streamCtx, cancel: cancel}
 			worker.streams[stream] = struct{}{}
+			worker.streamWG.Add(1)
 			idle++
 			go stream.run()
-		}
-		for pass := 0; pass < 2 && idle > desired; pass++ {
-			for stream := range worker.streams {
-				if idle <= desired {
-					break
-				}
-				stream.mu.Lock()
-				if stream.queue == queue && !stream.isBusy && !stream.isDraining && (pass == 1 || !stream.isPreferred) {
-					stream.isDraining = true
-					stream.cancel()
-					idle--
-				}
-				stream.mu.Unlock()
-			}
 		}
 	}
 }
 
 func (stream *pullStream) run() {
+	defer stream.worker.streamWG.Done()
 	defer stream.remove()
 	backoff := 100 * time.Millisecond
 	for stream.ctx.Err() == nil {
-		err := stream.poll()
+		wasRegistered, err := stream.poll()
+		if wasRegistered {
+			backoff = 100 * time.Millisecond
+		}
 		if stream.ctx.Err() != nil {
 			return
 		}
@@ -255,9 +256,12 @@ func (stream *pullStream) run() {
 		}
 		if stream.isReconnecting() {
 			backoff = 100 * time.Millisecond
-			continue
 		}
-		if err != nil && !errors.Is(err, io.EOF) {
+		isPermanent := isPermanentPullStreamError(err)
+		if isPermanent {
+			stream.worker.service.logger.Error("Worker task stream rejected", "queue", stream.queue, "error", err)
+			backoff = time.Minute
+		} else if err != nil && !errors.Is(err, io.EOF) {
 			stream.worker.service.logger.Warn("Worker task stream disconnected", "queue", stream.queue, "error", err)
 		}
 		jitter, jitterErr := rand.Int(rand.Reader, big.NewInt(int64(backoff/2)))
@@ -271,73 +275,117 @@ func (stream *pullStream) run() {
 			return
 		case <-time.After(wait):
 		}
-		backoff *= 2
-		if backoff > 5*time.Second {
-			backoff = 5 * time.Second
+		if !isPermanent {
+			backoff *= 2
+			if backoff > 5*time.Second {
+				backoff = 5 * time.Second
+			}
 		}
 	}
 }
 
-func (stream *pullStream) poll() error {
+func isPermanentPullStreamError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument, codes.Unimplemented, codes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (stream *pullStream) poll() (bool, error) {
 	pollCtx, cancel := context.WithCancel(stream.ctx)
-	defer cancel()
 	clientStream, err := stream.worker.client.PollWorkerTask(pollCtx)
 	if err != nil {
-		return err
+		cancel()
+		return false, err
 	}
-	stream.mu.Lock()
+	stream.sendMu.Lock()
 	stream.stream = clientStream
-	stream.mu.Unlock()
-	defer func() {
-		if closeErr := clientStream.CloseSend(); closeErr != nil {
-			stream.worker.service.logger.Debug("close Worker poll send", "error", closeErr)
-		}
-	}()
+	stream.isSendClosed = false
+	stream.sendMu.Unlock()
 	register := &dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{
 		Queue: stream.queue, AppWorkerId: stream.worker.appWorkerID, FlowTypes: stream.worker.flowTypes, SdkName: "go", SdkVersion: stream.worker.sdkVersion,
 	}}}
 	if err := stream.send(register); err != nil {
-		return err
+		stream.closeSend()
+		cancel()
+		return false, err
 	}
-	registered := false
+	responses := make(chan *dexpb.PollWorkerTaskResponse, 1)
+	receiveErrors := make(chan error, 1)
+	receiveDone := make(chan struct{})
+	go receivePullFrames(pollCtx, clientStream, responses, receiveErrors, receiveDone)
+	defer func() {
+		cancel()
+		<-receiveDone
+		stream.closeSend()
+	}()
+	wasRegistered := false
 	for {
-		response, err := clientStream.Recv()
+		select {
+		case response := <-responses:
+			if !wasRegistered {
+				if response.GetReconnect() != nil {
+					stream.markDraining()
+					return false, nil
+				}
+				if response.GetRegistered() == nil {
+					return false, fmt.Errorf("dex: Worker task stream did not register")
+				}
+				wasRegistered = true
+				stream.worker.signal()
+				continue
+			}
+			switch frame := response.Frame.(type) {
+			case *dexpb.PollWorkerTaskResponse_Task:
+				stream.startTask(frame.Task)
+			case *dexpb.PollWorkerTaskResponse_CancelTask:
+				stream.mu.Lock()
+				if stream.taskID == frame.CancelTask.TaskId && stream.taskCancel != nil {
+					stream.taskCancel()
+				}
+				stream.mu.Unlock()
+			case *dexpb.PollWorkerTaskResponse_Ping:
+				if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Pong{Pong: &dexpb.PollWorkerTaskPong{}}}); err != nil {
+					stream.cancelTaskContext()
+					stream.waitForTaskFinished()
+					return wasRegistered, err
+				}
+			case *dexpb.PollWorkerTaskResponse_Reconnect:
+				if !stream.markDraining() {
+					return wasRegistered, nil
+				}
+				stream.worker.signal()
+			default:
+				stream.worker.service.logger.Debug("ignore unknown Worker task frame", "frame", fmt.Sprintf("%T", frame))
+			}
+		case <-stream.taskFinished:
+			stream.completeTask()
+		case err := <-receiveErrors:
+			stream.cancelTaskContext()
+			stream.waitForTaskFinished()
+			return wasRegistered, err
+		case <-pollCtx.Done():
+			stream.cancelTaskContext()
+			stream.waitForTaskFinished()
+			return wasRegistered, pollCtx.Err()
+		}
+	}
+}
+
+func receivePullFrames(ctx context.Context, stream dexpb.WorkerTaskService_PollWorkerTaskClient, responses chan<- *dexpb.PollWorkerTaskResponse, receiveErrors chan<- error, done chan<- struct{}) {
+	defer close(done)
+	for {
+		response, err := stream.Recv()
 		if err != nil {
-			stream.cancelTask()
-			return err
+			receiveErrors <- err
+			return
 		}
-		if !registered {
-			if response.GetRegistered() == nil {
-				return fmt.Errorf("dex: Worker task stream did not register")
-			}
-			registered = true
-			stream.worker.signal()
-			continue
-		}
-		switch frame := response.Frame.(type) {
-		case *dexpb.PollWorkerTaskResponse_Task:
-			stream.startTask(frame.Task)
-		case *dexpb.PollWorkerTaskResponse_CancelTask:
-			stream.mu.Lock()
-			if stream.taskID == frame.CancelTask.TaskId && stream.taskCancel != nil {
-				stream.taskCancel()
-			}
-			stream.mu.Unlock()
-		case *dexpb.PollWorkerTaskResponse_Ping:
-			if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Pong{Pong: &dexpb.PollWorkerTaskPong{}}}); err != nil {
-				return err
-			}
-		case *dexpb.PollWorkerTaskResponse_Reconnect:
-			stream.mu.Lock()
-			stream.isDraining = true
-			isBusy := stream.isBusy
-			stream.mu.Unlock()
-			stream.worker.signal()
-			if !isBusy {
-				return nil
-			}
-		default:
-			return fmt.Errorf("dex: unrecognized Worker task frame %T", frame)
+		select {
+		case responses <- response:
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -362,7 +410,7 @@ func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
 	}
 	stream.taskCancel = cancel
 	stream.taskID = task.GetTaskId()
-	stream.taskDone = make(chan struct{})
+	stream.taskFinished = make(chan struct{}, 1)
 	stream.isBusy = true
 	stream.worker.busyTasks++
 	stream.mu.Unlock()
@@ -407,37 +455,55 @@ func (stream *pullStream) executeTask(ctx context.Context, task *dexpb.PollWorke
 }
 
 func (stream *pullStream) finishTask() {
+	stream.mu.Lock()
+	taskFinished := stream.taskFinished
+	stream.mu.Unlock()
+	taskFinished <- struct{}{}
+}
+
+func (stream *pullStream) completeTask() {
 	stream.worker.mu.Lock()
 	stream.mu.Lock()
 	stream.taskCancel()
 	stream.taskCancel = nil
 	stream.taskID = ""
 	stream.isBusy = false
-	close(stream.taskDone)
+	stream.taskFinished = nil
 	stream.worker.busyTasks--
 	isDraining := stream.isDraining
 	stream.mu.Unlock()
 	stream.worker.mu.Unlock()
 	if isDraining {
-		stream.sendMu.Lock()
-		if err := stream.stream.CloseSend(); err != nil {
-			stream.worker.service.logger.Error("close drained Worker stream", "error", err)
-		}
-		stream.sendMu.Unlock()
+		stream.closeSend()
 	}
 	stream.worker.signal()
 }
 
-func (stream *pullStream) cancelTask() {
+func (stream *pullStream) cancelTaskContext() {
 	stream.mu.Lock()
 	if stream.taskCancel != nil {
 		stream.taskCancel()
 	}
-	taskDone := stream.taskDone
 	stream.mu.Unlock()
-	if taskDone != nil {
-		<-taskDone
+}
+
+func (stream *pullStream) waitForTaskFinished() {
+	stream.mu.Lock()
+	isBusy := stream.isBusy
+	taskFinished := stream.taskFinished
+	stream.mu.Unlock()
+	if isBusy {
+		<-taskFinished
+		stream.completeTask()
 	}
+}
+
+func (stream *pullStream) markDraining() bool {
+	stream.mu.Lock()
+	stream.isDraining = true
+	isBusy := stream.isBusy
+	stream.mu.Unlock()
+	return isBusy
 }
 
 func (stream *pullStream) isReconnecting() bool {
@@ -447,12 +513,11 @@ func (stream *pullStream) isReconnecting() bool {
 		return false
 	}
 	stream.isDraining = false
-	stream.isPreferred = true
 	return true
 }
 
 func (stream *pullStream) remove() {
-	stream.cancelTask()
+	stream.cancelTaskContext()
 	stream.worker.mu.Lock()
 	delete(stream.worker.streams, stream)
 	if stream.worker.isStopping && len(stream.worker.streams) == 0 {
@@ -465,10 +530,22 @@ func (stream *pullStream) remove() {
 func (stream *pullStream) send(request *dexpb.PollWorkerTaskRequest) error {
 	stream.sendMu.Lock()
 	defer stream.sendMu.Unlock()
-	stream.mu.Lock()
-	clientStream := stream.stream
-	stream.mu.Unlock()
-	return clientStream.Send(request)
+	if stream.isSendClosed {
+		return io.ErrClosedPipe
+	}
+	return stream.stream.Send(request)
+}
+
+func (stream *pullStream) closeSend() {
+	stream.sendMu.Lock()
+	defer stream.sendMu.Unlock()
+	if stream.isSendClosed {
+		return
+	}
+	stream.isSendClosed = true
+	if err := stream.stream.CloseSend(); err != nil {
+		stream.worker.service.logger.Debug("close Worker poll send", "error", err)
+	}
 }
 
 func (stream *pullStream) sendTaskFrame(frame *dexpb.PollWorkerTaskFrame) error {

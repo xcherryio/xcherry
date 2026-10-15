@@ -614,6 +614,7 @@ worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
 	Pull: &dex.PullWorkerOptions{
 		MaxConcurrentTasks: 8,
 		IdleStreamsPerQueue: 1,
+		StopDrainTimeout: 30 * time.Second,
 	},
 })
 if err != nil {
@@ -638,10 +639,20 @@ Flow type names must be unique within a Dex server. `MaxConcurrentTasks` default
 to the CPU count, and `IdleStreamsPerQueue` defaults to one. When capacity is
 full, the Worker rejects additional assignments for reassignment. The generated
 Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
-`HOSTNAME`, or the system hostname, plus a random suffix. Set `AppWorkerID` only
-when a stable external identity is required. Pull and an advertised address
-cannot be combined. The Worker reconnects after stream failures and drains
-in-flight tasks before a server-directed reconnect.
+`HOSTNAME`, or the system hostname, plus a random suffix. An `AppWorkerID`
+override must identify one Worker process uniquely and change when that process
+restarts. It must contain 1-63 ASCII letters, digits, dots, underscores, or
+hyphens, and must not equal a registered Flow type. Pull and an advertised
+address cannot be combined. The Worker reconnects after stream failures and
+drains in-flight tasks before a server-directed reconnect. It logs permanent
+registration failures and retries them after at least one minute. `Start`
+returns startup synchronization errors, not later poll stream errors.
+
+The Worker keeps idle streams on each queue even when all task slots are busy,
+so excess assignments can be rejected for reassignment. A Worker may hold up to
+`(1 + number of Flow types) * IdleStreamsPerQueue + MaxConcurrentTasks` streams.
+Keep this below the server's per-Worker stream cap (default 256). Pull mode
+`Stop` drains for at most `StopDrainTimeout`, which defaults to 30 seconds.
 
 `Start` blocks and is one-shot. `Stop(ctx)` is idempotent, drains in-flight
 calls, and force-stops them if the context expires. The SDK does not install

@@ -23,6 +23,7 @@ import (
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -72,6 +73,7 @@ type WorkerOptions struct {
 //
 // Use it with WorkerOptions.Pull and advertise worker.WorkerTarget() to a Client.
 // MaxConcurrentTasks defaults to runtime.NumCPU; IdleStreamsPerQueue defaults to one.
+// StopDrainTimeout defaults to 30 seconds.
 // Each stream runs one task at a time. Negative values and an invalid AppWorkerID
 // cause NewWorker to return an error.
 //
@@ -87,6 +89,8 @@ type PullWorkerOptions struct {
 	IdleStreamsPerQueue int
 	// AppWorkerID overrides the generated process identity. Empty generates identity plus eight base32 characters.
 	AppWorkerID string
+	// StopDrainTimeout bounds Stop after it begins draining. Zero uses 30 seconds; negative values are invalid.
+	StopDrainTimeout time.Duration
 }
 
 // Worker hosts registered Flows through a listening service or outbound pull streams.
@@ -155,10 +159,13 @@ func NewWorker(
 	if err != nil {
 		return nil, err
 	}
-	flowConn, err := grpc.NewClient(
-		flowServiceAddress,
-		messageLimits.flowServiceDialOptions(options.Credential)...,
-	)
+	dialOptions := messageLimits.flowServiceDialOptions(options.Credential)
+	if options.Pull != nil {
+		dialOptions = append(dialOptions, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: false,
+		}))
+	}
+	flowConn, err := grpc.NewClient(flowServiceAddress, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("dex: create FlowService client: %w", err)
 	}
@@ -207,6 +214,9 @@ func resolveWorkerOptions(
 	options WorkerOptions,
 ) (string, WorkerTarget, string, time.Duration, error) {
 	bindAddress := strings.TrimSpace(options.BindAddress)
+	if options.Pull == nil && options.WorkerTarget.Pull {
+		return "", WorkerTarget{}, "", 0, fmt.Errorf("dex: WorkerTarget.Pull requires WorkerOptions.Pull")
+	}
 	if options.Pull != nil {
 		if bindAddress != "" || options.WorkerTarget.Address != "" || options.WorkerTarget.Headless {
 			return "", WorkerTarget{}, "", 0, fmt.Errorf("dex: Pull Worker cannot configure BindAddress or listening WorkerTarget")
@@ -324,6 +334,8 @@ func validatePlaintextTarget(address string, requireHostPort bool) error {
 // It returns nil after a normal Stop, or an error for synchronization, listener,
 // serving, or invalid lifecycle state failures. Call Start on a dedicated goroutine
 // when the application must continue doing other work.
+// Poll stream failures are retried while the Worker runs; registration failures
+// are logged with a longer retry delay.
 func (worker *Worker) Start() error {
 	worker.lifecycleMu.Lock()
 	if worker.state != workerCreated {
@@ -400,7 +412,7 @@ func (worker *Worker) Start() error {
 // Stop accepts calls before Start and repeated calls after shutdown. A nil context is
 // invalid. If ctx expires while handlers are draining, Stop force-closes the gRPC
 // server or connection, waits for cleanup, and returns ctx.Err. Pull mode also
-// limits the drain to 30 seconds. Stop closes the Worker's internal
+// limits the drain with PullWorkerOptions.StopDrainTimeout. Stop closes the Worker's internal
 // FlowService connection before returning.
 func (worker *Worker) Stop(ctx context.Context) error {
 	if ctx == nil {
@@ -431,7 +443,7 @@ func (worker *Worker) Stop(ctx context.Context) error {
 	worker.lifecycleMu.Unlock()
 	if worker.pull != nil {
 		var cancelDrain context.CancelFunc
-		ctx, cancelDrain = context.WithTimeout(ctx, 30*time.Second)
+		ctx, cancelDrain = context.WithTimeout(ctx, worker.pull.stopDrainTimeout)
 		defer cancelDrain()
 	}
 
