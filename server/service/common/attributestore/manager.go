@@ -37,11 +37,6 @@ type store interface {
 	close() error
 }
 
-// tenantRowDeleter is implemented by stores that can be tenant-scoped.
-type tenantRowDeleter interface {
-	deleteTenantRows(context.Context, string) error
-}
-
 type schemaRefreshingStore interface {
 	refreshSchema(context.Context) error
 }
@@ -188,20 +183,6 @@ func (m *Manager) WriteBatch(ctx context.Context, input *dexpb.SyncAttributeBatc
 		return fmt.Errorf("Attribute Store %q is unavailable", input.GetConfigName())
 	}
 	return entry.writeBatch(ctx, input.GetFlowId(), input.GetItems())
-}
-
-// DeleteTenantRows deletes every row of a tenant from each tenant-scoped store.
-func (m *Manager) DeleteTenantRows(ctx context.Context, tenantID string) error {
-	for name, entry := range m.entries {
-		deleter, isTenantScoped := entry.(tenantRowDeleter)
-		if !isTenantScoped {
-			continue
-		}
-		if err := deleter.deleteTenantRows(ctx, tenantID); err != nil {
-			return fmt.Errorf("delete tenant rows of Attribute Store %q: %w", name, err)
-		}
-	}
-	return nil
 }
 
 func (m *Manager) Close() error {

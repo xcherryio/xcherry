@@ -17,7 +17,7 @@ import (
 	"github.com/superdurable/dex/service/auth"
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/superdurable/dex/service/common/workerclient"
-	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service/wake"
 )
 
 // NewInternalServiceClient builds the continue-as-new dump client.
@@ -36,44 +36,30 @@ func NewInternalServiceClient(cfg *config.Config) *workerclient.InternalServiceC
 	return internalService
 }
 
-// NewDispatchGate builds the gate that admits tenant dispatches; it admits everything in single-tenant mode.
-func NewDispatchGate(cfg *config.Config) *tenancy.DispatchGate {
-	var internalToken *tenancy.InternalTokenFile
-	if cfg.Tenancy.Wake.URL != "" {
-		if cfg.Tenancy.IsMultiTenant() {
-			internalToken = newInternalToken(cfg).(*tenancy.InternalTokenFile)
-		}
+// NewWakeNotifier builds the Worker wake notifier.
+func NewWakeNotifier(cfg *config.Config) *wake.Notifier {
+	if cfg == nil {
+		panic("NewWakeNotifier requires non-nil config sections")
 	}
 	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
 		panic(fmt.Sprintf("create dispatch gate logger: %v", err))
 	}
-	gate, err := tenancy.NewDispatchGateWithWake(&cfg.Tenancy, &cfg.Worker.Wake, internalToken, newInternalToken(cfg), loggerimpl.NewLogger(zapLogger))
-	if err != nil {
-		panic(fmt.Sprintf("create dispatch gate: %v", err))
-	}
-	return gate
+	return wake.NewNotifier(&cfg.Worker.Wake, newInternalToken(cfg), loggerimpl.NewLogger(zapLogger))
 }
 
-// newInternalToken returns nil when neither internal authentication nor a legacy tenant token is configured.
+// newInternalToken returns nil when internal authentication is not configured.
 func newInternalToken(cfg *config.Config) interface{ Token() string } {
-	if !cfg.Tenancy.IsMultiTenant() && cfg.Internal.TokenFile == "" {
+	if cfg.Internal.TokenFile == "" {
 		return nil
 	}
 	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
 		panic(fmt.Sprintf("create internal token logger: %v", err))
 	}
-	if !cfg.Tenancy.IsMultiTenant() {
-		internalToken, err := auth.NewInternalTokenFile(&cfg.Internal, loggerimpl.NewLogger(zapLogger))
-		if err != nil {
-			panic(fmt.Sprintf("read internal.tokenFile: %v", err))
-		}
-		return internalToken
-	}
-	internalToken, err := tenancy.NewInternalTokenFile(cfg.Tenancy.Internal.TokenFile, loggerimpl.NewLogger(zapLogger))
+	internalToken, err := auth.NewInternalTokenFile(&cfg.Internal, loggerimpl.NewLogger(zapLogger))
 	if err != nil {
-		panic(fmt.Sprintf("read tenancy.internal.tokenFile: %v", err))
+		panic(fmt.Sprintf("read internal.tokenFile: %v", err))
 	}
 	return internalToken
 }

@@ -603,8 +603,8 @@ deployments with containers, pods, load balancers, or DNS must set the
 advertised address explicitly.
 
 `ClientOptions.Credential` and `WorkerOptions.Credential` attach a bearer
-credential to every FlowService call. A multi-tenant Dex server requires it
-and derives the caller's tenant from it; a single-tenant server ignores it.
+credential to every FlowService call. A Dex server with authentication enabled
+requires it on every public API call.
 `FileCredential` rereads its file when the file changes, so a rotated token,
 such as a projected service account token, takes effect without a restart.
 

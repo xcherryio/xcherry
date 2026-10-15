@@ -32,7 +32,7 @@ func TestLocalBlobStoreIntegration(t *testing.T) {
 	root := t.TempDir()
 	logger, err := loggerimpl.NewDevelopment()
 	require.NoError(t, err)
-	store, err := NewBlobStore(nil, "local-namespace", false, &config.BlobStoreConfig{
+	store, err := NewBlobStore(nil, "local-namespace", &config.BlobStoreConfig{
 		Enabled: ptr.Any(true),
 		SupportedStorages: []config.BlobStoreConfigEntry{{
 			Status:         config.StorageStatusActive,
@@ -121,7 +121,7 @@ func TestLocalBlobStoreTransfersCrossFlowOwnership(t *testing.T) {
 	root := t.TempDir()
 	logger, err := loggerimpl.NewDevelopment()
 	require.NoError(t, err)
-	store, err := NewBlobStore(nil, "local-namespace", false, &config.BlobStoreConfig{
+	store, err := NewBlobStore(nil, "local-namespace", &config.BlobStoreConfig{
 		Enabled: ptr.Any(true),
 		SupportedStorages: []config.BlobStoreConfigEntry{{
 			Status:         config.StorageStatusActive,

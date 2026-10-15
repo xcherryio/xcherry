@@ -32,8 +32,6 @@ var dexServerAddress = flag.String("dexServerAddress", "", "existing Dex gRPC ad
 
 var dependencyWaitSeconds = flag.Int("dependencyWaitSeconds", 60, "the number of seconds waiting for dependencies to be up(Cadence/Temporal)")
 
-var temporalFairnessIntegTest = flag.Bool("temporalFairness", false, "run tests that need Temporal task queue fairness (server 1.28+ with matching.enableFairness)")
-
 var disableStickyCache = flag.Bool("disableStickyCache", false, "disable Temporal/Cadence sticky execution")
 
 func init() {

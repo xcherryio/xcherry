@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/superdurable/dex/config"
-	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 )
@@ -45,20 +44,14 @@ type trimState struct {
 	isRunning   bool
 }
 
-// streamScope is the budget scope of a Stream: the Flow type and Stream name, within one tenant.
+// streamScope is the budget scope of a Stream: the Flow type and Stream name.
 type streamScope struct {
-	tenantID   string
 	flowType   string
 	streamName string
 }
 
-// newStreamScope derives the tenant from a server-minted stored Flow ID in multi-tenant mode only.
-func newStreamScope(isMultiTenant bool, flowType string, streamName string, flowID string) streamScope {
-	scope := streamScope{flowType: flowType, streamName: streamName}
-	if isMultiTenant {
-		scope.tenantID, _, _ = service.SplitTenantStoredFlowID(flowID)
-	}
-	return scope
+func newStreamScope(flowType string, streamName string) streamScope {
+	return streamScope{flowType: flowType, streamName: streamName}
 }
 
 type trimTask struct {

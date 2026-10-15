@@ -132,37 +132,3 @@ blobStore:
 #   trimLeaseRetry: 100ms
 #   trimBatchYieldTime: 1ms
 #   trimWorkers: 4
-# Multi-tenant namespaces stay disabled (single-tenant mode) unless configured.
-# Multi mode requires Temporal, interpreter.attributeIndexesManagedExternally,
-# tenant-scoped (tenantColumn) PostgreSQL or MySQL Attribute Stores only, and
-# starting only the api and interpreter services.
-# tenancy:
-#   mode: multi
-#   authenticators:
-#     - kind: jwt
-#       issuer: https://issuer.example
-#       audiences: [dex]
-#       jwksURL: https://issuer.example/keys
-#       subjectPattern: '^system:serviceaccount:apps-(?P<tenant>[a-z0-9]{1,32}):app$'
-#       claims: {namespace: 'apps-{{ .tenant }}'}
-#     - kind: staticTokens
-#       file: /etc/dex/tenant-tokens.yaml
-#   operators:
-#     - kind: jwt
-#       issuer: https://issuer.example
-#       subject: system:serviceaccount:platform:controller
-#   internal:
-#     listen: 127.0.0.1:8803
-#     tokenFile: /etc/dex/internal-token
-#   workerTarget:
-#     default: 'worker.{{ .namespace }}.svc.cluster.local:9000'
-#     allowed: 'worker\.{{ quote .namespace }}\.svc\.cluster\.local:9000'
-#   wake: {url: http://operator.example/worker-wake, budget: 120s}
-#   limits:
-#     maxConcurrentDispatchesPerTenant: 32
-#     maxStreamCapacityBytes: 1048576
-#     maxStreamBytesPerTenant: 8388608
-#     startFlowsPerSecond: {rate: 20, burst: 100}
-#     writesPerSecond: {rate: 100, burst: 500}
-#     searchesPerSecond: {rate: 1, burst: 5}
-#   fairness: false

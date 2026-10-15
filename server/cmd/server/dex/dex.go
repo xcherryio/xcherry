@@ -126,11 +126,6 @@ func newApplication(cfg *config.Config, services serviceSelection) (*application
 		panic("Dex Server config must not be nil")
 	}
 	serverApplication := &application{}
-	if services.isWebEnabled && cfg.Tenancy.IsMultiTenant() {
-		return nil, fmt.Errorf(
-			"Dex Web is not available in multi-tenant mode; start only the api and interpreter services",
-		)
-	}
 	if services.isWebEnabled {
 		connection, err := grpc.NewClient(
 			cfg.GetWebFlowServiceTargetWithDefault(),

@@ -2229,14 +2229,7 @@ class ContinueAsNewInput(_message.Message):
     def __init__(self, previous_internal_run_id: _Optional[str] = ...) -> None: ...
 
 class InterpreterWorkflowInput(_message.Message):
-    __slots__ = ("flow_type", "configured_flow_timeout_seconds", "flow_timeout_policy", "start_step_type", "step_input", "step_options", "init_attributes", "config", "is_resume_from_continue_as_new", "continue_as_new_input", "timeout_handler_options", "tenant_id", "tenant_claims")
-    class TenantClaimsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    __slots__ = ("flow_type", "configured_flow_timeout_seconds", "flow_timeout_policy", "start_step_type", "step_input", "step_options", "init_attributes", "config", "is_resume_from_continue_as_new", "continue_as_new_input", "timeout_handler_options")
     FLOW_TYPE_FIELD_NUMBER: _ClassVar[int]
     CONFIGURED_FLOW_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
     FLOW_TIMEOUT_POLICY_FIELD_NUMBER: _ClassVar[int]
@@ -2248,8 +2241,6 @@ class InterpreterWorkflowInput(_message.Message):
     IS_RESUME_FROM_CONTINUE_AS_NEW_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_INPUT_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_HANDLER_OPTIONS_FIELD_NUMBER: _ClassVar[int]
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_CLAIMS_FIELD_NUMBER: _ClassVar[int]
     flow_type: str
     configured_flow_timeout_seconds: int
     flow_timeout_policy: FlowTimeoutPolicy
@@ -2261,9 +2252,7 @@ class InterpreterWorkflowInput(_message.Message):
     is_resume_from_continue_as_new: bool
     continue_as_new_input: ContinueAsNewInput
     timeout_handler_options: FlowTimeoutHandlerOptions
-    tenant_id: str
-    tenant_claims: _containers.ScalarMap[str, str]
-    def __init__(self, flow_type: _Optional[str] = ..., configured_flow_timeout_seconds: _Optional[int] = ..., flow_timeout_policy: _Optional[_Union[FlowTimeoutPolicy, str]] = ..., start_step_type: _Optional[str] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., step_options: _Optional[_Union[StepOptions, _Mapping]] = ..., init_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., config: _Optional[_Union[FlowConfig, _Mapping]] = ..., is_resume_from_continue_as_new: _Optional[bool] = ..., continue_as_new_input: _Optional[_Union[ContinueAsNewInput, _Mapping]] = ..., timeout_handler_options: _Optional[_Union[FlowTimeoutHandlerOptions, _Mapping]] = ..., tenant_id: _Optional[str] = ..., tenant_claims: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, flow_type: _Optional[str] = ..., configured_flow_timeout_seconds: _Optional[int] = ..., flow_timeout_policy: _Optional[_Union[FlowTimeoutPolicy, str]] = ..., start_step_type: _Optional[str] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., step_options: _Optional[_Union[StepOptions, _Mapping]] = ..., init_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., config: _Optional[_Union[FlowConfig, _Mapping]] = ..., is_resume_from_continue_as_new: _Optional[bool] = ..., continue_as_new_input: _Optional[_Union[ContinueAsNewInput, _Mapping]] = ..., timeout_handler_options: _Optional[_Union[FlowTimeoutHandlerOptions, _Mapping]] = ...) -> None: ...
 
 class InterpreterWorkflowOutput(_message.Message):
     __slots__ = ("step_completion_outputs",)
@@ -2284,29 +2273,18 @@ class BlobStoreCleanupWorkflowOutput(_message.Message):
     def __init__(self, total_deleted: _Optional[int] = ...) -> None: ...
 
 class InvokeWaitForMethodActivityInput(_message.Message):
-    __slots__ = ("worker_target", "request", "tenant_id", "tenant_claims", "dex_task_queue", "dispatch_wait", "sticky_wait")
-    class TenantClaimsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    __slots__ = ("worker_target", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
     WORKER_TARGET_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_CLAIMS_FIELD_NUMBER: _ClassVar[int]
     DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     DISPATCH_WAIT_FIELD_NUMBER: _ClassVar[int]
     STICKY_WAIT_FIELD_NUMBER: _ClassVar[int]
     worker_target: WorkerTarget
     request: InvokeWaitForMethodRequest
-    tenant_id: str
-    tenant_claims: _containers.ScalarMap[str, str]
     dex_task_queue: str
     dispatch_wait: _duration_pb2.Duration
     sticky_wait: _duration_pb2.Duration
-    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ..., tenant_claims: _Optional[_Mapping[str, str]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class InvokeWaitForMethodActivityOutput(_message.Message):
     __slots__ = ("response", "served_by_app_worker_id")
@@ -2317,29 +2295,18 @@ class InvokeWaitForMethodActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[InvokeWaitForMethodResponse, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class InvokeExecuteMethodActivityInput(_message.Message):
-    __slots__ = ("worker_target", "request", "tenant_id", "tenant_claims", "dex_task_queue", "dispatch_wait", "sticky_wait")
-    class TenantClaimsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    __slots__ = ("worker_target", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
     WORKER_TARGET_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_CLAIMS_FIELD_NUMBER: _ClassVar[int]
     DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     DISPATCH_WAIT_FIELD_NUMBER: _ClassVar[int]
     STICKY_WAIT_FIELD_NUMBER: _ClassVar[int]
     worker_target: WorkerTarget
     request: InvokeExecuteMethodRequest
-    tenant_id: str
-    tenant_claims: _containers.ScalarMap[str, str]
     dex_task_queue: str
     dispatch_wait: _duration_pb2.Duration
     sticky_wait: _duration_pb2.Duration
-    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ..., tenant_claims: _Optional[_Mapping[str, str]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class RecoveryErrorInfo(_message.Message):
     __slots__ = ("detail", "error_type")
@@ -2384,29 +2351,18 @@ class DumpFlowForContinueAsNewActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[ContinueAsNewDumpResponse, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityInput(_message.Message):
-    __slots__ = ("rpc_prep", "request", "tenant_id", "tenant_claims", "dex_task_queue", "dispatch_wait", "sticky_wait")
-    class TenantClaimsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    __slots__ = ("rpc_prep", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
     RPC_PREP_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_CLAIMS_FIELD_NUMBER: _ClassVar[int]
     DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     DISPATCH_WAIT_FIELD_NUMBER: _ClassVar[int]
     STICKY_WAIT_FIELD_NUMBER: _ClassVar[int]
     rpc_prep: PrepareRpcQueryResponse
     request: InvokeRPCRequest
-    tenant_id: str
-    tenant_claims: _containers.ScalarMap[str, str]
     dex_task_queue: str
     dispatch_wait: _duration_pb2.Duration
     sticky_wait: _duration_pb2.Duration
-    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ..., tenant_id: _Optional[str] = ..., tenant_claims: _Optional[_Mapping[str, str]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityOutput(_message.Message):
     __slots__ = ("response", "request_id", "served_by_app_worker_id")
@@ -2451,25 +2407,14 @@ class SyncAttributeBatchActivityInput(_message.Message):
     def __init__(self, flow_id: _Optional[str] = ..., config_name: _Optional[str] = ..., items: _Optional[_Iterable[_Union[AttributeSyncItem, _Mapping]]] = ...) -> None: ...
 
 class StartSubFlowActivityInput(_message.Message):
-    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id", "tenant_id", "tenant_claims")
-    class TenantClaimsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id")
     CONDITION_FIELD_NUMBER: _ClassVar[int]
     PARENT_FLOW_CONFIG_FIELD_NUMBER: _ClassVar[int]
     PARENT_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    TENANT_CLAIMS_FIELD_NUMBER: _ClassVar[int]
     condition: SubFlowCondition
     parent_flow_config: FlowConfig
     parent_step_execution_id: str
-    tenant_id: str
-    tenant_claims: _containers.ScalarMap[str, str]
-    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., tenant_claims: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ...) -> None: ...
 
 class StartSubFlowActivityOutput(_message.Message):
     __slots__ = ("immediate_flow_result",)
@@ -2657,61 +2602,3 @@ class StepExecutionNumbers(_message.Message):
     NUMBERS_FIELD_NUMBER: _ClassVar[int]
     numbers: _containers.RepeatedScalarFieldContainer[int]
     def __init__(self, numbers: _Optional[_Iterable[int]] = ...) -> None: ...
-
-class TenantAdminState(_message.Message):
-    __slots__ = ("tenant_id", "is_tombstoned", "tombstoned_time", "purge_done_time", "tombstone_expiry_time")
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    IS_TOMBSTONED_FIELD_NUMBER: _ClassVar[int]
-    TOMBSTONED_TIME_FIELD_NUMBER: _ClassVar[int]
-    PURGE_DONE_TIME_FIELD_NUMBER: _ClassVar[int]
-    TOMBSTONE_EXPIRY_TIME_FIELD_NUMBER: _ClassVar[int]
-    tenant_id: str
-    is_tombstoned: bool
-    tombstoned_time: _timestamp_pb2.Timestamp
-    purge_done_time: _timestamp_pb2.Timestamp
-    tombstone_expiry_time: _timestamp_pb2.Timestamp
-    def __init__(self, tenant_id: _Optional[str] = ..., is_tombstoned: _Optional[bool] = ..., tombstoned_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., purge_done_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tombstone_expiry_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
-
-class TombstoneTenantRequest(_message.Message):
-    __slots__ = ("tenant_id",)
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    tenant_id: str
-    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
-
-class TombstoneTenantResponse(_message.Message):
-    __slots__ = ("state",)
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    state: TenantAdminState
-    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ...) -> None: ...
-
-class PurgeTenantRequest(_message.Message):
-    __slots__ = ("tenant_id",)
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    tenant_id: str
-    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
-
-class PurgeTenantResponse(_message.Message):
-    __slots__ = ("state", "terminated_executions", "deleted_executions", "deleted_blob_objects", "done")
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    TERMINATED_EXECUTIONS_FIELD_NUMBER: _ClassVar[int]
-    DELETED_EXECUTIONS_FIELD_NUMBER: _ClassVar[int]
-    DELETED_BLOB_OBJECTS_FIELD_NUMBER: _ClassVar[int]
-    DONE_FIELD_NUMBER: _ClassVar[int]
-    state: TenantAdminState
-    terminated_executions: int
-    deleted_executions: int
-    deleted_blob_objects: int
-    done: bool
-    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ..., terminated_executions: _Optional[int] = ..., deleted_executions: _Optional[int] = ..., deleted_blob_objects: _Optional[int] = ..., done: _Optional[bool] = ...) -> None: ...
-
-class DescribeTenantRequest(_message.Message):
-    __slots__ = ("tenant_id",)
-    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
-    tenant_id: str
-    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
-
-class DescribeTenantResponse(_message.Message):
-    __slots__ = ("state",)
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    state: TenantAdminState
-    def __init__(self, state: _Optional[_Union[TenantAdminState, _Mapping]] = ...) -> None: ...

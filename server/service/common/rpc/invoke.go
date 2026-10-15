@@ -22,7 +22,7 @@ import (
 	"github.com/superdurable/dex/service/common/channelmessage"
 	"github.com/superdurable/dex/service/common/utils"
 	"github.com/superdurable/dex/service/common/workerclient"
-	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service/wake"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -46,17 +46,11 @@ func InvokeWorkerRpc(
 	invocationId string,
 	blobStoreCfg *config.BlobStoreConfig,
 	isOutputPersisted bool,
-	tenant tenancy.DispatchTenant,
-	dispatchGate *tenancy.DispatchGate,
+	wakeNotifier *wake.Notifier,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
 	if apiCfg == nil || interpreterActivityCfg == nil {
 		panic("InvokeWorkerRpc requires non-nil config sections")
 	}
-	applicationFlowID, err := tenancy.DispatchFlowID(tenant.ID, req.GetFlowId())
-	if err != nil {
-		return nil, err
-	}
-
 	workerInput := req.GetInput()
 	if !blobStoreCfg.EffectiveLazyLoading() {
 		if err := blobstore.HydrateKVs(ctx, req.GetFlowId(), rpcPrep.GetAttributes(), blobStore); err != nil {
@@ -101,7 +95,7 @@ func InvokeWorkerRpc(
 
 	workerReq := &dexpb.InvokeWorkerRPCRequest{
 		Context: &dexpb.Context{
-			FlowId:               applicationFlowID,
+			FlowId:               req.GetFlowId(),
 			RunId:                rpcPrep.GetRunId(),
 			FlowStartedTimestamp: rpcPrep.GetFlowStartedTimestamp(),
 		},
@@ -120,12 +114,7 @@ func InvokeWorkerRpc(
 		return nil, &WorkerRequestTooLargeError{MaxMessageBytes: apiCfg.EffectiveGrpcMaxMessageBytes()}
 	}
 
-	releaseSlot, err := dispatchGate.Admit(rpcCtx, tenant, rpcPrep.GetWorkerTarget(), func() {})
-	if err != nil {
-		return nil, err
-	}
-	defer releaseSlot()
-	resp, err := invokeWorkerRPCWithinWakeBudget(rpcCtx, pool, dispatchGate, tenant, rpcPrep.GetWorkerTarget(), req.GetFlowId(), workerReq)
+	resp, err := invokeWorkerRPCWithinWakeBudget(rpcCtx, pool, wakeNotifier, rpcPrep.GetWorkerTarget(), req.GetFlowId(), workerReq)
 	if err != nil {
 		return nil, err
 	}
@@ -135,9 +124,6 @@ func InvokeWorkerRpc(
 		interpreterActivityCfg.EffectiveMinimumStepHeartbeatTimeout(),
 		backendType,
 	); err != nil {
-		return nil, err
-	}
-	if err := tenancy.ValidateTenantAttributeWrites(tenant.ID, resp.GetUpsertAttributes()); err != nil {
 		return nil, err
 	}
 	service.SetFromStepExecutionIDForStepDecision(
@@ -302,13 +288,12 @@ func validateWorkerRpcResponse(
 func invokeWorkerRPCWithinWakeBudget(
 	ctx context.Context,
 	pool *workerclient.WorkerClientPool,
-	dispatchGate *tenancy.DispatchGate,
-	tenant tenancy.DispatchTenant,
+	wakeNotifier *wake.Notifier,
 	target *dexpb.WorkerTarget,
 	flowID string,
 	workerReq *dexpb.InvokeWorkerRPCRequest,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
-	hold := dispatchGate.NewWakeHold(tenant, target, func() {})
+	hold := wakeNotifier.NewHold(target.GetAddress(), func() {})
 	for {
 		client, callCtx, release, err := pool.Acquire(ctx, target, flowID)
 		if err != nil {

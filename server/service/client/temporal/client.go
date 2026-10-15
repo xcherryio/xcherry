@@ -289,9 +289,6 @@ func (t *temporalClient) StartInterpreterWorkflow(
 		Memo:                                     memo,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}
-	if options.FairnessKey != "" {
-		workflowOptions.Priority = realtemporal.Priority{FairnessKey: options.FairnessKey}
-	}
 
 	if options.IdReusePolicy != nil {
 		workflowIdReusePolicy, err := mapToTemporalWorkflowIdReusePolicy(*options.IdReusePolicy)
@@ -364,14 +361,6 @@ func (t *temporalClient) TerminateWorkflow(ctx context.Context, workflowID strin
 	}
 
 	return t.tClient.TerminateWorkflow(ctx, workflowID, runID, reasonStr)
-}
-
-func (t *temporalClient) DeleteWorkflowExecution(ctx context.Context, workflowID string, runID string) error {
-	_, err := t.tClient.WorkflowService().DeleteWorkflowExecution(ctx, &workflowservice.DeleteWorkflowExecutionRequest{
-		Namespace:         t.namespace,
-		WorkflowExecution: &common.WorkflowExecution{WorkflowId: workflowID, RunId: runID},
-	})
-	return err
 }
 
 func (t *temporalClient) ListWorkflow(

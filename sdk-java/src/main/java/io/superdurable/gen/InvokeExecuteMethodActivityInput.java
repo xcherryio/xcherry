@@ -28,7 +28,6 @@ private static final long serialVersionUID = 0L;
     super(builder);
   }
   private InvokeExecuteMethodActivityInput() {
-    tenantId_ = "";
     dexTaskQueue_ = "";
   }
 
@@ -42,18 +41,6 @@ private static final long serialVersionUID = 0L;
     return io.superdurable.gen.DexProto.internal_static_dex_InvokeExecuteMethodActivityInput_descriptor;
   }
 
-  @SuppressWarnings({"rawtypes"})
-  @java.lang.Override
-  protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
-      int number) {
-    switch (number) {
-      case 4:
-        return internalGetTenantClaims();
-      default:
-        throw new RuntimeException(
-            "Invalid map field number: " + number);
-    }
-  }
   @java.lang.Override
   protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internalGetFieldAccessorTable() {
@@ -113,148 +100,6 @@ private static final long serialVersionUID = 0L;
   @java.lang.Override
   public io.superdurable.gen.InvokeExecuteMethodRequestOrBuilder getRequestOrBuilder() {
     return request_ == null ? io.superdurable.gen.InvokeExecuteMethodRequest.getDefaultInstance() : request_;
-  }
-
-  public static final int TENANT_ID_FIELD_NUMBER = 3;
-  @SuppressWarnings("serial")
-  private volatile java.lang.Object tenantId_ = "";
-  /**
-   * <pre>
-   * Tenant of the dispatching Flow; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>string tenant_id = 3;</code>
-   * @return The tenantId.
-   */
-  @java.lang.Override
-  public java.lang.String getTenantId() {
-    java.lang.Object ref = tenantId_;
-    if (ref instanceof java.lang.String) {
-      return (java.lang.String) ref;
-    } else {
-      com.google.protobuf.ByteString bs = 
-          (com.google.protobuf.ByteString) ref;
-      java.lang.String s = bs.toStringUtf8();
-      tenantId_ = s;
-      return s;
-    }
-  }
-  /**
-   * <pre>
-   * Tenant of the dispatching Flow; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>string tenant_id = 3;</code>
-   * @return The bytes for tenantId.
-   */
-  @java.lang.Override
-  public com.google.protobuf.ByteString
-      getTenantIdBytes() {
-    java.lang.Object ref = tenantId_;
-    if (ref instanceof java.lang.String) {
-      com.google.protobuf.ByteString b = 
-          com.google.protobuf.ByteString.copyFromUtf8(
-              (java.lang.String) ref);
-      tenantId_ = b;
-      return b;
-    } else {
-      return (com.google.protobuf.ByteString) ref;
-    }
-  }
-
-  public static final int TENANT_CLAIMS_FIELD_NUMBER = 4;
-  private static final class TenantClaimsDefaultEntryHolder {
-    static final com.google.protobuf.MapEntry<
-        java.lang.String, java.lang.String> defaultEntry =
-            com.google.protobuf.MapEntry
-            .<java.lang.String, java.lang.String>newDefaultInstance(
-                io.superdurable.gen.DexProto.internal_static_dex_InvokeExecuteMethodActivityInput_TenantClaimsEntry_descriptor, 
-                com.google.protobuf.WireFormat.FieldType.STRING,
-                "",
-                com.google.protobuf.WireFormat.FieldType.STRING,
-                "");
-  }
-  @SuppressWarnings("serial")
-  private com.google.protobuf.MapField<
-      java.lang.String, java.lang.String> tenantClaims_;
-  private com.google.protobuf.MapField<java.lang.String, java.lang.String>
-  internalGetTenantClaims() {
-    if (tenantClaims_ == null) {
-      return com.google.protobuf.MapField.emptyMapField(
-          TenantClaimsDefaultEntryHolder.defaultEntry);
-    }
-    return tenantClaims_;
-  }
-  public int getTenantClaimsCount() {
-    return internalGetTenantClaims().getMap().size();
-  }
-  /**
-   * <pre>
-   * Claims of the Flow's tenant principal; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-   */
-  @java.lang.Override
-  public boolean containsTenantClaims(
-      java.lang.String key) {
-    if (key == null) { throw new NullPointerException("map key"); }
-    return internalGetTenantClaims().getMap().containsKey(key);
-  }
-  /**
-   * Use {@link #getTenantClaimsMap()} instead.
-   */
-  @java.lang.Override
-  @java.lang.Deprecated
-  public java.util.Map<java.lang.String, java.lang.String> getTenantClaims() {
-    return getTenantClaimsMap();
-  }
-  /**
-   * <pre>
-   * Claims of the Flow's tenant principal; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-   */
-  @java.lang.Override
-  public java.util.Map<java.lang.String, java.lang.String> getTenantClaimsMap() {
-    return internalGetTenantClaims().getMap();
-  }
-  /**
-   * <pre>
-   * Claims of the Flow's tenant principal; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-   */
-  @java.lang.Override
-  public /* nullable */
-java.lang.String getTenantClaimsOrDefault(
-      java.lang.String key,
-      /* nullable */
-java.lang.String defaultValue) {
-    if (key == null) { throw new NullPointerException("map key"); }
-    java.util.Map<java.lang.String, java.lang.String> map =
-        internalGetTenantClaims().getMap();
-    return map.containsKey(key) ? map.get(key) : defaultValue;
-  }
-  /**
-   * <pre>
-   * Claims of the Flow's tenant principal; empty in single-tenant mode.
-   * </pre>
-   *
-   * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-   */
-  @java.lang.Override
-  public java.lang.String getTenantClaimsOrThrow(
-      java.lang.String key) {
-    if (key == null) { throw new NullPointerException("map key"); }
-    java.util.Map<java.lang.String, java.lang.String> map =
-        internalGetTenantClaims().getMap();
-    if (!map.containsKey(key)) {
-      throw new java.lang.IllegalArgumentException();
-    }
-    return map.get(key);
   }
 
   public static final int DEX_TASK_QUEUE_FIELD_NUMBER = 5;
@@ -400,15 +245,6 @@ java.lang.String defaultValue) {
     if (((bitField0_ & 0x00000002) != 0)) {
       output.writeMessage(2, getRequest());
     }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
-      com.google.protobuf.GeneratedMessage.writeString(output, 3, tenantId_);
-    }
-    com.google.protobuf.GeneratedMessage
-      .serializeStringMapTo(
-        output,
-        internalGetTenantClaims(),
-        TenantClaimsDefaultEntryHolder.defaultEntry,
-        4);
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 5, dexTaskQueue_);
     }
@@ -429,19 +265,6 @@ java.lang.String defaultValue) {
     if (((bitField0_ & 0x00000002) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(2, getRequest());
-    }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(tenantId_)) {
-      size += com.google.protobuf.GeneratedMessage.computeStringSize(3, tenantId_);
-    }
-    for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
-         : internalGetTenantClaims().getMap().entrySet()) {
-      com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
-      tenantClaims__ = TenantClaimsDefaultEntryHolder.defaultEntry.newBuilderForType()
-          .setKey(entry.getKey())
-          .setValue(entry.getValue())
-          .buildPartial();
-      size += com.google.protobuf.CodedOutputStream
-          .computeMessageSize(4, tenantClaims__);
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(5, dexTaskQueue_);
@@ -488,10 +311,6 @@ java.lang.String defaultValue) {
       if (!getRequest()
           .equals(other.getRequest())) return false;
     }
-    if (!getTenantId()
-        .equals(other.getTenantId())) return false;
-    if (!internalGetTenantClaims().equals(
-        other.internalGetTenantClaims())) return false;
     if (!getDexTaskQueue()
         .equals(other.getDexTaskQueue())) return false;
     if (hasDispatchWait() != other.hasDispatchWait()) return false;
@@ -522,12 +341,6 @@ java.lang.String defaultValue) {
     if (hasRequest()) {
       hash = (37 * hash) + REQUEST_FIELD_NUMBER;
       hash = (53 * hash) + getRequest().hashCode();
-    }
-    hash = (37 * hash) + TENANT_ID_FIELD_NUMBER;
-    hash = (53 * hash) + getTenantId().hashCode();
-    if (!internalGetTenantClaims().getMap().isEmpty()) {
-      hash = (37 * hash) + TENANT_CLAIMS_FIELD_NUMBER;
-      hash = (53 * hash) + internalGetTenantClaims().hashCode();
     }
     hash = (37 * hash) + DEX_TASK_QUEUE_FIELD_NUMBER;
     hash = (53 * hash) + getDexTaskQueue().hashCode();
@@ -648,28 +461,6 @@ java.lang.String defaultValue) {
       return io.superdurable.gen.DexProto.internal_static_dex_InvokeExecuteMethodActivityInput_descriptor;
     }
 
-    @SuppressWarnings({"rawtypes"})
-    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
-        int number) {
-      switch (number) {
-        case 4:
-          return internalGetTenantClaims();
-        default:
-          throw new RuntimeException(
-              "Invalid map field number: " + number);
-      }
-    }
-    @SuppressWarnings({"rawtypes"})
-    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMutableMapFieldReflection(
-        int number) {
-      switch (number) {
-        case 4:
-          return internalGetMutableTenantClaims();
-        default:
-          throw new RuntimeException(
-              "Invalid map field number: " + number);
-      }
-    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -711,8 +502,6 @@ java.lang.String defaultValue) {
         requestBuilder_.dispose();
         requestBuilder_ = null;
       }
-      tenantId_ = "";
-      internalGetMutableTenantClaims().clear();
       dexTaskQueue_ = "";
       dispatchWait_ = null;
       if (dispatchWaitBuilder_ != null) {
@@ -771,22 +560,15 @@ java.lang.String defaultValue) {
         to_bitField0_ |= 0x00000002;
       }
       if (((from_bitField0_ & 0x00000004) != 0)) {
-        result.tenantId_ = tenantId_;
-      }
-      if (((from_bitField0_ & 0x00000008) != 0)) {
-        result.tenantClaims_ = internalGetTenantClaims();
-        result.tenantClaims_.makeImmutable();
-      }
-      if (((from_bitField0_ & 0x00000010) != 0)) {
         result.dexTaskQueue_ = dexTaskQueue_;
       }
-      if (((from_bitField0_ & 0x00000020) != 0)) {
+      if (((from_bitField0_ & 0x00000008) != 0)) {
         result.dispatchWait_ = dispatchWaitBuilder_ == null
             ? dispatchWait_
             : dispatchWaitBuilder_.build();
         to_bitField0_ |= 0x00000004;
       }
-      if (((from_bitField0_ & 0x00000040) != 0)) {
+      if (((from_bitField0_ & 0x00000010) != 0)) {
         result.stickyWait_ = stickyWaitBuilder_ == null
             ? stickyWait_
             : stickyWaitBuilder_.build();
@@ -813,17 +595,9 @@ java.lang.String defaultValue) {
       if (other.hasRequest()) {
         mergeRequest(other.getRequest());
       }
-      if (!other.getTenantId().isEmpty()) {
-        tenantId_ = other.tenantId_;
-        bitField0_ |= 0x00000004;
-        onChanged();
-      }
-      internalGetMutableTenantClaims().mergeFrom(
-          other.internalGetTenantClaims());
-      bitField0_ |= 0x00000008;
       if (!other.getDexTaskQueue().isEmpty()) {
         dexTaskQueue_ = other.dexTaskQueue_;
-        bitField0_ |= 0x00000010;
+        bitField0_ |= 0x00000004;
         onChanged();
       }
       if (other.hasDispatchWait()) {
@@ -872,37 +646,23 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000002;
               break;
             } // case 18
-            case 26: {
-              tenantId_ = input.readStringRequireUtf8();
-              bitField0_ |= 0x00000004;
-              break;
-            } // case 26
-            case 34: {
-              com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
-              tenantClaims__ = input.readMessage(
-                  TenantClaimsDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
-              internalGetMutableTenantClaims().getMutableMap().put(
-                  tenantClaims__.getKey(), tenantClaims__.getValue());
-              bitField0_ |= 0x00000008;
-              break;
-            } // case 34
             case 42: {
               dexTaskQueue_ = input.readStringRequireUtf8();
-              bitField0_ |= 0x00000010;
+              bitField0_ |= 0x00000004;
               break;
             } // case 42
             case 50: {
               input.readMessage(
                   internalGetDispatchWaitFieldBuilder().getBuilder(),
                   extensionRegistry);
-              bitField0_ |= 0x00000020;
+              bitField0_ |= 0x00000008;
               break;
             } // case 50
             case 58: {
               input.readMessage(
                   internalGetStickyWaitFieldBuilder().getBuilder(),
                   extensionRegistry);
-              bitField0_ |= 0x00000040;
+              bitField0_ |= 0x00000010;
               break;
             } // case 58
             default: {
@@ -1164,253 +924,6 @@ java.lang.String defaultValue) {
       return requestBuilder_;
     }
 
-    private java.lang.Object tenantId_ = "";
-    /**
-     * <pre>
-     * Tenant of the dispatching Flow; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>string tenant_id = 3;</code>
-     * @return The tenantId.
-     */
-    public java.lang.String getTenantId() {
-      java.lang.Object ref = tenantId_;
-      if (!(ref instanceof java.lang.String)) {
-        com.google.protobuf.ByteString bs =
-            (com.google.protobuf.ByteString) ref;
-        java.lang.String s = bs.toStringUtf8();
-        tenantId_ = s;
-        return s;
-      } else {
-        return (java.lang.String) ref;
-      }
-    }
-    /**
-     * <pre>
-     * Tenant of the dispatching Flow; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>string tenant_id = 3;</code>
-     * @return The bytes for tenantId.
-     */
-    public com.google.protobuf.ByteString
-        getTenantIdBytes() {
-      java.lang.Object ref = tenantId_;
-      if (ref instanceof String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
-        tenantId_ = b;
-        return b;
-      } else {
-        return (com.google.protobuf.ByteString) ref;
-      }
-    }
-    /**
-     * <pre>
-     * Tenant of the dispatching Flow; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>string tenant_id = 3;</code>
-     * @param value The tenantId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setTenantId(
-        java.lang.String value) {
-      if (value == null) { throw new NullPointerException(); }
-      tenantId_ = value;
-      bitField0_ |= 0x00000004;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Tenant of the dispatching Flow; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>string tenant_id = 3;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearTenantId() {
-      tenantId_ = getDefaultInstance().getTenantId();
-      bitField0_ = (bitField0_ & ~0x00000004);
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Tenant of the dispatching Flow; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>string tenant_id = 3;</code>
-     * @param value The bytes for tenantId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setTenantIdBytes(
-        com.google.protobuf.ByteString value) {
-      if (value == null) { throw new NullPointerException(); }
-      checkByteStringIsUtf8(value);
-      tenantId_ = value;
-      bitField0_ |= 0x00000004;
-      onChanged();
-      return this;
-    }
-
-    private com.google.protobuf.MapField<
-        java.lang.String, java.lang.String> tenantClaims_;
-    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
-        internalGetTenantClaims() {
-      if (tenantClaims_ == null) {
-        return com.google.protobuf.MapField.emptyMapField(
-            TenantClaimsDefaultEntryHolder.defaultEntry);
-      }
-      return tenantClaims_;
-    }
-    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
-        internalGetMutableTenantClaims() {
-      if (tenantClaims_ == null) {
-        tenantClaims_ = com.google.protobuf.MapField.newMapField(
-            TenantClaimsDefaultEntryHolder.defaultEntry);
-      }
-      if (!tenantClaims_.isMutable()) {
-        tenantClaims_ = tenantClaims_.copy();
-      }
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return tenantClaims_;
-    }
-    public int getTenantClaimsCount() {
-      return internalGetTenantClaims().getMap().size();
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    @java.lang.Override
-    public boolean containsTenantClaims(
-        java.lang.String key) {
-      if (key == null) { throw new NullPointerException("map key"); }
-      return internalGetTenantClaims().getMap().containsKey(key);
-    }
-    /**
-     * Use {@link #getTenantClaimsMap()} instead.
-     */
-    @java.lang.Override
-    @java.lang.Deprecated
-    public java.util.Map<java.lang.String, java.lang.String> getTenantClaims() {
-      return getTenantClaimsMap();
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    @java.lang.Override
-    public java.util.Map<java.lang.String, java.lang.String> getTenantClaimsMap() {
-      return internalGetTenantClaims().getMap();
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    @java.lang.Override
-    public /* nullable */
-java.lang.String getTenantClaimsOrDefault(
-        java.lang.String key,
-        /* nullable */
-java.lang.String defaultValue) {
-      if (key == null) { throw new NullPointerException("map key"); }
-      java.util.Map<java.lang.String, java.lang.String> map =
-          internalGetTenantClaims().getMap();
-      return map.containsKey(key) ? map.get(key) : defaultValue;
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    @java.lang.Override
-    public java.lang.String getTenantClaimsOrThrow(
-        java.lang.String key) {
-      if (key == null) { throw new NullPointerException("map key"); }
-      java.util.Map<java.lang.String, java.lang.String> map =
-          internalGetTenantClaims().getMap();
-      if (!map.containsKey(key)) {
-        throw new java.lang.IllegalArgumentException();
-      }
-      return map.get(key);
-    }
-    public Builder clearTenantClaims() {
-      bitField0_ = (bitField0_ & ~0x00000008);
-      internalGetMutableTenantClaims().getMutableMap()
-          .clear();
-      return this;
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    public Builder removeTenantClaims(
-        java.lang.String key) {
-      if (key == null) { throw new NullPointerException("map key"); }
-      internalGetMutableTenantClaims().getMutableMap()
-          .remove(key);
-      return this;
-    }
-    /**
-     * Use alternate mutation accessors instead.
-     */
-    @java.lang.Deprecated
-    public java.util.Map<java.lang.String, java.lang.String>
-        getMutableTenantClaims() {
-      bitField0_ |= 0x00000008;
-      return internalGetMutableTenantClaims().getMutableMap();
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    public Builder putTenantClaims(
-        java.lang.String key,
-        java.lang.String value) {
-      if (key == null) { throw new NullPointerException("map key"); }
-      if (value == null) { throw new NullPointerException("map value"); }
-      internalGetMutableTenantClaims().getMutableMap()
-          .put(key, value);
-      bitField0_ |= 0x00000008;
-      return this;
-    }
-    /**
-     * <pre>
-     * Claims of the Flow's tenant principal; empty in single-tenant mode.
-     * </pre>
-     *
-     * <code>map&lt;string, string&gt; tenant_claims = 4;</code>
-     */
-    public Builder putAllTenantClaims(
-        java.util.Map<java.lang.String, java.lang.String> values) {
-      internalGetMutableTenantClaims().getMutableMap()
-          .putAll(values);
-      bitField0_ |= 0x00000008;
-      return this;
-    }
-
     private java.lang.Object dexTaskQueue_ = "";
     /**
      * <pre>
@@ -1466,7 +979,7 @@ java.lang.String defaultValue) {
         java.lang.String value) {
       if (value == null) { throw new NullPointerException(); }
       dexTaskQueue_ = value;
-      bitField0_ |= 0x00000010;
+      bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
@@ -1480,7 +993,7 @@ java.lang.String defaultValue) {
      */
     public Builder clearDexTaskQueue() {
       dexTaskQueue_ = getDefaultInstance().getDexTaskQueue();
-      bitField0_ = (bitField0_ & ~0x00000010);
+      bitField0_ = (bitField0_ & ~0x00000004);
       onChanged();
       return this;
     }
@@ -1498,7 +1011,7 @@ java.lang.String defaultValue) {
       if (value == null) { throw new NullPointerException(); }
       checkByteStringIsUtf8(value);
       dexTaskQueue_ = value;
-      bitField0_ |= 0x00000010;
+      bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
@@ -1515,7 +1028,7 @@ java.lang.String defaultValue) {
      * @return Whether the dispatchWait field is set.
      */
     public boolean hasDispatchWait() {
-      return ((bitField0_ & 0x00000020) != 0);
+      return ((bitField0_ & 0x00000008) != 0);
     }
     /**
      * <pre>
@@ -1548,7 +1061,7 @@ java.lang.String defaultValue) {
       } else {
         dispatchWaitBuilder_.setMessage(value);
       }
-      bitField0_ |= 0x00000020;
+      bitField0_ |= 0x00000008;
       onChanged();
       return this;
     }
@@ -1566,7 +1079,7 @@ java.lang.String defaultValue) {
       } else {
         dispatchWaitBuilder_.setMessage(builderForValue.build());
       }
-      bitField0_ |= 0x00000020;
+      bitField0_ |= 0x00000008;
       onChanged();
       return this;
     }
@@ -1579,7 +1092,7 @@ java.lang.String defaultValue) {
      */
     public Builder mergeDispatchWait(com.google.protobuf.Duration value) {
       if (dispatchWaitBuilder_ == null) {
-        if (((bitField0_ & 0x00000020) != 0) &&
+        if (((bitField0_ & 0x00000008) != 0) &&
           dispatchWait_ != null &&
           dispatchWait_ != com.google.protobuf.Duration.getDefaultInstance()) {
           getDispatchWaitBuilder().mergeFrom(value);
@@ -1590,7 +1103,7 @@ java.lang.String defaultValue) {
         dispatchWaitBuilder_.mergeFrom(value);
       }
       if (dispatchWait_ != null) {
-        bitField0_ |= 0x00000020;
+        bitField0_ |= 0x00000008;
         onChanged();
       }
       return this;
@@ -1603,7 +1116,7 @@ java.lang.String defaultValue) {
      * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
      */
     public Builder clearDispatchWait() {
-      bitField0_ = (bitField0_ & ~0x00000020);
+      bitField0_ = (bitField0_ & ~0x00000008);
       dispatchWait_ = null;
       if (dispatchWaitBuilder_ != null) {
         dispatchWaitBuilder_.dispose();
@@ -1620,7 +1133,7 @@ java.lang.String defaultValue) {
      * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
      */
     public com.google.protobuf.Duration.Builder getDispatchWaitBuilder() {
-      bitField0_ |= 0x00000020;
+      bitField0_ |= 0x00000008;
       onChanged();
       return internalGetDispatchWaitFieldBuilder().getBuilder();
     }
@@ -1672,7 +1185,7 @@ java.lang.String defaultValue) {
      * @return Whether the stickyWait field is set.
      */
     public boolean hasStickyWait() {
-      return ((bitField0_ & 0x00000040) != 0);
+      return ((bitField0_ & 0x00000010) != 0);
     }
     /**
      * <pre>
@@ -1705,7 +1218,7 @@ java.lang.String defaultValue) {
       } else {
         stickyWaitBuilder_.setMessage(value);
       }
-      bitField0_ |= 0x00000040;
+      bitField0_ |= 0x00000010;
       onChanged();
       return this;
     }
@@ -1723,7 +1236,7 @@ java.lang.String defaultValue) {
       } else {
         stickyWaitBuilder_.setMessage(builderForValue.build());
       }
-      bitField0_ |= 0x00000040;
+      bitField0_ |= 0x00000010;
       onChanged();
       return this;
     }
@@ -1736,7 +1249,7 @@ java.lang.String defaultValue) {
      */
     public Builder mergeStickyWait(com.google.protobuf.Duration value) {
       if (stickyWaitBuilder_ == null) {
-        if (((bitField0_ & 0x00000040) != 0) &&
+        if (((bitField0_ & 0x00000010) != 0) &&
           stickyWait_ != null &&
           stickyWait_ != com.google.protobuf.Duration.getDefaultInstance()) {
           getStickyWaitBuilder().mergeFrom(value);
@@ -1747,7 +1260,7 @@ java.lang.String defaultValue) {
         stickyWaitBuilder_.mergeFrom(value);
       }
       if (stickyWait_ != null) {
-        bitField0_ |= 0x00000040;
+        bitField0_ |= 0x00000010;
         onChanged();
       }
       return this;
@@ -1760,7 +1273,7 @@ java.lang.String defaultValue) {
      * <code>.google.protobuf.Duration sticky_wait = 7;</code>
      */
     public Builder clearStickyWait() {
-      bitField0_ = (bitField0_ & ~0x00000040);
+      bitField0_ = (bitField0_ & ~0x00000010);
       stickyWait_ = null;
       if (stickyWaitBuilder_ != null) {
         stickyWaitBuilder_.dispose();
@@ -1777,7 +1290,7 @@ java.lang.String defaultValue) {
      * <code>.google.protobuf.Duration sticky_wait = 7;</code>
      */
     public com.google.protobuf.Duration.Builder getStickyWaitBuilder() {
-      bitField0_ |= 0x00000040;
+      bitField0_ |= 0x00000010;
       onChanged();
       return internalGetStickyWaitFieldBuilder().getBuilder();
     }

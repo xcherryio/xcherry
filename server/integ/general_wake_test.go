@@ -10,8 +10,13 @@ package integ
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,38 +24,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/integ/workflow/common"
 	"github.com/superdurable/dex/service"
+	"google.golang.org/grpc"
 )
 
 func TestGeneralWakeTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
-	testGeneralWake(t, service.BackendTypeTemporal, false)
+	testGeneralWake(t, service.BackendTypeTemporal)
 }
 
 func TestGeneralWakeCadence(t *testing.T) {
 	if !*cadenceIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
-	testGeneralWake(t, service.BackendTypeCadence, false)
+	testGeneralWake(t, service.BackendTypeCadence)
 }
 
-func TestLegacySingleWakeTemporal(t *testing.T) {
-	if !*temporalIntegTest || *dexServerAddress != "" {
-		t.Skip()
-	}
-	testGeneralWake(t, service.BackendTypeTemporal, true)
-}
-
-func TestLegacySingleWakeCadence(t *testing.T) {
-	if !*cadenceIntegTest || *dexServerAddress != "" {
-		t.Skip()
-	}
-	testGeneralWake(t, service.BackendTypeCadence, true)
-}
-
-func testGeneralWake(t *testing.T, backend service.BackendType, isLegacy bool) {
+func testGeneralWake(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -64,10 +57,6 @@ func testGeneralWake(t *testing.T, backend service.BackendType, isLegacy bool) {
 	testConfig := DexServiceTestConfig{
 		BackendType: backend,
 		Wake:        &config.WakeConfig{URL: wakeServer.URL, Budget: 60 * time.Second},
-	}
-	if isLegacy {
-		testConfig.Wake = nil
-		testConfig.Tenancy = &config.TenancyConfig{Wake: config.TenantWakeConfig{URL: wakeServer.URL, Budget: 60 * time.Second}}
 	}
 	runtime := startInProcessDexService(t, testConfig)
 	flowID := "wake-" + uuid.NewString()
@@ -88,4 +77,101 @@ func testGeneralWake(t *testing.T, backend service.BackendType, isLegacy bool) {
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 30})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
+}
+
+const (
+	dispatchProbeFlowType = "DispatchProbeFlow"
+	dispatchProbeStep     = "DispatchStep"
+	dispatchProbeChannel  = "proceed"
+)
+
+type dispatchProbeHandler struct {
+	dexpb.UnimplementedWorkerServiceServer
+	mu       sync.Mutex
+	waitFors []*dexpb.Context
+}
+
+func newDispatchProbeHandler() *dispatchProbeHandler { return &dispatchProbeHandler{} }
+
+func (h *dispatchProbeHandler) InvokeWaitForMethod(request *dexpb.InvokeWaitForMethodRequest, stream dexpb.WorkerService_InvokeWaitForMethodServer) error {
+	h.mu.Lock()
+	h.waitFors = append(h.waitFors, request.GetContext())
+	h.mu.Unlock()
+	return stream.Send(&dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Result{Result: &dexpb.InvokeWaitForMethodResponse{WaitingCondition: &dexpb.WaitingCondition{
+		WaitingConditionType: dexpb.WaitingConditionType_WAITING_CONDITION_TYPE_ALL_COMPLETED,
+		ChannelConditions:    []*dexpb.ChannelCondition{{ChannelName: dispatchProbeChannel}},
+	}}}})
+}
+
+func (h *dispatchProbeHandler) InvokeExecuteMethod(request *dexpb.InvokeExecuteMethodRequest, stream dexpb.WorkerService_InvokeExecuteMethodServer) error {
+	return stream.Send(&dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_Result{Result: &dexpb.InvokeExecuteMethodResponse{
+		StepDecision: &dexpb.StepDecision{CloseDecision: common.GracefulCompleteDecision(stringValue(request.GetContext().GetFlowId()))},
+	}}})
+}
+
+func (h *dispatchProbeHandler) observedWaitFors() []*dexpb.Context {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]*dexpb.Context(nil), h.waitFors...)
+}
+
+func startDispatchProbe(ctx context.Context, client dexpb.FlowServiceClient, flowID string, startStep string, workerTarget *dexpb.WorkerTarget, stepOptions *dexpb.StepOptions) error {
+	_, err := client.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId: newRequestID(), FlowId: flowID, FlowType: dispatchProbeFlowType,
+		FlowTimeoutSeconds: 120, StartStepType: startStep, StepOptions: stepOptions,
+		FlowStartOptions: withWorkerTarget(nil, workerTarget),
+	})
+	return err
+}
+
+type wakeRecorder struct {
+	mu            sync.Mutex
+	notifications []map[string]string
+	credentials   []string
+}
+
+func (r *wakeRecorder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	notification := map[string]string{}
+	if err := json.Unmarshal(body, &notification); err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	r.notifications = append(r.notifications, notification)
+	r.credentials = append(r.credentials, request.Header.Get("Authorization"))
+	r.mu.Unlock()
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (r *wakeRecorder) count(kind string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for _, notification := range r.notifications {
+		if notification["kind"] == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func startStreamingWorkerOnAddress(t *testing.T, handler dexpb.WorkerServiceServer, address string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", address)
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	dexpb.RegisterWorkerServiceServer(server, handler)
+	go serveStreamingWorker(t, server, listener)
+	t.Cleanup(server.GracefulStop)
+}
+
+func serveStreamingWorker(t *testing.T, server *grpc.Server, listener net.Listener) {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		t.Errorf("serve Worker: %v", err)
+	}
 }

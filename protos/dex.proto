@@ -297,16 +297,6 @@ enum DispatchTaskErrorReason {
 }
 
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-// TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
-// Every RPC names its tenant explicitly and never returns Flow data.
-service TenantAdminService {
-  // Refuses every credential of the tenant within the tombstone refresh interval. Idempotent.
-  rpc TombstoneTenant(TombstoneTenantRequest) returns (TombstoneTenantResponse);
-  // Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true.
-  rpc PurgeTenant(PurgeTenantRequest) returns (PurgeTenantResponse);
-  rpc DescribeTenant(DescribeTenantRequest) returns (DescribeTenantResponse);
-}
-
 service InternalService {
   rpc DumpFlowForContinueAsNew(ContinueAsNewDumpRequest) returns (ContinueAsNewDumpResponse);
 }
@@ -1531,6 +1521,8 @@ message ContinueAsNewInput {
 }
 
 message InterpreterWorkflowInput {
+  reserved 12, 13;
+  reserved "tenant_id", "tenant_claims";
   string flow_type = 1;
   int32 configured_flow_timeout_seconds = 2;
   FlowTimeoutPolicy flow_timeout_policy = 3;
@@ -1543,10 +1535,6 @@ message InterpreterWorkflowInput {
   bool is_resume_from_continue_as_new = 9;
   ContinueAsNewInput continue_as_new_input = 10;
   FlowTimeoutHandlerOptions timeout_handler_options = 11;
-  // Tenant of a multi-tenant Flow, set at start and copied to SubFlows. Empty in single-tenant mode.
-  string tenant_id = 12;
-  // Verified claims of the starting tenant principal, used to check worker targets at every dispatch.
-  map<string, string> tenant_claims = 13;
 }
 
 message InterpreterWorkflowOutput {
@@ -1562,12 +1550,10 @@ message BlobStoreCleanupWorkflowOutput {
 }
 
 message InvokeWaitForMethodActivityInput {
+  reserved 3, 4;
+  reserved "tenant_id", "tenant_claims";
   WorkerTarget worker_target = 1;
   InvokeWaitForMethodRequest request = 2;
-  // Tenant of the dispatching Flow; empty in single-tenant mode.
-  string tenant_id = 3;
-  // Claims of the Flow's tenant principal; empty in single-tenant mode.
-  map<string, string> tenant_claims = 4;
   // Selects the sticky Worker queue; empty selects the request's Flow type queue.
   string dex_task_queue = 5;
   // Limits total waiting for a pull Worker to accept this attempt.
@@ -1583,12 +1569,10 @@ message InvokeWaitForMethodActivityOutput {
 }
 
 message InvokeExecuteMethodActivityInput {
+  reserved 3, 4;
+  reserved "tenant_id", "tenant_claims";
   WorkerTarget worker_target = 1;
   InvokeExecuteMethodRequest request = 2;
-  // Tenant of the dispatching Flow; empty in single-tenant mode.
-  string tenant_id = 3;
-  // Claims of the Flow's tenant principal; empty in single-tenant mode.
-  map<string, string> tenant_claims = 4;
   // Selects the sticky Worker queue; empty selects the request's Flow type queue.
   string dex_task_queue = 5;
   // Limits total waiting for a pull Worker to accept this attempt.
@@ -1625,12 +1609,10 @@ message DumpFlowForContinueAsNewActivityOutput {
 }
 
 message InvokeWorkerRPCActivityInput {
+  reserved 3, 4;
+  reserved "tenant_id", "tenant_claims";
   PrepareRpcQueryResponse rpc_prep = 1;
   InvokeRPCRequest request = 2;
-  // Tenant of the Flow; empty in single-tenant mode.
-  string tenant_id = 3;
-  // Claims of the Flow's tenant principal; empty in single-tenant mode.
-  map<string, string> tenant_claims = 4;
   // Selects the sticky Worker queue; empty selects the request's Flow type queue.
   string dex_task_queue = 5;
   // Limits total waiting for a pull Worker to accept this attempt.
@@ -1668,14 +1650,12 @@ message SyncAttributeBatchActivityInput {
 }
 
 message StartSubFlowActivityInput {
+  reserved 4, 5;
+  reserved "tenant_id", "tenant_claims";
   SubFlowCondition condition = 1;
   FlowConfig parent_flow_config = 2;
   // Source Step; activity context supplies parent Flow and run IDs.
   string parent_step_execution_id = 3;
-  // Tenant of the parent Flow, inherited by the SubFlow; empty in single-tenant mode.
-  string tenant_id = 4;
-  // Claims of the Flow's tenant principal; empty in single-tenant mode.
-  map<string, string> tenant_claims = 5;
 }
 
 message StartSubFlowActivityOutput {
@@ -1788,42 +1768,4 @@ message InvokeRpcUpdateResult {
 
 message StepExecutionNumbers {
   repeated int32 numbers = 1;
-}
-
-message TenantAdminState {
-  string tenant_id = 1;
-  bool is_tombstoned = 2;
-  google.protobuf.Timestamp tombstoned_time = 3;
-  // Set when a purge has found nothing left in two queries a confirmation delay apart.
-  google.protobuf.Timestamp purge_done_time = 4;
-  // After this time the tombstone is removed and the tenant ID may be reused.
-  google.protobuf.Timestamp tombstone_expiry_time = 5;
-}
-
-message TombstoneTenantRequest {
-  string tenant_id = 1;
-}
-
-message TombstoneTenantResponse {
-  TenantAdminState state = 1;
-}
-
-message PurgeTenantRequest {
-  string tenant_id = 1;
-}
-
-message PurgeTenantResponse {
-  TenantAdminState state = 1;
-  int32 terminated_executions = 2;
-  int32 deleted_executions = 3;
-  int32 deleted_blob_objects = 4;
-  bool done = 5;
-}
-
-message DescribeTenantRequest {
-  string tenant_id = 1;
-}
-
-message DescribeTenantResponse {
-  TenantAdminState state = 1;
 }

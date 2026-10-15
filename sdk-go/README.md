@@ -651,8 +651,8 @@ Continue-as-New automatically. `StartFlow` and `TimeTravel` return run IDs for
 diagnostics, while normal calls need only the flow ID.
 
 `ClientOptions.Credential` and `WorkerOptions.Credential` send a bearer
-credential with every FlowService call. A multi-tenant Dex server requires one
-and derives the caller's tenant from it. `dex.FileCredential(path)` reads a
+credential with every FlowService call. A Dex server with authentication enabled
+requires one on every public API call. `dex.FileCredential(path)` reads a
 token file, such as a projected service account token, and rereads it when it
 changes; an emptied or missing file fails calls instead of sending a stale
 token. The Worker sends its credential with startup index verification and

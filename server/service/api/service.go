@@ -43,7 +43,7 @@ import (
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
-	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service/wake"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -55,15 +55,6 @@ const (
 	waitForStepCompletionUpdateIDNamespace = "wait-for-step-completion:"
 	waitForAttributeUpdateIDNamespace      = "wait-for-attribute:"
 )
-
-// tenantReservedIndexNames are the server-owned search attributes a tenant may not declare.
-var tenantReservedIndexNames = []string{
-	service.SearchAttributeDexWorkflowType,
-	service.SearchAttributeDexParentFlowID,
-	service.SearchAttributeActiveStepTypes,
-	service.SearchAttributeDexWorkQueuePermissions,
-	tenancy.SearchAttributeDexTenantID,
-}
 
 var errWaitRequestDeadlineExceeded = errors.New("wait request deadline exceeded")
 
@@ -80,7 +71,7 @@ type serviceImpl struct {
 	attributeStore     *attributestore.Manager
 	indexSynchronizer  *indexsync.Synchronizer
 	streamStore        *streamstore.Store
-	dispatchGate       *tenancy.DispatchGate
+	wakeNotifier       *wake.Notifier
 }
 
 func NewApiService(
@@ -94,9 +85,9 @@ func NewApiService(
 	attributeStore *attributestore.Manager,
 	streamStore *streamstore.Store,
 	workerPool *workerclient.WorkerClientPool,
-	dispatchGate *tenancy.DispatchGate,
+	wakeNotifier *wake.Notifier,
 ) (ApiService, error) {
-	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || dispatchGate == nil {
+	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || wakeNotifier == nil {
 		panic("API service requires non-nil config sections")
 	}
 	if client == nil || logger == nil || workerPool == nil || attributeStore == nil || streamStore == nil || taskQueue == "" {
@@ -118,11 +109,12 @@ func NewApiService(
 		attributeStore:     attributeStore,
 		indexSynchronizer:  indexsync.New(interpreterCfg, client, logger),
 		streamStore:        streamStore,
-		dispatchGate:       dispatchGate,
+		wakeNotifier:       wakeNotifier,
 	}, nil
 }
 
 func (s *serviceImpl) Close() {
+	s.wakeNotifier.Close()
 	s.client.Close()
 }
 
@@ -172,18 +164,9 @@ func (s *serviceImpl) StartFlow(
 		return nil, makeInvalidRequestError(err.Error())
 	}
 
-	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), attributes); err != nil {
-		return nil, makeInvalidRequestError(err.Error())
-	}
 	searchAttributes := index.ConvertAttributeWritesToSearchAttributeUpsertMap(attributes)
 	searchAttributes[service.SearchAttributeDexWorkflowType] = req.GetFlowType()
-	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
-		searchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
-	}
-
-	tenantID := tenancy.TenantID(ctx)
-	applicationFlowID, _ := tenancy.ApplicationFlowID(tenantID, req.GetFlowId())
-	if err := service.ValidateFlowID(applicationFlowID); err != nil {
+	if err := service.ValidateFlowID(req.GetFlowId()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := service.ValidateStepType(req.GetStartStepType()); err != nil {
@@ -233,11 +216,7 @@ func (s *serviceImpl) StartFlow(
 	if err := s.validateAttributeStoreNames(ctx, workflowConfig.GetAttributeStoreNames()); err != nil {
 		return nil, err
 	}
-	resolvedTarget, err := s.dispatchGate.Policy().Resolve(tenancy.TenantClaims(ctx), workflowConfig.GetWorkerTarget())
-	if err != nil {
-		return nil, workerTargetRefusedError(err)
-	}
-	workerTarget, err := grpctarget.NormalizeWorkerTarget(resolvedTarget)
+	workerTarget, err := grpctarget.NormalizeWorkerTarget(workflowConfig.GetWorkerTarget())
 	if err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
@@ -253,7 +232,6 @@ func (s *serviceImpl) StartFlow(
 			},
 		},
 		IdReusePolicy: ptr.Any(dexpb.IdReusePolicy_ID_REUSE_POLICY_DISALLOW_REUSE),
-		FairnessKey:   s.dispatchGate.FairnessKey(tenantID),
 	}
 	ignoreAlreadyStartedError := false
 	if startOptions != nil {
@@ -287,8 +265,6 @@ func (s *serviceImpl) StartFlow(
 		InitAttributes:               attributes,
 		Config:                       &workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
-		TenantId:                     tenantID,
-		TenantClaims:                 tenancy.TenantClaims(ctx),
 	}
 
 	runId, err := s.client.StartInterpreterWorkflow(ctx, workflowOptions, input)
@@ -1034,12 +1010,6 @@ func (s *serviceImpl) UpdateFlowConfig(
 		}
 	}
 	if req.GetFlowConfig().GetWorkerTarget() != nil {
-		if err := s.dispatchGate.Policy().Check(
-			tenancy.TenantClaims(ctx),
-			req.GetFlowConfig().GetWorkerTarget(),
-		); err != nil {
-			return nil, workerTargetRefusedError(err)
-		}
 		workerTarget, err := grpctarget.NormalizeWorkerTarget(req.GetFlowConfig().GetWorkerTarget())
 		if err != nil {
 			return nil, makeInvalidRequestError(err.Error())
@@ -1121,9 +1091,6 @@ func (s *serviceImpl) validateAttributeStoreNames(ctx context.Context, names *de
 		if !s.attributeStore.HasStore(name) {
 			return makeInvalidRequestError(fmt.Sprintf("unknown Attribute Store %q", name))
 		}
-		if !s.dispatchGate.IsAttributeStoreAllowed(tenancy.TenantID(ctx), name) {
-			return makeInvalidRequestError(fmt.Sprintf("Attribute Store %q is not available to tenants", name))
-		}
 		seenNames[name] = struct{}{}
 	}
 	return nil
@@ -1170,9 +1137,6 @@ func (s *serviceImpl) SetAttributes(
 		return nil, makeInvalidRequestError("request ID is required")
 	}
 	if err := validateAttributeWrites(req.GetAttributes()); err != nil {
-		return nil, makeInvalidRequestError(err.Error())
-	}
-	if err := tenancy.ValidateTenantAttributeWrites(tenancy.TenantID(ctx), req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(req.GetAttributes()); err != nil {
@@ -1337,17 +1301,7 @@ func (s *serviceImpl) SearchFlows(
 	}
 	query := req.GetQuery()
 	const currentRuns = `ExecutionStatus != "ContinuedAsNew"`
-	if tenantID := tenancy.TenantID(ctx); tenantID != "" {
-		statusClause := currentRuns
-		if req.GetIncludeContinuedAsNew() {
-			statusClause = ""
-		}
-		tenantQuery, err := tenancy.TenantVisibilityQuery(tenantID, query, statusClause)
-		if err != nil {
-			return nil, makeInvalidRequestError(err.Error())
-		}
-		query = tenantQuery
-	} else if !req.GetIncludeContinuedAsNew() {
+	if !req.GetIncludeContinuedAsNew() {
 		if strings.TrimSpace(query) == "" {
 			query = currentRuns
 		} else {
@@ -1374,12 +1328,6 @@ func (s *serviceImpl) SyncAttributeIndexes(
 ) (*dexpb.SyncAttributeIndexResponse, error) {
 	if req == nil {
 		return nil, makeInvalidRequestError("request is required")
-	}
-	if tenancy.TenantID(ctx) != "" {
-		if err := s.indexSynchronizer.VerifyRegistered(ctx, req.GetAttributeIndexes(), tenantReservedIndexNames); err != nil {
-			return nil, err
-		}
-		return &dexpb.SyncAttributeIndexResponse{}, nil
 	}
 	if err := s.indexSynchronizer.Sync(ctx, req.GetAttributeIndexes()); err != nil {
 		return nil, err
@@ -1689,8 +1637,7 @@ func (s *serviceImpl) doInvokeRPC(
 		req.GetRequestId(),
 		s.blobStoreCfg,
 		false,
-		tenancy.DispatchTenant{ID: tenancy.TenantID(ctx), Claims: tenancy.TenantClaims(ctx)},
-		s.dispatchGate,
+		s.wakeNotifier,
 	)
 	if err != nil {
 		return nil, err
@@ -2066,15 +2013,6 @@ func waitContextStatus(err error) error {
 		return status.Error(codes.Canceled, err.Error())
 	}
 	return serviceerrors.DeadlineExceededLongPoll(err.Error()).ToGRPCError()
-}
-
-// workerTargetRefusedError reports a Worker target the tenant may not use.
-func workerTargetRefusedError(err error) error {
-	return serviceerrors.NewErrorAndStatus(
-		codes.PermissionDenied,
-		dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
-		err.Error(),
-	).ToGRPCError()
 }
 
 func makeInvalidRequestError(details string) error {
