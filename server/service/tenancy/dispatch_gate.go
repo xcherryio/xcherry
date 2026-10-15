@@ -22,6 +22,7 @@ import (
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
+	"github.com/superdurable/dex/service/wake"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,6 +62,7 @@ type DispatchGate struct {
 	slotsByTenant   map[string]*tenantDispatchSlots
 	lastWakeByKey   map[wakeNotificationKey]time.Time
 	notificationsWG sync.WaitGroup
+	generalWake     *wake.Notifier
 }
 
 type tenantDispatchSlots struct {
@@ -79,15 +81,32 @@ func NewDispatchGate(
 	internalToken *InternalTokenFile,
 	logger log.Logger,
 ) (*DispatchGate, error) {
+	return NewDispatchGateWithWake(cfg, &config.WakeConfig{}, internalToken, nil, logger)
+}
+
+// NewDispatchGateWithWake adds the general Worker wake hook to the dispatch gate.
+func NewDispatchGateWithWake(
+	cfg *config.TenancyConfig,
+	wakeCfg *config.WakeConfig,
+	internalToken *InternalTokenFile,
+	wakeToken interface{ Token() string },
+	logger log.Logger,
+) (*DispatchGate, error) {
 	if cfg == nil || logger == nil {
 		panic("dispatch gate requires a tenancy config and a logger")
+	}
+	if wakeCfg == nil {
+		panic("wake config must not be nil")
 	}
 	policy, err := NewWorkerTargetPolicy(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Wake.URL != "" && internalToken == nil {
+	if cfg.IsMultiTenant() && cfg.Wake.URL != "" && internalToken == nil {
 		panic("a wake URL requires the internal token")
+	}
+	if !cfg.IsMultiTenant() && wakeCfg.URL == "" && cfg.Wake.URL != "" {
+		wakeCfg = &config.WakeConfig{URL: cfg.Wake.URL, Budget: cfg.Wake.Budget}
 	}
 	return &DispatchGate{
 		policy:        policy,
@@ -102,6 +121,7 @@ func NewDispatchGate(
 		tenancyCfg:    cfg,
 		slotsByTenant: map[string]*tenantDispatchSlots{},
 		lastWakeByKey: map[wakeNotificationKey]time.Time{},
+		generalWake:   wake.NewNotifier(wakeCfg, wakeToken, logger),
 	}, nil
 }
 
@@ -181,7 +201,8 @@ func (g *DispatchGate) releaseSlots(tenantID string) {
 
 // NewWakeHold starts the wake budget of one dispatch.
 func (g *DispatchGate) NewWakeHold(tenant DispatchTenant, target *dexpb.WorkerTarget, heartbeat func()) *WakeHold {
-	return &WakeHold{gate: g, tenant: tenant, target: target.GetAddress(), heartbeat: heartbeat}
+	return &WakeHold{gate: g, tenant: tenant, target: target.GetAddress(), heartbeat: heartbeat,
+		general: g.generalWake.NewHold(target.GetAddress(), heartbeat)}
 }
 
 // WakeHold holds one dispatch to an unavailable Worker within the wake budget.
@@ -191,11 +212,15 @@ type WakeHold struct {
 	target    string
 	heartbeat func()
 	startedAt time.Time
+	general   *wake.Hold
 }
 
 // ShouldRedial reports whether a dispatch that failed with err should be retried after waiting 2 seconds.
 // It notifies the wake hook and holds only while the budget lasts; the wait heartbeats and counts no attempt.
 func (h *WakeHold) ShouldRedial(ctx context.Context, err error) bool {
+	if h.general.ShouldRedial(ctx, err) {
+		return true
+	}
 	if h.gate.wakeURL == "" || h.tenant.ID == "" || !isWorkerUnavailable(err) {
 		return false
 	}
@@ -217,8 +242,9 @@ func (h *WakeHold) ShouldRedial(ctx context.Context, err error) bool {
 	}
 }
 
-// RecordSuccess tells the wake hook that the tenant's Worker served a dispatch.
+// RecordSuccess tells configured wake hooks that the Worker served a dispatch.
 func (h *WakeHold) RecordSuccess() {
+	h.general.RecordSuccess()
 	if h.gate.wakeURL == "" || h.tenant.ID == "" {
 		return
 	}
@@ -279,6 +305,7 @@ func (g *DispatchGate) post(tenantID string, target string, kind string) error {
 // Close waits for notifications in flight.
 func (g *DispatchGate) Close() {
 	g.notificationsWG.Wait()
+	g.generalWake.Close()
 }
 
 func isWorkerUnavailable(err error) bool {

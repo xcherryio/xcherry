@@ -97,6 +97,9 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 	if err := cfg.ValidateTenancy(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateGeneralAccess(); err != nil {
+		return nil, err
+	}
 
 	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
@@ -162,9 +165,12 @@ func (r *Runtime) createServices() error {
 	r.unifiedClient = client
 	r.indexSynchronizer = indexsync.New(&r.cfg.Interpreter, client, r.logger)
 	if r.options.Services.API {
-		r.apiServer, err = api.NewServer(
+		r.apiServer, err = api.NewServerWithAccess(
 			&r.cfg.Api,
 			&r.cfg.Tenancy,
+			&r.cfg.Auth,
+			&r.cfg.Internal,
+			&r.cfg.Worker.Wake,
 			&r.cfg.BlobStore,
 			&r.cfg.Interpreter,
 			client,
@@ -208,10 +214,14 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	if r.apiServer != nil && r.apiServer.HasInternalListener() {
-		internalListener, err := net.Listen("tcp", r.cfg.Tenancy.Internal.Listen)
+		internalListen := r.cfg.Internal.Listen
+		if r.cfg.Tenancy.IsMultiTenant() {
+			internalListen = r.cfg.Tenancy.Internal.Listen
+		}
+		internalListener, err := net.Listen("tcp", internalListen)
 		if err != nil {
 			r.shutdown()
-			return fmt.Errorf("listen on tenancy.internal.listen: %w", err)
+			return fmt.Errorf("listen on internal.listen: %w", err)
 		}
 		go func() {
 			r.serveError <- r.apiServer.ServeInternal(internalListener)

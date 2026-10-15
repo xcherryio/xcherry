@@ -19,7 +19,6 @@ import (
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/grpctarget"
-	"github.com/superdurable/dex/service/tenancy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -31,17 +30,17 @@ type InternalServiceClient struct {
 	conn   *grpc.ClientConn
 	client dexpb.InternalServiceClient
 	header metadata.MD
-	// internalToken is nil in single-tenant mode.
-	internalToken *tenancy.InternalTokenFile
+	// internalToken is nil when the internal listener has no token.
+	internalToken interface{ Token() string }
 	closed        bool
 }
 
 // NewInternalServiceClient creates the continue-as-new dump client.
-// internalToken is nil in single-tenant mode; otherwise every call carries it as a bearer credential.
+// internalToken is nil without internal authentication; otherwise every call carries it as a bearer credential.
 func NewInternalServiceClient(
 	target string,
 	cfg *config.Config,
-	internalToken *tenancy.InternalTokenFile,
+	internalToken interface{ Token() string },
 ) (*InternalServiceClient, error) {
 	if cfg == nil {
 		panic("workerclient: config must not be nil")

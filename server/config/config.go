@@ -199,6 +199,10 @@ type (
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
 		// Tenancy enables multi-tenant namespaces. Default empty is single-tenant mode, unchanged from servers without it.
 		Tenancy TenancyConfig `yaml:"tenancy"`
+		// Auth authenticates public API callers. Default empty leaves authentication off.
+		Auth AuthConfig `yaml:"auth"`
+		// Internal configures a private InternalService listener. Default empty uses the public listener when auth is off.
+		Internal InternalConfig `yaml:"internal"`
 	}
 
 	MembershipConfig struct {
@@ -416,6 +420,8 @@ type (
 	}
 
 	WorkerConfig struct {
+		// Wake requests unavailable Workers to start. Default empty disables the hook.
+		Wake WakeConfig `yaml:"wake"`
 		// DefaultHeaders are forwarded as outgoing gRPC metadata on WorkerService calls. Empty means none.
 		// Default empty.
 		DefaultHeaders map[string]string `yaml:"defaultHeaders"`
@@ -629,6 +635,9 @@ func NewConfig(configPath string) (*Config, error) {
 	if err := cfg.ValidateTenancy(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateGeneralAccess(); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
@@ -797,6 +806,12 @@ func validateRetryPolicy(name string, policy RetryPolicy) error {
 func (c Config) GetInternalServiceTargetWithDefault() string {
 	if c.Interpreter.InterpreterActivityConfig.InternalServiceTarget != "" {
 		return c.Interpreter.InterpreterActivityConfig.InternalServiceTarget
+	}
+	if c.Tenancy.IsMultiTenant() {
+		return c.Tenancy.Internal.Listen
+	}
+	if c.Auth.IsEnabled() {
+		return c.Internal.Listen
 	}
 	port := c.Api.Port
 	if port == 0 {

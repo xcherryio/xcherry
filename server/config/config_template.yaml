@@ -24,6 +24,20 @@ api:
     backoffCoefficient: 2
     maximumInterval: 1s
     totalDuration: 5s
+# Public authentication is off unless at least one authenticator is configured.
+# auth:
+#   authenticators:
+#     - kind: staticTokens
+#       file: /etc/dex/public-tokens.yaml
+#     - kind: jwt
+#       issuer: https://issuer.example
+#       audiences: [dex]
+#       jwksURL: https://issuer.example/keys
+#       caFile: /etc/dex/issuer-ca.pem
+# Required with auth. InternalService is served only on this private listener.
+# internal:
+#   listen: 127.0.0.1:8803
+#   tokenFile: /etc/dex/internal-token
 web:
   bindAddress: 0.0.0.0
   port: 8802
@@ -32,6 +46,10 @@ web:
   # Apply headless routing to every Worker target submitted through Dex Web Start Flow.
   startFlowWorkerTargetHeadless: false
 worker:
+# Optional hook for unavailable Workers. The POST body contains target and kind.
+#   wake:
+#     url: https://operator.example/worker-wake
+#     budget: 120s
   # Refresh individual endpoints behind headless WorkerService DNS.
   headlessAddressRefreshInterval: 60s
   # Bound remembered flow-to-endpoint routes.

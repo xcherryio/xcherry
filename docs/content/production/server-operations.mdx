@@ -111,6 +111,70 @@ a trusted network path.
 
 **web.startFlowWorkerTargetHeadless** controls Worker routing for every Flow started from Dex Web. It defaults to false and is immutable after startup. The environment override is **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**. Enable it only when operators enter Kubernetes headless Service addresses.
 
+## Authentication
+
+Public API authentication is off by default. Configure **auth.authenticators**
+to require a bearer credential on every public unary call and stream. Health
+checks remain open. Authenticators are tried in order. Static token files contain
+SHA-256 hashes, and JWT authenticators verify the issuer, audience, signature,
+and validity period against a cached JSON Web Key Set.
+
+~~~yaml
+auth:
+  authenticators:
+    - kind: staticTokens
+      file: /etc/dex/public-tokens.yaml
+    - kind: jwt
+      issuer: https://issuer.example
+      audiences: [dex]
+      jwksURL: https://issuer.example/keys
+      caFile: /etc/dex/issuer-ca.pem
+internal:
+  listen: 127.0.0.1:8803
+  tokenFile: /etc/dex/internal-token
+~~~
+
+The static token file contains SHA-256 hashes:
+
+~~~text
+tokens:
+  - sha256: HASH
+~~~
+
+Use a token with at least 128 bits of entropy and store only its hash in the file.
+Dex reloads changed token files. For JWT, omit **jwksURL** to discover the key
+set through the issuer's OpenID configuration. **caFile** adds a PEM bundle to
+system roots for the issuer's HTTPS endpoints.
+
+When **auth** is enabled, **InternalService** runs only on **internal.listen**
+and requires a token from **internal.tokenFile**. The Interpreter sends the
+first token in that file; the listener accepts every line so tokens can rotate.
+Each token must have at least 32 characters.
+The listener uses plaintext gRPC. Bind it to loopback or protect its network
+path and encrypt traffic. An Interpreter deployed separately must set
+**interpreter.interpreterActivityConfig.internalServiceTarget** to this listener.
+With **auth** off, **InternalService** keeps using the public API listener.
+
+Currently only the Go SDK can connect when **auth** is enabled. Dex Web, the
+CLI, and the Java, Python, TypeScript, and Rust SDKs cannot supply the required
+credential yet.
+
+Configure the optional Worker wake hook under **worker.wake**:
+
+~~~yaml
+worker:
+  wake:
+    url: https://operator.example/worker-wake
+    budget: 120s
+~~~
+
+When a Worker is unavailable, Dex posts **target** and **kind: wake** to the
+hook and holds dispatch for up to **budget**, which defaults to 120 seconds.
+After a successful dispatch, it posts **kind: active**. Notifications are best
+effort and rate limited per target. Dex sends the internal token as a bearer
+credential when **internal.tokenFile** is configured; otherwise it sends no
+authorization header.
+
 ## Connect to a secured Temporal cluster
 
 Configure the Temporal frontend connection under **interpreter.temporal**. Mount the API key as a file when it rotates:

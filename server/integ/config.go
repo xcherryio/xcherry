@@ -49,6 +49,12 @@ type DexServiceTestConfig struct {
 	TenantCleanupConfirmationDelay time.Duration
 	// Tenancy enables multi-tenant mode; the runtime assigns the internal listener address.
 	Tenancy *config.TenancyConfig
+	// Auth authenticates the public API. Default empty leaves it open.
+	Auth *config.AuthConfig
+	// Internal configures the protected InternalService listener.
+	Internal *config.InternalConfig
+	// Wake configures the general Worker wake hook.
+	Wake *config.WakeConfig
 	// Credential is sent as a bearer token by the runtime's FlowClient.
 	Credential string
 	// LazyLoading overrides BlobStore.LazyLoading.
@@ -99,6 +105,15 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 	if testCfg.Tenancy != nil {
 		cfg.Tenancy = *testCfg.Tenancy
 		cfg.Interpreter.AttributeIndexesManagedExternally = true
+	}
+	if testCfg.Auth != nil {
+		cfg.Auth = *testCfg.Auth
+	}
+	if testCfg.Internal != nil {
+		cfg.Internal = *testCfg.Internal
+	}
+	if testCfg.Wake != nil {
+		cfg.Worker.Wake = *testCfg.Wake
 	}
 	cfg.StreamStore = testCfg.StreamStore
 	switch testCfg.BackendType {

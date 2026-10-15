@@ -61,7 +61,7 @@ type integRuntime struct {
 
 	internalDumpCapture *internalDumpHeaderCapture
 
-	// PublicAddress serves FlowService; InternalAddress serves InternalService only in multi-tenant mode.
+	// PublicAddress serves FlowService; InternalAddress serves InternalService when authentication or multi-tenant mode is enabled.
 	PublicAddress   string
 	InternalAddress string
 }
@@ -258,13 +258,19 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	cfg := createTestConfig(t, testConfig)
 	cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = listener.Addr().String()
 	var internalListener net.Listener
-	if cfg.Tenancy.IsMultiTenant() {
+	if cfg.Tenancy.IsMultiTenant() || cfg.Auth.IsEnabled() {
 		internalListener, err = net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
-		cfg.Tenancy.Internal.Listen = internalListener.Addr().String()
+		if cfg.Tenancy.IsMultiTenant() {
+			cfg.Tenancy.Internal.Listen = internalListener.Addr().String()
+		}
+		if cfg.Auth.IsEnabled() {
+			cfg.Internal.Listen = internalListener.Addr().String()
+		}
 		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = ""
 		require.NoError(t, cfg.ValidateTenancy())
 	}
+	require.NoError(t, cfg.ValidateGeneralAccess())
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
 	require.NoError(t, err)
 	t.Cleanup(workerPool.Close)
@@ -542,9 +548,12 @@ func startApiServer(
 ) {
 	t.Helper()
 
-	server, err := api.NewServer(
+	server, err := api.NewServerWithAccess(
 		&cfg.Api,
 		&cfg.Tenancy,
+		&cfg.Auth,
+		&cfg.Internal,
+		&cfg.Worker.Wake,
 		&cfg.BlobStore,
 		&cfg.Interpreter,
 		unifiedClient,
