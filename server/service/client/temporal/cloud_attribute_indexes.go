@@ -32,15 +32,24 @@ type CloudAttributeIndexClient struct {
 
 // NewCloudAttributeIndexClient creates a namespace-scoped Cloud Operations client.
 func NewCloudAttributeIndexClient(cfg *config.TemporalConfig) (*CloudAttributeIndexClient, error) {
+	return NewCloudAttributeIndexClientWithAPIKeyReader(cfg, nil)
+}
+
+// NewCloudAttributeIndexClientWithAPIKeyReader creates a namespace-scoped Cloud Operations client with rotating credentials.
+func NewCloudAttributeIndexClientWithAPIKeyReader(cfg *config.TemporalConfig, reader cloudclient.APIKeyReader) (*CloudAttributeIndexClient, error) {
 	if cfg == nil || cfg.CloudOps == nil {
 		return nil, fmt.Errorf("Temporal Cloud Operations config must not be nil")
 	}
-	client, err := cloudclient.New(cloudclient.Options{
+	options := cloudclient.Options{
 		APIKey:     cfg.CloudAPIKey,
 		HostPort:   cfg.CloudOps.HostPort,
 		APIVersion: cfg.CloudOps.APIVersion,
 		UserAgent:  "dex-server",
-	})
+	}
+	if reader != nil {
+		options.APIKeyReader = reader
+	}
+	client, err := cloudclient.New(options)
 	if err != nil {
 		return nil, fmt.Errorf("create Temporal Cloud Operations client: %w", err)
 	}
