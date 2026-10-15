@@ -40,7 +40,6 @@ import (
 	"github.com/superdurable/dex/service/indexsync"
 	"github.com/superdurable/dex/service/interpreter/cadence"
 	"github.com/superdurable/dex/service/interpreter/temporal"
-	"github.com/superdurable/dex/service/tenancy"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
@@ -61,7 +60,7 @@ type integRuntime struct {
 
 	internalDumpCapture *internalDumpHeaderCapture
 
-	// PublicAddress serves FlowService; InternalAddress serves InternalService when authentication or multi-tenant mode is enabled.
+	// PublicAddress serves FlowService; InternalAddress serves InternalService when authentication is enabled.
 	PublicAddress   string
 	InternalAddress string
 }
@@ -258,17 +257,11 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	cfg := createTestConfig(t, testConfig)
 	cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = listener.Addr().String()
 	var internalListener net.Listener
-	if cfg.Tenancy.IsMultiTenant() || cfg.Auth.IsEnabled() {
+	if cfg.Auth.IsEnabled() {
 		internalListener, err = net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
-		if cfg.Tenancy.IsMultiTenant() {
-			cfg.Tenancy.Internal.Listen = internalListener.Addr().String()
-		}
-		if cfg.Auth.IsEnabled() {
-			cfg.Internal.Listen = internalListener.Addr().String()
-		}
+		cfg.Internal.Listen = internalListener.Addr().String()
 		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = ""
-		require.NoError(t, cfg.ValidateTenancy())
 	}
 	require.NoError(t, cfg.ValidateGeneralAccess())
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
@@ -281,7 +274,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	attributeStore, err := attributestore.NewManager(context.Background(), &cfg.AttributeStore, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, attributeStore.Close()) })
-	streamStore, err := streamstore.New(&cfg.StreamStore, &cfg.Tenancy, logger)
+	streamStore, err := streamstore.New(&cfg.StreamStore, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, streamStore.Close()) })
 
@@ -302,7 +295,6 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		store, err = blobstore.NewBlobStore(
 			s3Client,
 			testNamespace,
-			cfg.Tenancy.IsMultiTenant(),
 			&cfg.BlobStore,
 			logger,
 			client.MetricsNopHandler,
@@ -347,7 +339,6 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		store, err = blobstore.NewBlobStore(
 			s3Client,
 			domain,
-			false,
 			&cfg.BlobStore,
 			logger,
 			client.MetricsNopHandler,
@@ -388,9 +379,6 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		service.SearchAttributeDexParentFlowID: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeActiveStepTypes: dexpb.IndexType_INDEX_TYPE_KEYWORD_ARRAY,
 	}
-	if cfg.Tenancy.IsMultiTenant() {
-		attributeIndexes[tenancy.SearchAttributeDexTenantID] = dexpb.IndexType_INDEX_TYPE_KEYWORD
-	}
 	for name, indexType := range localDexDevTestAttributeIndexes {
 		attributeIndexes[name] = indexType
 	}
@@ -398,10 +386,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		context.Background(),
 		cfg.Interpreter.EffectiveAttributeIndexSyncTimeout(),
 	)
-	// The operator registers indexes outside Dex in multi-tenant mode; the test plays that role.
-	operatorInterpreterConfig := cfg.Interpreter
-	operatorInterpreterConfig.AttributeIndexesManagedExternally = false
-	err = indexsync.New(&operatorInterpreterConfig, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
+	err = indexsync.New(&cfg.Interpreter, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
 	cancelSync()
 	require.NoError(t, err)
 	startInterpreter(t, worker)
@@ -550,7 +535,6 @@ func startApiServer(
 
 	server, err := api.NewServerWithAccess(
 		&cfg.Api,
-		&cfg.Tenancy,
 		&cfg.Auth,
 		&cfg.Internal,
 		&cfg.Worker.Wake,

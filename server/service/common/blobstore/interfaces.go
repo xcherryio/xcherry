@@ -13,15 +13,11 @@ package blobstore
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/superdurable/dex/service"
 )
 
 const (
@@ -35,26 +31,13 @@ var (
 )
 
 type WorkflowPath struct {
-	// FlowID is the stored Flow ID, rebuilt with its tenant prefix for a tenant path.
+	// FlowID is the stored Flow ID.
 	FlowID string
 	RunID  string
-	// TenantID is set for a tenant path, <tenant>/<yymmdd>$<escaped application Flow ID>[$<run ID>].
-	TenantID string
 }
 
-// ErrInvalidTenantSegment reports a tenant path whose tenant segment is not a valid tenant ID.
-var ErrInvalidTenantSegment = errors.New("invalid tenant segment in workflow path")
-
-var tenantSegmentPattern = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
-
 func ParseWorkflowPath(workflowPath string) (WorkflowPath, error) {
-	tenantID, flowPath, isTenantPath := strings.Cut(workflowPath, "/")
-	if !isTenantPath {
-		flowPath, tenantID = tenantID, ""
-	} else if !tenantSegmentPattern.MatchString(tenantID) {
-		return WorkflowPath{}, fmt.Errorf("%w: %q", ErrInvalidTenantSegment, workflowPath)
-	}
-	parts := strings.Split(flowPath, "$")
+	parts := strings.Split(workflowPath, "$")
 	if len(parts) != 2 && len(parts) != 3 {
 		return WorkflowPath{}, fmt.Errorf("invalid workflow path: %s", workflowPath)
 	}
@@ -65,7 +48,7 @@ func ParseWorkflowPath(workflowPath string) (WorkflowPath, error) {
 	if err != nil {
 		return WorkflowPath{}, fmt.Errorf("decode flow ID: %w", err)
 	}
-	parsed := WorkflowPath{FlowID: service.TenantStoredFlowID(tenantID, flowID), TenantID: tenantID}
+	parsed := WorkflowPath{FlowID: flowID}
 	if len(parts) == 3 {
 		if parsed.RunID, err = decodeOpaquePathPart(parts[2]); err != nil {
 			return WorkflowPath{}, fmt.Errorf("decode run ID: %w", err)
@@ -74,16 +57,12 @@ func ParseWorkflowPath(workflowPath string) (WorkflowPath, error) {
 	return parsed, nil
 }
 
-// workflowDirectory returns <yymmdd>$<escaped Flow ID>; in multi-tenant mode a tenant's stored Flow ID is placed
-// under a <tenant>/ segment. Single-tenant mode never interprets the Flow ID.
-func workflowDirectory(isMultiTenant bool, storageDate string, flowID string) string {
-	if tenantID, applicationFlowID, ok := service.SplitTenantStoredFlowID(flowID); isMultiTenant && ok {
-		return tenantID + "/" + storageDate + "$" + encodeFlowIDPathPart(applicationFlowID)
-	}
+// workflowDirectory returns <yymmdd>$<escaped Flow ID>.
+func workflowDirectory(storageDate string, flowID string) string {
 	return storageDate + "$" + encodeFlowIDPathPart(flowID)
 }
 
-// StepEventInputPath returns the single-tenant path of a Step event input.
+// StepEventInputPath returns the path of a Step event input.
 func StepEventInputPath(
 	runStarted time.Time,
 	flowID string,
@@ -91,28 +70,27 @@ func StepEventInputPath(
 	stepExecutionID string,
 	method string,
 ) string {
-	return stepEventInputPath(false, runStarted, flowID, runID, stepExecutionID, method)
+	return stepEventInputPath(runStarted, flowID, runID, stepExecutionID, method)
 }
 
 func stepEventInputPath(
-	isMultiTenant bool,
 	runStarted time.Time,
 	flowID string,
 	runID string,
 	stepExecutionID string,
 	method string,
 ) string {
-	workflowPath := workflowDirectory(isMultiTenant, formatBlobStorageDate(runStarted), flowID) + "$" +
+	workflowPath := workflowDirectory(formatBlobStorageDate(runStarted), flowID) + "$" +
 		encodeOpaquePathPart(runID)
 	return strings.Join([]string{workflowPath, encodeOpaquePathPart(stepExecutionID), method + ".pb"}, "/")
 }
 
-// ValueObjectPath returns the single-tenant path of a value object.
+// ValueObjectPath returns the path of a value object.
 func ValueObjectPath(flowID string, locator string) (string, error) {
-	return valueObjectPath(false, flowID, locator)
+	return valueObjectPath(flowID, locator)
 }
 
-func valueObjectPath(isMultiTenant bool, flowID string, locator string) (string, error) {
+func valueObjectPath(flowID string, locator string) (string, error) {
 	if flowID == "" {
 		return "", fmt.Errorf("Blob locator requires a Flow ID")
 	}
@@ -133,7 +111,7 @@ func valueObjectPath(isMultiTenant bool, flowID string, locator string) (string,
 			return "", fmt.Errorf("invalid Blob object ID %q", objectID)
 		}
 	}
-	return workflowDirectory(isMultiTenant, formatBlobStorageDate(writeDate), flowID) + "/" + objectID, nil
+	return workflowDirectory(formatBlobStorageDate(writeDate), flowID) + "/" + objectID, nil
 }
 
 func encodeFlowIDPathPart(flowID string) string {
@@ -281,7 +259,6 @@ type BlobStore interface {
 	) ([]byte, bool, error)
 	// DeleteWorkflowObjects will delete all the objects of the workflowId
 	// workflowPath is yymmdd$escapedFlowId, where yymmdd is needed to compose the path,
-	// or <tenant>/yymmdd$escapedFlowId for a tenant's Flow
 	DeleteWorkflowObjects(ctx context.Context, storeId, workflowPath string) error
 	// ListWorkflowPaths will list the workflowPaths ( yymmdd$escapedFlowId ) as CommonPrefixes from S3
 	// It uses of delimiter "/" before the object ID to get all the CommonPrefixes
@@ -292,28 +269,15 @@ type BlobStore interface {
 	//  1. It doesn't count across two days(so expect test to fail if you happen to run the test across day boundary :)
 	//  2. Only count less than 1000 objects(because it only make one API call to S3 which return at most 1000 objects)
 	CountWorkflowObjectsForTesting(ctx context.Context, flowID string) (int64, error)
-	// ReadTenancyRecord returns the multi-tenant record of the namespace and its version; both empty when absent.
-	ReadTenancyRecord(ctx context.Context) ([]byte, string, error)
-	// WriteTenancyRecord writes the record if it still has version, or is absent when version is empty.
-	// It returns ErrTenancyRecordConflict when another writer changed the record first.
-	WriteTenancyRecord(ctx context.Context, data []byte, version string) error
-	// DeleteTenantObjects deletes at most limit objects under the tenant's prefix in every storage and returns
-	// how many it deleted.
-	DeleteTenantObjects(ctx context.Context, tenantID string, limit int) (int, error)
 }
 
 type ListObjectPathsInput struct {
 	StoreId           string
 	ContinuationToken *string
-	// TenantID lists the workflow paths under one tenant segment instead of the namespace root.
-	TenantID string
 }
 
 type ListObjectPathsOutput struct {
 	ContinuationToken *string
-	// WorkflowPaths are relative to the namespace; under a tenant they start with <tenant>/.
+	// WorkflowPaths are relative to the namespace.
 	WorkflowPaths []string
-	// TenantSegments are the tenant directories found at the namespace root. Callers list each with TenantID.
-	// A segment is reported as found, whether or not it is a valid tenant ID.
-	TenantSegments []string
 }

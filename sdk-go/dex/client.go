@@ -43,7 +43,7 @@ type ClientOptions struct {
 	// Logger defaults to the shared BlobCache logger.
 	Logger Logger
 	// Credential is sent as a bearer credential with every FlowService call. Default: nil sends none.
-	// A multi-tenant Dex server requires it and derives the caller's tenant from it; see FileCredential.
+	// A Dex server with authentication enabled requires it; see FileCredential.
 	Credential Credential
 	// GrpcMaxMessageBytes limits the gRPC messages this Client receives, in bytes, such as
 	// InvokeRPC results, state reads, and each LoadBlobs response used to hydrate values.

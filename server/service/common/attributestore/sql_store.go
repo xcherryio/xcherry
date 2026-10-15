@@ -28,7 +28,6 @@ import (
 	_ "github.com/snowflakedb/gosnowflake/v2"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
-	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 )
@@ -128,7 +127,7 @@ func initializeSQLStore(
 	database *sql.DB,
 ) (*sqlStore, error) {
 	entry := &sqlStore{cfg: cfg, dialect: dialect, db: database, logger: logger}
-	if rowKeyText := effectiveRowKey(cfg); rowKeyText != "" {
+	if rowKeyText := cfg.RowKey; rowKeyText != "" {
 		rowKey, err := parseRowKeyTemplate(rowKeyText)
 		if err != nil {
 			return nil, err
@@ -618,23 +617,6 @@ func (s *sqlStore) buildUpsert(
 	return s.dialect.buildUpsert(snapshot, keyValues, columnNames, values)
 }
 
-// deleteTenantRows removes a tenant's rows from the store table and its AttributeMap tables in one transaction.
-func (s *sqlStore) deleteTenantRows(ctx context.Context, tenantID string) error {
-	if s.cfg.TenantColumn == "" {
-		return nil
-	}
-	statements := []sqlStatement{s.tenantDeleteStatement(s.table, tenantID)}
-	for _, reference := range s.mapTables {
-		statements = append(statements, s.tenantDeleteStatement(reference, tenantID))
-	}
-	return s.execute(ctx, statements)
-}
-
-func (s *sqlStore) tenantDeleteStatement(reference tableReference, tenantID string) sqlStatement {
-	query, arguments := s.dialect.buildKeyedDelete(reference, []string{s.cfg.TenantColumn}, []string{tenantID})
-	return sqlStatement{query: query, arguments: arguments}
-}
-
 func (s *sqlStore) close() error {
 	return redactStorageSecret(s.db.Close(), s.cfg.DSN)
 }
@@ -657,13 +639,4 @@ func (t *tableSchema) keyValues(flowID string) ([]string, bool) {
 
 func (t *tableSchema) isKeyColumn(name string) bool {
 	return slices.Contains(t.keyColumns(), name)
-}
-
-// effectiveRowKey prepends the tenant column to the row key of a tenant-scoped store, whose rows are keyed by the
-// stored Flow ID T:<tenant>:<application Flow ID>.
-func effectiveRowKey(cfg config.AttributeStoreConfigEntry) string {
-	if cfg.TenantColumn == "" {
-		return cfg.RowKey
-	}
-	return service.TenantStoredFlowID("{"+cfg.TenantColumn+"}", cfg.RowKey)
 }

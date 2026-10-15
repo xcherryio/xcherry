@@ -53,7 +53,7 @@ type WorkerOptions struct {
 	// It receives concurrent structured Worker logs and falls back to slog.Default.
 	Logger Logger
 	// Credential is sent as a bearer credential with the Worker's FlowService calls: startup index
-	// verification and blob hydration. Default: nil sends none. A multi-tenant Dex server requires it.
+	// verification and blob hydration. Default: nil sends none. A Dex server with authentication enabled requires it.
 	Credential Credential
 	// GrpcMaxMessageBytes limits the gRPC messages the Worker receives, in bytes: Step and RPC
 	// invocations on the WorkerService listener and FlowService responses such as each LoadBlobs

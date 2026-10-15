@@ -10,12 +10,11 @@ package interpreter
 
 import (
 	"github.com/superdurable/dex/gen/dexpb"
-	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service"
 )
 
 type SubFlowTracker struct {
 	parentFlowID         string
-	tenantID             string
 	waitStateByStepExeId map[string]*subFlowWaitState
 	subFlowIdLookupMap   map[string]*subFlowIdLookupEntry
 }
@@ -34,7 +33,6 @@ type subFlowIdLookupEntry struct {
 
 func NewSubFlowTracker(
 	parentFlowID string,
-	tenantID string,
 	resumeInfos []*dexpb.StepExecutionResumeInfo,
 ) *SubFlowTracker {
 	if parentFlowID == "" {
@@ -42,7 +40,6 @@ func NewSubFlowTracker(
 	}
 	tracker := &SubFlowTracker{
 		parentFlowID:         parentFlowID,
-		tenantID:             tenantID,
 		waitStateByStepExeId: map[string]*subFlowWaitState{},
 		subFlowIdLookupMap:   map[string]*subFlowIdLookupEntry{},
 	}
@@ -132,11 +129,6 @@ func (t *SubFlowTracker) Unregister(stepExecutionID string) {
 	delete(t.waitStateByStepExeId, stepExecutionID)
 }
 
-// subFlowID panics on a tenant mismatch, because the workflow's own ID and input tenant are trusted.
 func (t *SubFlowTracker) subFlowID(stepExecutionID string, index int32) string {
-	subFlowID, err := tenancy.SubFlowID(t.tenantID, t.parentFlowID, stepExecutionID, index)
-	if err != nil {
-		panic(err)
-	}
-	return subFlowID
+	return service.SubFlowID(t.parentFlowID, stepExecutionID, index)
 }

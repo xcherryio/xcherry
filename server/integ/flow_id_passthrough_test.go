@@ -11,12 +11,14 @@ package integ
 import (
 	"context"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/integ/workflow/common"
 	"github.com/superdurable/dex/service"
 	uclient "github.com/superdurable/dex/service/client"
 	"github.com/superdurable/dex/service/common/ptr"
@@ -24,34 +26,84 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestSingleTenantFlowIDsWithTenantPrefixTemporal shows single-tenant mode never interprets a "T:" Flow ID.
-// Servers before reserved ":" in Flow IDs could start such Flows; this test creates one through the engine.
-func TestSingleTenantFlowIDsWithTenantPrefixTemporal(t *testing.T) {
+const (
+	flowIDPassthroughType    = "FlowIDPassthroughFlow"
+	flowIDPassthroughStep    = "ProbeStep"
+	flowIDPassthroughChannel = "go"
+)
+
+type flowIDPassthroughHandler struct {
+	mu              sync.Mutex
+	observedFlowIDs []string
+}
+
+func (h *flowIDPassthroughHandler) InvokeWaitForMethod(
+	_ context.Context,
+	request *dexpb.InvokeWaitForMethodRequest,
+) (*dexpb.InvokeWaitForMethodResponse, error) {
+	h.observeFlowID(request.GetContext().GetFlowId())
+	return &dexpb.InvokeWaitForMethodResponse{WaitingCondition: &dexpb.WaitingCondition{
+		WaitingConditionType: dexpb.WaitingConditionType_WAITING_CONDITION_TYPE_ALL_COMPLETED,
+		ChannelConditions:    []*dexpb.ChannelCondition{{ChannelName: flowIDPassthroughChannel}},
+	}}, nil
+}
+
+func (h *flowIDPassthroughHandler) InvokeExecuteMethod(
+	_ context.Context,
+	request *dexpb.InvokeExecuteMethodRequest,
+) (*dexpb.InvokeExecuteMethodResponse, error) {
+	flowID := request.GetContext().GetFlowId()
+	h.observeFlowID(flowID)
+	return &dexpb.InvokeExecuteMethodResponse{StepDecision: &dexpb.StepDecision{
+		CloseDecision: common.GracefulCompleteDecision(stringValue(flowID)),
+	}}, nil
+}
+
+func (h *flowIDPassthroughHandler) InvokeWorkerRPC(
+	_ context.Context,
+	_ *dexpb.InvokeWorkerRPCRequest,
+) (*dexpb.InvokeWorkerRPCResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "no RPC registered")
+}
+
+func (h *flowIDPassthroughHandler) observeFlowID(flowID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.observedFlowIDs = append(h.observedFlowIDs, flowID)
+}
+
+func (h *flowIDPassthroughHandler) hasObservedFlowID(flowID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Contains(h.observedFlowIDs, flowID)
+}
+
+func TestFlowIDWithTenantPrefixPassesThroughTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
-	worker := &tenantProbeHandler{}
-	workerTarget := startWorker(t, worker)
+	workerHandler := &flowIDPassthroughHandler{}
+	workerTarget := startWorker(t, workerHandler)
 	runtime := startDexService(t, DexServiceTestConfig{BackendType: service.BackendTypeTemporal})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	_, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
-		RequestId: newRequestID(), FlowId: "T:order-1", FlowType: tenantProbeFlowType,
-		StartStepType: tenantProbeStep, FlowStartOptions: withWorkerTarget(nil, workerTarget),
+		RequestId: newRequestID(), FlowId: "T:order-1", FlowType: flowIDPassthroughType,
+		StartStepType: flowIDPassthroughStep, FlowStartOptions: withWorkerTarget(nil, workerTarget),
 	})
-	require.Equal(t, codes.InvalidArgument, status.Code(err), "StartFlow still refuses \":\" in Flow IDs: %v", err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "StartFlow still refuses colon in Flow IDs: %v", err)
 
 	flowID := "T:order-" + uuid.NewString()
 	runID, err := runtime.UnifiedClient.StartInterpreterWorkflow(ctx, uclient.StartWorkflowOptions{
 		ID:               flowID,
 		TaskQueue:        service.TaskQueue,
-		SearchAttributes: map[string]interface{}{service.SearchAttributeDexWorkflowType: tenantProbeFlowType},
+		SearchAttributes: map[string]interface{}{service.SearchAttributeDexWorkflowType: flowIDPassthroughType},
 		Memo:             map[string]interface{}{service.ReqId: &dexpb.EncodedObject{Payload: []byte(newRequestID())}},
 		IdReusePolicy:    ptr.Any(dexpb.IdReusePolicy_ID_REUSE_POLICY_DISALLOW_REUSE),
 	}, &dexpb.InterpreterWorkflowInput{
-		FlowType:      tenantProbeFlowType,
-		StartStepType: tenantProbeStep,
+		FlowType:      flowIDPassthroughType,
+		StartStepType: flowIDPassthroughStep,
 		Config: &dexpb.FlowConfig{
 			WorkerTarget:   workerTarget,
 			StepDurability: ptr.Any(dexpb.StepDurability_STEP_DURABILITY_SYNC),
@@ -74,7 +126,7 @@ func TestSingleTenantFlowIDsWithTenantPrefixTemporal(t *testing.T) {
 	}
 
 	_, err = runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
-		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: tenantProbeChannel}},
+		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: flowIDPassthroughChannel}},
 	})
 	require.NoError(t, err)
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{
@@ -83,7 +135,7 @@ func TestSingleTenantFlowIDsWithTenantPrefixTemporal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	require.Equal(t, flowID, result.GetResults()[0].GetCompletedStepOutput().GetStringValue())
-	require.True(t, slices.Contains(worker.observed(), flowID), "the Worker sees the Flow ID unchanged")
+	require.True(t, workerHandler.hasObservedFlowID(flowID), "the Worker sees the Flow ID unchanged")
 
 	history, err := runtime.FlowClient.GetHistoryEvents(ctx, &dexpb.GetHistoryEventsRequest{FlowId: flowID, RunId: runID})
 	require.NoError(t, err)

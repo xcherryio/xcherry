@@ -81,12 +81,12 @@ func testGeneralAuthentication(t *testing.T, backend service.BackendType) {
 	require.NoError(t, err)
 	require.Equal(t, healthpb.HealthCheckResponse_SERVING, health.GetStatus())
 	jwtToken := func(expiry time.Time, audience string) string {
-		return signTestJWT(t, issuer.key(tenancyTestKeyID), tenancyTestKeyID, jwt.Claims{
+		return signTestJWT(t, issuer.key(authenticationTestKeyID), authenticationTestKeyID, jwt.Claims{
 			Issuer: issuer.URL, Subject: "caller", Audience: jwt.Audience{audience}, Expiry: jwt.NewNumericDate(expiry),
 		})
 	}
 	require.Equal(t, codes.OK, call(jwtToken(time.Now().Add(time.Hour), "dex")))
-	require.Equal(t, codes.OK, call(signTestJWT(t, issuer.key(tenancyTestKeyID), tenancyTestKeyID, jwt.Claims{
+	require.Equal(t, codes.OK, call(signTestJWT(t, issuer.key(authenticationTestKeyID), authenticationTestKeyID, jwt.Claims{
 		Issuer: issuer.URL, Audience: jwt.Audience{"dex"}, Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 	})))
 	require.Equal(t, codes.Unauthenticated, call(jwtToken(time.Now().Add(-time.Hour), "dex")))

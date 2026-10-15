@@ -31,6 +31,25 @@ web:
 	require.True(t, cfg.Web.IsStartFlowWorkerTargetHeadless)
 }
 
+func TestRemovedTenancyConfigReportsMigration(t *testing.T) {
+	configurations := map[string]string{
+		"tenancy section":               "tenancy:\n  mode: multi\n",
+		"blob cleanup delay":            "blobStore:\n  tenantCleanupConfirmationDelay: 5s\n",
+		"attribute store tenant column": "attributeStore:\n  stores:\n    primary:\n      tenantColumn: tenant_id\n",
+	}
+	for name, configuration := range configurations {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewConfig(writeTestConfig(t, configuration))
+			require.ErrorContains(t, err, "multi-tenancy was removed")
+			require.ErrorContains(t, err, "auth.authenticators")
+			require.ErrorContains(t, err, "to internal")
+			require.ErrorContains(t, err, "worker.wake")
+			require.ErrorContains(t, err, "drop subjectPattern and claims")
+			require.ErrorContains(t, err, "only sha256 entries")
+		})
+	}
+}
+
 func TestWebStartFlowWorkerTargetHeadlessDefaultsFalseAndReadsYAML(t *testing.T) {
 	defaultConfig, err := NewConfig(writeTestConfig(t, "web: {}\n"))
 	require.NoError(t, err)

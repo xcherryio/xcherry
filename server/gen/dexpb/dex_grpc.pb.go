@@ -1560,202 +1560,14 @@ var MatchingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	TenantAdminService_TombstoneTenant_FullMethodName = "/dex.TenantAdminService/TombstoneTenant"
-	TenantAdminService_PurgeTenant_FullMethodName     = "/dex.TenantAdminService/PurgeTenant"
-	TenantAdminService_DescribeTenant_FullMethodName  = "/dex.TenantAdminService/DescribeTenant"
-)
-
-// TenantAdminServiceClient is the client API for TenantAdminService service.
-//
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-// TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
-// Every RPC names its tenant explicitly and never returns Flow data.
-type TenantAdminServiceClient interface {
-	// Refuses every credential of the tenant within the tombstone refresh interval. Idempotent.
-	TombstoneTenant(ctx context.Context, in *TombstoneTenantRequest, opts ...grpc.CallOption) (*TombstoneTenantResponse, error)
-	// Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true.
-	PurgeTenant(ctx context.Context, in *PurgeTenantRequest, opts ...grpc.CallOption) (*PurgeTenantResponse, error)
-	DescribeTenant(ctx context.Context, in *DescribeTenantRequest, opts ...grpc.CallOption) (*DescribeTenantResponse, error)
-}
-
-type tenantAdminServiceClient struct {
-	cc grpc.ClientConnInterface
-}
-
-func NewTenantAdminServiceClient(cc grpc.ClientConnInterface) TenantAdminServiceClient {
-	return &tenantAdminServiceClient{cc}
-}
-
-func (c *tenantAdminServiceClient) TombstoneTenant(ctx context.Context, in *TombstoneTenantRequest, opts ...grpc.CallOption) (*TombstoneTenantResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TombstoneTenantResponse)
-	err := c.cc.Invoke(ctx, TenantAdminService_TombstoneTenant_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tenantAdminServiceClient) PurgeTenant(ctx context.Context, in *PurgeTenantRequest, opts ...grpc.CallOption) (*PurgeTenantResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PurgeTenantResponse)
-	err := c.cc.Invoke(ctx, TenantAdminService_PurgeTenant_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tenantAdminServiceClient) DescribeTenant(ctx context.Context, in *DescribeTenantRequest, opts ...grpc.CallOption) (*DescribeTenantResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DescribeTenantResponse)
-	err := c.cc.Invoke(ctx, TenantAdminService_DescribeTenant_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// TenantAdminServiceServer is the server API for TenantAdminService service.
-// All implementations must embed UnimplementedTenantAdminServiceServer
-// for forward compatibility.
-//
-// Server-internal only (interpreter CAN activity → API). Not SDK-facing.
-// TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
-// Every RPC names its tenant explicitly and never returns Flow data.
-type TenantAdminServiceServer interface {
-	// Refuses every credential of the tenant within the tombstone refresh interval. Idempotent.
-	TombstoneTenant(context.Context, *TombstoneTenantRequest) (*TombstoneTenantResponse, error)
-	// Deletes one bounded batch of the tombstoned tenant's data. Repeat until done is true.
-	PurgeTenant(context.Context, *PurgeTenantRequest) (*PurgeTenantResponse, error)
-	DescribeTenant(context.Context, *DescribeTenantRequest) (*DescribeTenantResponse, error)
-	mustEmbedUnimplementedTenantAdminServiceServer()
-}
-
-// UnimplementedTenantAdminServiceServer must be embedded to have
-// forward compatible implementations.
-//
-// NOTE: this should be embedded by value instead of pointer to avoid a nil
-// pointer dereference when methods are called.
-type UnimplementedTenantAdminServiceServer struct{}
-
-func (UnimplementedTenantAdminServiceServer) TombstoneTenant(context.Context, *TombstoneTenantRequest) (*TombstoneTenantResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method TombstoneTenant not implemented")
-}
-func (UnimplementedTenantAdminServiceServer) PurgeTenant(context.Context, *PurgeTenantRequest) (*PurgeTenantResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PurgeTenant not implemented")
-}
-func (UnimplementedTenantAdminServiceServer) DescribeTenant(context.Context, *DescribeTenantRequest) (*DescribeTenantResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DescribeTenant not implemented")
-}
-func (UnimplementedTenantAdminServiceServer) mustEmbedUnimplementedTenantAdminServiceServer() {}
-func (UnimplementedTenantAdminServiceServer) testEmbeddedByValue()                            {}
-
-// UnsafeTenantAdminServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to TenantAdminServiceServer will
-// result in compilation errors.
-type UnsafeTenantAdminServiceServer interface {
-	mustEmbedUnimplementedTenantAdminServiceServer()
-}
-
-func RegisterTenantAdminServiceServer(s grpc.ServiceRegistrar, srv TenantAdminServiceServer) {
-	// If the following call panics, it indicates UnimplementedTenantAdminServiceServer was
-	// embedded by pointer and is nil.  This will cause panics if an
-	// unimplemented method is ever invoked, so we test this at initialization
-	// time to prevent it from happening at runtime later due to I/O.
-	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
-		t.testEmbeddedByValue()
-	}
-	s.RegisterService(&TenantAdminService_ServiceDesc, srv)
-}
-
-func _TenantAdminService_TombstoneTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TombstoneTenantRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TenantAdminServiceServer).TombstoneTenant(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TenantAdminService_TombstoneTenant_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantAdminServiceServer).TombstoneTenant(ctx, req.(*TombstoneTenantRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TenantAdminService_PurgeTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PurgeTenantRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TenantAdminServiceServer).PurgeTenant(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TenantAdminService_PurgeTenant_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantAdminServiceServer).PurgeTenant(ctx, req.(*PurgeTenantRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TenantAdminService_DescribeTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DescribeTenantRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TenantAdminServiceServer).DescribeTenant(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TenantAdminService_DescribeTenant_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantAdminServiceServer).DescribeTenant(ctx, req.(*DescribeTenantRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-// TenantAdminService_ServiceDesc is the grpc.ServiceDesc for TenantAdminService service.
-// It's only intended for direct use with grpc.RegisterService,
-// and not to be introspected or modified (even as a copy)
-var TenantAdminService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "dex.TenantAdminService",
-	HandlerType: (*TenantAdminServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "TombstoneTenant",
-			Handler:    _TenantAdminService_TombstoneTenant_Handler,
-		},
-		{
-			MethodName: "PurgeTenant",
-			Handler:    _TenantAdminService_PurgeTenant_Handler,
-		},
-		{
-			MethodName: "DescribeTenant",
-			Handler:    _TenantAdminService_DescribeTenant_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "dex.proto",
-}
-
-const (
 	InternalService_DumpFlowForContinueAsNew_FullMethodName = "/dex.InternalService/DumpFlowForContinueAsNew"
 )
 
 // InternalServiceClient is the client API for InternalService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Server-internal only (interpreter CAN activity → API). Not SDK-facing.
 type InternalServiceClient interface {
 	DumpFlowForContinueAsNew(ctx context.Context, in *ContinueAsNewDumpRequest, opts ...grpc.CallOption) (*ContinueAsNewDumpResponse, error)
 }
@@ -1781,6 +1593,8 @@ func (c *internalServiceClient) DumpFlowForContinueAsNew(ctx context.Context, in
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
+//
+// Server-internal only (interpreter CAN activity → API). Not SDK-facing.
 type InternalServiceServer interface {
 	DumpFlowForContinueAsNew(context.Context, *ContinueAsNewDumpRequest) (*ContinueAsNewDumpResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()

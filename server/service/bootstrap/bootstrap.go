@@ -32,7 +32,6 @@ import (
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
-	"github.com/superdurable/dex/service/tenancy"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -94,9 +93,6 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 	if cfg.Interpreter.Temporal != nil && cfg.Interpreter.Cadence != nil {
 		return nil, fmt.Errorf("Temporal and Cadence configs are mutually exclusive")
 	}
-	if err := cfg.ValidateTenancy(); err != nil {
-		return nil, err
-	}
 	if err := cfg.ValidateGeneralAccess(); err != nil {
 		return nil, err
 	}
@@ -121,7 +117,6 @@ func New(cfg *config.Config, options *Options) (*Runtime, error) {
 	}
 	streamStore, streamStoreErr := streamstore.New(
 		&cfg.StreamStore,
-		&cfg.Tenancy,
 		logger.WithTags(tag.Service("stream-store")),
 	)
 	if streamStoreErr != nil {
@@ -167,7 +162,6 @@ func (r *Runtime) createServices() error {
 	if r.options.Services.API {
 		r.apiServer, err = api.NewServerWithAccess(
 			&r.cfg.Api,
-			&r.cfg.Tenancy,
 			&r.cfg.Auth,
 			&r.cfg.Internal,
 			&r.cfg.Worker.Wake,
@@ -194,18 +188,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		service.SearchAttributeDexParentFlowID: dexpb.IndexType_INDEX_TYPE_KEYWORD,
 		service.SearchAttributeActiveStepTypes: dexpb.IndexType_INDEX_TYPE_KEYWORD_ARRAY,
 	}
-	if r.cfg.Tenancy.IsMultiTenant() {
-		dexIndexes[tenancy.SearchAttributeDexTenantID] = dexpb.IndexType_INDEX_TYPE_KEYWORD
-	}
 	if err := r.indexSynchronizer.Sync(ctx, dexIndexes); err != nil {
 		r.shutdown()
 		return fmt.Errorf("sync Dex attribute indexes: %w", err)
-	}
-	if r.cfg.Tenancy.IsMultiTenant() {
-		if err := tenancy.VerifyNamespaceHasOnlyTenantFlows(ctx, r.unifiedClient); err != nil {
-			r.shutdown()
-			return err
-		}
 	}
 	if r.worker != nil {
 		if err := r.worker.Start(); err != nil {
@@ -214,11 +199,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	if r.apiServer != nil && r.apiServer.HasInternalListener() {
-		internalListen := r.cfg.Internal.Listen
-		if r.cfg.Tenancy.IsMultiTenant() {
-			internalListen = r.cfg.Tenancy.Internal.Listen
-		}
-		internalListener, err := net.Listen("tcp", internalListen)
+		internalListener, err := net.Listen("tcp", r.cfg.Internal.Listen)
 		if err != nil {
 			r.shutdown()
 			return fmt.Errorf("listen on internal.listen: %w", err)

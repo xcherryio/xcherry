@@ -10,6 +10,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"time"
 )
@@ -92,9 +93,6 @@ func (c WakeConfig) EffectiveBudget() time.Duration {
 // ValidateGeneralAccess checks public authentication, internal listener, and Worker wake settings.
 func (c Config) ValidateGeneralAccess() error {
 	if c.Auth.IsEnabled() {
-		if c.Tenancy.IsMultiTenant() {
-			return fmt.Errorf("auth and tenancy.mode multi cannot be enabled together")
-		}
 		if c.Internal.Listen == "" || c.Internal.TokenFile == "" {
 			return fmt.Errorf("internal.listen and internal.tokenFile are required when auth is enabled")
 		}
@@ -135,14 +133,31 @@ func (c Config) ValidateGeneralAccess() error {
 	if c.Worker.Wake.Budget < 0 {
 		return fmt.Errorf("worker.wake.budget must not be negative")
 	}
-	if !c.Tenancy.IsMultiTenant() && c.Tenancy.Wake.URL != "" {
-		parsed, err := url.ParseRequestURI(c.Tenancy.Wake.URL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return fmt.Errorf("tenancy.wake.url must be an HTTP URL")
-		}
-		if c.Tenancy.Wake.Budget < 0 {
-			return fmt.Errorf("tenancy.wake.budget must not be negative")
-		}
-	}
 	return nil
+}
+
+// ValidateIssuerURL requires https, or http for a loopback host.
+func ValidateIssuerURL(name string, rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("%s must be an absolute URL", name)
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	if parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("%s must use https unless its host is loopback", name)
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }

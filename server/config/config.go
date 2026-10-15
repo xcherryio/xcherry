@@ -12,6 +12,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -197,8 +198,6 @@ type (
 		AttributeStore AttributeStoreConfig `yaml:"attributeStore"`
 		// StreamStore configures best-effort resumable Streams. Default backend is disabled.
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
-		// Tenancy enables multi-tenant namespaces. Default empty is single-tenant mode, unchanged from servers without it.
-		Tenancy TenancyConfig `yaml:"tenancy"`
 		// Auth authenticates public API callers. Default empty leaves authentication off.
 		Auth AuthConfig `yaml:"auth"`
 		// Internal configures a private InternalService listener. Default empty uses the public listener when auth is off.
@@ -271,9 +270,6 @@ type (
 		SupportedStorages []BlobStoreConfigEntry `yaml:"supportedStorages"`
 		// HistoryRetentionInDays must match the Temporal/Cadence history retention. Default 0; configure it explicitly.
 		HistoryRetentionInDays int `yaml:"historyRetentionInDays"`
-		// TenantCleanupConfirmationDelay separates the two NotFound answers that blob cleanup requires before deleting
-		// a tenant's workflow path, which guards against visibility lag. Default 60s. Must not be negative.
-		TenantCleanupConfirmationDelay time.Duration `yaml:"tenantCleanupConfirmationDelay"`
 		// BlobCache configures the S3 Attribute disk cache. Default disabled because Directory is empty. Immutable after startup.
 		BlobCache BlobCacheConfig `yaml:"blobCache"`
 	}
@@ -311,11 +307,6 @@ type (
 		TableName string `yaml:"tableName"`
 		// FlowIDColumn stores Flow IDs in Databricks and Snowflake. Default empty is invalid for warehouse stores. Immutable after startup.
 		FlowIDColumn string `yaml:"flowIdColumn"`
-		// TenantColumn makes a PostgreSQL or MySQL store tenant-scoped for multi-tenant namespaces: the server writes
-		// the tenant ID into this column and splits the application Flow ID with RowKey, which is then required, for
-		// example rowKey "{flow_id}". The table's primary key must be exactly TenantColumn and the RowKey columns.
-		// Required for every store in multi-tenant mode. Default empty. Immutable after startup.
-		TenantColumn string `yaml:"tenantColumn"`
 		// DatabaseName selects the MongoDB database. Default empty is invalid for MongoDB stores. Immutable after startup.
 		DatabaseName string `yaml:"databaseName"`
 		// CollectionName selects the existing MongoDB collection. Default empty is invalid for MongoDB stores. Immutable after startup.
@@ -378,15 +369,14 @@ type (
 		S3SecretKey string `yaml:"s3SecretKey"`
 		// S3KeyPrefix is prepended to every object key of this S3 storage, before the namespace. Default empty.
 		// It must not start with "/". Use it to place Dex objects under a bucket prefix that access policies scope,
-		// for example "dex/". With multi-tenant namespaces, keys are <s3KeyPrefix><namespace>/<tenant>/..., so each
-		// tenant has one prefix that a policy can scope and a purge can delete. Immutable after startup.
+		// for example "dex/". Immutable after startup.
 		S3KeyPrefix string `yaml:"s3KeyPrefix"`
 		// CleanupStrategy controls automatic blob cleanup. Default type is afterAllRunsDeleted; zero frequency disables scheduling.
 		CleanupStrategy CleanupStrategy `yaml:"cleanupStrategy"`
 	}
 
 	ApiConfig struct {
-		// Port is the TCP port for FlowService and InternalService (plaintext gRPC). Default 8801. Bind is 0.0.0.0:Port; SDKs/integ and the interpreter CAN activity dial this port.
+		// Port is the TCP port for FlowService and, when auth is off, InternalService (plaintext gRPC). Default 8801. Bind is 0.0.0.0:Port; SDKs/integ and the interpreter CAN activity dial this port when auth is off.
 		Port int `yaml:"port"`
 		// MaxWaitSeconds caps transport long polls. Zero uses DefaultMaxWaitSeconds (60). Positive values are the cap. Negatives are invalid. It does not limit Temporal Update handlers.
 		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
@@ -595,6 +585,16 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 	defer file.Close()
 
+	var document yaml.Node
+	if err := yaml.NewDecoder(file).Decode(&document); err != nil {
+		return nil, err
+	}
+	if err := rejectRemovedTenancyConfig(&document); err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
 	d := yaml.NewDecoder(file)
 	d.KnownFields(true)
 
@@ -631,9 +631,6 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 	if cfg.Interpreter.InterpreterActivityConfig.MinimumStepHeartbeatTimeout < 0 {
 		return nil, fmt.Errorf("interpreter.interpreterActivityConfig.minimumStepHeartbeatTimeout must be non-negative")
-	}
-	if err := cfg.ValidateTenancy(); err != nil {
-		return nil, err
 	}
 	if err := cfg.ValidateGeneralAccess(); err != nil {
 		return nil, err
@@ -806,9 +803,6 @@ func validateRetryPolicy(name string, policy RetryPolicy) error {
 func (c Config) GetInternalServiceTargetWithDefault() string {
 	if c.Interpreter.InterpreterActivityConfig.InternalServiceTarget != "" {
 		return c.Interpreter.InterpreterActivityConfig.InternalServiceTarget
-	}
-	if c.Tenancy.IsMultiTenant() {
-		return c.Tenancy.Internal.Listen
 	}
 	if c.Auth.IsEnabled() {
 		return c.Internal.Listen
@@ -1039,17 +1033,6 @@ func (c BlobStoreConfig) EffectiveAsyncStepInputSnapshotsEnabled() bool {
 }
 
 // Validate checks Blob Store identifier, credentials and cache settings.
-// DefaultTenantCleanupConfirmationDelay separates the two NotFound answers required before a tenant path is deleted.
-const DefaultTenantCleanupConfirmationDelay = 60 * time.Second
-
-// EffectiveTenantCleanupConfirmationDelay returns TenantCleanupConfirmationDelay or its default.
-func (c BlobStoreConfig) EffectiveTenantCleanupConfirmationDelay() time.Duration {
-	if c.TenantCleanupConfirmationDelay <= 0 {
-		return DefaultTenantCleanupConfirmationDelay
-	}
-	return c.TenantCleanupConfirmationDelay
-}
-
 func (c BlobStoreConfig) Validate() error {
 	if c.EffectiveAsyncStepInputSnapshotsEnabled() && !c.EffectiveEnabled() {
 		return fmt.Errorf("blobStore asyncStepInputSnapshotsEnabled requires blobStore.enabled")
@@ -1173,9 +1156,6 @@ func (c AttributeStoreConfig) Validate() error {
 		}
 		if store.Type.IsWarehouse() && store.hasRelationalOptions() {
 			return fmt.Errorf("attribute store %q only mysql and postgres accept rowKey, columnNaming and attributeMaps", name)
-		}
-		if store.TenantColumn != "" && (store.Type.IsWarehouse() || store.RowKey == "") {
-			return fmt.Errorf("attribute store %q tenantColumn requires a mysql or postgres store with rowKey", name)
 		}
 		if !store.ColumnNaming.IsSupported() {
 			return fmt.Errorf("attribute store %q has unsupported columnNaming %q", name, store.ColumnNaming)

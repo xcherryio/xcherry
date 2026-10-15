@@ -38,7 +38,7 @@ import (
 	"github.com/superdurable/dex/service/common/workerclient"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
-	"github.com/superdurable/dex/service/tenancy"
+	"github.com/superdurable/dex/service/wake"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -58,7 +58,7 @@ type Activities struct {
 	subFlowResolver  *SubFlowReuseResolver
 	streamStore      *streamstore.Store
 	metrics          client.MetricsHandler
-	dispatchGate     *tenancy.DispatchGate
+	wakeNotifier     *wake.Notifier
 }
 
 func NewActivities(
@@ -91,7 +91,7 @@ func NewActivities(
 		eventHandler:     eventHandler,
 		cfg:              cfg,
 		subFlowResolver:  NewSubFlowReuseResolver(unifiedClient),
-		dispatchGate:     NewDispatchGate(cfg),
+		wakeNotifier:     NewWakeNotifier(cfg),
 		streamStore:      streamStore,
 		metrics:          metrics,
 	}
@@ -153,26 +153,15 @@ func (a *Activities) IWaitForM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
-	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
-	if err != nil {
-		return nil, err
-	}
-	tenant := tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
-	storedContext := req.Context
-	req.Context = dispatchContext
 	dispatch, err := openWorkerStream(
-		ctx, a, tenant, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+		ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
 		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 			grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
 		) {
 			return client.InvokeWaitForMethod(callCtx, req)
 		},
 	)
-	req.Context = storedContext
-	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
-		return nil, a.newWorkerTargetRefusedError(err)
-	}
 	if err != nil && !dispatch.isOpened {
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 	}
@@ -200,18 +189,11 @@ func (a *Activities) IWaitForM(
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
-	if err := validateTenantWaitForAttributeWrites(input.GetTenantId(), resp); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
-	}
 	if err := a.offloadSubFlowStartInputs(
 		ctx,
-		input.GetTenantId(),
 		req.GetContext().GetStepExecutionId(),
 		resp.GetWaitingCondition().GetSubFlowConditions(),
 	); err != nil {
-		if errors.Is(err, tenancy.ErrStoredFlowIDTooLong) {
-			return nil, a.newInvalidSubFlowIDError(err)
-		}
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -259,13 +241,12 @@ func (a *Activities) IWaitForM(
 
 func (a *Activities) offloadSubFlowStartInputs(
 	ctx context.Context,
-	tenantID string,
 	stepExecutionID string,
 	conditions []*dexpb.SubFlowCondition,
 ) error {
 	for index, condition := range conditions {
 		parentFlowID, subFlowID, requestID, err := a.subFlowStartIdentity(
-			ctx, tenantID, stepExecutionID, int32(index),
+			ctx, stepExecutionID, int32(index),
 		)
 		if err != nil {
 			return err
@@ -353,26 +334,15 @@ func (a *Activities) IExecuteM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
-	dispatchContext, err := a.dispatchWorkerContext(ctx, input.GetTenantId(), req.GetContext())
-	if err != nil {
-		return nil, err
-	}
-	tenant := tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
-	storedContext := req.Context
-	req.Context = dispatchContext
 	dispatch, err := openWorkerStream(
-		ctx, a, tenant, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+		ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
 		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 			grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
 		) {
 			return client.InvokeExecuteMethod(callCtx, req)
 		},
 	)
-	req.Context = storedContext
-	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
-		return nil, a.newWorkerTargetRefusedError(err)
-	}
 	if err != nil && !dispatch.isOpened {
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 	}
@@ -395,9 +365,6 @@ func (a *Activities) IExecuteM(
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
-	}
-	if err := tenancy.ValidateTenantAttributeWrites(input.GetTenantId(), resp.GetUpsertAttributes()); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -821,12 +788,8 @@ func (a *Activities) IWRPC(
 		input.GetRequest().GetRequestId(),
 		&a.cfg.BlobStore,
 		true,
-		tenancy.DispatchTenant{ID: input.GetTenantId(), Claims: input.GetTenantClaims()},
-		a.dispatchGate,
+		a.wakeNotifier,
 	)
-	if errors.Is(err, tenancy.ErrWorkerTargetNotAllowed) {
-		return nil, a.newWorkerTargetRefusedError(err)
-	}
 	if err != nil {
 		var oversizedRequest *rpc.WorkerRequestTooLargeError
 		if errors.As(err, &oversizedRequest) {
@@ -863,11 +826,8 @@ func (a *Activities) StartSubFlow(
 		return nil, fmt.Errorf("SubFlow start requires a condition")
 	}
 	parentFlowID, subFlowID, requestID, err := a.subFlowStartIdentity(
-		ctx, input.GetTenantId(), input.GetParentStepExecutionId(), condition.GetSubFlowIndex(),
+		ctx, input.GetParentStepExecutionId(), condition.GetSubFlowIndex(),
 	)
-	if errors.Is(err, tenancy.ErrStoredFlowIDTooLong) {
-		return nil, a.newInvalidSubFlowIDError(err)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -899,21 +859,14 @@ func (a *Activities) StartSubFlow(
 	if err != nil {
 		return nil, err
 	}
-	if flowConfig.WorkerTarget, err = a.dispatchGate.Policy().Resolve(
-		input.GetTenantClaims(),
-		flowConfig.GetWorkerTarget(),
-	); err != nil {
-		return nil, a.newWorkerTargetRefusedError(err)
-	}
 	for _, storeName := range flowConfig.GetAttributeStoreNames().GetNames() {
-		if !a.attributeStore.HasStore(storeName) ||
-			!a.dispatchGate.IsAttributeStoreAllowed(input.GetTenantId(), storeName) {
+		if !a.attributeStore.HasStore(storeName) {
 			return nil, fmt.Errorf("Attribute Store %q is unavailable", storeName)
 		}
 	}
 
 	workflowOptions := buildSubFlowStartOptions(
-		input.GetTenantId(), a.dispatchGate.FairnessKey(input.GetTenantId()), condition, flowConfig, parentFlowID, subFlowID, requestID,
+		condition, flowConfig, parentFlowID, subFlowID, requestID,
 	)
 	workflowInput := &dexpb.InterpreterWorkflowInput{
 		FlowType:                     condition.GetSubFlowType(),
@@ -925,8 +878,6 @@ func (a *Activities) StartSubFlow(
 		InitAttributes:               options.GetAttributes(),
 		Config:                       flowConfig,
 		TimeoutHandlerOptions:        options.GetTimeoutHandlerOptions(),
-		TenantId:                     input.GetTenantId(),
-		TenantClaims:                 input.GetTenantClaims(),
 	}
 	output, err := a.subFlowResolver.Resolve(
 		ctx, condition, subFlowID, requestID, workflowOptions, workflowInput,
@@ -951,7 +902,6 @@ func (a *Activities) StartSubFlow(
 
 func (a *Activities) subFlowStartIdentity(
 	ctx context.Context,
-	tenantID string,
 	stepExecutionID string,
 	subFlowIndex int32,
 ) (string, string, string, error) {
@@ -964,13 +914,7 @@ func (a *Activities) subFlowStartIdentity(
 		return "", "", "", fmt.Errorf("SubFlow start requires a parent Workflow execution")
 	}
 	requestID := parentExecution.RunID + stepExecutionID
-	subFlowID, err := tenancy.SubFlowID(tenantID, parentExecution.ID, stepExecutionID, subFlowIndex)
-	if err == nil && tenantID != "" {
-		err = tenancy.ValidateStoredFlowIDLength(subFlowID, a.cfg.Tenancy.EffectiveMaxStoredFlowIDBytes())
-	}
-	if err != nil {
-		return "", "", "", err
-	}
+	subFlowID := service.SubFlowID(parentExecution.ID, stepExecutionID, subFlowIndex)
 	return parentExecution.ID, subFlowID, requestID, nil
 }
 
@@ -1091,8 +1035,6 @@ func buildSubFlowConfig(parent, override *dexpb.FlowConfig) (*dexpb.FlowConfig, 
 }
 
 func buildSubFlowStartOptions(
-	tenantID string,
-	fairnessKey string,
 	condition *dexpb.SubFlowCondition,
 	flowConfig *dexpb.FlowConfig,
 	parentFlowID string,
@@ -1112,10 +1054,6 @@ func buildSubFlowStartOptions(
 	}
 	workflowOptions.SearchAttributes[service.SearchAttributeDexWorkflowType] = condition.GetSubFlowType()
 	workflowOptions.SearchAttributes[service.SearchAttributeDexParentFlowID] = parentFlowID
-	if tenantID != "" {
-		workflowOptions.SearchAttributes[tenancy.SearchAttributeDexTenantID] = tenantID
-	}
-	workflowOptions.FairnessKey = fairnessKey
 	if options.GetFlowStartDelaySeconds() > 0 {
 		workflowOptions.WorkflowStartDelay = ptr.Any(time.Duration(options.GetFlowStartDelaySeconds()) * time.Second)
 	}
@@ -1123,30 +1061,13 @@ func buildSubFlowStartOptions(
 }
 
 // CleanupBlobsAfterAllRunsDeleted deletes blobs after the backend removes every run.
-// A tenant path is deleted only after two NotFound answers for its stored Flow ID, a confirmation delay apart.
 func (a *Activities) CleanupBlobsAfterAllRunsDeleted(
 	ctx context.Context, input *dexpb.CleanupBlobStoreActivityInput,
 ) (*dexpb.CleanupBlobStoreActivityOutput, error) {
 	logger := a.activityProvider.GetLogger(ctx)
 	logger.Info("CleanupBlobsAfterAllRunsDeleted started")
 	cleanup := &blobCleanup{activities: a, ctx: ctx, storeID: input.GetStoreId(), logger: logger}
-	tenantSegments, err := cleanup.cleanDirectory("")
-	if err != nil {
-		return nil, err
-	}
-	if !a.cfg.Tenancy.IsMultiTenant() {
-		tenantSegments = nil
-	}
-	for _, tenantSegment := range tenantSegments {
-		if !config.TenantIDPattern.MatchString(tenantSegment) {
-			logger.Warn("CleanupBlobsAfterAllRunsDeleted skipped an invalid tenant segment", "segment", tenantSegment)
-			continue
-		}
-		if _, err := cleanup.cleanDirectory(tenantSegment); err != nil {
-			return nil, err
-		}
-	}
-	if err := cleanup.deleteConfirmedTenantPaths(); err != nil {
+	if err := cleanup.cleanDirectory(); err != nil {
 		return nil, err
 	}
 	logger.Info("CleanupBlobsAfterAllRunsDeleted completed", "totalDeleted", cleanup.totalDeleted)
@@ -1155,40 +1076,33 @@ func (a *Activities) CleanupBlobsAfterAllRunsDeleted(
 
 // blobCleanup is one run of the blob cleanup activity.
 type blobCleanup struct {
-	activities      *Activities
-	ctx             context.Context
-	storeID         string
-	logger          interfaces.UnifiedLogger
-	totalDeleted    int32
-	pendingTenant   []blobstore.WorkflowPath
-	pendingPaths    []string
-	firstNotFoundAt time.Time
+	activities   *Activities
+	ctx          context.Context
+	storeID      string
+	logger       interfaces.UnifiedLogger
+	totalDeleted int32
 }
 
-// cleanDirectory handles every workflow path of the namespace root or of one tenant, and returns the root's
-// tenant segments.
-func (c *blobCleanup) cleanDirectory(tenantID string) ([]string, error) {
-	var tenantSegments []string
+// cleanDirectory handles every workflow path of the namespace root.
+func (c *blobCleanup) cleanDirectory() error {
 	var continueToken *string
 	for {
 		listOutput, err := c.activities.blobStore.ListWorkflowPaths(c.ctx, blobstore.ListObjectPathsInput{
 			StoreId:           c.storeID,
 			ContinuationToken: continueToken,
-			TenantID:          tenantID,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
-		tenantSegments = append(tenantSegments, listOutput.TenantSegments...)
 		for _, workflowPath := range listOutput.WorkflowPaths {
 			if err := c.cleanWorkflowPath(workflowPath); err != nil {
-				return nil, err
+				return err
 			}
 			c.activities.activityProvider.RecordHeartbeat(c.ctx)
 		}
 		continueToken = listOutput.ContinuationToken
 		if continueToken == nil {
-			return tenantSegments, nil
+			return nil
 		}
 	}
 }
@@ -1203,48 +1117,7 @@ func (c *blobCleanup) cleanWorkflowPath(workflowPath string) error {
 	if err != nil || !isNotFound {
 		return err
 	}
-	if parsedPath.TenantID == "" {
-		return c.delete(workflowPath)
-	}
-	if c.firstNotFoundAt.IsZero() {
-		c.firstNotFoundAt = time.Now()
-	}
-	c.pendingTenant = append(c.pendingTenant, parsedPath)
-	c.pendingPaths = append(c.pendingPaths, workflowPath)
-	return nil
-}
-
-// deleteConfirmedTenantPaths waits out the confirmation delay, heartbeating, and deletes the tenant paths whose
-// stored Flow ID is still NotFound, which guards against visibility lag.
-func (c *blobCleanup) deleteConfirmedTenantPaths() error {
-	if len(c.pendingTenant) == 0 {
-		return nil
-	}
-	confirmAt := c.firstNotFoundAt.Add(c.activities.cfg.BlobStore.EffectiveTenantCleanupConfirmationDelay())
-	for wait := time.Until(confirmAt); wait > 0; wait = time.Until(confirmAt) {
-		timer := time.NewTimer(min(wait, 5*time.Second))
-		select {
-		case <-c.ctx.Done():
-			timer.Stop()
-			return c.ctx.Err()
-		case <-timer.C:
-		}
-		c.activities.activityProvider.RecordHeartbeat(c.ctx)
-	}
-	for i, parsedPath := range c.pendingTenant {
-		isNotFound, err := c.isFlowNotFound(parsedPath)
-		if err != nil {
-			return err
-		}
-		if !isNotFound {
-			continue
-		}
-		if err := c.delete(c.pendingPaths[i]); err != nil {
-			return err
-		}
-		c.activities.activityProvider.RecordHeartbeat(c.ctx)
-	}
-	return nil
+	return c.delete(workflowPath)
 }
 
 func (c *blobCleanup) isFlowNotFound(parsedPath blobstore.WorkflowPath) (bool, error) {
@@ -1496,19 +1369,6 @@ func validateWorkerWaitForResponse(
 		return err
 	}
 	return validateWorkerChannelDeletions(resp.GetDeleteFromChannel())
-}
-
-// validateTenantWaitForAttributeWrites refuses tenant index writes in upserts and in SubFlow start Attributes.
-func validateTenantWaitForAttributeWrites(tenantID string, resp *dexpb.InvokeWaitForMethodResponse) error {
-	if err := tenancy.ValidateTenantAttributeWrites(tenantID, resp.GetUpsertAttributes()); err != nil {
-		return err
-	}
-	for _, condition := range resp.GetWaitingCondition().GetSubFlowConditions() {
-		if err := tenancy.ValidateTenantAttributeWrites(tenantID, condition.GetOptions().GetAttributes()); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func validateExecuteResponse(
@@ -2062,39 +1922,6 @@ func (a *Activities) emitStepExecuteMethodEvent(
 	})
 }
 
-// dispatchWorkerContext returns the Context a Worker sees: the application Flow ID of the input's tenant.
-// A tenant that disagrees with the Flow ID's prefix fails without retry.
-func (a *Activities) dispatchWorkerContext(
-	ctx context.Context,
-	tenantID string,
-	storedContext *dexpb.Context,
-) (*dexpb.Context, error) {
-	applicationFlowID, err := tenancy.DispatchFlowID(tenantID, storedContext.GetFlowId())
-	if err != nil {
-		return nil, a.activityProvider.NewNonRetryableActivityError(
-			dexpb.FlowErrorType_FLOW_ERROR_TYPE_INTERNAL,
-			&dexpb.InternalActivityError{ServerDetail: err.Error()},
-		)
-	}
-	if applicationFlowID == storedContext.GetFlowId() {
-		return storedContext, nil
-	}
-	dispatchContext := proto.Clone(storedContext).(*dexpb.Context)
-	dispatchContext.FlowId = applicationFlowID
-	return dispatchContext, nil
-}
-
-// newInvalidSubFlowIDError fails the Step without retry, because a SubFlow ID never shrinks.
-func (a *Activities) newInvalidSubFlowIDError(err error) error {
-	return a.activityProvider.NewNonRetryableActivityError(
-		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
-		&dexpb.InternalActivityError{
-			WorkerGrpcStatus: int32(codes.InvalidArgument),
-			ServerDetail:     err.Error(),
-		},
-	)
-}
-
 // workerStreamDispatch is one admitted dispatch with its open stream.
 type workerStreamDispatch[S any] struct {
 	stream   S
@@ -2103,30 +1930,23 @@ type workerStreamDispatch[S any] struct {
 	isOpened bool
 }
 
-// openWorkerStream admits a tenant's dispatch, then opens the stream, holding an unavailable Worker within the wake
-// budget. isOpened is false when the dispatch failed before a stream call was attempted.
+// openWorkerStream retries unavailable Workers within the wake budget. isOpened reports whether a stream call was attempted.
 func openWorkerStream[S any](
 	ctx context.Context,
 	a *Activities,
-	tenant tenancy.DispatchTenant,
 	target *dexpb.WorkerTarget,
 	flowID string,
 	heartbeat func(),
 	open func(dexpb.WorkerServiceClient, context.Context) (S, error),
 ) (workerStreamDispatch[S], error) {
 	dispatch := workerStreamDispatch[S]{release: func() {}}
-	releaseSlot, err := a.dispatchGate.Admit(ctx, tenant, target, heartbeat)
-	if err != nil {
-		return dispatch, err
-	}
-	hold := a.dispatchGate.NewWakeHold(tenant, target, heartbeat)
+	hold := a.wakeNotifier.NewHold(target.GetAddress(), heartbeat)
 	for {
 		client, callCtx, releaseConnection, acquireErr := a.workerPool.Acquire(ctx, target, flowID)
 		if acquireErr != nil {
 			if hold.ShouldRedial(ctx, acquireErr) {
 				continue
 			}
-			releaseSlot()
 			return dispatch, acquireErr
 		}
 		stream, openErr := open(client, callCtx)
@@ -2140,7 +1960,6 @@ func openWorkerStream[S any](
 		dispatch.stream, dispatch.callCtx, dispatch.isOpened = stream, callCtx, true
 		dispatch.release = func() {
 			releaseConnection()
-			releaseSlot()
 		}
 		return dispatch, openErr
 	}
@@ -2163,15 +1982,4 @@ func (a *Activities) dispatchHeartbeat(
 		}
 		a.activityProvider.RecordHeartbeat(ctx, lastHeartbeatValue)
 	}
-}
-
-// newWorkerTargetRefusedError fails the Step without retry: the tenant may not dispatch to this Worker target.
-func (a *Activities) newWorkerTargetRefusedError(err error) error {
-	return a.activityProvider.NewNonRetryableActivityError(
-		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
-		&dexpb.InternalActivityError{
-			WorkerGrpcStatus: int32(codes.PermissionDenied),
-			ServerDetail:     err.Error(),
-		},
-	)
 }

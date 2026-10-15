@@ -24,8 +24,7 @@ const credentialFileCheckInterval = time.Second
 
 // Credential supplies the bearer credential that a Client or Worker sends with every FlowService call.
 //
-// A Dex server in multi-tenant mode requires a credential on every call and derives the caller's
-// tenant from it; a single-tenant server ignores it. Use FileCredential for a token that another
+// A Dex server with authentication enabled requires a credential on every public API call. Use FileCredential for a token that another
 // process, such as a Kubernetes projected service account token, writes and rotates.
 //
 //	credential, err := dex.FileCredential("/var/run/secrets/dex/token")

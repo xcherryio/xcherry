@@ -64,8 +64,6 @@ func (i *Interpreter) StartEngineFlow(
 	basicInfo := service.BasicInfo{
 		FlowType:            input.GetFlowType(),
 		RunStartedTimestamp: runStartedTimestamp,
-		TenantID:            input.GetTenantId(),
-		TenantClaims:        input.GetTenantClaims(),
 	}
 	flowTimeout := NewFlowTimeout(input)
 	subFlowParentFlowID, parentFlowErr := provider.GetSearchAttributeKeyword(
@@ -195,7 +193,6 @@ func (i *Interpreter) StartEngineFlow(
 	} // end of NOT continueAsNew
 	subFlowTracker := NewSubFlowTracker(
 		provider.GetWorkflowInfo(ctx).WorkflowExecution.ID,
-		input.GetTenantId(),
 		resumeInfos,
 	)
 	stepExecutionRegistry := NewStepExecutionRegistry(
@@ -260,7 +257,7 @@ func (i *Interpreter) StartEngineFlow(
 	defer func() {
 		// Every normal return must provide a non-nil output or a non-nil error.
 		// Cadence cache eviction exits suspended workflow goroutines without a result; it must not finalize the Flow.
-		if i.activities.unifiedClient.GetBackendType() == service.BackendTypeCadence && out == nil && retErr == nil {
+		if i.sharedConfig.Interpreter.Cadence != nil && out == nil && retErr == nil {
 			return
 		}
 		retErr = terminalCoordinator.CoordinateAndFinalizeError(ctx, retErr)
@@ -923,8 +920,6 @@ func (i *Interpreter) processStepExecution(
 
 		activityInput := &dexpb.InvokeWaitForMethodActivityInput{
 			WorkerTarget: flowConfiger.GetWorkerTarget(),
-			TenantId:     basicInfo.TenantID,
-			TenantClaims: basicInfo.TenantClaims,
 			Request: &dexpb.InvokeWaitForMethodRequest{
 				Context:      executionContext,
 				FlowType:     basicInfo.FlowType,
@@ -1260,8 +1255,6 @@ func (i *Interpreter) invokeExecuteMethod(
 	continueAsNewer.RemoveStepExecutionToResume(stepExeId)
 	activityInput := &dexpb.InvokeExecuteMethodActivityInput{
 		WorkerTarget: flowConfiger.GetWorkerTarget(),
-		TenantId:     basicInfo.TenantID,
-		TenantClaims: basicInfo.TenantClaims,
 		Request: &dexpb.InvokeExecuteMethodRequest{
 			Context:          executionContext,
 			FlowType:         basicInfo.FlowType,

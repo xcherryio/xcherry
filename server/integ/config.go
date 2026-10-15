@@ -45,10 +45,6 @@ type DexServiceTestConfig struct {
 	UseBuiltInDefaultWorkflowConfig bool
 	// S3KeyPrefix is the S3 storage's object key prefix when S3TestThreshold is set.
 	S3KeyPrefix string
-	// TenantCleanupConfirmationDelay overrides the blob cleanup confirmation delay of tenant paths.
-	TenantCleanupConfirmationDelay time.Duration
-	// Tenancy enables multi-tenant mode; the runtime assigns the internal listener address.
-	Tenancy *config.TenancyConfig
 	// Auth authenticates the public API. Default empty leaves it open.
 	Auth *config.AuthConfig
 	// Internal configures the protected InternalService listener.
@@ -102,10 +98,6 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 		},
 	}
 	cfg.AttributeStore = testCfg.AttributeStore
-	if testCfg.Tenancy != nil {
-		cfg.Tenancy = *testCfg.Tenancy
-		cfg.Interpreter.AttributeIndexesManagedExternally = true
-	}
 	if testCfg.Auth != nil {
 		cfg.Auth = *testCfg.Auth
 	}
@@ -167,6 +159,5 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 			}},
 		}
 	}
-	cfg.BlobStore.TenantCleanupConfirmationDelay = testCfg.TenantCleanupConfirmationDelay
 	return cfg
 }

@@ -12,7 +12,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -27,8 +26,7 @@ import (
 	"github.com/superdurable/dex/service/common/log/tag"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
-	"github.com/superdurable/dex/service/tenancy"
-	"github.com/superdurable/dex/service/tenantadmin"
+	"github.com/superdurable/dex/service/wake"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -40,22 +38,19 @@ import (
 const maxCredentialHeaderListBytes = 32 << 10
 
 // Server hosts FlowService, InternalService, and grpc.health.
-// With authentication or multi-tenant mode, InternalService moves to a separate internal gRPC server.
+// Authentication serves InternalService on a separate listener.
 type Server struct {
 	cfg                *config.ApiConfig
 	grpcServer         *grpc.Server
 	internalGrpcServer *grpc.Server
-	// tombstones is nil in single-tenant mode.
-	tombstones *tenancy.TombstoneRegistry
-	healthSrv  *health.Server
-	handler    *handler
-	logger     log.Logger
-	readyCheck func(context.Context) error
+	healthSrv          *health.Server
+	handler            *handler
+	logger             log.Logger
+	readyCheck         func(context.Context) error
 }
 
 func NewServer(
 	apiCfg *config.ApiConfig,
-	tenancyCfg *config.TenancyConfig,
 	blobStoreCfg *config.BlobStoreConfig,
 	interpreterCfg *config.Interpreter,
 	client uclient.UnifiedClient,
@@ -67,14 +62,13 @@ func NewServer(
 	workerPool *workerclient.WorkerClientPool,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
-	return NewServerWithAccess(apiCfg, tenancyCfg, &config.AuthConfig{}, &config.InternalConfig{}, &config.WakeConfig{}, blobStoreCfg, interpreterCfg,
+	return NewServerWithAccess(apiCfg, &config.AuthConfig{}, &config.InternalConfig{}, &config.WakeConfig{}, blobStoreCfg, interpreterCfg,
 		client, logger, store, attributeStore, streamStore, readyCheck, workerPool, extraUnaryInterceptors...)
 }
 
 // NewServerWithAccess builds the public and optional private gRPC listeners.
 func NewServerWithAccess(
 	apiCfg *config.ApiConfig,
-	tenancyCfg *config.TenancyConfig,
 	authCfg *config.AuthConfig,
 	internalCfg *config.InternalConfig,
 	wakeCfg *config.WakeConfig,
@@ -92,14 +86,8 @@ func NewServerWithAccess(
 	if apiCfg == nil {
 		panic("apiCfg must not be nil")
 	}
-	if tenancyCfg == nil {
-		panic("tenancyCfg must not be nil")
-	}
 	if authCfg == nil || internalCfg == nil || wakeCfg == nil {
 		panic("access config sections must not be nil")
-	}
-	if authCfg.IsEnabled() && tenancyCfg.IsMultiTenant() {
-		return nil, fmt.Errorf("auth and tenancy.mode multi cannot be enabled together")
 	}
 	if authCfg.IsEnabled() && (internalCfg.Listen == "" || internalCfg.TokenFile == "") {
 		return nil, fmt.Errorf("internal.listen and internal.tokenFile are required when auth is enabled")
@@ -132,13 +120,6 @@ func NewServerWithAccess(
 		readyCheck = func(context.Context) error { return nil }
 	}
 
-	var internalToken *tenancy.InternalTokenFile
-	if tenancyCfg.IsMultiTenant() {
-		var err error
-		if internalToken, err = tenancy.NewInternalTokenFile(tenancyCfg.Internal.TokenFile, logger); err != nil {
-			return nil, fmt.Errorf("tenancy.internal.tokenFile: %w", err)
-		}
-	}
 	var generalInternalToken *auth.InternalTokenFile
 	if internalCfg.TokenFile != "" {
 		var err error
@@ -147,18 +128,11 @@ func NewServerWithAccess(
 			return nil, fmt.Errorf("internal.tokenFile: %w", err)
 		}
 	}
-	var wakeToken *tenancy.InternalTokenFile
-	if tenancyCfg.Wake.URL != "" {
-		wakeToken = internalToken
-	}
 	var generalWakeToken interface{ Token() string }
 	if generalInternalToken != nil {
 		generalWakeToken = generalInternalToken
 	}
-	dispatchGate, err := tenancy.NewDispatchGateWithWake(tenancyCfg, wakeCfg, wakeToken, generalWakeToken, logger)
-	if err != nil {
-		return nil, err
-	}
+	wakeNotifier := wake.NewNotifier(wakeCfg, generalWakeToken, logger)
 	handler := newHandler(
 		apiCfg,
 		blobStoreCfg,
@@ -169,7 +143,7 @@ func NewServerWithAccess(
 		attributeStore,
 		streamStore,
 		workerPool,
-		dispatchGate,
+		wakeNotifier,
 	)
 	maxMsg := apiCfg.EffectiveGrpcMaxMessageBytes()
 	healthSrv := health.NewServer()
@@ -188,7 +162,7 @@ func NewServerWithAccess(
 		logger:     logger,
 		readyCheck: readyCheck,
 	}
-	if !tenancyCfg.IsMultiTenant() && !authCfg.IsEnabled() {
+	if !authCfg.IsEnabled() {
 		server.grpcServer = grpc.NewServer(append(
 			serverOptions,
 			grpc.ChainUnaryInterceptor(unaryInterceptorChain(nil, extraUnaryInterceptors, logger)...),
@@ -198,71 +172,22 @@ func NewServerWithAccess(
 		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
 		return server, nil
 	}
-	if authCfg.IsEnabled() {
-		authenticator, err := auth.NewAuthenticator(authCfg, logger)
-		if err != nil {
-			return nil, err
-		}
-		serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxCredentialHeaderListBytes))
-		publicInterceptors := auth.NewPublicServiceInterceptors(authenticator)
-		server.grpcServer = grpc.NewServer(append(serverOptions,
-			grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{publicInterceptors.Unary}, extraUnaryInterceptors, logger)...),
-			grpc.ChainStreamInterceptor(publicInterceptors.Stream))...)
-		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
-		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
-		internalInterceptors := auth.NewInternalServiceInterceptor(generalInternalToken, []string{dexpb.InternalService_ServiceDesc.ServiceName})
-		server.internalGrpcServer = grpc.NewServer(append(serverOptions,
-			grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{internalInterceptors.Unary}, extraUnaryInterceptors, logger)...),
-			grpc.ChainStreamInterceptor(internalInterceptors.Stream))...)
-		dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
-		healthpb.RegisterHealthServer(server.internalGrpcServer, healthSrv)
-		return server, nil
-	}
-
-	authenticator, err := tenancy.NewAuthenticator(tenancyCfg, logger)
+	authenticator, err := auth.NewAuthenticator(authCfg, logger)
 	if err != nil {
 		return nil, err
 	}
 	// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
 	serverOptions = append(serverOptions, grpc.MaxHeaderListSize(maxCredentialHeaderListBytes))
-	tombstones, err := tenancy.NewTombstoneRegistry(
-		tenancyCfg,
-		store,
-		func(err error) bool { return errors.Is(err, blobstore.ErrTenancyRecordConflict) },
-		logger,
-	)
-	if err != nil {
-		return nil, err
-	}
-	server.tombstones = tombstones
-	publicInterceptors := tenancy.NewPublicServiceInterceptors(authenticator, tombstones)
-	server.grpcServer = grpc.NewServer(append(
-		serverOptions,
-		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
-			[]grpc.UnaryServerInterceptor{
-				publicInterceptors.Unary,
-				tenancy.NewTenantRateLimiter(&tenancyCfg.Limits).Unary,
-				tenancy.NewFlowIDMapper(tenancyCfg).Unary,
-			},
-			extraUnaryInterceptors,
-			logger,
-		)...),
-		grpc.ChainStreamInterceptor(publicInterceptors.Stream),
-	)...)
+	publicInterceptors := auth.NewPublicServiceInterceptors(authenticator)
+	server.grpcServer = grpc.NewServer(append(serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{publicInterceptors.Unary}, extraUnaryInterceptors, logger)...),
+		grpc.ChainStreamInterceptor(publicInterceptors.Stream))...)
 	dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
-	dexpb.RegisterTenantAdminServiceServer(server.grpcServer, tenantadmin.NewService(
-		tenancyCfg, client, store, streamStore, attributeStore, tombstones,
-	))
 	healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
-
-	server.internalGrpcServer = grpc.NewServer(append(
-		serverOptions,
-		grpc.ChainUnaryInterceptor(unaryInterceptorChain(
-			[]grpc.UnaryServerInterceptor{tenancy.NewInternalServiceInterceptor(internalToken).Unary},
-			extraUnaryInterceptors,
-			logger,
-		)...),
-	)...)
+	internalInterceptors := auth.NewInternalServiceInterceptor(generalInternalToken, []string{dexpb.InternalService_ServiceDesc.ServiceName})
+	server.internalGrpcServer = grpc.NewServer(append(serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{internalInterceptors.Unary}, extraUnaryInterceptors, logger)...),
+		grpc.ChainStreamInterceptor(internalInterceptors.Stream))...)
 	dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
 	healthpb.RegisterHealthServer(server.internalGrpcServer, healthSrv)
 	return server, nil
@@ -273,7 +198,7 @@ func (s *Server) HasInternalListener() bool {
 	return s.internalGrpcServer != nil
 }
 
-// ServeInternal hosts InternalService on listener when authentication or multi-tenant mode is enabled.
+// ServeInternal hosts InternalService on listener when authentication is enabled.
 func (s *Server) ServeInternal(listener net.Listener) error {
 	if s.internalGrpcServer == nil {
 		panic("ServeInternal requires an internal listener")
@@ -336,9 +261,6 @@ func (s *Server) StopServing(timeout time.Duration) {
 
 func (s *Server) Close() {
 	s.handler.close()
-	if s.tombstones != nil {
-		s.tombstones.Close()
-	}
 }
 
 func (s *Server) setServing(serving bool) {
