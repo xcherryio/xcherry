@@ -61,26 +61,31 @@ type rawPullWorker struct {
 	spawnSubFlow        bool
 	spawnParallel       bool
 	blockParallel       bool
+	sendProgress        bool
 	releaseParallel     chan struct{}
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false, false, false, false)
+}
+
+func startProgressPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, false, false, true)
 }
 
 func startDisconnectingPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, true, false, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, true, false, false, false, false)
 }
 
 func startSubFlowPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false, false)
 }
 
 func startParallelPullWorker(t *testing.T, address string, flowType string, workerID string, blockParallel bool) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, true, blockParallel)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, true, blockParallel, false)
 }
 
-func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool) *rawPullWorker {
+func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -89,7 +94,7 @@ func newRawPullWorker(t *testing.T, address string, flowType string, workerID st
 		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
 		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
-		spawnParallel: spawnParallel, blockParallel: blockParallel,
+		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress,
 	}
 	for _, queue := range []string{flowType, workerID} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -195,12 +200,54 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			w.errors <- fmt.Errorf("unexpected pull task request %T", task.GetRequest())
 			return
 		}
+		if w.sendProgress && method != "rpc" {
+			if err := w.sendProgressFrames(stream, task.GetTaskId(), method); err != nil {
+				w.errors <- err
+				return
+			}
+		}
 		if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: output}}); err != nil {
 			w.errors <- err
 			return
 		}
 		w.events <- observation
 	}
+}
+
+func (w *rawPullWorker) sendProgressFrames(
+	stream dexpb.WorkerTaskService_PollWorkerTaskClient, taskID string, method string,
+) error {
+	var heartbeat *dexpb.PollWorkerTaskFrame
+	var streamWrite *dexpb.PollWorkerTaskFrame
+	progress := &dexpb.StepStreamWrite{
+		StreamName: method + "-progress", StreamCapacityBytes: 1 << 20,
+		Value: stringValue(method + "-progress"),
+	}
+	if method == "wait_for" {
+		heartbeat = &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_WaitFor{
+			WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Heartbeat{
+				Heartbeat: &dexpb.StepMethodHeartbeat{Value: stringValue("wait-checkpoint")},
+			}},
+		}}
+		streamWrite = &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_WaitFor{
+			WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_StreamWrite{StreamWrite: progress}},
+		}}
+	} else {
+		heartbeat = &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_Execute{
+			Execute: &dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_Heartbeat{
+				Heartbeat: &dexpb.StepMethodHeartbeat{Value: stringValue("execute-checkpoint")},
+			}},
+		}}
+		streamWrite = &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_Execute{
+			Execute: &dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_StreamWrite{StreamWrite: progress}},
+		}}
+	}
+	for _, frame := range []*dexpb.PollWorkerTaskFrame{heartbeat, streamWrite} {
+		if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: frame}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *rawPullWorker) stop() {
@@ -693,9 +740,12 @@ func testPullWorkerUnavailable(t *testing.T, backend service.BackendType) {
 
 func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
 	t.Helper()
-	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	runtime := startInProcessDexService(t, DexServiceTestConfig{
+		BackendType: backend, Matching: &config.MatchingConfig{},
+		StreamStore: config.StreamStoreConfig{Backend: config.StreamStoreBackendMemory},
+	})
 	workerID := "pull-worker-" + uuid.NewString()
-	worker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, workerID, nil)
+	worker := startProgressPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, workerID)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	flowID := "pull-dispatch-" + uuid.NewString()
@@ -713,6 +763,14 @@ func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	second := waitForPullTask(t, worker, flowID)
 	require.Equal(t, pullTaskObservation{queue: workerID, method: "execute", flowID: flowID, attempt: 1}, second)
+	for _, method := range []string{"wait_for", "execute"} {
+		messages, listErr := runtime.FlowClient.ListStreamMessages(ctx, &dexpb.ListStreamMessagesRequest{
+			FlowId: flowID, FlowType: dispatchProbeFlowType, StreamName: method + "-progress", PageSize: 10,
+		})
+		require.NoError(t, listErr)
+		require.Len(t, messages.GetMessages(), 1)
+		require.Equal(t, method+"-progress", messages.GetMessages()[0].GetValue().GetStringValue())
+	}
 
 	rpcFlowID := "pull-rpc-" + uuid.NewString()
 	_, err = runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
