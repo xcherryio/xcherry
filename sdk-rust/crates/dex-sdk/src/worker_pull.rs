@@ -85,12 +85,12 @@ struct StreamRegistration {
 
 impl Drop for StreamRegistration {
     fn drop(&mut self) {
-        self.shared
-            .state
-            .lock()
-            .expect("pull state lock")
-            .streams
-            .remove(&self.stream_id);
+        let mut state = self.shared.state.lock().expect("pull state lock");
+        if let Some(slot) = state.streams.remove(&self.stream_id)
+            && slot.is_busy
+        {
+            state.busy_tasks -= 1;
+        }
         self.shared.notify.notify_one();
     }
 }
@@ -270,14 +270,13 @@ impl PullStream {
             if *self.stop.borrow() != 0 {
                 break;
             }
-            if is_reconnecting && result.is_ok() {
-                backoff = Duration::from_millis(100);
-                continue;
-            }
             if was_registered || is_reconnecting {
                 backoff = Duration::from_millis(100);
             }
-            let delay = match &result {
+            let has_permanent_error = result
+                .as_ref()
+                .is_err_and(|status| is_permanent(status.code()));
+            match &result {
                 Err(status) if status.code() == Code::Unimplemented => {
                     let mut state = self.shared.state.lock().expect("pull state lock");
                     if !state.logged_unsupported {
@@ -286,33 +285,31 @@ impl PullStream {
                             "ERROR: pull Worker polling is unsupported by this Dex server: {status}"
                         );
                     }
-                    Duration::from_secs(60)
+                    backoff = Duration::from_secs(60);
                 }
                 Err(status) if is_permanent(status.code()) => {
                     eprintln!(
                         "ERROR: Worker task stream rejected for {}: {status}",
                         self.queue
                     );
-                    backoff = Duration::from_millis(100);
-                    Duration::from_secs(60)
+                    backoff = Duration::from_secs(60);
                 }
                 Err(status) => {
                     eprintln!(
                         "WARN: Worker task stream disconnected for {}: {status}",
                         self.queue
                     );
-                    backoff
                 }
-                Ok(()) => backoff,
-            };
+                Ok(()) => {}
+            }
             let jitter = Duration::from_millis(
-                (uuid::Uuid::new_v4().as_u128() as u64) % (delay.as_millis() as u64 / 2).max(1),
+                (uuid::Uuid::new_v4().as_u128() as u64) % (backoff.as_millis() as u64 / 2).max(1),
             );
             tokio::select! {
-                () = sleep(delay + jitter) => {}
+                () = sleep(backoff + jitter) => {}
                 change = self.stop.changed() => { if change.is_err() || *self.stop.borrow() != 0 { break; } }
             }
-            if delay < Duration::from_secs(60) {
+            if !has_permanent_error {
                 backoff = (backoff * 2).min(Duration::from_secs(5));
             }
         }
@@ -1256,7 +1253,7 @@ mod tests {
     }
 
     enum DrainEvent {
-        FinalFrame(PollWorkerTaskFrame),
+        FinalFrame(Box<PollWorkerTaskFrame>),
         HalfClosed,
         ReadError(Status),
     }
@@ -1343,7 +1340,9 @@ mod tests {
                         Ok(Some(PollWorkerTaskRequest {
                             frame: Some(RequestFrame::TaskFrame(frame)),
                         })) if is_task_stream => {
-                            if let Err(error) = events.send(DrainEvent::FinalFrame(frame)).await {
+                            if let Err(error) =
+                                events.send(DrainEvent::FinalFrame(Box::new(frame))).await
+                            {
                                 eprintln!("record final frame: {error}");
                                 break;
                             }

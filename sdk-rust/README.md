@@ -321,8 +321,10 @@ The Worker reconnects after stream failures and drains an active task before a
 server-directed reconnect. Registration failures back off; an older server
 without pull support logs one explicit error and retries. `Worker::start`
 returns startup errors, while later polling failures are logged and retried.
-A permanent registration error waits one minute; a later transient failure
-restarts exponential backoff at 100 ms, doubling up to five seconds with jitter.
+A permanent registration error waits one minute. If the next attempt fails
+transiently before registration, that retry also waits one minute; subsequent
+transient retries resume at the five-second cap. A registered stream or a
+server-directed reconnect resets backoff to 100 ms, with jitter on every retry.
 The Worker may hold up to
 `(1 + number of Flow types) * (idleStreamsPerQueue + maxConcurrentTasks)`
 streams because busy streams are kept alongside each queue's idle streams.
