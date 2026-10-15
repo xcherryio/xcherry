@@ -460,10 +460,7 @@ func mapFlowConfig(config *FlowConfig) (*dexpb.FlowConfig, error) {
 		return nil, nil
 	}
 	if config.WorkerTarget != nil {
-		if err := validatePlaintextTarget(
-			config.WorkerTarget.Address,
-			config.WorkerTarget.Headless,
-		); err != nil {
+		if err := validateWorkerTarget(*config.WorkerTarget); err != nil {
 			return nil, fmt.Errorf("dex: invalid Worker target: %w", err)
 		}
 	}
@@ -496,6 +493,7 @@ func mapWorkerTarget(target *WorkerTarget) *dexpb.WorkerTarget {
 	return &dexpb.WorkerTarget{
 		Address:           target.Address,
 		IsHeadlessAddress: target.Headless,
+		IsPullMode:        target.Pull,
 	}
 }
 

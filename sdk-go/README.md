@@ -601,6 +601,63 @@ reaches the Worker through different DNS, a load balancer, or a headless
 address. `WorkerTarget()` returns the resolved value for
 `FlowConfig.WorkerTarget`.
 
+For outbound pull mode, set `WorkerOptions.Pull` and connect to the Dex server
+through `FlowServiceAddress`. The Worker opens task streams and does not listen.
+`Credential` also authenticates these streams. Advertise `worker.WorkerTarget()`
+through `ClientOptions.WorkerTarget`, or set
+`StartFlowOptions.ConfigOverride.WorkerTarget` for one Flow. A SubFlow can select
+pull mode through `SubFlowOptions.ConfigOverride.WorkerTarget`.
+
+```go
+worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
+	FlowServiceAddress: "dex.example:8801",
+	Pull: &dex.PullWorkerOptions{
+		MaxConcurrentTasks: 8,
+		IdleStreamsPerQueue: 1,
+		StopDrainTimeout: 30 * time.Second,
+	},
+})
+if err != nil {
+	return err
+}
+client, err := dex.NewClient(registry, cache, dex.ClientOptions{
+	FlowServiceAddress: "dex.example:8801",
+	WorkerTarget: worker.WorkerTarget(),
+})
+if err != nil {
+	return err
+}
+defer client.Close()
+defer worker.Stop(context.Background())
+if err := worker.Start(); err != nil {
+	return err
+}
+```
+
+Pull mode polls the Worker's sticky queue and every registered Flow type queue.
+Flow type names must be unique within a Dex server. `MaxConcurrentTasks` defaults
+to the CPU count, and `IdleStreamsPerQueue` defaults to one. When capacity is
+full, the Worker rejects additional assignments for reassignment. The generated
+Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
+`HOSTNAME`, or the system hostname, plus a random suffix. An `AppWorkerID`
+override must identify one Worker process uniquely and change when that process
+restarts. It must contain 1-63 ASCII letters, digits, dots, underscores, or
+hyphens, and must not equal a registered Flow type. Pull and an advertised
+address cannot be combined. The Worker reconnects after stream failures and
+drains in-flight tasks before a server-directed reconnect. It logs permanent
+registration failures and retries them after at least one minute. `Start`
+returns startup synchronization errors, not later poll stream errors.
+An older server without pull support produces one explicit error log and is retried.
+
+The Worker keeps idle streams on each queue even when all task slots are busy,
+so excess assignments can be rejected for reassignment. A Worker may hold up to
+`(1 + number of Flow types) * (IdleStreamsPerQueue + MaxConcurrentTasks)` streams
+because it retains surplus idle streams after tasks finish. Size both options so
+this bound fits the server's per-Worker stream cap (default 256). Per-queue or
+total server stream limits may also reject registration with `ResourceExhausted`.
+Pull mode `Stop` drains for at most `StopDrainTimeout`, which defaults to 30 seconds.
+After that timeout, it cancels active task contexts and waits for handlers to return.
+
 `Start` blocks and is one-shot. `Stop(ctx)` is idempotent, drains in-flight
 calls, and force-stops them if the context expires. The SDK does not install
 signal handlers; the [Order example](examples/order/main.go) shows signal-driven

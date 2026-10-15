@@ -156,10 +156,7 @@ func resolveClientOptions(options ClientOptions) (string, *WorkerTarget, error) 
 	}
 	workerTarget := *options.WorkerTarget
 	workerTarget.Address = strings.TrimSpace(workerTarget.Address)
-	if workerTarget.Address == "" {
-		return "", nil, fmt.Errorf("dex: Client Worker target address must not be empty")
-	}
-	if err := validatePlaintextTarget(workerTarget.Address, workerTarget.Headless); err != nil {
+	if err := validateWorkerTarget(workerTarget); err != nil {
 		return "", nil, fmt.Errorf("dex: invalid Client Worker target: %w", err)
 	}
 	return flowServiceAddress, &workerTarget, nil
@@ -596,7 +593,7 @@ func (client *Client) resolveStartFlowConfig(config *FlowConfig) (*FlowConfig, e
 		resolved.WorkerTarget = &target
 	} else if resolved.WorkerTarget != nil {
 		target := *resolved.WorkerTarget
-		if err := validatePlaintextTarget(target.Address, target.Headless); err != nil {
+		if err := validateWorkerTarget(target); err != nil {
 			return nil, fmt.Errorf("dex: invalid StartFlow Worker target: %w", err)
 		}
 		resolved.WorkerTarget = &target
