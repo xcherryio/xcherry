@@ -54,9 +54,9 @@ type AuthenticatorConfig struct {
 	File string `yaml:"file"`
 }
 
-// InternalConfig protects the server's private InternalService listener.
+// InternalConfig protects the server's private InternalService and MatchingService listener.
 type InternalConfig struct {
-	// Listen is the plaintext gRPC host:port bind address serving InternalService to interpreter Workers.
+	// Listen is the plaintext gRPC host:port bind address serving InternalService and MatchingService.
 	// Default empty disables the separate listener when auth is off; it is required with auth.
 	// Interpreter Workers dial this address unless interpreter.interpreterActivityConfig.internalServiceTarget overrides it.
 	// Bind to loopback or restrict access and encrypt the network path because bearer tokens travel in clear text.
@@ -92,6 +92,9 @@ func (c WakeConfig) EffectiveBudget() time.Duration {
 
 // ValidateGeneralAccess checks public authentication, internal listener, and Worker wake settings.
 func (c Config) ValidateGeneralAccess() error {
+	if c.Membership != nil && c.Internal.Listen != "" && c.Internal.TokenFile == "" {
+		return fmt.Errorf("internal.tokenFile is required when internal.listen is configured")
+	}
 	if c.Auth.IsEnabled() {
 		if c.Internal.Listen == "" || c.Internal.TokenFile == "" {
 			return fmt.Errorf("internal.listen and internal.tokenFile are required when auth is enabled")

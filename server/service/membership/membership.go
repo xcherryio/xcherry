@@ -129,6 +129,28 @@ func NewMonitor(cfg *config.MembershipConfig, roles []Role, rpcAddress string, r
 	return &Monitor{cfg: cfg, roles: slices.Clone(roles), rpcAddress: rpcAddress, resolver: resolver, logger: logger, rings: make(map[Role]*hashring.HashRing), members: make(map[Role][]HostInfo), subscribers: make(map[chan Change]struct{})}, nil
 }
 
+// AdvertisedRPCAddress replaces a wildcard internal bind host with the membership broadcast host.
+func AdvertisedRPCAddress(cfg *config.MembershipConfig, listen string) (string, error) {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("internal.listen must be host:port: %w", err)
+	}
+	if port == "0" {
+		return "", errors.New("internal.listen must use a fixed port with membership")
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		if cfg != nil && cfg.BroadcastAddress != "" {
+			host = cfg.BroadcastAddress
+		} else {
+			host, err = discoverPrivateIPv4()
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
 // Start begins discovery. A monitor can start only once.
 func (m *Monitor) Start(ctx context.Context) error {
 	m.mu.Lock()

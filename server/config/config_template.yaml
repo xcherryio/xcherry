@@ -34,7 +34,7 @@ api:
 #       audiences: [dex]
 #       jwksURL: https://issuer.example/keys
 #       caFile: /etc/dex/issuer-ca.pem
-# Required with auth. InternalService is served only on this private listener.
+# Required with auth, membership, or a matching-only process. InternalService and MatchingService use this private listener.
 # internal:
 #   listen: 127.0.0.1:8803
 #   tokenFile: /etc/dex/internal-token
@@ -77,6 +77,7 @@ worker:
 #   maxQueueLength: 256
 #   maxFlowTypes: 256
 #   maxFlowTypeLength: 256
+#   pingInterval: 20s
 interpreter:
   # Bounds backend index creation and propagation checks. Existing indexes return immediately.
   attributeIndexSyncTimeout: 2m

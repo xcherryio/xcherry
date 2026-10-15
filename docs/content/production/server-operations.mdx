@@ -62,7 +62,7 @@ graphs, and persisted payloads.
 
 ## Server components
 
-The dex-server image starts Dex Web, API, and Interpreter in one process by
+The dex-server image starts Dex Web, API, Interpreter, and Matching in one process by
 default. The container listens on port 8801 for FlowService and port 8802 for
 Dex Web. Publishing either port remains an explicit deployment decision.
 
@@ -73,15 +73,79 @@ components when they need different replica counts or resource limits:
 dex-server start --services web
 dex-server start --services api
 dex-server start --services interpreter
+dex-server start --services matching
 dex-server start --services web,api
 ~~~
 
-An Interpreter-only deployment must set
+An Interpreter-only deployment without **internal.listen** must set
 **interpreter.interpreterActivityConfig.internalServiceTarget** to the API
-service. A Web-only deployment does not connect to Temporal or Cadence. It
+service. With a private listener, the Interpreter uses its local address by
+default. A Web-only deployment does not connect to Temporal or Cadence. It
 starts before its API upstream is available, so **/healthz** reports only Web
 process health. Web API requests return an upstream error until FlowService is
 available.
+
+## Pull Worker routing
+
+The **matching** role owns pull Worker queues. API instances accept **PollWorkerTask**
+streams and forward each stream to its queue owner. Interpreter and API instances
+join membership even when they do not own queues. Keep at least one Matching
+instance running. Every instance sharing a membership cluster must use the same
+backend namespace and membership seeds.
+
+For one process, omit **membership** to use a local single-member ring. For
+multiple instances, configure **membership** and a private **internal** listener
+on every Server process:
+
+~~~yaml
+membership:
+  listen: 0.0.0.0:6833
+  broadcastAddress: ""
+  refreshInterval: 10s
+  seeds:
+    dnsName: dex-headless.dex.svc.cluster.local:6833
+internal:
+  listen: 0.0.0.0:8803
+  tokenFile: /etc/dex/internal-token
+matching:
+  dispatchWait: 10s
+  stickyWait: 5s
+  localDispatchWait: 3s
+  localStickyWait: 2s
+  localExecutionReserve: 4s
+  maxConcurrentTasksCap: 256
+  maxStreams: 100000
+  maxQueueLength: 256
+  maxFlowTypes: 256
+  maxFlowTypeLength: 256
+  pingInterval: 20s
+~~~
+
+**membership.listen** binds the replica-only ring listener. Its default is
+**0.0.0.0:6833**. **broadcastAddress** defaults to the first private IPv4
+address and is advertised with the bound port. **seeds.dnsName** resolves a
+headless service; **seeds.static** accepts a list of peer addresses instead.
+**refreshInterval** defaults to 10 seconds.
+The private gRPC listener binds **internal.listen**. When its bind host is a
+wildcard, Dex advertises the membership broadcast host with the internal port.
+Use a fixed internal port and ensure peers can reach that advertised address.
+
+The public API uses port 8801 by default. Allow clients and pull Workers to
+reach that port. In Kubernetes, use a NetworkPolicy to restrict the internal
+listener and port 6833 to Dex replicas. Require **internal.tokenFile**. The internal
+listener uses plaintext gRPC, so encrypt its network path. When **auth** is off
+and **internal.listen** is omitted, **MatchingService** and **InternalService**
+use the public listener in a single-process deployment. A membership cluster
+requires the separate internal listener even when public authentication is off.
+
+**matching.maxStreams** limits registered streams on each Matching instance.
+**maxConcurrentTasksCap** limits streams for one **appWorkerID** on that owner.
+**maxQueueLength** limits queue names, and **maxFlowTypes** and
+**maxFlowTypeLength** bound each Worker's registration. The wait budgets use
+the values shown above by default.
+Dex sends a **Ping** frame on idle poll streams every **pingInterval**. Configure
+load balancers for long-lived HTTP/2 streams and an idle timeout greater than
+that interval. Preserve bidirectional streaming through the public endpoint.
 
 ## Configuration
 
@@ -146,14 +210,14 @@ Dex reloads changed token files. For JWT, omit **jwksURL** to discover the key
 set through the issuer's OpenID configuration. **caFile** adds a PEM bundle to
 system roots for the issuer's HTTPS endpoints.
 
-When **auth** is enabled, **InternalService** runs only on **internal.listen**
+When **auth** is enabled, **InternalService** and **MatchingService** run only on **internal.listen**
 and requires a token from **internal.tokenFile**. The Interpreter sends the
 first token in that file; the listener accepts every line so tokens can rotate.
 Each token must have at least 32 characters.
 The listener uses plaintext gRPC. Bind it to loopback or protect its network
 path and encrypt traffic. An Interpreter deployed separately must set
 **interpreter.interpreterActivityConfig.internalServiceTarget** to this listener.
-With **auth** off, **InternalService** keeps using the public API listener.
+With **auth** off and no separate internal listener, both services use the public API listener.
 
 Currently only the Go SDK can connect when **auth** is enabled. Dex Web, the
 CLI, and the Java, Python, TypeScript, and Rust SDKs cannot supply the required

@@ -69,7 +69,7 @@ func createDexRuntime(ctx context.Context, cfg *Config) (*bootstrap.Runtime, err
 	var lastErr error
 	for ctx.Err() == nil {
 		runtime, err := bootstrap.New(cfg.Dex, &bootstrap.Options{
-			Services: bootstrap.Services{API: true, Interpreter: true},
+			Services: bootstrap.Services{API: true, Interpreter: true, Matching: true},
 		})
 		if err == nil {
 			return runtime, nil

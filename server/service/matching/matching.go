@@ -315,10 +315,22 @@ func (e *Engine) servePoll(transport pollTransport) error {
 			}
 		}
 	}()
+	pingTicker := time.NewTicker(e.cfg.PingInterval)
+	defer pingTicker.Stop()
 	for {
 		var result pollResult
 		select {
 		case result = <-received:
+		case <-pingTicker.C:
+			worker.mu.Lock()
+			isIdle := !worker.isBusy && !worker.isClosing
+			worker.mu.Unlock()
+			if isIdle {
+				if err := worker.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Ping{Ping: &dexpb.PollWorkerTaskPing{}}}); err != nil {
+					return err
+				}
+			}
+			continue
 		case <-worker.done:
 			return nil
 		}

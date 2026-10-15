@@ -81,6 +81,8 @@ const (
 	DefaultMatchingMaxFlowTypes = 256
 	// DefaultMatchingMaxFlowTypeLength bounds each declared Flow type.
 	DefaultMatchingMaxFlowTypeLength = 256
+	// DefaultMatchingPingInterval keeps idle Worker streams active through load balancers.
+	DefaultMatchingPingInterval = 20 * time.Second
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
 	// DefaultGrpcMaxMessageBytes is 32 MiB so that application values up to 16 MiB keep 16 MiB of headroom
@@ -222,7 +224,7 @@ type (
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
 		// Auth authenticates public API callers. Default empty leaves authentication off.
 		Auth AuthConfig `yaml:"auth"`
-		// Internal configures a private InternalService listener. Default empty uses the public listener when auth is off.
+		// Internal configures a private InternalService and MatchingService listener. Default empty uses the public listener when auth is off.
 		Internal InternalConfig `yaml:"internal"`
 	}
 
@@ -266,6 +268,8 @@ type (
 		MaxFlowTypes int `yaml:"maxFlowTypes"`
 		// MaxFlowTypeLength bounds each declared Flow type. Default 256. Must be positive when set.
 		MaxFlowTypeLength int `yaml:"maxFlowTypeLength"`
+		// PingInterval sends an application Ping on idle poll streams. Default 20s. Must be positive when set.
+		PingInterval time.Duration `yaml:"pingInterval"`
 	}
 
 	StreamStoreConfig struct {
@@ -422,7 +426,7 @@ type (
 	}
 
 	ApiConfig struct {
-		// Port is the TCP port for FlowService and, when auth is off, InternalService (plaintext gRPC). Default 8801. Bind is 0.0.0.0:Port; SDKs/integ and the interpreter CAN activity dial this port when auth is off.
+		// Port is the TCP port for FlowService and WorkerTaskService. Default 8801. Without internal.listen and auth, InternalService and MatchingService also use it. Bind is 0.0.0.0:Port.
 		Port int `yaml:"port"`
 		// MaxWaitSeconds caps transport long polls. Zero uses DefaultMaxWaitSeconds (60). Positive values are the cap. Negatives are invalid. It does not limit Temporal Update handlers.
 		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
@@ -722,6 +726,9 @@ func (c MatchingConfig) WithDefaults() MatchingConfig {
 	if c.MaxFlowTypeLength == 0 {
 		c.MaxFlowTypeLength = DefaultMatchingMaxFlowTypeLength
 	}
+	if c.PingInterval == 0 {
+		c.PingInterval = DefaultMatchingPingInterval
+	}
 	return c
 }
 
@@ -734,7 +741,7 @@ func (c MatchingConfig) Validate() error {
 	if settings.LocalDispatchWait <= 0 || settings.LocalStickyWait <= 0 || (c.LocalStickyWait != 0 && settings.LocalStickyWait > settings.LocalDispatchWait) {
 		return fmt.Errorf("matching.localStickyWait must be positive and no greater than localDispatchWait")
 	}
-	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 {
+	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 || settings.PingInterval <= 0 {
 		return fmt.Errorf("matching execution reserve and stream limits must be positive")
 	}
 	return nil
@@ -905,7 +912,11 @@ func (c Config) GetInternalServiceTargetWithDefault() string {
 	if c.Interpreter.InterpreterActivityConfig.InternalServiceTarget != "" {
 		return c.Interpreter.InterpreterActivityConfig.InternalServiceTarget
 	}
-	if c.Auth.IsEnabled() {
+	if c.Internal.Listen != "" && c.Internal.TokenFile != "" {
+		host, port, err := net.SplitHostPort(c.Internal.Listen)
+		if err == nil && (host == "" || host == "0.0.0.0" || host == "::") {
+			return net.JoinHostPort("127.0.0.1", port)
+		}
 		return c.Internal.Listen
 	}
 	port := c.Api.Port
