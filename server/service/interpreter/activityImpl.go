@@ -183,6 +183,9 @@ func (a *Activities) IWaitForM(
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
+		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	resp, err := a.receiveWaitForMethodResponse(ctx, stream, req, activityInfo, logger)
@@ -190,6 +193,10 @@ func (a *Activities) IWaitForM(
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
+		var matchingError *matchingDispatchError
+		if errors.As(err, &matchingError) {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateWaitingCondition(
@@ -377,6 +384,9 @@ func (a *Activities) IExecuteM(
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
+		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	resp, err := a.receiveExecuteMethodResponse(ctx, stream, req, activityInfo, logger)
@@ -384,6 +394,10 @@ func (a *Activities) IExecuteM(
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
+		var matchingError *matchingDispatchError
+		if errors.As(err, &matchingError) {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateExecuteResponse(
@@ -833,6 +847,10 @@ func (a *Activities) IWRPC(
 					WorkerGrpcStatus: int32(codes.ResourceExhausted), ServerDetail: err.Error(),
 				},
 			)
+		}
+		var dispatchError *pulldispatch.ServerError
+		if errors.As(err, &dispatchError) {
+			return nil, newServerSideActivityError(ctx, provider, err, nil)
 		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, nil)
 	}

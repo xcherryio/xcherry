@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/integ/workflow/common"
 	"github.com/superdurable/dex/service"
+	"github.com/superdurable/dex/service/bootstrap"
 	uclient "github.com/superdurable/dex/service/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -51,50 +54,62 @@ type pullTaskObservation struct {
 }
 
 type rawPullWorker struct {
-	events              chan pullTaskObservation
-	started             chan pullTaskObservation
-	errors              chan error
-	cancellations       []context.CancelFunc
-	queueCancels        map[string]context.CancelFunc
-	rpcError            *dexpb.WorkerErrorResponse
-	disconnectOnWaitFor bool
-	spawnSubFlow        bool
-	spawnParallel       bool
-	blockParallel       bool
-	sendProgress        bool
-	releaseParallel     chan struct{}
+	events                  chan pullTaskObservation
+	started                 chan pullTaskObservation
+	canceled                chan string
+	errors                  chan error
+	cancellations           []context.CancelFunc
+	queueCancels            map[string]context.CancelFunc
+	rpcError                *dexpb.WorkerErrorResponse
+	disconnectOnWaitFor     bool
+	spawnSubFlow            bool
+	hasInvalidSubFlowTarget bool
+	spawnParallel           bool
+	blockParallel           bool
+	sendProgress            bool
+	holdWaitFor             bool
+	releaseParallel         chan struct{}
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false, false, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false, false, false, false, false, false)
 }
 
 func startProgressPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, false, false, true)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, false, false, true, false, false)
 }
 
 func startDisconnectingPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, true, false, false, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, true, false, false, false, false, false, false)
 }
 
 func startSubFlowPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false, false, false, false)
+}
+
+func startInvalidSubFlowPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false, false, false, true)
 }
 
 func startParallelPullWorker(t *testing.T, address string, flowType string, workerID string, blockParallel bool) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, true, blockParallel, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, true, blockParallel, false, false, false)
 }
 
-func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool) *rawPullWorker {
+func startCancelPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, false, false, false, true, false)
+}
+
+func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool, holdWaitFor bool, hasInvalidSubFlowTarget bool) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 	worker := &rawPullWorker{
-		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16),
+		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
 		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
-		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress,
+		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress, holdWaitFor: holdWaitFor,
+		hasInvalidSubFlowTarget: hasInvalidSubFlowTarget,
 	}
 	for _, queue := range []string{flowType, workerID} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -127,6 +142,10 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			}
 			continue
 		}
+		if cancellation := frame.GetCancelTask(); cancellation != nil {
+			w.canceled <- cancellation.GetTaskId()
+			continue
+		}
 		task := frame.GetTask()
 		if task == nil {
 			continue
@@ -137,6 +156,10 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		switch request := task.GetRequest().(type) {
 		case *dexpb.PollWorkerTask_WaitFor:
 			method = "wait_for"
+			if w.holdWaitFor {
+				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
+				continue
+			}
 			if w.disconnectOnWaitFor {
 				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 				w.stop()
@@ -152,6 +175,11 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 					SubFlowType: request.WaitFor.GetFlowType(), StartStepType: "ChildStep",
 					StepOptions: &dexpb.StepOptions{SkipWaitFor: true},
 				}}
+				if w.hasInvalidSubFlowTarget {
+					waitingCondition.SubFlowConditions[0].Options = &dexpb.SubFlowOptions{FlowConfigOverride: &dexpb.FlowConfig{
+						WorkerTarget: &dexpb.WorkerTarget{Address: "127.0.0.1:9000", IsPullMode: true},
+					}}
+				}
 			}
 			output = &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_WaitFor{
 				WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Result{
@@ -274,6 +302,145 @@ func TestPullWorkerDispatchCadence(t *testing.T) {
 	testPullWorkerDispatch(t, service.BackendTypeCadence)
 }
 
+func TestPullWorkerSplitRoleTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerSplitRole(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerSplitRoleCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerSplitRole(t, service.BackendTypeCadence)
+}
+
+func TestPullWorkerAllInOneTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerAllInOne(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerAllInOneCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerAllInOne(t, service.BackendTypeCadence)
+}
+
+func testPullWorkerAllInOne(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	cfg := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	runtime := startPullRuntime(t, &cfg, bootstrap.Services{API: true, Interpreter: true, Matching: true})
+	connection := newDexClientConnectionWithCredential(t, runtime.publicAddress, "", config.DefaultGrpcMaxMessageBytes)
+	flowClient := dexpb.NewFlowServiceClient(connection)
+	worker := startRawPullWorker(t, runtime.publicAddress, dispatchProbeFlowType, "all-in-one-worker-"+uuid.NewString(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-all-in-one-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, flowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, "wait_for", waitForPullTask(t, worker, flowID).method)
+	_, err := flowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}}})
+	require.NoError(t, err)
+	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+	rpcFlowID := "pull-all-in-one-rpc-" + uuid.NewString()
+	_, err = flowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId: newRequestID(), FlowId: rpcFlowID, FlowType: dispatchProbeFlowType,
+		FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
+	})
+	require.NoError(t, err)
+	_, err = flowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+		RequestId: newRequestID(), FlowId: rpcFlowID, RpcName: "getProbe", TimeoutSeconds: 10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rpc", waitForPullTask(t, worker, rpcFlowID).method)
+	_, err = flowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: rpcFlowID})
+	require.NoError(t, err)
+}
+
+func TestPullWorkerCancellationTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerCancellation(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerCancellationCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerCancellation(t, service.BackendTypeCadence)
+}
+
+func testPullWorkerCancellation(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	worker := startCancelPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "cancel-worker-"+uuid.NewString())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-cancel-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, "wait_for", waitForPullTask(t, worker, flowID).method)
+	_, err := runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
+	select {
+	case taskID := <-worker.canceled:
+		require.NotEmpty(t, taskID)
+	case <-ctx.Done():
+		t.Fatal("pull Worker did not receive CancelTask")
+	}
+}
+
+func testPullWorkerSplitRole(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	internalTokenFile := filepath.Join(t.TempDir(), "internal-token")
+	require.NoError(t, os.WriteFile(internalTokenFile, []byte(uuid.NewString()+"\n"), 0o600))
+	firstConfig := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	firstConfig.Internal.TokenFile = internalTokenFile
+	firstConfig.Membership = &config.MembershipConfig{Listen: "127.0.0.1:0", BroadcastAddress: "127.0.0.1", RefreshInterval: 50 * time.Millisecond}
+	first := startPullRuntime(t, &firstConfig, bootstrap.Services{API: true, Interpreter: true})
+	require.Eventually(t, first.hasMembershipAddress, 10*time.Second, 50*time.Millisecond)
+	secondConfig := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	secondConfig.Internal.TokenFile = internalTokenFile
+	secondConfig.Membership = &config.MembershipConfig{
+		Listen: "127.0.0.1:0", BroadcastAddress: "127.0.0.1", RefreshInterval: 50 * time.Millisecond,
+		Seeds: config.MembershipSeedsConfig{Static: []string{first.runtime.MembershipAddress()}},
+	}
+	startPullRuntime(t, &secondConfig, bootstrap.Services{Matching: true})
+	connection := newDexClientConnectionWithCredential(t, first.publicAddress, "", config.DefaultGrpcMaxMessageBytes)
+	registration := &pullRegistrationAttempt{t: t, connection: connection, queue: "routing-probe-" + uuid.NewString()}
+	require.Eventually(t, registration.tryRegister, 10*time.Second, 50*time.Millisecond)
+	flowClient := dexpb.NewFlowServiceClient(connection)
+	worker := startRawPullWorker(t, first.publicAddress, dispatchProbeFlowType, "split-worker-"+uuid.NewString(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-split-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, flowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
+	_, err := flowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}}})
+	require.NoError(t, err)
+	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+	rpcFlowID := "pull-split-rpc-" + uuid.NewString()
+	_, err = flowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId: newRequestID(), FlowId: rpcFlowID, FlowType: dispatchProbeFlowType,
+		FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
+	})
+	require.NoError(t, err)
+	_, err = flowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+		RequestId: newRequestID(), FlowId: rpcFlowID, RpcName: "getProbe", TimeoutSeconds: 10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rpc", waitForPullTask(t, worker, rpcFlowID).method)
+	_, err = flowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: rpcFlowID})
+	require.NoError(t, err)
+}
+
 func TestPullWorkerUnavailableTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
@@ -349,6 +516,40 @@ func TestPullSubFlowStartsWithoutStickyQueueCadence(t *testing.T) {
 		t.Skip()
 	}
 	testPullSubFlowStartsWithoutStickyQueue(t, service.BackendTypeCadence)
+}
+
+func TestPullSubFlowRejectsInvalidTargetTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullSubFlowRejectsInvalidTarget(t, service.BackendTypeTemporal)
+}
+
+func TestPullSubFlowRejectsInvalidTargetCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullSubFlowRejectsInvalidTarget(t, service.BackendTypeCadence)
+}
+
+func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	cfg := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	cfg.Interpreter.InterpreterActivityConfig.SubFlowStartActivityConfig = &config.SubFlowStartActivityConfig{
+		ScheduleToCloseTimeout: 3 * time.Second, RetryPolicy: &config.RetryPolicy{MaximumAttempts: 1},
+	}
+	runtime := startPullRuntime(t, &cfg, bootstrap.Services{API: true, Interpreter: true, Matching: true})
+	connection := newDexClientConnectionWithCredential(t, runtime.publicAddress, "", config.DefaultGrpcMaxMessageBytes)
+	flowClient := dexpb.NewFlowServiceClient(connection)
+	startInvalidSubFlowPullWorker(t, runtime.publicAddress, dispatchProbeFlowType, "invalid-subflow-"+uuid.NewString())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "invalid-subflow-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, flowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true},
+		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1}}))
+	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
 }
 
 func TestPullParallelLastWriteTemporal(t *testing.T) {
@@ -433,7 +634,7 @@ func testPullWorkerAsyncLocal(t *testing.T, backend service.BackendType) {
 	stepOptions := &dexpb.StepOptions{
 		WaitForDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_ASYNC,
 		ExecuteDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_ASYNC,
-		WaitForRetryPolicy:        &dexpb.RetryPolicy{MaximumAttempts: 5, InitialIntervalSeconds: 1},
+		WaitForRetryPolicy:        &dexpb.RetryPolicy{MaximumAttempts: 3, InitialIntervalSeconds: 1},
 	}
 	for _, isWorkerIdle := range []bool{true, false} {
 		t.Run(fmt.Sprintf("worker_idle_%t", isWorkerIdle), func(t *testing.T) {
@@ -445,11 +646,11 @@ func testPullWorkerAsyncLocal(t *testing.T, backend service.BackendType) {
 				Matching: &config.MatchingConfig{
 					DispatchWait: 3 * time.Second, StickyWait: time.Second,
 					LocalDispatchWait: 200 * time.Millisecond, LocalStickyWait: 100 * time.Millisecond,
-					LocalExecutionReserve: 50 * time.Millisecond,
 				},
 				Wake: &config.WakeConfig{URL: wakeServer.URL, Budget: 5 * time.Second},
 			})
 			var worker *rawPullWorker
+			startedAt := time.Now()
 			if isWorkerIdle {
 				worker = startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-async-idle-"+uuid.NewString(), nil)
 			}
@@ -459,15 +660,19 @@ func testPullWorkerAsyncLocal(t *testing.T, backend service.BackendType) {
 			require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
 				&dexpb.WorkerTarget{IsPullMode: true}, stepOptions))
 			if !isWorkerIdle {
-				require.Eventually(t, func() bool { return recorder.count("wake") > 0 }, 10*time.Second, 20*time.Millisecond)
+				require.Eventually(t, func() bool {
+					return recorder.count("wake") > 0 && time.Since(startedAt) >= 700*time.Millisecond
+				}, 10*time.Second, 20*time.Millisecond)
 				worker = startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-async-late-"+uuid.NewString(), nil)
 			}
 			observation := waitForPullTask(t, worker, flowID)
 			require.Equal(t, "wait_for", observation.method)
 			if isWorkerIdle {
 				require.Equal(t, int32(1), observation.attempt)
+				require.Less(t, time.Since(startedAt), 7*time.Second)
 			} else {
 				require.Greater(t, observation.attempt, int32(1))
+				require.GreaterOrEqual(t, time.Since(startedAt), 700*time.Millisecond)
 			}
 			_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 				FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
@@ -655,6 +860,63 @@ func TestPullRPCDispatchRespectsCallerDeadlineCadence(t *testing.T) {
 	testPullRPCDispatchRespectsCallerDeadline(t, service.BackendTypeCadence)
 }
 
+func TestPullTransactionalRPCShortBudgetTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: service.BackendTypeTemporal, Matching: &config.MatchingConfig{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-short-rpc-" + uuid.NewString()
+	_, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId: newRequestID(), FlowId: flowID, FlowType: dispatchProbeFlowType,
+		FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
+	})
+	require.NoError(t, err)
+	worker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "short-rpc-worker-"+uuid.NewString(), nil)
+	startedAt := time.Now()
+	response, err := runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: true, TimeoutSeconds: 3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Less(t, time.Since(startedAt), 3*time.Second)
+	require.Equal(t, "rpc", waitForPullTask(t, worker, flowID).method)
+	_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
+}
+
+func TestPullTransactionalRPCTimeoutReleasesLockTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: service.BackendTypeTemporal, Matching: &config.MatchingConfig{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-rpc-lock-" + uuid.NewString()
+	_, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId: newRequestID(), FlowId: flowID, FlowType: dispatchProbeFlowType,
+		FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
+	})
+	require.NoError(t, err)
+	startedAt := time.Now()
+	_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: true, TimeoutSeconds: 3,
+	})
+	require.Error(t, err)
+	require.Less(t, time.Since(startedAt), 5*time.Second)
+	worker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "rpc-lock-worker-"+uuid.NewString(), nil)
+	startedAt = time.Now()
+	_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: true, TimeoutSeconds: 3,
+	})
+	require.NoError(t, err)
+	require.Less(t, time.Since(startedAt), 3*time.Second)
+	require.Equal(t, "rpc", waitForPullTask(t, worker, flowID).method)
+	_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
+}
+
 func testPullRPCDispatchRespectsCallerDeadline(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	runtime := startInProcessDexService(t, DexServiceTestConfig{
@@ -717,6 +979,7 @@ func testPullWorkerErrorMatchesPush(t *testing.T, backend service.BackendType) {
 	require.Equal(t, int32(codes.InvalidArgument), observedErrors[1].GetOriginalWorkerErrorStatus())
 	require.Equal(t, observedErrors[0].GetOriginalWorkerErrorDetail(), observedErrors[1].GetOriginalWorkerErrorDetail())
 	require.Equal(t, observedErrors[0].GetOriginalWorkerErrorType(), observedErrors[1].GetOriginalWorkerErrorType())
+	require.Equal(t, observedErrors[0].GetOriginalWorkerErrorStackTrace(), observedErrors[1].GetOriginalWorkerErrorStackTrace())
 }
 
 func testPullWorkerUnavailable(t *testing.T, backend service.BackendType) {
@@ -732,10 +995,12 @@ func testPullWorkerUnavailable(t *testing.T, backend service.BackendType) {
 		&dexpb.WorkerTarget{IsPullMode: true},
 		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 2, InitialIntervalSeconds: 1}},
 	))
+	startedAt := time.Now()
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
 	require.True(t, strings.Contains(result.GetErrorMessage(), "no Worker available for queue "+dispatchProbeFlowType), result.GetErrorMessage())
+	require.GreaterOrEqual(t, time.Since(startedAt), time.Second)
 }
 
 func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {

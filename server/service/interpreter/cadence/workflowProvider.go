@@ -451,7 +451,11 @@ func (w *workflowProvider) ExecuteActivity(
 		if !optionsFound {
 			panic("activity options required for ASYNC durability")
 		}
-		localCtx := workflow.WithLocalActivityOptions(wfCtx, cadenceLocalActivityOptions(options))
+		localOptions := cadenceLocalActivityOptions(options)
+		if interfaces.IsPullStepActivityInput(regularInput) {
+			localOptions.RetryPolicy.MaximumAttempts = 1
+		}
+		localCtx := workflow.WithLocalActivityOptions(wfCtx, localOptions)
 		firstAttemptTime := workflow.Now(wfCtx)
 		isStepMethodActivity := interfaces.IsStepActivityInput(regularInput)
 		err = workflow.ExecuteLocalActivity(localCtx, activity, localArgs...).Get(localCtx, valuePtr)

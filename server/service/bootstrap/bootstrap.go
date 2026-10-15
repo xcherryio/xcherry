@@ -30,6 +30,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/superdurable/dex/service/common/log/tag"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
@@ -79,6 +80,7 @@ type Runtime struct {
 	membership        *membership.Monitor
 	matching          *matching.Engine
 	matchingClients   *matchingClientPool
+	pullDispatcher    pulldispatch.Dispatcher
 	internalListener  net.Listener
 	internalToken     *auth.InternalTokenFile
 	shutdownOnce      sync.Once
@@ -200,6 +202,7 @@ func (r *Runtime) createServices() error {
 			r.options.Services.API,
 			r.internalToken,
 			r.matching,
+			r.pullDispatcher,
 		)
 		if err != nil {
 			return fmt.Errorf("create Dex API: %w", err)
@@ -261,7 +264,12 @@ func (r *Runtime) createMembershipAndMatching() error {
 		}
 	}
 	r.internalToken = token
-	r.matchingClients = newMatchingClientPool(token, r.cfg.Api.EffectiveGrpcMaxMessageBytes(), monitor, r.zapLogger)
+	var matchingToken interface{ Token() string }
+	if token != nil {
+		matchingToken = token
+	}
+	r.matchingClients = newMatchingClientPool(matchingToken, r.cfg.Api.EffectiveGrpcMaxMessageBytes(), monitor, r.zapLogger)
+	r.pullDispatcher = pulldispatch.NewRoutedDispatcher(monitor, r.matchingClients.MatchingClient)
 	if r.options.Services.API || r.options.Services.Matching {
 		matchingCfg := r.cfg.Matching
 		if matchingCfg == nil {

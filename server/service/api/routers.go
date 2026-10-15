@@ -121,7 +121,8 @@ func NewServerWithMatching(
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
 	return NewServerWithMatchingAccess(apiCfg, authCfg, internalCfg, wakeCfg, nil, blobStoreCfg, interpreterCfg,
-		client, logger, store, attributeStore, streamStore, readyCheck, workerPool, matchingEngine, extraUnaryInterceptors...)
+		client, logger, store, attributeStore, streamStore, readyCheck, workerPool,
+		publicEnabled, internalToken, matchingEngine, nil, extraUnaryInterceptors...)
 }
 
 // NewServerWithMatchingAccess configures pull dispatch waits alongside API access.
@@ -140,7 +141,10 @@ func NewServerWithMatchingAccess(
 	streamStore *streamstore.Store,
 	readyCheck func(context.Context) error,
 	workerPool *workerclient.WorkerClientPool,
+	publicEnabled bool,
+	internalToken *auth.InternalTokenFile,
 	matchingEngine *matching.Engine,
+	pullDispatcher pulldispatch.Dispatcher,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
 	if apiCfg == nil {
@@ -194,12 +198,17 @@ func NewServerWithMatchingAccess(
 		generalWakeToken = generalInternalToken
 	}
 	wakeNotifier := wake.NewNotifier(wakeCfg, generalWakeToken, logger)
-	internalClientConfig := &config.Config{Api: *apiCfg, Auth: *authCfg, Internal: *internalCfg, Interpreter: *interpreterCfg}
-	pullClient, err := workerclient.NewInternalServiceClient(
-		internalClientConfig.GetInternalServiceTargetWithDefault(), internalClientConfig, generalWakeToken,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create matching client: %w", err)
+	var pullClient *workerclient.InternalServiceClient
+	if pullDispatcher == nil {
+		internalClientConfig := &config.Config{Api: *apiCfg, Auth: *authCfg, Internal: *internalCfg, Interpreter: *interpreterCfg}
+		var err error
+		pullClient, err = workerclient.NewInternalServiceClient(
+			internalClientConfig.GetInternalServiceTargetWithDefault(), internalClientConfig, generalWakeToken,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create matching client: %w", err)
+		}
+		pullDispatcher = pulldispatch.NewDispatcher(pullClient)
 	}
 	handler := newHandler(
 		apiCfg,
@@ -212,7 +221,7 @@ func NewServerWithMatchingAccess(
 		streamStore,
 		workerPool,
 		wakeNotifier,
-		pulldispatch.NewDispatcher(pullClient),
+		pullDispatcher,
 		matchingCfg,
 	)
 	maxMsg := apiCfg.EffectiveGrpcMaxMessageBytes()
@@ -252,7 +261,9 @@ func NewServerWithMatchingAccess(
 	if publicEnabled && authCfg.IsEnabled() {
 		authenticator, err := auth.NewAuthenticator(authCfg, logger)
 		if err != nil {
-			pullClient.Close()
+			if pullClient != nil {
+				pullClient.Close()
+			}
 			return nil, err
 		}
 		// Recovery wraps authentication so a panic there is contained; metadata stays small before any parsing.
@@ -367,7 +378,9 @@ func (s *Server) StopServing(timeout time.Duration) {
 
 func (s *Server) Close() {
 	s.handler.close()
-	s.pullClient.Close()
+	if s.pullClient != nil {
+		s.pullClient.Close()
+	}
 }
 
 func (s *Server) setServing(serving bool) {

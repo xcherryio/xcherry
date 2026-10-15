@@ -10,8 +10,18 @@ package interfaces
 
 import (
 	"github.com/superdurable/dex/gen/dexpb"
-	"google.golang.org/protobuf/proto"
 )
+
+func IsPullStepActivityInput(input interface{}) bool {
+	switch activityInput := input.(type) {
+	case *dexpb.InvokeWaitForMethodActivityInput:
+		return activityInput.GetWorkerTarget().GetIsPullMode()
+	case *dexpb.InvokeExecuteMethodActivityInput:
+		return activityInput.GetWorkerTarget().GetIsPullMode()
+	default:
+		return false
+	}
+}
 
 func IsStepActivityInput(input interface{}) bool {
 	switch input.(type) {
@@ -56,9 +66,11 @@ func waitForActivityInputWithAttemptContext(
 	if request == nil {
 		panic("step activity request required")
 	}
-	fallbackInput := proto.Clone(input).(*dexpb.InvokeWaitForMethodActivityInput)
-	fallbackInput.Request.Context = stepActivityContextForFallback(fallbackInput.Request.GetContext(), previousAttempts, firstAttemptTimestamp)
-	return fallbackInput
+	fallbackInput := *input
+	fallbackRequest := *request
+	fallbackRequest.Context = stepActivityContextForFallback(request.GetContext(), previousAttempts, firstAttemptTimestamp)
+	fallbackInput.Request = &fallbackRequest
+	return &fallbackInput
 }
 
 func executeActivityInputWithAttemptContext(
@@ -70,9 +82,11 @@ func executeActivityInputWithAttemptContext(
 	if request == nil {
 		panic("step activity request required")
 	}
-	fallbackInput := proto.Clone(input).(*dexpb.InvokeExecuteMethodActivityInput)
-	fallbackInput.Request.Context = stepActivityContextForFallback(fallbackInput.Request.GetContext(), previousAttempts, firstAttemptTimestamp)
-	return fallbackInput
+	fallbackInput := *input
+	fallbackRequest := *request
+	fallbackRequest.Context = stepActivityContextForFallback(request.GetContext(), previousAttempts, firstAttemptTimestamp)
+	fallbackInput.Request = &fallbackRequest
+	return &fallbackInput
 }
 
 func stepActivityContextForFallback(
@@ -83,7 +97,8 @@ func stepActivityContextForFallback(
 	if workerContext == nil {
 		panic("step activity Context required")
 	}
-	workerContext.FirstAttemptTimestamp = firstAttemptTimestamp
-	workerContext.Attempt = previousAttempts
-	return workerContext
+	fallbackContext := *workerContext
+	fallbackContext.FirstAttemptTimestamp = firstAttemptTimestamp
+	fallbackContext.Attempt = previousAttempts
+	return &fallbackContext
 }

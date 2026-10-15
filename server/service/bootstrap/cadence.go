@@ -98,6 +98,7 @@ func (r *Runtime) createCadenceServices() (
 		r.workerPool,
 		r.streamStore,
 		client.MetricsNopHandler,
+		r.pullDispatcher,
 	)
 	return unifiedClient, store, worker, nil
 }

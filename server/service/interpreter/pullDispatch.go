@@ -10,6 +10,7 @@ package interpreter
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/superdurable/dex/config"
@@ -24,7 +25,11 @@ import (
 )
 
 type pullWaitForStream struct {
+	ctx                 context.Context
 	stream              grpc.ServerStreamingClient[dexpb.DispatchTaskResponse]
+	stickyWait          time.Duration
+	heartbeat           func()
+	receivedFirst       bool
 	queue               string
 	fallbackQueue       string
 	wakeNotifier        *wake.Notifier
@@ -32,7 +37,7 @@ type pullWaitForStream struct {
 }
 
 func (s *pullWaitForStream) Recv() (*dexpb.InvokeWaitForMethodOutput, error) {
-	frame, err := s.stream.Recv()
+	frame, err := s.receiveFrame()
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +51,26 @@ func (s *pullWaitForStream) Recv() (*dexpb.InvokeWaitForMethodOutput, error) {
 	return nil, pullFrameError(frame, s.queue, s.fallbackQueue, s.wakeNotifier)
 }
 
+func (s *pullWaitForStream) receiveFrame() (*dexpb.DispatchTaskResponse, error) {
+	if s.receivedFirst {
+		return s.stream.Recv()
+	}
+	s.receivedFirst = true
+	frame, err := pulldispatch.ReceiveFirstFrame(s.ctx, s.stream, s.stickyWait, s.heartbeat, func() {
+		s.wakeNotifier.NotifyWorkerUnavailable(s.fallbackQueue)
+	})
+	if err != nil {
+		return nil, &matchingDispatchError{err: err}
+	}
+	return frame, nil
+}
+
 type pullExecuteStream struct {
+	ctx                 context.Context
 	stream              grpc.ServerStreamingClient[dexpb.DispatchTaskResponse]
+	stickyWait          time.Duration
+	heartbeat           func()
+	receivedFirst       bool
 	queue               string
 	fallbackQueue       string
 	wakeNotifier        *wake.Notifier
@@ -55,7 +78,7 @@ type pullExecuteStream struct {
 }
 
 func (s *pullExecuteStream) Recv() (*dexpb.InvokeExecuteMethodOutput, error) {
-	frame, err := s.stream.Recv()
+	frame, err := s.receiveFrame()
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +91,25 @@ func (s *pullExecuteStream) Recv() (*dexpb.InvokeExecuteMethodOutput, error) {
 	}
 	return nil, pullFrameError(frame, s.queue, s.fallbackQueue, s.wakeNotifier)
 }
+
+func (s *pullExecuteStream) receiveFrame() (*dexpb.DispatchTaskResponse, error) {
+	if s.receivedFirst {
+		return s.stream.Recv()
+	}
+	s.receivedFirst = true
+	frame, err := pulldispatch.ReceiveFirstFrame(s.ctx, s.stream, s.stickyWait, s.heartbeat, func() {
+		s.wakeNotifier.NotifyWorkerUnavailable(s.fallbackQueue)
+	})
+	if err != nil {
+		return nil, &matchingDispatchError{err: err}
+	}
+	return frame, nil
+}
+
+type matchingDispatchError struct{ err error }
+
+func (e *matchingDispatchError) Error() string { return fmt.Sprintf("matching dispatch: %v", e.err) }
+func (e *matchingDispatchError) Unwrap() error { return e.err }
 
 func pullFrameError(frame *dexpb.DispatchTaskResponse, queue string, fallbackQueue string, notifier *wake.Notifier) error {
 	if workerError := frame.GetWorkerError(); workerError != nil {
@@ -84,7 +126,7 @@ func pullFrameError(frame *dexpb.DispatchTaskResponse, queue string, fallbackQue
 			}
 			return status.Errorf(codes.Unavailable, "no Worker available for queue %s: %s", queue, dispatchError.GetDetail())
 		case dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED:
-			return status.Errorf(codes.Unavailable, "no Worker available for queue %s: Worker disconnected: %s", queue, dispatchError.GetDetail())
+			return status.Errorf(codes.Unavailable, "Worker disconnected from queue %s: %s", queue, dispatchError.GetDetail())
 		}
 		return status.Errorf(codes.Internal, "unknown dispatch failure for queue %s", queue)
 	}
@@ -131,7 +173,11 @@ func activityPullWaits(
 		dispatchWait = settings.LocalDispatchWait
 		stickyWait = settings.LocalStickyWait
 		if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
-			remainingBudget := time.Until(deadline) - settings.LocalExecutionReserve
+			remaining := time.Until(deadline)
+			remainingBudget := remaining - settings.LocalExecutionReserve
+			if remainingBudget <= 0 {
+				remainingBudget = remaining / 2
+			}
 			if remainingBudget < dispatchWait {
 				dispatchWait = remainingBudget
 			}
@@ -153,16 +199,12 @@ func (a *Activities) openPullWaitFor(
 	isLocalActivity bool,
 	heartbeat func(),
 ) (*pullWaitForStream, error) {
-	settings := a.matchingConfig()
 	dispatchWait, stickyWait, err := activityPullWaits(
 		ctx, a.cfg.Matching, isLocalActivity,
 		input.GetDispatchWait().AsDuration(), input.GetStickyWait().AsDuration(),
 	)
 	if err != nil {
 		return nil, err
-	}
-	if input.GetDispatchWait() == nil && !isLocalActivity {
-		dispatchWait, stickyWait = settings.DispatchWait, settings.StickyWait
 	}
 	dispatchRequest := pullTaskRequest(ctx, input.GetDexTaskQueue(), request.GetFlowType(), request.GetContext().GetFlowId(), dispatchWait, stickyWait)
 	dispatchRequest.Request = &dexpb.DispatchTaskRequest_WaitFor{WaitFor: request}
@@ -171,7 +213,7 @@ func (a *Activities) openPullWaitFor(
 		heartbeat()
 		return nil, err
 	}
-	return &pullWaitForStream{stream: stream, queue: dispatchRequest.Queue, fallbackQueue: dispatchRequest.FallbackQueue, wakeNotifier: a.wakeNotifier}, nil
+	return &pullWaitForStream{ctx: ctx, stream: stream, stickyWait: stickyWait, heartbeat: heartbeat, queue: dispatchRequest.Queue, fallbackQueue: dispatchRequest.FallbackQueue, wakeNotifier: a.wakeNotifier}, nil
 }
 
 func (a *Activities) openPullExecute(
@@ -181,16 +223,12 @@ func (a *Activities) openPullExecute(
 	isLocalActivity bool,
 	heartbeat func(),
 ) (*pullExecuteStream, error) {
-	settings := a.matchingConfig()
 	dispatchWait, stickyWait, err := activityPullWaits(
 		ctx, a.cfg.Matching, isLocalActivity,
 		input.GetDispatchWait().AsDuration(), input.GetStickyWait().AsDuration(),
 	)
 	if err != nil {
 		return nil, err
-	}
-	if input.GetDispatchWait() == nil && !isLocalActivity {
-		dispatchWait, stickyWait = settings.DispatchWait, settings.StickyWait
 	}
 	dispatchRequest := pullTaskRequest(ctx, input.GetDexTaskQueue(), request.GetFlowType(), request.GetContext().GetFlowId(), dispatchWait, stickyWait)
 	dispatchRequest.Request = &dexpb.DispatchTaskRequest_Execute{Execute: request}
@@ -199,10 +237,10 @@ func (a *Activities) openPullExecute(
 		heartbeat()
 		return nil, err
 	}
-	return &pullExecuteStream{stream: stream, queue: dispatchRequest.Queue, fallbackQueue: dispatchRequest.FallbackQueue, wakeNotifier: a.wakeNotifier}, nil
+	return &pullExecuteStream{ctx: ctx, stream: stream, stickyWait: stickyWait, heartbeat: heartbeat, queue: dispatchRequest.Queue, fallbackQueue: dispatchRequest.FallbackQueue, wakeNotifier: a.wakeNotifier}, nil
 }
 
-func (a *Activities) matchingConfig() config.MatchingConfig {
+func (a *Activities) MatchingConfig() config.MatchingConfig {
 	if a.cfg.Matching == nil {
 		return config.MatchingConfig{}.WithDefaults()
 	}

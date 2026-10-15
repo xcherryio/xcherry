@@ -11,9 +11,11 @@ package pulldispatch
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/workerclient"
+	"github.com/superdurable/dex/service/membership"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,7 +30,66 @@ type grpcDispatcher struct {
 	client *workerclient.InternalServiceClient
 }
 
+type routedDispatcher struct {
+	members interface {
+		Lookup(membership.Role, string) (membership.HostInfo, error)
+	}
+	clientForAddress func(context.Context, string) (dexpb.MatchingServiceClient, error)
+}
+
 type unavailableDispatcher struct{}
+
+// ServerError marks a failure before matching assigns a Worker.
+type ServerError struct{ Err error }
+
+func (e *ServerError) Error() string { return fmt.Sprintf("matching dispatch: %v", e.Err) }
+func (e *ServerError) Unwrap() error { return e.Err }
+
+// ReceiveFirstFrame keeps the activity alive and wakes the flow type while matching waits.
+func ReceiveFirstFrame(
+	ctx context.Context,
+	stream grpc.ServerStreamingClient[dexpb.DispatchTaskResponse],
+	stickyWait time.Duration,
+	heartbeat func(),
+	wake func(),
+) (*dexpb.DispatchTaskResponse, error) {
+	type result struct {
+		frame *dexpb.DispatchTaskResponse
+		err   error
+	}
+	frames := make(chan result, 1)
+	go func() {
+		frame, err := stream.Recv()
+		frames <- result{frame: frame, err: err}
+	}()
+	var wakeTimer *time.Timer
+	var wakeChannel <-chan time.Time
+	if wake != nil {
+		wakeTimer = time.NewTimer(stickyWait)
+		wakeChannel = wakeTimer.C
+		defer wakeTimer.Stop()
+	}
+	var heartbeatTicker *time.Ticker
+	var heartbeatChannel <-chan time.Time
+	if heartbeat != nil {
+		heartbeatTicker = time.NewTicker(time.Second)
+		heartbeatChannel = heartbeatTicker.C
+		defer heartbeatTicker.Stop()
+	}
+	for {
+		select {
+		case received := <-frames:
+			return received.frame, received.err
+		case <-wakeChannel:
+			wake()
+			wakeChannel = nil
+		case <-heartbeatChannel:
+			heartbeat()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
 
 // NewUnavailableDispatcher preserves push-only service construction.
 func NewUnavailableDispatcher() Dispatcher {
@@ -57,6 +118,33 @@ func (d *grpcDispatcher) Dispatch(
 		return nil, err
 	}
 	return client.DispatchTask(callCtx, request)
+}
+
+// NewRoutedDispatcher selects the matching owner for each pull queue.
+func NewRoutedDispatcher(
+	members interface {
+		Lookup(membership.Role, string) (membership.HostInfo, error)
+	},
+	clientForAddress func(context.Context, string) (dexpb.MatchingServiceClient, error),
+) Dispatcher {
+	if members == nil || clientForAddress == nil {
+		panic("routed dispatcher requires membership and a matching client factory")
+	}
+	return &routedDispatcher{members: members, clientForAddress: clientForAddress}
+}
+
+func (d *routedDispatcher) Dispatch(
+	ctx context.Context, request *dexpb.DispatchTaskRequest,
+) (grpc.ServerStreamingClient[dexpb.DispatchTaskResponse], error) {
+	owner, err := d.members.Lookup(membership.RoleMatching, request.GetQueue())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "find matching owner for queue %s: %v", request.GetQueue(), err)
+	}
+	client, err := d.clientForAddress(ctx, owner.RPCAddress)
+	if err != nil {
+		return nil, err
+	}
+	return client.DispatchTask(ctx, request)
 }
 
 // WorkerErrorStatus preserves the gRPC status and Worker details from a pull frame.

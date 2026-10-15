@@ -941,8 +941,8 @@ func (i *Interpreter) processStepExecution(
 		}
 		if flowConfiger.GetWorkerTarget().GetIsPullMode() {
 			activityInput.DexTaskQueue = continueAsNewer.DexTaskQueue()
-			activityInput.DispatchWait = durationpb.New(i.matchingConfig().DispatchWait)
-			activityInput.StickyWait = durationpb.New(i.matchingConfig().StickyWait)
+			activityInput.DispatchWait = durationpb.New(i.activities.MatchingConfig().DispatchWait)
+			activityInput.StickyWait = durationpb.New(i.activities.MatchingConfig().StickyWait)
 		}
 		var activityOutput dexpb.InvokeWaitForMethodActivityOutput
 		waitForMethErr = provider.ExecuteActivity(
@@ -1284,8 +1284,8 @@ func (i *Interpreter) invokeExecuteMethod(
 	}
 	if flowConfiger.GetWorkerTarget().GetIsPullMode() {
 		activityInput.DexTaskQueue = continueAsNewer.DexTaskQueue()
-		activityInput.DispatchWait = durationpb.New(i.matchingConfig().DispatchWait)
-		activityInput.StickyWait = durationpb.New(i.matchingConfig().StickyWait)
+		activityInput.DispatchWait = durationpb.New(i.activities.MatchingConfig().DispatchWait)
+		activityInput.StickyWait = durationpb.New(i.activities.MatchingConfig().StickyWait)
 	}
 	var activityOutput dexpb.InvokeExecuteMethodActivityOutput
 	exeMethErr := provider.ExecuteActivity(
@@ -1324,13 +1324,6 @@ func (i *Interpreter) invokeExecuteMethod(
 	continueAsNewer.RecordServedByAppWorkerID(activityOutput.GetServedByAppWorkerId())
 
 	return executeResponse.GetStepDecision(), service.StepExecutionStatusCompleted, nil
-}
-
-func (i *Interpreter) matchingConfig() config.MatchingConfig {
-	if i.sharedConfig.Matching == nil {
-		return config.MatchingConfig{}.WithDefaults()
-	}
-	return i.sharedConfig.Matching.WithDefaults()
 }
 
 func stepMethodOptions(options interfaces.ActivityOptions) *dexpb.StepMethodOptions {

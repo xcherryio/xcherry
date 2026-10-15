@@ -2353,18 +2353,12 @@ class DumpFlowForContinueAsNewActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[ContinueAsNewDumpResponse, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityInput(_message.Message):
-    __slots__ = ("rpc_prep", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
+    __slots__ = ("rpc_prep", "request")
     RPC_PREP_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
-    DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
-    DISPATCH_WAIT_FIELD_NUMBER: _ClassVar[int]
-    STICKY_WAIT_FIELD_NUMBER: _ClassVar[int]
     rpc_prep: PrepareRpcQueryResponse
     request: InvokeRPCRequest
-    dex_task_queue: str
-    dispatch_wait: _duration_pb2.Duration
-    sticky_wait: _duration_pb2.Duration
-    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityOutput(_message.Message):
     __slots__ = ("response", "request_id", "served_by_app_worker_id")

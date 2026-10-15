@@ -55,6 +55,7 @@ func NewInterpreterWorker(
 	workerPool *workerclient.WorkerClientPool,
 	streamStore *streamstore.Store,
 	metrics client.MetricsHandler,
+	pullDispatchers ...pulldispatch.Dispatcher,
 ) *InterpreterWorker {
 	if cfg == nil {
 		panic("Temporal InterpreterWorker requires non-nil config sections")
@@ -64,6 +65,16 @@ func NewInterpreterWorker(
 		panic("Temporal InterpreterWorker requires non-nil dependencies and task queue")
 	}
 	internal := interpreter.NewInternalServiceClient(cfg)
+	pullDispatcher := pulldispatch.NewDispatcher(internal)
+	if len(pullDispatchers) > 1 {
+		panic("Temporal InterpreterWorker accepts one pull dispatcher")
+	}
+	if len(pullDispatchers) == 1 {
+		if pullDispatchers[0] == nil {
+			panic("Temporal InterpreterWorker requires a non-nil pull dispatcher")
+		}
+		pullDispatcher = pullDispatchers[0]
+	}
 	eventHandler := event.Handle
 	activities := interpreter.NewActivities(
 		&activityProvider{},
@@ -76,7 +87,7 @@ func NewInterpreterWorker(
 		cfg,
 		streamStore,
 		metrics,
-		pulldispatch.NewDispatcher(internal),
+		pullDispatcher,
 	)
 	workflowInterpreter := interpreter.NewInterpreter(cfg, activities)
 

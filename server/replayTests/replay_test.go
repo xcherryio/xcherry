@@ -24,6 +24,8 @@ import (
 // gRPC-era Temporal histories recaptured after the interpreter rewrite.
 // Global versioning restarted at v1; do not keep pre-rewrite version baselines.
 var jsonHistoryFiles = []string{
+	"v1-pull-sticky-continue-as-new-CAN1.json",
+	"v1-pull-sticky-continue-as-new-wf-finish.json",
 	"rt-pr1-single-basic-CAN1.json",
 	"rt-pr1-single-basic-finish.json",
 	"rt-pr1-single-subflow-parent-reset.json",

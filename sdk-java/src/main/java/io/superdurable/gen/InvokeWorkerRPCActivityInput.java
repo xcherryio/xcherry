@@ -28,7 +28,6 @@ private static final long serialVersionUID = 0L;
     super(builder);
   }
   private InvokeWorkerRPCActivityInput() {
-    dexTaskQueue_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -102,129 +101,6 @@ private static final long serialVersionUID = 0L;
     return request_ == null ? io.superdurable.gen.InvokeRPCRequest.getDefaultInstance() : request_;
   }
 
-  public static final int DEX_TASK_QUEUE_FIELD_NUMBER = 5;
-  @SuppressWarnings("serial")
-  private volatile java.lang.Object dexTaskQueue_ = "";
-  /**
-   * <pre>
-   * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-   * </pre>
-   *
-   * <code>string dex_task_queue = 5;</code>
-   * @return The dexTaskQueue.
-   */
-  @java.lang.Override
-  public java.lang.String getDexTaskQueue() {
-    java.lang.Object ref = dexTaskQueue_;
-    if (ref instanceof java.lang.String) {
-      return (java.lang.String) ref;
-    } else {
-      com.google.protobuf.ByteString bs = 
-          (com.google.protobuf.ByteString) ref;
-      java.lang.String s = bs.toStringUtf8();
-      dexTaskQueue_ = s;
-      return s;
-    }
-  }
-  /**
-   * <pre>
-   * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-   * </pre>
-   *
-   * <code>string dex_task_queue = 5;</code>
-   * @return The bytes for dexTaskQueue.
-   */
-  @java.lang.Override
-  public com.google.protobuf.ByteString
-      getDexTaskQueueBytes() {
-    java.lang.Object ref = dexTaskQueue_;
-    if (ref instanceof java.lang.String) {
-      com.google.protobuf.ByteString b = 
-          com.google.protobuf.ByteString.copyFromUtf8(
-              (java.lang.String) ref);
-      dexTaskQueue_ = b;
-      return b;
-    } else {
-      return (com.google.protobuf.ByteString) ref;
-    }
-  }
-
-  public static final int DISPATCH_WAIT_FIELD_NUMBER = 6;
-  private com.google.protobuf.Duration dispatchWait_;
-  /**
-   * <pre>
-   * Limits total waiting for a pull Worker to accept this attempt.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-   * @return Whether the dispatchWait field is set.
-   */
-  @java.lang.Override
-  public boolean hasDispatchWait() {
-    return ((bitField0_ & 0x00000004) != 0);
-  }
-  /**
-   * <pre>
-   * Limits total waiting for a pull Worker to accept this attempt.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-   * @return The dispatchWait.
-   */
-  @java.lang.Override
-  public com.google.protobuf.Duration getDispatchWait() {
-    return dispatchWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : dispatchWait_;
-  }
-  /**
-   * <pre>
-   * Limits total waiting for a pull Worker to accept this attempt.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-   */
-  @java.lang.Override
-  public com.google.protobuf.DurationOrBuilder getDispatchWaitOrBuilder() {
-    return dispatchWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : dispatchWait_;
-  }
-
-  public static final int STICKY_WAIT_FIELD_NUMBER = 7;
-  private com.google.protobuf.Duration stickyWait_;
-  /**
-   * <pre>
-   * Limits waiting on the sticky queue before the Flow type queue.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-   * @return Whether the stickyWait field is set.
-   */
-  @java.lang.Override
-  public boolean hasStickyWait() {
-    return ((bitField0_ & 0x00000008) != 0);
-  }
-  /**
-   * <pre>
-   * Limits waiting on the sticky queue before the Flow type queue.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-   * @return The stickyWait.
-   */
-  @java.lang.Override
-  public com.google.protobuf.Duration getStickyWait() {
-    return stickyWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : stickyWait_;
-  }
-  /**
-   * <pre>
-   * Limits waiting on the sticky queue before the Flow type queue.
-   * </pre>
-   *
-   * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-   */
-  @java.lang.Override
-  public com.google.protobuf.DurationOrBuilder getStickyWaitOrBuilder() {
-    return stickyWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : stickyWait_;
-  }
-
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -245,15 +121,6 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000002) != 0)) {
       output.writeMessage(2, getRequest());
     }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
-      com.google.protobuf.GeneratedMessage.writeString(output, 5, dexTaskQueue_);
-    }
-    if (((bitField0_ & 0x00000004) != 0)) {
-      output.writeMessage(6, getDispatchWait());
-    }
-    if (((bitField0_ & 0x00000008) != 0)) {
-      output.writeMessage(7, getStickyWait());
-    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -265,17 +132,6 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000002) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(2, getRequest());
-    }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(dexTaskQueue_)) {
-      size += com.google.protobuf.GeneratedMessage.computeStringSize(5, dexTaskQueue_);
-    }
-    if (((bitField0_ & 0x00000004) != 0)) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(6, getDispatchWait());
-    }
-    if (((bitField0_ & 0x00000008) != 0)) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(7, getStickyWait());
     }
     return size;
   }
@@ -311,18 +167,6 @@ private static final long serialVersionUID = 0L;
       if (!getRequest()
           .equals(other.getRequest())) return false;
     }
-    if (!getDexTaskQueue()
-        .equals(other.getDexTaskQueue())) return false;
-    if (hasDispatchWait() != other.hasDispatchWait()) return false;
-    if (hasDispatchWait()) {
-      if (!getDispatchWait()
-          .equals(other.getDispatchWait())) return false;
-    }
-    if (hasStickyWait() != other.hasStickyWait()) return false;
-    if (hasStickyWait()) {
-      if (!getStickyWait()
-          .equals(other.getStickyWait())) return false;
-    }
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -341,16 +185,6 @@ private static final long serialVersionUID = 0L;
     if (hasRequest()) {
       hash = (37 * hash) + REQUEST_FIELD_NUMBER;
       hash = (53 * hash) + getRequest().hashCode();
-    }
-    hash = (37 * hash) + DEX_TASK_QUEUE_FIELD_NUMBER;
-    hash = (53 * hash) + getDexTaskQueue().hashCode();
-    if (hasDispatchWait()) {
-      hash = (37 * hash) + DISPATCH_WAIT_FIELD_NUMBER;
-      hash = (53 * hash) + getDispatchWait().hashCode();
-    }
-    if (hasStickyWait()) {
-      hash = (37 * hash) + STICKY_WAIT_FIELD_NUMBER;
-      hash = (53 * hash) + getStickyWait().hashCode();
     }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
@@ -484,8 +318,6 @@ private static final long serialVersionUID = 0L;
               .alwaysUseFieldBuilders) {
         internalGetRpcPrepFieldBuilder();
         internalGetRequestFieldBuilder();
-        internalGetDispatchWaitFieldBuilder();
-        internalGetStickyWaitFieldBuilder();
       }
     }
     @java.lang.Override
@@ -501,17 +333,6 @@ private static final long serialVersionUID = 0L;
       if (requestBuilder_ != null) {
         requestBuilder_.dispose();
         requestBuilder_ = null;
-      }
-      dexTaskQueue_ = "";
-      dispatchWait_ = null;
-      if (dispatchWaitBuilder_ != null) {
-        dispatchWaitBuilder_.dispose();
-        dispatchWaitBuilder_ = null;
-      }
-      stickyWait_ = null;
-      if (stickyWaitBuilder_ != null) {
-        stickyWaitBuilder_.dispose();
-        stickyWaitBuilder_ = null;
       }
       return this;
     }
@@ -559,21 +380,6 @@ private static final long serialVersionUID = 0L;
             : requestBuilder_.build();
         to_bitField0_ |= 0x00000002;
       }
-      if (((from_bitField0_ & 0x00000004) != 0)) {
-        result.dexTaskQueue_ = dexTaskQueue_;
-      }
-      if (((from_bitField0_ & 0x00000008) != 0)) {
-        result.dispatchWait_ = dispatchWaitBuilder_ == null
-            ? dispatchWait_
-            : dispatchWaitBuilder_.build();
-        to_bitField0_ |= 0x00000004;
-      }
-      if (((from_bitField0_ & 0x00000010) != 0)) {
-        result.stickyWait_ = stickyWaitBuilder_ == null
-            ? stickyWait_
-            : stickyWaitBuilder_.build();
-        to_bitField0_ |= 0x00000008;
-      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -594,17 +400,6 @@ private static final long serialVersionUID = 0L;
       }
       if (other.hasRequest()) {
         mergeRequest(other.getRequest());
-      }
-      if (!other.getDexTaskQueue().isEmpty()) {
-        dexTaskQueue_ = other.dexTaskQueue_;
-        bitField0_ |= 0x00000004;
-        onChanged();
-      }
-      if (other.hasDispatchWait()) {
-        mergeDispatchWait(other.getDispatchWait());
-      }
-      if (other.hasStickyWait()) {
-        mergeStickyWait(other.getStickyWait());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -646,25 +441,6 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 18
-            case 42: {
-              dexTaskQueue_ = input.readStringRequireUtf8();
-              bitField0_ |= 0x00000004;
-              break;
-            } // case 42
-            case 50: {
-              input.readMessage(
-                  internalGetDispatchWaitFieldBuilder().getBuilder(),
-                  extensionRegistry);
-              bitField0_ |= 0x00000008;
-              break;
-            } // case 50
-            case 58: {
-              input.readMessage(
-                  internalGetStickyWaitFieldBuilder().getBuilder(),
-                  extensionRegistry);
-              bitField0_ |= 0x00000010;
-              break;
-            } // case 58
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -922,412 +698,6 @@ private static final long serialVersionUID = 0L;
         request_ = null;
       }
       return requestBuilder_;
-    }
-
-    private java.lang.Object dexTaskQueue_ = "";
-    /**
-     * <pre>
-     * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-     * </pre>
-     *
-     * <code>string dex_task_queue = 5;</code>
-     * @return The dexTaskQueue.
-     */
-    public java.lang.String getDexTaskQueue() {
-      java.lang.Object ref = dexTaskQueue_;
-      if (!(ref instanceof java.lang.String)) {
-        com.google.protobuf.ByteString bs =
-            (com.google.protobuf.ByteString) ref;
-        java.lang.String s = bs.toStringUtf8();
-        dexTaskQueue_ = s;
-        return s;
-      } else {
-        return (java.lang.String) ref;
-      }
-    }
-    /**
-     * <pre>
-     * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-     * </pre>
-     *
-     * <code>string dex_task_queue = 5;</code>
-     * @return The bytes for dexTaskQueue.
-     */
-    public com.google.protobuf.ByteString
-        getDexTaskQueueBytes() {
-      java.lang.Object ref = dexTaskQueue_;
-      if (ref instanceof String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
-        dexTaskQueue_ = b;
-        return b;
-      } else {
-        return (com.google.protobuf.ByteString) ref;
-      }
-    }
-    /**
-     * <pre>
-     * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-     * </pre>
-     *
-     * <code>string dex_task_queue = 5;</code>
-     * @param value The dexTaskQueue to set.
-     * @return This builder for chaining.
-     */
-    public Builder setDexTaskQueue(
-        java.lang.String value) {
-      if (value == null) { throw new NullPointerException(); }
-      dexTaskQueue_ = value;
-      bitField0_ |= 0x00000004;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-     * </pre>
-     *
-     * <code>string dex_task_queue = 5;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearDexTaskQueue() {
-      dexTaskQueue_ = getDefaultInstance().getDexTaskQueue();
-      bitField0_ = (bitField0_ & ~0x00000004);
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Selects the sticky Worker queue; empty selects the request's Flow type queue.
-     * </pre>
-     *
-     * <code>string dex_task_queue = 5;</code>
-     * @param value The bytes for dexTaskQueue to set.
-     * @return This builder for chaining.
-     */
-    public Builder setDexTaskQueueBytes(
-        com.google.protobuf.ByteString value) {
-      if (value == null) { throw new NullPointerException(); }
-      checkByteStringIsUtf8(value);
-      dexTaskQueue_ = value;
-      bitField0_ |= 0x00000004;
-      onChanged();
-      return this;
-    }
-
-    private com.google.protobuf.Duration dispatchWait_;
-    private com.google.protobuf.SingleFieldBuilder<
-        com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder> dispatchWaitBuilder_;
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     * @return Whether the dispatchWait field is set.
-     */
-    public boolean hasDispatchWait() {
-      return ((bitField0_ & 0x00000008) != 0);
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     * @return The dispatchWait.
-     */
-    public com.google.protobuf.Duration getDispatchWait() {
-      if (dispatchWaitBuilder_ == null) {
-        return dispatchWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : dispatchWait_;
-      } else {
-        return dispatchWaitBuilder_.getMessage();
-      }
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public Builder setDispatchWait(com.google.protobuf.Duration value) {
-      if (dispatchWaitBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        dispatchWait_ = value;
-      } else {
-        dispatchWaitBuilder_.setMessage(value);
-      }
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public Builder setDispatchWait(
-        com.google.protobuf.Duration.Builder builderForValue) {
-      if (dispatchWaitBuilder_ == null) {
-        dispatchWait_ = builderForValue.build();
-      } else {
-        dispatchWaitBuilder_.setMessage(builderForValue.build());
-      }
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public Builder mergeDispatchWait(com.google.protobuf.Duration value) {
-      if (dispatchWaitBuilder_ == null) {
-        if (((bitField0_ & 0x00000008) != 0) &&
-          dispatchWait_ != null &&
-          dispatchWait_ != com.google.protobuf.Duration.getDefaultInstance()) {
-          getDispatchWaitBuilder().mergeFrom(value);
-        } else {
-          dispatchWait_ = value;
-        }
-      } else {
-        dispatchWaitBuilder_.mergeFrom(value);
-      }
-      if (dispatchWait_ != null) {
-        bitField0_ |= 0x00000008;
-        onChanged();
-      }
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public Builder clearDispatchWait() {
-      bitField0_ = (bitField0_ & ~0x00000008);
-      dispatchWait_ = null;
-      if (dispatchWaitBuilder_ != null) {
-        dispatchWaitBuilder_.dispose();
-        dispatchWaitBuilder_ = null;
-      }
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public com.google.protobuf.Duration.Builder getDispatchWaitBuilder() {
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return internalGetDispatchWaitFieldBuilder().getBuilder();
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    public com.google.protobuf.DurationOrBuilder getDispatchWaitOrBuilder() {
-      if (dispatchWaitBuilder_ != null) {
-        return dispatchWaitBuilder_.getMessageOrBuilder();
-      } else {
-        return dispatchWait_ == null ?
-            com.google.protobuf.Duration.getDefaultInstance() : dispatchWait_;
-      }
-    }
-    /**
-     * <pre>
-     * Limits total waiting for a pull Worker to accept this attempt.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration dispatch_wait = 6;</code>
-     */
-    private com.google.protobuf.SingleFieldBuilder<
-        com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder> 
-        internalGetDispatchWaitFieldBuilder() {
-      if (dispatchWaitBuilder_ == null) {
-        dispatchWaitBuilder_ = new com.google.protobuf.SingleFieldBuilder<
-            com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder>(
-                getDispatchWait(),
-                getParentForChildren(),
-                isClean());
-        dispatchWait_ = null;
-      }
-      return dispatchWaitBuilder_;
-    }
-
-    private com.google.protobuf.Duration stickyWait_;
-    private com.google.protobuf.SingleFieldBuilder<
-        com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder> stickyWaitBuilder_;
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     * @return Whether the stickyWait field is set.
-     */
-    public boolean hasStickyWait() {
-      return ((bitField0_ & 0x00000010) != 0);
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     * @return The stickyWait.
-     */
-    public com.google.protobuf.Duration getStickyWait() {
-      if (stickyWaitBuilder_ == null) {
-        return stickyWait_ == null ? com.google.protobuf.Duration.getDefaultInstance() : stickyWait_;
-      } else {
-        return stickyWaitBuilder_.getMessage();
-      }
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public Builder setStickyWait(com.google.protobuf.Duration value) {
-      if (stickyWaitBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        stickyWait_ = value;
-      } else {
-        stickyWaitBuilder_.setMessage(value);
-      }
-      bitField0_ |= 0x00000010;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public Builder setStickyWait(
-        com.google.protobuf.Duration.Builder builderForValue) {
-      if (stickyWaitBuilder_ == null) {
-        stickyWait_ = builderForValue.build();
-      } else {
-        stickyWaitBuilder_.setMessage(builderForValue.build());
-      }
-      bitField0_ |= 0x00000010;
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public Builder mergeStickyWait(com.google.protobuf.Duration value) {
-      if (stickyWaitBuilder_ == null) {
-        if (((bitField0_ & 0x00000010) != 0) &&
-          stickyWait_ != null &&
-          stickyWait_ != com.google.protobuf.Duration.getDefaultInstance()) {
-          getStickyWaitBuilder().mergeFrom(value);
-        } else {
-          stickyWait_ = value;
-        }
-      } else {
-        stickyWaitBuilder_.mergeFrom(value);
-      }
-      if (stickyWait_ != null) {
-        bitField0_ |= 0x00000010;
-        onChanged();
-      }
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public Builder clearStickyWait() {
-      bitField0_ = (bitField0_ & ~0x00000010);
-      stickyWait_ = null;
-      if (stickyWaitBuilder_ != null) {
-        stickyWaitBuilder_.dispose();
-        stickyWaitBuilder_ = null;
-      }
-      onChanged();
-      return this;
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public com.google.protobuf.Duration.Builder getStickyWaitBuilder() {
-      bitField0_ |= 0x00000010;
-      onChanged();
-      return internalGetStickyWaitFieldBuilder().getBuilder();
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    public com.google.protobuf.DurationOrBuilder getStickyWaitOrBuilder() {
-      if (stickyWaitBuilder_ != null) {
-        return stickyWaitBuilder_.getMessageOrBuilder();
-      } else {
-        return stickyWait_ == null ?
-            com.google.protobuf.Duration.getDefaultInstance() : stickyWait_;
-      }
-    }
-    /**
-     * <pre>
-     * Limits waiting on the sticky queue before the Flow type queue.
-     * </pre>
-     *
-     * <code>.google.protobuf.Duration sticky_wait = 7;</code>
-     */
-    private com.google.protobuf.SingleFieldBuilder<
-        com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder> 
-        internalGetStickyWaitFieldBuilder() {
-      if (stickyWaitBuilder_ == null) {
-        stickyWaitBuilder_ = new com.google.protobuf.SingleFieldBuilder<
-            com.google.protobuf.Duration, com.google.protobuf.Duration.Builder, com.google.protobuf.DurationOrBuilder>(
-                getStickyWait(),
-                getParentForChildren(),
-                isClean());
-        stickyWait_ = null;
-      }
-      return stickyWaitBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.InvokeWorkerRPCActivityInput)

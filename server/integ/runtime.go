@@ -260,11 +260,11 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	cfg := createTestConfig(t, testConfig)
 	cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = listener.Addr().String()
 	var internalListener net.Listener
-	if cfg.Auth.IsEnabled() {
+	if cfg.Auth.IsEnabled() || cfg.Matching != nil {
 		internalListener, err = net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		cfg.Internal.Listen = internalListener.Addr().String()
-		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = ""
+		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = internalListener.Addr().String()
 	}
 	require.NoError(t, cfg.ValidateGeneralAccess())
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
@@ -564,7 +564,10 @@ func startApiServer(
 		streamStore,
 		func(context.Context) error { return nil },
 		workerPool,
+		true,
+		nil,
 		matchingEngine,
+		nil,
 		extraUnaryInterceptors...,
 	)
 	require.NoError(t, err)

@@ -503,7 +503,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
   private volatile java.lang.Object dexTaskQueue_ = "";
   /**
    * <pre>
-   * Selects the last Worker queue for API-direct RPC dispatch.
+   * Selects the last Worker queue for RPC dispatch.
    * </pre>
    *
    * <code>string dex_task_queue = 11;</code>
@@ -524,7 +524,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
   }
   /**
    * <pre>
-   * Selects the last Worker queue for API-direct RPC dispatch.
+   * Selects the last Worker queue for RPC dispatch.
    * </pre>
    *
    * <code>string dex_task_queue = 11;</code>
@@ -2437,7 +2437,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
     private java.lang.Object dexTaskQueue_ = "";
     /**
      * <pre>
-     * Selects the last Worker queue for API-direct RPC dispatch.
+     * Selects the last Worker queue for RPC dispatch.
      * </pre>
      *
      * <code>string dex_task_queue = 11;</code>
@@ -2457,7 +2457,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
     }
     /**
      * <pre>
-     * Selects the last Worker queue for API-direct RPC dispatch.
+     * Selects the last Worker queue for RPC dispatch.
      * </pre>
      *
      * <code>string dex_task_queue = 11;</code>
@@ -2478,7 +2478,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
     }
     /**
      * <pre>
-     * Selects the last Worker queue for API-direct RPC dispatch.
+     * Selects the last Worker queue for RPC dispatch.
      * </pre>
      *
      * <code>string dex_task_queue = 11;</code>
@@ -2495,7 +2495,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
     }
     /**
      * <pre>
-     * Selects the last Worker queue for API-direct RPC dispatch.
+     * Selects the last Worker queue for RPC dispatch.
      * </pre>
      *
      * <code>string dex_task_queue = 11;</code>
@@ -2509,7 +2509,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
     }
     /**
      * <pre>
-     * Selects the last Worker queue for API-direct RPC dispatch.
+     * Selects the last Worker queue for RPC dispatch.
      * </pre>
      *
      * <code>string dex_task_queue = 11;</code>

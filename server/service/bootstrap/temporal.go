@@ -159,6 +159,7 @@ func (r *Runtime) createTemporalServices() (
 		r.workerPool,
 		r.streamStore,
 		metrics,
+		r.pullDispatcher,
 	)
 	return unifiedClient, store, worker, nil
 }

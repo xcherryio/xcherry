@@ -48,11 +48,15 @@ func invokePullWorkerRPC(
 	}
 	deadline, hasDeadline := ctx.Deadline()
 	if !hasDeadline {
-		deadline = time.Now().Add(dispatchWait + time.Hour)
+		deadline = time.Now().Add(2 * time.Hour)
 	}
 	remaining := time.Until(deadline)
 	if isLocalActivity {
-		remaining -= settings.LocalExecutionReserve
+		localBudget := remaining - settings.LocalExecutionReserve
+		if localBudget <= 0 {
+			localBudget = remaining / 2
+		}
+		remaining = localBudget
 	}
 	if remaining < dispatchWait {
 		dispatchWait = remaining
@@ -78,11 +82,15 @@ func invokePullWorkerRPC(
 	}
 	stream, err := dispatcher.Dispatch(ctx, dispatchRequest)
 	if err != nil {
-		return nil, "", err
+		return nil, "", &pulldispatch.ServerError{Err: err}
 	}
-	frame, err := stream.Recv()
+	var wakeWorker func()
+	if notifier != nil {
+		wakeWorker = func() { notifier.NotifyWorkerUnavailable(flowType) }
+	}
+	frame, err := pulldispatch.ReceiveFirstFrame(ctx, stream, stickyWait, nil, wakeWorker)
 	if err != nil {
-		return nil, "", err
+		return nil, "", &pulldispatch.ServerError{Err: err}
 	}
 	if response := frame.GetRpc(); response != nil {
 		if _, err := stream.Recv(); err != io.EOF {
@@ -107,7 +115,7 @@ func invokePullWorkerRPC(
 			return nil, "", status.Errorf(codes.Unavailable, "no Worker available for queue %s: %s", flowType, dispatchError.GetDetail())
 		}
 		if dispatchError.GetReason() == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED {
-			return nil, "", status.Errorf(codes.Unavailable, "no Worker available for queue %s: Worker disconnected: %s", queue, dispatchError.GetDetail())
+			return nil, "", status.Errorf(codes.Unavailable, "Worker disconnected from queue %s: %s", queue, dispatchError.GetDetail())
 		}
 	}
 	return nil, "", status.Error(codes.Internal, "unexpected pull Worker RPC response")

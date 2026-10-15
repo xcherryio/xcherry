@@ -240,7 +240,10 @@ worker:
 ~~~
 
 When a Worker is unavailable, Dex posts **target** and **kind: wake** to the
-hook and holds dispatch for up to **budget**, which defaults to 120 seconds.
+hook. For push dispatch, Dex holds the attempt for up to **budget**, which
+defaults to 120 seconds. For pull dispatch, **target** is the Flow type queue.
+Dex sends the wake notification after the sticky wait and continues waiting
+within the same dispatch attempt.
 After a successful dispatch, it posts **kind: active**. Notifications are best
 effort and rate limited per target. Dex sends the internal token as a bearer
 credential when **internal.tokenFile** is configured; otherwise it sends no

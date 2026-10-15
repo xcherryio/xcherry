@@ -24,7 +24,6 @@ import (
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/interpreter/cont"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -218,12 +217,6 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 	activityInput := &dexpb.InvokeWorkerRPCActivityInput{
 		RpcPrep: rpcPrep,
 		Request: input,
-	}
-	if u.flowConfiger.GetWorkerTarget().GetIsPullMode() {
-		settings := u.activities.matchingConfig()
-		activityInput.DexTaskQueue = u.continueAsNewer.DexTaskQueue()
-		activityInput.DispatchWait = durationpb.New(settings.LocalDispatchWait)
-		activityInput.StickyWait = durationpb.New(settings.LocalStickyWait)
 	}
 	err = u.provider.ExecuteLocalActivity(
 		&activityOutput,

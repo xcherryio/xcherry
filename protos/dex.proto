@@ -1611,16 +1611,10 @@ message DumpFlowForContinueAsNewActivityOutput {
 }
 
 message InvokeWorkerRPCActivityInput {
-  reserved 3, 4;
-  reserved "tenant_id", "tenant_claims";
+  reserved 3, 4, 5, 6, 7;
+  reserved "tenant_id", "tenant_claims", "dex_task_queue", "dispatch_wait", "sticky_wait";
   PrepareRpcQueryResponse rpc_prep = 1;
   InvokeRPCRequest request = 2;
-  // Selects the sticky Worker queue; empty selects the request's Flow type queue.
-  string dex_task_queue = 5;
-  // Limits total waiting for a pull Worker to accept this attempt.
-  google.protobuf.Duration dispatch_wait = 6;
-  // Limits waiting on the sticky queue before the Flow type queue.
-  google.protobuf.Duration sticky_wait = 7;
 }
 
 message InvokeWorkerRPCActivityOutput {
@@ -1734,7 +1728,7 @@ message PrepareRpcQueryResponse {
   repeated string loaded_attribute_map_instances = 8;
   repeated string loaded_channel_names = 9;
   repeated string loaded_channel_map_instances = 10;
-  // Selects the last Worker queue for API-direct RPC dispatch.
+  // Selects the last Worker queue for RPC dispatch.
   string dex_task_queue = 11;
 }
 

@@ -45,7 +45,6 @@ func NormalizeWorkerTarget(target *dexpb.WorkerTarget) (*dexpb.WorkerTarget, err
 	return &dexpb.WorkerTarget{
 		Address:           address,
 		IsHeadlessAddress: target.GetIsHeadlessAddress(),
-		IsPullMode:        target.GetIsPullMode(),
 	}, nil
 }
 
