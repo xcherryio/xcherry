@@ -3857,8 +3857,8 @@ github.com/superdurable/dex/blob-cache-go v0.1.1 h1:cswtUCelKqhYA+kuSKdk0u3us3Qm
 github.com/superdurable/dex/blob-cache-go v0.1.1/go.mod h1:Atepb7+sztvDCztVKmlvEKCSKFCkHKtDhoFYjaFmtEw=
 github.com/superdurable/temporal-sdk-go v1.47.1-superdurable.3 h1:DbV21FY6SW6i+OcfbGnBgyzzJCqHljEqKASvIDbd61I=
 github.com/superdurable/temporal-sdk-go v1.47.1-superdurable.3/go.mod h1:man3WG0HjtUkJVJn2TR82mFEK0F9PfDAZl3W1m4vkws=
-github.com/superdurable/xtemporal v0.0.0-20261014192205-fe88df32ebe1 h1:RhKW33Z7A0hhWuKuYY0ne6Teq1uOXy+k7WXncmxkHPQ=
-github.com/superdurable/xtemporal v0.0.0-20261014192205-fe88df32ebe1/go.mod h1:DX5y+I92RVHEGbegzn6Rpgx68D3xXHRUNdwCT5SOUPw=
+github.com/superdurable/xtemporal v1.32.1 h1:VC1ODDz/NDMlbCVtxGFrPbMKy302KswJjO646BwYYRw=
+github.com/superdurable/xtemporal v1.32.1/go.mod h1:DX5y+I92RVHEGbegzn6Rpgx68D3xXHRUNdwCT5SOUPw=
 github.com/temporalio/ringpop-go v0.1.0 h1:VSyNcMOLYOnXwTPp2Yevhl5vqhMDU3M6iqpoL7qkrQI=
 github.com/temporalio/ringpop-go v0.1.0/go.mod h1:RE+CHmY+kOZQk47AQaVzwrGmxpflnLgTd6EOK0853j4=
 github.com/temporalio/sqlparser v0.1.0 h1:jHbQyN3bfVLWGYPC/tLHpdjJxuL1YKOd1sf5OQPRM7o=

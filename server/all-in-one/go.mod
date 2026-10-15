@@ -5,7 +5,7 @@ go 1.26.8
 require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/superdurable/dex v0.5.0
-	github.com/superdurable/xtemporal v0.0.0-20261014192205-fe88df32ebe1
+	github.com/superdurable/xtemporal v1.32.1
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.47.1-superdurable.3
 	google.golang.org/grpc v1.83.2
