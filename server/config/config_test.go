@@ -75,7 +75,7 @@ func TestTemporalCloudOpsConfigValidation(t *testing.T) {
     cloudOps:
       hostPort: saas-api.tmprl.cloud:443
       apiVersion: v0.19.1`,
-			errorContains: "cloudAPIKey is required",
+			errorContains: "cloudAPIKey or apiKeyFile is required",
 		},
 		{
 			name: "host and port required",
@@ -103,6 +103,56 @@ func TestTemporalCloudOpsConfigValidation(t *testing.T) {
 			require.ErrorContains(t, err, testCase.errorContains)
 		})
 	}
+}
+
+func TestTemporalConnectionConfigValidation(t *testing.T) {
+	testCases := []struct {
+		name          string
+		temporalYAML  string
+		errorContains string
+	}{
+		{"both API key sources", "cloudAPIKey: static\n    apiKeyFile: /tmp/key", "cannot both be configured"},
+		{"certificate without key", "tls:\n      certFile: /tmp/cert", "must be configured together"},
+		{"negative refresh interval", "apiKeyFileRefreshInterval: -1s", "must be non-negative"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := writeTestConfig(t, "interpreter:\n  temporal:\n    "+testCase.temporalYAML+"\n")
+			_, err := NewConfig(path)
+			require.ErrorContains(t, err, testCase.errorContains)
+		})
+	}
+}
+
+func TestTemporalCloudOpsAcceptsFileAPIKey(t *testing.T) {
+	path := writeTestConfig(t, "interpreter:\n  temporal:\n    apiKeyFile: /tmp/key\n    cloudOps:\n      hostPort: saas-api.tmprl.cloud:443\n      apiVersion: v0.19.1\n")
+	_, err := NewConfig(path)
+	require.NoError(t, err)
+}
+
+func TestTemporalConnectionConfigDecode(t *testing.T) {
+	path := writeTestConfig(t, `
+interpreter:
+  temporal:
+    apiKeyFile: /var/run/secrets/dex/temporal-token
+    apiKeyFileRefreshInterval: 45s
+    tls:
+      enabled: true
+      caFile: /etc/dex/ca.pem
+      serverName: temporal.example
+      certFile: /etc/dex/client.crt
+      keyFile: /etc/dex/client.key
+`)
+	cfg, err := NewConfig(path)
+	require.NoError(t, err)
+	temporalConfig := cfg.Interpreter.Temporal
+	require.Equal(t, "/var/run/secrets/dex/temporal-token", temporalConfig.APIKeyFile)
+	require.Equal(t, 45*time.Second, temporalConfig.APIKeyFileRefreshInterval)
+	require.True(t, *temporalConfig.TLS.Enabled)
+	require.Equal(t, "/etc/dex/ca.pem", temporalConfig.TLS.CAFile)
+	require.Equal(t, "temporal.example", temporalConfig.TLS.ServerName)
+	require.Equal(t, "/etc/dex/client.crt", temporalConfig.TLS.CertFile)
+	require.Equal(t, "/etc/dex/client.key", temporalConfig.TLS.KeyFile)
 }
 
 func TestConfigAcceptsExternallyManagedIndexesOption(t *testing.T) {

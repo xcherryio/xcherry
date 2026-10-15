@@ -98,6 +98,31 @@ network path 内。
 
 **web.startFlowWorkerTargetHeadless** 控制所有从 Dex Web 启动的 Flow 的 Worker routing。默认值为 false，启动后不可变。对应的环境变量是 **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**。只有操作员填写 Kubernetes headless Service address 时才启用它。
 
+## 连接受保护的 Temporal 集群
+
+在 **interpreter.temporal** 下配置 Temporal frontend 连接。API key 需要轮换时，将其挂载为文件：
+
+~~~yaml
+interpreter:
+  temporal:
+    hostPort: temporal-frontend:7233
+    namespace: my-namespace
+    apiKeyFile: /var/run/secrets/dex/temporal-token
+    apiKeyFileRefreshInterval: 30s
+    tls:
+      enabled: true
+      caFile: /etc/dex/temporal-ca.pem
+      serverName: temporal-frontend.example
+      certFile: /etc/dex/tls/tls.crt
+      keyFile: /etc/dex/tls/tls.key
+~~~
+
+Dex 启动时读取 **apiKeyFile**。文件不存在或内容为空时，启动失败。Dex 最多每隔 **apiKeyFileRefreshInterval** 检查一次文件变化；默认间隔为 30 秒。刷新期间，请求继续使用最近一次有效的 key。后续读取失败或文件变空时，Dex 记录警告并保留该 key。静态 key 使用 **cloudAPIKey**，轮换 key 使用 **apiKeyFile**，两者不能同时配置。Temporal Cloud Operations 可使用任意一种 key 来源。
+
+配置 key 时，TLS 默认使用系统 CA；没有 key 时，默认使用明文连接。设置 **tls.enabled** 为 true，可以在没有 key 时启用 TLS。**tls.caFile** 将私有 CA 加入信任列表；**tls.serverName** 覆盖服务器证书校验使用的名称。Dex 仅在启动时加载 CA，轮换 CA 后必须重启 Dex。同时设置 **tls.certFile** 和 **tls.keyFile** 可启用双向 TLS。Dex 启动时加载证书和私钥，并在新的 TLS 握手时重新加载发生变化的文件。
+
+同时配置 API key 和 **tls.enabled: false** 会以明文发送凭据。Dex 会记录警告。仅在允许明文凭据的网络路径上使用此配置。
+
 ## Blob Store
 
 在允许超过 inline limit 的 payload 前配置持久化 store。为每个环境使用独立凭据和

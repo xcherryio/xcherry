@@ -430,6 +430,12 @@ type (
 		HostPort string `yaml:"hostPort"`
 		// CloudAPIKey authenticates to Temporal Cloud. Empty means no cloud credentials.
 		CloudAPIKey string `yaml:"cloudAPIKey"`
+		// APIKeyFile holds a rotating Temporal API key. Default empty disables file credentials. Dex reads it at startup and retains the last valid value if a later refresh fails.
+		APIKeyFile string `yaml:"apiKeyFile"`
+		// APIKeyFileRefreshInterval is the minimum interval between file checks. Default 30s when zero. Negative values are invalid.
+		APIKeyFileRefreshInterval time.Duration `yaml:"apiKeyFileRefreshInterval"`
+		// TLS configures the Temporal frontend connection. Nil enables TLS with system roots when an API key is configured and plaintext otherwise.
+		TLS *TemporalTLSConfig `yaml:"tls"`
 		// CloudOps configures Temporal Cloud namespace operations for attribute index synchronization.
 		// Nil uses the Temporal data-plane OperatorService for self-hosted clusters.
 		CloudOps *TemporalCloudOpsConfig `yaml:"cloudOps"`
@@ -439,6 +445,19 @@ type (
 		Prometheus *prometheus.Configuration `yaml:"prometheus"`
 		// WorkerOptions are passed to the Temporal worker. Nil uses SDK defaults.
 		WorkerOptions *temporalWorker.Options
+	}
+
+	TemporalTLSConfig struct {
+		// Enabled explicitly enables or disables TLS. Nil enables TLS when an API key is configured and plaintext otherwise.
+		Enabled *bool `yaml:"enabled"`
+		// CAFile supplies trusted server certificates. Default empty uses system roots. Dex loads this file once at startup; restart Dex after rotating it.
+		CAFile string `yaml:"caFile"`
+		// ServerName overrides the TLS server name. Default empty uses the host in hostPort for certificate verification.
+		ServerName string `yaml:"serverName"`
+		// CertFile supplies a client certificate for mutual TLS. Default empty sends no client certificate. Set keyFile too; Dex reloads changed files for new handshakes.
+		CertFile string `yaml:"certFile"`
+		// KeyFile supplies the private key for certFile. Default empty sends no client certificate. Set certFile too; Dex reloads changed files for new handshakes.
+		KeyFile string `yaml:"keyFile"`
 	}
 
 	TemporalCloudOpsConfig struct {
@@ -552,10 +571,15 @@ func NewConfig(configPath string) (*Config, error) {
 	if err := applyWebEnvironment(cfg); err != nil {
 		return nil, err
 	}
+	if cfg.Interpreter.Temporal != nil {
+		if err := cfg.Interpreter.Temporal.ValidateTemporalConnection(); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Interpreter.Temporal != nil && cfg.Interpreter.Temporal.CloudOps != nil {
 		cloudOps := cfg.Interpreter.Temporal.CloudOps
-		if strings.TrimSpace(cfg.Interpreter.Temporal.CloudAPIKey) == "" {
-			return nil, fmt.Errorf("interpreter.temporal.cloudAPIKey is required when cloudOps is configured")
+		if strings.TrimSpace(cfg.Interpreter.Temporal.CloudAPIKey) == "" && cfg.Interpreter.Temporal.APIKeyFile == "" {
+			return nil, fmt.Errorf("interpreter.temporal.cloudAPIKey or apiKeyFile is required when cloudOps is configured")
 		}
 		if _, _, err := net.SplitHostPort(cloudOps.HostPort); err != nil {
 			return nil, fmt.Errorf("interpreter.temporal.cloudOps.hostPort must be host:port: %w", err)
@@ -575,6 +599,20 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// ValidateTemporalConnection checks Temporal connection settings.
+func (c *TemporalConfig) ValidateTemporalConnection() error {
+	if c.CloudAPIKey != "" && c.APIKeyFile != "" {
+		return fmt.Errorf("interpreter.temporal.cloudAPIKey and apiKeyFile cannot both be configured")
+	}
+	if c.APIKeyFileRefreshInterval < 0 {
+		return fmt.Errorf("interpreter.temporal.apiKeyFileRefreshInterval must be non-negative")
+	}
+	if c.TLS != nil && (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
+		return fmt.Errorf("interpreter.temporal.tls.certFile and keyFile must be configured together")
+	}
+	return nil
 }
 
 func applyWebEnvironment(cfg *Config) error {
