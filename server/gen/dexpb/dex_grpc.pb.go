@@ -1313,6 +1313,253 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	WorkerTaskService_PollWorkerTask_FullMethodName = "/dex.WorkerTaskService/PollWorkerTask"
+)
+
+// WorkerTaskServiceClient is the client API for WorkerTaskService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+type WorkerTaskServiceClient interface {
+	// Exchanges registration, task, result, and control frames for one Dex task queue.
+	PollWorkerTask(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse], error)
+}
+
+type workerTaskServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewWorkerTaskServiceClient(cc grpc.ClientConnInterface) WorkerTaskServiceClient {
+	return &workerTaskServiceClient{cc}
+}
+
+func (c *workerTaskServiceClient) PollWorkerTask(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerTaskService_ServiceDesc.Streams[0], WorkerTaskService_PollWorkerTask_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PollWorkerTaskRequest, PollWorkerTaskResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerTaskService_PollWorkerTaskClient = grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse]
+
+// WorkerTaskServiceServer is the server API for WorkerTaskService service.
+// All implementations must embed UnimplementedWorkerTaskServiceServer
+// for forward compatibility.
+//
+// Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+type WorkerTaskServiceServer interface {
+	// Exchanges registration, task, result, and control frames for one Dex task queue.
+	PollWorkerTask(grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]) error
+	mustEmbedUnimplementedWorkerTaskServiceServer()
+}
+
+// UnimplementedWorkerTaskServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedWorkerTaskServiceServer struct{}
+
+func (UnimplementedWorkerTaskServiceServer) PollWorkerTask(grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]) error {
+	return status.Error(codes.Unimplemented, "method PollWorkerTask not implemented")
+}
+func (UnimplementedWorkerTaskServiceServer) mustEmbedUnimplementedWorkerTaskServiceServer() {}
+func (UnimplementedWorkerTaskServiceServer) testEmbeddedByValue()                           {}
+
+// UnsafeWorkerTaskServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WorkerTaskServiceServer will
+// result in compilation errors.
+type UnsafeWorkerTaskServiceServer interface {
+	mustEmbedUnimplementedWorkerTaskServiceServer()
+}
+
+func RegisterWorkerTaskServiceServer(s grpc.ServiceRegistrar, srv WorkerTaskServiceServer) {
+	// If the following call panics, it indicates UnimplementedWorkerTaskServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&WorkerTaskService_ServiceDesc, srv)
+}
+
+func _WorkerTaskService_PollWorkerTask_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WorkerTaskServiceServer).PollWorkerTask(&grpc.GenericServerStream[PollWorkerTaskRequest, PollWorkerTaskResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerTaskService_PollWorkerTaskServer = grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]
+
+// WorkerTaskService_ServiceDesc is the grpc.ServiceDesc for WorkerTaskService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var WorkerTaskService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dex.WorkerTaskService",
+	HandlerType: (*WorkerTaskServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "PollWorkerTask",
+			Handler:       _WorkerTaskService_PollWorkerTask_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "dex.proto",
+}
+
+const (
+	MatchingService_DispatchTask_FullMethodName          = "/dex.MatchingService/DispatchTask"
+	MatchingService_ForwardPollWorkerTask_FullMethodName = "/dex.MatchingService/ForwardPollWorkerTask"
+)
+
+// MatchingServiceClient is the client API for MatchingService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+type MatchingServiceClient interface {
+	// Streams Worker output frames and a final result or dispatch error.
+	DispatchTask(ctx context.Context, in *DispatchTaskRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DispatchTaskResponse], error)
+	// Proxies a Worker's queue stream from its receiving instance to the queue owner.
+	ForwardPollWorkerTask(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse], error)
+}
+
+type matchingServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMatchingServiceClient(cc grpc.ClientConnInterface) MatchingServiceClient {
+	return &matchingServiceClient{cc}
+}
+
+func (c *matchingServiceClient) DispatchTask(ctx context.Context, in *DispatchTaskRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DispatchTaskResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &MatchingService_ServiceDesc.Streams[0], MatchingService_DispatchTask_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DispatchTaskRequest, DispatchTaskResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MatchingService_DispatchTaskClient = grpc.ServerStreamingClient[DispatchTaskResponse]
+
+func (c *matchingServiceClient) ForwardPollWorkerTask(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &MatchingService_ServiceDesc.Streams[1], MatchingService_ForwardPollWorkerTask_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PollWorkerTaskRequest, PollWorkerTaskResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MatchingService_ForwardPollWorkerTaskClient = grpc.BidiStreamingClient[PollWorkerTaskRequest, PollWorkerTaskResponse]
+
+// MatchingServiceServer is the server API for MatchingService service.
+// All implementations must embed UnimplementedMatchingServiceServer
+// for forward compatibility.
+//
+// Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+type MatchingServiceServer interface {
+	// Streams Worker output frames and a final result or dispatch error.
+	DispatchTask(*DispatchTaskRequest, grpc.ServerStreamingServer[DispatchTaskResponse]) error
+	// Proxies a Worker's queue stream from its receiving instance to the queue owner.
+	ForwardPollWorkerTask(grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]) error
+	mustEmbedUnimplementedMatchingServiceServer()
+}
+
+// UnimplementedMatchingServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMatchingServiceServer struct{}
+
+func (UnimplementedMatchingServiceServer) DispatchTask(*DispatchTaskRequest, grpc.ServerStreamingServer[DispatchTaskResponse]) error {
+	return status.Error(codes.Unimplemented, "method DispatchTask not implemented")
+}
+func (UnimplementedMatchingServiceServer) ForwardPollWorkerTask(grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]) error {
+	return status.Error(codes.Unimplemented, "method ForwardPollWorkerTask not implemented")
+}
+func (UnimplementedMatchingServiceServer) mustEmbedUnimplementedMatchingServiceServer() {}
+func (UnimplementedMatchingServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeMatchingServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MatchingServiceServer will
+// result in compilation errors.
+type UnsafeMatchingServiceServer interface {
+	mustEmbedUnimplementedMatchingServiceServer()
+}
+
+func RegisterMatchingServiceServer(s grpc.ServiceRegistrar, srv MatchingServiceServer) {
+	// If the following call panics, it indicates UnimplementedMatchingServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MatchingService_ServiceDesc, srv)
+}
+
+func _MatchingService_DispatchTask_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DispatchTaskRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(MatchingServiceServer).DispatchTask(m, &grpc.GenericServerStream[DispatchTaskRequest, DispatchTaskResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MatchingService_DispatchTaskServer = grpc.ServerStreamingServer[DispatchTaskResponse]
+
+func _MatchingService_ForwardPollWorkerTask_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(MatchingServiceServer).ForwardPollWorkerTask(&grpc.GenericServerStream[PollWorkerTaskRequest, PollWorkerTaskResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MatchingService_ForwardPollWorkerTaskServer = grpc.BidiStreamingServer[PollWorkerTaskRequest, PollWorkerTaskResponse]
+
+// MatchingService_ServiceDesc is the grpc.ServiceDesc for MatchingService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MatchingService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dex.MatchingService",
+	HandlerType: (*MatchingServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "DispatchTask",
+			Handler:       _MatchingService_DispatchTask_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ForwardPollWorkerTask",
+			Handler:       _MatchingService_ForwardPollWorkerTask_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "dex.proto",
+}
+
+const (
 	TenantAdminService_TombstoneTenant_FullMethodName = "/dex.TenantAdminService/TombstoneTenant"
 	TenantAdminService_PurgeTenant_FullMethodName     = "/dex.TenantAdminService/PurgeTenant"
 	TenantAdminService_DescribeTenant_FullMethodName  = "/dex.TenantAdminService/DescribeTenant"

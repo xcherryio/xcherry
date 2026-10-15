@@ -106,7 +106,7 @@ public enum FlowResetStepMethod
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(13);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(15);
   }
 
   private static final FlowResetStepMethod[] VALUES = values();

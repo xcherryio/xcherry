@@ -133,7 +133,7 @@ public enum CloseDecisionType
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(16);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(18);
   }
 
   private static final CloseDecisionType[] VALUES = values();

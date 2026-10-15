@@ -1247,6 +1247,7 @@ fn map_worker_target(target: &WorkerTarget) -> ProtoWorkerTarget {
     ProtoWorkerTarget {
         address: target.address().to_string(),
         is_headless_address: target.is_headless(),
+        is_pull_mode: false,
     }
 }
 
