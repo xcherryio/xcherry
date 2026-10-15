@@ -258,11 +258,13 @@ class Worker:
         Raises:
             RuntimeError: If called on the pull Worker's ``start`` thread.
         """
-        if self._pull is not None and self._pull.is_loop_thread():
-            raise RuntimeError("pull Worker.stop() must be called from another thread")
         with self._lock:
             if self._state in ("stopped", "closed"):
                 return
+            if self._pull is not None and self._pull.is_loop_thread():
+                raise RuntimeError(
+                    "pull Worker.stop() must be called from another thread"
+                )
             was_created = self._state == "created"
             self._state = "stopping"
         if self._pull is not None:

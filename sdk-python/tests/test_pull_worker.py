@@ -87,6 +87,34 @@ def test_sync_stop_rejects_event_loop_thread() -> None:
         runtime.stop_threadsafe()
 
 
+def test_sync_close_after_start_returns_on_same_thread() -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(app_worker_id="closed-loop-worker"),
+        "localhost:8801",
+        None,
+    )
+    runtime._loop_thread_id = threading.get_ident()
+    context_worker = object.__new__(Worker)
+    context_worker._lock = threading.Lock()
+    context_worker._state = "stopped"
+    context_worker._pull = runtime
+    with context_worker:
+        pass
+    assert context_worker._state == "closed"
+
+    finally_worker = object.__new__(Worker)
+    finally_worker._lock = threading.Lock()
+    finally_worker._state = "stopped"
+    finally_worker._pull = runtime
+    try:
+        pass
+    finally:
+        finally_worker.close()
+    assert finally_worker._state == "closed"
+
+
 def test_generated_app_worker_id_uses_identity_and_random_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -249,6 +277,14 @@ def test_stop_forces_async_handler_after_drain_timeout() -> None:
 
 async def _stop_forces_async_handler_after_drain_timeout() -> None:
     dispatcher = BlockingDispatcher()
+    call = DelayedEofCall(
+        [
+            pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered()),
+            pb.PollWorkerTaskResponse(
+                task=pb.PollWorkerTask(task_id="task", rpc=pb.InvokeWorkerRPCRequest())
+            ),
+        ]
+    )
     runtime = PullWorkerRuntime(
         Registry([]),
         dispatcher,
@@ -259,16 +295,27 @@ async def _stop_forces_async_handler_after_drain_timeout() -> None:
         None,
     )
     runtime._stopping = asyncio.Event()
-    stream = PullStream(runtime, None, "stop-worker")
-    stream.run_task = asyncio.create_task(asyncio.sleep(0))
+    stream = PullStream(runtime, FakeStub(cast(FakeCall, call)), "stop-worker")
+    stream.run_task = asyncio.create_task(_poll_until_closed(stream))
     runtime._streams.add(stream)
-    with patch.object(stream, "_send", new_callable=AsyncMock):
-        await stream._start_task(
-            pb.PollWorkerTask(task_id="task", rpc=pb.InvokeWorkerRPCRequest())
-        )
-        await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
-        await runtime.stop()
+    await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
+    stopping = asyncio.create_task(runtime.stop())
+    await asyncio.wait_for(call.half_closed.wait(), timeout=1)
+    assert not call.is_closed
+    assert not stopping.done()
+    call.release_eof()
+    await asyncio.wait_for(stopping, timeout=1)
     assert dispatcher.canceled.is_set()
+    assert call.operations.index("write:task_frame") < call.operations.index(
+        "done_writing"
+    )
+    assert call.operations.index("read:EOF") < call.operations.index("cancel")
+    errors = [
+        request.task_frame.worker_error
+        for request in call.requests
+        if request.WhichOneof("frame") == "task_frame"
+    ]
+    assert errors[0].grpc_status == grpc.StatusCode.CANCELLED.value[0]
 
 
 class FakeRpcError(grpc.RpcError):
@@ -383,6 +430,39 @@ class QueueCall:
         self.frames.put_nowait(getattr(grpc.aio, "EOF"))
 
 
+class DelayedEofCall(QueueCall):
+    def __init__(self, frames: list[pb.PollWorkerTaskResponse]) -> None:
+        super().__init__(frames)
+        self.half_closed = asyncio.Event()
+        self.operations: list[str] = []
+
+    async def write(self, request: pb.PollWorkerTaskRequest) -> None:
+        await super().write(request)
+        self.operations.append(f"write:{request.WhichOneof('frame')}")
+
+    async def read(self) -> Any:
+        frame = await super().read()
+        if frame is getattr(grpc.aio, "EOF"):
+            self.operations.append("read:EOF")
+        return frame
+
+    async def done_writing(self) -> None:
+        self.is_half_closed = True
+        self.operations.append("done_writing")
+        self.half_closed.set()
+
+    def release_eof(self) -> None:
+        self.frames.put_nowait(getattr(grpc.aio, "EOF"))
+
+    def cancel(self) -> None:
+        self.operations.append("cancel")
+        super().cancel()
+
+
+async def _poll_until_closed(stream: PullStream) -> None:
+    await stream._poll()
+
+
 def test_busy_reconnect_drains_before_closing_stream() -> None:
     asyncio.run(_busy_reconnect_drains_before_closing_stream())
 
@@ -428,6 +508,7 @@ async def _busy_reconnect_drains_before_closing_stream() -> None:
         assert await asyncio.wait_for(polling, timeout=1)
     assert call.is_half_closed
     assert call.is_closed
+    assert stream._immediate_reconnect
     assert [request.WhichOneof("frame") for request in call.requests] == [
         "register",
         "task_frame",
@@ -581,6 +662,14 @@ def test_stop_drains_handler_before_timeout() -> None:
 
 async def _stop_drains_handler_before_timeout() -> None:
     dispatcher = BlockingDispatcher()
+    call = DelayedEofCall(
+        [
+            pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered()),
+            pb.PollWorkerTaskResponse(
+                task=pb.PollWorkerTask(task_id="drain", rpc=pb.InvokeWorkerRPCRequest())
+            ),
+        ]
+    )
     runtime = PullWorkerRuntime(
         Registry([]),
         dispatcher,
@@ -589,18 +678,21 @@ async def _stop_drains_handler_before_timeout() -> None:
         None,
     )
     runtime._stopping = asyncio.Event()
-    stream = PullStream(runtime, None, "drain-worker")
-    stream.run_task = asyncio.create_task(asyncio.sleep(0))
+    stream = PullStream(runtime, FakeStub(cast(FakeCall, call)), "drain-worker")
+    stream.run_task = asyncio.create_task(_poll_until_closed(stream))
     runtime._streams.add(stream)
-    with patch.object(stream, "_send", new_callable=AsyncMock):
-        await stream._start_task(
-            pb.PollWorkerTask(task_id="drain", rpc=pb.InvokeWorkerRPCRequest())
-        )
-        await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
-        stopping = asyncio.create_task(runtime.stop())
-        await asyncio.wait_for(runtime._stopping.wait(), timeout=1)
-        assert not stopping.done()
-        dispatcher.gate.set()
-        await asyncio.wait_for(stopping, timeout=1)
-        await stream._finish_handler()
+    await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
+    stopping = asyncio.create_task(runtime.stop())
+    await asyncio.wait_for(runtime._stopping.wait(), timeout=1)
+    assert not stopping.done()
+    dispatcher.gate.set()
+    await asyncio.wait_for(call.half_closed.wait(), timeout=1)
+    assert not call.is_closed
+    assert not stopping.done()
+    call.release_eof()
+    await asyncio.wait_for(stopping, timeout=1)
     assert not dispatcher.canceled.is_set()
+    assert call.operations.index("write:task_frame") < call.operations.index(
+        "done_writing"
+    )
+    assert call.operations.index("read:EOF") < call.operations.index("cancel")

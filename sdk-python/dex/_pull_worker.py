@@ -94,6 +94,7 @@ class PullWorkerRuntime:
         self._started = threading.Event()
         self._wake: asyncio.Event | None = None
         self._stopping: asyncio.Event | None = None
+        self._stop_completed: asyncio.Event | None = None
         self._streams: set[PullStream] = set()
         self._busy_tasks = 0
         self._unsupported_logged = False
@@ -103,6 +104,7 @@ class PullWorkerRuntime:
         self._loop_thread_id = threading.get_ident()
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
+        self._stop_completed = asyncio.Event()
         self._started.set()
         channel = outbound_worker_task_channel(self._server_address)
         stub = dex_pb2_grpc.WorkerTaskServiceStub(channel)  # type: ignore[no-untyped-call]
@@ -112,12 +114,16 @@ class PullWorkerRuntime:
                 await self._wake.wait()
                 self._wake.clear()
                 self._reconcile(stub)
+            await self._stop_completed.wait()
             await asyncio.gather(
                 *(stream.run_task for stream in tuple(self._streams)),
                 return_exceptions=True,
             )
         finally:
-            await channel.close(grace=None)
+            try:
+                await channel.close(grace=None)
+            finally:
+                self._loop_thread_id = None
 
     def signal(self) -> None:
         if self._wake is not None:
@@ -158,27 +164,37 @@ class PullWorkerRuntime:
         self.signal()
 
     async def stop(self) -> None:
-        if self._stopping is None or self._stopping.is_set():
+        if self._stopping is None:
             return
+        if self._stopping.is_set():
+            if self._stop_completed is not None:
+                await self._stop_completed.wait()
+            return
+        if self._stop_completed is None:
+            self._stop_completed = asyncio.Event()
         self._stopping.set()
-        for stream in tuple(self._streams):
-            stream.drain()
-        self.signal()
-        active = [
-            stream.handler_task for stream in self._streams if stream.handler_task
-        ]
-        if active:
-            _, pending = await asyncio.wait(active, timeout=self.stop_drain_timeout)
-            if pending:
+        try:
+            for stream in tuple(self._streams):
+                stream.drain()
+            self.signal()
+            active = [
+                stream.handler_task for stream in self._streams if stream.handler_task
+            ]
+            if active:
+                _, pending = await asyncio.wait(active, timeout=self.stop_drain_timeout)
+                if pending:
+                    for stream in tuple(self._streams):
+                        stream.cancel_handler()
+                    await asyncio.gather(*pending, return_exceptions=True)
+            stream_tasks = [stream.run_task for stream in tuple(self._streams)]
+            if stream_tasks:
+                await asyncio.wait(stream_tasks, timeout=2.5)
                 for stream in tuple(self._streams):
-                    stream.cancel_handler()
-                await asyncio.gather(*pending, return_exceptions=True)
-        for stream in tuple(self._streams):
-            stream.close()
-        await asyncio.gather(
-            *(stream.run_task for stream in tuple(self._streams)),
-            return_exceptions=True,
-        )
+                    if not stream.run_task.done():
+                        stream.close()
+                await asyncio.gather(*stream_tasks, return_exceptions=True)
+        finally:
+            self._stop_completed.set()
 
     def stop_threadsafe(self) -> None:
         if self.is_loop_thread():
@@ -289,9 +305,18 @@ class PullStream:
                 if self.handler_task in completed:
                     await self._finish_handler()
                     if self.is_draining:
+                        if reader.done():
+                            frame = reader.result()
+                            reader = None
+                            if (
+                                frame is not _GRPC_AIO_EOF
+                                and frame.WhichOneof("frame") == "task"
+                            ):
+                                await self._reject_task(frame.task)
                         await self._call.done_writing()
                         await self._await_stream_eof(reader)
                         reader = None
+                        self._immediate_reconnect = True
                         return was_registered
                 if reader not in completed:
                     continue
@@ -353,14 +378,7 @@ class PullStream:
 
     async def _start_task(self, task: pb.PollWorkerTask) -> None:
         if self.is_busy or self.is_draining or not self.runtime.accept_task():
-            await self._send(
-                pb.PollWorkerTaskRequest(
-                    reject=pb.PollWorkerTaskReject(
-                        task_id=task.task_id,
-                        reason=pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
-                    )
-                )
-            )
+            await self._reject_task(task)
             return
         self.is_busy = True
         self.task_id = task.task_id
@@ -373,6 +391,16 @@ class PullStream:
                 remaining, self._cancel_if_current, task.task_id
             )
         self.runtime.signal()
+
+    async def _reject_task(self, task: pb.PollWorkerTask) -> None:
+        await self._send(
+            pb.PollWorkerTaskRequest(
+                reject=pb.PollWorkerTaskReject(
+                    task_id=task.task_id,
+                    reason=pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
+                )
+            )
+        )
 
     def _cancel_if_current(self, task_id: str) -> None:
         if self.task_id == task_id:
