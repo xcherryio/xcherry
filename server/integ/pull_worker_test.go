@@ -34,6 +34,23 @@ import (
 
 type pushRPCErrorWorker struct{}
 
+type pushWaitForErrorWorker struct {
+	retryAfterSeconds int32
+}
+
+func (w pushWaitForErrorWorker) InvokeWaitForMethod(
+	context.Context, *dexpb.InvokeWaitForMethodRequest,
+) (*dexpb.InvokeWaitForMethodResponse, error) {
+	workerStatus, err := status.New(codes.InvalidArgument, "invalid Worker input").WithDetails(&dexpb.WorkerErrorResponse{
+		Detail: "invalid Worker input", ErrorType: "InputError", StackTrace: "worker stack",
+		RetryAfterSeconds: w.retryAfterSeconds,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return nil, workerStatus.Err()
+}
+
 func (pushRPCErrorWorker) InvokeWorkerRPC(
 	context.Context, *dexpb.InvokeWorkerRPCRequest,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
@@ -156,6 +173,11 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		switch request := task.GetRequest().(type) {
 		case *dexpb.PollWorkerTask_WaitFor:
 			method = "wait_for"
+			if w.rpcError != nil {
+				output = &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_WorkerError{WorkerError: w.rpcError}}
+				observation = pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
+				break
+			}
 			if w.holdWaitFor {
 				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 				continue
@@ -844,6 +866,49 @@ func TestPullWorkerErrorMatchesPushCadence(t *testing.T) {
 		t.Skip()
 	}
 	testPullWorkerErrorMatchesPush(t, service.BackendTypeCadence)
+}
+
+func TestPullStepErrorMatchesPushTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullStepErrorMatchesPush(t, service.BackendTypeTemporal)
+}
+
+func TestPullStepErrorMatchesPushCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullStepErrorMatchesPush(t, service.BackendTypeCadence)
+}
+
+func testPullStepErrorMatchesPush(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	retryAfterSeconds := int32(0)
+	if backend == service.BackendTypeTemporal {
+		retryAfterSeconds = 1
+	}
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	pushTarget := startWorker(t, pushWaitForErrorWorker{retryAfterSeconds: retryAfterSeconds})
+	startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "step-error-"+uuid.NewString(),
+		&dexpb.WorkerErrorResponse{Detail: "invalid Worker input", ErrorType: "InputError", StackTrace: "worker stack",
+			GrpcStatus: int32(codes.InvalidArgument), RetryAfterSeconds: retryAfterSeconds})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var results []*dexpb.FlowResult
+	for _, target := range []*dexpb.WorkerTarget{pushTarget, {IsPullMode: true}} {
+		flowID := "step-error-" + uuid.NewString()
+		startedAt := time.Now()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, target,
+			&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 2, InitialIntervalSeconds: 1}}))
+		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, time.Since(startedAt), time.Second)
+		results = append(results, result)
+	}
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, results[0].GetFlowStatus())
+	require.Equal(t, results[0].GetErrorType(), results[1].GetErrorType())
+	require.Equal(t, dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL, results[1].GetErrorType())
 }
 
 func TestPullRPCDispatchRespectsCallerDeadlineTemporal(t *testing.T) {
