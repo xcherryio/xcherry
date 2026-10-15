@@ -28,8 +28,9 @@ jobs:
         with:
           filters: |
             server:
-              - 'server/**'
-              - '!server/all-in-one/**'
+              # Any-pattern matching makes a negation match every other file; use an extglob.
+              - 'server/*'
+              - 'server/!(all-in-one)/**'
               - 'protos/**'
               - '.github/scripts/dump-docker-logs.sh'
               - '.github/workflows/server-ci.yml'
