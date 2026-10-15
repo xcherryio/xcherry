@@ -210,8 +210,10 @@ func NewServerWithAccess(
 			grpc.ChainStreamInterceptor(publicInterceptors.Stream))...)
 		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
 		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
+		internalInterceptors := auth.NewInternalServiceInterceptor(generalInternalToken, []string{dexpb.InternalService_ServiceDesc.ServiceName})
 		server.internalGrpcServer = grpc.NewServer(append(serverOptions,
-			grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{auth.NewInternalServiceInterceptor(generalInternalToken).Unary}, extraUnaryInterceptors, logger)...))...)
+			grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{internalInterceptors.Unary}, extraUnaryInterceptors, logger)...),
+			grpc.ChainStreamInterceptor(internalInterceptors.Stream))...)
 		dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
 		healthpb.RegisterHealthServer(server.internalGrpcServer, healthSrv)
 		return server, nil

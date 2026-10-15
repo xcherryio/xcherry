@@ -29,6 +29,7 @@ import (
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -115,6 +116,7 @@ func testGeneralAuthentication(t *testing.T, backend service.BackendType) {
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	runtime.requireInternalDumpHeaders(t, "authorization", "Bearer "+internalToken)
 	testAuthenticatedStream(t, &config.AuthConfig{Authenticators: []config.AuthenticatorConfig{{Kind: config.AuthenticatorKindStaticTokens, File: tokenFile}}}, token)
+	testInternalAuthenticatedStream(t, internalTokenFile, internalToken)
 }
 
 type testStreamService interface{ Observe() }
@@ -132,7 +134,47 @@ func testAuthenticatedStream(t *testing.T, cfg *config.AuthConfig, token string)
 	require.NoError(t, err)
 	interceptors := auth.NewPublicServiceInterceptors(authenticator)
 	server := grpc.NewServer(grpc.StreamInterceptor(interceptors.Stream))
-	server.RegisterService(&grpc.ServiceDesc{ServiceName: "test.Public", HandlerType: (*testStreamService)(nil), Streams: []grpc.StreamDesc{{
+	registerTestStreamService(server, "test.Public")
+	go serveAuthenticatedTestStream(t, server, listener)
+	t.Cleanup(server.Stop)
+	for _, testCase := range []struct {
+		credential string
+		code       codes.Code
+	}{{"", codes.Unauthenticated}, {"wrong", codes.Unauthenticated}, {token, codes.OK}} {
+		require.Equal(t, testCase.code, callTestStream(t, listener.Addr().String(), testCase.credential, "test.Public"))
+	}
+}
+
+func testInternalAuthenticatedStream(t *testing.T, tokenFile string, token string) {
+	t.Helper()
+	logger, err := loggerimpl.NewDevelopment()
+	require.NoError(t, err)
+	internalToken, err := auth.NewInternalTokenFile(&config.InternalConfig{TokenFile: tokenFile}, logger)
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	interceptor := auth.NewInternalServiceInterceptor(internalToken, []string{"test.Internal"})
+	server := grpc.NewServer(grpc.StreamInterceptor(interceptor.Stream))
+	registerTestStreamService(server, "test.Internal")
+	registerTestStreamService(server, "test.Other")
+	healthpb.RegisterHealthServer(server, health.NewServer())
+	go serveAuthenticatedTestStream(t, server, listener)
+	t.Cleanup(server.Stop)
+	require.Equal(t, codes.Unauthenticated, callTestStream(t, listener.Addr().String(), "", "test.Internal"))
+	require.Equal(t, codes.Unauthenticated, callTestStream(t, listener.Addr().String(), "wrong", "test.Internal"))
+	require.Equal(t, codes.OK, callTestStream(t, listener.Addr().String(), token, "test.Internal"))
+	require.Equal(t, codes.PermissionDenied, callTestStream(t, listener.Addr().String(), token, "test.Other"))
+	connection := newDexClientConnectionWithCredential(t, listener.Addr().String(), "", config.DefaultGrpcMaxMessageBytes)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	watch, err := healthpb.NewHealthClient(connection).Watch(ctx, &healthpb.HealthCheckRequest{})
+	require.NoError(t, err)
+	_, err = watch.Recv()
+	require.NoError(t, err)
+}
+
+func registerTestStreamService(server *grpc.Server, serviceName string) {
+	server.RegisterService(&grpc.ServiceDesc{ServiceName: serviceName, HandlerType: (*testStreamService)(nil), Streams: []grpc.StreamDesc{{
 		StreamName: "Observe", ServerStreams: true,
 		Handler: func(_ interface{}, stream grpc.ServerStream) error {
 			if _, isAuthenticated := auth.PrincipalFromContext(stream.Context()); !isAuthenticated {
@@ -141,19 +183,16 @@ func testAuthenticatedStream(t *testing.T, cfg *config.AuthConfig, token string)
 			return stream.SendMsg(&emptypb.Empty{})
 		},
 	}}}, testStreamServer{})
-	go serveAuthenticatedTestStream(t, server, listener)
-	t.Cleanup(server.Stop)
-	for _, testCase := range []struct {
-		credential string
-		code       codes.Code
-	}{{"", codes.Unauthenticated}, {"wrong", codes.Unauthenticated}, {token, codes.OK}} {
-		connection := newDexClientConnectionWithCredential(t, listener.Addr().String(), testCase.credential, config.DefaultGrpcMaxMessageBytes)
-		stream, err := connection.NewStream(context.Background(), &grpc.StreamDesc{ServerStreams: true}, "/test.Public/Observe")
-		require.NoError(t, err)
-		var response emptypb.Empty
-		err = stream.RecvMsg(&response)
-		require.Equal(t, testCase.code, status.Code(err))
-	}
+}
+
+func callTestStream(t *testing.T, address string, credential string, serviceName string) codes.Code {
+	t.Helper()
+	connection := newDexClientConnectionWithCredential(t, address, credential, config.DefaultGrpcMaxMessageBytes)
+	stream, err := connection.NewStream(context.Background(), &grpc.StreamDesc{ServerStreams: true}, "/"+serviceName+"/Observe")
+	require.NoError(t, err)
+	var response emptypb.Empty
+	err = stream.RecvMsg(&response)
+	return status.Code(err)
 }
 
 func serveAuthenticatedTestStream(t *testing.T, server *grpc.Server, listener net.Listener) {

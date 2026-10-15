@@ -77,30 +77,57 @@ func (i *PublicServiceInterceptors) authenticate(ctx context.Context) (*Principa
 	return principal, nil
 }
 
-// InternalServiceInterceptor requires the private InternalService bearer token.
-type InternalServiceInterceptor struct{ token *InternalTokenFile }
-
-// NewInternalServiceInterceptor creates the private listener interceptor.
-func NewInternalServiceInterceptor(token *InternalTokenFile) *InternalServiceInterceptor {
-	if token == nil {
-		panic("internal token file must not be nil")
-	}
-	return &InternalServiceInterceptor{token: token}
+// InternalServiceInterceptor requires the private listener bearer token.
+type InternalServiceInterceptor struct {
+	token               *InternalTokenFile
+	allowedServiceNames []string
 }
 
-// Unary authenticates private InternalService calls except health checks.
+// NewInternalServiceInterceptor creates the private listener interceptor.
+func NewInternalServiceInterceptor(token *InternalTokenFile, allowedServiceNames []string) *InternalServiceInterceptor {
+	if token == nil || len(allowedServiceNames) == 0 {
+		panic("internal token file and allowed services must be configured")
+	}
+	for _, serviceName := range allowedServiceNames {
+		if serviceName == "" {
+			panic("allowed service name must not be empty")
+		}
+	}
+	return &InternalServiceInterceptor{token: token, allowedServiceNames: append([]string(nil), allowedServiceNames...)}
+}
+
+// Unary authenticates allowed private service calls except health checks.
 func (i *InternalServiceInterceptor) Unary(ctx context.Context, request interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	if isHealthMethod(info.FullMethod) {
-		return handler(ctx, request)
+	authorizedCtx, err := i.authorize(ctx, info.FullMethod)
+	if err != nil {
+		return nil, err
+	}
+	return handler(authorizedCtx, request)
+}
+
+// Stream authenticates allowed private service streams except health watches.
+func (i *InternalServiceInterceptor) Stream(server interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	authorizedCtx, err := i.authorize(stream.Context(), info.FullMethod)
+	if err != nil {
+		return err
+	}
+	return handler(server, &principalServerStream{ServerStream: stream, ctx: authorizedCtx})
+}
+
+func (i *InternalServiceInterceptor) authorize(ctx context.Context, fullMethod string) (context.Context, error) {
+	if isHealthMethod(fullMethod) {
+		return ctx, nil
 	}
 	credential, ok := bearerCredential(ctx)
 	if !ok || !i.token.Accepts(credential) {
 		return nil, unauthenticated("the internal token is required")
 	}
-	if !isServiceMethod(info.FullMethod, dexpb.InternalService_ServiceDesc.ServiceName) {
-		return nil, permissionDenied("the principal is not allowed on this method")
+	for _, serviceName := range i.allowedServiceNames {
+		if isServiceMethod(fullMethod, serviceName) {
+			return context.WithValue(ctx, principalContextKey{}, &Principal{}), nil
+		}
 	}
-	return handler(context.WithValue(ctx, principalContextKey{}, &Principal{}), request)
+	return nil, permissionDenied("the principal is not allowed on this method")
 }
 
 func bearerCredential(ctx context.Context) (string, bool) {
