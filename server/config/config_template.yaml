@@ -66,6 +66,17 @@ worker:
 #   seeds:
 #     dnsName: dex-headless.dex.svc.cluster.local:6833
 #     # static: ["10.0.0.1:6833", "10.0.0.2:6833"]
+# matching:
+#   dispatchWait: 10s
+#   stickyWait: 5s
+#   localDispatchWait: 3s
+#   localStickyWait: 2s
+#   localExecutionReserve: 4s
+#   maxConcurrentTasksCap: 256
+#   maxStreams: 100000
+#   maxQueueLength: 256
+#   maxFlowTypes: 256
+#   maxFlowTypeLength: 256
 interpreter:
   # Bounds backend index creation and propagation checks. Existing indexes return immediately.
   attributeIndexSyncTimeout: 2m

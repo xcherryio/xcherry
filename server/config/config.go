@@ -61,6 +61,26 @@ const (
 	DefaultMembershipListen = "0.0.0.0:6833"
 	// DefaultMembershipRefreshInterval re-resolves DNS seeds and refreshes role rings every ten seconds.
 	DefaultMembershipRefreshInterval = 10 * time.Second
+	// DefaultMatchingDispatchWait bounds a regular attempt's Worker search.
+	DefaultMatchingDispatchWait = 10 * time.Second
+	// DefaultMatchingStickyWait bounds a regular attempt's sticky queue search.
+	DefaultMatchingStickyWait = 5 * time.Second
+	// DefaultMatchingLocalDispatchWait bounds a local attempt's Worker search.
+	DefaultMatchingLocalDispatchWait = 3 * time.Second
+	// DefaultMatchingLocalStickyWait bounds a local attempt's sticky queue search.
+	DefaultMatchingLocalStickyWait = 2 * time.Second
+	// DefaultMatchingLocalExecutionReserve preserves time for local task execution.
+	DefaultMatchingLocalExecutionReserve = 4 * time.Second
+	// DefaultMatchingMaxConcurrentTasksCap bounds streams registered by one Worker.
+	DefaultMatchingMaxConcurrentTasksCap = 256
+	// DefaultMatchingMaxStreams bounds all registered Worker streams on one server.
+	DefaultMatchingMaxStreams = 100000
+	// DefaultMatchingMaxQueueLength bounds queue names in matching requests.
+	DefaultMatchingMaxQueueLength = 256
+	// DefaultMatchingMaxFlowTypes bounds Flow types in one Worker registration.
+	DefaultMatchingMaxFlowTypes = 256
+	// DefaultMatchingMaxFlowTypeLength bounds each declared Flow type.
+	DefaultMatchingMaxFlowTypeLength = 256
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
 	// DefaultGrpcMaxMessageBytes is 32 MiB so that application values up to 16 MiB keep 16 MiB of headroom
@@ -190,6 +210,8 @@ type (
 		Worker WorkerConfig `yaml:"worker"`
 		// Membership configures optional multi-instance discovery. Nil uses an in-process single-member ring. Immutable after startup.
 		Membership *MembershipConfig `yaml:"membership"`
+		// Matching configures pull Worker dispatch and stream limits. Nil uses defaults. Immutable after startup.
+		Matching *MatchingConfig `yaml:"matching"`
 		// Interpreter selects Temporal or Cadence and worker activity settings. Exactly one of Temporal/Cadence must be set.
 		Interpreter Interpreter `yaml:"interpreter"`
 		// BlobStore offloads large Attribute payloads above ThresholdInBytes. Default enabled.
@@ -220,6 +242,30 @@ type (
 		DNSName string `yaml:"dnsName"`
 		// Static lists peer host:port addresses. Default empty. Mutually exclusive with DNSName.
 		Static []string `yaml:"static"`
+	}
+
+	// MatchingConfig sets waiting budgets and stream limits for pull Workers.
+	MatchingConfig struct {
+		// DispatchWait bounds a regular attempt's Worker search. Default 10s. Must be positive when set.
+		DispatchWait time.Duration `yaml:"dispatchWait"`
+		// StickyWait bounds searching the sticky queue before fallback. Default 5s. When set, must not exceed DispatchWait.
+		StickyWait time.Duration `yaml:"stickyWait"`
+		// LocalDispatchWait bounds a local attempt's Worker search. Default 3s. Must be positive when set.
+		LocalDispatchWait time.Duration `yaml:"localDispatchWait"`
+		// LocalStickyWait bounds a local attempt's sticky queue search. Default 2s. When set, must not exceed LocalDispatchWait.
+		LocalStickyWait time.Duration `yaml:"localStickyWait"`
+		// LocalExecutionReserve preserves time for local task execution. Default 4s. Must be positive when set.
+		LocalExecutionReserve time.Duration `yaml:"localExecutionReserve"`
+		// MaxConcurrentTasksCap bounds registered streams per appWorkerID on each owner node. Default 256. Must be positive when set.
+		MaxConcurrentTasksCap int `yaml:"maxConcurrentTasksCap"`
+		// MaxStreams bounds registered streams on this server. Default 100000. Must be positive when set.
+		MaxStreams int `yaml:"maxStreams"`
+		// MaxQueueLength bounds queue and fallback queue names. Default 256. Must be positive when set.
+		MaxQueueLength int `yaml:"maxQueueLength"`
+		// MaxFlowTypes bounds declared Flow types per Worker registration. Default 256. Must be positive when set.
+		MaxFlowTypes int `yaml:"maxFlowTypes"`
+		// MaxFlowTypeLength bounds each declared Flow type. Default 256. Must be positive when set.
+		MaxFlowTypeLength int `yaml:"maxFlowTypeLength"`
 	}
 
 	StreamStoreConfig struct {
@@ -629,6 +675,11 @@ func NewConfig(configPath string) (*Config, error) {
 			return nil, err
 		}
 	}
+	if cfg.Matching != nil {
+		if err := cfg.Matching.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Interpreter.InterpreterActivityConfig.MinimumStepHeartbeatTimeout < 0 {
 		return nil, fmt.Errorf("interpreter.interpreterActivityConfig.minimumStepHeartbeatTimeout must be non-negative")
 	}
@@ -637,6 +688,56 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// WithDefaults fills omitted matching settings without modifying the receiver.
+func (c MatchingConfig) WithDefaults() MatchingConfig {
+	if c.DispatchWait == 0 {
+		c.DispatchWait = DefaultMatchingDispatchWait
+	}
+	if c.StickyWait == 0 {
+		c.StickyWait = DefaultMatchingStickyWait
+	}
+	if c.LocalDispatchWait == 0 {
+		c.LocalDispatchWait = DefaultMatchingLocalDispatchWait
+	}
+	if c.LocalStickyWait == 0 {
+		c.LocalStickyWait = DefaultMatchingLocalStickyWait
+	}
+	if c.LocalExecutionReserve == 0 {
+		c.LocalExecutionReserve = DefaultMatchingLocalExecutionReserve
+	}
+	if c.MaxConcurrentTasksCap == 0 {
+		c.MaxConcurrentTasksCap = DefaultMatchingMaxConcurrentTasksCap
+	}
+	if c.MaxStreams == 0 {
+		c.MaxStreams = DefaultMatchingMaxStreams
+	}
+	if c.MaxQueueLength == 0 {
+		c.MaxQueueLength = DefaultMatchingMaxQueueLength
+	}
+	if c.MaxFlowTypes == 0 {
+		c.MaxFlowTypes = DefaultMatchingMaxFlowTypes
+	}
+	if c.MaxFlowTypeLength == 0 {
+		c.MaxFlowTypeLength = DefaultMatchingMaxFlowTypeLength
+	}
+	return c
+}
+
+// Validate checks matching wait relationships and stream limits.
+func (c MatchingConfig) Validate() error {
+	settings := c.WithDefaults()
+	if settings.DispatchWait <= 0 || settings.StickyWait <= 0 || (c.StickyWait != 0 && settings.StickyWait > settings.DispatchWait) {
+		return fmt.Errorf("matching.stickyWait must be positive and no greater than dispatchWait")
+	}
+	if settings.LocalDispatchWait <= 0 || settings.LocalStickyWait <= 0 || (c.LocalStickyWait != 0 && settings.LocalStickyWait > settings.LocalDispatchWait) {
+		return fmt.Errorf("matching.localStickyWait must be positive and no greater than localDispatchWait")
+	}
+	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 {
+		return fmt.Errorf("matching execution reserve and stream limits must be positive")
+	}
+	return nil
 }
 
 // EffectiveListen returns the configured ringpop bind address or its default.

@@ -54,6 +54,8 @@ See the server operations guide for token formats and listener requirements.
 
 Integration and replay test instructions are available in
 [integ/README.md](integ/README.md) and [replayTests/README.md](replayTests/README.md).
+Run `make -C server matchingIntegTests` for the narrow matching integration suite.
+The matching `maxConcurrentTasksCap` applies per appWorkerID on each queue owner node.
 
 S3 blob storage uses the AWS SDK credential chain when both `s3AccessKey` and
 `s3SecretKey` are omitted, including credentials supplied through EKS Pod Identity.

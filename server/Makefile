@@ -249,6 +249,9 @@ unitTests:
 	@GOWORK=off go test -v ./config $$(GOWORK=off go list ./service/... | grep -v ./service/common/blobstore)
 	@GOWORK=off go test -v ./service/common/blobstore -run '^TestDeterministicBlobObjectID'
 
+matchingIntegTests:
+	@GOWORK=off go test -v ./service/matching -run 'Integration$$' -timeout 5m
+
 # Requires MySQL, PostgreSQL, Temporal, and Cadence in label-gated CI.
 attributeSyncIntegTests: prepareIntegrationCoverage
 	@GOWORK=off go test $(integrationCoverageFlags) -v -tags=attributestore_integration ./service/common/attributestore -run '^TestMySQLAndPostgresAttributeStore.*Integration$$' -timeout 5m $(integrationCoverageArgs)
