@@ -34,6 +34,10 @@ class WorkerTarget:
 
     Raises:
         ValueError: If pull mode is combined with an address or headless mode.
+
+    Examples:
+        >>> target = WorkerTarget(pull=True)
+        >>> client_options = ClientOptions(worker_target=target)
     """
 
     address: str = ""
@@ -70,6 +74,12 @@ class PullWorkerOptions:
 
     Raises:
         ValueError: If a numeric option is negative or app_worker_id is invalid.
+
+    Examples:
+        >>> pull = PullWorkerOptions(max_concurrent_tasks=8)
+        >>> worker = Worker(registry, cache, WorkerOptions(pull=pull))
+        >>> worker.worker_target == WorkerTarget(pull=True)
+        True
     """
 
     max_concurrent_tasks: int = 0

@@ -16,6 +16,7 @@ import queue
 import threading
 from datetime import timedelta
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from dex import (
     AsyncClient,
@@ -25,15 +26,19 @@ from dex import (
     ClientOptions,
     Context,
     Flow,
+    FlowConfig,
     PullWorkerOptions,
     Registry,
     RPCResult,
     Step,
     StepDecision,
     StepList,
+    SubFlow,
+    SubFlowOptions,
     Wait,
     Worker,
     WorkerOptions,
+    WorkerTarget,
     go_to,
     graceful_complete,
     open_blob_cache,
@@ -109,8 +114,36 @@ class PullFlow(Flow[str]):
         return RPCResult(self.worker_id)
 
 
+class PullSubFlowStep(Step[str]):
+    def __init__(self, child: PullFlow) -> None:
+        self.child = child
+
+    def wait_for(self, context: Context, input: str) -> Wait:
+        return Wait.until(
+            SubFlow.run(
+                self.child,
+                input,
+                SubFlowOptions(
+                    config_override=FlowConfig(worker_target=WorkerTarget(pull=True))
+                ),
+            )
+        )
+
+    def execute(self, context: Context, input: str) -> StepDecision:
+        output = SubFlow.get_condition_results(context).single_output(str)
+        return graceful_complete(output)
+
+
+class PullSubFlowParent(Flow[str]):
+    def __init__(self, child: PullFlow) -> None:
+        self.start = PullSubFlowStep(child)
+
+    def get_steps(self) -> StepList[str]:
+        return StepList.start_step(self.start)
+
+
 class PullWorkerHarness:
-    def __init__(self, flow: PullFlow, server_address: str, worker_id: str) -> None:
+    def __init__(self, flow: Flow[Any], server_address: str, worker_id: str) -> None:
         self.registry = Registry([flow])
         self.cache_directory = TemporaryDirectory(prefix="dex-python-pull-test-")
         self.cache = open_blob_cache(
@@ -251,3 +284,26 @@ async def _async_pull_worker_handles_flow() -> None:
             await worker.close()
             await asyncio.wait_for(worker_task, timeout=10)
             cache.close()
+
+
+def test_subflow_can_override_push_parent_with_pull_child() -> None:
+    server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
+    observations: queue.Queue[tuple[str, str]] = queue.Queue()
+    first_gate = threading.Event()
+    second_gate = threading.Event()
+    first_gate.set()
+    second_gate.set()
+    pull_worker_id = unique_id("python-pull-subflow")
+    push_child = PullFlow("push", observations, first_gate, second_gate)
+    pull_child = PullFlow(pull_worker_id, observations, first_gate, second_gate)
+    parent = PullSubFlowParent(push_child)
+    pull_worker = PullWorkerHarness(pull_child, server_address, pull_worker_id)
+    try:
+        with DexDevTestEnvironment(parent, push_child) as environment:
+            flow_id = unique_id("python-pull-subflow-parent")
+            environment.client.start_flow(parent, flow_id, "child-completed")
+            result = environment.client.wait_for_flow(flow_id, timedelta(seconds=30))
+            assert result.single_output(str) == "child-completed"
+            assert observations.get(timeout=20) == (pull_worker_id, "first_wait_for")
+    finally:
+        pull_worker.close()

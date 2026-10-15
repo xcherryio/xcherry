@@ -89,6 +89,7 @@ class PullWorkerRuntime:
         self._server_address = server_address
         self._executor = executor
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread_id: int | None = None
         self._started = threading.Event()
         self._wake: asyncio.Event | None = None
         self._stopping: asyncio.Event | None = None
@@ -98,6 +99,7 @@ class PullWorkerRuntime:
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
+        self._loop_thread_id = threading.get_ident()
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
         self._started.set()
@@ -178,10 +180,15 @@ class PullWorkerRuntime:
         )
 
     def stop_threadsafe(self) -> None:
+        if self.is_loop_thread():
+            raise RuntimeError("pull Worker.stop() must be called from another thread")
         if not self._started.wait(timeout=10):
             raise RuntimeError("pull Worker did not start its event loop")
         if self._loop is not None and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self.stop(), self._loop).result()
+
+    def is_loop_thread(self) -> bool:
+        return self._loop_thread_id == threading.get_ident()
 
     @property
     def is_stopping(self) -> bool:
@@ -202,6 +209,7 @@ class PullStream:
         self._call: Any = None
         self._send_lock = asyncio.Lock()
         self._immediate_reconnect = False
+        self._deadline_handle: asyncio.TimerHandle | None = None
 
     def on_done(self, completed: asyncio.Task[None]) -> None:
         self.runtime._stream_done(self, completed)
@@ -281,6 +289,8 @@ class PullStream:
                     await self._finish_handler()
                     if self.is_draining:
                         await self._call.done_writing()
+                        await self._await_stream_eof(reader)
+                        reader = None
                         return was_registered
                 if reader not in completed:
                     continue
@@ -323,6 +333,23 @@ class PullStream:
             self._call = None
         return was_registered
 
+    async def _await_stream_eof(self, reader: asyncio.Task[Any] | None) -> None:
+        deadline = asyncio.get_running_loop().time() + 2
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                if reader is not None:
+                    frame = await asyncio.wait_for(reader, timeout=remaining)
+                    reader = None
+                else:
+                    frame = await asyncio.wait_for(self._call.read(), timeout=remaining)
+                if frame is grpc.aio.EOF:
+                    return
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Worker task stream did not close after draining")
+
     async def _start_task(self, task: pb.PollWorkerTask) -> None:
         if self.is_busy or self.is_draining or not self.runtime.accept_task():
             await self._send(
@@ -341,7 +368,7 @@ class PullStream:
         if task.HasField("deadline"):
             deadline = task.deadline.ToDatetime(tzinfo=timezone.utc)
             remaining = max(0, (deadline - datetime.now(timezone.utc)).total_seconds())
-            asyncio.get_running_loop().call_later(
+            self._deadline_handle = asyncio.get_running_loop().call_later(
                 remaining, self._cancel_if_current, task.task_id
             )
         self.runtime.signal()
@@ -367,7 +394,8 @@ class PullStream:
             )
         except BaseException as failure:
             _LOGGER.exception("Python Worker invocation failed")
-            await self._send_error(task.task_id, failure)
+            status = grpc.StatusCode.CANCELLED if not self._active.is_set() else None
+            await self._send_error(task.task_id, failure, status)
 
     async def _execute_async(self, task: pb.PollWorkerTask, kind: str | None) -> None:
         if kind == "wait_for":
@@ -436,9 +464,12 @@ class PullStream:
         report.details[0].Unpack(worker_error)
         if status is not None:
             worker_error.grpc_status = status.value[0]
-        await self._send_frame(
-            pb.PollWorkerTaskFrame(task_id=task_id, worker_error=worker_error)
-        )
+        try:
+            await self._send_frame(
+                pb.PollWorkerTaskFrame(task_id=task_id, worker_error=worker_error)
+            )
+        except Exception:
+            _LOGGER.exception("send Worker error frame failed")
 
     async def _send_frame(self, frame: pb.PollWorkerTaskFrame) -> None:
         await self._send(pb.PollWorkerTaskRequest(task_frame=frame))
@@ -451,6 +482,9 @@ class PullStream:
         if self.handler_task is None:
             return
         await asyncio.gather(self.handler_task, return_exceptions=True)
+        if self._deadline_handle is not None:
+            self._deadline_handle.cancel()
+            self._deadline_handle = None
         self.handler_task = None
         self.task_id = ""
         self.is_busy = False

@@ -40,9 +40,9 @@ class Worker:
     """Host synchronous Step and RPC handlers through a listener or pull streams.
 
     A Worker is one-shot. Call ``start`` on a dedicated thread because it blocks,
-        then call ``stop`` or ``close`` during shutdown. Set ``WorkerOptions.pull``
-        to poll Dex without a listener. Handlers run concurrently in a bounded
-        thread pool and must synchronize shared application state.
+    then call ``stop`` or ``close`` during shutdown. Set ``WorkerOptions.pull``
+    to poll Dex without a listener. Handlers run concurrently in a bounded
+    thread pool and must synchronize shared application state.
 
     Attributes:
         registry: The Flow Registry served by this Worker.
@@ -252,8 +252,14 @@ class Worker:
         drains for ``PullWorkerOptions.stop_drain_timeout`` (30 seconds by default),
         then requests cancellation and waits for every handler to return. A
         synchronous handler must check ``Context.is_cancellation_requested`` to
-        respond promptly to forced shutdown.
+        respond promptly to forced shutdown. Call ``stop`` from a thread other
+        than the pull Worker's ``start`` thread.
+
+        Raises:
+            RuntimeError: If called on the pull Worker's ``start`` thread.
         """
+        if self._pull is not None and self._pull.is_loop_thread():
+            raise RuntimeError("pull Worker.stop() must be called from another thread")
         with self._lock:
             if self._state in ("stopped", "closed"):
                 return
