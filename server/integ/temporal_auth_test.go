@@ -120,7 +120,7 @@ func TestTemporalAuthClientCertificateRotation(t *testing.T) {
 	proxy := newTemporalAuthProxy(t, &tls.Config{Certificates: []tls.Certificate{testCA.serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, "")
 	clientDirectory := t.TempDir()
 	certPath, keyPath := testCA.writeClientCertificate(t, clientDirectory, "first-client")
-	temporalConfig := &config.TemporalConfig{HostPort: proxy.listener.Addr().String(), TLS: &config.TemporalTLSConfig{Enabled: ptr.Any(true), CAFile: testCA.caPath, ServerName: "temporal-auth.test", CertFile: certPath, KeyFile: keyPath}}
+	temporalConfig := &config.TemporalConfig{HostPort: proxy.listener.Addr().String(), TLS: &config.TemporalTLSConfig{CAFile: testCA.caPath, ServerName: "temporal-auth.test", CertFile: certPath, KeyFile: keyPath}}
 	workerTarget := startWorker(t, basic.NewHandler())
 	flowClient := startTemporalAuthDex(t, temporalConfig, "")
 	runTemporalAuthFlow(t, flowClient, workerTarget)

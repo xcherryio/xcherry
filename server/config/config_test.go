@@ -114,6 +114,7 @@ func TestTemporalConnectionConfigValidation(t *testing.T) {
 		{"both API key sources", "cloudAPIKey: static\n    apiKeyFile: /tmp/key", "cannot both be configured"},
 		{"certificate without key", "tls:\n      certFile: /tmp/cert", "must be configured together"},
 		{"negative refresh interval", "apiKeyFileRefreshInterval: -1s", "must be non-negative"},
+		{"disabled TLS with CA", "tls:\n      enabled: false\n      caFile: /tmp/ca.pem", "enabled cannot be false"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

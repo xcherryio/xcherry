@@ -434,7 +434,7 @@ type (
 		APIKeyFile string `yaml:"apiKeyFile"`
 		// APIKeyFileRefreshInterval is the minimum interval between file checks. Default 30s when zero. Negative values are invalid.
 		APIKeyFileRefreshInterval time.Duration `yaml:"apiKeyFileRefreshInterval"`
-		// TLS configures the Temporal frontend connection. Nil enables TLS with system roots when an API key is configured and plaintext otherwise.
+		// TLS configures the Temporal frontend connection. Nil enables TLS with system roots when an API key is configured and plaintext otherwise. A nonempty TLS block enables TLS when enabled is omitted.
 		TLS *TemporalTLSConfig `yaml:"tls"`
 		// CloudOps configures Temporal Cloud namespace operations for attribute index synchronization.
 		// Nil uses the Temporal data-plane OperatorService for self-hosted clusters.
@@ -448,9 +448,9 @@ type (
 	}
 
 	TemporalTLSConfig struct {
-		// Enabled explicitly enables or disables TLS. Nil enables TLS when an API key is configured and plaintext otherwise.
+		// Enabled explicitly enables or disables TLS. Nil enables TLS when an API key or another TLS setting is configured and plaintext otherwise.
 		Enabled *bool `yaml:"enabled"`
-		// CAFile supplies trusted server certificates. Default empty uses system roots. Dex loads this file once at startup; restart Dex after rotating it.
+		// CAFile supplies trusted server certificates. Default empty uses system roots. A configured file replaces system roots and is loaded once at startup; restart Dex after rotating it.
 		CAFile string `yaml:"caFile"`
 		// ServerName overrides the TLS server name. Default empty uses the host in hostPort for certificate verification.
 		ServerName string `yaml:"serverName"`
@@ -612,7 +612,27 @@ func (c *TemporalConfig) ValidateTemporalConnection() error {
 	if c.TLS != nil && (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
 		return fmt.Errorf("interpreter.temporal.tls.certFile and keyFile must be configured together")
 	}
+	if c.TLS != nil && c.TLS.Enabled != nil && !*c.TLS.Enabled && c.TLS.hasConnectionSettings() {
+		return fmt.Errorf("interpreter.temporal.tls.enabled cannot be false when other TLS settings are configured")
+	}
 	return nil
+}
+
+// IsTLSEnabled reports whether the Temporal frontend connection uses TLS.
+func (c *TemporalConfig) IsTLSEnabled() bool {
+	if c.TLS != nil {
+		if c.TLS.Enabled != nil {
+			return *c.TLS.Enabled
+		}
+		if c.TLS.hasConnectionSettings() {
+			return true
+		}
+	}
+	return c.CloudAPIKey != "" || c.APIKeyFile != ""
+}
+
+func (c *TemporalTLSConfig) hasConnectionSettings() bool {
+	return c.CAFile != "" || c.ServerName != "" || c.CertFile != "" || c.KeyFile != ""
 }
 
 func applyWebEnvironment(cfg *Config) error {

@@ -70,10 +70,7 @@ func (r *Runtime) createTemporalServices() (
 		clientOptions.Credentials = client.NewAPIKeyStaticCredentials(temporalConfig.CloudAPIKey)
 	}
 	hasAPIKey := temporalConfig.CloudAPIKey != "" || apiKeyReader != nil
-	isTLSEnabled := hasAPIKey
-	if temporalConfig.TLS != nil && temporalConfig.TLS.Enabled != nil {
-		isTLSEnabled = *temporalConfig.TLS.Enabled
-	}
+	isTLSEnabled := temporalConfig.IsTLSEnabled()
 	if isTLSEnabled && temporalConfig.TLS != nil {
 		var err error
 		clientOptions.ConnectionOptions.TLS, err = createTemporalTLSConfig(temporalConfig.TLS, r.zapLogger)
@@ -173,10 +170,7 @@ func createTemporalTLSConfig(cfg *config.TemporalTLSConfig, logger *zap.Logger) 
 		if err != nil {
 			return nil, fmt.Errorf("read Temporal CA file: %w", err)
 		}
-		rootCAs, err := x509.SystemCertPool()
-		if err != nil {
-			return nil, fmt.Errorf("load system CA certificates: %w", err)
-		}
+		rootCAs := x509.NewCertPool()
 		if !rootCAs.AppendCertsFromPEM(caPEM) {
 			return nil, fmt.Errorf("Temporal CA file contains no certificates")
 		}
