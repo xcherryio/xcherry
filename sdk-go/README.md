@@ -622,6 +622,24 @@ Flow service matches the Server dispatching the call. Worker error details are
 bounded to 1 KiB; when the complete diagnostic exceeds that limit, the SDK also
 logs every missing blob and value through its logger.
 
+`ClientOptions.GrpcMaxMessageBytes` and `WorkerOptions.GrpcMaxMessageBytes`
+limit the gRPC messages the Client or Worker receives. Zero uses
+`dex.DefaultGrpcMaxMessageBytes` (32 MiB), which matches the Dex server's
+default `api.grpcMaxMessageBytes`, and keeps gRPC's unlimited send limit, so
+the server bounds what the SDK sends. A positive value limits both directions;
+negative values are invalid. The Worker applies the limit to its WorkerService
+listener, which receives Step and RPC invocations, and to its FlowService
+connection. Every hop applies the smaller limit of its two ends, so raise the
+server and SDK limits together. Keep the limit above the largest application
+value by an explicit margin for the message envelope; the default leaves 16 MiB
+of headroom for values up to 16 MiB.
+
+Hydration first requests every uncached blob in one `LoadBlobs` call. Blob
+references do not carry sizes, so when a response exceeds a gRPC message limit,
+the SDK splits the request in half and retries each half. N uncached blobs take
+at most 2N-1 calls. A single blob that still does not fit returns
+`*dex.BlobMessageTooLargeError` with its Flow ID and blob ID.
+
 `dex.Logger` supports structured debug, info, warning, and error messages.
 `blobcache.Config.Logger` defaults to `slog.Default` and is inherited by Client
 and Worker. Their option-level loggers override it for that component.
