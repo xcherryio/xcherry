@@ -222,4 +222,24 @@ io.superdurable.gen.ChannelValues defaultValue);
    */
   io.superdurable.gen.AttributeSyncItemOrBuilder getPendingAttributeSyncItemsOrBuilder(
       int index);
+
+  /**
+   * <pre>
+   * Retains the last serving Worker's sticky queue across a Flow continuation.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 9;</code>
+   * @return The dexTaskQueue.
+   */
+  java.lang.String getDexTaskQueue();
+  /**
+   * <pre>
+   * Retains the last serving Worker's sticky queue across a Flow continuation.
+   * </pre>
+   *
+   * <code>string dex_task_queue = 9;</code>
+   * @return The bytes for dexTaskQueue.
+   */
+  com.google.protobuf.ByteString
+      getDexTaskQueueBytes();
 }

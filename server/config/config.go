@@ -56,10 +56,15 @@ const (
 	DefaultWebBindAddress = "0.0.0.0"
 	// DefaultWebPort is the default Dex Web HTTP bind port.
 	DefaultWebPort = 8802
+	// DefaultMembershipListen binds ringpop on every interface, outside the all-in-one backend port ranges.
+	DefaultMembershipListen = "0.0.0.0:6833"
+	// DefaultMembershipRefreshInterval re-resolves DNS seeds and refreshes role rings every ten seconds.
+	DefaultMembershipRefreshInterval = 10 * time.Second
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
-	// DefaultGrpcMaxMessageBytes is 16 MiB so that large attributes can be transported.
-	DefaultGrpcMaxMessageBytes = 16 * 1024 * 1024
+	// DefaultGrpcMaxMessageBytes is 32 MiB so that application values up to 16 MiB keep 16 MiB of headroom
+	// for the request or response envelope, such as loaded state, batch entries, and metadata.
+	DefaultGrpcMaxMessageBytes = 32 * 1024 * 1024
 	// DefaultWorkerConnectionIdleTimeout is how long an idle WorkerService conn may sit unused before eviction.
 	DefaultWorkerConnectionIdleTimeout = 10 * time.Minute
 	// DefaultMaxWorkerConnections caps the WorkerService dial pool; positive required at runtime.
@@ -182,6 +187,8 @@ type (
 		Web WebConfig `yaml:"web"`
 		// Worker configures shared WorkerService clients. Immutable after startup.
 		Worker WorkerConfig `yaml:"worker"`
+		// Membership configures optional multi-instance discovery. Nil uses an in-process single-member ring. Immutable after startup.
+		Membership *MembershipConfig `yaml:"membership"`
 		// Interpreter selects Temporal or Cadence and worker activity settings. Exactly one of Temporal/Cadence must be set.
 		Interpreter Interpreter `yaml:"interpreter"`
 		// BlobStore offloads large Attribute payloads above ThresholdInBytes. Default enabled.
@@ -196,6 +203,24 @@ type (
 		Auth AuthConfig `yaml:"auth"`
 		// Internal configures a private InternalService listener. Default empty uses the public listener when auth is off.
 		Internal InternalConfig `yaml:"internal"`
+	}
+
+	MembershipConfig struct {
+		// Listen binds the ringpop TChannel listener. Default 0.0.0.0:6833. Its port is advertised with BroadcastAddress.
+		Listen string `yaml:"listen"`
+		// BroadcastAddress is the reachable IPv4 address advertised to peers. Default first private IPv4; it must differ from a wildcard bind address.
+		BroadcastAddress string `yaml:"broadcastAddress"`
+		// Seeds selects DNS or static peer addresses. Default empty, which starts a cluster containing only this listener.
+		Seeds MembershipSeedsConfig `yaml:"seeds"`
+		// RefreshInterval re-resolves DNS seeds and role membership. Default 10s. Must be positive when set.
+		RefreshInterval time.Duration `yaml:"refreshInterval"`
+	}
+
+	MembershipSeedsConfig struct {
+		// DNSName resolves a headless service's host:port to peer addresses. Default empty. Mutually exclusive with Static.
+		DNSName string `yaml:"dnsName"`
+		// Static lists peer host:port addresses. Default empty. Mutually exclusive with DNSName.
+		Static []string `yaml:"static"`
 	}
 
 	StreamStoreConfig struct {
@@ -365,7 +390,9 @@ type (
 		Port int `yaml:"port"`
 		// MaxWaitSeconds caps transport long polls. Zero uses DefaultMaxWaitSeconds (60). Positive values are the cap. Negatives are invalid. It does not limit Temporal Update handlers.
 		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
-		// GrpcMaxMessageBytes is MaxRecv/MaxSend for FlowService, InternalService, and WorkerService clients. Default 16 MiB. Must be positive and larger than continue-as-new page size plus overhead.
+		// GrpcMaxMessageBytes is MaxRecv/MaxSend for FlowService, InternalService, and WorkerService clients. Default 32 MiB. Must be positive and larger than continue-as-new page size plus overhead.
+		// Keep it above the largest application value plus envelope headroom; the default leaves 16 MiB for values up to 16 MiB.
+		// SDK Clients and Workers apply their own limit (the Go SDK's GrpcMaxMessageBytes receive limit also defaults to 32 MiB); the smaller limit of each hop applies.
 		GrpcMaxMessageBytes int `yaml:"grpcMaxMessageBytes"`
 		// UseTemporalSynchronousUpdateForAllRPCs routes non-locking Temporal RPCs through synchronous Updates. Default false because Temporal limits concurrent Updates. Enabling trades that capacity for validator rejection and atomic effect commits. Locking Temporal RPCs always use Updates.
 		UseTemporalSynchronousUpdateForAllRPCs bool `yaml:"useTemporalSynchronousUpdateForAllRPCs"`
@@ -597,6 +624,11 @@ func NewConfig(configPath string) (*Config, error) {
 	if err := cfg.validateRetryPolicies(); err != nil {
 		return nil, err
 	}
+	if cfg.Membership != nil {
+		if err := cfg.Membership.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Interpreter.InterpreterActivityConfig.MinimumStepHeartbeatTimeout < 0 {
 		return nil, fmt.Errorf("interpreter.interpreterActivityConfig.minimumStepHeartbeatTimeout must be non-negative")
 	}
@@ -608,6 +640,49 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// EffectiveListen returns the configured ringpop bind address or its default.
+func (c MembershipConfig) EffectiveListen() string {
+	if c.Listen == "" {
+		return DefaultMembershipListen
+	}
+	return c.Listen
+}
+
+// EffectiveRefreshInterval returns the configured DNS and ring refresh interval or its default.
+func (c MembershipConfig) EffectiveRefreshInterval() time.Duration {
+	if c.RefreshInterval == 0 {
+		return DefaultMembershipRefreshInterval
+	}
+	return c.RefreshInterval
+}
+
+// Validate checks membership listener, advertised address, and seed configuration.
+func (c MembershipConfig) Validate() error {
+	if _, _, err := net.SplitHostPort(c.EffectiveListen()); err != nil {
+		return fmt.Errorf("membership.listen must be host:port: %w", err)
+	}
+	if c.BroadcastAddress != "" && net.ParseIP(c.BroadcastAddress) == nil {
+		return fmt.Errorf("membership.broadcastAddress must be an IP address")
+	}
+	if c.RefreshInterval < 0 {
+		return fmt.Errorf("membership.refreshInterval must be positive")
+	}
+	if c.Seeds.DNSName != "" && len(c.Seeds.Static) != 0 {
+		return fmt.Errorf("membership.seeds.dnsName and static are mutually exclusive")
+	}
+	if c.Seeds.DNSName != "" {
+		if _, _, err := net.SplitHostPort(c.Seeds.DNSName); err != nil {
+			return fmt.Errorf("membership.seeds.dnsName must be host:port: %w", err)
+		}
+	}
+	for _, address := range c.Seeds.Static {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("membership.seeds.static address must be host:port: %w", err)
+		}
+	}
+	return nil
 }
 
 // ValidateTemporalConnection checks Temporal connection settings.

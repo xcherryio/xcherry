@@ -1537,6 +1537,202 @@ class WorkerService:
             _registered_method=True)
 
 
+class WorkerTaskServiceStub:
+    """Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.PollWorkerTask = channel.stream_stream(
+                '/dex.WorkerTaskService/PollWorkerTask',
+                request_serializer=dex__pb2.PollWorkerTaskRequest.SerializeToString,
+                response_deserializer=dex__pb2.PollWorkerTaskResponse.FromString,
+                _registered_method=True)
+
+
+class WorkerTaskServiceServicer:
+    """Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+    """
+
+    def PollWorkerTask(self, request_iterator, context):
+        """Exchanges registration, task, result, and control frames for one Dex task queue.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_WorkerTaskServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'PollWorkerTask': grpc.stream_stream_rpc_method_handler(
+                    servicer.PollWorkerTask,
+                    request_deserializer=dex__pb2.PollWorkerTaskRequest.FromString,
+                    response_serializer=dex__pb2.PollWorkerTaskResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'dex.WorkerTaskService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('dex.WorkerTaskService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class WorkerTaskService:
+    """Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+    """
+
+    @staticmethod
+    def PollWorkerTask(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/dex.WorkerTaskService/PollWorkerTask',
+            dex__pb2.PollWorkerTaskRequest.SerializeToString,
+            dex__pb2.PollWorkerTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class MatchingServiceStub:
+    """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.DispatchTask = channel.unary_stream(
+                '/dex.MatchingService/DispatchTask',
+                request_serializer=dex__pb2.DispatchTaskRequest.SerializeToString,
+                response_deserializer=dex__pb2.DispatchTaskResponse.FromString,
+                _registered_method=True)
+        self.ForwardPollWorkerTask = channel.stream_stream(
+                '/dex.MatchingService/ForwardPollWorkerTask',
+                request_serializer=dex__pb2.PollWorkerTaskRequest.SerializeToString,
+                response_deserializer=dex__pb2.PollWorkerTaskResponse.FromString,
+                _registered_method=True)
+
+
+class MatchingServiceServicer:
+    """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    """
+
+    def DispatchTask(self, request, context):
+        """Streams Worker output frames and a final result or dispatch error.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ForwardPollWorkerTask(self, request_iterator, context):
+        """Proxies a Worker's queue stream from its receiving instance to the queue owner.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_MatchingServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'DispatchTask': grpc.unary_stream_rpc_method_handler(
+                    servicer.DispatchTask,
+                    request_deserializer=dex__pb2.DispatchTaskRequest.FromString,
+                    response_serializer=dex__pb2.DispatchTaskResponse.SerializeToString,
+            ),
+            'ForwardPollWorkerTask': grpc.stream_stream_rpc_method_handler(
+                    servicer.ForwardPollWorkerTask,
+                    request_deserializer=dex__pb2.PollWorkerTaskRequest.FromString,
+                    response_serializer=dex__pb2.PollWorkerTaskResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'dex.MatchingService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('dex.MatchingService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class MatchingService:
+    """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    """
+
+    @staticmethod
+    def DispatchTask(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/dex.MatchingService/DispatchTask',
+            dex__pb2.DispatchTaskRequest.SerializeToString,
+            dex__pb2.DispatchTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ForwardPollWorkerTask(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/dex.MatchingService/ForwardPollWorkerTask',
+            dex__pb2.PollWorkerTaskRequest.SerializeToString,
+            dex__pb2.PollWorkerTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
 class TenantAdminServiceStub:
     """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
     TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.

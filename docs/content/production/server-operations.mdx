@@ -229,10 +229,17 @@ Loading existing state may read existing Blob objects.
 If the complete Worker request exceeds **api.grpcMaxMessageBytes**, Dex rejects
 it before calling the Worker.
 
-SDK Workers default to a 4 MiB gRPC receive limit. **api.grpcMaxMessageBytes**
-controls the Dex server limit, which defaults to 16 MiB; increasing it does not
-raise the Worker limit. The complete Worker request must fit both limits,
-including loaded state and metadata. A request exceeding either limit returns
+**api.grpcMaxMessageBytes** controls the Dex server limit for its listeners and
+for its calls to Workers. It defaults to 32 MiB. A message carries one or more
+application values plus an envelope, such as loaded state, batch entries, and
+metadata. Keep the limit above the largest application value by an explicit
+margin. The default leaves 16 MiB of headroom for values up to 16 MiB.
+
+Each SDK applies its own limit, and increasing the server limit does not raise
+it. Go SDK Clients and Workers default to a 32 MiB receive limit and accept
+**GrpcMaxMessageBytes** to change it. Other SDK Workers default to a 4 MiB gRPC
+receive limit. The complete Worker request must fit both limits, including
+loaded state and metadata. A request exceeding either limit returns
 **FailedPrecondition** with **WORKER_API_ERROR** and **OriginalWorkerErrorStatus**
 set to **ResourceExhausted** (8). This error applies to both transactional and
 nontransactional RPCs. A transactional request rejected by Dex's size check is

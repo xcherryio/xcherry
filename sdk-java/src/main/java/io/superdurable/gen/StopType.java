@@ -115,7 +115,7 @@ public enum StopType
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(7);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(9);
   }
 
   private static final StopType[] VALUES = values();

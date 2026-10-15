@@ -35,4 +35,14 @@ public interface WorkerTargetOrBuilder extends
    * @return The isHeadlessAddress.
    */
   boolean getIsHeadlessAddress();
+
+  /**
+   * <pre>
+   * Routes work through a connected pull Worker; mutually exclusive with address.
+   * </pre>
+   *
+   * <code>bool is_pull_mode = 3;</code>
+   * @return The isPullMode.
+   */
+  boolean getIsPullMode();
 }

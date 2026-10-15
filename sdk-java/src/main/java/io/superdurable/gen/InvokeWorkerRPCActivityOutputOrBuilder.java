@@ -44,4 +44,24 @@ public interface InvokeWorkerRPCActivityOutputOrBuilder extends
    */
   com.google.protobuf.ByteString
       getRequestIdBytes();
+
+  /**
+   * <pre>
+   * Identifies the Worker that completed this pull task for sticky routing.
+   * </pre>
+   *
+   * <code>string served_by_app_worker_id = 3;</code>
+   * @return The servedByAppWorkerId.
+   */
+  java.lang.String getServedByAppWorkerId();
+  /**
+   * <pre>
+   * Identifies the Worker that completed this pull task for sticky routing.
+   * </pre>
+   *
+   * <code>string served_by_app_worker_id = 3;</code>
+   * @return The bytes for servedByAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getServedByAppWorkerIdBytes();
 }
