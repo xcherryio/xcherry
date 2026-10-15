@@ -64,6 +64,18 @@ interpreter:
     hostPort: "temporal:7233"
     namespace: "default"
     cloudAPIKey: ""
+    # Read a rotating API key from a file instead of setting cloudAPIKey.
+    # apiKeyFile: "/var/run/secrets/dex/temporal-token"
+    # apiKeyFileRefreshInterval: 30s
+    # Any TLS setting enables TLS when enabled is omitted.
+    # tls:
+    #   enabled: true
+    #   # caFile replaces system roots. Restart Dex after rotating it.
+    #   caFile: "/etc/dex/temporal-ca.pem"
+    #   serverName: "temporal-frontend.example"
+    #   certFile: "/etc/dex/tls/tls.crt"
+    #   keyFile: "/etc/dex/tls/tls.key"
+    # Set enabled: false only without other TLS settings; API keys then travel in plaintext.
     # Configure for Temporal Cloud. Omit for self-hosted Temporal.
     # cloudOps:
     #   hostPort: "saas-api.tmprl.cloud:443"

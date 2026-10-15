@@ -492,6 +492,8 @@
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--p-line-soft);
+  /* Its column opens at once and the canvas makes room; its content slides in (canvas.css panel-in). */
+  animation: panel-in 220ms var(--ease-glide) backwards;
 }
 
 [data-theme='light'] .v2-shell .rsw,

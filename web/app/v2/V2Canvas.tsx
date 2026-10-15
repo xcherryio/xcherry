@@ -31,6 +31,7 @@ import { DetailPanel } from './canvas/panel/DetailPanel';
 import { useWebCatalog } from './WebCatalogProvider';
 import { buildPanel, type SectionId } from './canvas/panel/panelModel';
 import { ArrowDefs } from './canvas/render/ArrowDefs';
+import { framingNeighbours, NO_FRAMING_NEIGHBOURS } from './canvas/render/camera';
 import { Stage } from './canvas/render/Stage';
 import type { CanvasViewportHandle } from './canvas/render/viewport';
 import { useStageScene } from './canvas/useStageScene';
@@ -62,6 +63,7 @@ export function V2Canvas({
   onSummary,
   onTick,
   deselectKey = 0,
+  refocusKey = 0,
   focusBlockingStep = false,
   showStepPanel = true,
 }: {
@@ -71,6 +73,8 @@ export function V2Canvas({
   definition?: FlowDefinitionEntry;
   /** Bumped by the host to clear the Step selection. */
   deselectKey?: number;
+  /** Bumped when the open run is picked again: the reader's selection goes and the view returns to the run. */
+  refocusKey?: number;
   /** Zoom in on the waiting Step instead of merely panning to it. */
   focusBlockingStep?: boolean;
   /** False when the host renders step detail itself, so the canvas keeps its width. */
@@ -103,6 +107,8 @@ export function V2Canvas({
   });
   const [error, setError] = useState('');
   const [runError, setRunError] = useState('');
+  /** The run whose history last loaded or failed to; the drawing waits for the shown one. */
+  const [loadedFlowId, setLoadedFlowId] = useState('');
   const [currentBundle, setCurrentBundle] = useState<RunOverlayBundle | null>(null);
   const [olderByStep, setOlderByStep] = useState<Record<string, ExecutionRecord[]>>({});
   const [previousCursorByStep, setPreviousCursorByStep] = useState<Record<string, string>>({});
@@ -144,6 +150,7 @@ export function V2Canvas({
           activeSteps: state?.activeStepExecutions ?? [],
         }));
         setRunError('');
+        setLoadedFlowId(flowId);
         onSummary?.(summary);
         onTick?.();
         if (summary.flowStatusCode === 1 && timer === undefined) {
@@ -151,6 +158,7 @@ export function V2Canvas({
         }
       } catch (loadError: unknown) {
         if (!cancelled) {
+          setLoadedFlowId(flowId);
           setRunError(loadError instanceof Error ? loadError.message : 'Run history failed to load');
         }
       }
@@ -209,15 +217,28 @@ export function V2Canvas({
   // Nothing selected, so no detour: however the selection was cleared.
   if (selectedId === null && detourFor !== null) setDetourFor(null);
 
+  // Picking the open run again drops the reader's selection before the run's Step is revealed below.
+  const firstRefocus = useRef(refocusKey);
+  useEffect(() => {
+    if (refocusKey === firstRefocus.current) return;
+    setSelectedId(null);
+    setSelectedByReader(false);
+    setSelectedGroupId(null);
+    setDetourFor(null);
+  }, [refocusKey]);
+
   // Choosing a run should land on where it stopped, once, without fighting later clicks.
   const revealedFor = useRef('');
+  const [revealedKey, setRevealedKey] = useState('');
+  const revealKey = `${flowId}|${blockingStepType}|${String(focusBlockingStep)}|${refocusKey}`;
   useEffect(() => {
     if (!flow || blockingStepType === null) return;
-    const key = `${flowId}|${blockingStepType}|${String(focusBlockingStep)}`;
+    const key = revealKey;
     if (revealedFor.current === key) return;
     const step = flow.steps.find((candidate) => candidate.stepType === blockingStepType);
     if (!step) return;
     revealedFor.current = key;
+    setRevealedKey(key);
     // The stage holding where the run waits opens, so its "now" ring is on a Step.
     const holding = isFailureHandling(flow, step.id) ? undefined : groupOfStep(groups, step.id);
     if (holding) revealStage(holding.id);
@@ -226,7 +247,11 @@ export function V2Canvas({
     setSelectedId(focusBlockingStep ? step.id : null);
     setSelectedByReader(false);
     setSelectedGroupId(null);
-  }, [blockingStepType, flow, flowId, focusBlockingStep, groups, revealStage]);
+  }, [blockingStepType, flow, focusBlockingStep, groups, revealKey, revealStage]);
+  // The drawing settles once the shown run has loaded, its Step's stage is open and the layout is done.
+  const isSettled = stages.isSettled
+    && (!flowId || loadedFlowId === flowId)
+    && (blockingStepType === null || revealedKey === revealKey);
 
   // The host closed its drawer, so nothing is being explained any more.
   const firstDeselect = useRef(deselectKey);
@@ -275,6 +300,20 @@ export function V2Canvas({
     if (!flow || blockingStepType === null) return null;
     return flow.steps.find((step) => step.stepType === blockingStepType)?.id ?? null;
   }, [blockingStepType, flow]);
+
+  // Picking a run frames its Step; Collapsed, Expanded or a new direction then return to the opening view.
+  const runPick = `${flowId}|${refocusKey}`;
+  const [picked, setPicked] = useState({ runPick, view: stages.view, isLeft: false });
+  if (picked.runPick !== runPick) setPicked({ runPick, view: stages.view, isLeft: false });
+  else if (picked.view === '' && stages.view !== '') setPicked({ ...picked, view: stages.view });
+  else if (!picked.isLeft && stages.view !== picked.view) setPicked({ ...picked, isLeft: true });
+  const frameStepId = picked.isLeft ? null : (focusNodeId ?? nowNodeId);
+
+  /** What the camera keeps in view around the framed Step: the cards of Steps one and two transitions away. */
+  const targetNeighbours = useMemo(() => {
+    if (!flow || !scene || frameStepId === null) return NO_FRAMING_NEIGHBOURS;
+    return framingNeighbours(flow, groups, scene, frameStepId);
+  }, [flow, frameStepId, groups, scene]);
 
   const { collapseStage, openStage: openStageInPlace } = stages;
   const closeStage = useCallback(
@@ -425,8 +464,12 @@ export function V2Canvas({
       </div>
       {runError ? <p className="v2-error v2-run-error">{runError}</p> : null}
       <Stage
+        // A new drawing enters afresh; another run of the same drawing moves into place.
+        key={`${flowType}|${selected.file}`}
+        isSettled={isSettled}
+        targetNeighbours={targetNeighbours}
         dimUnrelated={selectedByReader}
-        focusNodeId={focusNodeId}
+        focusNodeId={frameStepId}
         nowNodeId={nowNodeId}
         handleRef={viewportRef}
         scene={scene}
@@ -481,7 +524,7 @@ export function V2Canvas({
           </div>
         )}
         // Opening or closing a stage, or the Step panel, keeps the reader's place, so neither refits.
-        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${overlay?.executions.length ?? 0}|${focusNodeId !== null && scene.boxes.some((box) => box.id === focusNodeId) ? 'focus' : 'whole'}`}
+        fitKey={`${flowType}|${flowId}|${stages.view}|${selected.file}|${refocusKey}`}
       />
       <p className="sr-only" aria-live="polite">
         {stages.cue?.message}

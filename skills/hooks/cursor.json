@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "workspaceOpen": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/hooks/version-check.mjs\" --client cursor --refresh-only",
+        "timeout": 2
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/hooks/version-check.mjs\" --client cursor",
+        "timeout": 2
+      }
+    ]
+  }
+}

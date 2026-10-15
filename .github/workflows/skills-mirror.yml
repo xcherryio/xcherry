@@ -1,0 +1,117 @@
+name: Mirror Dex skills
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'skills/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Check drift and show the proposed mirror changes without pushing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skills-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Dex
+        uses: actions/checkout@v7
+        with:
+          path: dex
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out skills mirror
+        uses: actions/checkout@v7
+        with:
+          repository: superdurable/dex-skills
+          ref: main
+          path: mirror
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DEX_SKILLS_MIRROR_DEPLOY_KEY }}
+      - name: Check drift and sync
+        shell: bash
+        env:
+          DEX_COMMIT: ${{ github.sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEX_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${DEX_REF}" != 'refs/heads/main' ]]; then
+            echo "Dex ref ${DEX_REF} is not main; forcing dry run."
+            DRY_RUN=true
+          fi
+
+          target_tree="$(git -C dex rev-parse "${DEX_COMMIT}:skills")"
+          mirror_tree="$(git -C mirror rev-parse 'HEAD^{tree}')"
+          last_dex_commit="$(git -C mirror log -1 --format=%B | sed -n 's/^Dex-Commit: \([0-9a-f]\{40\}\)$/\1/p' | tail -n 1)"
+
+          if [[ -n "${last_dex_commit}" ]]; then
+            if ! expected_tree="$(git -C dex rev-parse "${last_dex_commit}:skills" 2>/dev/null)"; then
+              echo "Mirror trailer refers to an unavailable Dex skills tree: ${last_dex_commit}" >&2
+              exit 1
+            fi
+          else
+            # dex-skills main snapshot before the first Dex mirror sync.
+            expected_tree=66cfe2662123bf44a2af371dd68bc8518fce4939
+          fi
+
+          if [[ "${mirror_tree}" != "${expected_tree}" ]]; then
+            echo "Skills mirror drift: mirror HEAD tree ${mirror_tree} differs from expected Dex tree ${expected_tree}. Restore the mirror or investigate direct edits before syncing." >&2
+            exit 1
+          fi
+          if [[ -n "${last_dex_commit}" ]] && ! git -C dex merge-base --is-ancestor "${last_dex_commit}" "${DEX_COMMIT}"; then
+            echo "Skipping stale Dex commit ${DEX_COMMIT}: mirror already synced ${last_dex_commit}, which is not its ancestor."
+            exit 0
+          fi
+
+          rsync -a --delete --exclude=.git dex/skills/ mirror/
+          git -C mirror add -A
+          synced_tree="$(git -C mirror write-tree)"
+          if [[ "${synced_tree}" != "${target_tree}" ]]; then
+            echo "Skills mirror copy failed: staged tree ${synced_tree} differs from Dex ${DEX_COMMIT}:skills tree ${target_tree}." >&2
+            exit 1
+          fi
+          if [[ "${synced_tree}" == "${mirror_tree}" ]]; then
+            echo "Skills mirror is already current at ${target_tree}."
+            exit 0
+          fi
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "Dry run for Dex ${DEX_COMMIT}; proposed mirror diff:"
+            git -C mirror diff --cached --stat
+            exit 0
+          fi
+
+          short_commit="$(git -C dex rev-parse --short "${DEX_COMMIT}")"
+          commit_message="$(mktemp)"
+          {
+            printf 'Sync from superdurable/dex@%s\n\n' "${short_commit}"
+            if [[ -n "${last_dex_commit}" ]]; then
+              git -C dex log --format=%s "${last_dex_commit}..${DEX_COMMIT}" -- skills/
+            else
+              git -C dex log --format=%s "${DEX_COMMIT}" -- skills/
+            fi
+            printf '\nDex-Commit: %s\n' "${DEX_COMMIT}"
+          } > "${commit_message}"
+          git -C mirror -c user.name='Dex Skills Mirror' -c user.email='dex-skills-mirror@users.noreply.github.com' commit -F "${commit_message}"
+          rm "${commit_message}"
+          git -C mirror push origin HEAD:main
+
+          git -C mirror fetch origin main
+          pushed_tree="$(git -C mirror rev-parse 'origin/main^{tree}')"
+          if [[ "${pushed_tree}" != "${target_tree}" ]]; then
+            echo "Skills mirror verification failed: origin/main tree ${pushed_tree} differs from Dex ${DEX_COMMIT}:skills tree ${target_tree}." >&2
+            exit 1
+          fi
+          echo "Verified skills mirror tree ${pushed_tree}."

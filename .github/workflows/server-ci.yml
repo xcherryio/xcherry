@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "server/**"
+      - "!server/all-in-one/**"
       - "protos/**"
       - "codecov.yml"
       - ".github/scripts/dump-docker-logs.sh"
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - "server/**"
+      - "!server/all-in-one/**"
       - "protos/**"
       - "codecov.yml"
       - ".github/scripts/dump-docker-logs.sh"

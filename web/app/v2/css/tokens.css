@@ -224,6 +224,8 @@
   --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-breathe: cubic-bezier(0.4, 0, 0.6, 1);
+  /* The canvas camera eases with this curve too (render/camera.ts easeGlide). */
+  --ease-glide: cubic-bezier(0.33, 1, 0.68, 1);
 
   /* ---- z scale --------------------------------------------------------- */
   --z-canvas: 0;

@@ -56,6 +56,7 @@ export function RunWorkspace() {
   const entry = catalog?.flows.find((candidate) => candidate.flowType === flowType);
   const runQuery = useRunQuery(entry?.definition);
   const [permission, setPermission] = useState('');
+  const [refocusKey, setRefocusKey] = useState(0);
   const workQueuePermissions = useMemo(
     () => permission === '' ? [] : [permission],
     [permission],
@@ -169,7 +170,11 @@ export function RunWorkspace() {
           selectedFlowID={flowId}
           strandedFlowIDs={strandedFlowIDs}
           onSelectFlowType={(next) => navigate(v2RunPath(next))}
-          onSelectRun={(nextFlowID) => navigate(v2RunPath(entry.flowType, nextFlowID))}
+          onSelectRun={(nextFlowID) => {
+            // Picking the open run again takes the canvas back to where the run is.
+            if (nextFlowID === flowId) setRefocusKey((key) => key + 1);
+            navigate(v2RunPath(entry.flowType, nextFlowID));
+          }}
         />
         <V2SplitHandle
           axis="column"
@@ -192,6 +197,7 @@ export function RunWorkspace() {
             onStepContext={setStepView}
             deselectKey={deselectKey}
             focusBlockingStep={showRun}
+            refocusKey={refocusKey}
             onSummary={setSummary}
             showStepPanel={false}
             onTick={onTick}

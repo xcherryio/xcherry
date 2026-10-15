@@ -28,10 +28,16 @@ jobs:
         with:
           filters: |
             server:
-              - 'server/**'
+              # Any-pattern matching makes a negation match every other file; use an extglob.
+              - 'server/*'
+              - 'server/!(all-in-one)/**'
               - 'protos/**'
               - '.github/scripts/dump-docker-logs.sh'
               - '.github/workflows/server-ci.yml'
+            server_all_in_one:
+              - 'server/**'
+              - 'protos/**'
+              - '.github/workflows/server-all-in-one-ci.yml'
             sdk_go:
               - 'sdk-go/**'
               - 'protos/**'
@@ -79,6 +85,9 @@ jobs:
               - '.github/workflows/release-changed-components.yml'
               - '.github/workflows/release-tooling-ci.yml'
               - 'CONTRIBUTING.md'
+            skills:
+              - 'skills/**'
+              - '.github/workflows/skills-ci.yml'
             copyright:
               - 'server/**'
               - 'cli/**'
@@ -107,6 +116,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           EVENT_NAME: ${{ github.event_name }}
           FILTER_SERVER: ${{ steps.filter.outputs.server }}
+          FILTER_SERVER_ALL_IN_ONE: ${{ steps.filter.outputs.server_all_in_one }}
           FILTER_SDK_GO: ${{ steps.filter.outputs.sdk_go }}
           FILTER_SDK_RUST: ${{ steps.filter.outputs.sdk_rust }}
           FILTER_WEB: ${{ steps.filter.outputs.web }}
@@ -117,6 +127,7 @@ jobs:
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
+          FILTER_SKILLS: ${{ steps.filter.outputs.skills }}
           FILTER_COPYRIGHT: ${{ steps.filter.outputs.copyright }}
         run: |
           set -euo pipefail
@@ -140,11 +151,13 @@ jobs:
               "Rust SDK CI"
               "TypeScript SDK CI"
               "Server CI"
+              "Server All-in-One CI"
               "Web CI"
             )
           else
             expected+=("CLA")
             [[ "$FILTER_SERVER" == "true" ]] && expected+=("Server CI")
+            [[ "$FILTER_SERVER_ALL_IN_ONE" == "true" ]] && expected+=("Server All-in-One CI")
             [[ "$FILTER_SDK_GO" == "true" ]] && expected+=("Go SDK CI")
             [[ "$FILTER_SDK_RUST" == "true" ]] && expected+=("Rust SDK CI")
             [[ "$FILTER_WEB" == "true" ]] && expected+=("Web CI")
@@ -155,6 +168,7 @@ jobs:
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")
+            [[ "$FILTER_SKILLS" == "true" ]] && expected+=("Skills CI")
             [[ "$FILTER_COPYRIGHT" == "true" ]] && expected+=("Copyright")
           fi
 

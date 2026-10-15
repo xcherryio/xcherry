@@ -111,6 +111,31 @@ a trusted network path.
 
 **web.startFlowWorkerTargetHeadless** controls Worker routing for every Flow started from Dex Web. It defaults to false and is immutable after startup. The environment override is **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**. Enable it only when operators enter Kubernetes headless Service addresses.
 
+## Connect to a secured Temporal cluster
+
+Configure the Temporal frontend connection under **interpreter.temporal**. Mount the API key as a file when it rotates:
+
+~~~yaml
+interpreter:
+  temporal:
+    hostPort: temporal-frontend:7233
+    namespace: my-namespace
+    apiKeyFile: /var/run/secrets/dex/temporal-token
+    apiKeyFileRefreshInterval: 30s
+    tls:
+      enabled: true
+      caFile: /etc/dex/temporal-ca.pem
+      serverName: temporal-frontend.example
+      certFile: /etc/dex/tls/tls.crt
+      keyFile: /etc/dex/tls/tls.key
+~~~
+
+Dex reads **apiKeyFile** at startup and fails if it is missing or empty. It checks for file changes at most once per **apiKeyFileRefreshInterval**, which defaults to 30 seconds. Requests use the last valid key while a refresh runs. If a later read fails or the file becomes empty, Dex logs a warning and keeps that key. Set either **cloudAPIKey** for a static key or **apiKeyFile** for rotation, never both. Temporal Cloud Operations can use either key source.
+
+TLS uses system roots by default when a key is configured. Without a key or TLS settings, the default connection is plaintext. Setting **tls.caFile**, **tls.serverName**, **tls.certFile**, or **tls.keyFile** enables TLS even when **tls.enabled** is omitted. Set **tls.enabled** to true to use TLS without any other TLS settings. **tls.caFile** replaces system roots with the certificates in that file, and **tls.serverName** overrides the name checked against the server certificate. Dex loads the CA once at startup, so restart Dex after rotating it. Set **tls.certFile** and **tls.keyFile** together for mutual TLS. Dex loads the pair at startup and reloads changed files on a new TLS handshake.
+
+Setting **tls.enabled** to false with an API key sends the credential in plaintext. Dex logs a warning. Use that setting only on a network path where plaintext credentials are acceptable. **tls.enabled: false** cannot be combined with other TLS settings.
+
 ## Blob Store
 
 Configure a durable store before allowing payloads that exceed inline limits.

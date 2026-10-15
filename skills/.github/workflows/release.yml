@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Read metadata
+        id: metadata
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "VERSION must be stable SemVer, got: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "sdk=$(cat DEX_BASELINE)" >> "$GITHUB_OUTPUT"
+          echo "server=$(cat DEX_SERVER_BASELINE)" >> "$GITHUB_OUTPUT"
+          echo "cli=$(cat DEX_CLI_BASELINE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.metadata.outputs.sdk }}
+          path: upstream-dex-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.metadata.outputs.server }}
+          path: upstream-dex-server
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.metadata.outputs.cli }}
+          path: upstream-dex-cli
+          fetch-depth: 0
+      - name: Validate release package
+        run: |
+          python3 script/check-package.py
+          python3 script/check-reference-sources.py --dex-root upstream-dex-sdk --server-root upstream-dex-server --cli-root upstream-dex-cli
+          python3 script/check-upstream-baselines.py --dex-root upstream-dex-cli
+      - name: Check existing tag
+        id: existing
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prepare release notes
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: python3 script/release-notes.py --version "$VERSION" --output "$RUNNER_TEMP/release-notes.md"
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            --title "Dex $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --target "$GITHUB_SHA"

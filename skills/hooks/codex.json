@@ -1,0 +1,19 @@
+{
+  "description": "Checks GitHub for a newer stable Dex Skills version. Reads public release metadata only and never installs updates.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/version-check.mjs\" --client codex",
+            "statusMessage": "Checking for Dex Skills updates",
+            "timeout": 2,
+            "additionalContextLimit": 1200
+          }
+        ]
+      }
+    ]
+  }
+}

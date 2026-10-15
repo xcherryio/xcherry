@@ -152,6 +152,16 @@ signed agreement and GitHub handle to licensing@superdurable.io. Pull
 requests from handles absent from `.github/cla-signatures.json` fail the CLA
 check until the record is updated.
 
+## Skills mirror
+
+Contribute skills in [`skills/`](skills/) in this repository. Its CI runs the
+skills validators. A merge to Dex main syncs that directory to the read-only
+[`superdurable/dex-skills`](https://github.com/superdurable/dex-skills) mirror;
+the mirror publishes releases when `VERSION` changes. If the sync fails its
+drift check, compare the mirror HEAD tree with the last synced Dex commit's
+`skills/` tree (from the mirror commit's `Dex-Commit` trailer). Restore the
+mirror to that tree, then rerun the sync; do not overwrite unexplained edits.
+
 ## CI
 
 Root workflows under [`.github/workflows/`](.github/workflows/) run path-filtered jobs for server and each SDK/samples tree, plus the copyright check. Prefer fixing those over re-adding nested `*/.github/workflows` duplicates.

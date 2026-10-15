@@ -1,0 +1,57 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read upstream baselines
+        id: baselines
+        shell: bash
+        run: |
+          echo "sdk=$(cat DEX_BASELINE)" >> "$GITHUB_OUTPUT"
+          echo "server=$(cat DEX_SERVER_BASELINE)" >> "$GITHUB_OUTPUT"
+          echo "cli=$(cat DEX_CLI_BASELINE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.baselines.outputs.sdk }}
+          path: upstream-dex-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.baselines.outputs.server }}
+          path: upstream-dex-server
+      - uses: actions/checkout@v4
+        with:
+          repository: superdurable/dex
+          ref: ${{ steps.baselines.outputs.cli }}
+          path: upstream-dex-cli
+          fetch-depth: 0
+      - name: Validate package and manifests
+        run: python3 script/check-package.py
+      - name: Test source validation
+        run: python3 -m unittest discover -s test -p 'test_*.py'
+      - name: Test lifecycle version hook
+        run: node --test test/version-check.test.mjs
+      - name: Validate Dex SDK reference sources
+        run: python3 script/check-reference-sources.py --dex-root upstream-dex-sdk --server-root upstream-dex-server --cli-root upstream-dex-cli
+      - name: Validate CLI and Server baselines
+        run: |
+          python3 script/check-upstream-baselines.py --dex-root upstream-dex-cli
