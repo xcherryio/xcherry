@@ -1,6 +1,70 @@
 
 # Dex SDK for Python
 
+## Pull mode
+
+Set `WorkerOptions.pull` to run a `Worker` or `AsyncWorker` with outbound task
+streams. The Worker connects to the Dex server through `server_address` and
+does not open a listener. Advertise `worker.worker_target` through
+`ClientOptions.worker_target`. A single Flow can override the Client default
+with `StartFlowOptions(config_override=FlowConfig(worker_target=...))`; a
+SubFlow can use `SubFlowOptions` with the same `FlowConfig` override.
+
+```python
+import threading
+from dex import Client, ClientOptions, PullWorkerOptions, Worker, WorkerOptions
+
+worker = Worker(
+    registry,
+    cache,
+    WorkerOptions(
+        server_address="dex.example:8801",
+        pull=PullWorkerOptions(max_concurrent_tasks=8, idle_streams_per_queue=1),
+    ),
+)
+worker_thread = threading.Thread(target=worker.start)
+worker_thread.start()
+client = Client(
+    registry,
+    cache,
+    ClientOptions(server_address="dex.example:8801", worker_target=worker.worker_target),
+)
+try:
+    client.start_flow(flow, flow_id, input_value)
+finally:
+    client.close()
+    worker.stop()
+    worker_thread.join()
+```
+
+The Worker polls its sticky queue and every registered Flow type queue. Flow
+type names must be unique within a Dex server. `max_concurrent_tasks` defaults
+to the CPU count, and `idle_streams_per_queue` defaults to one. At capacity,
+the Worker rejects an assignment so Dex can reassign it. Each stream runs one
+task at a time; Step heartbeat and stream writes use the same stream. A Worker
+may hold up to `(1 + number of Flow types) * (idle_streams_per_queue +
+max_concurrent_tasks)` streams because busy streams are replaced with idle
+streams and retained after tasks finish. Size these options for the server's
+per-Worker stream cap (256 by default).
+
+The generated `app_worker_id` uses the first nonempty `DEX_WORKER_INSTANCE`,
+`POD_NAME`, `HOSTNAME`, or system hostname, plus eight random base32 characters.
+An override must uniquely identify one Worker process and change after restart.
+It must contain 1-63 ASCII letters, digits, dots, underscores, or hyphens and
+must not equal a registered Flow type. Pull mode cannot configure a bind address
+or an advertised address or headless target. Use `WorkerTarget(pull=True)` for
+Client defaults or Flow overrides when the Worker target is not directly in
+scope.
+
+Pull streams reconnect after failures. A server-directed reconnect waits for
+an active task to finish; an idle stream reconnects immediately. An older
+server without pull support produces one explicit error log and is retried
+after one minute. `start()` reports startup synchronization errors, while
+later stream errors are logged and retried. `stop()` drains for at most
+`stop_drain_timeout`, which defaults to 30 seconds. Afterward it requests
+cancellation and waits for handlers to return. Synchronous handlers should
+check `Context.is_cancellation_requested()` during long operations.
+
 ## Flow state I/O
 
 Applications read and write Flow state through typed RPCs. Client and AsyncClient

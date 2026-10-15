@@ -747,6 +747,7 @@ class WorkerDispatcher:
                 pb.WorkerTarget(
                     address=config.worker_target.address,
                     is_headless_address=config.worker_target.headless,
+                    is_pull_mode=config.worker_target.pull,
                 )
             )
         if config.attribute_store_names is not None:

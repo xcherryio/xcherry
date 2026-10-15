@@ -1173,6 +1173,7 @@ class Client:
                 pb.WorkerTarget(
                     address=target.address,
                     is_headless_address=target.headless,
+                    is_pull_mode=target.pull,
                 )
             )
         return mapped

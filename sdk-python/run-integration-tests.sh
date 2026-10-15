@@ -23,9 +23,9 @@ if [[ "${1:-}" == "--coverage" ]]; then
   )
   shift
 fi
-if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--coverage]" >&2
-  exit 2
+test_paths=("$@")
+if [[ "${#test_paths[@]}" -eq 0 ]]; then
+  test_paths=(tests/integ/test_*_runtime.py)
 fi
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -93,4 +93,4 @@ fi
 
 cd "$script_dir"
 DEX_SERVER_ADDRESS="$dex_address" \
-  uv run --frozen pytest "${pytest_args[@]}" tests/integ/test_*_runtime.py
+  uv run --frozen pytest "${pytest_args[@]}" "${test_paths[@]}"

@@ -14,14 +14,15 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
+from dex._async_value_hydrator import AsyncValueHydrator
+from dex._async_worker_dispatcher import AsyncWorkerDispatcher
+from dex._async_worker_service import AsyncWorkerService
+from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
     negotiate_server_protocol,
     sdk_version,
     server_info_request_error,
 )
-from dex._async_value_hydrator import AsyncValueHydrator
-from dex._async_worker_dispatcher import AsyncWorkerDispatcher
-from dex._async_worker_service import AsyncWorkerService
 from dex._value_mapper import ValueMapper
 from dex.blob_cache import BlobCache
 from dex.dexpb import dex_pb2 as pb
@@ -31,11 +32,12 @@ from dex.worker_options import WorkerOptions, WorkerTarget
 
 
 class AsyncWorker:
-    """Host asynchronous registered Step and RPC handlers over WorkerService.
+    """Host asynchronous Step and RPC handlers through a listener or pull streams.
 
     A Worker is one-shot. Await ``start`` in a background task because it waits for
-    termination, and await ``stop`` or ``close`` during shutdown. Application
-    handlers may overlap on the event loop and must avoid blocking operations.
+    termination, and await ``stop`` or ``close`` during shutdown. Set
+    ``WorkerOptions.pull`` to poll Dex without a listener. Application handlers
+    may overlap on the event loop and must avoid blocking operations.
 
     Attributes:
         registry: The Flow Registry served by this Worker.
@@ -55,16 +57,24 @@ class AsyncWorker:
         blob_cache: BlobCache,
         options: WorkerOptions | None = None,
     ) -> None:
-        """Construct an AsyncWorker without starting its listener.
+        """Construct an AsyncWorker without starting its listener or pull streams.
 
         Args:
             registry: A Registry created with ``allow_async_handlers=True``.
             blob_cache: An open cache shared for asynchronous value hydration.
             options: Networking and startup options; ``None`` uses defaults.
+
+        Raises:
+            ValueError: If a target, bind address, or pull Worker ID is invalid.
         """
         self.registry = registry
         self.blob_cache = blob_cache
         self.options = options or WorkerOptions()
+        app_worker_id = (
+            resolve_app_worker_id(registry, self.options.pull)
+            if self.options.pull is not None
+            else None
+        )
         self._state = "created"
         self._flow_channel = grpc.aio.insecure_channel(self.options.server_address)
         self._flow_service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
@@ -78,20 +88,37 @@ class AsyncWorker:
             values,
             AsyncValueHydrator(self._flow_service, blob_cache),
         )
-        self._server = grpc.aio.server()
-        dex_pb2_grpc.add_WorkerServiceServicer_to_server(  # type: ignore[no-untyped-call]
-            AsyncWorkerService(dispatcher),
-            self._server,
-        )
+        self._server = None
+        self._pull = None
+        if self.options.pull is not None:
+            self._pull = PullWorkerRuntime(
+                registry,
+                dispatcher,
+                self.options.pull,
+                self.options.server_address,
+                None,
+                app_worker_id,
+            )
+        else:
+            self._server = grpc.aio.server()
+            dex_pb2_grpc.add_WorkerServiceServicer_to_server(  # type: ignore[no-untyped-call]
+                AsyncWorkerService(dispatcher),
+                self._server,
+            )
         self._bound_port = 0
-        self._worker_target = self.options.worker_target or WorkerTarget(
-            self._target_address(self.options.bind_address, 0)
+        self._worker_target = (
+            WorkerTarget(pull=True)
+            if self._pull is not None
+            else self.options.worker_target
+            or WorkerTarget(self._target_address(self.options.bind_address, 0))
         )
         self._stopped = asyncio.Event()
 
     @property
     def worker_target(self) -> WorkerTarget:
-        """Return the effective endpoint advertised to Dex.
+        """Return the effective Worker target advertised to Dex.
+
+        Pull mode returns ``WorkerTarget(pull=True)`` without binding a port.
 
         Returns:
             The WorkerTarget, including the actual port after binding.
@@ -127,7 +154,8 @@ class AsyncWorker:
         """Negotiate protocol, synchronize Attribute indexes, and serve.
 
         ``start`` may be awaited exactly once. It contacts FlowService before binding
-        and completes only after ``stop`` terminates the server.
+        and completes only after ``stop`` terminates the listener or pull streams.
+        Later pull stream failures are logged and retried.
 
         Raises:
             RuntimeError: If lifecycle state, index synchronization, or binding fails.
@@ -166,32 +194,44 @@ class AsyncWorker:
             await self._flow_channel.close(None)
             self._stopped.set()
             raise RuntimeError("cannot synchronize Attribute indexes") from failure
-        self._bound_port = self._server.add_insecure_port(self.options.bind_address)
-        if self._bound_port == 0:
-            self._state = "stopped"
-            await self._flow_channel.close(None)
-            self._stopped.set()
-            raise RuntimeError(
-                f"cannot bind Python AsyncWorker to {self.options.bind_address}"
-            )
-        if self.options.worker_target is None:
-            self._worker_target = WorkerTarget(
-                self._target_address(self.options.bind_address, self._bound_port)
-            )
+        if self._pull is None:
+            assert self._server is not None
+            self._bound_port = self._server.add_insecure_port(self.options.bind_address)
+            if self._bound_port == 0:
+                self._state = "stopped"
+                await self._flow_channel.close(None)
+                self._stopped.set()
+                raise RuntimeError(
+                    f"cannot bind Python AsyncWorker to {self.options.bind_address}"
+                )
+            if self.options.worker_target is None:
+                self._worker_target = WorkerTarget(
+                    self._target_address(self.options.bind_address, self._bound_port)
+                )
         self._state = "running"
-        await self._server.start()
-        await self._server.wait_for_termination()
+        if self._pull is not None:
+            await self._pull.run()
+        else:
+            assert self._server is not None
+            await self._server.start()
+            await self._server.wait_for_termination()
         self._stopped.set()
 
     async def stop(self) -> None:
-        """Gracefully stop handlers and release asynchronous channel resources.
+        """Drain handlers and release asynchronous channel resources.
 
-        Calls before ``start`` and repeated calls after shutdown are safe.
+        Calls before ``start`` and repeated calls after shutdown are safe. Pull
+        mode drains for ``PullWorkerOptions.stop_drain_timeout`` (30 seconds by
+        default), then cancels active tasks and waits for handlers to return.
         """
         if self._state in ("stopped", "closed"):
             return
         self._state = "stopping"
-        await self._server.stop(grace=5)
+        if self._pull is not None:
+            await self._pull.stop()
+        else:
+            assert self._server is not None
+            await self._server.stop(grace=5)
         await self._flow_channel.close(None)
         if self._state != "closed":
             self._state = "stopped"

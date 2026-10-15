@@ -65,7 +65,7 @@ jobs:
     - name: Install dependencies
       run: uv sync --locked --reinstall-package dex-python-sdk
     - name: Test contracts
-      run: uv run --frozen pytest tests/test_contracts.py
+      run: uv run --frozen pytest tests/test_*.py
     - name: Check static types with mypy
       run: uv run --frozen mypy --strict tests/typecheck_contracts.py tests/integ
     - name: Check static types with pyright
@@ -105,6 +105,7 @@ jobs:
             dex/_grpc_errors.py \
             dex/_invocation_context.py \
             dex/_native.pyi \
+            dex/_pull_worker.py \
             dex/_server_protocol.py \
             dex/_utils.py \
             dex/_value_hydrator.py \
