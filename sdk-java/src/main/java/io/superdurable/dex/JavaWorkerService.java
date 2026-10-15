@@ -149,7 +149,8 @@ final class JavaWorkerService extends WorkerServiceGrpc.WorkerServiceImplBase {
                         reportedFailure.getClass().getName(),
                         MAX_WORKER_ERROR_TYPE_BYTES,
                         ERROR_TYPE_TRUNCATION_MARKER))
-                .setStackTrace(stackTrace(reportedFailure));
+                .setStackTrace(stackTrace(reportedFailure))
+                .setGrpcStatus(grpcErrorStatusMapping.statusFor(reportedFailure).value());
         if (retryAfter != null) {
             details.setRetryAfterSeconds((int) retryAfter.getRetryAfter().getSeconds());
         }

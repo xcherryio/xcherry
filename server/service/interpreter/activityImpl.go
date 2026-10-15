@@ -32,6 +32,7 @@ import (
 	"github.com/superdurable/dex/service/common/index"
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/ptr"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/retry"
 	"github.com/superdurable/dex/service/common/rpc"
 	"github.com/superdurable/dex/service/common/streamstore"
@@ -59,6 +60,7 @@ type Activities struct {
 	streamStore      *streamstore.Store
 	metrics          client.MetricsHandler
 	wakeNotifier     *wake.Notifier
+	pullDispatcher   pulldispatch.Dispatcher
 }
 
 func NewActivities(
@@ -72,10 +74,11 @@ func NewActivities(
 	cfg *config.Config,
 	streamStore *streamstore.Store,
 	metrics client.MetricsHandler,
+	pullDispatcher pulldispatch.Dispatcher,
 ) *Activities {
 	if activityProvider == nil || workerPool == nil || internalClient == nil ||
 		unifiedClient == nil || attributeStore == nil || eventHandler == nil ||
-		streamStore == nil || metrics == nil {
+		streamStore == nil || metrics == nil || pullDispatcher == nil {
 		panic("Activities requires non-nil dependencies")
 	}
 	if cfg == nil {
@@ -94,6 +97,7 @@ func NewActivities(
 		wakeNotifier:     NewWakeNotifier(cfg),
 		streamStore:      streamStore,
 		metrics:          metrics,
+		pullDispatcher:   pullDispatcher,
 	}
 }
 
@@ -112,7 +116,7 @@ func (a *Activities) SyncAttributeBatch(
 	return a.attributeStore.WriteBatch(ctx, input)
 }
 
-// IWaitForM calls WorkerService.InvokeWaitForMethod.
+// IWaitForM invokes a Worker's WaitFor method through the selected transport.
 func (a *Activities) IWaitForM(
 	ctx context.Context,
 	input *dexpb.InvokeWaitForMethodActivityInput,
@@ -154,22 +158,34 @@ func (a *Activities) IWaitForM(
 		}
 	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
-	dispatch, err := openWorkerStream(
-		ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
-		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
-			grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
-		) {
-			return client.InvokeWaitForMethod(callCtx, req)
-		},
-	)
-	if err != nil && !dispatch.isOpened {
-		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	var stream waitForMethodOutputStream
+	var callCtx = ctx
+	var pullStream *pullWaitForStream
+	var err error
+	if input.GetWorkerTarget().GetIsPullMode() {
+		pullStream, err = a.openPullWaitFor(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		stream = pullStream
+	} else {
+		dispatch, openErr := openWorkerStream(
+			ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
+				grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
+			) {
+				return client.InvokeWaitForMethod(callCtx, req)
+			},
+		)
+		if openErr != nil && !dispatch.isOpened {
+			return nil, newServerSideActivityError(ctx, provider, openErr, localActivityFailure)
+		}
+		defer dispatch.release()
+		stream, callCtx, err = dispatch.stream, dispatch.callCtx, openErr
 	}
-	defer dispatch.release()
-	stream, callCtx := dispatch.stream, dispatch.callCtx
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
+		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	resp, err := a.receiveWaitForMethodResponse(ctx, stream, req, activityInfo, logger)
@@ -177,6 +193,10 @@ func (a *Activities) IWaitForM(
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
+		var matchingError *matchingDispatchError
+		if errors.As(err, &matchingError) {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateWaitingCondition(
@@ -236,7 +256,11 @@ func (a *Activities) IWaitForM(
 	}
 
 	a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptSucc)
-	return &dexpb.InvokeWaitForMethodActivityOutput{Response: resp}, nil
+	output := &dexpb.InvokeWaitForMethodActivityOutput{Response: resp}
+	if pullStream != nil {
+		output.ServedByAppWorkerId = pullStream.servedByAppWorkerID
+	}
+	return output, nil
 }
 
 func (a *Activities) offloadSubFlowStartInputs(
@@ -284,7 +308,7 @@ func (a *Activities) offloadSubFlowStartInputs(
 	return nil
 }
 
-// IExecuteM calls WorkerService.InvokeExecuteMethod.
+// IExecuteM invokes a Worker's Execute method through the selected transport.
 func (a *Activities) IExecuteM(
 	ctx context.Context,
 	input *dexpb.InvokeExecuteMethodActivityInput,
@@ -335,22 +359,34 @@ func (a *Activities) IExecuteM(
 		}
 	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
-	dispatch, err := openWorkerStream(
-		ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
-		func(client dexpb.WorkerServiceClient, callCtx context.Context) (
-			grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
-		) {
-			return client.InvokeExecuteMethod(callCtx, req)
-		},
-	)
-	if err != nil && !dispatch.isOpened {
-		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	var stream executeMethodOutputStream
+	var callCtx = ctx
+	var pullStream *pullExecuteStream
+	var err error
+	if input.GetWorkerTarget().GetIsPullMode() {
+		pullStream, err = a.openPullExecute(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		stream = pullStream
+	} else {
+		dispatch, openErr := openWorkerStream(
+			ctx, a, input.GetWorkerTarget(), activityInfo.WorkflowExecution.ID, heartbeat,
+			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
+				grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
+			) {
+				return client.InvokeExecuteMethod(callCtx, req)
+			},
+		)
+		if openErr != nil && !dispatch.isOpened {
+			return nil, newServerSideActivityError(ctx, provider, openErr, localActivityFailure)
+		}
+		defer dispatch.release()
+		stream, callCtx, err = dispatch.stream, dispatch.callCtx, openErr
 	}
-	defer dispatch.release()
-	stream, callCtx := dispatch.stream, dispatch.callCtx
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
+		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	resp, err := a.receiveExecuteMethodResponse(ctx, stream, req, activityInfo, logger)
@@ -358,6 +394,10 @@ func (a *Activities) IExecuteM(
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
 		a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
+		var matchingError *matchingDispatchError
+		if errors.As(err, &matchingError) {
+			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateExecuteResponse(
@@ -421,7 +461,11 @@ func (a *Activities) IExecuteM(
 	}
 
 	a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptSucc)
-	return &dexpb.InvokeExecuteMethodActivityOutput{Response: resp}, nil
+	output := &dexpb.InvokeExecuteMethodActivityOutput{Response: resp}
+	if pullStream != nil {
+		output.ServedByAppWorkerId = pullStream.servedByAppWorkerID
+	}
+	return output, nil
 }
 
 type waitForMethodOutputStream interface {
@@ -776,7 +820,7 @@ func (a *Activities) IWRPC(
 	logger.Info("InvokeWorkerRpcActivity", "input", log.ToJsonAndTruncateForLogging(input))
 	activityInfo := provider.GetActivityInfo(ctx)
 
-	resp, err := rpc.InvokeWorkerRpc(
+	resp, servedByAppWorkerID, err := rpc.InvokeWorkerRpc(
 		ctx,
 		a.workerPool,
 		input.GetRpcPrep(),
@@ -789,6 +833,9 @@ func (a *Activities) IWRPC(
 		&a.cfg.BlobStore,
 		true,
 		a.wakeNotifier,
+		a.pullDispatcher,
+		a.cfg.Matching,
+		activityInfo.IsLocalActivity,
 	)
 	if err != nil {
 		var oversizedRequest *rpc.WorkerRequestTooLargeError
@@ -801,11 +848,16 @@ func (a *Activities) IWRPC(
 				},
 			)
 		}
+		var dispatchError *pulldispatch.ServerError
+		if errors.As(err, &dispatchError) {
+			return nil, newServerSideActivityError(ctx, provider, err, nil)
+		}
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, nil)
 	}
 	out := &dexpb.InvokeWorkerRPCActivityOutput{
-		Response:  resp,
-		RequestId: input.GetRequest().GetRequestId(),
+		Response:            resp,
+		RequestId:           input.GetRequest().GetRequestId(),
+		ServedByAppWorkerId: servedByAppWorkerID,
 	}
 	if activityInfo.IsLocalActivity {
 		payloadSize, sized := jsonPayloadSize(logger, out)

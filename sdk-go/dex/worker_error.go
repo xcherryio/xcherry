@@ -136,6 +136,7 @@ func workerStatusError(
 		Detail:     truncateWorkerFailureField(detail, maxWorkerErrorDetailBytes, errorDetailTruncationMarker),
 		ErrorType:  truncateWorkerFailureField(errorType, maxWorkerErrorTypeBytes, errorTypeTruncationMarker),
 		StackTrace: truncateWorkerFailureField(stackTrace, maxWorkerStackTraceBytes, stackTraceTruncationMarker),
+		GrpcStatus: int32(code),
 	}
 	if retryAfter != nil {
 		workerError.RetryAfterSeconds = int32(retryAfter.After / time.Second)

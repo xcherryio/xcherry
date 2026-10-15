@@ -1221,6 +1221,8 @@ export interface WorkerErrorResponse {
   errorType: string;
   stackTrace: string;
   retryAfterSeconds: number;
+  /** Pull Workers set the gRPC code push mode would return; push mode uses its transport status. */
+  grpcStatus: number;
 }
 
 export interface InternalActivityError {
@@ -1675,17 +1677,7 @@ export interface DumpFlowForContinueAsNewActivityOutput {
 
 export interface InvokeWorkerRPCActivityInput {
   rpcPrep: PrepareRpcQueryResponse | undefined;
-  request:
-    | InvokeRPCRequest
-    | undefined;
-  /** Selects the sticky Worker queue; empty selects the request's Flow type queue. */
-  dexTaskQueue: string;
-  /** Limits total waiting for a pull Worker to accept this attempt. */
-  dispatchWait:
-    | Duration
-    | undefined;
-  /** Limits waiting on the sticky queue before the Flow type queue. */
-  stickyWait: Duration | undefined;
+  request: InvokeRPCRequest | undefined;
 }
 
 export interface InvokeWorkerRPCActivityOutput {
@@ -1793,6 +1785,8 @@ export interface PrepareRpcQueryResponse {
   loadedAttributeMapInstances: string[];
   loadedChannelNames: string[];
   loadedChannelMapInstances: string[];
+  /** Selects the last Worker queue for RPC dispatch. */
+  dexTaskQueue: string;
 }
 
 export interface PrepareRpcQueryResponse_ChannelInfosEntry {
@@ -11908,7 +11902,7 @@ export const ServiceErrorResponse: MessageFns<ServiceErrorResponse> = {
 };
 
 function createBaseWorkerErrorResponse(): WorkerErrorResponse {
-  return { detail: "", errorType: "", stackTrace: "", retryAfterSeconds: 0 };
+  return { detail: "", errorType: "", stackTrace: "", retryAfterSeconds: 0, grpcStatus: 0 };
 }
 
 export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
@@ -11924,6 +11918,9 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
     }
     if (message.retryAfterSeconds !== 0) {
       writer.uint32(32).int32(message.retryAfterSeconds);
+    }
+    if (message.grpcStatus !== 0) {
+      writer.uint32(40).int32(message.grpcStatus);
     }
     return writer;
   },
@@ -11967,6 +11964,14 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
           message.retryAfterSeconds = reader.int32();
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.grpcStatus = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11985,6 +11990,7 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
     message.errorType = object.errorType ?? "";
     message.stackTrace = object.stackTrace ?? "";
     message.retryAfterSeconds = object.retryAfterSeconds ?? 0;
+    message.grpcStatus = object.grpcStatus ?? 0;
     return message;
   },
 };
@@ -17400,7 +17406,7 @@ export const DumpFlowForContinueAsNewActivityOutput: MessageFns<DumpFlowForConti
 };
 
 function createBaseInvokeWorkerRPCActivityInput(): InvokeWorkerRPCActivityInput {
-  return { rpcPrep: undefined, request: undefined, dexTaskQueue: "", dispatchWait: undefined, stickyWait: undefined };
+  return { rpcPrep: undefined, request: undefined };
 }
 
 export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInput> = {
@@ -17410,15 +17416,6 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
     }
     if (message.request !== undefined) {
       InvokeRPCRequest.encode(message.request, writer.uint32(18).fork()).join();
-    }
-    if (message.dexTaskQueue !== "") {
-      writer.uint32(42).string(message.dexTaskQueue);
-    }
-    if (message.dispatchWait !== undefined) {
-      Duration.encode(message.dispatchWait, writer.uint32(50).fork()).join();
-    }
-    if (message.stickyWait !== undefined) {
-      Duration.encode(message.stickyWait, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -17446,30 +17443,6 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
           message.request = InvokeRPCRequest.decode(reader, reader.uint32());
           continue;
         }
-        case 5: {
-          if (tag !== 42) {
-            break;
-          }
-
-          message.dexTaskQueue = reader.string();
-          continue;
-        }
-        case 6: {
-          if (tag !== 50) {
-            break;
-          }
-
-          message.dispatchWait = Duration.decode(reader, reader.uint32());
-          continue;
-        }
-        case 7: {
-          if (tag !== 58) {
-            break;
-          }
-
-          message.stickyWait = Duration.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -17489,13 +17462,6 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
       : undefined;
     message.request = (object.request !== undefined && object.request !== null)
       ? InvokeRPCRequest.fromPartial(object.request)
-      : undefined;
-    message.dexTaskQueue = object.dexTaskQueue ?? "";
-    message.dispatchWait = (object.dispatchWait !== undefined && object.dispatchWait !== null)
-      ? Duration.fromPartial(object.dispatchWait)
-      : undefined;
-    message.stickyWait = (object.stickyWait !== undefined && object.stickyWait !== null)
-      ? Duration.fromPartial(object.stickyWait)
       : undefined;
     return message;
   },
@@ -18569,6 +18535,7 @@ function createBasePrepareRpcQueryResponse(): PrepareRpcQueryResponse {
     loadedAttributeMapInstances: [],
     loadedChannelNames: [],
     loadedChannelMapInstances: [],
+    dexTaskQueue: "",
   };
 }
 
@@ -18607,6 +18574,9 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
     }
     for (const v of message.loadedChannelMapInstances) {
       writer.uint32(82).string(v!);
+    }
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(90).string(message.dexTaskQueue);
     }
     return writer;
   },
@@ -18704,6 +18674,14 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
           message.loadedChannelMapInstances.push(reader.string());
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18749,6 +18727,7 @@ export const PrepareRpcQueryResponse: MessageFns<PrepareRpcQueryResponse> = {
     message.loadedAttributeMapInstances = object.loadedAttributeMapInstances?.map((e) => e) || [];
     message.loadedChannelNames = object.loadedChannelNames?.map((e) => e) || [];
     message.loadedChannelMapInstances = object.loadedChannelMapInstances?.map((e) => e) || [];
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
     return message;
   },
 };

@@ -51,6 +51,8 @@ type DexServiceTestConfig struct {
 	Internal *config.InternalConfig
 	// Wake configures the general Worker wake hook.
 	Wake *config.WakeConfig
+	// Matching configures pull dispatch wait budgets.
+	Matching *config.MatchingConfig
 	// Credential is sent as a bearer token by the runtime's FlowClient.
 	Credential string
 	// LazyLoading overrides BlobStore.LazyLoading.
@@ -107,6 +109,7 @@ func createTestConfig(t *testing.T, testCfg DexServiceTestConfig) config.Config 
 	if testCfg.Wake != nil {
 		cfg.Worker.Wake = *testCfg.Wake
 	}
+	cfg.Matching = testCfg.Matching
 	cfg.StreamStore = testCfg.StreamStore
 	switch testCfg.BackendType {
 	case service.BackendTypeTemporal:

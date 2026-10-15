@@ -35,13 +35,18 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/superdurable/dex/service/common/ptr"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
+	"github.com/superdurable/dex/service/interpreter"
 	"github.com/superdurable/dex/service/interpreter/cadence"
 	"github.com/superdurable/dex/service/interpreter/temporal"
+	"github.com/superdurable/dex/service/matching"
+	"github.com/superdurable/dex/service/membership"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -55,6 +60,7 @@ type integRuntime struct {
 	FlowClient    dexpb.FlowServiceClient
 	UnifiedClient uclient.UnifiedClient
 	BlobStore     blobstore.BlobStore
+	Matching      *matching.Engine
 
 	defaultFlowConfig *dexpb.FlowConfig
 
@@ -257,13 +263,19 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	cfg := createTestConfig(t, testConfig)
 	cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = listener.Addr().String()
 	var internalListener net.Listener
-	if cfg.Auth.IsEnabled() {
+	if cfg.Auth.IsEnabled() || cfg.Matching != nil {
 		internalListener, err = net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		cfg.Internal.Listen = internalListener.Addr().String()
-		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = ""
+		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = internalListener.Addr().String()
 	}
 	require.NoError(t, cfg.ValidateGeneralAccess())
+	pullDispatcher := pulldispatch.NewUnavailableDispatcher()
+	if cfg.Matching != nil {
+		pullClient := interpreter.NewInternalServiceClient(&cfg)
+		t.Cleanup(pullClient.Close)
+		pullDispatcher = pulldispatch.NewDispatcher(pullClient)
+	}
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
 	require.NoError(t, err)
 	t.Cleanup(workerPool.Close)
@@ -319,6 +331,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 			workerPool,
 			streamStore,
 			metricsHandler,
+			pullDispatcher,
 		)
 	case service.BackendTypeCadence:
 		domain := testConfig.CadenceDomain
@@ -367,6 +380,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 			workerPool,
 			streamStore,
 			client.MetricsNopHandler,
+			pullDispatcher,
 		)
 	default:
 		require.FailNow(t, "unsupported backend", testConfig.BackendType)
@@ -404,7 +418,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	t.Cleanup(func() {
 		api.DumpFlowForContinueAsNewHeaderObserver = previousDumpObserver
 	})
-	startApiServer(
+	runtime.Matching = startApiServer(
 		t,
 		listener,
 		internalListener,
@@ -530,14 +544,28 @@ func startApiServer(
 	closeInterpreter func(),
 	workerPool *workerclient.WorkerClientPool,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
-) {
+) *matching.Engine {
 	t.Helper()
+	var matchingEngine *matching.Engine
+	var matchingMonitor *membership.Monitor
+	if cfg.Matching != nil {
+		var err error
+		matchingMonitor, err = membership.NewMonitor(nil, []membership.Role{membership.RoleMatching}, "", nil, zap.NewNop())
+		require.NoError(t, err)
+		require.NoError(t, matchingMonitor.Start(context.Background()))
+		matchingEngine, err = matching.NewEngine(cfg.Matching, zap.NewNop(), matchingMonitor,
+			func(context.Context, string) (dexpb.MatchingServiceClient, error) {
+				return nil, fmt.Errorf("unexpected remote matching owner in single-server test")
+			})
+		require.NoError(t, err)
+	}
 
-	server, err := api.NewServerWithAccess(
+	server, err := api.NewServerWithMatchingAccess(
 		&cfg.Api,
 		&cfg.Auth,
 		&cfg.Internal,
 		&cfg.Worker.Wake,
+		cfg.Matching,
 		&cfg.BlobStore,
 		&cfg.Interpreter,
 		unifiedClient,
@@ -547,6 +575,10 @@ func startApiServer(
 		streamStore,
 		func(context.Context) error { return nil },
 		workerPool,
+		true,
+		nil,
+		matchingEngine,
+		nil,
 		extraUnaryInterceptors...,
 	)
 	require.NoError(t, err)
@@ -564,6 +596,10 @@ func startApiServer(
 	t.Cleanup(func() {
 		closeInterpreter()
 		server.GracefulStop(2 * time.Second)
+		if matchingEngine != nil {
+			matchingEngine.Close()
+			matchingMonitor.Stop()
+		}
 		for _, serverListener := range listeners {
 			if err := serverListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				require.NoError(t, err)
@@ -573,6 +609,7 @@ func startApiServer(
 			}
 		}
 	})
+	return matchingEngine
 }
 
 func createTemporalClient(

@@ -25,8 +25,9 @@ import (
 )
 
 type ContinueAsNewer struct {
-	provider interfaces.WorkflowProvider
-	apiCfg   *config.ApiConfig
+	provider     interfaces.WorkflowProvider
+	apiCfg       *config.ApiConfig
+	dexTaskQueue string
 
 	StepExecutionToResumeMap map[string]*dexpb.StepExecutionResumeInfo // stepExeId to StepExecutionResumeInfo
 	inflightUpdateOperations int
@@ -48,6 +49,7 @@ func NewContinueAsNewer(
 	persistenceManager *PersistenceManager, stepRequestQueue *StepRequestQueue, collector *OutputCollector,
 	timerProcessor interfaces.TimerProcessor,
 	attributeSynchronizer *AttributeSynchronizer,
+	dexTaskQueue string,
 ) *ContinueAsNewer {
 	if apiCfg == nil || provider == nil || stepRequestQueue == nil || channelStore == nil ||
 		stepExecutionCounter == nil || persistenceManager == nil || collector == nil ||
@@ -55,8 +57,9 @@ func NewContinueAsNewer(
 		panic("ContinueAsNewer requires non-nil dependencies")
 	}
 	return &ContinueAsNewer{
-		provider: provider,
-		apiCfg:   apiCfg,
+		provider:     provider,
+		apiCfg:       apiCfg,
+		dexTaskQueue: dexTaskQueue,
 
 		StepExecutionToResumeMap: map[string]*dexpb.StepExecutionResumeInfo{},
 
@@ -162,6 +165,7 @@ func (c *ContinueAsNewer) GetSnapshot() *dexpb.ContinueAsNewDump {
 		)
 	}
 	return &dexpb.ContinueAsNewDump{
+		DexTaskQueue:              c.dexTaskQueue,
 		ChannelReceived:           c.channelStore.GetAllReceived(),
 		CounterInfo:               c.stepExecutionCounter.Dump(),
 		Attributes:                c.persistenceManager.GetAllAttributes(),
@@ -172,6 +176,16 @@ func (c *ContinueAsNewer) GetSnapshot() *dexpb.ContinueAsNewDump {
 			c.stepExecutionCounter.IsStepExecutionActive,
 		),
 		PendingAttributeSyncItems: c.attributeSynchronizer.PendingItems(),
+	}
+}
+
+func (c *ContinueAsNewer) DexTaskQueue() string {
+	return c.dexTaskQueue
+}
+
+func (c *ContinueAsNewer) RecordServedByAppWorkerID(appWorkerID string) {
+	if appWorkerID != "" {
+		c.dexTaskQueue = appWorkerID
 	}
 }
 

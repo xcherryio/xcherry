@@ -213,8 +213,10 @@ worker:
     budget: 120s
 ~~~
 
-Worker 不可用时，Dex 向 hook 发送包含 **target** 和 **kind: wake** 的 POST，
-并在 **budget** 内等待，默认 120 秒。成功 dispatch 后发送 **kind: active**。
+Worker 不可用时，Dex 向 hook 发送包含 **target** 和 **kind: wake** 的 POST。
+推送模式下，Dex 在同一次尝试中最多等待 **budget**，默认 120 秒。拉取模式下，
+**target** 是 Flow 类型队列。黏性等待结束后，Dex 发送唤醒通知，并在同一次
+dispatch 尝试中继续等待。成功 dispatch 后发送 **kind: active**。
 通知尽力发送，并按 target 限速。配置 **internal.tokenFile** 时，Dex 将内部 token
 作为 bearer credential 发送；否则不发送 authorization header。
 

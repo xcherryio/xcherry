@@ -68,6 +68,7 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
       stackTraceTruncationMarker,
     ),
     retryAfterSeconds: retryAfterError?.afterSeconds ?? 0,
+    grpcStatus: status.UNKNOWN,
   }).finish();
   const metadata = new Metadata();
   metadata.set(

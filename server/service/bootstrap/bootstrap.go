@@ -30,6 +30,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/superdurable/dex/service/common/log/tag"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
@@ -79,6 +80,7 @@ type Runtime struct {
 	membership        *membership.Monitor
 	matching          *matching.Engine
 	matchingClients   *matchingClientPool
+	pullDispatcher    pulldispatch.Dispatcher
 	internalListener  net.Listener
 	internalToken     *auth.InternalTokenFile
 	shutdownOnce      sync.Once
@@ -182,11 +184,12 @@ func (r *Runtime) createServices() error {
 		if !r.options.Services.API && r.options.Services.Matching {
 			serviceName = "matching"
 		}
-		r.apiServer, err = api.NewServerWithMatching(
+		r.apiServer, err = api.NewServerWithMatchingAccess(
 			&r.cfg.Api,
 			&r.cfg.Auth,
 			&r.cfg.Internal,
 			&r.cfg.Worker.Wake,
+			r.cfg.Matching,
 			&r.cfg.BlobStore,
 			&r.cfg.Interpreter,
 			client,
@@ -199,6 +202,7 @@ func (r *Runtime) createServices() error {
 			r.options.Services.API,
 			r.internalToken,
 			r.matching,
+			r.pullDispatcher,
 		)
 		if err != nil {
 			return fmt.Errorf("create Dex API: %w", err)
@@ -260,7 +264,12 @@ func (r *Runtime) createMembershipAndMatching() error {
 		}
 	}
 	r.internalToken = token
-	r.matchingClients = newMatchingClientPool(token, r.cfg.Api.EffectiveGrpcMaxMessageBytes(), monitor, r.zapLogger)
+	var matchingToken interface{ Token() string }
+	if token != nil {
+		matchingToken = token
+	}
+	r.matchingClients = newMatchingClientPool(matchingToken, r.cfg.Api.EffectiveGrpcMaxMessageBytes(), monitor, r.zapLogger)
+	r.pullDispatcher = pulldispatch.NewRoutedDispatcher(monitor, r.matchingClients.MatchingClient)
 	if r.options.Services.API || r.options.Services.Matching {
 		matchingCfg := r.cfg.Matching
 		if matchingCfg == nil {
@@ -336,11 +345,14 @@ func (r *Runtime) Close() {
 
 func (r *Runtime) shutdown() {
 	r.shutdownOnce.Do(func() {
-		if r.membership != nil {
-			r.membership.Stop()
+		if r.worker != nil {
+			r.worker.Close()
 		}
 		if r.matching != nil {
 			r.matching.Close()
+		}
+		if r.membership != nil {
+			r.membership.Stop()
 		}
 		if r.apiServer != nil {
 			timeout := r.options.ShutdownTimeout
@@ -348,9 +360,6 @@ func (r *Runtime) shutdown() {
 				timeout = DefaultShutdownTimeout
 			}
 			r.apiServer.StopServing(timeout)
-		}
-		if r.worker != nil {
-			r.worker.Close()
 		}
 		if r.apiServer != nil {
 			r.apiServer.Close()

@@ -51,4 +51,14 @@ public interface WorkerErrorResponseOrBuilder extends
    * @return The retryAfterSeconds.
    */
   int getRetryAfterSeconds();
+
+  /**
+   * <pre>
+   * Pull Workers set the gRPC code push mode would return; push mode uses its transport status.
+   * </pre>
+   *
+   * <code>int32 grpc_status = 5;</code>
+   * @return The grpcStatus.
+   */
+  int getGrpcStatus();
 }

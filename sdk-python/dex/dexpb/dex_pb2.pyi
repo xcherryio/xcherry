@@ -1659,16 +1659,18 @@ class ServiceErrorResponse(_message.Message):
     def __init__(self, detail: _Optional[str] = ..., sub_status: _Optional[_Union[ErrorSubStatus, str]] = ..., original_worker_error_detail: _Optional[str] = ..., original_worker_error_type: _Optional[str] = ..., original_worker_error_status: _Optional[int] = ..., original_worker_error_stack_trace: _Optional[str] = ...) -> None: ...
 
 class WorkerErrorResponse(_message.Message):
-    __slots__ = ("detail", "error_type", "stack_trace", "retry_after_seconds")
+    __slots__ = ("detail", "error_type", "stack_trace", "retry_after_seconds", "grpc_status")
     DETAIL_FIELD_NUMBER: _ClassVar[int]
     ERROR_TYPE_FIELD_NUMBER: _ClassVar[int]
     STACK_TRACE_FIELD_NUMBER: _ClassVar[int]
     RETRY_AFTER_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    GRPC_STATUS_FIELD_NUMBER: _ClassVar[int]
     detail: str
     error_type: str
     stack_trace: str
     retry_after_seconds: int
-    def __init__(self, detail: _Optional[str] = ..., error_type: _Optional[str] = ..., stack_trace: _Optional[str] = ..., retry_after_seconds: _Optional[int] = ...) -> None: ...
+    grpc_status: int
+    def __init__(self, detail: _Optional[str] = ..., error_type: _Optional[str] = ..., stack_trace: _Optional[str] = ..., retry_after_seconds: _Optional[int] = ..., grpc_status: _Optional[int] = ...) -> None: ...
 
 class InternalActivityError(_message.Message):
     __slots__ = ("server_detail", "worker_grpc_status", "worker_error")
@@ -2351,18 +2353,12 @@ class DumpFlowForContinueAsNewActivityOutput(_message.Message):
     def __init__(self, response: _Optional[_Union[ContinueAsNewDumpResponse, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityInput(_message.Message):
-    __slots__ = ("rpc_prep", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
+    __slots__ = ("rpc_prep", "request")
     RPC_PREP_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
-    DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
-    DISPATCH_WAIT_FIELD_NUMBER: _ClassVar[int]
-    STICKY_WAIT_FIELD_NUMBER: _ClassVar[int]
     rpc_prep: PrepareRpcQueryResponse
     request: InvokeRPCRequest
-    dex_task_queue: str
-    dispatch_wait: _duration_pb2.Duration
-    sticky_wait: _duration_pb2.Duration
-    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, rpc_prep: _Optional[_Union[PrepareRpcQueryResponse, _Mapping]] = ..., request: _Optional[_Union[InvokeRPCRequest, _Mapping]] = ...) -> None: ...
 
 class InvokeWorkerRPCActivityOutput(_message.Message):
     __slots__ = ("response", "request_id", "served_by_app_worker_id")
@@ -2507,7 +2503,7 @@ class PrepareRpcQueryRequest(_message.Message):
     def __init__(self, load_attribute_map_instances: _Optional[_Iterable[str]] = ..., load_channel_names: _Optional[_Iterable[str]] = ..., load_channel_map_instances: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class PrepareRpcQueryResponse(_message.Message):
-    __slots__ = ("attributes", "run_id", "flow_started_timestamp", "flow_type", "worker_target", "channel_infos", "loaded_channel_messages", "loaded_attribute_map_instances", "loaded_channel_names", "loaded_channel_map_instances")
+    __slots__ = ("attributes", "run_id", "flow_started_timestamp", "flow_type", "worker_target", "channel_infos", "loaded_channel_messages", "loaded_attribute_map_instances", "loaded_channel_names", "loaded_channel_map_instances", "dex_task_queue")
     class ChannelInfosEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -2532,6 +2528,7 @@ class PrepareRpcQueryResponse(_message.Message):
     LOADED_ATTRIBUTE_MAP_INSTANCES_FIELD_NUMBER: _ClassVar[int]
     LOADED_CHANNEL_NAMES_FIELD_NUMBER: _ClassVar[int]
     LOADED_CHANNEL_MAP_INSTANCES_FIELD_NUMBER: _ClassVar[int]
+    DEX_TASK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     attributes: _containers.RepeatedCompositeFieldContainer[KV]
     run_id: str
     flow_started_timestamp: int
@@ -2542,7 +2539,8 @@ class PrepareRpcQueryResponse(_message.Message):
     loaded_attribute_map_instances: _containers.RepeatedScalarFieldContainer[str]
     loaded_channel_names: _containers.RepeatedScalarFieldContainer[str]
     loaded_channel_map_instances: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., run_id: _Optional[str] = ..., flow_started_timestamp: _Optional[int] = ..., flow_type: _Optional[str] = ..., worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., channel_infos: _Optional[_Mapping[str, ChannelInfo]] = ..., loaded_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., loaded_attribute_map_instances: _Optional[_Iterable[str]] = ..., loaded_channel_names: _Optional[_Iterable[str]] = ..., loaded_channel_map_instances: _Optional[_Iterable[str]] = ...) -> None: ...
+    dex_task_queue: str
+    def __init__(self, attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., run_id: _Optional[str] = ..., flow_started_timestamp: _Optional[int] = ..., flow_type: _Optional[str] = ..., worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., channel_infos: _Optional[_Mapping[str, ChannelInfo]] = ..., loaded_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., loaded_attribute_map_instances: _Optional[_Iterable[str]] = ..., loaded_channel_names: _Optional[_Iterable[str]] = ..., loaded_channel_map_instances: _Optional[_Iterable[str]] = ..., dex_task_queue: _Optional[str] = ...) -> None: ...
 
 class TimerInfo(_message.Message):
     __slots__ = ("condition_id", "firing_unix_timestamp_seconds", "status")

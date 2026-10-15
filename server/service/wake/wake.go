@@ -56,6 +56,20 @@ func (n *Notifier) NewHold(target string, heartbeat func()) *Hold {
 	return &Hold{notifier: n, target: target, heartbeat: heartbeat}
 }
 
+// NotifyWorkerUnavailable invokes the configured wake hook for an unavailable pull queue.
+func (n *Notifier) NotifyWorkerUnavailable(queue string) {
+	if n.cfg.URL != "" {
+		n.notify(queue, "wake", 10*time.Second)
+	}
+}
+
+// NotifyWorkerActive reports a successful pull dispatch to the wake hook.
+func (n *Notifier) NotifyWorkerActive(queue string) {
+	if n.cfg.URL != "" {
+		n.notify(queue, "active", time.Minute)
+	}
+}
+
 // Hold waits for an unavailable Worker within the configured budget.
 type Hold struct {
 	notifier  *Notifier

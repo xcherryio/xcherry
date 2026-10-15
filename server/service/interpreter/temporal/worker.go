@@ -21,6 +21,7 @@ import (
 	"github.com/superdurable/dex/service/common/attributestore"
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/event"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/interpreter"
@@ -54,12 +55,13 @@ func NewInterpreterWorker(
 	workerPool *workerclient.WorkerClientPool,
 	streamStore *streamstore.Store,
 	metrics client.MetricsHandler,
+	pullDispatcher pulldispatch.Dispatcher,
 ) *InterpreterWorker {
 	if cfg == nil {
 		panic("Temporal InterpreterWorker requires non-nil config sections")
 	}
 	if temporalClient == nil || dataConverter == nil || unifiedClient == nil ||
-		workerPool == nil || streamStore == nil || metrics == nil || taskQueue == "" {
+		workerPool == nil || streamStore == nil || metrics == nil || pullDispatcher == nil || taskQueue == "" {
 		panic("Temporal InterpreterWorker requires non-nil dependencies and task queue")
 	}
 	internal := interpreter.NewInternalServiceClient(cfg)
@@ -75,6 +77,7 @@ func NewInterpreterWorker(
 		cfg,
 		streamStore,
 		metrics,
+		pullDispatcher,
 	)
 	workflowInterpreter := interpreter.NewInterpreter(cfg, activities)
 

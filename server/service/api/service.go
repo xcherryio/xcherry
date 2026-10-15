@@ -36,6 +36,7 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/tag"
 	"github.com/superdurable/dex/service/common/ptr"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/retry"
 	"github.com/superdurable/dex/service/common/rpc"
 	"github.com/superdurable/dex/service/common/streamstore"
@@ -46,6 +47,7 @@ import (
 	"github.com/superdurable/dex/service/wake"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -72,9 +74,11 @@ type serviceImpl struct {
 	indexSynchronizer  *indexsync.Synchronizer
 	streamStore        *streamstore.Store
 	wakeNotifier       *wake.Notifier
+	pullDispatcher     pulldispatch.Dispatcher
+	matchingCfg        *config.MatchingConfig
 }
 
-func NewApiService(
+func NewApiServiceWithPull(
 	apiCfg *config.ApiConfig,
 	blobStoreCfg *config.BlobStoreConfig,
 	interpreterCfg *config.Interpreter,
@@ -86,8 +90,10 @@ func NewApiService(
 	streamStore *streamstore.Store,
 	workerPool *workerclient.WorkerClientPool,
 	wakeNotifier *wake.Notifier,
+	pullDispatcher pulldispatch.Dispatcher,
+	matchingCfg *config.MatchingConfig,
 ) (ApiService, error) {
-	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || wakeNotifier == nil {
+	if apiCfg == nil || blobStoreCfg == nil || interpreterCfg == nil || wakeNotifier == nil || pullDispatcher == nil {
 		panic("API service requires non-nil config sections")
 	}
 	if client == nil || logger == nil || workerPool == nil || attributeStore == nil || streamStore == nil || taskQueue == "" {
@@ -110,6 +116,8 @@ func NewApiService(
 		indexSynchronizer:  indexsync.New(interpreterCfg, client, logger),
 		streamStore:        streamStore,
 		wakeNotifier:       wakeNotifier,
+		pullDispatcher:     pullDispatcher,
+		matchingCfg:        matchingCfg,
 	}, nil
 }
 
@@ -201,16 +209,15 @@ func (s *serviceImpl) StartFlow(
 		return nil, s.handleError(err)
 	}
 
-	var workflowConfig dexpb.FlowConfig
+	baseConfig := s.interpreterCfg.DefaultWorkflowConfig
 	if s.interpreterCfg.DefaultWorkflowConfig == nil {
-		workflowConfig = *config.DefaultWorkflowConfig
-	} else {
-		workflowConfig = *s.interpreterCfg.DefaultWorkflowConfig
+		baseConfig = config.DefaultWorkflowConfig
 	}
+	workflowConfig := proto.Clone(baseConfig).(*dexpb.FlowConfig)
 	if startOptions.GetFlowConfigOverride() != nil {
-		overrideWorkflowConfig(*startOptions.GetFlowConfigOverride(), &workflowConfig)
+		overrideWorkflowConfig(startOptions.GetFlowConfigOverride(), workflowConfig)
 	}
-	if err := interpreterconfig.ValidateFlowConfig(&workflowConfig); err != nil {
+	if err := interpreterconfig.ValidateFlowConfig(workflowConfig); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := s.validateAttributeStoreNames(ctx, workflowConfig.GetAttributeStoreNames()); err != nil {
@@ -263,7 +270,7 @@ func (s *serviceImpl) StartFlow(
 		StepInput:                    req.GetStepInput(),
 		StepOptions:                  req.GetStepOptions(),
 		InitAttributes:               attributes,
-		Config:                       &workflowConfig,
+		Config:                       workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
 	}
 
@@ -292,7 +299,7 @@ func (s *serviceImpl) StartFlow(
 	return &dexpb.StartFlowResponse{RunId: runId}, nil
 }
 
-func overrideWorkflowConfig(configOverride dexpb.FlowConfig, workflowConfig *dexpb.FlowConfig) {
+func overrideWorkflowConfig(configOverride *dexpb.FlowConfig, workflowConfig *dexpb.FlowConfig) {
 	if configOverride.ActiveStepSearchMode != nil {
 		workflowConfig.ActiveStepSearchMode = configOverride.ActiveStepSearchMode
 	}
@@ -1625,7 +1632,7 @@ func (s *serviceImpl) doInvokeRPC(
 	); err != nil {
 		return nil, err
 	}
-	workerResponse, err := rpc.InvokeWorkerRpc(
+	workerResponse, _, err := rpc.InvokeWorkerRpc(
 		ctx,
 		s.workerPool,
 		&preparation,
@@ -1638,6 +1645,9 @@ func (s *serviceImpl) doInvokeRPC(
 		s.blobStoreCfg,
 		false,
 		s.wakeNotifier,
+		s.pullDispatcher,
+		s.matchingCfg,
+		false,
 	)
 	if err != nil {
 		return nil, err
@@ -1678,6 +1688,17 @@ func (s *serviceImpl) shouldInvokeRPCTransactionally(req *dexpb.InvokeRPCRequest
 }
 
 func (s *serviceImpl) handleInvokeRPCError(err error) error {
+	var dispatchError *pulldispatch.ServerError
+	if errors.As(err, &dispatchError) {
+		if dispatchStatus, ok := status.FromError(dispatchError.Err); ok {
+			return serviceerrors.NewErrorAndStatus(
+				dispatchStatus.Code(),
+				dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+				dispatchError.Error(),
+			).ToGRPCError()
+		}
+		return s.handleError(dispatchError.Err)
+	}
 	if mapped, ok := serviceerrors.WorkerAPIFailure(err); ok {
 		return mapped.ToGRPCError()
 	}

@@ -19,10 +19,19 @@ import (
 	"github.com/superdurable/dex/gen/dexpb"
 )
 
-// NormalizeWorkerTarget validates a plaintext gRPC worker_target and applies optional host rewrites.
+// NormalizeWorkerTarget validates a pull target or a plaintext gRPC target and applies host rewrites.
 func NormalizeWorkerTarget(target *dexpb.WorkerTarget) (*dexpb.WorkerTarget, error) {
 	if target == nil {
 		return nil, fmt.Errorf("worker_target is required")
+	}
+	if target.GetIsPullMode() {
+		if target.GetAddress() != "" {
+			return nil, fmt.Errorf("pull worker_target cannot specify address")
+		}
+		if target.GetIsHeadlessAddress() {
+			return nil, fmt.Errorf("pull worker_target cannot use headless address")
+		}
+		return &dexpb.WorkerTarget{IsPullMode: true}, nil
 	}
 	address, err := NormalizeAddress(target.GetAddress())
 	if err != nil {

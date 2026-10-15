@@ -20,6 +20,7 @@ import (
 	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/channelmessage"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/utils"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/wake"
@@ -33,7 +34,7 @@ type WorkerRequestTooLargeError struct {
 	MaxMessageBytes int
 }
 
-// InvokeWorkerRpc calls WorkerService.InvokeWorkerRPC using the shared worker pool.
+// InvokeWorkerRpc invokes a Worker RPC through the selected transport.
 func InvokeWorkerRpc(
 	ctx context.Context,
 	pool *workerclient.WorkerClientPool,
@@ -47,14 +48,17 @@ func InvokeWorkerRpc(
 	blobStoreCfg *config.BlobStoreConfig,
 	isOutputPersisted bool,
 	wakeNotifier *wake.Notifier,
-) (*dexpb.InvokeWorkerRPCResponse, error) {
+	pullDispatcher pulldispatch.Dispatcher,
+	matchingCfg *config.MatchingConfig,
+	isLocalActivity bool,
+) (*dexpb.InvokeWorkerRPCResponse, string, error) {
 	if apiCfg == nil || interpreterActivityCfg == nil {
 		panic("InvokeWorkerRpc requires non-nil config sections")
 	}
 	workerInput := req.GetInput()
 	if !blobStoreCfg.EffectiveLazyLoading() {
 		if err := blobstore.HydrateKVs(ctx, req.GetFlowId(), rpcPrep.GetAttributes(), blobStore); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if err := blobstore.HydrateChannelValues(
 			ctx,
@@ -62,7 +66,7 @@ func InvokeWorkerRpc(
 			rpcPrep.GetLoadedChannelMessages(),
 			blobStore,
 		); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if workerInput != nil {
 			// Use a new struct to preserve the request's blob reference
@@ -72,7 +76,7 @@ func InvokeWorkerRpc(
 			workerInput = &dexpb.Value{Kind: workerInput.GetKind()}
 		}
 		if err := blobstore.HydrateValue(ctx, req.GetFlowId(), workerInput, blobStore); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 
@@ -111,12 +115,22 @@ func InvokeWorkerRpc(
 	}
 	// Classify oversized requests before gRPC wraps the error, without offloading transient payloads.
 	if proto.Size(workerReq) > apiCfg.EffectiveGrpcMaxMessageBytes() {
-		return nil, &WorkerRequestTooLargeError{MaxMessageBytes: apiCfg.EffectiveGrpcMaxMessageBytes()}
+		return nil, "", &WorkerRequestTooLargeError{MaxMessageBytes: apiCfg.EffectiveGrpcMaxMessageBytes()}
 	}
 
-	resp, err := invokeWorkerRPCWithinWakeBudget(rpcCtx, pool, wakeNotifier, rpcPrep.GetWorkerTarget(), req.GetFlowId(), workerReq)
+	var resp *dexpb.InvokeWorkerRPCResponse
+	var servedByAppWorkerID string
+	var err error
+	if rpcPrep.GetWorkerTarget().GetIsPullMode() {
+		resp, servedByAppWorkerID, err = invokePullWorkerRPC(
+			rpcCtx, pullDispatcher, matchingCfg, wakeNotifier,
+			rpcPrep.GetDexTaskQueue(), req.GetFlowId(), rpcPrep.GetFlowType(), workerReq, isLocalActivity,
+		)
+	} else {
+		resp, err = invokeWorkerRPCWithinWakeBudget(rpcCtx, pool, wakeNotifier, rpcPrep.GetWorkerTarget(), req.GetFlowId(), workerReq)
+	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if err := validateWorkerRpcResponse(
@@ -124,28 +138,28 @@ func InvokeWorkerRpc(
 		interpreterActivityCfg.EffectiveMinimumStepHeartbeatTimeout(),
 		backendType,
 	); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	service.SetFromStepExecutionIDForStepDecision(
 		resp.GetStepDecision(),
 		service.GetFromStepExecutionIdForRPC(req.GetRpcName()),
 	)
 	if err := channelmessage.AssignIDs(resp.GetPublishToChannel()); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if err := blobstore.OffloadLargeAttributeWrites(
 		ctx, resp.GetUpsertAttributes(), req.GetFlowId(), invocationId,
 		blobStoreCfg.EffectiveThresholdInBytes(), blobStore, blobStoreCfg.EffectiveEnabled(),
 	); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if isOutputPersisted {
 		if err := blobstore.OffloadLargeValue(
 			ctx, resp.GetOutput(), req.GetFlowId(), invocationId,
 			blobStoreCfg.EffectiveThresholdInBytes(), blobStore, blobStoreCfg.EffectiveEnabled(),
 		); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if err := offloadRPCSideEffects(
@@ -156,10 +170,10 @@ func InvokeWorkerRpc(
 		blobStore,
 		blobStoreCfg,
 	); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	return resp, nil
+	return resp, servedByAppWorkerID, nil
 }
 
 // GRPCStatus preserves the Worker transport error contract for server-side size checks.

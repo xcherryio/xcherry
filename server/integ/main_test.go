@@ -112,10 +112,11 @@ func TestMain(m *testing.M) {
 		var serviceClient workflowserviceclient.Interface
 		serviceClient, _, closeFunc, err = bootstrap.BuildCadenceServiceClient(bootstrap.DefaultCadenceHostPort)
 		for i := 0; i < *dependencyWaitSeconds; i++ {
-			ctx, _ := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			_, err = serviceClient.DescribeDomain(ctx, &shared.DescribeDomainRequest{
 				Name: ptr.Any(bootstrap.DefaultCadenceDomain),
 			})
+			cancel()
 			if err != nil {
 				fmt.Println("wait for Cadence domain to be ready...", err)
 				time.Sleep(time.Second)

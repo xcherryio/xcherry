@@ -192,6 +192,7 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 	}
 
 	rpcPrep := &dexpb.PrepareRpcQueryResponse{
+		DexTaskQueue:                u.continueAsNewer.DexTaskQueue(),
 		Attributes:                  attributes,
 		RunId:                       info.WorkflowExecution.RunID,
 		FlowStartedTimestamp:        info.WorkflowStartTime.Unix(),
@@ -213,14 +214,15 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 	}
 	ctx = u.provider.WithActivityOptions(ctx, activityOptions)
 	var activityOutput dexpb.InvokeWorkerRPCActivityOutput
+	activityInput := &dexpb.InvokeWorkerRPCActivityInput{
+		RpcPrep: rpcPrep,
+		Request: input,
+	}
 	err = u.provider.ExecuteLocalActivity(
 		&activityOutput,
 		ctx,
 		u.activities.IWRPC,
-		&dexpb.InvokeWorkerRPCActivityInput{
-			RpcPrep: rpcPrep,
-			Request: input,
-		},
+		activityInput,
 	)
 	u.persistenceManager.UnlockKeys(keysToLock)
 	if err != nil {
@@ -248,6 +250,7 @@ func (u *WorkflowUpdater) handleWorkerRpc(
 		return nil, err
 	}
 	u.stepRequestQueue.AddStepStartRequests(decision.GetNextSteps())
+	u.continueAsNewer.RecordServedByAppWorkerID(activityOutput.GetServedByAppWorkerId())
 	u.continueAsNewCounter.IncSyncUpdateReceived()
 	return &dexpb.InvokeRpcUpdateResult{
 		Response: &dexpb.InvokeRPCResponse{Output: response.GetOutput()},

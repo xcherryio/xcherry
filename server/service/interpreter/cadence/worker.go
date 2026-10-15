@@ -20,6 +20,7 @@ import (
 	"github.com/superdurable/dex/service/common/attributestore"
 	"github.com/superdurable/dex/service/common/blobstore"
 	"github.com/superdurable/dex/service/common/event"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/interpreter"
@@ -57,12 +58,13 @@ func NewInterpreterWorker(
 	workerPool *workerclient.WorkerClientPool,
 	streamStore *streamstore.Store,
 	metrics client.MetricsHandler,
+	pullDispatcher pulldispatch.Dispatcher,
 ) *InterpreterWorker {
 	if cfg == nil {
 		panic("requires non-nil config sections")
 	}
 	if serviceClient == nil || closeFunc == nil || dataConverter == nil ||
-		unifiedClient == nil || workerPool == nil || streamStore == nil || metrics == nil {
+		unifiedClient == nil || workerPool == nil || streamStore == nil || metrics == nil || pullDispatcher == nil {
 		panic("Cadence InterpreterWorker requires non-nil dependencies")
 	}
 	if domain == "" || tasklist == "" {
@@ -81,6 +83,7 @@ func NewInterpreterWorker(
 		cfg,
 		streamStore,
 		metrics,
+		pullDispatcher,
 	)
 	workflowInterpreter := interpreter.NewInterpreter(cfg, activities)
 	return &InterpreterWorker{
