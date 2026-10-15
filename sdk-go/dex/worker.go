@@ -41,6 +41,7 @@ const (
 type WorkerOptions struct {
 	// Pull enables outbound task polling. Nil keeps the listening WorkerService mode.
 	// Configure FlowServiceAddress and Credential for the server this Worker contacts.
+	// BindAddress and WorkerTarget must be empty in pull mode; NewWorker rejects either setting.
 	Pull *PullWorkerOptions
 	// BindAddress is the plaintext WorkerService listener for Dex; it may differ from WorkerTarget. Default: ":8803".
 	// It uses host:port syntax.
@@ -88,6 +89,8 @@ type PullWorkerOptions struct {
 	// IdleStreamsPerQueue sets waiting streams for each Flow type and the sticky queue. Zero uses one.
 	IdleStreamsPerQueue int
 	// AppWorkerID overrides the generated process identity. Empty generates identity plus eight base32 characters.
+	// Set a new value after each process restart. It must not equal a registered Flow type.
+	// Valid values contain 1-63 ASCII letters, digits, dots, underscores, or hyphens.
 	AppWorkerID string
 	// StopDrainTimeout bounds Stop after it begins draining. Zero uses 30 seconds; negative values are invalid.
 	StopDrainTimeout time.Duration
@@ -413,7 +416,8 @@ func (worker *Worker) Start() error {
 // invalid. If ctx expires while handlers are draining, Stop force-closes the gRPC
 // server or connection, waits for cleanup, and returns ctx.Err. Pull mode also
 // limits the drain with PullWorkerOptions.StopDrainTimeout. Stop closes the Worker's internal
-// FlowService connection before returning.
+// FlowService connection before returning. A forced pull Stop waits for handlers to return;
+// a handler ignoring ctx can block Stop. Push mode does not wait after forcing its gRPC server closed.
 func (worker *Worker) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("dex: Worker Stop context must not be nil")

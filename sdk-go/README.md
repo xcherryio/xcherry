@@ -647,12 +647,16 @@ address cannot be combined. The Worker reconnects after stream failures and
 drains in-flight tasks before a server-directed reconnect. It logs permanent
 registration failures and retries them after at least one minute. `Start`
 returns startup synchronization errors, not later poll stream errors.
+An older server without pull support produces one explicit error log and is retried.
 
 The Worker keeps idle streams on each queue even when all task slots are busy,
 so excess assignments can be rejected for reassignment. A Worker may hold up to
-`(1 + number of Flow types) * IdleStreamsPerQueue + MaxConcurrentTasks` streams.
-Keep this below the server's per-Worker stream cap (default 256). Pull mode
-`Stop` drains for at most `StopDrainTimeout`, which defaults to 30 seconds.
+`(1 + number of Flow types) * (IdleStreamsPerQueue + MaxConcurrentTasks)` streams
+because it retains surplus idle streams after tasks finish. Size both options so
+this bound fits the server's per-Worker stream cap (default 256). Per-queue or
+total server stream limits may also reject registration with `ResourceExhausted`.
+Pull mode `Stop` drains for at most `StopDrainTimeout`, which defaults to 30 seconds.
+After that timeout, it cancels active task contexts and waits for handlers to return.
 
 `Start` blocks and is one-shot. `Stop(ctx)` is idempotent, drains in-flight
 calls, and force-stops them if the context expires. The SDK does not install

@@ -326,6 +326,29 @@ func TestPublicContractsCompile(t *testing.T) {
 	if err := worker.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	pullTarget := dex.WorkerTarget{Pull: true}
+	pullOptions := dex.PullWorkerOptions{
+		MaxConcurrentTasks:  2,
+		IdleStreamsPerQueue: 1,
+		AppWorkerID:         "contract-pull-12345678",
+	}
+	pullWorker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{Pull: &pullOptions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pullWorker.WorkerTarget().Pull {
+		t.Fatal("pull Worker target was not advertised")
+	}
+	pullClient, err := dex.NewClient(registry, cache, dex.ClientOptions{WorkerTarget: &pullTarget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pullClient.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pullWorker.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestServiceErrorsSupportErrorsAs(t *testing.T) {

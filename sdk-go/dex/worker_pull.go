@@ -44,6 +44,7 @@ type pullWorker struct {
 	mu                  sync.Mutex
 	streams             map[*pullStream]struct{}
 	streamWG            sync.WaitGroup
+	unsupportedOnce     sync.Once
 	busyTasks           int
 	isStopping          bool
 	wake                chan struct{}
@@ -258,7 +259,12 @@ func (stream *pullStream) run() {
 			backoff = 100 * time.Millisecond
 		}
 		isPermanent := isPermanentPullStreamError(err)
-		if isPermanent {
+		if status.Code(err) == codes.Unimplemented {
+			stream.worker.unsupportedOnce.Do(func() {
+				stream.worker.service.logger.Error("pull Worker polling is unsupported by this Dex server", "error", err)
+			})
+			backoff = time.Minute
+		} else if isPermanent {
 			stream.worker.service.logger.Error("Worker task stream rejected", "queue", stream.queue, "error", err)
 			backoff = time.Minute
 		} else if err != nil && !errors.Is(err, io.EOF) {
@@ -426,6 +432,7 @@ func (stream *pullStream) executeTask(ctx context.Context, task *dexpb.PollWorke
 		if finalErr := finishWorkerCall(stream.worker.service.logger, recover(), err); finalErr != nil {
 			workerError := &dexpb.WorkerErrorResponse{Detail: finalErr.Error(), GrpcStatus: int32(status.Code(finalErr))}
 			if rpcStatus, ok := status.FromError(finalErr); ok {
+				workerError.Detail = rpcStatus.Message()
 				for _, detail := range rpcStatus.Details() {
 					if typed, ok := detail.(*dexpb.WorkerErrorResponse); ok {
 						workerError = typed
