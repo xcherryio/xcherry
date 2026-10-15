@@ -240,6 +240,11 @@ func TestWorkerPullTaskFramesAndReconnect(t *testing.T) {
 		}
 		awaitPullTaskCompletion(t, worker)
 	}
+	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Task{Task: &dexpb.PollWorkerTask{TaskId: "invalid-request", Request: &dexpb.PollWorkerTask_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodRequest{FlowType: flowType, StepType: GetFinalStepType(workerTestWait), StepInput: mustEncodeWorkerTestValue(t, input)}}}}}))
+	invalidFrame := awaitPullFrame(t, queueStream).GetTaskFrame()
+	require.NotNil(t, invalidFrame)
+	require.Equal(t, int32(codes.InvalidArgument), invalidFrame.GetWorkerError().GetGrpcStatus())
+	awaitPullTaskCompletion(t, worker)
 	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: "test"}}}))
 	var reconnected *pullTestStream
 	for reconnected == nil {

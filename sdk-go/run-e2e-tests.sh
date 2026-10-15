@@ -119,7 +119,7 @@ DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
 DEX_WEB_ADDRESS="127.0.0.1:${web_port}" \
 DEX_WORKER_HOST=127.0.0.1 \
 DEX_WORKER_PORT="$worker_port" \
-  run_go_test -count=1 -race -v ./integ
+  run_go_test -count=1 -race -v ./integ -run "${DEX_GO_INTEG_TEST_PATTERN:-.}"
 
 if $coverage; then
   mkdir -p coverage

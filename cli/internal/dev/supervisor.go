@@ -306,7 +306,7 @@ func (s *supervisor) startDexRuntime(
 		AttributeStore: attributeStoreConfig,
 	}
 	dexRuntime, err := bootstrap.New(dexConfig, &bootstrap.Options{
-		Services:        bootstrap.Services{API: true, Interpreter: true},
+		Services:        bootstrap.Services{API: true, Interpreter: true, Matching: true},
 		APIListener:     listener,
 		ShutdownTimeout: s.cfg.ShutdownTimeout,
 	})

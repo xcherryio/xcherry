@@ -145,6 +145,9 @@ integTests:
 e2eTests:
 	$Q ./run-e2e-tests.sh
 
+pullWorkerE2ETests:
+	$Q DEX_GO_INTEG_TEST_PATTERN='^Test(PullSDKWorkerEndToEnd|BasicFlow)$$' ./run-e2e-tests.sh
+
 integrationCoverage:
 	$Q ./run-e2e-tests.sh --coverage
 

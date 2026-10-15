@@ -424,11 +424,12 @@ func (stream *pullStream) executeTask(ctx context.Context, task *dexpb.PollWorke
 	var err error
 	defer func() {
 		if finalErr := finishWorkerCall(stream.worker.service.logger, recover(), err); finalErr != nil {
-			workerError := &dexpb.WorkerErrorResponse{Detail: finalErr.Error()}
+			workerError := &dexpb.WorkerErrorResponse{Detail: finalErr.Error(), GrpcStatus: int32(status.Code(finalErr))}
 			if rpcStatus, ok := status.FromError(finalErr); ok {
 				for _, detail := range rpcStatus.Details() {
 					if typed, ok := detail.(*dexpb.WorkerErrorResponse); ok {
 						workerError = typed
+						workerError.GrpcStatus = int32(rpcStatus.Code())
 						break
 					}
 				}
