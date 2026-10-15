@@ -133,6 +133,7 @@ func TestReceiveWaitForMethodClearsHeartbeatValueAndWritesStream(t *testing.T) {
 	provider.EXPECT().RecordHeartbeat(gomock.Any())
 	store := newActivityStreamStore(t, config.StreamStoreBackendMemory)
 	activities := &Activities{
+		cfg:              &config.Config{},
 		activityProvider: provider,
 		streamStore:      store,
 		metrics:          client.MetricsNopHandler,
@@ -184,6 +185,7 @@ func TestReceiveExecuteMethodLocalIgnoresHeartbeatAndWritesStream(t *testing.T) 
 	provider := interfaces.NewMockActivityProvider(gomock.NewController(t))
 	store := newActivityStreamStore(t, config.StreamStoreBackendMemory)
 	activities := &Activities{
+		cfg:              &config.Config{},
 		activityProvider: provider,
 		streamStore:      store,
 		metrics:          client.MetricsNopHandler,
@@ -246,7 +248,7 @@ func TestReceiveExecuteMethodRejectsInvalidResultProtocol(t *testing.T) {
 		}, errorContains: "after its result"},
 		{name: "empty_output", outputs: []*dexpb.InvokeExecuteMethodOutput{{}}, errorContains: "empty output"},
 	}
-	activities := &Activities{}
+	activities := &Activities{cfg: &config.Config{}}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, err := activities.receiveExecuteMethodResponse(
@@ -265,6 +267,7 @@ func TestReceiveExecuteMethodDropsDisabledStreamWrite(t *testing.T) {
 	store := newActivityStreamStore(t, config.StreamStoreBackendDisabled)
 	metricsHandler, capturedMetrics := newCapturingMetricsHandler()
 	activities := &Activities{
+		cfg:         &config.Config{},
 		streamStore: store,
 		metrics:     metricsHandler,
 	}

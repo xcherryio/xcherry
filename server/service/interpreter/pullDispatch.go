@@ -241,7 +241,7 @@ func (a *Activities) openPullExecute(
 }
 
 func (a *Activities) MatchingConfig() config.MatchingConfig {
-	if a.cfg == nil || a.cfg.Matching == nil {
+	if a.cfg.Matching == nil {
 		return config.MatchingConfig{}.WithDefaults()
 	}
 	return a.cfg.Matching.WithDefaults()

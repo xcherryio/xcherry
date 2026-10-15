@@ -48,6 +48,12 @@ func NewInterpreter(sharedConfig *config.Config, activities *Activities) *Interp
 	}
 }
 
+// NewInterpreterForReplay supplies config while replaying recorded Activity results.
+func NewInterpreterForReplay() *Interpreter {
+	sharedConfig := &config.Config{}
+	return NewInterpreter(sharedConfig, &Activities{cfg: sharedConfig})
+}
+
 func (i *Interpreter) StartEngineFlow(
 	ctx interfaces.UnifiedContext,
 	provider interfaces.WorkflowProvider,
