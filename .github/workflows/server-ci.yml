@@ -37,6 +37,10 @@ jobs:
         env:
           GOWORK: "off"
         run: make unitTests
+      - name: Replay tests
+        env:
+          GOWORK: "off"
+        run: make replayTests
 
   blob-store-integ:
     name: Blob Store integration

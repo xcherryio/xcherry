@@ -62,7 +62,7 @@ func workflowDirectory(storageDate string, flowID string) string {
 	return storageDate + "$" + encodeFlowIDPathPart(flowID)
 }
 
-// StepEventInputPath returns the single-tenant path of a Step event input.
+// StepEventInputPath returns the path of a Step event input.
 func StepEventInputPath(
 	runStarted time.Time,
 	flowID string,
@@ -85,7 +85,7 @@ func stepEventInputPath(
 	return strings.Join([]string{workflowPath, encodeOpaquePathPart(stepExecutionID), method + ".pb"}, "/")
 }
 
-// ValueObjectPath returns the single-tenant path of a value object.
+// ValueObjectPath returns the path of a value object.
 func ValueObjectPath(flowID string, locator string) (string, error) {
 	return valueObjectPath(flowID, locator)
 }

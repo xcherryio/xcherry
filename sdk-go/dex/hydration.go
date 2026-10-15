@@ -310,7 +310,7 @@ func (hydrator *valueHydratorImpl) storeCached(
 }
 
 // gRPC reports a message size violation as RESOURCE_EXHAUSTED without details; Dex errors,
-// tenant rate limits included, always carry details. The status code decides, never the message text.
+// including rate limits, always carry details. The status code decides, never the message text.
 func isGrpcMessageSizeError(err error) bool {
 	rpcStatus, ok := status.FromError(err)
 	return ok && rpcStatus.Code() == codes.ResourceExhausted && len(rpcStatus.Details()) == 0

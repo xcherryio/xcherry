@@ -43,7 +43,7 @@ func NewWakeNotifier(cfg *config.Config) *wake.Notifier {
 	}
 	zapLogger, err := cfg.Log.NewZapLogger()
 	if err != nil {
-		panic(fmt.Sprintf("create dispatch gate logger: %v", err))
+		panic(fmt.Sprintf("create wake notifier logger: %v", err))
 	}
 	return wake.NewNotifier(&cfg.Worker.Wake, newInternalToken(cfg), loggerimpl.NewLogger(zapLogger))
 }

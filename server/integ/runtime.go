@@ -386,9 +386,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		context.Background(),
 		cfg.Interpreter.EffectiveAttributeIndexSyncTimeout(),
 	)
-	operatorInterpreterConfig := cfg.Interpreter
-	operatorInterpreterConfig.AttributeIndexesManagedExternally = false
-	err = indexsync.New(&operatorInterpreterConfig, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
+	err = indexsync.New(&cfg.Interpreter, unifiedClient, logger).Sync(syncCtx, attributeIndexes)
 	cancelSync()
 	require.NoError(t, err)
 	startInterpreter(t, worker)

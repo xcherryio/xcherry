@@ -42,8 +42,10 @@ func TestRemovedTenancyConfigReportsMigration(t *testing.T) {
 			_, err := NewConfig(writeTestConfig(t, configuration))
 			require.ErrorContains(t, err, "multi-tenancy was removed")
 			require.ErrorContains(t, err, "auth.authenticators")
-			require.ErrorContains(t, err, "internal")
+			require.ErrorContains(t, err, "to internal")
 			require.ErrorContains(t, err, "worker.wake")
+			require.ErrorContains(t, err, "drop subjectPattern and claims")
+			require.ErrorContains(t, err, "only sha256 entries")
 		})
 	}
 }

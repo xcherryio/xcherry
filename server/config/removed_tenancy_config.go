@@ -52,5 +52,5 @@ func mappingValueForKey(mapping *yaml.Node, key string) *yaml.Node {
 }
 
 func removedTenancyConfigError(path string) error {
-	return fmt.Errorf("%s: multi-tenancy was removed; move tenancy.authenticators to auth.authenticators, tenancy.internal to internal, and tenancy.wake to worker.wake", path)
+	return fmt.Errorf("%s: multi-tenancy was removed; move tenancy.authenticators to auth.authenticators, tenancy.internal to internal, and tenancy.wake to worker.wake; drop subjectPattern and claims, and keep only sha256 entries in static token files", path)
 }
