@@ -12,7 +12,7 @@ import asyncio
 import re
 from datetime import timedelta
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import grpc
 import pytest
@@ -119,20 +119,21 @@ async def _capacity_reject_and_cancel() -> None:
     )
     runtime._stopping = asyncio.Event()
     stream = PullStream(runtime, None, "capacity-worker")
-    stream._send = AsyncMock()
-    await stream._start_task(
-        pb.PollWorkerTask(task_id="first", rpc=pb.InvokeWorkerRPCRequest())
-    )
-    await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
-    await stream._start_task(
-        pb.PollWorkerTask(task_id="second", rpc=pb.InvokeWorkerRPCRequest())
-    )
-    rejected = stream._send.await_args.args[0].reject
-    assert rejected.task_id == "second"
-    assert rejected.reason == pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY
-    stream.cancel_handler()
-    await asyncio.wait_for(dispatcher.canceled.wait(), timeout=1)
-    await stream._finish_handler()
+    with patch.object(stream, "_send", new_callable=AsyncMock) as send_mock:
+        await stream._start_task(
+            pb.PollWorkerTask(task_id="first", rpc=pb.InvokeWorkerRPCRequest())
+        )
+        await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
+        await stream._start_task(
+            pb.PollWorkerTask(task_id="second", rpc=pb.InvokeWorkerRPCRequest())
+        )
+        assert send_mock.await_args is not None
+        rejected = send_mock.await_args.args[0].reject
+        assert rejected.task_id == "second"
+        assert rejected.reason == pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY
+        stream.cancel_handler()
+        await asyncio.wait_for(dispatcher.canceled.wait(), timeout=1)
+        await stream._finish_handler()
     assert runtime._busy_tasks == 0
 
 
@@ -145,8 +146,8 @@ class FakeCall:
     async def write(self, request: pb.PollWorkerTaskRequest) -> None:
         self.requests.append(request)
 
-    async def read(self) -> pb.PollWorkerTaskResponse | object:
-        return next(self.frames, grpc.aio.EOF)
+    async def read(self) -> pb.PollWorkerTaskResponse:
+        return next(self.frames)
 
     def cancel(self) -> None:
         self.is_canceled = True
@@ -205,9 +206,10 @@ async def _worker_error_frame_preserves_push_error_details() -> None:
         None,
     )
     stream = PullStream(runtime, None, "error-worker")
-    stream._send = AsyncMock()
-    await stream._send_error("task", retry_after(7, RuntimeError("broken")))
-    frame = stream._send.await_args.args[0].task_frame
+    with patch.object(stream, "_send", new_callable=AsyncMock) as send_mock:
+        await stream._send_error("task", retry_after(7, RuntimeError("broken")))
+    assert send_mock.await_args is not None
+    frame = send_mock.await_args.args[0].task_frame
     assert frame.task_id == "task"
     assert frame.worker_error.detail == "broken"
     assert frame.worker_error.error_type.endswith("RuntimeError")
@@ -232,12 +234,12 @@ async def _stop_forces_async_handler_after_drain_timeout() -> None:
     )
     runtime._stopping = asyncio.Event()
     stream = PullStream(runtime, None, "stop-worker")
-    stream._send = AsyncMock()
     stream.run_task = asyncio.create_task(asyncio.sleep(0))
     runtime._streams.add(stream)
-    await stream._start_task(
-        pb.PollWorkerTask(task_id="task", rpc=pb.InvokeWorkerRPCRequest())
-    )
-    await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
-    await runtime.stop()
+    with patch.object(stream, "_send", new_callable=AsyncMock):
+        await stream._start_task(
+            pb.PollWorkerTask(task_id="task", rpc=pb.InvokeWorkerRPCRequest())
+        )
+        await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
+        await runtime.stop()
     assert dispatcher.canceled.is_set()

@@ -102,7 +102,7 @@ class PullWorkerRuntime:
         self._stopping = asyncio.Event()
         self._started.set()
         channel = outbound_worker_task_channel(self._server_address)
-        stub = dex_pb2_grpc.WorkerTaskServiceStub(channel)
+        stub = dex_pb2_grpc.WorkerTaskServiceStub(channel)  # type: ignore[no-untyped-call]
         try:
             self._wake.set()
             while not self._stopping.is_set():

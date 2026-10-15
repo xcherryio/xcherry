@@ -44,6 +44,7 @@ from .basic_flow import BasicFlow
 from .environment import DexDevTestEnvironment
 from .shared import unique_id
 
+
 class PullSecondStep(Step[str]):
     def __init__(
         self,
@@ -64,6 +65,7 @@ class PullSecondStep(Step[str]):
         if not self.gate.wait(timeout=20):
             raise TimeoutError("pull test gate did not open")
         return graceful_complete(input)
+
 
 class PullFirstStep(Step[str]):
     def __init__(
@@ -86,6 +88,7 @@ class PullFirstStep(Step[str]):
             raise TimeoutError("pull test first gate did not open")
         return go_to(PullSecondStep, input)
 
+
 class PullFlow(Flow[str]):
     def __init__(
         self,
@@ -104,6 +107,7 @@ class PullFlow(Flow[str]):
     @rpc
     def get_worker(self, context: Context) -> RPCResult[str]:
         return RPCResult(self.worker_id)
+
 
 class PullWorkerHarness:
     def __init__(self, flow: PullFlow, server_address: str, worker_id: str) -> None:
@@ -141,6 +145,7 @@ class PullWorkerHarness:
             raise RuntimeError("pull Worker did not stop")
         if self.failure is not None:
             raise RuntimeError("pull Worker failed") from self.failure
+
 
 def test_pull_worker_sticky_rpc_stop_drain_and_push() -> None:
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
@@ -211,8 +216,10 @@ def test_pull_worker_sticky_rpc_stop_drain_and_push() -> None:
         if worker_b is not None:
             worker_b.close()
 
+
 def test_async_pull_worker_handles_flow() -> None:
     asyncio.run(_async_pull_worker_handles_flow())
+
 
 async def _async_pull_worker_handles_flow() -> None:
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
