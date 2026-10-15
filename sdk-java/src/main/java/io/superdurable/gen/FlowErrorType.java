@@ -158,7 +158,7 @@ public enum FlowErrorType
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(9);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(11);
   }
 
   private static final FlowErrorType[] VALUES = values();

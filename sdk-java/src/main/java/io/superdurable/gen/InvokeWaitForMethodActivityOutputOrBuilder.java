@@ -24,4 +24,24 @@ public interface InvokeWaitForMethodActivityOutputOrBuilder extends
    * <code>.dex.InvokeWaitForMethodResponse response = 1;</code>
    */
   io.superdurable.gen.InvokeWaitForMethodResponseOrBuilder getResponseOrBuilder();
+
+  /**
+   * <pre>
+   * Identifies the Worker that completed this pull task for sticky routing.
+   * </pre>
+   *
+   * <code>string served_by_app_worker_id = 2;</code>
+   * @return The servedByAppWorkerId.
+   */
+  java.lang.String getServedByAppWorkerId();
+  /**
+   * <pre>
+   * Identifies the Worker that completed this pull task for sticky routing.
+   * </pre>
+   *
+   * <code>string served_by_app_worker_id = 2;</code>
+   * @return The bytes for servedByAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getServedByAppWorkerIdBytes();
 }

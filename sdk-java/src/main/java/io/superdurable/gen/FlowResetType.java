@@ -124,7 +124,7 @@ public enum FlowResetType
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(12);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(14);
   }
 
   private static final FlowResetType[] VALUES = values();

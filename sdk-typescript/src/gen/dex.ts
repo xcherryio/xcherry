@@ -10,9 +10,11 @@ import {
   type CallOptions,
   type ChannelCredentials,
   Client,
+  type ClientDuplexStream,
   type ClientOptions,
   type ClientReadableStream,
   type ClientUnaryCall,
+  type handleBidiStreamingCall,
   type handleServerStreamingCall,
   type handleUnaryCall,
   makeGenericClientConstructor,
@@ -26,6 +28,23 @@ import { NullValue } from "./google/protobuf/struct.js";
 import { Timestamp } from "./google/protobuf/timestamp.js";
 
 export const protobufPackage = "dex";
+
+/** Explains why a Worker declined a task. */
+export enum PollWorkerTaskRejectReason {
+  /** POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED - No rejection reason was supplied. */
+  POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED = 0,
+  /** POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY - All Worker execution slots are occupied. */
+  POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1,
+  UNRECOGNIZED = -1,
+}
+
+/** Distinguishes absence of a Worker from loss of an assigned Worker. */
+export enum DispatchTaskErrorReason {
+  DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0,
+  DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1,
+  DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2,
+  UNRECOGNIZED = -1,
+}
 
 export enum IndexType {
   INDEX_TYPE_UNSPECIFIED = 0,
@@ -246,6 +265,178 @@ export interface ServerInfo {
   currentProtocolVersion: number;
 }
 
+/** Carries one Worker frame on a pull stream. Register must be the first frame. */
+export interface PollWorkerTaskRequest {
+  frame:
+    | //
+    /** Starts this queue stream; no other frame may precede registration. */
+    { $case: "register"; value: PollWorkerTaskRegister }
+    | //
+    /** Reports task progress or its final result. */
+    { $case: "taskFrame"; value: PollWorkerTaskFrame }
+    | //
+    /** Declines an assigned task when the Worker has no capacity. */
+    { $case: "reject"; value: PollWorkerTaskReject }
+    | //
+    /** Acknowledges a server liveness check. */
+    { $case: "pong"; value: PollWorkerTaskPong }
+    | undefined;
+}
+
+/** Registers one queue stream for a Worker process. */
+export interface PollWorkerTaskRegister {
+  /** Names this stream's queue: app_worker_id or one declared flow_type. */
+  queue: string;
+  /** Identifies this Worker process across reconnects; a restart uses a new ID. */
+  appWorkerId: string;
+  /** Lists the Flow types this Worker can execute. */
+  flowTypes: string[];
+  /** Identifies the SDK implementation for diagnostics. */
+  sdkName: string;
+  /** Identifies the SDK release for diagnostics. */
+  sdkVersion: string;
+}
+
+/** Carries a task's heartbeat, stream write, result, or Worker error. */
+export interface PollWorkerTaskFrame {
+  /** Matches the task_id sent by Dex on this stream. */
+  taskId: string;
+  output:
+    | //
+    /** Includes heartbeat, stream write, and final result variants. */
+    { $case: "waitFor"; value: InvokeWaitForMethodOutput }
+    | //
+    /** Includes heartbeat, stream write, and final result variants. */
+    { $case: "execute"; value: InvokeExecuteMethodOutput }
+    | //
+    /** Completes an RPC task. */
+    { $case: "rpc"; value: InvokeWorkerRPCResponse }
+    | //
+    /** Ends the task with a Worker error. */
+    { $case: "workerError"; value: WorkerErrorResponse }
+    | undefined;
+}
+
+/** Declines a task so Dex can assign it to another available Worker stream. */
+export interface PollWorkerTaskReject {
+  /** Matches the declined task on this stream. */
+  taskId: string;
+  /** Explains why the Worker cannot accept the task. */
+  reason: PollWorkerTaskRejectReason;
+}
+
+/** Acknowledges a server Ping on the same stream. */
+export interface PollWorkerTaskPong {
+}
+
+/** Carries one server frame on a pull stream. */
+export interface PollWorkerTaskResponse {
+  frame:
+    | //
+    /** Confirms that Dex accepted this stream's queue registration. */
+    { $case: "registered"; value: PollWorkerTaskRegistered }
+    | //
+    /** Assigns work to the registered Worker. */
+    { $case: "task"; value: PollWorkerTask }
+    | //
+    /** Requests cancellation of the assigned task. */
+    { $case: "cancelTask"; value: PollWorkerTaskCancelTask }
+    | //
+    /** Requests a reconnect after the current task finishes. */
+    { $case: "reconnect"; value: PollWorkerTaskReconnect }
+    | //
+    /** Checks whether an idle stream remains responsive. */
+    { $case: "ping"; value: PollWorkerTaskPing }
+    | undefined;
+}
+
+/** Confirms that Dex accepted the queue registration. */
+export interface PollWorkerTaskRegistered {
+}
+
+/** Assigns one task to this stream until its final result, error, or rejection. */
+export interface PollWorkerTask {
+  /** Identifies the assignment for result and cancellation frames. */
+  taskId: string;
+  /** Bounds task execution, including Worker processing time. */
+  deadline: Date | undefined;
+  request:
+    | //
+    /** Runs a Step's WaitFor method. */
+    { $case: "waitFor"; value: InvokeWaitForMethodRequest }
+    | //
+    /** Runs a Step's Execute method. */
+    { $case: "execute"; value: InvokeExecuteMethodRequest }
+    | //
+    /** Runs a Worker RPC. */
+    { $case: "rpc"; value: InvokeWorkerRPCRequest }
+    | undefined;
+}
+
+/** Requests cancellation of the task currently assigned to this stream. */
+export interface PollWorkerTaskCancelTask {
+  /** Matches the task currently assigned on this stream. */
+  taskId: string;
+}
+
+/** Asks the Worker to finish its task and reconnect for queue ownership changes or shutdown. */
+export interface PollWorkerTaskReconnect {
+  /** Explains why Dex needs a new queue stream. */
+  reason: string;
+}
+
+/** Checks that an idle pull stream remains responsive. */
+export interface PollWorkerTaskPing {
+}
+
+/** Describes one task dispatched to a Dex task queue. */
+export interface DispatchTaskRequest {
+  /** Selects the initial queue: a sticky Worker ID or a Flow type. */
+  queue: string;
+  /** Names the Flow type queue after a sticky wait expires. */
+  fallbackQueue: string;
+  /** Identifies the Flow for Worker affinity within a Flow type queue. */
+  flowId: string;
+  /** Limits waiting on a sticky queue before trying fallback_queue. */
+  stickyWait:
+    | Duration
+    | undefined;
+  /** Limits total waiting for a Worker to accept the task. */
+  dispatchWait:
+    | Duration
+    | undefined;
+  /** Bounds task execution, including Worker processing time. */
+  deadline:
+    | Date
+    | undefined;
+  /** Identifies this dispatch across Worker and server streams. */
+  taskId: string;
+  request:
+    | { $case: "waitFor"; value: InvokeWaitForMethodRequest }
+    | { $case: "execute"; value: InvokeExecuteMethodRequest }
+    | { $case: "rpc"; value: InvokeWorkerRPCRequest }
+    | undefined;
+}
+
+/** Relays Worker output, then ends with a result, Worker error, or dispatch error. */
+export interface DispatchTaskResponse {
+  output:
+    | { $case: "waitFor"; value: InvokeWaitForMethodOutput }
+    | { $case: "execute"; value: InvokeExecuteMethodOutput }
+    | { $case: "rpc"; value: InvokeWorkerRPCResponse }
+    | { $case: "workerError"; value: WorkerErrorResponse }
+    | { $case: "dispatchError"; value: DispatchTaskError }
+    | undefined;
+  /** Identifies the Worker that produced the final result or Worker error. */
+  servedByAppWorkerId: string;
+}
+
+/** Reports a failure before Dex receives a Worker result. */
+export interface DispatchTaskError {
+  reason: DispatchTaskErrorReason;
+  detail: string;
+}
+
 export interface Value {
   kind:
     | //
@@ -416,6 +607,8 @@ export interface WorkerTarget {
   /** Plaintext gRPC dial target, not an HTTP URL. */
   address: string;
   isHeadlessAddress: boolean;
+  /** Routes work through a connected pull Worker; mutually exclusive with address. */
+  isPullMode: boolean;
 }
 
 export interface StartFlowRequest {
@@ -1371,6 +1564,8 @@ export interface ContinueAsNewDump {
   /** Stored values only; index metadata remains in backend search attributes. */
   attributes: KV[];
   pendingAttributeSyncItems: AttributeSyncItem[];
+  /** Retains the last serving Worker's sticky queue across a Flow continuation. */
+  dexTaskQueue: string;
 }
 
 export interface ContinueAsNewDump_ChannelReceivedEntry {
@@ -1431,6 +1626,14 @@ export interface InvokeWaitForMethodActivityInput {
   tenantId: string;
   /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
   tenantClaims: { [key: string]: string };
+  /** Selects the sticky Worker queue; empty selects the request's Flow type queue. */
+  dexTaskQueue: string;
+  /** Limits total waiting for a pull Worker to accept this attempt. */
+  dispatchWait:
+    | Duration
+    | undefined;
+  /** Limits waiting on the sticky queue before the Flow type queue. */
+  stickyWait: Duration | undefined;
 }
 
 export interface InvokeWaitForMethodActivityInput_TenantClaimsEntry {
@@ -1439,7 +1642,11 @@ export interface InvokeWaitForMethodActivityInput_TenantClaimsEntry {
 }
 
 export interface InvokeWaitForMethodActivityOutput {
-  response: InvokeWaitForMethodResponse | undefined;
+  response:
+    | InvokeWaitForMethodResponse
+    | undefined;
+  /** Identifies the Worker that completed this pull task for sticky routing. */
+  servedByAppWorkerId: string;
 }
 
 export interface InvokeExecuteMethodActivityInput {
@@ -1451,6 +1658,14 @@ export interface InvokeExecuteMethodActivityInput {
   tenantId: string;
   /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
   tenantClaims: { [key: string]: string };
+  /** Selects the sticky Worker queue; empty selects the request's Flow type queue. */
+  dexTaskQueue: string;
+  /** Limits total waiting for a pull Worker to accept this attempt. */
+  dispatchWait:
+    | Duration
+    | undefined;
+  /** Limits waiting on the sticky queue before the Flow type queue. */
+  stickyWait: Duration | undefined;
 }
 
 export interface InvokeExecuteMethodActivityInput_TenantClaimsEntry {
@@ -1472,7 +1687,11 @@ export interface InternalLocalStepActivityFailure {
 }
 
 export interface InvokeExecuteMethodActivityOutput {
-  response: InvokeExecuteMethodResponse | undefined;
+  response:
+    | InvokeExecuteMethodResponse
+    | undefined;
+  /** Identifies the Worker that completed this pull task for sticky routing. */
+  servedByAppWorkerId: string;
 }
 
 export interface DumpFlowForContinueAsNewActivityInput {
@@ -1492,6 +1711,14 @@ export interface InvokeWorkerRPCActivityInput {
   tenantId: string;
   /** Claims of the Flow's tenant principal; empty in single-tenant mode. */
   tenantClaims: { [key: string]: string };
+  /** Selects the sticky Worker queue; empty selects the request's Flow type queue. */
+  dexTaskQueue: string;
+  /** Limits total waiting for a pull Worker to accept this attempt. */
+  dispatchWait:
+    | Duration
+    | undefined;
+  /** Limits waiting on the sticky queue before the Flow type queue. */
+  stickyWait: Duration | undefined;
 }
 
 export interface InvokeWorkerRPCActivityInput_TenantClaimsEntry {
@@ -1505,6 +1732,8 @@ export interface InvokeWorkerRPCActivityOutput {
     | undefined;
   /** Correlates this local Activity result with its InvokeRpc Update. */
   requestId: string;
+  /** Identifies the Worker that completed this pull task for sticky routing. */
+  servedByAppWorkerId: string;
 }
 
 export interface CleanupBlobStoreActivityInput {
@@ -1772,6 +2001,1191 @@ export const ServerInfo: MessageFns<ServerInfo> = {
     message.serverVersion = object.serverVersion ?? "";
     message.minimumSupportedProtocolVersion = object.minimumSupportedProtocolVersion ?? 0;
     message.currentProtocolVersion = object.currentProtocolVersion ?? 0;
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskRequest(): PollWorkerTaskRequest {
+  return { frame: undefined };
+}
+
+export const PollWorkerTaskRequest: MessageFns<PollWorkerTaskRequest> = {
+  encode(message: PollWorkerTaskRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    switch (message.frame?.$case) {
+      case "register":
+        PollWorkerTaskRegister.encode(message.frame.value, writer.uint32(10).fork()).join();
+        break;
+      case "taskFrame":
+        PollWorkerTaskFrame.encode(message.frame.value, writer.uint32(18).fork()).join();
+        break;
+      case "reject":
+        PollWorkerTaskReject.encode(message.frame.value, writer.uint32(26).fork()).join();
+        break;
+      case "pong":
+        PollWorkerTaskPong.encode(message.frame.value, writer.uint32(34).fork()).join();
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.frame = { $case: "register", value: PollWorkerTaskRegister.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.frame = { $case: "taskFrame", value: PollWorkerTaskFrame.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.frame = { $case: "reject", value: PollWorkerTaskReject.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.frame = { $case: "pong", value: PollWorkerTaskPong.decode(reader, reader.uint32()) };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskRequest>, I>>(base?: I): PollWorkerTaskRequest {
+    return PollWorkerTaskRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskRequest>, I>>(object: I): PollWorkerTaskRequest {
+    const message = createBasePollWorkerTaskRequest();
+    switch (object.frame?.$case) {
+      case "register": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "register", value: PollWorkerTaskRegister.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "taskFrame": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "taskFrame", value: PollWorkerTaskFrame.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "reject": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "reject", value: PollWorkerTaskReject.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "pong": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "pong", value: PollWorkerTaskPong.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskRegister(): PollWorkerTaskRegister {
+  return { queue: "", appWorkerId: "", flowTypes: [], sdkName: "", sdkVersion: "" };
+}
+
+export const PollWorkerTaskRegister: MessageFns<PollWorkerTaskRegister> = {
+  encode(message: PollWorkerTaskRegister, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.queue !== "") {
+      writer.uint32(10).string(message.queue);
+    }
+    if (message.appWorkerId !== "") {
+      writer.uint32(18).string(message.appWorkerId);
+    }
+    for (const v of message.flowTypes) {
+      writer.uint32(26).string(v!);
+    }
+    if (message.sdkName !== "") {
+      writer.uint32(34).string(message.sdkName);
+    }
+    if (message.sdkVersion !== "") {
+      writer.uint32(42).string(message.sdkVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskRegister {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskRegister();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.queue = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.appWorkerId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.flowTypes.push(reader.string());
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.sdkName = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.sdkVersion = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskRegister>, I>>(base?: I): PollWorkerTaskRegister {
+    return PollWorkerTaskRegister.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskRegister>, I>>(object: I): PollWorkerTaskRegister {
+    const message = createBasePollWorkerTaskRegister();
+    message.queue = object.queue ?? "";
+    message.appWorkerId = object.appWorkerId ?? "";
+    message.flowTypes = object.flowTypes?.map((e) => e) || [];
+    message.sdkName = object.sdkName ?? "";
+    message.sdkVersion = object.sdkVersion ?? "";
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskFrame(): PollWorkerTaskFrame {
+  return { taskId: "", output: undefined };
+}
+
+export const PollWorkerTaskFrame: MessageFns<PollWorkerTaskFrame> = {
+  encode(message: PollWorkerTaskFrame, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.taskId !== "") {
+      writer.uint32(10).string(message.taskId);
+    }
+    switch (message.output?.$case) {
+      case "waitFor":
+        InvokeWaitForMethodOutput.encode(message.output.value, writer.uint32(18).fork()).join();
+        break;
+      case "execute":
+        InvokeExecuteMethodOutput.encode(message.output.value, writer.uint32(26).fork()).join();
+        break;
+      case "rpc":
+        InvokeWorkerRPCResponse.encode(message.output.value, writer.uint32(34).fork()).join();
+        break;
+      case "workerError":
+        WorkerErrorResponse.encode(message.output.value, writer.uint32(42).fork()).join();
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskFrame {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskFrame();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.taskId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.output = { $case: "waitFor", value: InvokeWaitForMethodOutput.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.output = { $case: "execute", value: InvokeExecuteMethodOutput.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.output = { $case: "rpc", value: InvokeWorkerRPCResponse.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.output = { $case: "workerError", value: WorkerErrorResponse.decode(reader, reader.uint32()) };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskFrame>, I>>(base?: I): PollWorkerTaskFrame {
+    return PollWorkerTaskFrame.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskFrame>, I>>(object: I): PollWorkerTaskFrame {
+    const message = createBasePollWorkerTaskFrame();
+    message.taskId = object.taskId ?? "";
+    switch (object.output?.$case) {
+      case "waitFor": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "waitFor", value: InvokeWaitForMethodOutput.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "execute": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "execute", value: InvokeExecuteMethodOutput.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "rpc": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "rpc", value: InvokeWorkerRPCResponse.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "workerError": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "workerError", value: WorkerErrorResponse.fromPartial(object.output.value) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskReject(): PollWorkerTaskReject {
+  return { taskId: "", reason: 0 };
+}
+
+export const PollWorkerTaskReject: MessageFns<PollWorkerTaskReject> = {
+  encode(message: PollWorkerTaskReject, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.taskId !== "") {
+      writer.uint32(10).string(message.taskId);
+    }
+    if (message.reason !== 0) {
+      writer.uint32(16).int32(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskReject {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskReject();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.taskId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.reason = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskReject>, I>>(base?: I): PollWorkerTaskReject {
+    return PollWorkerTaskReject.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskReject>, I>>(object: I): PollWorkerTaskReject {
+    const message = createBasePollWorkerTaskReject();
+    message.taskId = object.taskId ?? "";
+    message.reason = object.reason ?? 0;
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskPong(): PollWorkerTaskPong {
+  return {};
+}
+
+export const PollWorkerTaskPong: MessageFns<PollWorkerTaskPong> = {
+  encode(_: PollWorkerTaskPong, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskPong {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskPong();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskPong>, I>>(base?: I): PollWorkerTaskPong {
+    return PollWorkerTaskPong.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskPong>, I>>(_: I): PollWorkerTaskPong {
+    const message = createBasePollWorkerTaskPong();
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskResponse(): PollWorkerTaskResponse {
+  return { frame: undefined };
+}
+
+export const PollWorkerTaskResponse: MessageFns<PollWorkerTaskResponse> = {
+  encode(message: PollWorkerTaskResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    switch (message.frame?.$case) {
+      case "registered":
+        PollWorkerTaskRegistered.encode(message.frame.value, writer.uint32(10).fork()).join();
+        break;
+      case "task":
+        PollWorkerTask.encode(message.frame.value, writer.uint32(18).fork()).join();
+        break;
+      case "cancelTask":
+        PollWorkerTaskCancelTask.encode(message.frame.value, writer.uint32(26).fork()).join();
+        break;
+      case "reconnect":
+        PollWorkerTaskReconnect.encode(message.frame.value, writer.uint32(34).fork()).join();
+        break;
+      case "ping":
+        PollWorkerTaskPing.encode(message.frame.value, writer.uint32(42).fork()).join();
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.frame = { $case: "registered", value: PollWorkerTaskRegistered.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.frame = { $case: "task", value: PollWorkerTask.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.frame = { $case: "cancelTask", value: PollWorkerTaskCancelTask.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.frame = { $case: "reconnect", value: PollWorkerTaskReconnect.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.frame = { $case: "ping", value: PollWorkerTaskPing.decode(reader, reader.uint32()) };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskResponse>, I>>(base?: I): PollWorkerTaskResponse {
+    return PollWorkerTaskResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskResponse>, I>>(object: I): PollWorkerTaskResponse {
+    const message = createBasePollWorkerTaskResponse();
+    switch (object.frame?.$case) {
+      case "registered": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "registered", value: PollWorkerTaskRegistered.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "task": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "task", value: PollWorkerTask.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "cancelTask": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "cancelTask", value: PollWorkerTaskCancelTask.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "reconnect": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "reconnect", value: PollWorkerTaskReconnect.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+      case "ping": {
+        if (object.frame?.value !== undefined && object.frame?.value !== null) {
+          message.frame = { $case: "ping", value: PollWorkerTaskPing.fromPartial(object.frame.value) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskRegistered(): PollWorkerTaskRegistered {
+  return {};
+}
+
+export const PollWorkerTaskRegistered: MessageFns<PollWorkerTaskRegistered> = {
+  encode(_: PollWorkerTaskRegistered, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskRegistered {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskRegistered();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskRegistered>, I>>(base?: I): PollWorkerTaskRegistered {
+    return PollWorkerTaskRegistered.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskRegistered>, I>>(_: I): PollWorkerTaskRegistered {
+    const message = createBasePollWorkerTaskRegistered();
+    return message;
+  },
+};
+
+function createBasePollWorkerTask(): PollWorkerTask {
+  return { taskId: "", deadline: undefined, request: undefined };
+}
+
+export const PollWorkerTask: MessageFns<PollWorkerTask> = {
+  encode(message: PollWorkerTask, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.taskId !== "") {
+      writer.uint32(10).string(message.taskId);
+    }
+    if (message.deadline !== undefined) {
+      Timestamp.encode(toTimestamp(message.deadline), writer.uint32(18).fork()).join();
+    }
+    switch (message.request?.$case) {
+      case "waitFor":
+        InvokeWaitForMethodRequest.encode(message.request.value, writer.uint32(26).fork()).join();
+        break;
+      case "execute":
+        InvokeExecuteMethodRequest.encode(message.request.value, writer.uint32(34).fork()).join();
+        break;
+      case "rpc":
+        InvokeWorkerRPCRequest.encode(message.request.value, writer.uint32(42).fork()).join();
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTask {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTask();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.taskId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.deadline = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.request = { $case: "waitFor", value: InvokeWaitForMethodRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.request = { $case: "execute", value: InvokeExecuteMethodRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.request = { $case: "rpc", value: InvokeWorkerRPCRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTask>, I>>(base?: I): PollWorkerTask {
+    return PollWorkerTask.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTask>, I>>(object: I): PollWorkerTask {
+    const message = createBasePollWorkerTask();
+    message.taskId = object.taskId ?? "";
+    message.deadline = object.deadline ?? undefined;
+    switch (object.request?.$case) {
+      case "waitFor": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "waitFor", value: InvokeWaitForMethodRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+      case "execute": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "execute", value: InvokeExecuteMethodRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+      case "rpc": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "rpc", value: InvokeWorkerRPCRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskCancelTask(): PollWorkerTaskCancelTask {
+  return { taskId: "" };
+}
+
+export const PollWorkerTaskCancelTask: MessageFns<PollWorkerTaskCancelTask> = {
+  encode(message: PollWorkerTaskCancelTask, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.taskId !== "") {
+      writer.uint32(10).string(message.taskId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskCancelTask {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskCancelTask();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.taskId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskCancelTask>, I>>(base?: I): PollWorkerTaskCancelTask {
+    return PollWorkerTaskCancelTask.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskCancelTask>, I>>(object: I): PollWorkerTaskCancelTask {
+    const message = createBasePollWorkerTaskCancelTask();
+    message.taskId = object.taskId ?? "";
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskReconnect(): PollWorkerTaskReconnect {
+  return { reason: "" };
+}
+
+export const PollWorkerTaskReconnect: MessageFns<PollWorkerTaskReconnect> = {
+  encode(message: PollWorkerTaskReconnect, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.reason !== "") {
+      writer.uint32(10).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskReconnect {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskReconnect();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.reason = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskReconnect>, I>>(base?: I): PollWorkerTaskReconnect {
+    return PollWorkerTaskReconnect.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskReconnect>, I>>(object: I): PollWorkerTaskReconnect {
+    const message = createBasePollWorkerTaskReconnect();
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBasePollWorkerTaskPing(): PollWorkerTaskPing {
+  return {};
+}
+
+export const PollWorkerTaskPing: MessageFns<PollWorkerTaskPing> = {
+  encode(_: PollWorkerTaskPing, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PollWorkerTaskPing {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePollWorkerTaskPing();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PollWorkerTaskPing>, I>>(base?: I): PollWorkerTaskPing {
+    return PollWorkerTaskPing.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskPing>, I>>(_: I): PollWorkerTaskPing {
+    const message = createBasePollWorkerTaskPing();
+    return message;
+  },
+};
+
+function createBaseDispatchTaskRequest(): DispatchTaskRequest {
+  return {
+    queue: "",
+    fallbackQueue: "",
+    flowId: "",
+    stickyWait: undefined,
+    dispatchWait: undefined,
+    deadline: undefined,
+    taskId: "",
+    request: undefined,
+  };
+}
+
+export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
+  encode(message: DispatchTaskRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.queue !== "") {
+      writer.uint32(10).string(message.queue);
+    }
+    if (message.fallbackQueue !== "") {
+      writer.uint32(18).string(message.fallbackQueue);
+    }
+    if (message.flowId !== "") {
+      writer.uint32(26).string(message.flowId);
+    }
+    if (message.stickyWait !== undefined) {
+      Duration.encode(message.stickyWait, writer.uint32(34).fork()).join();
+    }
+    if (message.dispatchWait !== undefined) {
+      Duration.encode(message.dispatchWait, writer.uint32(42).fork()).join();
+    }
+    if (message.deadline !== undefined) {
+      Timestamp.encode(toTimestamp(message.deadline), writer.uint32(50).fork()).join();
+    }
+    if (message.taskId !== "") {
+      writer.uint32(58).string(message.taskId);
+    }
+    switch (message.request?.$case) {
+      case "waitFor":
+        InvokeWaitForMethodRequest.encode(message.request.value, writer.uint32(66).fork()).join();
+        break;
+      case "execute":
+        InvokeExecuteMethodRequest.encode(message.request.value, writer.uint32(74).fork()).join();
+        break;
+      case "rpc":
+        InvokeWorkerRPCRequest.encode(message.request.value, writer.uint32(82).fork()).join();
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DispatchTaskRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDispatchTaskRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.queue = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.fallbackQueue = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.flowId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.stickyWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dispatchWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.deadline = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.taskId = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.request = { $case: "waitFor", value: InvokeWaitForMethodRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.request = { $case: "execute", value: InvokeExecuteMethodRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.request = { $case: "rpc", value: InvokeWorkerRPCRequest.decode(reader, reader.uint32()) };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<DispatchTaskRequest>, I>>(base?: I): DispatchTaskRequest {
+    return DispatchTaskRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DispatchTaskRequest>, I>>(object: I): DispatchTaskRequest {
+    const message = createBaseDispatchTaskRequest();
+    message.queue = object.queue ?? "";
+    message.fallbackQueue = object.fallbackQueue ?? "";
+    message.flowId = object.flowId ?? "";
+    message.stickyWait = (object.stickyWait !== undefined && object.stickyWait !== null)
+      ? Duration.fromPartial(object.stickyWait)
+      : undefined;
+    message.dispatchWait = (object.dispatchWait !== undefined && object.dispatchWait !== null)
+      ? Duration.fromPartial(object.dispatchWait)
+      : undefined;
+    message.deadline = object.deadline ?? undefined;
+    message.taskId = object.taskId ?? "";
+    switch (object.request?.$case) {
+      case "waitFor": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "waitFor", value: InvokeWaitForMethodRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+      case "execute": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "execute", value: InvokeExecuteMethodRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+      case "rpc": {
+        if (object.request?.value !== undefined && object.request?.value !== null) {
+          message.request = { $case: "rpc", value: InvokeWorkerRPCRequest.fromPartial(object.request.value) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBaseDispatchTaskResponse(): DispatchTaskResponse {
+  return { output: undefined, servedByAppWorkerId: "" };
+}
+
+export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
+  encode(message: DispatchTaskResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    switch (message.output?.$case) {
+      case "waitFor":
+        InvokeWaitForMethodOutput.encode(message.output.value, writer.uint32(10).fork()).join();
+        break;
+      case "execute":
+        InvokeExecuteMethodOutput.encode(message.output.value, writer.uint32(18).fork()).join();
+        break;
+      case "rpc":
+        InvokeWorkerRPCResponse.encode(message.output.value, writer.uint32(26).fork()).join();
+        break;
+      case "workerError":
+        WorkerErrorResponse.encode(message.output.value, writer.uint32(34).fork()).join();
+        break;
+      case "dispatchError":
+        DispatchTaskError.encode(message.output.value, writer.uint32(42).fork()).join();
+        break;
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(50).string(message.servedByAppWorkerId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DispatchTaskResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDispatchTaskResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.output = { $case: "waitFor", value: InvokeWaitForMethodOutput.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.output = { $case: "execute", value: InvokeExecuteMethodOutput.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.output = { $case: "rpc", value: InvokeWorkerRPCResponse.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.output = { $case: "workerError", value: WorkerErrorResponse.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.output = { $case: "dispatchError", value: DispatchTaskError.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<DispatchTaskResponse>, I>>(base?: I): DispatchTaskResponse {
+    return DispatchTaskResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DispatchTaskResponse>, I>>(object: I): DispatchTaskResponse {
+    const message = createBaseDispatchTaskResponse();
+    switch (object.output?.$case) {
+      case "waitFor": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "waitFor", value: InvokeWaitForMethodOutput.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "execute": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "execute", value: InvokeExecuteMethodOutput.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "rpc": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "rpc", value: InvokeWorkerRPCResponse.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "workerError": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "workerError", value: WorkerErrorResponse.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "dispatchError": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "dispatchError", value: DispatchTaskError.fromPartial(object.output.value) };
+        }
+        break;
+      }
+    }
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
+    return message;
+  },
+};
+
+function createBaseDispatchTaskError(): DispatchTaskError {
+  return { reason: 0, detail: "" };
+}
+
+export const DispatchTaskError: MessageFns<DispatchTaskError> = {
+  encode(message: DispatchTaskError, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.reason !== 0) {
+      writer.uint32(8).int32(message.reason);
+    }
+    if (message.detail !== "") {
+      writer.uint32(18).string(message.detail);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DispatchTaskError {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDispatchTaskError();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.reason = reader.int32() as any;
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.detail = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<DispatchTaskError>, I>>(base?: I): DispatchTaskError {
+    return DispatchTaskError.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DispatchTaskError>, I>>(object: I): DispatchTaskError {
+    const message = createBaseDispatchTaskError();
+    message.reason = object.reason ?? 0;
+    message.detail = object.detail ?? "";
     return message;
   },
 };
@@ -3625,7 +5039,7 @@ export const AttributeStoreNames: MessageFns<AttributeStoreNames> = {
 };
 
 function createBaseWorkerTarget(): WorkerTarget {
-  return { address: "", isHeadlessAddress: false };
+  return { address: "", isHeadlessAddress: false, isPullMode: false };
 }
 
 export const WorkerTarget: MessageFns<WorkerTarget> = {
@@ -3635,6 +5049,9 @@ export const WorkerTarget: MessageFns<WorkerTarget> = {
     }
     if (message.isHeadlessAddress !== false) {
       writer.uint32(16).bool(message.isHeadlessAddress);
+    }
+    if (message.isPullMode !== false) {
+      writer.uint32(24).bool(message.isPullMode);
     }
     return writer;
   },
@@ -3662,6 +5079,14 @@ export const WorkerTarget: MessageFns<WorkerTarget> = {
           message.isHeadlessAddress = reader.bool();
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.isPullMode = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3678,6 +5103,7 @@ export const WorkerTarget: MessageFns<WorkerTarget> = {
     const message = createBaseWorkerTarget();
     message.address = object.address ?? "";
     message.isHeadlessAddress = object.isHeadlessAddress ?? false;
+    message.isPullMode = object.isPullMode ?? false;
     return message;
   },
 };
@@ -14835,6 +16261,7 @@ function createBaseContinueAsNewDump(): ContinueAsNewDump {
     staleSkipTimers: [],
     attributes: [],
     pendingAttributeSyncItems: [],
+    dexTaskQueue: "",
   };
 }
 
@@ -14863,6 +16290,9 @@ export const ContinueAsNewDump: MessageFns<ContinueAsNewDump> = {
     }
     for (const v of message.pendingAttributeSyncItems) {
       AttributeSyncItem.encode(v!, writer.uint32(66).fork()).join();
+    }
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(74).string(message.dexTaskQueue);
     }
     return writer;
   },
@@ -14941,6 +16371,14 @@ export const ContinueAsNewDump: MessageFns<ContinueAsNewDump> = {
           message.pendingAttributeSyncItems.push(AttributeSyncItem.decode(reader, reader.uint32()));
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -14973,6 +16411,7 @@ export const ContinueAsNewDump: MessageFns<ContinueAsNewDump> = {
     message.attributes = object.attributes?.map((e) => KV.fromPartial(e)) || [];
     message.pendingAttributeSyncItems =
       object.pendingAttributeSyncItems?.map((e) => AttributeSyncItem.fromPartial(e)) || [];
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
     return message;
   },
 };
@@ -15518,7 +16957,15 @@ export const BlobStoreCleanupWorkflowOutput: MessageFns<BlobStoreCleanupWorkflow
 };
 
 function createBaseInvokeWaitForMethodActivityInput(): InvokeWaitForMethodActivityInput {
-  return { workerTarget: undefined, request: undefined, tenantId: "", tenantClaims: {} };
+  return {
+    workerTarget: undefined,
+    request: undefined,
+    tenantId: "",
+    tenantClaims: {},
+    dexTaskQueue: "",
+    dispatchWait: undefined,
+    stickyWait: undefined,
+  };
 }
 
 export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodActivityInput> = {
@@ -15536,6 +16983,15 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
       InvokeWaitForMethodActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
         .join();
     });
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(42).string(message.dexTaskQueue);
+    }
+    if (message.dispatchWait !== undefined) {
+      Duration.encode(message.dispatchWait, writer.uint32(50).fork()).join();
+    }
+    if (message.stickyWait !== undefined) {
+      Duration.encode(message.stickyWait, writer.uint32(58).fork()).join();
+    }
     return writer;
   },
 
@@ -15581,6 +17037,30 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
           }
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.dispatchWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.stickyWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15615,6 +17095,13 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
       },
       {},
     );
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
+    message.dispatchWait = (object.dispatchWait !== undefined && object.dispatchWait !== null)
+      ? Duration.fromPartial(object.dispatchWait)
+      : undefined;
+    message.stickyWait = (object.stickyWait !== undefined && object.stickyWait !== null)
+      ? Duration.fromPartial(object.stickyWait)
+      : undefined;
     return message;
   },
 };
@@ -15687,13 +17174,16 @@ export const InvokeWaitForMethodActivityInput_TenantClaimsEntry: MessageFns<
 };
 
 function createBaseInvokeWaitForMethodActivityOutput(): InvokeWaitForMethodActivityOutput {
-  return { response: undefined };
+  return { response: undefined, servedByAppWorkerId: "" };
 }
 
 export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodActivityOutput> = {
   encode(message: InvokeWaitForMethodActivityOutput, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.response !== undefined) {
       InvokeWaitForMethodResponse.encode(message.response, writer.uint32(10).fork()).join();
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(18).string(message.servedByAppWorkerId);
     }
     return writer;
   },
@@ -15711,6 +17201,14 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
           }
 
           message.response = InvokeWaitForMethodResponse.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
           continue;
         }
       }
@@ -15734,12 +17232,21 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
     message.response = (object.response !== undefined && object.response !== null)
       ? InvokeWaitForMethodResponse.fromPartial(object.response)
       : undefined;
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
     return message;
   },
 };
 
 function createBaseInvokeExecuteMethodActivityInput(): InvokeExecuteMethodActivityInput {
-  return { workerTarget: undefined, request: undefined, tenantId: "", tenantClaims: {} };
+  return {
+    workerTarget: undefined,
+    request: undefined,
+    tenantId: "",
+    tenantClaims: {},
+    dexTaskQueue: "",
+    dispatchWait: undefined,
+    stickyWait: undefined,
+  };
 }
 
 export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodActivityInput> = {
@@ -15757,6 +17264,15 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
       InvokeExecuteMethodActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
         .join();
     });
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(42).string(message.dexTaskQueue);
+    }
+    if (message.dispatchWait !== undefined) {
+      Duration.encode(message.dispatchWait, writer.uint32(50).fork()).join();
+    }
+    if (message.stickyWait !== undefined) {
+      Duration.encode(message.stickyWait, writer.uint32(58).fork()).join();
+    }
     return writer;
   },
 
@@ -15802,6 +17318,30 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
           }
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.dispatchWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.stickyWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15836,6 +17376,13 @@ export const InvokeExecuteMethodActivityInput: MessageFns<InvokeExecuteMethodAct
       },
       {},
     );
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
+    message.dispatchWait = (object.dispatchWait !== undefined && object.dispatchWait !== null)
+      ? Duration.fromPartial(object.dispatchWait)
+      : undefined;
+    message.stickyWait = (object.stickyWait !== undefined && object.stickyWait !== null)
+      ? Duration.fromPartial(object.stickyWait)
+      : undefined;
     return message;
   },
 };
@@ -16083,13 +17630,16 @@ export const InternalLocalStepActivityFailure: MessageFns<InternalLocalStepActiv
 };
 
 function createBaseInvokeExecuteMethodActivityOutput(): InvokeExecuteMethodActivityOutput {
-  return { response: undefined };
+  return { response: undefined, servedByAppWorkerId: "" };
 }
 
 export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodActivityOutput> = {
   encode(message: InvokeExecuteMethodActivityOutput, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.response !== undefined) {
       InvokeExecuteMethodResponse.encode(message.response, writer.uint32(10).fork()).join();
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(18).string(message.servedByAppWorkerId);
     }
     return writer;
   },
@@ -16107,6 +17657,14 @@ export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodAc
           }
 
           message.response = InvokeExecuteMethodResponse.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
           continue;
         }
       }
@@ -16130,6 +17688,7 @@ export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodAc
     message.response = (object.response !== undefined && object.response !== null)
       ? InvokeExecuteMethodResponse.fromPartial(object.response)
       : undefined;
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
     return message;
   },
 };
@@ -16239,7 +17798,15 @@ export const DumpFlowForContinueAsNewActivityOutput: MessageFns<DumpFlowForConti
 };
 
 function createBaseInvokeWorkerRPCActivityInput(): InvokeWorkerRPCActivityInput {
-  return { rpcPrep: undefined, request: undefined, tenantId: "", tenantClaims: {} };
+  return {
+    rpcPrep: undefined,
+    request: undefined,
+    tenantId: "",
+    tenantClaims: {},
+    dexTaskQueue: "",
+    dispatchWait: undefined,
+    stickyWait: undefined,
+  };
 }
 
 export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInput> = {
@@ -16257,6 +17824,15 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
       InvokeWorkerRPCActivityInput_TenantClaimsEntry.encode({ key: key as any, value }, writer.uint32(34).fork())
         .join();
     });
+    if (message.dexTaskQueue !== "") {
+      writer.uint32(42).string(message.dexTaskQueue);
+    }
+    if (message.dispatchWait !== undefined) {
+      Duration.encode(message.dispatchWait, writer.uint32(50).fork()).join();
+    }
+    if (message.stickyWait !== undefined) {
+      Duration.encode(message.stickyWait, writer.uint32(58).fork()).join();
+    }
     return writer;
   },
 
@@ -16302,6 +17878,30 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
           }
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dexTaskQueue = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.dispatchWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.stickyWait = Duration.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -16332,6 +17932,13 @@ export const InvokeWorkerRPCActivityInput: MessageFns<InvokeWorkerRPCActivityInp
       },
       {},
     );
+    message.dexTaskQueue = object.dexTaskQueue ?? "";
+    message.dispatchWait = (object.dispatchWait !== undefined && object.dispatchWait !== null)
+      ? Duration.fromPartial(object.dispatchWait)
+      : undefined;
+    message.stickyWait = (object.stickyWait !== undefined && object.stickyWait !== null)
+      ? Duration.fromPartial(object.stickyWait)
+      : undefined;
     return message;
   },
 };
@@ -16404,7 +18011,7 @@ export const InvokeWorkerRPCActivityInput_TenantClaimsEntry: MessageFns<
 };
 
 function createBaseInvokeWorkerRPCActivityOutput(): InvokeWorkerRPCActivityOutput {
-  return { response: undefined, requestId: "" };
+  return { response: undefined, requestId: "", servedByAppWorkerId: "" };
 }
 
 export const InvokeWorkerRPCActivityOutput: MessageFns<InvokeWorkerRPCActivityOutput> = {
@@ -16414,6 +18021,9 @@ export const InvokeWorkerRPCActivityOutput: MessageFns<InvokeWorkerRPCActivityOu
     }
     if (message.requestId !== "") {
       writer.uint32(18).string(message.requestId);
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(26).string(message.servedByAppWorkerId);
     }
     return writer;
   },
@@ -16441,6 +18051,14 @@ export const InvokeWorkerRPCActivityOutput: MessageFns<InvokeWorkerRPCActivityOu
           message.requestId = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -16461,6 +18079,7 @@ export const InvokeWorkerRPCActivityOutput: MessageFns<InvokeWorkerRPCActivityOu
       ? InvokeWorkerRPCResponse.fromPartial(object.response)
       : undefined;
     message.requestId = object.requestId ?? "";
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
     return message;
   },
 };
@@ -19632,6 +21251,113 @@ export const WorkerServiceClient = makeGenericClientConstructor(
 ) as unknown as {
   new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): WorkerServiceClient;
   service: typeof WorkerServiceService;
+  serviceName: string;
+};
+
+/** Hosted by Dex server; pull Workers open one queue stream for at most one task at a time. */
+export type WorkerTaskServiceService = typeof WorkerTaskServiceService;
+export const WorkerTaskServiceService = {
+  /** Exchanges registration, task, result, and control frames for one Dex task queue. */
+  pollWorkerTask: {
+    path: "/dex.WorkerTaskService/PollWorkerTask" as const,
+    requestStream: true as const,
+    responseStream: true as const,
+    requestSerialize: (value: PollWorkerTaskRequest): Buffer =>
+      Buffer.from(PollWorkerTaskRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PollWorkerTaskRequest => PollWorkerTaskRequest.decode(value),
+    responseSerialize: (value: PollWorkerTaskResponse): Buffer =>
+      Buffer.from(PollWorkerTaskResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): PollWorkerTaskResponse => PollWorkerTaskResponse.decode(value),
+  },
+} as const;
+
+export interface WorkerTaskServiceServer extends UntypedServiceImplementation {
+  /** Exchanges registration, task, result, and control frames for one Dex task queue. */
+  pollWorkerTask: handleBidiStreamingCall<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+}
+
+export interface WorkerTaskServiceClient extends Client {
+  /** Exchanges registration, task, result, and control frames for one Dex task queue. */
+  pollWorkerTask(): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+  pollWorkerTask(options: Partial<CallOptions>): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+  pollWorkerTask(
+    metadata: Metadata,
+    options?: Partial<CallOptions>,
+  ): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+}
+
+export const WorkerTaskServiceClient = makeGenericClientConstructor(
+  WorkerTaskServiceService,
+  "dex.WorkerTaskService",
+) as unknown as {
+  new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): WorkerTaskServiceClient;
+  service: typeof WorkerTaskServiceService;
+  serviceName: string;
+};
+
+/** Hosted on the internal listener; server instances route tasks and Worker streams to queue owners. */
+export type MatchingServiceService = typeof MatchingServiceService;
+export const MatchingServiceService = {
+  /** Streams Worker output frames and a final result or dispatch error. */
+  dispatchTask: {
+    path: "/dex.MatchingService/DispatchTask" as const,
+    requestStream: false as const,
+    responseStream: true as const,
+    requestSerialize: (value: DispatchTaskRequest): Buffer => Buffer.from(DispatchTaskRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): DispatchTaskRequest => DispatchTaskRequest.decode(value),
+    responseSerialize: (value: DispatchTaskResponse): Buffer =>
+      Buffer.from(DispatchTaskResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): DispatchTaskResponse => DispatchTaskResponse.decode(value),
+  },
+  /** Proxies a Worker's queue stream from its receiving instance to the queue owner. */
+  forwardPollWorkerTask: {
+    path: "/dex.MatchingService/ForwardPollWorkerTask" as const,
+    requestStream: true as const,
+    responseStream: true as const,
+    requestSerialize: (value: PollWorkerTaskRequest): Buffer =>
+      Buffer.from(PollWorkerTaskRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PollWorkerTaskRequest => PollWorkerTaskRequest.decode(value),
+    responseSerialize: (value: PollWorkerTaskResponse): Buffer =>
+      Buffer.from(PollWorkerTaskResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): PollWorkerTaskResponse => PollWorkerTaskResponse.decode(value),
+  },
+} as const;
+
+export interface MatchingServiceServer extends UntypedServiceImplementation {
+  /** Streams Worker output frames and a final result or dispatch error. */
+  dispatchTask: handleServerStreamingCall<DispatchTaskRequest, DispatchTaskResponse>;
+  /** Proxies a Worker's queue stream from its receiving instance to the queue owner. */
+  forwardPollWorkerTask: handleBidiStreamingCall<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+}
+
+export interface MatchingServiceClient extends Client {
+  /** Streams Worker output frames and a final result or dispatch error. */
+  dispatchTask(
+    request: DispatchTaskRequest,
+    options?: Partial<CallOptions>,
+  ): ClientReadableStream<DispatchTaskResponse>;
+  dispatchTask(
+    request: DispatchTaskRequest,
+    metadata?: Metadata,
+    options?: Partial<CallOptions>,
+  ): ClientReadableStream<DispatchTaskResponse>;
+  /** Proxies a Worker's queue stream from its receiving instance to the queue owner. */
+  forwardPollWorkerTask(): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+  forwardPollWorkerTask(
+    options: Partial<CallOptions>,
+  ): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+  forwardPollWorkerTask(
+    metadata: Metadata,
+    options?: Partial<CallOptions>,
+  ): ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
+}
+
+export const MatchingServiceClient = makeGenericClientConstructor(
+  MatchingServiceService,
+  "dex.MatchingService",
+) as unknown as {
+  new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): MatchingServiceClient;
+  service: typeof MatchingServiceService;
   serviceName: string;
 };
 

@@ -110,7 +110,7 @@ public enum PendingStepMethodPhase
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(10);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(12);
   }
 
   private static final PendingStepMethodPhase[] VALUES = values();

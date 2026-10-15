@@ -115,7 +115,7 @@ public enum ActiveStepSearchMode
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(4);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(6);
   }
 
   private static final ActiveStepSearchMode[] VALUES = values();

@@ -120,6 +120,182 @@ service WorkerService {
   rpc InvokeWorkerRPC(InvokeWorkerRPCRequest) returns (InvokeWorkerRPCResponse);
 }
 
+// Hosted by Dex server; pull Workers open one queue stream for at most one task at a time.
+service WorkerTaskService {
+  // Exchanges registration, task, result, and control frames for one Dex task queue.
+  rpc PollWorkerTask(stream PollWorkerTaskRequest) returns (stream PollWorkerTaskResponse);
+}
+
+// Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+service MatchingService {
+  // Streams Worker output frames and a final result or dispatch error.
+  rpc DispatchTask(DispatchTaskRequest) returns (stream DispatchTaskResponse);
+  // Proxies a Worker's queue stream from its receiving instance to the queue owner.
+  rpc ForwardPollWorkerTask(stream PollWorkerTaskRequest) returns (stream PollWorkerTaskResponse);
+}
+
+// Carries one Worker frame on a pull stream. Register must be the first frame.
+message PollWorkerTaskRequest {
+  oneof frame {
+    // Starts this queue stream; no other frame may precede registration.
+    PollWorkerTaskRegister register = 1;
+    // Reports task progress or its final result.
+    PollWorkerTaskFrame task_frame = 2;
+    // Declines an assigned task when the Worker has no capacity.
+    PollWorkerTaskReject reject = 3;
+    // Acknowledges a server liveness check.
+    PollWorkerTaskPong pong = 4;
+  }
+}
+
+// Registers one queue stream for a Worker process.
+message PollWorkerTaskRegister {
+  // Names this stream's queue: app_worker_id or one declared flow_type.
+  string queue = 1;
+  // Identifies this Worker process across reconnects; a restart uses a new ID.
+  string app_worker_id = 2;
+  // Lists the Flow types this Worker can execute.
+  repeated string flow_types = 3;
+  // Identifies the SDK implementation for diagnostics.
+  string sdk_name = 4;
+  // Identifies the SDK release for diagnostics.
+  string sdk_version = 5;
+}
+
+// Carries a task's heartbeat, stream write, result, or Worker error.
+message PollWorkerTaskFrame {
+  // Matches the task_id sent by Dex on this stream.
+  string task_id = 1;
+  oneof output {
+    // Includes heartbeat, stream write, and final result variants.
+    InvokeWaitForMethodOutput wait_for = 2;
+    // Includes heartbeat, stream write, and final result variants.
+    InvokeExecuteMethodOutput execute = 3;
+    // Completes an RPC task.
+    InvokeWorkerRPCResponse rpc = 4;
+    // Ends the task with a Worker error.
+    WorkerErrorResponse worker_error = 5;
+  }
+}
+
+// Declines a task so Dex can assign it to another available Worker stream.
+message PollWorkerTaskReject {
+  // Matches the declined task on this stream.
+  string task_id = 1;
+  // Explains why the Worker cannot accept the task.
+  PollWorkerTaskRejectReason reason = 2;
+}
+
+// Explains why a Worker declined a task.
+enum PollWorkerTaskRejectReason {
+  // No rejection reason was supplied.
+  POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED = 0;
+  // All Worker execution slots are occupied.
+  POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1;
+}
+
+// Acknowledges a server Ping on the same stream.
+message PollWorkerTaskPong {}
+
+// Carries one server frame on a pull stream.
+message PollWorkerTaskResponse {
+  oneof frame {
+    // Confirms that Dex accepted this stream's queue registration.
+    PollWorkerTaskRegistered registered = 1;
+    // Assigns work to the registered Worker.
+    PollWorkerTask task = 2;
+    // Requests cancellation of the assigned task.
+    PollWorkerTaskCancelTask cancel_task = 3;
+    // Requests a reconnect after the current task finishes.
+    PollWorkerTaskReconnect reconnect = 4;
+    // Checks whether an idle stream remains responsive.
+    PollWorkerTaskPing ping = 5;
+  }
+}
+
+// Confirms that Dex accepted the queue registration.
+message PollWorkerTaskRegistered {}
+
+// Assigns one task to this stream until its final result, error, or rejection.
+message PollWorkerTask {
+  // Identifies the assignment for result and cancellation frames.
+  string task_id = 1;
+  // Bounds task execution, including Worker processing time.
+  google.protobuf.Timestamp deadline = 2;
+  oneof request {
+    // Runs a Step's WaitFor method.
+    InvokeWaitForMethodRequest wait_for = 3;
+    // Runs a Step's Execute method.
+    InvokeExecuteMethodRequest execute = 4;
+    // Runs a Worker RPC.
+    InvokeWorkerRPCRequest rpc = 5;
+  }
+}
+
+// Requests cancellation of the task currently assigned to this stream.
+message PollWorkerTaskCancelTask {
+  // Matches the task currently assigned on this stream.
+  string task_id = 1;
+}
+
+// Asks the Worker to finish its task and reconnect for queue ownership changes or shutdown.
+message PollWorkerTaskReconnect {
+  // Explains why Dex needs a new queue stream.
+  string reason = 1;
+}
+
+// Checks that an idle pull stream remains responsive.
+message PollWorkerTaskPing {}
+
+// Describes one task dispatched to a Dex task queue.
+message DispatchTaskRequest {
+  // Selects the initial queue: a sticky Worker ID or a Flow type.
+  string queue = 1;
+  // Names the Flow type queue after a sticky wait expires.
+  string fallback_queue = 2;
+  // Identifies the Flow for Worker affinity within a Flow type queue.
+  string flow_id = 3;
+  // Limits waiting on a sticky queue before trying fallback_queue.
+  google.protobuf.Duration sticky_wait = 4;
+  // Limits total waiting for a Worker to accept the task.
+  google.protobuf.Duration dispatch_wait = 5;
+  // Bounds task execution, including Worker processing time.
+  google.protobuf.Timestamp deadline = 6;
+  // Identifies this dispatch across Worker and server streams.
+  string task_id = 7;
+  oneof request {
+    InvokeWaitForMethodRequest wait_for = 8;
+    InvokeExecuteMethodRequest execute = 9;
+    InvokeWorkerRPCRequest rpc = 10;
+  }
+}
+
+// Relays Worker output, then ends with a result, Worker error, or dispatch error.
+message DispatchTaskResponse {
+  oneof output {
+    InvokeWaitForMethodOutput wait_for = 1;
+    InvokeExecuteMethodOutput execute = 2;
+    InvokeWorkerRPCResponse rpc = 3;
+    WorkerErrorResponse worker_error = 4;
+    DispatchTaskError dispatch_error = 5;
+  }
+  // Identifies the Worker that produced the final result or Worker error.
+  string served_by_app_worker_id = 6;
+}
+
+// Reports a failure before Dex receives a Worker result.
+message DispatchTaskError {
+  DispatchTaskErrorReason reason = 1;
+  string detail = 2;
+}
+
+// Distinguishes absence of a Worker from loss of an assigned Worker.
+enum DispatchTaskErrorReason {
+  DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0;
+  DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1;
+  DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2;
+}
+
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
 // TenantAdminService manages the tenants of a multi-tenant server. Only operator principals may call it.
 // Every RPC names its tenant explicitly and never returns Flow data.
@@ -345,6 +521,8 @@ message WorkerTarget {
   // Plaintext gRPC dial target, not an HTTP URL.
   string address = 1;
   bool is_headless_address = 2;
+  // Routes work through a connected pull Worker; mutually exclusive with address.
+  bool is_pull_mode = 3;
 }
 
 message StartFlowRequest {
@@ -1323,6 +1501,8 @@ message ContinueAsNewDump {
   // Stored values only; index metadata remains in backend search attributes.
   repeated KV attributes = 7;
   repeated AttributeSyncItem pending_attribute_sync_items = 8;
+  // Retains the last serving Worker's sticky queue across a Flow continuation.
+  string dex_task_queue = 9;
 }
 
 // --- Internal serializable types (history / query / activity) ---
@@ -1388,10 +1568,18 @@ message InvokeWaitForMethodActivityInput {
   string tenant_id = 3;
   // Claims of the Flow's tenant principal; empty in single-tenant mode.
   map<string, string> tenant_claims = 4;
+  // Selects the sticky Worker queue; empty selects the request's Flow type queue.
+  string dex_task_queue = 5;
+  // Limits total waiting for a pull Worker to accept this attempt.
+  google.protobuf.Duration dispatch_wait = 6;
+  // Limits waiting on the sticky queue before the Flow type queue.
+  google.protobuf.Duration sticky_wait = 7;
 }
 
 message InvokeWaitForMethodActivityOutput {
   InvokeWaitForMethodResponse response = 1;
+  // Identifies the Worker that completed this pull task for sticky routing.
+  string served_by_app_worker_id = 2;
 }
 
 message InvokeExecuteMethodActivityInput {
@@ -1401,6 +1589,12 @@ message InvokeExecuteMethodActivityInput {
   string tenant_id = 3;
   // Claims of the Flow's tenant principal; empty in single-tenant mode.
   map<string, string> tenant_claims = 4;
+  // Selects the sticky Worker queue; empty selects the request's Flow type queue.
+  string dex_task_queue = 5;
+  // Limits total waiting for a pull Worker to accept this attempt.
+  google.protobuf.Duration dispatch_wait = 6;
+  // Limits waiting on the sticky queue before the Flow type queue.
+  google.protobuf.Duration sticky_wait = 7;
 }
 
 message RecoveryErrorInfo {
@@ -1418,6 +1612,8 @@ message InternalLocalStepActivityFailure {
 
 message InvokeExecuteMethodActivityOutput {
   InvokeExecuteMethodResponse response = 1;
+  // Identifies the Worker that completed this pull task for sticky routing.
+  string served_by_app_worker_id = 2;
 }
 
 message DumpFlowForContinueAsNewActivityInput {
@@ -1435,12 +1631,20 @@ message InvokeWorkerRPCActivityInput {
   string tenant_id = 3;
   // Claims of the Flow's tenant principal; empty in single-tenant mode.
   map<string, string> tenant_claims = 4;
+  // Selects the sticky Worker queue; empty selects the request's Flow type queue.
+  string dex_task_queue = 5;
+  // Limits total waiting for a pull Worker to accept this attempt.
+  google.protobuf.Duration dispatch_wait = 6;
+  // Limits waiting on the sticky queue before the Flow type queue.
+  google.protobuf.Duration sticky_wait = 7;
 }
 
 message InvokeWorkerRPCActivityOutput {
   InvokeWorkerRPCResponse response = 1;
   // Correlates this local Activity result with its InvokeRpc Update.
   string request_id = 2;
+  // Identifies the Worker that completed this pull task for sticky routing.
+  string served_by_app_worker_id = 3;
 }
 
 message CleanupBlobStoreActivityInput {

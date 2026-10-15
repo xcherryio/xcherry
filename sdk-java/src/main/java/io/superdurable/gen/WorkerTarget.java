@@ -107,6 +107,21 @@ private static final long serialVersionUID = 0L;
     return isHeadlessAddress_;
   }
 
+  public static final int IS_PULL_MODE_FIELD_NUMBER = 3;
+  private boolean isPullMode_ = false;
+  /**
+   * <pre>
+   * Routes work through a connected pull Worker; mutually exclusive with address.
+   * </pre>
+   *
+   * <code>bool is_pull_mode = 3;</code>
+   * @return The isPullMode.
+   */
+  @java.lang.Override
+  public boolean getIsPullMode() {
+    return isPullMode_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -127,6 +142,9 @@ private static final long serialVersionUID = 0L;
     if (isHeadlessAddress_ != false) {
       output.writeBool(2, isHeadlessAddress_);
     }
+    if (isPullMode_ != false) {
+      output.writeBool(3, isPullMode_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -137,6 +155,10 @@ private static final long serialVersionUID = 0L;
     if (isHeadlessAddress_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(2, isHeadlessAddress_);
+    }
+    if (isPullMode_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(3, isPullMode_);
     }
     return size;
   }
@@ -166,6 +188,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getAddress())) return false;
     if (getIsHeadlessAddress()
         != other.getIsHeadlessAddress()) return false;
+    if (getIsPullMode()
+        != other.getIsPullMode()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -182,6 +206,9 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + IS_HEADLESS_ADDRESS_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getIsHeadlessAddress());
+    hash = (37 * hash) + IS_PULL_MODE_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getIsPullMode());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -315,6 +342,7 @@ private static final long serialVersionUID = 0L;
       bitField0_ = 0;
       address_ = "";
       isHeadlessAddress_ = false;
+      isPullMode_ = false;
       return this;
     }
 
@@ -354,6 +382,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000002) != 0)) {
         result.isHeadlessAddress_ = isHeadlessAddress_;
       }
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.isPullMode_ = isPullMode_;
+      }
     }
 
     @java.lang.Override
@@ -375,6 +406,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getIsHeadlessAddress() != false) {
         setIsHeadlessAddress(other.getIsHeadlessAddress());
+      }
+      if (other.getIsPullMode() != false) {
+        setIsPullMode(other.getIsPullMode());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -412,6 +446,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 16
+            case 24: {
+              isPullMode_ = input.readBool();
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 24
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -549,6 +588,50 @@ private static final long serialVersionUID = 0L;
     public Builder clearIsHeadlessAddress() {
       bitField0_ = (bitField0_ & ~0x00000002);
       isHeadlessAddress_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean isPullMode_ ;
+    /**
+     * <pre>
+     * Routes work through a connected pull Worker; mutually exclusive with address.
+     * </pre>
+     *
+     * <code>bool is_pull_mode = 3;</code>
+     * @return The isPullMode.
+     */
+    @java.lang.Override
+    public boolean getIsPullMode() {
+      return isPullMode_;
+    }
+    /**
+     * <pre>
+     * Routes work through a connected pull Worker; mutually exclusive with address.
+     * </pre>
+     *
+     * <code>bool is_pull_mode = 3;</code>
+     * @param value The isPullMode to set.
+     * @return This builder for chaining.
+     */
+    public Builder setIsPullMode(boolean value) {
+
+      isPullMode_ = value;
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Routes work through a connected pull Worker; mutually exclusive with address.
+     * </pre>
+     *
+     * <code>bool is_pull_mode = 3;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearIsPullMode() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      isPullMode_ = false;
       onChanged();
       return this;
     }

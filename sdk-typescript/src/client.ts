@@ -1325,7 +1325,7 @@ function mapFlowConfig(
     workerTarget:
       workerTarget === undefined
         ? undefined
-        : { address: workerTarget.address, isHeadlessAddress: workerTarget.headless ?? false },
+        : { address: workerTarget.address, isHeadlessAddress: workerTarget.headless ?? false, isPullMode: false },
   };
 }
 
