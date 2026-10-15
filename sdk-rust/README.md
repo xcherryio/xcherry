@@ -312,15 +312,17 @@ type names must be unique within a Dex server. The task limit defaults to the
 CPU count, and each queue keeps one idle stream by default. A stream runs one
 task at a time. At capacity, the Worker rejects an assignment for reassignment.
 The generated app Worker ID uses the first nonempty `DEX_WORKER_INSTANCE`,
-`POD_NAME`, or `HOSTNAME` value, or the system hostname, plus eight random
-base32 characters. An override must identify one Worker process, change after
-restart, contain 1–63 ASCII letters, digits, dots, underscores, or hyphens,
-and differ from every registered Flow type.
+`POD_NAME`, or `HOSTNAME` value, or the system hostname (falling back to
+`worker`), plus eight random base32 characters. An override must identify one
+Worker process, change after restart, contain 1–63 ASCII letters, digits, dots,
+underscores, or hyphens, and differ from every registered Flow type.
 
 The Worker reconnects after stream failures and drains an active task before a
 server-directed reconnect. Registration failures back off; an older server
 without pull support logs one explicit error and retries. `Worker::start`
 returns startup errors, while later polling failures are logged and retried.
+A permanent registration error waits one minute; a later transient failure
+restarts exponential backoff at 100 ms, doubling up to five seconds with jitter.
 The Worker may hold up to
 `(1 + number of Flow types) * (idleStreamsPerQueue + maxConcurrentTasks)`
 streams because busy streams are kept alongside each queue's idle streams.

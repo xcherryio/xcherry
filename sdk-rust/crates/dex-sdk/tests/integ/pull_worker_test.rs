@@ -436,6 +436,10 @@ fn pull_worker_test_end_to_end() {
             .single_output::<String>()
             .expect("pull result")
     );
+    assert!(matches!(
+        observations.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 
     let push = DexDevTestEnvironment::start(Registry::new().register(BasicWorkflow::new()));
     let push_id = flow_id("rust-push-alongside-pull");
