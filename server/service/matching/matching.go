@@ -10,6 +10,7 @@
 package matching
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"io"
@@ -57,14 +58,18 @@ type Engine struct {
 }
 
 type queueState struct {
-	mu       sync.Mutex
-	idle     []*workerStream
-	streams  map[*workerStream]struct{}
-	affinity map[string]affinityEntry
-	changed  chan struct{}
+	mu            sync.Mutex
+	idle          []*workerStream
+	streams       map[*workerStream]struct{}
+	affinity      map[string]*list.Element
+	affinityOrder *list.List
+	changed       chan struct{}
+	users         int
+	isDeleted     bool
 }
 
 type affinityEntry struct {
+	flowID   string
 	workerID string
 	expires  time.Time
 }
@@ -75,13 +80,24 @@ type workerStream struct {
 	transport        pollTransport
 	sendMu           sync.Mutex
 	mu               sync.Mutex
-	current          chan *dexpb.PollWorkerTaskRequest
-	currentTaskID    string
+	current          *taskAssignment
 	isBusy           bool
 	isClosing        bool
 	hasReconnectSent bool
+	reconnectSent    chan struct{}
 	done             chan struct{}
 	closeOnce        sync.Once
+}
+
+type taskAssignment struct {
+	frames    chan *dexpb.PollWorkerTaskRequest
+	abandoned chan struct{}
+	taskID    string
+}
+
+type pollResult struct {
+	frame *dexpb.PollWorkerTaskRequest
+	err   error
 }
 
 type pollTransport interface {
@@ -169,11 +185,31 @@ func (e *Engine) watchMembership() {
 }
 
 func (e *Engine) getQueue(name string) *queueState {
-	value, isExistingQueue := e.queues.LoadOrStore(name, &queueState{streams: make(map[*workerStream]struct{}), affinity: make(map[string]affinityEntry), changed: make(chan struct{})})
-	if !isExistingQueue {
-		e.logger.Debug("matching queue created", zap.String("queue", name))
+	for {
+		value, isExistingQueue := e.queues.LoadOrStore(name, &queueState{streams: make(map[*workerStream]struct{}), affinity: make(map[string]*list.Element), affinityOrder: list.New(), changed: make(chan struct{})})
+		queue := value.(*queueState)
+		queue.mu.Lock()
+		if queue.isDeleted {
+			queue.mu.Unlock()
+			continue
+		}
+		queue.users++
+		queue.mu.Unlock()
+		if !isExistingQueue {
+			e.logger.Debug("matching queue created", zap.String("queue", name))
+		}
+		return queue
 	}
-	return value.(*queueState)
+}
+
+func (e *Engine) releaseQueue(name string, queue *queueState) {
+	queue.mu.Lock()
+	queue.users--
+	if queue.users == 0 {
+		queue.isDeleted = true
+		e.queues.CompareAndDelete(name, queue)
+	}
+	queue.mu.Unlock()
 }
 
 func (q *queueState) signal() { close(q.changed); q.changed = make(chan struct{}) }
@@ -218,8 +254,13 @@ func (e *Engine) servePoll(transport pollTransport) error {
 		return err
 	}
 	registration := first.GetRegister()
-	if err := validateRegistration(registration); err != nil {
+	if err := validateRegistration(registration, e.cfg); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	select {
+	case <-e.stop:
+		return status.Error(codes.Unavailable, "matching server is closing")
+	default:
 	}
 	owner, err := e.membership.Lookup(membership.RoleMatching, registration.Queue)
 	if err != nil {
@@ -236,23 +277,58 @@ func (e *Engine) servePoll(transport pollTransport) error {
 	}
 	defer e.releaseStream(registration.AppWorkerId)
 	queue := e.getQueue(registration.Queue)
+	defer e.releaseQueue(registration.Queue, queue)
 	worker := &workerStream{queue: queue, registration: registration, transport: transport, done: make(chan struct{})}
 	queue.mu.Lock()
 	queue.streams[worker] = struct{}{}
 	queue.mu.Unlock()
 	defer worker.disconnect()
+	select {
+	case <-e.stop:
+		<-worker.requestReconnect("matching server is closing")
+		return nil
+	default:
+	}
+	owner, err = e.membership.Lookup(membership.RoleMatching, registration.Queue)
+	if err != nil {
+		return status.Error(codes.Unavailable, err.Error())
+	}
+	if !owner.IsSelf {
+		<-worker.requestReconnect("queue ownership changed")
+		return nil
+	}
 	if err := worker.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{}}}); err != nil {
 		return err
 	}
 	worker.makeIdle()
+	received := make(chan pollResult, 1)
+	go func() {
+		for {
+			frame, recvErr := transport.Recv()
+			select {
+			case received <- pollResult{frame: frame, err: recvErr}:
+			case <-worker.done:
+				return
+			}
+			if recvErr != nil {
+				return
+			}
+		}
+	}()
 	for {
-		frame, err := transport.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+		var result pollResult
+		select {
+		case result = <-received:
+		case <-worker.done:
+			return nil
+		}
+		if result.err != nil {
+			if errors.Is(result.err, io.EOF) {
 				return nil
 			}
-			return err
+			return result.err
 		}
+		frame := result.frame
 		if frame.GetRegister() != nil {
 			return status.Error(codes.InvalidArgument, "duplicate Worker registration")
 		}
@@ -260,27 +336,39 @@ func (e *Engine) servePoll(transport pollTransport) error {
 			continue
 		}
 		worker.mu.Lock()
-		current, taskID := worker.current, worker.currentTaskID
+		current := worker.current
 		worker.mu.Unlock()
 		if current == nil {
-			return status.Error(codes.InvalidArgument, "Worker frame without assigned task")
+			e.logger.Debug("dropping Worker frame without assignment")
+			continue
 		}
 		if taskFrame := frame.GetTaskFrame(); taskFrame != nil {
-			if taskFrame.TaskId != taskID {
-				return status.Error(codes.InvalidArgument, "task ID does not match assignment")
+			if taskFrame.TaskId != current.taskID {
+				e.logger.Debug("dropping Worker frame for another task", zap.String("task_id", taskFrame.TaskId))
+				continue
 			}
 			if taskFrame.Output == nil {
 				return status.Error(codes.InvalidArgument, "task output is required")
 			}
-			current <- frame
+			select {
+			case current.frames <- frame:
+			case <-current.abandoned:
+			}
 			if isFinal(taskFrame) {
 				worker.finishTask()
 			}
 		} else if rejection := frame.GetReject(); rejection != nil {
-			if rejection.TaskId != taskID || rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY {
+			if rejection.TaskId != current.taskID {
+				e.logger.Debug("dropping Worker rejection for another task", zap.String("task_id", rejection.TaskId))
+				continue
+			}
+			if rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY {
 				return status.Error(codes.InvalidArgument, "invalid task rejection")
 			}
-			current <- frame
+			select {
+			case current.frames <- frame:
+			case <-current.abandoned:
+			}
 			worker.finishTask()
 		} else {
 			return status.Error(codes.InvalidArgument, "unknown Worker frame")
@@ -365,7 +453,6 @@ func (w *workerStream) makeIdle() {
 	}
 	w.isBusy = false
 	w.current = nil
-	w.currentTaskID = ""
 	w.mu.Unlock()
 	w.queue.mu.Lock()
 	w.queue.idle = append(w.queue.idle, w)
@@ -378,7 +465,6 @@ func (w *workerStream) finishTask() {
 	isClosing := w.isClosing
 	w.isBusy = false
 	w.current = nil
-	w.currentTaskID = ""
 	w.mu.Unlock()
 	if isClosing {
 		w.requestReconnect("queue ownership changed")
@@ -387,20 +473,50 @@ func (w *workerStream) finishTask() {
 	w.makeIdle()
 }
 
-func (w *workerStream) requestReconnect(reason string) {
+func (w *workerStream) requestReconnect(reason string) <-chan struct{} {
 	w.mu.Lock()
 	w.isClosing = true
 	isBusy := w.isBusy
 	shouldSendReconnect := !isBusy && !w.hasReconnectSent
 	if shouldSendReconnect {
 		w.hasReconnectSent = true
+		w.reconnectSent = make(chan struct{})
 	}
+	reconnectSent := w.reconnectSent
 	w.mu.Unlock()
 	if shouldSendReconnect {
-		if err := w.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: reason}}}); err != nil {
-			w.disconnect()
-		}
+		go func() {
+			defer close(reconnectSent)
+			if err := w.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: reason}}}); err != nil {
+				w.disconnect()
+			}
+		}()
 	}
+	return reconnectSent
+}
+
+func (w *workerStream) abandon(assignment *taskAssignment) {
+	close(assignment.abandoned)
+	w.mu.Lock()
+	isCurrent := w.current == assignment
+	w.mu.Unlock()
+	if !isCurrent {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			w.mu.Lock()
+			isCurrent := w.current == assignment
+			w.mu.Unlock()
+			if isCurrent {
+				w.disconnect()
+			}
+		case <-w.done:
+		}
+	}()
 }
 
 func (w *workerStream) disconnect() {
@@ -425,10 +541,14 @@ func (w *workerStream) disconnect() {
 func (q *queueState) take(flowID string, excluded map[*workerStream]struct{}) (*workerStream, <-chan struct{}) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	preferred := q.affinity[flowID]
+	preferredElement := q.affinity[flowID]
+	preferred := affinityEntry{}
+	if preferredElement != nil {
+		preferred = preferredElement.Value.(affinityEntry)
+	}
 	selected := -1
 	for index, worker := range q.idle {
-		if _, wasRejected := excluded[worker]; wasRejected {
+		if _, isRejected := excluded[worker]; isRejected {
 			continue
 		}
 		if selected < 0 {
@@ -444,41 +564,36 @@ func (q *queueState) take(flowID string, excluded map[*workerStream]struct{}) (*
 	}
 	worker := q.idle[selected]
 	q.idle = append(q.idle[:selected], q.idle[selected+1:]...)
+	q.rememberLocked(flowID, worker.registration.AppWorkerId)
 	return worker, q.changed
 }
 
-func (q *queueState) remember(flowID, workerID string) {
+func (q *queueState) rememberLocked(flowID, workerID string) {
 	if flowID == "" {
 		return
 	}
-	q.mu.Lock()
-	q.affinity[flowID] = affinityEntry{workerID: workerID, expires: time.Now().Add(affinityDuration)}
-	if len(q.affinity) > 10000 {
-		for key, entry := range q.affinity {
-			if time.Now().After(entry.expires) {
-				delete(q.affinity, key)
-			}
-		}
+	if element := q.affinity[flowID]; element != nil {
+		q.affinityOrder.Remove(element)
 	}
-	q.mu.Unlock()
+	q.affinity[flowID] = q.affinityOrder.PushBack(affinityEntry{flowID: flowID, workerID: workerID, expires: time.Now().Add(affinityDuration)})
+	if len(q.affinity) > 10000 {
+		oldest := q.affinityOrder.Front()
+		delete(q.affinity, oldest.Value.(affinityEntry).flowID)
+		q.affinityOrder.Remove(oldest)
+	}
 }
 
 // DispatchTask routes a task to an idle Worker and relays its output frames.
 func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.MatchingService_DispatchTaskServer) error {
-	if err := validateDispatch(request); err != nil {
+	if err := validateDispatch(request, e.cfg); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	requestCopy := *request
+	if requestCopy.TaskId == "" {
+		requestCopy.TaskId = uuid.NewString()
+	}
+	request = &requestCopy
 	ctx := stream.Context()
-	owner, err := e.membership.Lookup(membership.RoleMatching, request.Queue)
-	if err != nil {
-		return status.Error(codes.Unavailable, err.Error())
-	}
-	if !owner.IsSelf {
-		if isForwarded(ctx) {
-			return status.Error(codes.FailedPrecondition, "matching forwarding loop")
-		}
-		return e.forwardDispatch(ctx, request, owner.RPCAddress, stream.Send)
-	}
 	dispatchEnd := time.Now().Add(request.DispatchWait.AsDuration())
 	if deadline := request.Deadline.AsTime(); deadline.Before(dispatchEnd) {
 		dispatchEnd = deadline
@@ -493,19 +608,19 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 			stickyEnd = dispatchEnd
 		}
 	}
-	matched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, stream.Send)
+	isMatched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, stream.Send)
 	if err != nil {
 		return err
 	}
-	if matched {
+	if isMatched {
 		return nil
 	}
 	if request.FallbackQueue != "" && request.FallbackQueue != request.Queue && time.Now().Before(dispatchEnd) {
-		matched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, stream.Send)
+		isMatched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, stream.Send)
 		if err != nil {
 			return err
 		}
-		if matched {
+		if isMatched {
 			return nil
 		}
 	}
@@ -539,11 +654,17 @@ func (e *Engine) forwardDispatch(ctx context.Context, request *dexpb.DispatchTas
 }
 
 func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskRequest, queueName string, waitEnd time.Time, send func(*dexpb.DispatchTaskResponse) error) (bool, error) {
+	if !time.Now().Before(waitEnd) {
+		return false, nil
+	}
 	owner, err := e.membership.Lookup(membership.RoleMatching, queueName)
 	if err != nil {
 		return false, status.Error(codes.Unavailable, err.Error())
 	}
 	if !owner.IsSelf {
+		if isForwarded(ctx) {
+			return false, status.Error(codes.FailedPrecondition, "matching forwarding loop")
+		}
 		remoteRequest := *request
 		remoteRequest.Queue = queueName
 		remoteRequest.FallbackQueue = ""
@@ -560,7 +681,10 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 		return isMatched, err
 	}
 	queue := e.getQueue(queueName)
+	defer e.releaseQueue(queueName, queue)
 	excluded := make(map[*workerStream]struct{})
+	deadlineTimer := time.NewTimer(time.Until(request.Deadline.AsTime()))
+	defer deadlineTimer.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, err
@@ -583,16 +707,16 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			timer.Stop()
 			continue
 		}
-		frames := make(chan *dexpb.PollWorkerTaskRequest, 32)
+		assignment := &taskAssignment{frames: make(chan *dexpb.PollWorkerTaskRequest, 32), abandoned: make(chan struct{}), taskID: request.TaskId}
 		worker.mu.Lock()
 		if worker.isClosing {
 			worker.mu.Unlock()
 			continue
 		}
 		worker.isBusy = true
-		worker.current = frames
-		worker.currentTaskID = request.TaskId
+		worker.current = assignment
 		worker.mu.Unlock()
+		defer worker.abandon(assignment)
 		task := &dexpb.PollWorkerTask{TaskId: request.TaskId, Deadline: request.Deadline}
 		switch value := request.Request.(type) {
 		case *dexpb.DispatchTaskRequest_WaitFor:
@@ -606,11 +730,9 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			worker.disconnect()
 			return true, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, err.Error()))
 		}
-		deadlineTimer := time.NewTimer(time.Until(request.Deadline.AsTime()))
-		defer deadlineTimer.Stop()
 		for {
 			select {
-			case frame := <-frames:
+			case frame := <-assignment.frames:
 				if frame.GetReject() != nil {
 					excluded[worker] = struct{}{}
 					goto nextWorker
@@ -622,11 +744,24 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 					return true, err
 				}
 				if isFinal(output) {
-					queue.remember(request.FlowId, worker.registration.AppWorkerId)
 					return true, nil
 				}
 			case <-worker.done:
-				return true, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, "Worker stream disconnected"))
+				for {
+					select {
+					case frame := <-assignment.frames:
+						if output := frame.GetTaskFrame(); output != nil {
+							if err := send(relayFrame(output, worker.registration.AppWorkerId)); err != nil {
+								return true, err
+							}
+							if isFinal(output) {
+								return true, nil
+							}
+						}
+					default:
+						return true, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, "Worker stream disconnected"))
+					}
+				}
 			case <-ctx.Done():
 				worker.cancelTask(request.TaskId)
 				return true, ctx.Err()
@@ -689,7 +824,7 @@ func isForwarded(ctx context.Context) bool {
 	return exists && len(incoming.Get(forwardedHeader)) > 0
 }
 
-func validateRegistration(registration *dexpb.PollWorkerTaskRegister) error {
+func validateRegistration(registration *dexpb.PollWorkerTaskRegister, cfg *config.MatchingConfig) error {
 	if registration == nil {
 		return errors.New("first frame must register a Worker")
 	}
@@ -702,8 +837,16 @@ func validateRegistration(registration *dexpb.PollWorkerTaskRegister) error {
 			return errors.New("app_worker_id contains an invalid character")
 		}
 	}
-	if registration.Queue == "" {
-		return errors.New("queue is required")
+	if registration.Queue == "" || len(registration.Queue) > cfg.MaxQueueLength {
+		return errors.New("queue must have a valid length")
+	}
+	if len(registration.FlowTypes) > cfg.MaxFlowTypes {
+		return errors.New("too many flow_types")
+	}
+	for _, flowType := range registration.FlowTypes {
+		if len(flowType) > cfg.MaxFlowTypeLength {
+			return errors.New("flow_type exceeds the length limit")
+		}
 	}
 	if registration.Queue == workerID {
 		return nil
@@ -716,9 +859,12 @@ func validateRegistration(registration *dexpb.PollWorkerTaskRegister) error {
 	return errors.New("queue must be app_worker_id or a declared flow_type")
 }
 
-func validateDispatch(request *dexpb.DispatchTaskRequest) error {
+func validateDispatch(request *dexpb.DispatchTaskRequest, cfg *config.MatchingConfig) error {
 	if request == nil || request.Queue == "" || request.Request == nil {
 		return errors.New("queue and task request are required")
+	}
+	if len(request.Queue) > cfg.MaxQueueLength || len(request.FallbackQueue) > cfg.MaxQueueLength {
+		return errors.New("queue exceeds the length limit")
 	}
 	switch task := request.Request.(type) {
 	case *dexpb.DispatchTaskRequest_WaitFor:
@@ -744,9 +890,6 @@ func validateDispatch(request *dexpb.DispatchTaskRequest) error {
 	}
 	if request.FallbackQueue != "" && request.FallbackQueue != request.Queue && (request.StickyWait == nil || request.StickyWait.AsDuration() < 0) {
 		return errors.New("non-negative sticky_wait is required with fallback_queue")
-	}
-	if request.TaskId == "" {
-		request.TaskId = uuid.NewString()
 	}
 	return nil
 }

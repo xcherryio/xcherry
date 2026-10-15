@@ -17,10 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgryski/go-farm"
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/membership"
+	"github.com/temporalio/ringpop-go/hashring"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -35,6 +37,12 @@ type testMembership struct {
 	owners  map[string]membership.HostInfo
 	changes chan membership.Change
 }
+
+type testHashMember struct{ address string }
+
+func (m testHashMember) GetAddress() string          { return m.address }
+func (m testHashMember) Identity() string            { return m.address }
+func (m testHashMember) Label(string) (string, bool) { return "", false }
 
 func (m *testMembership) Lookup(_ membership.Role, queue string) (membership.HostInfo, error) {
 	m.mu.Lock()
@@ -94,13 +102,39 @@ func newTestMembership() *testMembership {
 
 func registerWorker(t *testing.T, server *testServer, queue, workerID string) dexpb.WorkerTaskService_PollWorkerTaskClient {
 	t.Helper()
-	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(context.Background())
+	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: queue, AppWorkerId: workerID, FlowTypes: []string{"flow"}}}}))
 	registered, err := stream.Recv()
 	require.NoError(t, err)
 	require.NotNil(t, registered.GetRegistered())
 	return stream
+}
+
+func testStreamContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func waitWorkerIdle(t *testing.T, engine *Engine, queueName, workerID string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		value, exists := engine.queues.Load(queueName)
+		if !exists {
+			return false
+		}
+		queue := value.(*queueState)
+		queue.mu.Lock()
+		defer queue.mu.Unlock()
+		for _, worker := range queue.idle {
+			if worker.registration.AppWorkerId == workerID {
+				return true
+			}
+		}
+		return false
+	}, time.Second, time.Millisecond)
 }
 
 func dispatchRequest(queue, fallback string, sticky, total time.Duration) *dexpb.DispatchTaskRequest {
@@ -126,7 +160,7 @@ func TestMatchingRelayAndReuseIntegration(t *testing.T) {
 	for _, taskID := range []string{"first", "second"} {
 		request := dispatchRequest("flow", "", 0, time.Second)
 		request.TaskId = taskID
-		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), request)
+		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
 		require.NoError(t, err)
 		assigned, err := worker.Recv()
 		require.NoError(t, err)
@@ -145,7 +179,7 @@ func TestMatchingFallbackAndUnavailableIntegration(t *testing.T) {
 	worker := registerWorker(t, server, "flow", "worker-2")
 	request := dispatchRequest("stale-worker", "flow", 40*time.Millisecond, 250*time.Millisecond)
 	started := time.Now()
-	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), request)
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
@@ -154,7 +188,7 @@ func TestMatchingFallbackAndUnavailableIntegration(t *testing.T) {
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
 	require.Equal(t, "worker-2", frames[0].ServedByAppWorkerId)
-	unavailable, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), dispatchRequest("empty", "", 0, 60*time.Millisecond))
+	unavailable, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("empty", "", 0, 60*time.Millisecond))
 	require.NoError(t, err)
 	frames = receiveDispatch(t, unavailable)
 	require.Len(t, frames, 1)
@@ -165,7 +199,9 @@ func TestMatchingRejectDisconnectAndCancelIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
 	first := registerWorker(t, server, "flow", "worker-a")
 	second := registerWorker(t, server, "flow", "worker-b")
-	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), dispatchRequest("flow", "", 0, time.Second))
+	waitWorkerIdle(t, server.engine, "flow", "worker-a")
+	waitWorkerIdle(t, server.engine, "flow", "worker-b")
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, time.Second))
 	require.NoError(t, err)
 	assigned, err := first.Recv()
 	require.NoError(t, err)
@@ -176,7 +212,7 @@ func TestMatchingRejectDisconnectAndCancelIntegration(t *testing.T) {
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
 	require.Equal(t, dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, frames[0].GetDispatchError().Reason)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testStreamContext(t))
 	canceled, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(ctx, dispatchRequest("flow", "", 0, time.Second))
 	require.NoError(t, err)
 	assigned, err = first.Recv()
@@ -196,7 +232,7 @@ func TestMatchingForwardAndProxyIntegration(t *testing.T) {
 	receiverMembership.owners["flow"] = membership.HostInfo{RPCAddress: owner.listener.Addr().String()}
 	receiver := startTestServer(t, config.MatchingConfig{}, receiverMembership)
 	worker := registerWorker(t, receiver, "flow", "worker-forwarded")
-	dispatch, err := dexpb.NewMatchingServiceClient(receiver.connection).DispatchTask(context.Background(), dispatchRequest("flow", "", 0, time.Second))
+	dispatch, err := dexpb.NewMatchingServiceClient(receiver.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, time.Second))
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
@@ -209,22 +245,27 @@ func TestMatchingForwardAndProxyIntegration(t *testing.T) {
 func TestMatchingRegistrationLimitsIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{MaxStreams: 2, MaxConcurrentTasksCap: 1}, newTestMembership())
 	registerWorker(t, server, "flow", "worker-1")
-	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(context.Background())
+	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "flow", AppWorkerId: "worker-1", FlowTypes: []string{"flow"}}}}))
 	_, err = stream.Recv()
 	require.Error(t, err)
-	invalid, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(context.Background())
+	invalid, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, invalid.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "flow", AppWorkerId: "bad/id", FlowTypes: []string{"flow"}}}}))
 	_, err = invalid.Recv()
 	require.Error(t, err)
 	registerWorker(t, server, "flow", "worker-2")
-	full, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(context.Background())
+	full, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, full.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "flow", AppWorkerId: "worker-3", FlowTypes: []string{"flow"}}}}))
 	_, err = full.Recv()
 	require.Error(t, err)
+	wrongQueue, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
+	require.NoError(t, err)
+	require.NoError(t, wrongQueue.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "other", AppWorkerId: "worker-4", FlowTypes: []string{"flow"}}}}))
+	_, err = wrongQueue.Recv()
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
 func TestMatchingExecuteAndRPCIntegration(t *testing.T) {
@@ -247,7 +288,7 @@ func TestMatchingExecuteAndRPCIntegration(t *testing.T) {
 			request := dispatchRequest("flow", "", 0, time.Second)
 			request.TaskId = testCase.name
 			testCase.setRequest(request)
-			dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), request)
+			dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
 			require.NoError(t, err)
 			assigned, err := worker.Recv()
 			require.NoError(t, err)
@@ -296,12 +337,22 @@ func TestMatchingRealMembershipThreeEngineIntegration(t *testing.T) {
 	for index := range servers {
 		servers[index] = startTestServerForMonitor(t, listeners[index], monitors[index])
 	}
+	newMembershipListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	newMembershipAddress := newMembershipListener.Addr().String()
+	require.NoError(t, newMembershipListener.Close())
+	futureRing := hashring.New(farm.Fingerprint32, 100)
+	for _, member := range monitors[1].Members(membership.RoleMatching) {
+		futureRing.AddMembers(testHashMember{address: member.Address})
+	}
+	futureRing.AddMembers(testHashMember{address: newMembershipAddress})
 	queue := ""
 	for index := 0; index < 1000; index++ {
 		candidate := fmt.Sprintf("flow-%d", index)
 		owner, lookupErr := monitors[1].Lookup(membership.RoleMatching, candidate)
 		require.NoError(t, lookupErr)
-		if owner.IsSelf {
+		futureAddress, isFound := futureRing.Lookup(candidate)
+		if owner.IsSelf && isFound && futureAddress == newMembershipAddress {
 			queue = candidate
 			break
 		}
@@ -309,24 +360,91 @@ func TestMatchingRealMembershipThreeEngineIntegration(t *testing.T) {
 	require.NotEmpty(t, queue)
 	worker := registerWorkerForFlowTypes(t, servers[0], queue, "worker-ring", []string{queue})
 	request := dispatchRequest(queue, "", 0, time.Second)
-	dispatch, err := dexpb.NewMatchingServiceClient(servers[2].connection).DispatchTask(context.Background(), request)
+	dispatch, err := dexpb.NewMatchingServiceClient(servers[2].connection).DispatchTask(testStreamContext(t), request)
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
+	newListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	settings := *membershipSettings
+	settings.Listen = newMembershipAddress
+	settings.Seeds.Static = []string{seed}
+	newMonitor, err := membership.NewMonitor(&settings, []membership.Role{membership.RoleMatching}, newListener.Addr().String(), nil, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, newMonitor.Start(context.Background()))
+	t.Cleanup(newMonitor.Stop)
+	monitors = append(monitors, newMonitor)
+	servers = append(servers, startTestServerForMonitor(t, newListener, newMonitor))
+	require.Eventually(t, func() bool {
+		return len(monitors[1].Members(membership.RoleMatching)) == 4
+	}, 10*time.Second, 20*time.Millisecond)
+	newOwner, err := monitors[1].Lookup(membership.RoleMatching, queue)
+	require.NoError(t, err)
+	require.False(t, newOwner.IsSelf, "adding members did not transfer queue ownership")
+	require.Eventually(t, func() bool {
+		for _, monitor := range monitors {
+			owner, lookupErr := monitor.Lookup(membership.RoleMatching, queue)
+			if lookupErr != nil || owner.RPCAddress != newOwner.RPCAddress {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 20*time.Millisecond)
+	oldQueue := servers[1].engine.getQueue(queue)
+	require.Eventually(t, func() bool {
+		oldQueue.mu.Lock()
+		defer oldQueue.mu.Unlock()
+		for registered := range oldQueue.streams {
+			registered.mu.Lock()
+			isClosing := registered.isClosing
+			registered.mu.Unlock()
+			if isClosing {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+	servers[1].engine.releaseQueue(queue, oldQueue)
+	reconnectFrames := make(chan *dexpb.PollWorkerTaskResponse, 1)
+	reconnectErrors := make(chan error, 1)
+	go func() {
+		frame, recvErr := worker.Recv()
+		if recvErr != nil {
+			reconnectErrors <- recvErr
+		} else {
+			reconnectFrames <- frame
+		}
+	}()
+	select {
+	case <-reconnectFrames:
+		t.Fatal("reconnect arrived before current task finished")
+	case recvErr := <-reconnectErrors:
+		t.Fatal(recvErr)
+	default:
+	}
 	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
 	require.Equal(t, "worker-ring", frames[0].ServedByAppWorkerId)
-	servers[1].engine.Close()
-	reconnect, err := worker.Recv()
-	require.NoError(t, err)
-	require.NotNil(t, reconnect.GetReconnect())
-	monitors[1].Stop()
-	require.Eventually(t, func() bool {
-		return len(monitors[0].Members(membership.RoleMatching)) == 2 && len(monitors[2].Members(membership.RoleMatching)) == 2
-	}, 10*time.Second, 20*time.Millisecond)
+	select {
+	case reconnect := <-reconnectFrames:
+		require.NotNil(t, reconnect.GetReconnect())
+	case recvErr := <-reconnectErrors:
+		t.Fatal(recvErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnect was not sent after task completion")
+	}
+	require.False(t, newOwner.RPCAddress == listeners[1].Addr().String())
 	replacement := registerWorkerForFlowTypes(t, servers[0], queue, "worker-ring", []string{queue})
-	require.NotNil(t, replacement)
+	replacementRequest := dispatchRequest(queue, "", 0, time.Second)
+	replacementRequest.TaskId = "replacement"
+	replacementDispatch, err := dexpb.NewMatchingServiceClient(servers[2].connection).DispatchTask(testStreamContext(t), replacementRequest)
+	require.NoError(t, err)
+	replacementAssignment, err := replacement.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "replacement", replacementAssignment.GetTask().TaskId)
+	require.NoError(t, replacement.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: "replacement", Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	require.Len(t, receiveDispatch(t, replacementDispatch), 1)
 }
 
 func startTestServerForMonitor(t *testing.T, listener net.Listener, monitor *membership.Monitor) *testServer {
@@ -360,7 +478,7 @@ func startTestServerForMonitor(t *testing.T, listener net.Listener, monitor *mem
 
 func registerWorkerForFlowTypes(t *testing.T, server *testServer, queue, workerID string, flowTypes []string) dexpb.WorkerTaskService_PollWorkerTaskClient {
 	t.Helper()
-	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(context.Background())
+	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: queue, AppWorkerId: workerID, FlowTypes: flowTypes}}}))
 	registered, err := stream.Recv()
@@ -373,16 +491,18 @@ func TestMatchingAffinityIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
 	first := registerWorker(t, server, "flow", "worker-first")
 	registerWorker(t, server, "flow", "worker-second")
+	waitWorkerIdle(t, server.engine, "flow", "worker-first")
 	for _, taskID := range []string{"affinity-1", "affinity-2"} {
 		request := dispatchRequest("flow", "", 0, time.Second)
 		request.TaskId = taskID
-		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), request)
+		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
 		require.NoError(t, err)
 		assigned, err := first.Recv()
 		require.NoError(t, err)
 		require.Equal(t, taskID, assigned.GetTask().TaskId)
 		require.NoError(t, first.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
 		require.Len(t, receiveDispatch(t, dispatch), 1)
+		waitWorkerIdle(t, server.engine, "flow", "worker-first")
 	}
 }
 
@@ -390,7 +510,7 @@ func TestMatchingReconnectAfterTaskIntegration(t *testing.T) {
 	members := newTestMembership()
 	server := startTestServer(t, config.MatchingConfig{}, members)
 	worker := registerWorker(t, server, "flow", "worker-drain")
-	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(context.Background(), dispatchRequest("flow", "", 0, time.Second))
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, time.Second))
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
@@ -398,6 +518,21 @@ func TestMatchingReconnectAfterTaskIntegration(t *testing.T) {
 	members.owners["flow"] = membership.HostInfo{RPCAddress: "127.0.0.1:1"}
 	members.mu.Unlock()
 	members.changes <- membership.Change{Role: membership.RoleMatching}
+	queueState := server.engine.getQueue("flow")
+	require.Eventually(t, func() bool {
+		queueState.mu.Lock()
+		defer queueState.mu.Unlock()
+		for registered := range queueState.streams {
+			registered.mu.Lock()
+			isClosing := registered.isClosing
+			registered.mu.Unlock()
+			if isClosing {
+				return true
+			}
+		}
+		return false
+	}, time.Second, time.Millisecond)
+	server.engine.releaseQueue("flow", queueState)
 	control := make(chan *dexpb.PollWorkerTaskResponse, 1)
 	errors := make(chan error, 1)
 	go func() {
@@ -413,7 +548,7 @@ func TestMatchingReconnectAfterTaskIntegration(t *testing.T) {
 		t.Fatal("reconnect arrived before current task finished")
 	case recvErr := <-errors:
 		t.Fatal(recvErr)
-	case <-time.After(30 * time.Millisecond):
+	default:
 	}
 	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
 	require.Len(t, receiveDispatch(t, dispatch), 1)
@@ -438,15 +573,181 @@ func TestMatchingForwardingLoopIntegration(t *testing.T) {
 	secondMembership.mu.Lock()
 	secondMembership.owners["flow"] = membership.HostInfo{RPCAddress: first.listener.Addr().String()}
 	secondMembership.mu.Unlock()
-	dispatch, err := dexpb.NewMatchingServiceClient(first.connection).DispatchTask(context.Background(), dispatchRequest("flow", "", 0, time.Second))
+	dispatch, err := dexpb.NewMatchingServiceClient(first.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, time.Second))
 	require.NoError(t, err)
 	_, err = dispatch.Recv()
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	poll, err := dexpb.NewWorkerTaskServiceClient(first.connection).PollWorkerTask(context.Background())
+	poll, err := dexpb.NewWorkerTaskServiceClient(first.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, poll.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "flow", AppWorkerId: "worker-loop", FlowTypes: []string{"flow"}}}}))
 	_, err = poll.Recv()
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestMatchingAbandonedTaskReleasesStreamIntegration(t *testing.T) {
+	for _, frameCount := range []int{0, 64} {
+		t.Run(fmt.Sprintf("late-frames-%d", frameCount), func(t *testing.T) {
+			server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+			worker := registerWorker(t, server, "flow", "worker-abandoned")
+			ctx, cancel := context.WithCancel(testStreamContext(t))
+			dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(ctx, dispatchRequest("flow", "", 0, time.Second))
+			require.NoError(t, err)
+			assigned, err := worker.Recv()
+			require.NoError(t, err)
+			cancel()
+			control, err := worker.Recv()
+			require.NoError(t, err)
+			require.Equal(t, assigned.GetTask().TaskId, control.GetCancelTask().TaskId)
+			_, err = dispatch.Recv()
+			require.Error(t, err)
+			for index := 0; index < frameCount; index++ {
+				frame := &dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Heartbeat{}}}}}}
+				if sendErr := worker.Send(frame); sendErr != nil {
+					break
+				}
+			}
+			require.Eventually(t, func() bool {
+				server.engine.limitsMu.Lock()
+				defer server.engine.limitsMu.Unlock()
+				return server.engine.streamCount == 0
+			}, 5*time.Second, 10*time.Millisecond)
+			require.Eventually(t, func() bool {
+				_, exists := server.engine.queues.Load("flow")
+				return !exists
+			}, time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
+func TestMatchingCanceledTaskFinalFrameReusesStreamIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	worker := registerWorker(t, server, "flow", "worker-reusable")
+	ctx, cancel := context.WithCancel(testStreamContext(t))
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(ctx, dispatchRequest("flow", "", 0, time.Second))
+	require.NoError(t, err)
+	assigned, err := worker.Recv()
+	require.NoError(t, err)
+	cancel()
+	control, err := worker.Recv()
+	require.NoError(t, err)
+	require.Equal(t, assigned.GetTask().TaskId, control.GetCancelTask().TaskId)
+	_, err = dispatch.Recv()
+	require.Error(t, err)
+	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	secondRequest := dispatchRequest("flow", "", 0, time.Second)
+	secondRequest.TaskId = "second-task"
+	second, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), secondRequest)
+	require.NoError(t, err)
+	secondAssignment, err := worker.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "second-task", secondAssignment.GetTask().TaskId)
+	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: "second-task", Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	require.Len(t, receiveDispatch(t, second), 1)
+}
+
+func TestMatchingFinalFrameBeforeEOFRaceIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	for index := 0; index < 100; index++ {
+		worker := registerWorker(t, server, "flow", fmt.Sprintf("worker-%d", index))
+		request := dispatchRequest("flow", "", 0, time.Second)
+		request.TaskId = fmt.Sprintf("task-%d", index)
+		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
+		require.NoError(t, err)
+		assigned, err := worker.Recv()
+		require.NoError(t, err)
+		require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+		require.NoError(t, worker.CloseSend())
+		frames := receiveDispatch(t, dispatch)
+		require.Len(t, frames, 1)
+		require.Equal(t, fmt.Sprintf("worker-%d", index), frames[0].ServedByAppWorkerId)
+		require.Eventually(t, func() bool {
+			server.engine.limitsMu.Lock()
+			defer server.engine.limitsMu.Unlock()
+			return server.engine.streamCount == 0
+		}, time.Second, time.Millisecond)
+	}
+}
+
+func TestMatchingStaleAndDuplicateFramesIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	worker := registerWorker(t, server, "flow", "worker-stale")
+	for _, taskID := range []string{"first", "second"} {
+		request := dispatchRequest("flow", "", 0, time.Second)
+		request.TaskId = taskID
+		dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
+		require.NoError(t, err)
+		_, err = worker.Recv()
+		require.NoError(t, err)
+		require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: "stale", Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+		valid := &dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}
+		require.NoError(t, worker.Send(valid))
+		require.Len(t, receiveDispatch(t, dispatch), 1)
+		require.NoError(t, worker.Send(valid))
+	}
+}
+
+func TestMatchingCrossEngineStickyFallbackIntegration(t *testing.T) {
+	for _, stickyWait := range []time.Duration{0, 30 * time.Millisecond} {
+		t.Run(stickyWait.String(), func(t *testing.T) {
+			entryMembers := newTestMembership()
+			stickyMembers := newTestMembership()
+			fallbackMembers := newTestMembership()
+			entry := startTestServer(t, config.MatchingConfig{}, entryMembers)
+			sticky := startTestServer(t, config.MatchingConfig{}, stickyMembers)
+			fallback := startTestServer(t, config.MatchingConfig{}, fallbackMembers)
+			entryMembers.mu.Lock()
+			entryMembers.owners["sticky"] = membership.HostInfo{RPCAddress: sticky.listener.Addr().String()}
+			entryMembers.owners["fallback"] = membership.HostInfo{RPCAddress: fallback.listener.Addr().String()}
+			entryMembers.mu.Unlock()
+			stickyMembers.mu.Lock()
+			stickyMembers.owners["fallback"] = membership.HostInfo{RPCAddress: entry.listener.Addr().String()}
+			stickyMembers.mu.Unlock()
+			worker := registerWorkerForFlowTypes(t, fallback, "fallback", "worker-fallback", []string{"fallback"})
+			dispatch, err := dexpb.NewMatchingServiceClient(entry.connection).DispatchTask(testStreamContext(t), dispatchRequest("sticky", "fallback", stickyWait, time.Second))
+			require.NoError(t, err)
+			assigned, err := worker.Recv()
+			require.NoError(t, err)
+			require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+			frames := receiveDispatch(t, dispatch)
+			require.Len(t, frames, 1)
+			require.Equal(t, "worker-fallback", frames[0].ServedByAppWorkerId)
+		})
+	}
+}
+
+func TestMatchingRegistrationAfterCloseIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	server.engine.Close()
+	worker, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
+	require.NoError(t, err)
+	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: "flow", AppWorkerId: "worker-closed", FlowTypes: []string{"flow"}}}}))
+	_, err = worker.Recv()
+	require.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+func TestMatchingUntrustedNameLimitsIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{MaxQueueLength: 8, MaxFlowTypes: 1, MaxFlowTypeLength: 4}, newTestMembership())
+	for _, registration := range []*dexpb.PollWorkerTaskRegister{
+		{Queue: "queue-too-long", AppWorkerId: "worker-1", FlowTypes: []string{"flow"}},
+		{Queue: "flow", AppWorkerId: "worker-2", FlowTypes: []string{"flow", "other"}},
+		{Queue: "flow", AppWorkerId: "worker-3", FlowTypes: []string{"flow-too-long"}},
+	} {
+		worker, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
+		require.NoError(t, err)
+		require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: registration}}))
+		_, err = worker.Recv()
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+	}
+	request := dispatchRequest("queue-too-long", "", 0, time.Second)
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
+	require.NoError(t, err)
+	_, err = dispatch.Recv()
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestMatchingShortDispatchWaitUsesDefaultStickyIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{DispatchWait: 3 * time.Second}, newTestMembership())
+	require.NotNil(t, server.engine)
 }

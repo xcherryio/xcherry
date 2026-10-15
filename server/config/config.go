@@ -75,6 +75,12 @@ const (
 	DefaultMatchingMaxConcurrentTasksCap = 256
 	// DefaultMatchingMaxStreams bounds all registered Worker streams on one server.
 	DefaultMatchingMaxStreams = 100000
+	// DefaultMatchingMaxQueueLength bounds queue names in matching requests.
+	DefaultMatchingMaxQueueLength = 256
+	// DefaultMatchingMaxFlowTypes bounds Flow types in one Worker registration.
+	DefaultMatchingMaxFlowTypes = 256
+	// DefaultMatchingMaxFlowTypeLength bounds each declared Flow type.
+	DefaultMatchingMaxFlowTypeLength = 256
 	// DefaultMaxWaitSeconds caps transport long polls when MaxWaitSeconds is 0.
 	DefaultMaxWaitSeconds int64 = 60
 	// DefaultGrpcMaxMessageBytes is 32 MiB so that application values up to 16 MiB keep 16 MiB of headroom
@@ -242,18 +248,24 @@ type (
 	MatchingConfig struct {
 		// DispatchWait bounds a regular attempt's Worker search. Default 10s. Must be positive when set.
 		DispatchWait time.Duration `yaml:"dispatchWait"`
-		// StickyWait bounds searching the sticky queue before fallback. Default 5s. Must not exceed DispatchWait.
+		// StickyWait bounds searching the sticky queue before fallback. Default 5s. When set, must not exceed DispatchWait.
 		StickyWait time.Duration `yaml:"stickyWait"`
 		// LocalDispatchWait bounds a local attempt's Worker search. Default 3s. Must be positive when set.
 		LocalDispatchWait time.Duration `yaml:"localDispatchWait"`
-		// LocalStickyWait bounds a local attempt's sticky queue search. Default 2s. Must not exceed LocalDispatchWait.
+		// LocalStickyWait bounds a local attempt's sticky queue search. Default 2s. When set, must not exceed LocalDispatchWait.
 		LocalStickyWait time.Duration `yaml:"localStickyWait"`
 		// LocalExecutionReserve preserves time for local task execution. Default 4s. Must be positive when set.
 		LocalExecutionReserve time.Duration `yaml:"localExecutionReserve"`
-		// MaxConcurrentTasksCap bounds registered streams per appWorkerID. Default 256. Must be positive when set.
+		// MaxConcurrentTasksCap bounds registered streams per appWorkerID on each owner node. Default 256. Must be positive when set.
 		MaxConcurrentTasksCap int `yaml:"maxConcurrentTasksCap"`
 		// MaxStreams bounds registered streams on this server. Default 100000. Must be positive when set.
 		MaxStreams int `yaml:"maxStreams"`
+		// MaxQueueLength bounds queue and fallback queue names. Default 256. Must be positive when set.
+		MaxQueueLength int `yaml:"maxQueueLength"`
+		// MaxFlowTypes bounds declared Flow types per Worker registration. Default 256. Must be positive when set.
+		MaxFlowTypes int `yaml:"maxFlowTypes"`
+		// MaxFlowTypeLength bounds each declared Flow type. Default 256. Must be positive when set.
+		MaxFlowTypeLength int `yaml:"maxFlowTypeLength"`
 	}
 
 	StreamStoreConfig struct {
@@ -701,19 +713,28 @@ func (c MatchingConfig) WithDefaults() MatchingConfig {
 	if c.MaxStreams == 0 {
 		c.MaxStreams = DefaultMatchingMaxStreams
 	}
+	if c.MaxQueueLength == 0 {
+		c.MaxQueueLength = DefaultMatchingMaxQueueLength
+	}
+	if c.MaxFlowTypes == 0 {
+		c.MaxFlowTypes = DefaultMatchingMaxFlowTypes
+	}
+	if c.MaxFlowTypeLength == 0 {
+		c.MaxFlowTypeLength = DefaultMatchingMaxFlowTypeLength
+	}
 	return c
 }
 
 // Validate checks matching wait relationships and stream limits.
 func (c MatchingConfig) Validate() error {
 	settings := c.WithDefaults()
-	if settings.DispatchWait <= 0 || settings.StickyWait <= 0 || settings.StickyWait > settings.DispatchWait {
+	if settings.DispatchWait <= 0 || settings.StickyWait <= 0 || (c.StickyWait != 0 && settings.StickyWait > settings.DispatchWait) {
 		return fmt.Errorf("matching.stickyWait must be positive and no greater than dispatchWait")
 	}
-	if settings.LocalDispatchWait <= 0 || settings.LocalStickyWait <= 0 || settings.LocalStickyWait > settings.LocalDispatchWait {
+	if settings.LocalDispatchWait <= 0 || settings.LocalStickyWait <= 0 || (c.LocalStickyWait != 0 && settings.LocalStickyWait > settings.LocalDispatchWait) {
 		return fmt.Errorf("matching.localStickyWait must be positive and no greater than localDispatchWait")
 	}
-	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 {
+	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 {
 		return fmt.Errorf("matching execution reserve and stream limits must be positive")
 	}
 	return nil

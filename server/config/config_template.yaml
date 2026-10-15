@@ -74,6 +74,9 @@ worker:
 #   localExecutionReserve: 4s
 #   maxConcurrentTasksCap: 256
 #   maxStreams: 100000
+#   maxQueueLength: 256
+#   maxFlowTypes: 256
+#   maxFlowTypeLength: 256
 interpreter:
   # Bounds backend index creation and propagation checks. Existing indexes return immediately.
   attributeIndexSyncTimeout: 2m
