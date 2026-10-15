@@ -23,6 +23,7 @@ import {
   InvokeWaitForMethodRequest,
   InvokeWaitForMethodResponse,
   PollWorkerTaskRejectReason,
+  Value,
   WorkerTaskServiceService,
   type PollWorkerTaskRequest,
   type PollWorkerTaskResponse,
@@ -134,7 +135,7 @@ test("poll streams register first, reject at capacity, answer Ping, and reuse af
   }
 });
 
-test("Reconnect replaces idle streams immediately and drains a busy stream", async () => {
+test("Reconnect backs off idle streams and drains a busy stream", async () => {
   const harness = await startHarness();
   let finishTask!: () => void;
   const gate = new Promise<void>((resolve) => { finishTask = resolve; });
@@ -146,8 +147,10 @@ test("Reconnect replaces idle streams immediately and drains a busy stream", asy
     worker.start();
     const idle = await harness.nextStream();
     idle.call.write({ frame: { $case: "registered", value: {} } });
+    const reconnectRequestedAt = Date.now();
     idle.call.write({ frame: { $case: "reconnect", value: { reason: "move" } } });
     const replacement = await harness.nextStream();
+    assert.ok(replacement.openedAt - reconnectRequestedAt >= 95);
     replacement.call.write({ frame: { $case: "registered", value: {} } });
     replacement.call.write(rpcTask("busy"));
     const spare = await harness.nextStream();
@@ -245,6 +248,52 @@ test("pull WaitFor sends heartbeat and stream write before its final result", as
   }
 });
 
+for (const shouldReconnect of [false, true]) {
+  test(`close preserves a large final result after ${shouldReconnect ? "busy Reconnect" : "normal completion"}`, async () => {
+    const harness = await startHarness();
+    let finishTask!: () => void;
+    const gate = new Promise<void>((resolve) => { finishTask = resolve; });
+    const payload = "x".repeat(3_000_000);
+    const worker = harness.worker(async () => {
+      await gate;
+      return InvokeWorkerRPCResponse.create({ output: Value.create({
+        kind: { $case: "stringValue", value: payload },
+      }) });
+    }, { stopDrainTimeoutMs: 1_000 });
+    try {
+      worker.start();
+      const stream = await harness.nextStream();
+      stream.call.write({ frame: { $case: "registered", value: {} } });
+      stream.call.write(rpcTask("large-result"));
+      await until(() => harness.invocationCount === 1);
+      if (shouldReconnect) {
+        stream.call.write({ frame: { $case: "reconnect", value: { reason: "move" } } });
+        stream.call.write({ frame: { $case: "ping", value: {} } });
+        await stream.frame("pong");
+      }
+      finishTask();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const closing = worker.close();
+      const result = await stream.frame("taskFrame");
+      assert.equal(result.frame?.$case, "taskFrame");
+      if (result.frame?.$case === "taskFrame") {
+        assert.equal(result.frame.value.output?.$case, "rpc");
+        if (result.frame.value.output?.$case === "rpc") {
+          assert.equal(result.frame.value.output.value.output?.kind?.$case, "stringValue");
+          if (result.frame.value.output.value.output?.kind?.$case === "stringValue") {
+            assert.equal(result.frame.value.output.value.output.kind.value.length, payload.length);
+          }
+        }
+      }
+      await closing;
+    } finally {
+      finishTask();
+      await worker.close();
+      await harness.close();
+    }
+  });
+}
+
 test("Worker error frame preserves push status, type, stack, and retry delay", () => {
   const failure = Object.assign(new Error("failed"), { code: status.INVALID_ARGUMENT });
   const pull = workerErrorResponse(failure);
@@ -292,6 +341,7 @@ test("close drains a task, then force-cancels and waits for a handler that ignor
 interface CapturedStream {
   readonly call: TaskStream;
   readonly frames: PollWorkerTaskRequest[];
+  readonly openedAt: number;
   frame(kind: NonNullable<PollWorkerTaskRequest["frame"]>["$case"], occurrence?: number): Promise<PollWorkerTaskRequest>;
 }
 
@@ -307,7 +357,7 @@ async function startHarness() {
       call.on("end", () => call.end());
       call.on("error", () => {});
       streams.push({
-        call, frames,
+        call, frames, openedAt: Date.now(),
         async frame(kind, occurrence = 1) {
           await until(() => frames.filter((candidate) => candidate.frame?.$case === kind).length >= occurrence);
           return frames.filter((candidate) => candidate.frame?.$case === kind)[occurrence - 1]!;

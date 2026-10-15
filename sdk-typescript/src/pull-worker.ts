@@ -55,7 +55,6 @@ interface PollStream {
   isHalfClosed: boolean;
   isDraining: boolean;
   isReconnectRequested: boolean;
-  wasBusyReconnect: boolean;
   backoffMs: number;
   failure: ServiceError | undefined;
 }
@@ -108,8 +107,12 @@ export class PullWorker {
     this.isStopping = true;
     for (const poll of this.streams) {
       poll.isDraining = true;
-      if (poll.task === undefined) {
-        this.closeStream(poll);
+      if (poll.retryTimer !== undefined) {
+        clearTimeout(poll.retryTimer);
+        poll.retryTimer = undefined;
+      }
+      if (poll.task === undefined && !poll.isDisconnected) {
+        this.halfCloseStream(poll);
       }
     }
     if (this.activeTasks.size !== 0) {
@@ -125,18 +128,17 @@ export class PullWorker {
       if (!didDrain) {
         this.isForceStopping = true;
         for (const poll of this.streams) {
-          poll.task?.controller.abort();
-          this.closeStream(poll);
+          if (poll.task !== undefined) {
+            poll.task.controller.abort();
+            this.closeStream(poll);
+          }
         }
         await drained;
       }
     }
     await Promise.all([...this.streams].flatMap((poll) => poll.halfClosePromise === undefined ? [] : [poll.halfClosePromise]));
     for (const poll of this.streams) {
-      this.closeStream(poll);
-      if (poll.retryTimer !== undefined) {
-        clearTimeout(poll.retryTimer);
-      }
+      if (!poll.isDisconnected) this.closeStream(poll);
     }
     this.streams.clear();
     this.client.close();
@@ -154,7 +156,7 @@ export class PullWorker {
           queue, stream: undefined, task: undefined, retryTimer: undefined,
           halfCloseTimer: undefined, halfClosePromise: undefined, resolveHalfClose: undefined,
           isRegistered: false, isDisconnected: false, isHalfClosed: false, isDraining: false,
-          isReconnectRequested: false, wasBusyReconnect: false,
+          isReconnectRequested: false,
           backoffMs: 100, failure: undefined,
         };
         this.streams.add(poll);
@@ -172,7 +174,6 @@ export class PullWorker {
     poll.failure = undefined;
     poll.isDraining = false;
     poll.isReconnectRequested = false;
-    poll.wasBusyReconnect = false;
     const stream = this.client.pollWorkerTask();
     poll.stream = stream;
     stream.on("data", (response: PollWorkerTaskResponse) => {
@@ -238,7 +239,6 @@ export class PullWorker {
         if (poll.task === undefined) {
           this.halfCloseStream(poll);
         } else {
-          poll.wasBusyReconnect = true;
           this.reconcile();
         }
         break;
@@ -390,11 +390,10 @@ export class PullWorker {
 
   private scheduleReconnect(poll: PollStream): void {
     if (this.isStopping || poll.retryTimer !== undefined) return;
+    if (poll.isReconnectRequested) poll.backoffMs = 100;
     const failure = poll.failure;
     let delayMs: number;
-    if (poll.isReconnectRequested && !poll.wasBusyReconnect) {
-      delayMs = 0;
-    } else if (failure?.code === status.UNIMPLEMENTED) {
+    if (failure?.code === status.UNIMPLEMENTED) {
       if (!this.hasLoggedUnsupportedServer) {
         this.hasLoggedUnsupportedServer = true;
         console.error("pull Worker polling is unsupported by this Dex server", failure);
