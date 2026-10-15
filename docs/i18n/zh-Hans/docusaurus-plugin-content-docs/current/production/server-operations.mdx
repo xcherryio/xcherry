@@ -98,6 +98,63 @@ network path 内。
 
 **web.startFlowWorkerTargetHeadless** 控制所有从 Dex Web 启动的 Flow 的 Worker routing。默认值为 false，启动后不可变。对应的环境变量是 **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**。只有操作员填写 Kubernetes headless Service address 时才启用它。
 
+## 身份认证
+
+公开 API 默认不启用身份认证。配置 **auth.authenticators** 后，所有公开的 unary
+调用和 stream 都必须携带 bearer credential；健康检查仍然开放。Dex 按配置顺序尝试
+authenticator。静态 token 文件保存 SHA-256 哈希。JWT authenticator 使用缓存的
+JSON Web Key Set 校验签名、issuer、audience 和有效期。
+
+~~~yaml
+auth:
+  authenticators:
+    - kind: staticTokens
+      file: /etc/dex/public-tokens.yaml
+    - kind: jwt
+      issuer: https://issuer.example
+      audiences: [dex]
+      jwksURL: https://issuer.example/keys
+      caFile: /etc/dex/issuer-ca.pem
+internal:
+  listen: 127.0.0.1:8803
+  tokenFile: /etc/dex/internal-token
+~~~
+
+静态 token 文件保存 SHA-256 哈希：
+
+~~~text
+tokens:
+  - sha256: HASH
+~~~
+
+使用至少具有 128 bit 熵的 token，文件中只保存其哈希。Dex 会重新加载发生变化的 token 文件。
+JWT 配置省略 **jwksURL** 时，Dex 通过 issuer 的 OpenID 配置发现 key set。
+**caFile** 为 issuer 的 HTTPS endpoint 添加 PEM 证书包，系统根证书仍然有效。
+
+启用 **auth** 后，**InternalService** 只在 **internal.listen** 上运行，并要求
+**internal.tokenFile** 中的 token。Interpreter 发送文件第一行的 token；listener
+接受每一行，便于轮换。每个 token 至少需要 32 个字符。该 listener 使用明文 gRPC。应绑定到 loopback，或限制网络
+访问并加密流量。单独部署的 Interpreter 必须将
+**interpreter.interpreterActivityConfig.internalServiceTarget** 指向此 listener。
+关闭 **auth** 时，**InternalService** 继续使用公开 API listener。
+
+目前启用 **auth** 后只有 Go SDK 能连接。Dex Web、CLI，以及 Java、Python、
+TypeScript 和 Rust SDK 还不能提供所需 credential。
+
+可选的 Worker wake hook 配置在 **worker.wake** 下：
+
+~~~yaml
+worker:
+  wake:
+    url: https://operator.example/worker-wake
+    budget: 120s
+~~~
+
+Worker 不可用时，Dex 向 hook 发送包含 **target** 和 **kind: wake** 的 POST，
+并在 **budget** 内等待，默认 120 秒。成功 dispatch 后发送 **kind: active**。
+通知尽力发送，并按 target 限速。配置 **internal.tokenFile** 时，Dex 将内部 token
+作为 bearer credential 发送；否则不发送 authorization header。
+
 ## 连接受保护的 Temporal 集群
 
 在 **interpreter.temporal** 下配置 Temporal frontend 连接。API key 需要轮换时，将其挂载为文件：

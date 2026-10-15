@@ -47,6 +47,11 @@ For standalone server configuration and integration-test setup, see
 [server contributor guidance](CONTRIBUTING.md). For production operations, see
 the [server operations guide](../docs/content/production/server-operations.mdx).
 
+Public API authentication is configured under `auth` and is off by default.
+When enabled, `InternalService` uses the private `internal` listener and its
+token file. The optional Worker wake hook is configured under `worker.wake`.
+See the server operations guide for token formats and listener requirements.
+
 Integration and replay test instructions are available in
 [integ/README.md](integ/README.md) and [replayTests/README.md](replayTests/README.md).
 

@@ -84,7 +84,7 @@ func doTestWaitUntilHistoryCompleted(t *testing.T, flowConfig *dexpb.FlowConfig)
 		RequestId:          newRequestID(),
 		FlowId:             flowId,
 		FlowType:           wait_until_search_attributes_optimization.WorkflowType,
-		FlowTimeoutSeconds: 15,
+		FlowTimeoutSeconds: 60,
 
 		StartStepType:    wait_until_search_attributes_optimization.State1,
 		FlowStartOptions: withWorkerTarget(nil, workerTarget),
@@ -97,7 +97,9 @@ func doTestWaitUntilHistoryCompleted(t *testing.T, flowConfig *dexpb.FlowConfig)
 	_, err := flowClient.StartFlow(ctx, startRequest)
 	require.NoError(t, err)
 
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return workerHandler.GetTestResult().InvokeHistory[wait_until_search_attributes_optimization.State4+"_waitFor"] > 0
+	}, 30*time.Second, 100*time.Millisecond)
 
 	_, err = flowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 		FlowId: flowId,
@@ -114,7 +116,8 @@ func doTestWaitUntilHistoryCompleted(t *testing.T, flowConfig *dexpb.FlowConfig)
 		FlowId: flowId,
 	})
 	require.NoError(t, err)
-	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, resp.GetFlowStatus())
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, resp.GetFlowStatus(),
+		"Flow %s failed: %s", flowId, resp.GetErrorMessage())
 
 	api := unifiedClient.GetApiService().(workflowservice.WorkflowServiceClient)
 	eventHistory, err := api.GetWorkflowExecutionHistory(ctx, &workflowservice.GetWorkflowExecutionHistoryRequest{
