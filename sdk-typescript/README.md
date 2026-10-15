@@ -155,9 +155,64 @@ Non-starting Steps may use unrelated input types. `Flow` defaults to `void` for
 Flows without a start input.
 
 `Worker.start()` synchronizes every registered Indexed Attribute with Dex
-Server before binding its listener. Existing indexes return immediately;
-failure or the default 120-second deadline aborts startup. An indexed
-`AttributeMap` must provide one fixed `indexKey`.
+Server before binding its listener or opening pull streams. Existing indexes
+return immediately; failure or the default 120-second deadline aborts startup.
+An indexed `AttributeMap` must provide one fixed `indexKey`.
+
+### Pull mode
+
+Set `WorkerOptions.pull` to open outbound task streams without a WorkerService
+listener. Advertise `worker.workerTarget` through `ClientOptions.workerTarget`.
+`StartFlowOptions.configOverride.workerTarget` can select pull routing for one
+Flow, and `SubFlowOptions.configOverride.workerTarget` can select it for a SubFlow.
+The pull target is `{ address: "", pull: true }`; it cannot include a nonempty
+address or `headless`.
+A pull Worker cannot set `bindAddress` or an advertised `workerTarget`.
+
+```typescript
+const worker = new Worker(registry, cache, {
+  serverAddress: "dex.example:8801",
+  pull: {
+    maxConcurrentTasks: 8,
+    idleStreamsPerQueue: 1,
+    stopDrainTimeoutMs: 30_000,
+  },
+});
+await worker.start();
+const client = new Client(registry, cache, {
+  serverAddress: "dex.example:8801",
+  workerTarget: worker.workerTarget,
+});
+try {
+  await client.startFlow(flow, flowId, input);
+} finally {
+  await client.close();
+  await worker.close();
+}
+```
+
+Pull mode polls the Worker's sticky queue and every registered Flow type queue.
+Flow type names must be unique within one Dex server. `maxConcurrentTasks`
+defaults to the logical CPU count, and `idleStreamsPerQueue` defaults to one.
+Each stream runs one task at a time. When all slots are busy, the Worker rejects
+additional assignments for reassignment. The Worker keeps idle streams on each
+queue even when all slots are busy, so it can hold up to
+`(1 + F) * (idleStreamsPerQueue + maxConcurrentTasks)` streams, where `F` is the
+number of registered Flow types. Size both options for the server's stream cap.
+
+The default `appWorkerID` uses the first nonempty value from
+`DEX_WORKER_INSTANCE`, `POD_NAME`, `HOSTNAME`, or the system hostname, followed by
+eight random base32 characters. An override must identify one Worker process
+uniquely and change after each restart. It must contain 1-63 ASCII letters,
+digits, dots, underscores, or hyphens, and cannot equal a registered Flow type.
+
+The Worker reconnects after transport failures. A server-directed reconnect
+waits for the current task to finish. An older server without pull support
+produces one explicit error log and is retried after one minute. Startup reports
+protocol and index synchronization failures; later poll failures are retried.
+`Worker.close()` drains for at most `stopDrainTimeoutMs`, which defaults to
+30 seconds. It then cancels active handlers and waits for them to return. A
+handler that ignores cancellation can delay shutdown.
 
 `StepOptions.waitForMethodTimeoutMs` and `executeMethodTimeoutMs` bound the two
 handler calls. Timer and channel conditions determine how long a Step waits.

@@ -47,6 +47,10 @@ import {
   type RPCInvokeOptions,
   type Step,
   type StepDecision,
+  type PullWorkerOptions,
+  type WorkerOptions,
+  type WorkerTarget,
+  type SubFlowOptions,
 } from "../src/index.js";
 import {
   mapAttributeStoreNames,
@@ -995,6 +999,13 @@ test("blob cache contract opens the native DXBC cache", () => {
 });
 
 async function compileStrongTypes(client: Client): Promise<void> {
+  const pullOptions: PullWorkerOptions = { maxConcurrentTasks: 8, idleStreamsPerQueue: 1 };
+  const workerOptions: WorkerOptions = { pull: pullOptions };
+  const pullTarget: WorkerTarget = { address: "", pull: true };
+  const pullConfig: FlowConfig = { workerTarget: pullTarget };
+  const subFlowOptions: SubFlowOptions = { configOverride: pullConfig };
+  void workerOptions;
+  void subFlowOptions;
   const runId: string = await client.startFlow(orders, "order-1", { orderId: "order-1" });
   const output: OrderOutput = await client.invokeRPC(
     orders.getOrder,

@@ -41,14 +41,18 @@ import { negotiateServerProtocol, serverInfoRequestError } from "./server-protoc
 import { sdkVersion } from "./sdk-version.generated.js";
 import { ValueHydrator } from "./value-mapper.js";
 import { WorkerDispatcher } from "./worker-dispatcher.js";
+import { PullWorker } from "./pull-worker.js";
+import { mapWorkerTarget } from "./worker-target.js";
 
 type WorkerState = "created" | "running" | "stopping" | "stopped" | "closed";
 
 /**
- * Hosts registered Step and RPC handlers over the private WorkerService protocol.
+ * Hosts registered Step and RPC handlers through a listener or outbound pull streams.
  *
  * A Worker is one-shot. Call `start` for non-blocking startup or `run` to await
  * shutdown, then call `close`. Concurrent handlers must synchronize shared state.
+ * In pull mode, `close` drains for `stopDrainTimeoutMs`, then cancels handlers and
+ * waits for them to return. A handler that ignores cancellation can delay shutdown.
  *
  * @example
  * ```ts
@@ -63,24 +67,36 @@ export class Worker {
 
   private readonly server = new Server();
   private readonly flowService: InstanceType<typeof FlowServiceClient>;
+  private readonly pullWorker: PullWorker | undefined;
   private readonly stopped: Promise<void>;
   private resolveStopped!: () => void;
   private state: WorkerState = "created";
   private negotiatedProtocolVersion = 0;
 
   /**
-   * Constructs a Worker without starting its listener.
+   * Constructs a Worker without starting its listener or task streams.
    * @param registry - Flow definitions served by this Worker.
    * @param blobCache - Open cache used to hydrate large handler values.
-   * @param options - Networking and startup settings; uses local defaults when omitted.
+   * @param options - Networking, pull mode, and startup settings; uses local defaults when omitted.
+   * @throws {TypeError} When pull mode conflicts with a listener or has an invalid Worker ID.
+   * @throws {RangeError} When a pull capacity or drain timeout is invalid.
    */
   public constructor(
     public readonly registry: Registry,
     public readonly blobCache: BlobCache,
     public readonly options: WorkerOptions = {},
   ) {
+    if (options.pull !== undefined && (options.bindAddress !== undefined || options.workerTarget !== undefined)) {
+      throw new TypeError("pull Worker cannot configure bindAddress or workerTarget");
+    }
+    if (options.pull === undefined && options.workerTarget?.pull === true) {
+      throw new TypeError("workerTarget.pull requires WorkerOptions.pull");
+    }
     const bindAddress = options.bindAddress ?? "127.0.0.1:8803";
-    this.workerTarget = options.workerTarget ?? targetFromBindAddress(bindAddress);
+    this.workerTarget = options.pull === undefined
+      ? options.workerTarget ?? targetFromBindAddress(bindAddress)
+      : { address: "", pull: true };
+    if (options.pull === undefined) mapWorkerTarget(this.workerTarget);
     this.flowService = new FlowServiceClient(
       options.serverAddress ?? "localhost:8801",
       credentials.createInsecure(),
@@ -89,15 +105,25 @@ export class Worker {
       registry,
       new ValueHydrator(this.flowService, blobCache),
     );
-    this.server.addService(WorkerServiceService, workerService(dispatcher));
+    try {
+      this.pullWorker = options.pull === undefined
+        ? undefined
+        : new PullWorker(registry, dispatcher, options.serverAddress ?? "localhost:8801", options.pull);
+    } catch (failure) {
+      this.flowService.close();
+      throw failure;
+    }
+    if (this.pullWorker === undefined) {
+      this.server.addService(WorkerServiceService, workerService(dispatcher));
+    }
     this.stopped = new Promise((resolve) => {
       this.resolveStopped = resolve;
     });
   }
 
   /**
-   * Negotiates the Server protocol, synchronizes indexes, and starts the listener.
-   * The promise resolves after successful binding; call exactly once.
+   * Negotiates the Server protocol, synchronizes indexes, and starts listening or polling.
+   * The promise resolves after binding or launching pull streams; call exactly once.
    */
   public async start(): Promise<void> {
     if (this.state !== "created") {
@@ -117,10 +143,15 @@ export class Worker {
       }
       this.negotiatedProtocolVersion = negotiateServerProtocol(serverInfo, sdkVersion);
       await syncAttributeIndexes(this.flowService, this.registry, timeoutMs);
-      await bind(this.server, bindAddress);
+      if (this.pullWorker === undefined) {
+        await bind(this.server, bindAddress);
+      } else {
+        this.pullWorker.start();
+      }
       this.state = "running";
     } catch (failure) {
       this.state = "stopped";
+      await this.pullWorker?.close();
       this.flowService.close();
       this.resolveStopped();
       throw new Error(`cannot start TypeScript Worker on ${bindAddress}`, { cause: failure });
@@ -134,7 +165,8 @@ export class Worker {
   }
 
   /**
-   * Gracefully stops the listener and releases the FlowService connection.
+   * Gracefully stops the listener or drains pull tasks, then releases connections.
+   * A pull Worker force-cancels after its drain timeout and waits for handlers to return.
    * Calls before `start` and repeated calls after shutdown are safe.
    */
   public async close(): Promise<void> {
@@ -143,16 +175,24 @@ export class Worker {
     }
     if (this.state === "created") {
       this.state = "closed";
+      await this.pullWorker?.close();
       this.flowService.close();
       this.resolveStopped();
       return;
     }
     if (this.state === "running") {
       this.state = "stopping";
-      await shutdown(this.server);
-      this.flowService.close();
-      this.state = "stopped";
-      this.resolveStopped();
+      try {
+        if (this.pullWorker === undefined) {
+          await shutdown(this.server);
+        } else {
+          await this.pullWorker.close();
+        }
+      } finally {
+        this.flowService.close();
+        this.state = "stopped";
+        this.resolveStopped();
+      }
     } else {
       await this.stopped;
     }

@@ -43,6 +43,25 @@ interface AnyDetail {
 }
 
 export function workerServiceError(failure: unknown): GrpcServiceError {
+  const response = workerErrorResponse(failure);
+  const worker = WorkerErrorResponse.encode(response).finish();
+  const metadata = new Metadata();
+  metadata.set(
+    statusDetailsKey,
+    Buffer.from(
+      encodeStatus(response.grpcStatus, response.detail, [
+        { typeUrl: "type.googleapis.com/dex.WorkerErrorResponse", value: worker },
+      ]),
+    ),
+  );
+  return Object.assign(new Error(response.detail), {
+    code: response.grpcStatus,
+    details: response.detail,
+    metadata,
+  });
+}
+
+export function workerErrorResponse(failure: unknown): WorkerErrorResponse {
   const retryAfterError = failure instanceof RetryAfterError ? failure : undefined;
   const cause =
     retryAfterError?.cause instanceof Error
@@ -55,7 +74,8 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
     maxWorkerErrorDetailBytes,
     errorDetailTruncationMarker,
   );
-  const worker = WorkerErrorResponse.encode({
+  const grpcStatus = grpcStatusForWorkerFailure(cause);
+  return WorkerErrorResponse.create({
     detail,
     errorType: truncateWorkerFailureField(
       cause.name,
@@ -68,22 +88,19 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
       stackTraceTruncationMarker,
     ),
     retryAfterSeconds: retryAfterError?.afterSeconds ?? 0,
-    grpcStatus: status.UNKNOWN,
-  }).finish();
-  const metadata = new Metadata();
-  metadata.set(
-    statusDetailsKey,
-    Buffer.from(
-      encodeStatus(status.UNKNOWN, detail, [
-        { typeUrl: "type.googleapis.com/dex.WorkerErrorResponse", value: worker },
-      ]),
-    ),
-  );
-  return Object.assign(new Error(detail), {
-    code: status.UNKNOWN,
-    details: detail,
-    metadata,
+    grpcStatus,
   });
+}
+
+function grpcStatusForWorkerFailure(failure: Error): status {
+  const code = (failure as Error & { code?: unknown }).code;
+  if (typeof code === "number" && code !== status.OK && Object.values(status).includes(code)) {
+    return code as status;
+  }
+  if (failure.name === "AbortError") {
+    return status.CANCELLED;
+  }
+  return status.UNKNOWN;
 }
 
 function truncateWorkerFailureField(

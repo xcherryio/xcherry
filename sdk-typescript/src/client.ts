@@ -70,6 +70,7 @@ import {
   type FlowResult,
 } from "./flow-result.js";
 import { translateServiceError } from "./grpc-status.js";
+import { mapWorkerTarget } from "./worker-target.js";
 import {
   ActiveStepSearchMode,
   FlowTimeoutPolicy,
@@ -135,6 +136,7 @@ export class Client {
     public readonly blobCache: BlobCache,
     public readonly options: ClientOptions = {},
   ) {
+    if (options.workerTarget !== undefined) mapWorkerTarget(options.workerTarget);
     this.service = new FlowServiceClient(
       options.serverAddress ?? defaultServerAddress,
       credentials.createInsecure(),
@@ -1325,7 +1327,7 @@ function mapFlowConfig(
     workerTarget:
       workerTarget === undefined
         ? undefined
-        : { address: workerTarget.address, isHeadlessAddress: workerTarget.headless ?? false, isPullMode: false },
+        : mapWorkerTarget(workerTarget),
   };
 }
 

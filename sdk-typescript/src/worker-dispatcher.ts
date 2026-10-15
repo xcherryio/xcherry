@@ -68,6 +68,7 @@ import {
   type FlowTimeoutHandlerOptions,
 } from "./options.js";
 import { SubFlowReusePolicy, type SubFlowOptions } from "./subflow.js";
+import { mapWorkerTarget } from "./worker-target.js";
 import type { RegisteredRPC } from "./rpc.js";
 import type {
   RetryPolicy,
@@ -1091,10 +1092,7 @@ function mapSubFlowConfig(config: FlowConfig | undefined): ProtoFlowConfig | und
     workerTarget:
       config.workerTarget === undefined
         ? undefined
-        : {
-            address: config.workerTarget.address,
-            isHeadlessAddress: config.workerTarget.headless ?? false,
-          },
+        : mapWorkerTarget(config.workerTarget),
   });
 }
 
