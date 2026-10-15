@@ -54,10 +54,13 @@ type AuthenticatorConfig struct {
 	File string `yaml:"file"`
 }
 
-// InternalConfig protects the server's private InternalService listener.
+// InternalConfig protects the server's private InternalService and MatchingService listener.
 type InternalConfig struct {
 	// Listen is the plaintext gRPC host:port bind address serving InternalService to interpreter Workers.
+	// It also serves MatchingService to peer Dex replicas. In network mode, wildcard and loopback hosts advertise
+	// the membership broadcast address. Use a fixed port reachable by peers.
 	// Default empty disables the separate listener when auth is off; it is required with auth.
+	// Without auth or membership, a configured listen address is ignored until tokenFile is also configured.
 	// Interpreter Workers dial this address unless interpreter.interpreterActivityConfig.internalServiceTarget overrides it.
 	// Bind to loopback or restrict access and encrypt the network path because bearer tokens travel in clear text.
 	// The bind address is immutable after startup.
@@ -92,6 +95,9 @@ func (c WakeConfig) EffectiveBudget() time.Duration {
 
 // ValidateGeneralAccess checks public authentication, internal listener, and Worker wake settings.
 func (c Config) ValidateGeneralAccess() error {
+	if c.Membership != nil && (c.Internal.Listen == "" || c.Internal.TokenFile == "") {
+		return fmt.Errorf("internal.listen and internal.tokenFile are required when membership is configured")
+	}
 	if c.Auth.IsEnabled() {
 		if c.Internal.Listen == "" || c.Internal.TokenFile == "" {
 			return fmt.Errorf("internal.listen and internal.tokenFile are required when auth is enabled")

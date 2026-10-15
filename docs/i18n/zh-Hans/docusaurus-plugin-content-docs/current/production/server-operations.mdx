@@ -52,7 +52,7 @@ Flow type name、Step graph 和持久化 payload。
 
 ## Server 组件
 
-dex-server 镜像默认在同一个 process 中启动 Dex Web、API 和 Interpreter。容器在 8801
+dex-server 镜像默认在同一个 process 中启动 Dex Web、API、Interpreter 和 Matching。容器在 8801
 端口提供 FlowService，在 8802 端口提供 Dex Web。是否发布任一端口仍由 deployment
 显式决定。
 
@@ -63,14 +63,77 @@ resource limit 时，将它们分开部署：
 dex-server start --services web
 dex-server start --services api
 dex-server start --services interpreter
+dex-server start --services matching
 dex-server start --services web,api
 ~~~
 
-仅部署 Interpreter 时，必须将
+仅部署 Interpreter 且没有 **internal.listen** 时，必须将
 **interpreter.interpreterActivityConfig.internalServiceTarget** 设置为 API service。
+配置私有 listener 时，Interpreter 默认使用本地地址。
 仅部署 Web 时不会连接 Temporal 或 Cadence。Web 会在 API upstream 可用前启动，因此
 **/healthz** 只报告 Web process 的健康状态。在 FlowService 可用前，Web API request
 会返回 upstream error。
+
+## Pull Worker 路由
+
+**matching** 角色拥有 pull Worker 队列。API 实例接收 **PollWorkerTask** stream，
+并将每条 stream 转发到队列 owner。Interpreter 和 API 实例即使不拥有队列，也会加入
+membership。至少运行一个 Matching 实例。共享 membership cluster 的所有实例必须
+使用同一个 backend namespace 和 membership seeds。
+
+单进程可省略 **membership**，使用本地单成员 ring。多实例部署需要在每个 Server
+process 上配置 **membership** 和私有 **internal** listener：
+
+~~~yaml
+membership:
+  listen: 0.0.0.0:6833
+  broadcastAddress: ""
+  refreshInterval: 10s
+  seeds:
+    dnsName: dex-headless.dex.svc.cluster.local:6833
+internal:
+  listen: 0.0.0.0:8803
+  tokenFile: /etc/dex/internal-token
+matching:
+  dispatchWait: 10s
+  stickyWait: 5s
+  localDispatchWait: 3s
+  localStickyWait: 2s
+  localExecutionReserve: 4s
+  maxConcurrentTasksCap: 256
+  maxStreams: 100000
+  maxQueueLength: 256
+  maxFlowTypes: 256
+  maxFlowTypeLength: 256
+  pingInterval: 20s
+~~~
+
+**membership.listen** 绑定仅供副本访问的 ring listener，默认值为 **0.0.0.0:6833**。
+**broadcastAddress** 默认取第一个私有 IPv4 地址，并与绑定端口一起对外发布。
+**seeds.dnsName** 解析 headless service；也可以使用 **seeds.static** 指定 peer
+地址列表。私有 gRPC listener 绑定 **internal.listen**。绑定 host 为 wildcard 时，
+Dex 使用 membership broadcast host 和 internal port 作为发布地址。使用固定的
+internal port，并确保 peer 可以访问该地址。
+**refreshInterval** 默认是 10 秒。
+
+API 角色默认使用 8801 端口。客户端和 pull Worker 通过该端口访问 API 实例。
+仅运行 Matching 或 Interpreter 的实例不开放 8801 端口。公开负载均衡器只能选择
+API 实例。在 Kubernetes 中，使用 NetworkPolicy 将 internal listener 和 6833
+端口限制为仅供 Dex 副本访问。membership cluster 必须配置 **internal.tokenFile**。
+internal listener 使用明文 gRPC，应加密其网络路径。**MatchingService** 只在私有
+listener 上提供。未配置 membership 或 **internal.listen** 时，Dex 为其绑定本地
+loopback 端口。关闭 **auth** 时，公开 listener 仍提供 **InternalService**，以兼容
+现有 Interpreter 连接。配置 **internal.listen** 和 **internal.tokenFile** 可通过
+私有 listener 访问该服务。仅运行 Interpreter 的进程只会在配置 **membership** 时
+加入 membership。
+
+**matching.maxStreams** 限制每个 Matching 实例上的已注册 stream 数。
+**maxConcurrentTasksCap** 限制该 owner 上单个 **appWorkerID** 的 stream 数。
+**maxQueueLength** 限制队列名长度，**maxFlowTypes** 和 **maxFlowTypeLength**
+限制每个 Worker 的注册内容。等待预算默认使用上述值。Dex 每隔 **pingInterval** 向空闲 poll stream
+发送 **Ping** frame。负载均衡器必须支持长时间运行的 HTTP/2 stream，且 idle timeout
+大于该间隔。忙碌的 stream 不会收到这些 Ping；Worker 应足够频繁地发送任务心跳
+frame，以保持负载均衡器连接活跃。公开 endpoint 必须保留双向 streaming。
 
 ## 配置
 
@@ -131,12 +194,12 @@ tokens:
 JWT 配置省略 **jwksURL** 时，Dex 通过 issuer 的 OpenID 配置发现 key set。
 **caFile** 为 issuer 的 HTTPS endpoint 添加 PEM 证书包，系统根证书仍然有效。
 
-启用 **auth** 后，**InternalService** 只在 **internal.listen** 上运行，并要求
+启用 **auth** 后，**InternalService** 和 **MatchingService** 只在 **internal.listen** 上运行，并要求
 **internal.tokenFile** 中的 token。Interpreter 发送文件第一行的 token；listener
 接受每一行，便于轮换。每个 token 至少需要 32 个字符。该 listener 使用明文 gRPC。应绑定到 loopback，或限制网络
 访问并加密流量。单独部署的 Interpreter 必须将
 **interpreter.interpreterActivityConfig.internalServiceTarget** 指向此 listener。
-关闭 **auth** 时，**InternalService** 继续使用公开 API listener。
+关闭 **auth** 且未配置独立 internal listener 时，这两个 service 使用公开 API listener。
 
 目前启用 **auth** 后只有 Go SDK 能连接。Dex Web、CLI，以及 Java、Python、
 TypeScript 和 Rust SDK 还不能提供所需 credential。

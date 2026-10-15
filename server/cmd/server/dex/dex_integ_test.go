@@ -192,11 +192,13 @@ func TestServiceSelection(t *testing.T) {
 				isWebEnabled:         true,
 				isAPIEnabled:         true,
 				isInterpreterEnabled: true,
+				isMatchingEnabled:    true,
 			},
 		},
 		{name: "web", arguments: []string{"--services", "web"}, expected: serviceSelection{isWebEnabled: true}},
 		{name: "api", arguments: []string{"--services", "api"}, expected: serviceSelection{isAPIEnabled: true}},
 		{name: "interpreter", arguments: []string{"--services", "interpreter"}, expected: serviceSelection{isInterpreterEnabled: true}},
+		{name: "matching", arguments: []string{"--services", "matching"}, expected: serviceSelection{isMatchingEnabled: true}},
 		{
 			name:      "web and api",
 			arguments: []string{"--services", "web, api"},

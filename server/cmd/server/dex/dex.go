@@ -49,12 +49,14 @@ const (
 	serviceWeb         = "web"
 	serviceAPI         = "api"
 	serviceInterpreter = "interpreter"
+	serviceMatching    = "matching"
 )
 
 type serviceSelection struct {
 	isWebEnabled         bool
 	isAPIEnabled         bool
 	isInterpreterEnabled bool
+	isMatchingEnabled    bool
 }
 
 type componentExit struct {
@@ -92,8 +94,8 @@ func BuildCLI(ctx context.Context) *cli.App {
 			Flags: []cli.Flag{
 				cli.StringFlag{
 					Name:  "services",
-					Value: strings.Join([]string{serviceWeb, serviceAPI, serviceInterpreter}, ", "),
-					Usage: "start Dex components: web, api, interpreter",
+					Value: strings.Join([]string{serviceWeb, serviceAPI, serviceInterpreter, serviceMatching}, ", "),
+					Usage: "start Dex components: web, api, interpreter, matching",
 				},
 			},
 			Usage: "start Dex Server",
@@ -159,11 +161,12 @@ func newApplication(cfg *config.Config, services serviceSelection) (*application
 		serverApplication.webServer = webServer
 		serverApplication.componentCount++
 	}
-	if services.isAPIEnabled || services.isInterpreterEnabled {
+	if services.isAPIEnabled || services.isInterpreterEnabled || services.isMatchingEnabled {
 		dexRuntime, err := bootstrap.New(cfg, &bootstrap.Options{
 			Services: bootstrap.Services{
 				API:         services.isAPIEnabled,
 				Interpreter: services.isInterpreterEnabled,
+				Matching:    services.isMatchingEnabled,
 			},
 		})
 		if err != nil {
@@ -274,6 +277,8 @@ func getServices(cliContext *cli.Context) (serviceSelection, error) {
 			services.isAPIEnabled = true
 		case serviceInterpreter:
 			services.isInterpreterEnabled = true
+		case serviceMatching:
+			services.isMatchingEnabled = true
 		default:
 			return serviceSelection{}, fmt.Errorf("invalid service %q", token)
 		}

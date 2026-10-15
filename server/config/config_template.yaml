@@ -34,9 +34,10 @@ api:
 #       audiences: [dex]
 #       jwksURL: https://issuer.example/keys
 #       caFile: /etc/dex/issuer-ca.pem
-# Required with auth. InternalService is served only on this private listener.
+# Required with auth, membership, or a matching-only process. MatchingService is never public.
+# When auth is off, InternalService remains public for existing interpreter targets.
 # internal:
-#   listen: 127.0.0.1:8803
+#   listen: 0.0.0.0:8803 # Bind here; peers dial the membership broadcast host on this port.
 #   tokenFile: /etc/dex/internal-token
 web:
   bindAddress: 0.0.0.0
@@ -77,6 +78,7 @@ worker:
 #   maxQueueLength: 256
 #   maxFlowTypes: 256
 #   maxFlowTypeLength: 256
+#   pingInterval: 20s
 interpreter:
   # Bounds backend index creation and propagation checks. Existing indexes return immediately.
   attributeIndexSyncTimeout: 2m

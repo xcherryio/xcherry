@@ -55,6 +55,9 @@ type Engine struct {
 	unsubscribe  func()
 	stop         chan struct{}
 	stopped      chan struct{}
+	lifecycleMu  sync.Mutex
+	isClosing    bool
+	activePoll   sync.WaitGroup
 }
 
 type queueState struct {
@@ -100,6 +103,21 @@ type pollResult struct {
 	err   error
 }
 
+type pollProxy struct {
+	source        pollTransport
+	target        dexpb.MatchingService_ForwardPollWorkerTaskClient
+	stop          <-chan struct{}
+	upstream      chan error
+	downstream    chan error
+	mu            sync.Mutex
+	sendMu        sync.Mutex
+	isBusy        bool
+	isDraining    bool
+	idle          chan struct{}
+	reconnectOnce sync.Once
+	reconnectErr  error
+}
+
 type pollTransport interface {
 	Send(*dexpb.PollWorkerTaskResponse) error
 	Recv() (*dexpb.PollWorkerTaskRequest, error)
@@ -123,12 +141,14 @@ func NewEngine(cfg *config.MatchingConfig, logger *zap.Logger, members Membershi
 
 // Close stops membership observation and drains owned poll streams.
 func (e *Engine) Close() {
-	select {
-	case <-e.stop:
+	e.lifecycleMu.Lock()
+	if e.isClosing {
+		e.lifecycleMu.Unlock()
 		return
-	default:
-		close(e.stop)
 	}
+	e.isClosing = true
+	close(e.stop)
+	e.lifecycleMu.Unlock()
 	<-e.stopped
 	e.queues.Range(func(_, value any) bool {
 		queue := value.(*queueState)
@@ -143,6 +163,7 @@ func (e *Engine) Close() {
 		}
 		return true
 	})
+	e.activePoll.Wait()
 }
 
 func (e *Engine) watchMembership() {
@@ -257,6 +278,14 @@ func (e *Engine) servePoll(transport pollTransport) error {
 	if err := validateRegistration(registration, e.cfg); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	e.lifecycleMu.Lock()
+	if e.isClosing {
+		e.lifecycleMu.Unlock()
+		return status.Error(codes.Unavailable, "matching server is closing")
+	}
+	e.activePoll.Add(1)
+	e.lifecycleMu.Unlock()
+	defer e.activePoll.Done()
 	select {
 	case <-e.stop:
 		return status.Error(codes.Unavailable, "matching server is closing")
@@ -315,10 +344,22 @@ func (e *Engine) servePoll(transport pollTransport) error {
 			}
 		}
 	}()
+	pingTicker := time.NewTicker(e.cfg.PingInterval)
+	defer pingTicker.Stop()
 	for {
 		var result pollResult
 		select {
 		case result = <-received:
+		case <-pingTicker.C:
+			worker.mu.Lock()
+			isIdle := !worker.isBusy && !worker.isClosing
+			worker.mu.Unlock()
+			if isIdle {
+				if err := worker.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Ping{Ping: &dexpb.PollWorkerTaskPing{}}}); err != nil {
+					return err
+				}
+			}
+			continue
 		case <-worker.done:
 			return nil
 		}
@@ -393,50 +434,137 @@ func (e *Engine) proxyPoll(source pollTransport, first *dexpb.PollWorkerTaskRequ
 	if err := target.Send(first); err != nil {
 		return err
 	}
-	upstream := make(chan error, 1)
-	downstream := make(chan error, 1)
-	go func() {
-		for {
-			frame, recvErr := source.Recv()
-			if recvErr != nil {
-				if errors.Is(recvErr, io.EOF) {
-					upstream <- target.CloseSend()
-				} else {
-					upstream <- recvErr
-				}
-				return
-			}
-			if sendErr := target.Send(frame); sendErr != nil {
-				upstream <- sendErr
-				return
-			}
-		}
-	}()
-	go func() {
-		for {
-			frame, recvErr := target.Recv()
-			if recvErr != nil {
-				downstream <- recvErr
-				return
-			}
-			if sendErr := source.Send(frame); sendErr != nil {
-				downstream <- sendErr
-				return
-			}
-		}
-	}()
+	proxy := &pollProxy{source: source, target: target, stop: e.stop, upstream: make(chan error, 1), downstream: make(chan error, 1)}
+	return proxy.run()
+}
+
+func (p *pollProxy) run() error {
+	go p.relayWorkerFrames()
+	go p.relayOwnerFrames()
+	var err error
 	select {
-	case err = <-upstream:
+	case <-p.stop:
+		idle := p.beginDrain()
+		select {
+		case <-idle:
+			return p.finishDrain()
+		case err = <-p.upstream:
+		case err = <-p.downstream:
+		case <-p.source.Context().Done():
+			return p.source.Context().Err()
+		}
+	case err = <-p.upstream:
 		if err != nil {
 			return err
 		}
-		err = <-downstream
-	case err = <-downstream:
+		err = <-p.downstream
+	case err = <-p.downstream:
 	}
 	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	return err
+}
+
+func (p *pollProxy) finishDrain() error {
+	if err := p.target.CloseSend(); err != nil {
+		return err
+	}
+	select {
+	case err := <-p.downstream:
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+	case <-p.source.Context().Done():
+		return p.source.Context().Err()
+	}
+	return p.sendReconnect()
+}
+
+func (p *pollProxy) relayWorkerFrames() {
+	for {
+		frame, recvErr := p.source.Recv()
+		if recvErr != nil {
+			if errors.Is(recvErr, io.EOF) {
+				p.upstream <- p.target.CloseSend()
+			} else {
+				p.upstream <- recvErr
+			}
+			return
+		}
+		if err := p.target.Send(frame); err != nil {
+			p.upstream <- err
+			return
+		}
+		if taskFrame := frame.GetTaskFrame(); taskFrame != nil && isFinal(taskFrame) {
+			p.finishTask()
+		} else if frame.GetReject() != nil {
+			p.finishTask()
+		}
+	}
+}
+
+func (p *pollProxy) relayOwnerFrames() {
+	for {
+		frame, recvErr := p.target.Recv()
+		if recvErr != nil {
+			p.downstream <- recvErr
+			return
+		}
+		if frame.GetTask() != nil && !p.beginTask() {
+			p.downstream <- p.sendReconnect()
+			return
+		}
+		if err := p.sendToWorker(frame); err != nil {
+			p.downstream <- err
+			return
+		}
+	}
+}
+
+func (p *pollProxy) beginTask() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.isDraining {
+		return false
+	}
+	p.isBusy = true
+	p.idle = make(chan struct{})
+	return true
+}
+
+func (p *pollProxy) finishTask() {
+	p.mu.Lock()
+	if p.isBusy {
+		p.isBusy = false
+		close(p.idle)
+	}
+	p.mu.Unlock()
+}
+
+func (p *pollProxy) beginDrain() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.isDraining = true
+	if p.isBusy {
+		return p.idle
+	}
+	idle := make(chan struct{})
+	close(idle)
+	return idle
+}
+
+func (p *pollProxy) sendToWorker(frame *dexpb.PollWorkerTaskResponse) error {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	return p.source.Send(frame)
+}
+
+func (p *pollProxy) sendReconnect() error {
+	p.reconnectOnce.Do(func() {
+		p.reconnectErr = p.sendToWorker(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: "matching server is closing"}}})
+	})
+	return p.reconnectErr
 }
 
 func (w *workerStream) send(frame *dexpb.PollWorkerTaskResponse) error {
@@ -489,7 +617,9 @@ func (w *workerStream) requestReconnect(reason string) <-chan struct{} {
 			defer close(reconnectSent)
 			if err := w.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: reason}}}); err != nil {
 				w.disconnect()
+				return
 			}
+			w.disconnect()
 		}()
 	}
 	return reconnectSent
@@ -585,6 +715,11 @@ func (q *queueState) rememberLocked(flowID, workerID string) {
 
 // DispatchTask routes a task to an idle Worker and relays its output frames.
 func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.MatchingService_DispatchTaskServer) error {
+	select {
+	case <-e.stop:
+		return status.Error(codes.Unavailable, "matching server is closing")
+	default:
+	}
 	if err := validateDispatch(request, e.cfg); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -686,6 +821,11 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 	deadlineTimer := time.NewTimer(time.Until(request.Deadline.AsTime()))
 	defer deadlineTimer.Stop()
 	for {
+		select {
+		case <-e.stop:
+			return false, status.Error(codes.Unavailable, "matching server is closing")
+		default:
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -703,6 +843,11 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 					<-timer.C
 				}
 				return false, ctx.Err()
+			case <-e.stop:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return false, status.Error(codes.Unavailable, "matching server is closing")
 			}
 			timer.Stop()
 			continue
