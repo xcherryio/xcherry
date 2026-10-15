@@ -605,6 +605,17 @@ advertised address explicitly.
 `ClientOptions.Credential` and `WorkerOptions.Credential` attach a bearer
 credential to every FlowService call. A Dex server with authentication enabled
 requires it on every public API call.
+
+Pull Workers set `WorkerOptions.Pull` with `MaxConcurrentTasks`,
+`IdleStreamsPerQueue`, and optional `AppWorkerID`. They connect outbound through
+`FlowServiceAddress`, using the same `Credential`, without opening the local
+listener. `Worker.WorkerTarget()` returns `{Pull: true}`. A Client or per-Flow
+`FlowConfig.WorkerTarget` can advertise that value; `StartFlowOptions` and
+`SubFlowOptions` both carry the per-Flow override through `ConfigOverride`.
+`WorkerTarget.Pull` and `WorkerTarget.Address` are mutually exclusive. The SDK
+maps pull mode to `WorkerTarget.is_pull_mode`, keeps one task per stream, and
+polls the sticky Worker ID queue plus each registered Flow type queue. A Flow
+type must be unique within one Dex server for pull routing.
 `FileCredential` rereads its file when the file changes, so a rotated token,
 such as a projected service account token, takes effect without a restart.
 

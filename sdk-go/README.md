@@ -601,6 +601,48 @@ reaches the Worker through different DNS, a load balancer, or a headless
 address. `WorkerTarget()` returns the resolved value for
 `FlowConfig.WorkerTarget`.
 
+For outbound pull mode, set `WorkerOptions.Pull` and connect to the Dex server
+through `FlowServiceAddress`. The Worker opens task streams and does not listen.
+`Credential` also authenticates these streams. Advertise `worker.WorkerTarget()`
+through `ClientOptions.WorkerTarget`, or set
+`StartFlowOptions.ConfigOverride.WorkerTarget` for one Flow. A SubFlow can select
+pull mode through `SubFlowOptions.ConfigOverride.WorkerTarget`.
+
+```go
+worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
+	FlowServiceAddress: "dex.example:8801",
+	Pull: &dex.PullWorkerOptions{
+		MaxConcurrentTasks: 8,
+		IdleStreamsPerQueue: 1,
+	},
+})
+if err != nil {
+	return err
+}
+client, err := dex.NewClient(registry, cache, dex.ClientOptions{
+	FlowServiceAddress: "dex.example:8801",
+	WorkerTarget: worker.WorkerTarget(),
+})
+if err != nil {
+	return err
+}
+defer client.Close()
+defer worker.Stop(context.Background())
+if err := worker.Start(); err != nil {
+	return err
+}
+```
+
+Pull mode polls the Worker's sticky queue and every registered Flow type queue.
+Flow type names must be unique within a Dex server. `MaxConcurrentTasks` defaults
+to the CPU count, and `IdleStreamsPerQueue` defaults to one. When capacity is
+full, the Worker rejects additional assignments for reassignment. The generated
+Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
+`HOSTNAME`, or the system hostname, plus a random suffix. Set `AppWorkerID` only
+when a stable external identity is required. Pull and an advertised address
+cannot be combined. The Worker reconnects after stream failures and drains
+in-flight tasks before a server-directed reconnect.
+
 `Start` blocks and is one-shot. `Stop(ctx)` is idempotent, drains in-flight
 calls, and force-stops them if the context expires. The SDK does not install
 signal handlers; the [Order example](examples/order/main.go) shows signal-driven

@@ -32,12 +32,15 @@ const (
 	defaultAttributeIndexSyncTimeout = 2 * time.Minute
 )
 
-// WorkerOptions configures the application-hosted WorkerService.
+// WorkerOptions configures a listening or outbound-polling Worker.
 //
-// Zero values select local plaintext defaults. BindAddress controls the listening
+// Zero values select local plaintext defaults. In listening mode, BindAddress controls the
 // socket, while WorkerTarget is the address Dex advertises to running Flows; these
 // commonly differ in containers or headless service deployments.
 type WorkerOptions struct {
+	// Pull enables outbound task polling. Nil keeps the listening WorkerService mode.
+	// Configure FlowServiceAddress and Credential for the server this Worker contacts.
+	Pull *PullWorkerOptions
 	// BindAddress is the plaintext WorkerService listener for Dex; it may differ from WorkerTarget. Default: ":8803".
 	// It uses host:port syntax.
 	BindAddress string
@@ -65,7 +68,28 @@ type WorkerOptions struct {
 	GrpcMaxMessageBytes int
 }
 
-// Worker hosts registered Flows over the private WorkerService protocol.
+// PullWorkerOptions configures outbound polling of Dex task queues.
+//
+// Use it with WorkerOptions.Pull and advertise worker.WorkerTarget() to a Client.
+// MaxConcurrentTasks defaults to runtime.NumCPU; IdleStreamsPerQueue defaults to one.
+// Each stream runs one task at a time. Negative values and an invalid AppWorkerID
+// cause NewWorker to return an error.
+//
+//	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
+//		Pull: &dex.PullWorkerOptions{MaxConcurrentTasks: 8},
+//	})
+//	if err != nil { return err }
+//	defer worker.Stop(context.Background())
+type PullWorkerOptions struct {
+	// MaxConcurrentTasks bounds simultaneous handlers. Zero uses runtime.NumCPU().
+	MaxConcurrentTasks int
+	// IdleStreamsPerQueue sets waiting streams for each Flow type and the sticky queue. Zero uses one.
+	IdleStreamsPerQueue int
+	// AppWorkerID overrides the generated process identity. Empty generates identity plus eight base32 characters.
+	AppWorkerID string
+}
+
+// Worker hosts registered Flows through a listening service or outbound pull streams.
 //
 // A Worker is one-shot: construct it, call Start once, then call Stop during
 // shutdown. Start blocks while serving. Step and RPC handlers may execute
@@ -88,6 +112,7 @@ type Worker struct {
 	sdkVersion                string
 	negotiatedProtocolVersion uint32
 	logger                    Logger
+	pull                      *pullWorker
 
 	lifecycleMu sync.Mutex
 	state       workerState
@@ -109,7 +134,7 @@ const (
 // registry supplies definitions and cache hydrates large values. It panics when
 // registry or cache is nil. It validates listener, advertised target,
 // FlowService address, synchronization timeout, and GrpcMaxMessageBytes, then creates the private gRPC
-// server and FlowService connection without starting the listener. The returned
+// server and FlowService connection without starting a listener. The returned
 // Worker owns that connection; Start or Stop closes it.
 func NewWorker(
 	registry *Registry,
@@ -152,6 +177,16 @@ func NewWorker(
 		logger,
 	)
 	dexpb.RegisterWorkerServiceServer(grpcServer, service)
+	var pull *pullWorker
+	if options.Pull != nil {
+		pull, err = newPullWorker(registry, service, flowConn, *options.Pull, currentGoSDKVersion())
+		if err != nil {
+			if closeErr := flowConn.Close(); closeErr != nil {
+				logger.Error("close Worker FlowService connection", "error", closeErr)
+			}
+			return nil, err
+		}
+	}
 	return &Worker{
 		registry:                  registry,
 		bindAddress:               bindAddress,
@@ -162,6 +197,7 @@ func NewWorker(
 		attributeIndexSyncTimeout: syncTimeout,
 		sdkVersion:                currentGoSDKVersion(),
 		logger:                    logger,
+		pull:                      pull,
 		state:                     workerCreated,
 		done:                      make(chan struct{}),
 	}, nil
@@ -171,21 +207,26 @@ func resolveWorkerOptions(
 	options WorkerOptions,
 ) (string, WorkerTarget, string, time.Duration, error) {
 	bindAddress := strings.TrimSpace(options.BindAddress)
+	if options.Pull != nil {
+		if bindAddress != "" || options.WorkerTarget.Address != "" || options.WorkerTarget.Headless {
+			return "", WorkerTarget{}, "", 0, fmt.Errorf("dex: Pull Worker cannot configure BindAddress or listening WorkerTarget")
+		}
+	}
 	if bindAddress == "" {
 		bindAddress = defaultWorkerBindAddress
 	}
-	bindHost, bindPort, err := validateWorkerBindAddress(bindAddress)
-	if err != nil {
-		return "", WorkerTarget{}, "", 0, err
-	}
-
-	target, err := resolveAdvertisedWorkerTarget(
-		bindHost,
-		bindPort,
-		options.WorkerTarget,
-	)
-	if err != nil {
-		return "", WorkerTarget{}, "", 0, err
+	var target WorkerTarget
+	if options.Pull != nil {
+		target.Pull = true
+	} else {
+		bindHost, bindPort, err := validateWorkerBindAddress(bindAddress)
+		if err != nil {
+			return "", WorkerTarget{}, "", 0, err
+		}
+		target, err = resolveAdvertisedWorkerTarget(bindHost, bindPort, options.WorkerTarget)
+		if err != nil {
+			return "", WorkerTarget{}, "", 0, err
+		}
 	}
 	flowServiceAddress := strings.TrimSpace(options.FlowServiceAddress)
 	if flowServiceAddress == "" {
@@ -207,6 +248,16 @@ func resolveWorkerOptions(
 		syncTimeout = defaultAttributeIndexSyncTimeout
 	}
 	return bindAddress, target, flowServiceAddress, syncTimeout, nil
+}
+
+func validateWorkerTarget(target WorkerTarget) error {
+	if target.Pull {
+		if target.Address != "" || target.Headless {
+			return fmt.Errorf("pull mode cannot be combined with address or headless mode")
+		}
+		return nil
+	}
+	return validatePlaintextTarget(target.Address, target.Headless)
 }
 
 func validateWorkerBindAddress(address string) (string, string, error) {
@@ -265,9 +316,9 @@ func validatePlaintextTarget(address string, requireHostPort bool) error {
 	return nil
 }
 
-// Start serves WorkerService and blocks until Stop or a serve failure.
+// Start serves Worker tasks and blocks until Stop or a serve failure.
 //
-// Start may be called exactly once. Before listening, it negotiates a Server
+// Start may be called exactly once. Before serving, it negotiates a Server
 // protocol, synchronizes Attribute indexes, and waits up to
 // WorkerOptions.AttributeIndexSyncTimeout for each startup request.
 // It returns nil after a normal Stop, or an error for synchronization, listener,
@@ -310,6 +361,16 @@ func (worker *Worker) Start() error {
 		worker.finish()
 		return fmt.Errorf("dex: sync attribute indexes: %w", err)
 	}
+	if worker.pull != nil {
+		worker.state = workerRunning
+		worker.lifecycleMu.Unlock()
+		worker.pull.run()
+		worker.lifecycleMu.Lock()
+		worker.state = workerStopped
+		worker.lifecycleMu.Unlock()
+		worker.finish()
+		return nil
+	}
 	listener, err := net.Listen("tcp", worker.bindAddress)
 	if err != nil {
 		worker.state = workerStopped
@@ -338,7 +399,8 @@ func (worker *Worker) Start() error {
 //
 // Stop accepts calls before Start and repeated calls after shutdown. A nil context is
 // invalid. If ctx expires while handlers are draining, Stop force-closes the gRPC
-// server, waits for cleanup, and returns ctx.Err. Stop closes the Worker's internal
+// server or connection, waits for cleanup, and returns ctx.Err. Pull mode also
+// limits the drain to 30 seconds. Stop closes the Worker's internal
 // FlowService connection before returning.
 func (worker *Worker) Stop(ctx context.Context) error {
 	if ctx == nil {
@@ -355,7 +417,11 @@ func (worker *Worker) Stop(ctx context.Context) error {
 		return nil
 	case workerRunning:
 		worker.state = workerStopping
-		go worker.grpcServer.GracefulStop()
+		if worker.pull != nil {
+			worker.pull.stop()
+		} else {
+			go worker.grpcServer.GracefulStop()
+		}
 	case workerStopping:
 	case workerStopped:
 		worker.lifecycleMu.Unlock()
@@ -363,12 +429,21 @@ func (worker *Worker) Stop(ctx context.Context) error {
 	}
 	done := worker.done
 	worker.lifecycleMu.Unlock()
+	if worker.pull != nil {
+		var cancelDrain context.CancelFunc
+		ctx, cancelDrain = context.WithTimeout(ctx, 30*time.Second)
+		defer cancelDrain()
+	}
 
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		worker.grpcServer.Stop()
+		if worker.pull != nil {
+			worker.pull.cancel()
+		} else {
+			worker.grpcServer.Stop()
+		}
 		<-done
 		return ctx.Err()
 	}
@@ -376,6 +451,9 @@ func (worker *Worker) Stop(ctx context.Context) error {
 
 func (worker *Worker) finish() {
 	worker.finishOnce.Do(func() {
+		if worker.pull != nil {
+			worker.pull.cancel()
+		}
 		if err := worker.flowConn.Close(); err != nil {
 			worker.logger.Error("close Worker FlowService connection", "error", err)
 		}

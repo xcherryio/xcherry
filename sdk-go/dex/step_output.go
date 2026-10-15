@@ -21,11 +21,21 @@ type stepProgressStream interface {
 }
 
 type waitForOutputStream struct {
-	stream dexpb.WorkerService_InvokeWaitForMethodServer
+	stream waitForFrameSender
 }
 
 type executeOutputStream struct {
-	stream dexpb.WorkerService_InvokeExecuteMethodServer
+	stream executeFrameSender
+}
+
+type waitForFrameSender interface {
+	Context() context.Context
+	Send(*dexpb.InvokeWaitForMethodOutput) error
+}
+
+type executeFrameSender interface {
+	Context() context.Context
+	Send(*dexpb.InvokeExecuteMethodOutput) error
 }
 
 type stepOutputEmitter struct {
@@ -37,7 +47,7 @@ type stepOutputEmitter struct {
 }
 
 func newWaitForOutputStream(
-	stream dexpb.WorkerService_InvokeWaitForMethodServer,
+	stream waitForFrameSender,
 ) *waitForOutputStream {
 	if stream == nil {
 		panic("dex: WaitFor output stream is nil")
@@ -46,7 +56,7 @@ func newWaitForOutputStream(
 }
 
 func newExecuteOutputStream(
-	stream dexpb.WorkerService_InvokeExecuteMethodServer,
+	stream executeFrameSender,
 ) *executeOutputStream {
 	if stream == nil {
 		panic("dex: Execute output stream is nil")

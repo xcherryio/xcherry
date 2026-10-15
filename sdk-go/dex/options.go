@@ -175,12 +175,21 @@ type FlowTimeoutHandlerOptions struct {
 	LoadChannelMapInstances []ChannelMapLoad
 }
 
-// WorkerTarget identifies the application WorkerService endpoint Dex should call.
+// WorkerTarget selects how Dex dispatches Step and RPC work to an application Worker.
+//
+// Use Pull with a pull Worker, or Address with a listening Worker. A Flow type
+// must be unique within a Dex server when Pull is enabled.
+//
+//	target := &dex.WorkerTarget{Pull: true}
+//	options := dex.StartFlowOptions{ConfigOverride: &dex.FlowConfig{WorkerTarget: target}}
+//	_ = options
 type WorkerTarget struct {
 	// Address is the advertised plaintext gRPC target, normally host:port.
 	Address string
 	// Headless bypasses service discovery and requires a direct host:port target.
 	Headless bool
+	// Pull dispatches through the server's Worker task queues. It cannot be combined with Address or Headless.
+	Pull bool
 }
 
 // ActiveStepSearchMode controls which active Step types Dex indexes for Flow search.
