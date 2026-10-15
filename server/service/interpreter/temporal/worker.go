@@ -97,7 +97,7 @@ func NewInterpreterWorker(
 // Activity results come from history; Activities is never invoked for real.
 func NewWorkerForReplay() *InterpreterWorker {
 	return &InterpreterWorker{
-		workflow: interpreter.NewInterpreter(&config.Config{}, &interpreter.Activities{}),
+		workflow: interpreter.NewInterpreterForReplay(),
 	}
 }
 

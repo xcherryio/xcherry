@@ -86,6 +86,8 @@ type rawPullWorker struct {
 	sendProgress            bool
 	holdWaitFor             bool
 	releaseParallel         chan struct{}
+	rejectNextStickyTask    chan struct{}
+	rejectedStickyTasks     chan pullTaskObservation
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
@@ -124,6 +126,7 @@ func newRawPullWorker(t *testing.T, address string, flowType string, workerID st
 	worker := &rawPullWorker{
 		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
+		rejectNextStickyTask: make(chan struct{}, 1), rejectedStickyTasks: make(chan pullTaskObservation, 1),
 		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
 		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress, holdWaitFor: holdWaitFor,
 		hasInvalidSubFlowTarget: hasInvalidSubFlowTarget,
@@ -166,6 +169,18 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		task := frame.GetTask()
 		if task == nil {
 			continue
+		}
+		if queue != taskFlowType(task) {
+			select {
+			case <-w.rejectNextStickyTask:
+				if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: task.GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY}}}); err != nil {
+					w.errors <- err
+					return
+				}
+				w.rejectedStickyTasks <- pullTaskObservation{queue: queue}
+				continue
+			default:
+			}
 		}
 		method := ""
 		observation := pullTaskObservation{queue: queue}
@@ -261,6 +276,19 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			return
 		}
 		w.events <- observation
+	}
+}
+
+func taskFlowType(task *dexpb.PollWorkerTask) string {
+	switch request := task.GetRequest().(type) {
+	case *dexpb.PollWorkerTask_WaitFor:
+		return request.WaitFor.GetFlowType()
+	case *dexpb.PollWorkerTask_Execute:
+		return request.Execute.GetFlowType()
+	case *dexpb.PollWorkerTask_Rpc:
+		return request.Rpc.GetFlowType()
+	default:
+		return ""
 	}
 }
 
@@ -548,6 +576,20 @@ func TestPullWorkerDisconnectCadence(t *testing.T) {
 	testPullWorkerDisconnect(t, service.BackendTypeCadence)
 }
 
+func TestPullWorkerStickyCapacityRecoveryTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerStickyCapacityRecovery(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerStickyCapacityRecoveryCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerStickyCapacityRecovery(t, service.BackendTypeCadence)
+}
+
 func TestPullWorkerAsyncLocalTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
@@ -825,7 +867,7 @@ func testPullWorkerDisconnect(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	runtime := startInProcessDexService(t, DexServiceTestConfig{
 		BackendType: backend,
-		Matching:    &config.MatchingConfig{DispatchWait: time.Second, StickyWait: 100 * time.Millisecond},
+		Matching:    &config.MatchingConfig{DispatchWait: 2 * time.Second, StickyWait: 100 * time.Millisecond},
 	})
 	firstWorker := startDisconnectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-disconnect-"+uuid.NewString())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -833,11 +875,15 @@ func testPullWorkerDisconnect(t *testing.T, backend service.BackendType) {
 	flowID := "pull-disconnect-" + uuid.NewString()
 	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
 		&dexpb.WorkerTarget{IsPullMode: true},
-		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 5, InitialIntervalSeconds: 1}},
+		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1}},
 	))
-	require.Equal(t, "wait_for", waitForPullTask(t, firstWorker, flowID).method)
+	firstTask := waitForPullTask(t, firstWorker, flowID)
+	require.Equal(t, "wait_for", firstTask.method)
+	require.Equal(t, int32(1), firstTask.attempt)
 	secondWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-replacement-"+uuid.NewString(), nil)
-	require.Equal(t, "wait_for", waitForPullTask(t, secondWorker, flowID).method)
+	secondTask := waitForPullTask(t, secondWorker, flowID)
+	require.Equal(t, "wait_for", secondTask.method)
+	require.Equal(t, int32(1), secondTask.attempt)
 	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
 	})
@@ -845,6 +891,44 @@ func testPullWorkerDisconnect(t *testing.T, backend service.BackendType) {
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
+}
+
+func testPullWorkerStickyCapacityRecovery(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	stickyWait := 5 * time.Second
+	runtime := startInProcessDexService(t, DexServiceTestConfig{
+		BackendType: backend,
+		Matching:    &config.MatchingConfig{DispatchWait: 7 * time.Second, StickyWait: stickyWait},
+	})
+	workerID := "pull-capacity-" + uuid.NewString()
+	worker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, workerID, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-capacity-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+		&dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
+	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	worker.rejectNextStickyTask <- struct{}{}
+	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
+		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
+	})
+	require.NoError(t, err)
+	select {
+	case rejected := <-worker.rejectedStickyTasks:
+		require.Equal(t, workerID, rejected.queue)
+	case <-ctx.Done():
+		t.Fatal("sticky Worker did not reject the task")
+	}
+	rejectedAt := time.Now()
+	served := waitForPullTask(t, worker, flowID)
+	require.Equal(t, workerID, served.queue)
+	require.Equal(t, "execute", served.method)
+	require.Equal(t, int32(1), served.attempt)
+	require.Less(t, time.Since(rejectedAt), stickyWait/2)
+	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
 }
 
 func testPullWorkerAppearsDuringRetries(t *testing.T, backend service.BackendType) {

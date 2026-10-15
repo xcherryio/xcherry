@@ -190,6 +190,9 @@ integrationCoverage:
 integTests: prepareIntegrationCoverage
 	$Q go test $(integrationCoverageFlags) -v ./integ -timeout 20m $(integrationCoverageArgs)
 
+pullIntegTests: prepareIntegrationCoverage
+	$Q go test $(integrationCoverageFlags) -v ./integ -run '^TestPull' -timeout 20m $(integrationCoverageArgs)
+
 temporalIntegTests: prepareIntegrationCoverage
 	$Q go test $(integrationCoverageFlags) -v ./integ -timeout 20m -cadence=false $(integrationCoverageArgs)
 

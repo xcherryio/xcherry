@@ -73,7 +73,7 @@ func TestAttributeSynchronizerBatchesByLimitAndStore(t *testing.T) {
 	provider := &attributeSynchronizerTestProvider{}
 	synchronizer := &AttributeSynchronizer{
 		cfg:        &config.AttributeStoreConfig{SyncBatchSize: 2},
-		activities: &Activities{},
+		activities: &Activities{cfg: &config.Config{}},
 		provider:   provider,
 		flowID:     "flow-id",
 		pending: []*dexpb.AttributeSyncItem{
