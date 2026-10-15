@@ -30,6 +30,7 @@ from dex.flow import Registry
 from dex.worker_options import PullWorkerOptions
 
 _LOGGER = logging.getLogger(__name__)
+_GRPC_AIO_EOF = getattr(grpc.aio, "EOF")
 _PERMANENT_CODES = {
     grpc.StatusCode.UNAUTHENTICATED,
     grpc.StatusCode.PERMISSION_DENIED,
@@ -116,7 +117,7 @@ class PullWorkerRuntime:
                 return_exceptions=True,
             )
         finally:
-            await channel.close()
+            await channel.close(grace=None)
 
     def signal(self) -> None:
         if self._wake is not None:
@@ -296,7 +297,7 @@ class PullStream:
                     continue
                 frame = reader.result()
                 reader = None
-                if frame is grpc.aio.EOF:
+                if frame is _GRPC_AIO_EOF:
                     return was_registered
                 kind = frame.WhichOneof("frame")
                 if not was_registered:
@@ -345,7 +346,7 @@ class PullStream:
                     reader = None
                 else:
                     frame = await asyncio.wait_for(self._call.read(), timeout=remaining)
-                if frame is grpc.aio.EOF:
+                if frame is _GRPC_AIO_EOF:
                     return
         except asyncio.TimeoutError:
             _LOGGER.warning("Worker task stream did not close after draining")
