@@ -142,7 +142,7 @@ class PullOverrideParentStep implements Step<string> {
   public getStepType(): string { return "PullOverrideParentStep"; }
   public waitFor(_context: Context, input: string): Wait {
     return Wait.until(SubFlow.run(this.child, input, {
-      configOverride: { workerTarget: { address: "", pull: true } },
+      configOverride: { workerTarget: { pull: true } },
     }));
   }
   public execute(context: Context, _input: string): StepDecision {
@@ -223,6 +223,9 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
       await client.waitForFlow(id, 30_000).then((result) => result.singleOutput(stringCodec)),
       "completed",
     );
+    assert.deepEqual(observations.filter((entry) => entry.method === "SecondExecute"), [
+      { workerID: "pull-a", method: "SecondExecute" },
+    ]);
 
     const pushId = flowId("push-alongside-pull");
     await client.startFlow(pushFlow, pushId, "push", {

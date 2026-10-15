@@ -165,8 +165,8 @@ Set `WorkerOptions.pull` to open outbound task streams without a WorkerService
 listener. Advertise `worker.workerTarget` through `ClientOptions.workerTarget`.
 `StartFlowOptions.configOverride.workerTarget` can select pull routing for one
 Flow, and `SubFlowOptions.configOverride.workerTarget` can select it for a SubFlow.
-The pull target is `{ address: "", pull: true }`; it cannot include a nonempty
-address or `headless`.
+The pull target is `{ pull: true }`; it cannot include a nonempty address or
+`headless`.
 A pull Worker cannot set `bindAddress` or an advertised `workerTarget`.
 
 ```typescript

@@ -48,8 +48,8 @@ import {
   type Step,
   type StepDecision,
   type PullWorkerOptions,
+  type PullWorkerTarget,
   type WorkerOptions,
-  type WorkerTarget,
   type SubFlowOptions,
 } from "../src/index.js";
 import {
@@ -1001,7 +1001,7 @@ test("blob cache contract opens the native DXBC cache", () => {
 async function compileStrongTypes(client: Client): Promise<void> {
   const pullOptions: PullWorkerOptions = { maxConcurrentTasks: 8, idleStreamsPerQueue: 1 };
   const workerOptions: WorkerOptions = { pull: pullOptions };
-  const pullTarget: WorkerTarget = { address: "", pull: true };
+  const pullTarget: PullWorkerTarget = { pull: true };
   const pullConfig: FlowConfig = { workerTarget: pullTarget };
   const subFlowOptions: SubFlowOptions = { configOverride: pullConfig };
   void workerOptions;

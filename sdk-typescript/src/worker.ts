@@ -42,7 +42,6 @@ import { sdkVersion } from "./sdk-version.generated.js";
 import { ValueHydrator } from "./value-mapper.js";
 import { WorkerDispatcher } from "./worker-dispatcher.js";
 import { PullWorker } from "./pull-worker.js";
-import { mapWorkerTarget } from "./worker-target.js";
 
 type WorkerState = "created" | "running" | "stopping" | "stopped" | "closed";
 
@@ -62,7 +61,11 @@ type WorkerState = "created" | "running" | "stopping" | "stopped" | "closed";
  * ```
  */
 export class Worker {
-  /** Effective endpoint advertised to Dex. */
+  /**
+   * Effective endpoint advertised to Dex.
+   * In pull mode, the runtime value also carries `pull: true` and an empty address.
+   * Pass it directly to ClientOptions.workerTarget or a Flow configuration override.
+   */
   public readonly workerTarget: WorkerTarget;
 
   private readonly server = new Server();
@@ -89,14 +92,11 @@ export class Worker {
     if (options.pull !== undefined && (options.bindAddress !== undefined || options.workerTarget !== undefined)) {
       throw new TypeError("pull Worker cannot configure bindAddress or workerTarget");
     }
-    if (options.pull === undefined && options.workerTarget?.pull === true) {
-      throw new TypeError("workerTarget.pull requires WorkerOptions.pull");
-    }
     const bindAddress = options.bindAddress ?? "127.0.0.1:8803";
+    const pullTarget = { address: "", pull: true } as const;
     this.workerTarget = options.pull === undefined
       ? options.workerTarget ?? targetFromBindAddress(bindAddress)
-      : { address: "", pull: true };
-    if (options.pull === undefined) mapWorkerTarget(this.workerTarget);
+      : pullTarget;
     this.flowService = new FlowServiceClient(
       options.serverAddress ?? "localhost:8801",
       credentials.createInsecure(),
@@ -154,7 +154,10 @@ export class Worker {
       await this.pullWorker?.close();
       this.flowService.close();
       this.resolveStopped();
-      throw new Error(`cannot start TypeScript Worker on ${bindAddress}`, { cause: failure });
+      const endpoint = this.pullWorker === undefined
+        ? `Worker on ${bindAddress}`
+        : `pull Worker for ${this.options.serverAddress ?? "localhost:8801"}`;
+      throw new Error(`cannot start TypeScript ${endpoint}`, { cause: failure });
     }
   }
 

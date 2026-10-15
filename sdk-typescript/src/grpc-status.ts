@@ -61,7 +61,7 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
   });
 }
 
-export function workerErrorResponse(failure: unknown): WorkerErrorResponse {
+export function workerErrorResponse(failure: unknown, grpcStatus: status = status.UNKNOWN): WorkerErrorResponse {
   const retryAfterError = failure instanceof RetryAfterError ? failure : undefined;
   const cause =
     retryAfterError?.cause instanceof Error
@@ -74,7 +74,6 @@ export function workerErrorResponse(failure: unknown): WorkerErrorResponse {
     maxWorkerErrorDetailBytes,
     errorDetailTruncationMarker,
   );
-  const grpcStatus = grpcStatusForWorkerFailure(cause);
   return WorkerErrorResponse.create({
     detail,
     errorType: truncateWorkerFailureField(
@@ -90,17 +89,6 @@ export function workerErrorResponse(failure: unknown): WorkerErrorResponse {
     retryAfterSeconds: retryAfterError?.afterSeconds ?? 0,
     grpcStatus,
   });
-}
-
-function grpcStatusForWorkerFailure(failure: Error): status {
-  const code = (failure as Error & { code?: unknown }).code;
-  if (typeof code === "number" && code !== status.OK && Object.values(status).includes(code)) {
-    return code as status;
-  }
-  if (failure.name === "AbortError") {
-    return status.CANCELLED;
-  }
-  return status.UNKNOWN;
 }
 
 function truncateWorkerFailureField(

@@ -47,10 +47,15 @@ interface PollStream {
   stream: ClientDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse> | undefined;
   task: ActiveTask | undefined;
   retryTimer: ReturnType<typeof setTimeout> | undefined;
+  halfCloseTimer: ReturnType<typeof setTimeout> | undefined;
+  halfClosePromise: Promise<void> | undefined;
+  resolveHalfClose: (() => void) | undefined;
   isRegistered: boolean;
   isDisconnected: boolean;
+  isHalfClosed: boolean;
   isDraining: boolean;
   isReconnectRequested: boolean;
+  wasBusyReconnect: boolean;
   backoffMs: number;
   failure: ServiceError | undefined;
 }
@@ -66,6 +71,7 @@ export class PullWorker {
   private readonly streams = new Set<PollStream>();
   private readonly activeTasks = new Set<Promise<void>>();
   private isStopping = false;
+  private isForceStopping = false;
   private hasLoggedUnsupportedServer = false;
   private busyTaskCount = 0;
 
@@ -77,7 +83,8 @@ export class PullWorker {
   ) {
     this.maxConcurrentTasks = positiveOption(options.maxConcurrentTasks, availableParallelism(), "maxConcurrentTasks");
     this.idleStreamsPerQueue = positiveOption(options.idleStreamsPerQueue, 1, "idleStreamsPerQueue");
-    this.stopDrainTimeoutMs = options.stopDrainTimeoutMs ?? 30_000;
+    this.stopDrainTimeoutMs = options.stopDrainTimeoutMs === undefined || options.stopDrainTimeoutMs === 0
+      ? 30_000 : options.stopDrainTimeoutMs;
     if (!Number.isFinite(this.stopDrainTimeoutMs) || this.stopDrainTimeoutMs < 0) {
       throw new RangeError("stopDrainTimeoutMs must not be negative");
     }
@@ -116,6 +123,7 @@ export class PullWorker {
       ]);
       if (drainTimer !== undefined) clearTimeout(drainTimer);
       if (!didDrain) {
+        this.isForceStopping = true;
         for (const poll of this.streams) {
           poll.task?.controller.abort();
           this.closeStream(poll);
@@ -123,6 +131,7 @@ export class PullWorker {
         await drained;
       }
     }
+    await Promise.all([...this.streams].flatMap((poll) => poll.halfClosePromise === undefined ? [] : [poll.halfClosePromise]));
     for (const poll of this.streams) {
       this.closeStream(poll);
       if (poll.retryTimer !== undefined) {
@@ -143,8 +152,10 @@ export class PullWorker {
       while (idleCount < this.idleStreamsPerQueue) {
         const poll: PollStream = {
           queue, stream: undefined, task: undefined, retryTimer: undefined,
-          isRegistered: false, isDisconnected: false, isDraining: false,
-          isReconnectRequested: false, backoffMs: 100, failure: undefined,
+          halfCloseTimer: undefined, halfClosePromise: undefined, resolveHalfClose: undefined,
+          isRegistered: false, isDisconnected: false, isHalfClosed: false, isDraining: false,
+          isReconnectRequested: false, wasBusyReconnect: false,
+          backoffMs: 100, failure: undefined,
         };
         this.streams.add(poll);
         this.openStream(poll);
@@ -157,9 +168,11 @@ export class PullWorker {
     if (this.isStopping) return;
     poll.isRegistered = false;
     poll.isDisconnected = false;
+    poll.isHalfClosed = false;
     poll.failure = undefined;
     poll.isDraining = false;
     poll.isReconnectRequested = false;
+    poll.wasBusyReconnect = false;
     const stream = this.client.pollWorkerTask();
     poll.stream = stream;
     stream.on("data", (response: PollWorkerTaskResponse) => {
@@ -168,10 +181,10 @@ export class PullWorker {
     stream.on("error", (failure: ServiceError) => {
       if (poll.stream !== stream) return;
       poll.failure = failure;
-      this.disconnect(poll);
+      this.onStreamClosed(poll);
     });
     stream.on("end", () => {
-      if (poll.stream === stream) this.disconnect(poll);
+      if (poll.stream === stream) this.onStreamClosed(poll);
     });
     try {
       stream.write({ frame: { $case: "register", value: {
@@ -193,8 +206,7 @@ export class PullWorker {
     if (!poll.isRegistered) {
       if (frame?.$case === "reconnect") {
         poll.isReconnectRequested = true;
-        this.closeStream(poll);
-        this.scheduleReconnect(poll);
+        this.halfCloseStream(poll);
       } else if (frame?.$case === "registered") {
         poll.isRegistered = true;
         poll.backoffMs = 100;
@@ -224,9 +236,9 @@ export class PullWorker {
         poll.isDraining = true;
         poll.isReconnectRequested = true;
         if (poll.task === undefined) {
-          this.closeStream(poll);
-          this.scheduleReconnect(poll);
+          this.halfCloseStream(poll);
         } else {
+          poll.wasBusyReconnect = true;
           this.reconcile();
         }
         break;
@@ -290,8 +302,10 @@ export class PullWorker {
     } catch (failure) {
       if (!poll.isDisconnected) {
         try {
+          const grpcStatus = poll.task?.deadlineCancellation?.hasExpired === true
+            ? status.DEADLINE_EXCEEDED : signal.aborted ? status.CANCELLED : status.UNKNOWN;
           this.sendTaskFrame(poll, { taskId: task.taskId, output: {
-            $case: "workerError", value: workerErrorResponse(failure),
+            $case: "workerError", value: workerErrorResponse(failure, grpcStatus),
           } });
         } catch (sendFailure) {
           console.error("send Worker error", sendFailure);
@@ -308,11 +322,12 @@ export class PullWorker {
     poll.task = undefined;
     this.activeTasks.delete(task.completion);
     this.busyTaskCount--;
-    if (this.isStopping || poll.isDraining) {
-      this.closeStream(poll);
+    if (poll.isDisconnected) {
       if (!this.isStopping) this.scheduleReconnect(poll);
-    } else if (poll.isDisconnected) {
-      this.scheduleReconnect(poll);
+    } else if (this.isForceStopping) {
+      this.closeStream(poll);
+    } else if (this.isStopping || poll.isDraining) {
+      this.halfCloseStream(poll);
     }
     this.reconcile();
   }
@@ -331,29 +346,66 @@ export class PullWorker {
   private disconnect(poll: PollStream): void {
     if (poll.isDisconnected) return;
     poll.isDisconnected = true;
+    poll.stream?.cancel();
     poll.task?.controller.abort();
     if (this.isStopping) return;
     if (poll.task === undefined) this.scheduleReconnect(poll);
+  }
+
+  private onStreamClosed(poll: PollStream): void {
+    if (poll.isHalfClosed) {
+      this.completeHalfClose(poll);
+      return;
+    }
+    if (poll.isDisconnected) return;
+    poll.isDisconnected = true;
+    poll.task?.controller.abort();
+    if (!this.isStopping && poll.task === undefined) this.scheduleReconnect(poll);
+  }
+
+  private halfCloseStream(poll: PollStream): void {
+    if (poll.isHalfClosed || poll.stream === undefined) return;
+    poll.isDisconnected = true;
+    poll.isHalfClosed = true;
+    poll.halfClosePromise = new Promise((resolve) => { poll.resolveHalfClose = resolve; });
+    const stream = poll.stream;
+    poll.halfCloseTimer = setTimeout(() => {
+      stream.cancel();
+      this.completeHalfClose(poll);
+    }, 5_000);
+    poll.halfCloseTimer.unref();
+    stream.end();
+  }
+
+  private completeHalfClose(poll: PollStream): void {
+    if (!poll.isHalfClosed) return;
+    poll.isHalfClosed = false;
+    if (poll.halfCloseTimer !== undefined) clearTimeout(poll.halfCloseTimer);
+    poll.halfCloseTimer = undefined;
+    poll.resolveHalfClose?.();
+    poll.resolveHalfClose = undefined;
+    poll.halfClosePromise = undefined;
+    if (!this.isStopping) this.scheduleReconnect(poll);
   }
 
   private scheduleReconnect(poll: PollStream): void {
     if (this.isStopping || poll.retryTimer !== undefined) return;
     const failure = poll.failure;
     let delayMs: number;
-    if (poll.isReconnectRequested) {
+    if (poll.isReconnectRequested && !poll.wasBusyReconnect) {
       delayMs = 0;
     } else if (failure?.code === status.UNIMPLEMENTED) {
       if (!this.hasLoggedUnsupportedServer) {
         this.hasLoggedUnsupportedServer = true;
         console.error("pull Worker polling is unsupported by this Dex server", failure);
       }
-      delayMs = 60_000;
+      delayMs = 60_000 + Math.floor(Math.random() * 30_000);
     } else if (failure !== undefined && [
       status.UNAUTHENTICATED, status.PERMISSION_DENIED, status.INVALID_ARGUMENT,
       status.RESOURCE_EXHAUSTED,
     ].includes(failure.code)) {
       console.error("Worker task stream rejected", poll.queue, failure);
-      delayMs = 60_000;
+      delayMs = 60_000 + Math.floor(Math.random() * 30_000);
     } else {
       if (failure !== undefined && failure.code !== status.CANCELLED) {
         console.warn("Worker task stream disconnected", poll.queue, failure);
@@ -370,6 +422,7 @@ export class PullWorker {
   private closeStream(poll: PollStream): void {
     poll.isDisconnected = true;
     poll.stream?.cancel();
+    if (poll.isHalfClosed) this.completeHalfClose(poll);
     if (poll.retryTimer !== undefined) {
       clearTimeout(poll.retryTimer);
       poll.retryTimer = undefined;
@@ -404,6 +457,7 @@ class PullStepOutputEmitter implements StepOutputEmitter {
 }
 
 class DeadlineCancellation {
+  public hasExpired = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   public constructor(
@@ -420,6 +474,7 @@ class DeadlineCancellation {
   private schedule(): void {
     const remainingMs = this.deadlineMs - Date.now();
     if (remainingMs <= 0) {
+      this.hasExpired = true;
       this.controller.abort();
     } else {
       this.timer = setTimeout(() => this.schedule(), Math.min(remainingMs, 2_147_483_647));
@@ -429,13 +484,13 @@ class DeadlineCancellation {
 
 function positiveOption(value: number | undefined, defaultValue: number, name: string): number {
   if (value === undefined || value === 0) return defaultValue;
-  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} must not be negative`);
+  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
   return value;
 }
 
 function generateAppWorkerID(): string {
   const identity = [process.env.DEX_WORKER_INSTANCE, process.env.POD_NAME, process.env.HOSTNAME, hostname()]
-    .find((candidate) => candidate?.trim() !== "") ?? "worker";
+    .find((candidate) => candidate !== undefined && candidate.trim() !== "") ?? "worker";
   const sanitized = identity.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 54).replace(/^-+|-+$/g, "") || "worker";
   const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
   const bytes = randomBytes(5);

@@ -7,21 +7,20 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import type { WorkerTarget as ProtoWorkerTarget } from "./gen/dex.js";
-import type { WorkerTarget } from "./options.js";
+import type { PullWorkerTarget, WorkerTarget } from "./options.js";
 
-export function mapWorkerTarget(target: WorkerTarget): ProtoWorkerTarget {
-  if (target.pull === true) {
-    if (target.address !== "" || target.headless === true) {
+export function mapWorkerTarget(target: WorkerTarget | PullWorkerTarget): ProtoWorkerTarget {
+  if ((target as PullWorkerTarget).pull === true) {
+    const provided = target as { readonly address?: string; readonly headless?: boolean };
+    if (provided.address !== undefined && provided.address !== "" || provided.headless === true) {
       throw new TypeError("pull WorkerTarget cannot include address or headless");
     }
     return { address: "", isHeadlessAddress: false, isPullMode: true };
   }
-  if (target.address.trim() === "") {
-    throw new TypeError("WorkerTarget address is required unless pull is true");
-  }
+  const listener = target as WorkerTarget;
   return {
-    address: target.address,
-    isHeadlessAddress: target.headless ?? false,
+    address: listener.address,
+    isHeadlessAddress: listener.headless ?? false,
     isPullMode: false,
   };
 }

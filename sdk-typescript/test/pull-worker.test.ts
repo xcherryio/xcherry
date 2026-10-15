@@ -16,7 +16,7 @@ import {
   type ServerDuplexStream,
 } from "@grpc/grpc-js";
 
-import { Client, Registry, StepList, Worker, retryAfter, type BlobCache, type Flow } from "../src/index.js";
+import { Client, Registry, StepList, Worker, retryAfter, type BlobCache, type Flow, type PullWorkerTarget } from "../src/index.js";
 import {
   InvokeWorkerRPCRequest,
   InvokeWorkerRPCResponse,
@@ -43,15 +43,18 @@ test("pull options reject listener conflicts, invalid capacity, and Worker IDs",
   const registry = new Registry([new TestFlow()]);
   const cache = {} as BlobCache;
   assert.throws(() => new Worker(registry, cache, { pull: {}, bindAddress: "127.0.0.1:8000" }), TypeError);
-  assert.throws(() => new Worker(registry, cache, { pull: {}, workerTarget: { address: "", pull: true } }), TypeError);
-  assert.throws(() => new Worker(registry, cache, { workerTarget: { address: "", pull: true } }), TypeError);
+  assert.throws(() => new Worker(registry, cache, { pull: {}, workerTarget: { address: "" } }), TypeError);
   assert.throws(() => new Worker(registry, cache, { pull: { maxConcurrentTasks: -1 } }), RangeError);
   assert.throws(() => new Worker(registry, cache, { pull: { idleStreamsPerQueue: 1.2 } }), RangeError);
   assert.throws(() => new Worker(registry, cache, { pull: { stopDrainTimeoutMs: -1 } }), RangeError);
   assert.throws(() => new Worker(registry, cache, { pull: { appWorkerID: "bad/id" } }), TypeError);
   assert.throws(() => new Worker(registry, cache, { pull: { appWorkerID: "TestFlow" } }), TypeError);
-  assert.throws(() => new Client(registry, cache, { workerTarget: { pull: true, address: "127.0.0.1:8000" } }), TypeError);
-  assert.throws(() => new Client(registry, cache, { workerTarget: { address: "", headless: true } }), TypeError);
+  assert.throws(() => new Client(registry, cache, { workerTarget: { pull: true, address: "127.0.0.1:8000" } as unknown as PullWorkerTarget }), TypeError);
+  assert.throws(() => new Client(registry, cache, { workerTarget: { pull: true, headless: true } as unknown as PullWorkerTarget }), TypeError);
+  const emptyTargetClient = new Client(registry, cache, { workerTarget: { address: "" } });
+  await emptyTargetClient.close();
+  const emptyTargetWorker = new Worker(registry, cache, { workerTarget: { address: "" } });
+  await emptyTargetWorker.close();
   const worker = new Worker(registry, cache, { pull: {} });
   assert.deepEqual(worker.workerTarget, { address: "", pull: true });
   await worker.close();
@@ -68,6 +71,27 @@ test("generated appWorkerID uses host identity and eight base32 characters", asy
   } finally {
     await first.close();
     await second.close();
+  }
+});
+
+test("generated appWorkerID uses HOSTNAME when higher-priority identities are absent", async () => {
+  const previous = {
+    dex: process.env.DEX_WORKER_INSTANCE,
+    pod: process.env.POD_NAME,
+    host: process.env.HOSTNAME,
+  };
+  delete process.env.DEX_WORKER_INSTANCE;
+  delete process.env.POD_NAME;
+  process.env.HOSTNAME = "Pull.Worker Example";
+  let worker: PullWorker | undefined;
+  try {
+    worker = new PullWorker(new Registry([]), {} as WorkerDispatcher, "127.0.0.1:1", {});
+    assert.match(worker.appWorkerID, /^pull-worker-example-[a-z2-7]{8}$/);
+  } finally {
+    await worker?.close();
+    restoreEnvironment("DEX_WORKER_INSTANCE", previous.dex);
+    restoreEnvironment("POD_NAME", previous.pod);
+    restoreEnvironment("HOSTNAME", previous.host);
   }
 });
 
@@ -129,8 +153,12 @@ test("Reconnect replaces idle streams immediately and drains a busy stream", asy
     const spare = await harness.nextStream();
     spare.call.write({ frame: { $case: "registered", value: {} } });
     replacement.call.write({ frame: { $case: "reconnect", value: { reason: "move" } } });
+    replacement.call.write({ frame: { $case: "ping", value: {} } });
+    await replacement.frame("pong");
     finishTask();
     await replacement.frame("taskFrame");
+    const reconnected = await harness.nextStream();
+    assert.equal((await reconnected.frame("register")).frame?.$case, "register");
     spare.call.write(rpcTask("after-reconnect"));
     const continued = await spare.frame("taskFrame");
     assert.equal(continued.frame?.$case, "taskFrame");
@@ -160,9 +188,21 @@ test("CancelTask and task deadline abort the handler", async () => {
     stream.call.write({ frame: { $case: "cancelTask", value: { taskId: "cancel" } } });
     const cancelled = await stream.frame("taskFrame");
     assert.equal(cancelled.frame?.$case, "taskFrame");
-    if (cancelled.frame?.$case === "taskFrame") assert.equal(cancelled.frame.value.output?.$case, "workerError");
+    if (cancelled.frame?.$case === "taskFrame") {
+      assert.equal(cancelled.frame.value.output?.$case, "workerError");
+      if (cancelled.frame.value.output?.$case === "workerError") {
+        assert.equal(cancelled.frame.value.output.value.grpcStatus, status.CANCELLED);
+      }
+    }
     stream.call.write(rpcTask("deadline", new Date(Date.now() + 20)));
-    await stream.frame("taskFrame", 2);
+    const timedOut = await stream.frame("taskFrame", 2);
+    assert.equal(timedOut.frame?.$case, "taskFrame");
+    if (timedOut.frame?.$case === "taskFrame") {
+      assert.equal(timedOut.frame.value.output?.$case, "workerError");
+      if (timedOut.frame.value.output?.$case === "workerError") {
+        assert.equal(timedOut.frame.value.output.value.grpcStatus, status.DEADLINE_EXCEEDED);
+      }
+    }
     stream.call.write(rpcTask("expired", new Date(Date.now() - 1_000)));
     await stream.frame("taskFrame", 3);
     assert.equal(cancellations.length, 3);
@@ -209,13 +249,13 @@ test("Worker error frame preserves push status, type, stack, and retry delay", (
   const failure = Object.assign(new Error("failed"), { code: status.INVALID_ARGUMENT });
   const pull = workerErrorResponse(failure);
   const push = workerServiceError(failure);
-  assert.equal(pull.grpcStatus, status.INVALID_ARGUMENT);
+  assert.equal(pull.grpcStatus, status.UNKNOWN);
   assert.equal(push.code, pull.grpcStatus);
   assert.equal(pull.detail, "failed");
   assert.equal(pull.errorType, "Error");
   assert.match(pull.stackTrace, /failed/);
   const delayed = workerErrorResponse(retryAfter(2, failure));
-  assert.equal(delayed.grpcStatus, status.INVALID_ARGUMENT);
+  assert.equal(delayed.grpcStatus, status.UNKNOWN);
   assert.equal(delayed.retryAfterSeconds, 2);
 });
 
@@ -264,6 +304,7 @@ async function startHarness() {
     pollWorkerTask(call: TaskStream) {
       const frames: PollWorkerTaskRequest[] = [];
       call.on("data", (frame: PollWorkerTaskRequest) => frames.push(frame));
+      call.on("end", () => call.end());
       call.on("error", () => {});
       streams.push({
         call, frames,
@@ -316,4 +357,9 @@ async function until(condition: () => boolean): Promise<void> {
     if (Date.now() >= deadline) throw new Error("timed out waiting for poll stream event");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }

@@ -24,6 +24,10 @@ if [[ "$#" -ne 0 ]]; then
   echo "usage: $0 [--coverage] [--pull]" >&2
   exit 2
 fi
+if $pull_only && [[ "$test_script" == "test:integration:coverage" ]]; then
+  echo "--coverage and --pull cannot be combined" >&2
+  exit 2
+fi
 
 available_port() {
   node -e 'const net=require("node:net");const server=net.createServer();server.listen(0,"127.0.0.1",()=>{console.log(server.address().port);server.close();});'
