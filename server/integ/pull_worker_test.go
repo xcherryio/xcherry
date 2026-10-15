@@ -52,34 +52,49 @@ type pullTaskObservation struct {
 
 type rawPullWorker struct {
 	events              chan pullTaskObservation
+	started             chan pullTaskObservation
 	errors              chan error
 	cancellations       []context.CancelFunc
+	queueCancels        map[string]context.CancelFunc
 	rpcError            *dexpb.WorkerErrorResponse
 	disconnectOnWaitFor bool
 	spawnSubFlow        bool
+	spawnParallel       bool
+	blockParallel       bool
+	releaseParallel     chan struct{}
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false)
+	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false, false, false)
 }
 
 func startDisconnectingPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, true, false)
+	return newRawPullWorker(t, address, flowType, workerID, nil, true, false, false, false)
 }
 
 func startSubFlowPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, false, true)
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, true, false, false)
 }
 
-func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool) *rawPullWorker {
+func startParallelPullWorker(t *testing.T, address string, flowType string, workerID string, blockParallel bool) *rawPullWorker {
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, false, true, blockParallel)
+}
+
+func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
-	worker := &rawPullWorker{events: make(chan pullTaskObservation, 16), errors: make(chan error, 4), rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow}
+	worker := &rawPullWorker{
+		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16),
+		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
+		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
+		spawnParallel: spawnParallel, blockParallel: blockParallel,
+	}
 	for _, queue := range []string{flowType, workerID} {
 		ctx, cancel := context.WithCancel(context.Background())
 		worker.cancellations = append(worker.cancellations, cancel)
+		worker.queueCancels[queue] = cancel
 		t.Cleanup(cancel)
 		stream, err := dexpb.NewWorkerTaskServiceClient(connection).PollWorkerTask(ctx)
 		require.NoError(t, err)
@@ -141,14 +156,31 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			observation = pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 		case *dexpb.PollWorkerTask_Execute:
 			method = "execute"
+			decision := &dexpb.StepDecision{
+				CloseDecision: common.GracefulCompleteDecision(stringValue(request.Execute.GetContext().GetFlowId())),
+			}
+			if w.spawnParallel {
+				decision.CloseDecision = &dexpb.CloseDecision{
+					CloseDecisionType: dexpb.CloseDecisionType_CLOSE_DECISION_TYPE_DEAD_END,
+				}
+				if request.Execute.GetStepType() == dispatchProbeStep {
+					decision.CloseDecision = nil
+					decision.NextSteps = []*dexpb.StepMovement{
+						{StepType: "ParallelFirst", StepOptions: &dexpb.StepOptions{SkipWaitFor: true}},
+						{StepType: "ParallelSecond", StepOptions: &dexpb.StepOptions{SkipWaitFor: true}},
+					}
+				}
+			}
 			output = &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Execute{
 				Execute: &dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_Result{
-					Result: &dexpb.InvokeExecuteMethodResponse{StepDecision: &dexpb.StepDecision{
-						CloseDecision: common.GracefulCompleteDecision(stringValue(request.Execute.GetContext().GetFlowId())),
-					}},
+					Result: &dexpb.InvokeExecuteMethodResponse{StepDecision: decision},
 				}},
 			}}
 			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Execute.GetContext().GetFlowId(), attempt: request.Execute.GetContext().GetAttempt()}
+			if w.blockParallel && request.Execute.GetStepType() != dispatchProbeStep {
+				w.started <- observation
+				<-w.releaseParallel
+			}
 		case *dexpb.PollWorkerTask_Rpc:
 			method = "rpc"
 			if w.rpcError != nil {
@@ -175,6 +207,10 @@ func (w *rawPullWorker) stop() {
 	for _, cancel := range w.cancellations {
 		cancel()
 	}
+}
+
+func (w *rawPullWorker) stopQueue(queue string) {
+	w.queueCancels[queue]()
 }
 
 func TestPullWorkerDispatchTemporal(t *testing.T) {
@@ -266,6 +302,61 @@ func TestPullSubFlowStartsWithoutStickyQueueCadence(t *testing.T) {
 		t.Skip()
 	}
 	testPullSubFlowStartsWithoutStickyQueue(t, service.BackendTypeCadence)
+}
+
+func TestPullParallelLastWriteTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullParallelLastWrite(t, service.BackendTypeTemporal)
+}
+
+func TestPullParallelLastWriteCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullParallelLastWrite(t, service.BackendTypeCadence)
+}
+
+func testPullParallelLastWrite(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	runtime := startInProcessDexService(t, DexServiceTestConfig{
+		BackendType: backend, Matching: &config.MatchingConfig{
+			DispatchWait: 3 * time.Second, StickyWait: 100 * time.Millisecond,
+		},
+	})
+	firstWorkerID := "pull-parallel-first-" + uuid.NewString()
+	firstWorker := startParallelPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, firstWorkerID, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-parallel-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+		&dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, firstWorker, flowID).queue)
+	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, firstWorkerID)
+	firstWorker.stopQueue(dispatchProbeFlowType)
+	secondWorkerID := "pull-parallel-second-" + uuid.NewString()
+	secondWorker := startParallelPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, secondWorkerID, false)
+	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
+		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, firstWorkerID, waitForPullTask(t, firstWorker, flowID).queue)
+	select {
+	case started := <-firstWorker.started:
+		require.Equal(t, flowID, started.flowID)
+	case <-ctx.Done():
+		t.Fatal("first parallel Step was not dispatched")
+	}
+	secondTask := waitForPullTask(t, secondWorker, flowID)
+	require.Equal(t, "execute", secondTask.method)
+	require.Equal(t, dispatchProbeFlowType, secondTask.queue)
+	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, secondWorkerID)
+	close(firstWorker.releaseParallel)
+	require.Equal(t, firstWorkerID, waitForPullTask(t, firstWorker, flowID).queue)
+	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, firstWorkerID)
+	_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
 }
 
 func testPullSubFlowStartsWithoutStickyQueue(t *testing.T, backend service.BackendType) {
