@@ -345,11 +345,14 @@ func (r *Runtime) Close() {
 
 func (r *Runtime) shutdown() {
 	r.shutdownOnce.Do(func() {
-		if r.membership != nil {
-			r.membership.Stop()
+		if r.worker != nil {
+			r.worker.Close()
 		}
 		if r.matching != nil {
 			r.matching.Close()
+		}
+		if r.membership != nil {
+			r.membership.Stop()
 		}
 		if r.apiServer != nil {
 			timeout := r.options.ShutdownTimeout
@@ -357,9 +360,6 @@ func (r *Runtime) shutdown() {
 				timeout = DefaultShutdownTimeout
 			}
 			r.apiServer.StopServing(timeout)
-		}
-		if r.worker != nil {
-			r.worker.Close()
 		}
 		if r.apiServer != nil {
 			r.apiServer.Close()

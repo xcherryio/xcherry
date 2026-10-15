@@ -47,6 +47,7 @@ import (
 	"github.com/superdurable/dex/service/wake"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -75,26 +76,6 @@ type serviceImpl struct {
 	wakeNotifier       *wake.Notifier
 	pullDispatcher     pulldispatch.Dispatcher
 	matchingCfg        *config.MatchingConfig
-}
-
-func NewApiService(
-	apiCfg *config.ApiConfig,
-	blobStoreCfg *config.BlobStoreConfig,
-	interpreterCfg *config.Interpreter,
-	client uclient.UnifiedClient,
-	taskQueue string,
-	logger log.Logger,
-	store blobstore.BlobStore,
-	attributeStore *attributestore.Manager,
-	streamStore *streamstore.Store,
-	workerPool *workerclient.WorkerClientPool,
-	wakeNotifier *wake.Notifier,
-) (ApiService, error) {
-	return NewApiServiceWithPull(
-		apiCfg, blobStoreCfg, interpreterCfg, client, taskQueue, logger,
-		store, attributeStore, streamStore, workerPool, wakeNotifier,
-		pulldispatch.NewUnavailableDispatcher(), nil,
-	)
 }
 
 func NewApiServiceWithPull(
@@ -228,16 +209,15 @@ func (s *serviceImpl) StartFlow(
 		return nil, s.handleError(err)
 	}
 
-	var workflowConfig dexpb.FlowConfig
+	baseConfig := s.interpreterCfg.DefaultWorkflowConfig
 	if s.interpreterCfg.DefaultWorkflowConfig == nil {
-		workflowConfig = *config.DefaultWorkflowConfig
-	} else {
-		workflowConfig = *s.interpreterCfg.DefaultWorkflowConfig
+		baseConfig = config.DefaultWorkflowConfig
 	}
+	workflowConfig := proto.Clone(baseConfig).(*dexpb.FlowConfig)
 	if startOptions.GetFlowConfigOverride() != nil {
-		overrideWorkflowConfig(*startOptions.GetFlowConfigOverride(), &workflowConfig)
+		overrideWorkflowConfig(startOptions.GetFlowConfigOverride(), workflowConfig)
 	}
-	if err := interpreterconfig.ValidateFlowConfig(&workflowConfig); err != nil {
+	if err := interpreterconfig.ValidateFlowConfig(workflowConfig); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
 	if err := s.validateAttributeStoreNames(ctx, workflowConfig.GetAttributeStoreNames()); err != nil {
@@ -290,7 +270,7 @@ func (s *serviceImpl) StartFlow(
 		StepInput:                    req.GetStepInput(),
 		StepOptions:                  req.GetStepOptions(),
 		InitAttributes:               attributes,
-		Config:                       &workflowConfig,
+		Config:                       workflowConfig,
 		TimeoutHandlerOptions:        startOptions.GetTimeoutHandlerOptions(),
 	}
 
@@ -319,7 +299,7 @@ func (s *serviceImpl) StartFlow(
 	return &dexpb.StartFlowResponse{RunId: runId}, nil
 }
 
-func overrideWorkflowConfig(configOverride dexpb.FlowConfig, workflowConfig *dexpb.FlowConfig) {
+func overrideWorkflowConfig(configOverride *dexpb.FlowConfig, workflowConfig *dexpb.FlowConfig) {
 	if configOverride.ActiveStepSearchMode != nil {
 		workflowConfig.ActiveStepSearchMode = configOverride.ActiveStepSearchMode
 	}
@@ -1708,6 +1688,17 @@ func (s *serviceImpl) shouldInvokeRPCTransactionally(req *dexpb.InvokeRPCRequest
 }
 
 func (s *serviceImpl) handleInvokeRPCError(err error) error {
+	var dispatchError *pulldispatch.ServerError
+	if errors.As(err, &dispatchError) {
+		if dispatchStatus, ok := status.FromError(dispatchError.Err); ok {
+			return serviceerrors.NewErrorAndStatus(
+				dispatchStatus.Code(),
+				dexpb.ErrorSubStatus_ERROR_SUB_STATUS_UNCATEGORIZED,
+				dispatchError.Error(),
+			).ToGRPCError()
+		}
+		return s.handleError(dispatchError.Err)
+	}
 	if mapped, ok := serviceerrors.WorkerAPIFailure(err); ok {
 		return mapped.ToGRPCError()
 	}

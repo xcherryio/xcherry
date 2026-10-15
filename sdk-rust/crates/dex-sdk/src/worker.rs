@@ -304,6 +304,7 @@ fn worker_status(error: HandlerError) -> Status {
         error_type,
         stack_trace,
         retry_after_seconds: error.retry_after_seconds(),
+        grpc_status: Code::Unknown as i32,
     };
     let status = GoogleRpcStatus {
         code: Code::Unknown as i32,

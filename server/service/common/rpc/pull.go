@@ -53,7 +53,7 @@ func invokePullWorkerRPC(
 	remaining := time.Until(deadline)
 	if isLocalActivity {
 		localBudget := remaining - settings.LocalExecutionReserve
-		if localBudget <= 0 {
+		if remaining/2 > localBudget {
 			localBudget = remaining / 2
 		}
 		remaining = localBudget
@@ -62,7 +62,7 @@ func invokePullWorkerRPC(
 		dispatchWait = remaining
 	}
 	if dispatchWait <= 0 {
-		return nil, "", status.Error(codes.DeadlineExceeded, "no time remains for pull Worker dispatch")
+		return nil, "", &pulldispatch.ServerError{Err: status.Error(codes.DeadlineExceeded, "no time remains for pull Worker dispatch")}
 	}
 	if stickyWait > dispatchWait {
 		stickyWait = dispatchWait
@@ -115,8 +115,8 @@ func invokePullWorkerRPC(
 			return nil, "", status.Errorf(codes.Unavailable, "no Worker available for queue %s: %s", flowType, dispatchError.GetDetail())
 		}
 		if dispatchError.GetReason() == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED {
-			return nil, "", status.Errorf(codes.Unavailable, "Worker disconnected from queue %s: %s", queue, dispatchError.GetDetail())
+			return nil, "", status.Errorf(codes.Unavailable, "Worker disconnected during pull dispatch: %s", dispatchError.GetDetail())
 		}
 	}
-	return nil, "", status.Error(codes.Internal, "unexpected pull Worker RPC response")
+	return nil, "", &pulldispatch.ServerError{Err: status.Error(codes.Internal, "unexpected pull Worker RPC response")}
 }

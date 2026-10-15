@@ -58,29 +58,19 @@ func NewInterpreterWorker(
 	workerPool *workerclient.WorkerClientPool,
 	streamStore *streamstore.Store,
 	metrics client.MetricsHandler,
-	pullDispatchers ...pulldispatch.Dispatcher,
+	pullDispatcher pulldispatch.Dispatcher,
 ) *InterpreterWorker {
 	if cfg == nil {
 		panic("requires non-nil config sections")
 	}
 	if serviceClient == nil || closeFunc == nil || dataConverter == nil ||
-		unifiedClient == nil || workerPool == nil || streamStore == nil || metrics == nil {
+		unifiedClient == nil || workerPool == nil || streamStore == nil || metrics == nil || pullDispatcher == nil {
 		panic("Cadence InterpreterWorker requires non-nil dependencies")
 	}
 	if domain == "" || tasklist == "" {
 		panic("Cadence InterpreterWorker requires domain and task list")
 	}
 	internal := interpreter.NewInternalServiceClient(cfg)
-	pullDispatcher := pulldispatch.NewDispatcher(internal)
-	if len(pullDispatchers) > 1 {
-		panic("Cadence InterpreterWorker accepts one pull dispatcher")
-	}
-	if len(pullDispatchers) == 1 {
-		if pullDispatchers[0] == nil {
-			panic("Cadence InterpreterWorker requires a non-nil pull dispatcher")
-		}
-		pullDispatcher = pullDispatchers[0]
-	}
 	eventHandler := event.Handle
 	activities := interpreter.NewActivities(
 		&activityProvider{},

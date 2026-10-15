@@ -35,9 +35,11 @@ import (
 	"github.com/superdurable/dex/service/common/log"
 	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/superdurable/dex/service/common/ptr"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/streamstore"
 	"github.com/superdurable/dex/service/common/workerclient"
 	"github.com/superdurable/dex/service/indexsync"
+	"github.com/superdurable/dex/service/interpreter"
 	"github.com/superdurable/dex/service/interpreter/cadence"
 	"github.com/superdurable/dex/service/interpreter/temporal"
 	"github.com/superdurable/dex/service/matching"
@@ -58,6 +60,7 @@ type integRuntime struct {
 	FlowClient    dexpb.FlowServiceClient
 	UnifiedClient uclient.UnifiedClient
 	BlobStore     blobstore.BlobStore
+	Matching      *matching.Engine
 
 	defaultFlowConfig *dexpb.FlowConfig
 
@@ -267,6 +270,12 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		cfg.Interpreter.InterpreterActivityConfig.InternalServiceTarget = internalListener.Addr().String()
 	}
 	require.NoError(t, cfg.ValidateGeneralAccess())
+	pullDispatcher := pulldispatch.NewUnavailableDispatcher()
+	if cfg.Matching != nil {
+		pullClient := interpreter.NewInternalServiceClient(&cfg)
+		t.Cleanup(pullClient.Close)
+		pullDispatcher = pulldispatch.NewDispatcher(pullClient)
+	}
 	workerPool, err := workerclient.NewWorkerClientPool(&cfg)
 	require.NoError(t, err)
 	t.Cleanup(workerPool.Close)
@@ -322,6 +331,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 			workerPool,
 			streamStore,
 			metricsHandler,
+			pullDispatcher,
 		)
 	case service.BackendTypeCadence:
 		domain := testConfig.CadenceDomain
@@ -370,6 +380,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 			workerPool,
 			streamStore,
 			client.MetricsNopHandler,
+			pullDispatcher,
 		)
 	default:
 		require.FailNow(t, "unsupported backend", testConfig.BackendType)
@@ -407,7 +418,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	t.Cleanup(func() {
 		api.DumpFlowForContinueAsNewHeaderObserver = previousDumpObserver
 	})
-	startApiServer(
+	runtime.Matching = startApiServer(
 		t,
 		listener,
 		internalListener,
@@ -533,7 +544,7 @@ func startApiServer(
 	closeInterpreter func(),
 	workerPool *workerclient.WorkerClientPool,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
-) {
+) *matching.Engine {
 	t.Helper()
 	var matchingEngine *matching.Engine
 	var matchingMonitor *membership.Monitor
@@ -598,6 +609,7 @@ func startApiServer(
 			}
 		}
 	})
+	return matchingEngine
 }
 
 func createTemporalClient(

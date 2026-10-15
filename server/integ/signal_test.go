@@ -128,8 +128,7 @@ func doTestSignalWorkflow(
 		if queryErr != nil {
 			return false
 		}
-		debugDump = currentDebugDump
-		return proto.Equal(expectedConfig, debugDump.GetConfig())
+		return proto.Equal(expectedConfig, currentDebugDump.GetConfig())
 	}, 2*time.Second, 50*time.Millisecond)
 
 	var unhandledSignalVals []*dexpb.Value

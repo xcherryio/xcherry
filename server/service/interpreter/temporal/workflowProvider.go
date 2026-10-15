@@ -452,7 +452,7 @@ func (w *workflowProvider) ExecuteActivity(
 		}
 		localOptions := temporalLocalActivityOptions(options)
 		if interfaces.IsPullStepActivityInput(regularInput) {
-			localOptions.RetryPolicy.MaximumAttempts = 1
+			localOptions.RetryPolicy = &temporal.RetryPolicy{MaximumAttempts: 1}
 		}
 		localCtx := workflow.WithLocalActivityOptions(wfCtx, localOptions)
 		firstAttemptTime := workflow.Now(wfCtx)

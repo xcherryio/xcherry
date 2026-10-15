@@ -77,7 +77,7 @@ func TestWorkflowProviderMapsWorkerAndTimeoutErrors(t *testing.T) {
 	workerFailure := temporalsdk.NewApplicationError(
 		"",
 		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL.String(),
-		*original,
+		original,
 	)
 
 	recoveryError, err := provider.MapToRecoveryError(workerFailure)

@@ -200,6 +200,7 @@ def _worker_error_status(error: BaseException) -> status_pb2.Status:
             _ERROR_TYPE_TRUNCATION_MARKER,
         ),
         stack_trace=_worker_stack_trace(stack_trace_source),
+        grpc_status=grpc.StatusCode.UNKNOWN.value[0],
     )
     if retry_after_error is not None:
         worker_error.retry_after_seconds = retry_after_error.after_seconds
