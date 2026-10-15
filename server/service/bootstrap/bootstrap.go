@@ -79,6 +79,8 @@ type Runtime struct {
 	membership        *membership.Monitor
 	matching          *matching.Engine
 	matchingClients   *matchingClientPool
+	internalListener  net.Listener
+	internalToken     *auth.InternalTokenFile
 	shutdownOnce      sync.Once
 }
 
@@ -172,7 +174,7 @@ func (r *Runtime) createServices() error {
 	r.blobStore = store
 	r.unifiedClient = client
 	r.indexSynchronizer = indexsync.New(&r.cfg.Interpreter, client, r.logger)
-	if r.options.Services.API || r.options.Services.Matching || r.cfg.Membership != nil {
+	if r.options.Services.API || r.options.Services.Matching || r.internalListener != nil {
 		serviceName := "api"
 		if !r.options.Services.API {
 			serviceName = "interpreter"
@@ -194,6 +196,8 @@ func (r *Runtime) createServices() error {
 			r.streamStore,
 			nil,
 			r.workerPool,
+			r.options.Services.API,
+			r.internalToken,
 			r.matching,
 		)
 		if err != nil {
@@ -204,14 +208,26 @@ func (r *Runtime) createServices() error {
 }
 
 func (r *Runtime) createMembershipAndMatching() error {
-	if r.cfg.Membership != nil && r.cfg.Internal.Listen == "" {
-		return fmt.Errorf("internal.listen is required when membership is configured")
-	}
 	if r.options.Services.Matching && !r.options.Services.API && r.cfg.Internal.Listen == "" {
 		return fmt.Errorf("internal.listen is required for a matching-only process")
 	}
 	if r.options.Services.Matching && !r.options.Services.API && r.cfg.Internal.TokenFile == "" {
 		return fmt.Errorf("internal.tokenFile is required for a matching-only process")
+	}
+	if r.options.InternalListener != nil {
+		r.internalListener = r.options.InternalListener
+	} else if r.cfg.Internal.Listen != "" && r.cfg.Internal.TokenFile != "" {
+		listener, err := net.Listen("tcp", r.cfg.Internal.Listen)
+		if err != nil {
+			return fmt.Errorf("listen on internal.listen: %w", err)
+		}
+		r.internalListener = listener
+	} else if r.options.Services.API || r.options.Services.Matching {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return fmt.Errorf("listen on local matching service: %w", err)
+		}
+		r.internalListener = listener
 	}
 	roles := make([]membership.Role, 0, 3)
 	if r.options.Services.API {
@@ -224,24 +240,12 @@ func (r *Runtime) createMembershipAndMatching() error {
 		roles = append(roles, membership.RoleMatching)
 	}
 	rpcAddress := ""
-	if r.cfg.Internal.Listen != "" && r.cfg.Internal.TokenFile != "" {
+	if r.internalListener != nil {
 		var err error
-		listen := r.cfg.Internal.Listen
-		if r.options.InternalListener != nil {
-			listen = r.options.InternalListener.Addr().String()
-		}
-		rpcAddress, err = membership.AdvertisedRPCAddress(r.cfg.Membership, listen)
+		rpcAddress, err = membership.AdvertisedRPCAddress(r.cfg.Membership, r.internalListener.Addr().String())
 		if err != nil {
 			return err
 		}
-	} else if r.options.APIListener != nil {
-		rpcAddress = r.options.APIListener.Addr().String()
-	} else if r.options.Services.API {
-		port := r.cfg.Api.Port
-		if port == 0 {
-			port = config.DefaultApiPort
-		}
-		rpcAddress = fmt.Sprintf("127.0.0.1:%d", port)
 	}
 	monitor, err := membership.NewMonitor(r.cfg.Membership, roles, rpcAddress, nil, r.zapLogger)
 	if err != nil {
@@ -255,7 +259,8 @@ func (r *Runtime) createMembershipAndMatching() error {
 			return err
 		}
 	}
-	r.matchingClients = newMatchingClientPool(token, r.cfg.Api.EffectiveGrpcMaxMessageBytes())
+	r.internalToken = token
+	r.matchingClients = newMatchingClientPool(token, r.cfg.Api.EffectiveGrpcMaxMessageBytes(), monitor, r.zapLogger)
 	if r.options.Services.API || r.options.Services.Matching {
 		matchingCfg := r.cfg.Matching
 		if matchingCfg == nil {
@@ -279,30 +284,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 		r.shutdown()
 		return fmt.Errorf("sync Dex attribute indexes: %w", err)
 	}
-	var internalListener net.Listener
-	if r.apiServer != nil && r.apiServer.HasInternalListener() {
-		if r.options.InternalListener != nil {
-			internalListener = r.options.InternalListener
-		} else {
-			var err error
-			internalListener, err = net.Listen("tcp", r.cfg.Internal.Listen)
-			if err != nil {
-				r.shutdown()
-				return fmt.Errorf("listen on internal.listen: %w", err)
-			}
-		}
-	}
 	if err := r.membership.Start(ctx); err != nil {
-		if internalListener != nil {
-			if closeErr := internalListener.Close(); closeErr != nil {
-				r.logger.Error("close internal listener", tag.Error(closeErr))
-			}
-		}
 		r.shutdown()
 		return fmt.Errorf("start membership: %w", err)
 	}
-	if internalListener != nil {
-		go func() { r.serveError <- r.apiServer.ServeInternal(internalListener) }()
+	if r.apiServer != nil && r.apiServer.HasInternalListener() {
+		go func() { r.serveError <- r.apiServer.ServeInternal(r.internalListener) }()
 	}
 	if r.worker != nil {
 		if err := r.worker.Start(); err != nil {
@@ -349,6 +336,9 @@ func (r *Runtime) Close() {
 
 func (r *Runtime) shutdown() {
 	r.shutdownOnce.Do(func() {
+		if r.membership != nil {
+			r.membership.Stop()
+		}
 		if r.matching != nil {
 			r.matching.Close()
 		}
@@ -365,8 +355,10 @@ func (r *Runtime) shutdown() {
 		if r.apiServer != nil {
 			r.apiServer.Close()
 		}
-		if r.membership != nil {
-			r.membership.Stop()
+		if r.internalListener != nil {
+			if err := r.internalListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				r.logger.Error("close internal listener", tag.Error(err))
+			}
 		}
 		if r.matchingClients != nil {
 			if err := r.matchingClients.Close(); err != nil {
@@ -395,4 +387,20 @@ func (r *Runtime) shutdown() {
 			}
 		}
 	})
+}
+
+// InternalAddress returns the local MatchingService listener address.
+func (r *Runtime) InternalAddress() string {
+	if r.internalListener == nil {
+		return ""
+	}
+	return r.internalListener.Addr().String()
+}
+
+// MembershipAddress returns this process's advertised ring address after Run starts.
+func (r *Runtime) MembershipAddress() string {
+	if r.membership == nil {
+		return ""
+	}
+	return r.membership.Address()
 }

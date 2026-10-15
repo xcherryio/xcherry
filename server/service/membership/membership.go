@@ -129,8 +129,11 @@ func NewMonitor(cfg *config.MembershipConfig, roles []Role, rpcAddress string, r
 	return &Monitor{cfg: cfg, roles: slices.Clone(roles), rpcAddress: rpcAddress, resolver: resolver, logger: logger, rings: make(map[Role]*hashring.HashRing), members: make(map[Role][]HostInfo), subscribers: make(map[chan Change]struct{})}, nil
 }
 
-// AdvertisedRPCAddress replaces a wildcard internal bind host with the membership broadcast host.
+// AdvertisedRPCAddress uses the membership broadcast host for wildcard or loopback internal binds.
 func AdvertisedRPCAddress(cfg *config.MembershipConfig, listen string) (string, error) {
+	if cfg == nil {
+		return listen, nil
+	}
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return "", fmt.Errorf("internal.listen must be host:port: %w", err)
@@ -138,7 +141,7 @@ func AdvertisedRPCAddress(cfg *config.MembershipConfig, listen string) (string, 
 	if port == "0" {
 		return "", errors.New("internal.listen must use a fixed port with membership")
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()) {
 		if cfg != nil && cfg.BroadcastAddress != "" {
 			host = cfg.BroadcastAddress
 		} else {
@@ -303,6 +306,13 @@ func (m *Monitor) Members(role Role) []HostInfo {
 		hosts[index].Roles = slices.Clone(hosts[index].Roles)
 	}
 	return hosts
+}
+
+// Address returns this member's advertised ring address after Start.
+func (m *Monitor) Address() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.address
 }
 
 // Subscribe returns non-blocking, coalesced change hints and a removal function. Re-read Lookup or Members after each hint.

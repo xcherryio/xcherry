@@ -95,7 +95,7 @@ func NewServerWithAccess(
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
 	return NewServerWithMatching(apiCfg, authCfg, internalCfg, wakeCfg, blobStoreCfg, interpreterCfg,
-		client, logger, store, attributeStore, streamStore, readyCheck, workerPool, nil, extraUnaryInterceptors...)
+		client, logger, store, attributeStore, streamStore, readyCheck, workerPool, true, nil, nil, extraUnaryInterceptors...)
 }
 
 // NewServerWithMatching builds gRPC listeners with pull Worker routing.
@@ -113,6 +113,8 @@ func NewServerWithMatching(
 	streamStore *streamstore.Store,
 	readyCheck func(context.Context) error,
 	workerPool *workerclient.WorkerClientPool,
+	publicEnabled bool,
+	internalToken *auth.InternalTokenFile,
 	matchingEngine *matching.Engine,
 	extraUnaryInterceptors ...grpc.UnaryServerInterceptor,
 ) (*Server, error) {
@@ -154,8 +156,8 @@ func NewServerWithMatching(
 		readyCheck = func(context.Context) error { return nil }
 	}
 
-	var generalInternalToken *auth.InternalTokenFile
-	if internalCfg.TokenFile != "" {
+	generalInternalToken := internalToken
+	if generalInternalToken == nil && internalCfg.TokenFile != "" {
 		var err error
 		generalInternalToken, err = auth.NewInternalTokenFile(internalCfg, logger)
 		if err != nil {
@@ -200,27 +202,19 @@ func NewServerWithMatching(
 		logger:     logger,
 		readyCheck: readyCheck,
 	}
-	if !authCfg.IsEnabled() {
+	if publicEnabled && !authCfg.IsEnabled() {
 		server.grpcServer = grpc.NewServer(append(
 			serverOptions,
 			grpc.ChainUnaryInterceptor(unaryInterceptorChain(nil, extraUnaryInterceptors, logger)...),
 		)...)
 		dexpb.RegisterFlowServiceServer(server.grpcServer, handler)
-		if !hasInternalListener {
-			dexpb.RegisterInternalServiceServer(server.grpcServer, handler)
-		}
+		dexpb.RegisterInternalServiceServer(server.grpcServer, handler)
 		if matchingEngine != nil {
 			dexpb.RegisterWorkerTaskServiceServer(server.grpcServer, &pollWorkerTaskService{engine: matchingEngine})
-			if !hasInternalListener {
-				dexpb.RegisterMatchingServiceServer(server.grpcServer, matchingEngine)
-			}
 		}
 		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
-		if !hasInternalListener {
-			return server, nil
-		}
 	}
-	if authCfg.IsEnabled() {
+	if publicEnabled && authCfg.IsEnabled() {
 		authenticator, err := auth.NewAuthenticator(authCfg, logger)
 		if err != nil {
 			return nil, err
@@ -237,10 +231,18 @@ func NewServerWithMatching(
 		}
 		healthpb.RegisterHealthServer(server.grpcServer, healthSrv)
 	}
-	internalInterceptors := auth.NewInternalServiceInterceptor(generalInternalToken, []string{dexpb.InternalService_ServiceDesc.ServiceName, dexpb.MatchingService_ServiceDesc.ServiceName})
-	server.internalGrpcServer = grpc.NewServer(append(serverOptions,
-		grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{internalInterceptors.Unary}, extraUnaryInterceptors, logger)...),
-		grpc.ChainStreamInterceptor(internalInterceptors.Stream))...)
+	if !hasInternalListener && matchingEngine == nil {
+		return server, nil
+	}
+	if generalInternalToken != nil {
+		internalInterceptors := auth.NewInternalServiceInterceptor(generalInternalToken, []string{dexpb.InternalService_ServiceDesc.ServiceName, dexpb.MatchingService_ServiceDesc.ServiceName})
+		server.internalGrpcServer = grpc.NewServer(append(serverOptions,
+			grpc.ChainUnaryInterceptor(unaryInterceptorChain([]grpc.UnaryServerInterceptor{internalInterceptors.Unary}, extraUnaryInterceptors, logger)...),
+			grpc.ChainStreamInterceptor(internalInterceptors.Stream))...)
+	} else {
+		server.internalGrpcServer = grpc.NewServer(append(serverOptions,
+			grpc.ChainUnaryInterceptor(unaryInterceptorChain(nil, extraUnaryInterceptors, logger)...))...)
+	}
 	dexpb.RegisterInternalServiceServer(server.internalGrpcServer, handler)
 	if matchingEngine != nil {
 		dexpb.RegisterMatchingServiceServer(server.internalGrpcServer, matchingEngine)
@@ -254,12 +256,17 @@ func (s *Server) HasInternalListener() bool {
 	return s.internalGrpcServer != nil
 }
 
-// ServeInternal hosts InternalService on listener when authentication is enabled.
+// ServeInternal hosts the private gRPC services on listener.
 func (s *Server) ServeInternal(listener net.Listener) error {
 	if s.internalGrpcServer == nil {
 		panic("ServeInternal requires an internal listener")
 	}
 	s.logger.Info("InternalService gRPC listening", tag.Address(listener.Addr().String()))
+	if err := s.readyCheck(context.Background()); err != nil {
+		s.logger.Error("initial readiness check failed", tag.Error(err))
+	} else {
+		s.setServing(true)
+	}
 	return s.internalGrpcServer.Serve(listener)
 }
 
@@ -278,6 +285,9 @@ func (s *Server) Run() error {
 
 // Serve hosts the gRPC services on listener.
 func (s *Server) Serve(listener net.Listener) error {
+	if s.grpcServer == nil {
+		panic("Serve requires the API role")
+	}
 	s.logger.Info("FlowService gRPC listening", tag.Address(listener.Addr().String()))
 
 	if err := s.readyCheck(context.Background()); err != nil {
@@ -299,7 +309,9 @@ func (s *Server) StopServing(timeout time.Duration) {
 	s.setServing(false)
 	done := make(chan struct{})
 	go func() {
-		s.grpcServer.GracefulStop()
+		if s.grpcServer != nil {
+			s.grpcServer.GracefulStop()
+		}
 		if s.internalGrpcServer != nil {
 			s.internalGrpcServer.GracefulStop()
 		}
@@ -308,7 +320,9 @@ func (s *Server) StopServing(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		s.grpcServer.Stop()
+		if s.grpcServer != nil {
+			s.grpcServer.Stop()
+		}
 		if s.internalGrpcServer != nil {
 			s.internalGrpcServer.Stop()
 		}

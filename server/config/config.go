@@ -224,7 +224,8 @@ type (
 		StreamStore StreamStoreConfig `yaml:"streamStore"`
 		// Auth authenticates public API callers. Default empty leaves authentication off.
 		Auth AuthConfig `yaml:"auth"`
-		// Internal configures a private InternalService and MatchingService listener. Default empty uses the public listener when auth is off.
+		// Internal configures a private InternalService listener. Default empty uses the public listener when auth is off.
+		// It also configures private MatchingService access.
 		Internal InternalConfig `yaml:"internal"`
 	}
 
@@ -426,7 +427,8 @@ type (
 	}
 
 	ApiConfig struct {
-		// Port is the TCP port for FlowService and WorkerTaskService. Default 8801. Without internal.listen and auth, InternalService and MatchingService also use it. Bind is 0.0.0.0:Port.
+		// Port is the TCP port for FlowService and, when auth is off, InternalService (plaintext gRPC). Default 8801. Bind is 0.0.0.0:Port; SDKs/integ and the interpreter CAN activity dial this port when auth is off.
+		// WorkerTaskService also uses this port. MatchingService is private.
 		Port int `yaml:"port"`
 		// MaxWaitSeconds caps transport long polls. Zero uses DefaultMaxWaitSeconds (60). Positive values are the cap. Negatives are invalid. It does not limit Temporal Update handlers.
 		MaxWaitSeconds int64 `yaml:"maxWaitSeconds"`
@@ -741,8 +743,11 @@ func (c MatchingConfig) Validate() error {
 	if settings.LocalDispatchWait <= 0 || settings.LocalStickyWait <= 0 || (c.LocalStickyWait != 0 && settings.LocalStickyWait > settings.LocalDispatchWait) {
 		return fmt.Errorf("matching.localStickyWait must be positive and no greater than localDispatchWait")
 	}
-	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 || settings.PingInterval <= 0 {
+	if settings.LocalExecutionReserve <= 0 || settings.MaxConcurrentTasksCap <= 0 || settings.MaxStreams <= 0 || settings.MaxQueueLength <= 0 || settings.MaxFlowTypes <= 0 || settings.MaxFlowTypeLength <= 0 {
 		return fmt.Errorf("matching execution reserve and stream limits must be positive")
+	}
+	if settings.PingInterval <= 0 {
+		return fmt.Errorf("matching.pingInterval must be positive")
 	}
 	return nil
 }

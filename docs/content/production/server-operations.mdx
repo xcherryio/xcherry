@@ -130,13 +130,18 @@ The private gRPC listener binds **internal.listen**. When its bind host is a
 wildcard, Dex advertises the membership broadcast host with the internal port.
 Use a fixed internal port and ensure peers can reach that advertised address.
 
-The public API uses port 8801 by default. Allow clients and pull Workers to
-reach that port. In Kubernetes, use a NetworkPolicy to restrict the internal
-listener and port 6833 to Dex replicas. Require **internal.tokenFile**. The internal
-listener uses plaintext gRPC, so encrypt its network path. When **auth** is off
-and **internal.listen** is omitted, **MatchingService** and **InternalService**
-use the public listener in a single-process deployment. A membership cluster
-requires the separate internal listener even when public authentication is off.
+The API role uses port 8801 by default. Allow clients and pull Workers to reach
+API instances through that port. Matching-only and interpreter-only instances
+do not expose port 8801. Select only API instances for the public load balancer.
+In Kubernetes, use a NetworkPolicy to restrict the internal listener and port
+6833 to Dex replicas. Require **internal.tokenFile** for membership clusters.
+The internal listener uses plaintext gRPC, so encrypt its network path.
+**MatchingService** is served only on the private listener. Without membership
+or **internal.listen**, Dex binds it to a local loopback port. With **auth** off,
+**InternalService** remains available on the public listener for existing
+interpreter targets. Set **internal.listen** and **internal.tokenFile** to use a
+private listener for it. Interpreter-only processes join membership only when
+**membership** is configured.
 
 **matching.maxStreams** limits registered streams on each Matching instance.
 **maxConcurrentTasksCap** limits streams for one **appWorkerID** on that owner.
@@ -145,7 +150,9 @@ requires the separate internal listener even when public authentication is off.
 the values shown above by default.
 Dex sends a **Ping** frame on idle poll streams every **pingInterval**. Configure
 load balancers for long-lived HTTP/2 streams and an idle timeout greater than
-that interval. Preserve bidirectional streaming through the public endpoint.
+that interval. Busy streams do not receive these Pings; Workers should send
+task heartbeat frames often enough to keep the load balancer connection active.
+Preserve bidirectional streaming through the public endpoint.
 
 ## Configuration
 
