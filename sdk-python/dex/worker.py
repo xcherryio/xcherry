@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,7 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
+from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
     negotiate_server_protocol,
     sdk_version,
@@ -35,11 +37,12 @@ from dex.worker_options import WorkerOptions, WorkerTarget
 
 
 class Worker:
-    """Host synchronous registered Step and RPC handlers over WorkerService.
+    """Host synchronous Step and RPC handlers through a listener or pull streams.
 
     A Worker is one-shot. Call ``start`` on a dedicated thread because it blocks,
-    then call ``stop`` or ``close`` during shutdown. Handlers run concurrently in a
-    bounded thread pool and must synchronize shared application state.
+        then call ``stop`` or ``close`` during shutdown. Set ``WorkerOptions.pull``
+        to poll Dex without a listener. Handlers run concurrently in a bounded
+        thread pool and must synchronize shared application state.
 
     Attributes:
         registry: The Flow Registry served by this Worker.
@@ -61,7 +64,7 @@ class Worker:
         blob_cache: BlobCache,
         options: WorkerOptions | None = None,
     ) -> None:
-        """Construct a Worker without starting its listener.
+        """Construct a Worker without starting its listener or pull streams.
 
         Args:
             registry: A Registry created for synchronous handlers.
@@ -69,11 +72,16 @@ class Worker:
             options: Networking and startup options; ``None`` uses defaults.
 
         Raises:
-            ValueError: If a configured target or bind address is malformed.
+            ValueError: If a target, bind address, or pull Worker ID is invalid.
         """
         self.registry = registry
         self.blob_cache = blob_cache
         self.options = options or WorkerOptions()
+        app_worker_id = (
+            resolve_app_worker_id(registry, self.options.pull)
+            if self.options.pull is not None
+            else None
+        )
         self._lock = threading.Lock()
         self._state = "created"
         self._flow_channel = grpc.insecure_channel(self.options.server_address)
@@ -88,22 +96,41 @@ class Worker:
             values,
             ValueHydrator(self._flow_service, blob_cache),
         )
-        concurrency = max(2, min(32, os.cpu_count() or 2))
+        concurrency = (
+            self.options.pull.max_concurrent_tasks or os.cpu_count() or 1
+            if self.options.pull is not None
+            else max(2, min(32, os.cpu_count() or 2))
+        )
         self._executor = ThreadPoolExecutor(
             max_workers=concurrency,
             thread_name_prefix="dex-python-handler",
         )
-        self._server = grpc.server(
-            self._executor,
-            maximum_concurrent_rpcs=concurrency,
-        )
-        dex_pb2_grpc.add_WorkerServiceServicer_to_server(  # type: ignore[no-untyped-call]
-            WorkerService(dispatcher),
-            self._server,
-        )
+        self._server = None
+        self._pull = None
+        if self.options.pull is not None:
+            self._pull = PullWorkerRuntime(
+                registry,
+                dispatcher,
+                self.options.pull,
+                self.options.server_address,
+                self._executor,
+                app_worker_id,
+            )
+        else:
+            self._server = grpc.server(
+                self._executor,
+                maximum_concurrent_rpcs=concurrency,
+            )
+            dex_pb2_grpc.add_WorkerServiceServicer_to_server(  # type: ignore[no-untyped-call]
+                WorkerService(dispatcher),
+                self._server,
+            )
         self._bound_port = 0
-        self._worker_target = self.options.worker_target or WorkerTarget(
-            self._target_address(self.options.bind_address, 0)
+        self._worker_target = (
+            WorkerTarget(pull=True)
+            if self._pull is not None
+            else self.options.worker_target
+            or WorkerTarget(self._target_address(self.options.bind_address, 0))
         )
 
     def __enter__(self) -> Worker:
@@ -118,10 +145,11 @@ class Worker:
 
     @property
     def worker_target(self) -> WorkerTarget:
-        """Return the effective endpoint advertised to Dex.
+        """Return the effective Worker target advertised to Dex.
 
         Before ``start``, an ephemeral bind port may not yet be resolved. After
-        binding, the property contains the actual selected port.
+        binding, the property contains the actual selected port. Pull mode returns
+        ``WorkerTarget(pull=True)`` before and after start.
 
         Returns:
             The advertised WorkerTarget.
@@ -147,8 +175,9 @@ class Worker:
         """Negotiate protocol, synchronize Attribute indexes, and serve.
 
         ``start`` may be called exactly once. It first contacts FlowService using the
-        configured synchronization timeout, then binds the listener and waits until
-        ``stop`` shuts the server down.
+        configured synchronization timeout, then starts a listener or outbound
+        pull streams and waits until ``stop`` finishes. Later stream failures are
+        logged and retried; they do not raise from ``start``.
 
         Raises:
             RuntimeError: If lifecycle state, index synchronization, or binding fails.
@@ -188,33 +217,54 @@ class Worker:
                 self._flow_channel.close()
                 self._executor.shutdown(wait=True, cancel_futures=True)
                 raise RuntimeError("cannot synchronize Attribute indexes") from failure
-            self._bound_port = self._server.add_insecure_port(self.options.bind_address)
-            if self._bound_port == 0:
-                self._state = "stopped"
-                self._flow_channel.close()
-                self._executor.shutdown(wait=True, cancel_futures=True)
-                raise RuntimeError(
-                    f"cannot bind Python Worker to {self.options.bind_address}"
+            if self._pull is None:
+                assert self._server is not None
+                self._bound_port = self._server.add_insecure_port(
+                    self.options.bind_address
                 )
-            if self.options.worker_target is None:
-                self._worker_target = WorkerTarget(
-                    self._target_address(self.options.bind_address, self._bound_port)
-                )
+                if self._bound_port == 0:
+                    self._state = "stopped"
+                    self._flow_channel.close()
+                    self._executor.shutdown(wait=True, cancel_futures=True)
+                    raise RuntimeError(
+                        f"cannot bind Python Worker to {self.options.bind_address}"
+                    )
+                if self.options.worker_target is None:
+                    self._worker_target = WorkerTarget(
+                        self._target_address(
+                            self.options.bind_address, self._bound_port
+                        )
+                    )
             self._state = "running"
-            self._server.start()
-        self._server.wait_for_termination()
+            if self._server is not None:
+                self._server.start()
+        if self._pull is not None:
+            asyncio.run(self._pull.run())
+        else:
+            assert self._server is not None
+            self._server.wait_for_termination()
 
     def stop(self) -> None:
-        """Drain handlers for five seconds and release Worker resources.
+        """Drain handlers and release Worker resources.
 
         Calls before ``start`` and repeated calls after shutdown are safe. Remaining
-        handler futures are canceled after the gRPC grace period.
+        listening-mode handler futures are canceled after five seconds. Pull mode
+        drains for ``PullWorkerOptions.stop_drain_timeout`` (30 seconds by default),
+        then requests cancellation and waits for every handler to return. A
+        synchronous handler must check ``Context.is_cancellation_requested`` to
+        respond promptly to forced shutdown.
         """
         with self._lock:
             if self._state in ("stopped", "closed"):
                 return
+            was_created = self._state == "created"
             self._state = "stopping"
-        self._server.stop(grace=5).wait(timeout=10)
+        if self._pull is not None:
+            if not was_created:
+                self._pull.stop_threadsafe()
+        else:
+            assert self._server is not None
+            self._server.stop(grace=5).wait(timeout=10)
         self._flow_channel.close()
         self._executor.shutdown(wait=True, cancel_futures=True)
         with self._lock:

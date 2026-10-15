@@ -14,15 +14,16 @@ from dex import (
     Attribute,
     AttributeMap,
     BlobCache,
-    Client,
     ChannelMap,
+    Client,
     Context,
     Flow,
     FlowConfig,
     PersistenceSchema,
+    PullWorkerOptions,
     Registry,
-    RPCResult,
     RPCInvokeOptions,
+    RPCResult,
     StartFlowOptions,
     Step,
     StepDecision,
@@ -31,7 +32,10 @@ from dex import (
     Stream,
     StreamMessage,
     StreamMessagesPage,
+    SubFlowOptions,
     Worker,
+    WorkerOptions,
+    WorkerTarget,
     graceful_complete,
     heartbeat,
     rpc,
@@ -146,3 +150,15 @@ def compile_lifecycle(client: Client, worker: Worker) -> None:
         pass
     with worker:
         pass
+
+
+pull_target: WorkerTarget = WorkerTarget(pull=True)
+pull_worker_options: WorkerOptions = WorkerOptions(
+    pull=PullWorkerOptions(max_concurrent_tasks=8, idle_streams_per_queue=1)
+)
+pull_start_options: StartFlowOptions = StartFlowOptions(
+    config_override=FlowConfig(worker_target=pull_target)
+)
+pull_subflow_options: SubFlowOptions = SubFlowOptions(
+    config_override=FlowConfig(worker_target=pull_target)
+)
