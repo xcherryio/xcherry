@@ -44,9 +44,10 @@ func (pushRPCErrorWorker) InvokeWorkerRPC(
 }
 
 type pullTaskObservation struct {
-	queue  string
-	method string
-	flowID string
+	queue   string
+	method  string
+	flowID  string
+	attempt int32
 }
 
 type rawPullWorker struct {
@@ -55,22 +56,27 @@ type rawPullWorker struct {
 	cancellations       []context.CancelFunc
 	rpcError            *dexpb.WorkerErrorResponse
 	disconnectOnWaitFor bool
+	spawnSubFlow        bool
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, rpcError, false)
+	return newRawPullWorker(t, address, flowType, workerID, rpcError, false, false)
 }
 
 func startDisconnectingPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
-	return newRawPullWorker(t, address, flowType, workerID, nil, true)
+	return newRawPullWorker(t, address, flowType, workerID, nil, true, false)
 }
 
-func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool) *rawPullWorker {
+func startSubFlowPullWorker(t *testing.T, address string, flowType string, workerID string) *rawPullWorker {
+	return newRawPullWorker(t, address, flowType, workerID, nil, false, true)
+}
+
+func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
-	worker := &rawPullWorker{events: make(chan pullTaskObservation, 16), errors: make(chan error, 4), rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor}
+	worker := &rawPullWorker{events: make(chan pullTaskObservation, 16), errors: make(chan error, 4), rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow}
 	for _, queue := range []string{flowType, workerID} {
 		ctx, cancel := context.WithCancel(context.Background())
 		worker.cancellations = append(worker.cancellations, cancel)
@@ -112,19 +118,27 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		case *dexpb.PollWorkerTask_WaitFor:
 			method = "wait_for"
 			if w.disconnectOnWaitFor {
-				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId()}
+				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 				w.stop()
 				return
 			}
+			waitingCondition := &dexpb.WaitingCondition{
+				WaitingConditionType: dexpb.WaitingConditionType_WAITING_CONDITION_TYPE_ALL_COMPLETED,
+				ChannelConditions:    []*dexpb.ChannelCondition{{ChannelName: dispatchProbeChannel}},
+			}
+			if w.spawnSubFlow {
+				waitingCondition.ChannelConditions = nil
+				waitingCondition.SubFlowConditions = []*dexpb.SubFlowCondition{{
+					SubFlowType: request.WaitFor.GetFlowType(), StartStepType: "ChildStep",
+					StepOptions: &dexpb.StepOptions{SkipWaitFor: true},
+				}}
+			}
 			output = &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_WaitFor{
 				WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Result{
-					Result: &dexpb.InvokeWaitForMethodResponse{WaitingCondition: &dexpb.WaitingCondition{
-						WaitingConditionType: dexpb.WaitingConditionType_WAITING_CONDITION_TYPE_ALL_COMPLETED,
-						ChannelConditions:    []*dexpb.ChannelCondition{{ChannelName: dispatchProbeChannel}},
-					}},
+					Result: &dexpb.InvokeWaitForMethodResponse{WaitingCondition: waitingCondition},
 				}},
 			}}
-			observation = pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId()}
+			observation = pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 		case *dexpb.PollWorkerTask_Execute:
 			method = "execute"
 			output = &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Execute{
@@ -134,7 +148,7 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 					}},
 				}},
 			}}
-			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Execute.GetContext().GetFlowId()}
+			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Execute.GetContext().GetFlowId(), attempt: request.Execute.GetContext().GetAttempt()}
 		case *dexpb.PollWorkerTask_Rpc:
 			method = "rpc"
 			if w.rpcError != nil {
@@ -144,7 +158,7 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 					Rpc: &dexpb.InvokeWorkerRPCResponse{Output: stringValue("pull-rpc-ok")},
 				}}
 			}
-			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Rpc.GetContext().GetFlowId()}
+			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Rpc.GetContext().GetFlowId(), attempt: request.Rpc.GetContext().GetAttempt()}
 		default:
 			w.errors <- fmt.Errorf("unexpected pull task request %T", task.GetRequest())
 			return
@@ -226,6 +240,108 @@ func TestPullWorkerDisconnectCadence(t *testing.T) {
 	testPullWorkerDisconnect(t, service.BackendTypeCadence)
 }
 
+func TestPullWorkerAsyncLocalTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerAsyncLocal(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerAsyncLocalCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerAsyncLocal(t, service.BackendTypeCadence)
+}
+
+func TestPullSubFlowStartsWithoutStickyQueueTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullSubFlowStartsWithoutStickyQueue(t, service.BackendTypeTemporal)
+}
+
+func TestPullSubFlowStartsWithoutStickyQueueCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullSubFlowStartsWithoutStickyQueue(t, service.BackendTypeCadence)
+}
+
+func testPullSubFlowStartsWithoutStickyQueue(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	workerID := "pull-subflow-worker-" + uuid.NewString()
+	worker := startSubFlowPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, workerID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "pull-subflow-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+		&dexpb.WorkerTarget{IsPullMode: true}, nil))
+	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
+	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	childFlowID := "SubFlow:" + flowID + "-" + dispatchProbeStep + "-1-0"
+	childTask := waitForPullTask(t, worker, childFlowID)
+	require.Equal(t, "execute", childTask.method)
+	require.Equal(t, dispatchProbeFlowType, childTask.queue)
+	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+	require.Equal(t, workerID, waitForPullTask(t, worker, flowID).queue)
+}
+
+func testPullWorkerAsyncLocal(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	stepOptions := &dexpb.StepOptions{
+		WaitForDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_ASYNC,
+		ExecuteDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_ASYNC,
+		WaitForRetryPolicy:        &dexpb.RetryPolicy{MaximumAttempts: 5, InitialIntervalSeconds: 1},
+	}
+	for _, isWorkerIdle := range []bool{true, false} {
+		t.Run(fmt.Sprintf("worker_idle_%t", isWorkerIdle), func(t *testing.T) {
+			recorder := &wakeRecorder{}
+			wakeServer := httptest.NewServer(recorder)
+			t.Cleanup(wakeServer.Close)
+			runtime := startInProcessDexService(t, DexServiceTestConfig{
+				BackendType: backend,
+				Matching: &config.MatchingConfig{
+					DispatchWait: 3 * time.Second, StickyWait: time.Second,
+					LocalDispatchWait: 200 * time.Millisecond, LocalStickyWait: 100 * time.Millisecond,
+					LocalExecutionReserve: 50 * time.Millisecond,
+				},
+				Wake: &config.WakeConfig{URL: wakeServer.URL, Budget: 5 * time.Second},
+			})
+			var worker *rawPullWorker
+			if isWorkerIdle {
+				worker = startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-async-idle-"+uuid.NewString(), nil)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flowID := "pull-async-" + uuid.NewString()
+			require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+				&dexpb.WorkerTarget{IsPullMode: true}, stepOptions))
+			if !isWorkerIdle {
+				require.Eventually(t, func() bool { return recorder.count("wake") > 0 }, 10*time.Second, 20*time.Millisecond)
+				worker = startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-async-late-"+uuid.NewString(), nil)
+			}
+			observation := waitForPullTask(t, worker, flowID)
+			require.Equal(t, "wait_for", observation.method)
+			if isWorkerIdle {
+				require.Equal(t, int32(1), observation.attempt)
+			} else {
+				require.Greater(t, observation.attempt, int32(1))
+			}
+			_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
+				FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
+			})
+			require.NoError(t, err)
+			result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+			require.NoError(t, err)
+			require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
+		})
+	}
+}
+
 func TestPullWorkerQueueSurvivesContinueAsNewTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
@@ -248,15 +364,22 @@ func testPullWorkerQueueSurvivesContinueAsNew(t *testing.T, backend service.Back
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	flowID := "pull-continue-" + uuid.NewString()
+	startStep := ""
+	if backend == service.BackendTypeCadence {
+		startStep = dispatchProbeStep
+	}
 	startResponse, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
 		RequestId: newRequestID(), FlowId: flowID, FlowType: dispatchProbeFlowType,
-		FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
+		FlowTimeoutSeconds: 120, StartStepType: startStep,
+		FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true}),
 	})
 	require.NoError(t, err)
-	_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
-		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: true, TimeoutSeconds: 15,
-	})
-	require.NoError(t, err)
+	if backend == service.BackendTypeTemporal {
+		_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
+			RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: true, TimeoutSeconds: 15,
+		})
+		require.NoError(t, err)
+	}
 	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
 	_, err = runtime.FlowClient.TriggerContinueAsNew(ctx, &dexpb.TriggerContinueAsNewRequest{
@@ -488,7 +611,7 @@ func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
 	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
 		&dexpb.WorkerTarget{IsPullMode: true}, nil))
 	first := waitForPullTask(t, worker, flowID)
-	require.Equal(t, pullTaskObservation{queue: dispatchProbeFlowType, method: "wait_for", flowID: flowID}, first)
+	require.Equal(t, pullTaskObservation{queue: dispatchProbeFlowType, method: "wait_for", flowID: flowID, attempt: 1}, first)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
 	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
@@ -498,7 +621,7 @@ func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	second := waitForPullTask(t, worker, flowID)
-	require.Equal(t, pullTaskObservation{queue: workerID, method: "execute", flowID: flowID}, second)
+	require.Equal(t, pullTaskObservation{queue: workerID, method: "execute", flowID: flowID, attempt: 1}, second)
 
 	rpcFlowID := "pull-rpc-" + uuid.NewString()
 	_, err = runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
@@ -515,7 +638,7 @@ func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
 		observed := waitForPullTask(t, worker, rpcFlowID)
 		require.Equal(t, "rpc", observed.method)
 		expectedQueue := dispatchProbeFlowType
-		if rpcIndex == 2 {
+		if rpcIndex == 2 && backend == service.BackendTypeTemporal {
 			expectedQueue = workerID
 		}
 		require.Equal(t, expectedQueue, observed.queue)

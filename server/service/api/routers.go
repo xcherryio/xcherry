@@ -196,7 +196,7 @@ func NewServerWithMatchingAccess(
 	wakeNotifier := wake.NewNotifier(wakeCfg, generalWakeToken, logger)
 	internalClientConfig := &config.Config{Api: *apiCfg, Auth: *authCfg, Internal: *internalCfg, Interpreter: *interpreterCfg}
 	pullClient, err := workerclient.NewInternalServiceClient(
-		internalClientConfig.GetInternalServiceTargetWithDefault(), internalClientConfig, generalInternalToken,
+		internalClientConfig.GetInternalServiceTargetWithDefault(), internalClientConfig, generalWakeToken,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create matching client: %w", err)
