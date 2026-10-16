@@ -21,6 +21,7 @@ import (
 
 type ActivityProvider interface {
 	GetLogger(ctx context.Context) UnifiedLogger
+	NewSubFlowStartRejection(detail string) error
 	NewActivityError(
 		errType dexpb.FlowErrorType,
 		activityError *dexpb.InternalActivityError,
@@ -79,7 +80,10 @@ type ActivityOptions struct {
 	LocalActivityScheduleToCloseTimeout time.Duration
 	HeartbeatTimeout                    time.Duration
 	RetryPolicy                         *config.RetryPolicy
+	NonRetryableErrorTypes              []string
 }
+
+const SubFlowStartRejectionErrorType = "SubFlowStartRejected"
 
 type UnifiedContext interface {
 	GetContext() interface{}
@@ -142,6 +146,7 @@ type WorkflowProvider interface {
 	NewCanceledError(reason string) error
 	NewUpdateError(errType dexpb.UpdateErrorType, detail string) error
 	IsApplicationError(err error) bool
+	IsSubFlowStartRejection(err error) (string, bool, error)
 	MapToFlowResultError(err error) (dexpb.FlowErrorType, *dexpb.RecoveryErrorInfo, error)
 	MapToRecoveryError(err error) (*dexpb.RecoveryErrorInfo, error)
 	IsCanceledError(err error) bool

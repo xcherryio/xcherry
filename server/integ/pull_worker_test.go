@@ -38,6 +38,38 @@ type pushWaitForErrorWorker struct {
 	retryAfterSeconds int32
 }
 
+type pushSubFlowParentWorker struct{}
+
+func (pushSubFlowParentWorker) InvokeWaitForMethod(
+	_ context.Context, request *dexpb.InvokeWaitForMethodRequest,
+) (*dexpb.InvokeWaitForMethodResponse, error) {
+	if request.GetStepType() != dispatchProbeStep {
+		return nil, status.Error(codes.FailedPrecondition, "child Step reached push Worker")
+	}
+	return &dexpb.InvokeWaitForMethodResponse{WaitingCondition: &dexpb.WaitingCondition{
+		WaitingConditionType: dexpb.WaitingConditionType_WAITING_CONDITION_TYPE_ALL_COMPLETED,
+		SubFlowConditions: []*dexpb.SubFlowCondition{{
+			SubFlowType:   request.GetFlowType(),
+			StartStepType: "ChildStep",
+			StepOptions:   &dexpb.StepOptions{SkipWaitFor: true},
+			Options: &dexpb.SubFlowOptions{FlowConfigOverride: &dexpb.FlowConfig{
+				WorkerTarget: &dexpb.WorkerTarget{IsPullMode: true},
+			}},
+		}},
+	}}, nil
+}
+
+func (pushSubFlowParentWorker) InvokeExecuteMethod(
+	_ context.Context, request *dexpb.InvokeExecuteMethodRequest,
+) (*dexpb.InvokeExecuteMethodResponse, error) {
+	if request.GetStepType() != dispatchProbeStep {
+		return nil, status.Error(codes.FailedPrecondition, "child Step reached push Worker")
+	}
+	return &dexpb.InvokeExecuteMethodResponse{StepDecision: &dexpb.StepDecision{
+		CloseDecision: common.GracefulCompleteDecision(stringValue(request.GetContext().GetFlowId())),
+	}}, nil
+}
+
 func (w pushWaitForErrorWorker) InvokeWaitForMethod(
 	context.Context, *dexpb.InvokeWaitForMethodRequest,
 ) (*dexpb.InvokeWaitForMethodResponse, error) {
@@ -801,6 +833,38 @@ func TestPullSubFlowStartsWithoutStickyQueueCadence(t *testing.T) {
 	testPullSubFlowStartsWithoutStickyQueue(t, service.BackendTypeCadence)
 }
 
+func TestPushParentRoutesSubFlowToPullWorkerTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPushParentRoutesSubFlowToPullWorker(t, service.BackendTypeTemporal)
+}
+
+func TestPushParentRoutesSubFlowToPullWorkerCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPushParentRoutesSubFlowToPullWorker(t, service.BackendTypeCadence)
+}
+
+func testPushParentRoutesSubFlowToPullWorker(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
+	pushTarget := startWorker(t, pushSubFlowParentWorker{})
+	pullWorkerID := "pull-subflow-override-" + uuid.NewString()
+	pullWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, pullWorkerID, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flowID := "push-subflow-parent-" + uuid.NewString()
+	require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, pushTarget, nil))
+	childFlowID := "SubFlow:" + flowID + "-" + dispatchProbeStep + "-1-0"
+	childTask := waitForPullTask(t, pullWorker, childFlowID)
+	require.Equal(t, pullTaskObservation{queue: dispatchProbeFlowType, method: "execute", flowID: childFlowID, attempt: 1}, childTask)
+	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+}
+
 func TestPullSubFlowRejectsInvalidTargetTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
@@ -818,9 +882,6 @@ func TestPullSubFlowRejectsInvalidTargetCadence(t *testing.T) {
 func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	cfg := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
-	cfg.Interpreter.InterpreterActivityConfig.SubFlowStartActivityConfig = &config.SubFlowStartActivityConfig{
-		ScheduleToCloseTimeout: 3 * time.Second, RetryPolicy: &config.RetryPolicy{MaximumAttempts: 1},
-	}
 	runtime := startPullRuntime(t, &cfg, bootstrap.Services{API: true, Interpreter: true, Matching: true})
 	connection := newDexClientConnectionWithCredential(t, runtime.publicAddress, "", config.DefaultGrpcMaxMessageBytes)
 	flowClient := dexpb.NewFlowServiceClient(connection)
@@ -830,9 +891,13 @@ func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendTy
 	flowID := "invalid-subflow-" + uuid.NewString()
 	require.NoError(t, startDispatchProbe(ctx, flowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true},
 		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1}}))
+	startedAt := time.Now()
 	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
+	require.Equal(t, dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE, result.GetErrorType())
+	require.Equal(t, "SubFlow start rejected: pull worker_target cannot specify address", result.GetErrorMessage())
+	require.Less(t, time.Since(startedAt), 10*time.Second)
 }
 
 func TestPullParallelLastWriteTemporal(t *testing.T) {

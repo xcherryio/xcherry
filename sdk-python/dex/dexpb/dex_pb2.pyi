@@ -2411,14 +2411,16 @@ class SyncAttributeBatchActivityInput(_message.Message):
     def __init__(self, flow_id: _Optional[str] = ..., config_name: _Optional[str] = ..., items: _Optional[_Iterable[_Union[AttributeSyncItem, _Mapping]]] = ...) -> None: ...
 
 class StartSubFlowActivityInput(_message.Message):
-    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id")
+    __slots__ = ("condition", "parent_flow_config", "parent_step_execution_id", "typed_rejection_enabled")
     CONDITION_FIELD_NUMBER: _ClassVar[int]
     PARENT_FLOW_CONFIG_FIELD_NUMBER: _ClassVar[int]
     PARENT_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    TYPED_REJECTION_ENABLED_FIELD_NUMBER: _ClassVar[int]
     condition: SubFlowCondition
     parent_flow_config: FlowConfig
     parent_step_execution_id: str
-    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ...) -> None: ...
+    typed_rejection_enabled: bool
+    def __init__(self, condition: _Optional[_Union[SubFlowCondition, _Mapping]] = ..., parent_flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., parent_step_execution_id: _Optional[str] = ..., typed_rejection_enabled: _Optional[bool] = ...) -> None: ...
 
 class StartSubFlowActivityOutput(_message.Message):
     __slots__ = ("immediate_flow_result",)

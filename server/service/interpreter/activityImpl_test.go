@@ -874,3 +874,17 @@ func TestNewServerActivityFailureKeepsGRPCErrorInternal(t *testing.T) {
 	)
 	require.Contains(t, internalActivityError.GetServerDetail(), "internal service unavailable")
 }
+
+func TestSubFlowStartRejectionPreservesLegacyError(t *testing.T) {
+	provider := interfaces.NewMockActivityProvider(gomock.NewController(t))
+	provider.EXPECT().GetActivityInfo(gomock.Any()).Return(interfaces.ActivityInfo{
+		WorkflowExecution: interfaces.WorkflowExecution{ID: "parent", RunID: "run"},
+	})
+	activities := &Activities{activityProvider: provider, cfg: &config.Config{}}
+	legacyInput := &dexpb.StartSubFlowActivityInput{
+		Condition:             &dexpb.SubFlowCondition{Options: &dexpb.SubFlowOptions{FlowStartDelaySeconds: -1}},
+		ParentStepExecutionId: "Step-1",
+	}
+	_, actualError := activities.StartSubFlow(context.Background(), legacyInput)
+	require.EqualError(t, actualError, "SubFlow start delay must be non-negative")
+}

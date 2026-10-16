@@ -13421,6 +13421,8 @@ type StartSubFlowActivityInput struct {
 	ParentFlowConfig *FlowConfig            `protobuf:"bytes,2,opt,name=parent_flow_config,json=parentFlowConfig,proto3" json:"parent_flow_config,omitempty"`
 	// Source Step; activity context supplies parent Flow and run IDs.
 	ParentStepExecutionId string `protobuf:"bytes,3,opt,name=parent_step_execution_id,json=parentStepExecutionId,proto3" json:"parent_step_execution_id,omitempty"`
+	// Preserve legacy activity errors when older interpreter versions schedule this activity.
+	TypedRejectionEnabled bool `protobuf:"varint,6,opt,name=typed_rejection_enabled,json=typedRejectionEnabled,proto3" json:"typed_rejection_enabled,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -13474,6 +13476,13 @@ func (x *StartSubFlowActivityInput) GetParentStepExecutionId() string {
 		return x.ParentStepExecutionId
 	}
 	return ""
+}
+
+func (x *StartSubFlowActivityInput) GetTypedRejectionEnabled() bool {
+	if x != nil {
+		return x.TypedRejectionEnabled
+	}
+	return false
 }
 
 type StartSubFlowActivityOutput struct {
@@ -15550,11 +15559,12 @@ const file_dex_proto_rawDesc = "" +
 	"\aflow_id\x18\x01 \x01(\tR\x06flowId\x12\x1f\n" +
 	"\vconfig_name\x18\x02 \x01(\tR\n" +
 	"configName\x12,\n" +
-	"\x05items\x18\x03 \x03(\v2\x16.dex.AttributeSyncItemR\x05items\"\xee\x01\n" +
+	"\x05items\x18\x03 \x03(\v2\x16.dex.AttributeSyncItemR\x05items\"\xa6\x02\n" +
 	"\x19StartSubFlowActivityInput\x123\n" +
 	"\tcondition\x18\x01 \x01(\v2\x15.dex.SubFlowConditionR\tcondition\x12=\n" +
 	"\x12parent_flow_config\x18\x02 \x01(\v2\x0f.dex.FlowConfigR\x10parentFlowConfig\x127\n" +
-	"\x18parent_step_execution_id\x18\x03 \x01(\tR\x15parentStepExecutionIdJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\ttenant_idR\rtenant_claims\"a\n" +
+	"\x18parent_step_execution_id\x18\x03 \x01(\tR\x15parentStepExecutionId\x126\n" +
+	"\x17typed_rejection_enabled\x18\x06 \x01(\bR\x15typedRejectionEnabledJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\ttenant_idR\rtenant_claims\"a\n" +
 	"\x1aStartSubFlowActivityOutput\x12C\n" +
 	"\x15immediate_flow_result\x18\x01 \x01(\v2\x0f.dex.FlowResultR\x13immediateFlowResult\"r\n" +
 	"\x1eSubFlowCompletionSignalRequest\x12\x1e\n" +

@@ -131,6 +131,20 @@ func (mr *MockActivityProviderMockRecorder) NewNonRetryableActivityError(errType
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewNonRetryableActivityError", reflect.TypeOf((*MockActivityProvider)(nil).NewNonRetryableActivityError), errType, activityError)
 }
 
+// NewSubFlowStartRejection mocks base method.
+func (m *MockActivityProvider) NewSubFlowStartRejection(detail string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NewSubFlowStartRejection", detail)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NewSubFlowStartRejection indicates an expected call of NewSubFlowStartRejection.
+func (mr *MockActivityProviderMockRecorder) NewSubFlowStartRejection(detail interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewSubFlowStartRejection", reflect.TypeOf((*MockActivityProvider)(nil).NewSubFlowStartRejection), detail)
+}
+
 // RecordHeartbeat mocks base method.
 func (m *MockActivityProvider) RecordHeartbeat(ctx context.Context, details ...interface{}) {
 	m.ctrl.T.Helper()
@@ -699,6 +713,22 @@ func (m *MockWorkflowProvider) IsReplaying(ctx UnifiedContext) bool {
 func (mr *MockWorkflowProviderMockRecorder) IsReplaying(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsReplaying", reflect.TypeOf((*MockWorkflowProvider)(nil).IsReplaying), ctx)
+}
+
+// IsSubFlowStartRejection mocks base method.
+func (m *MockWorkflowProvider) IsSubFlowStartRejection(err error) (string, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsSubFlowStartRejection", err)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// IsSubFlowStartRejection indicates an expected call of IsSubFlowStartRejection.
+func (mr *MockWorkflowProviderMockRecorder) IsSubFlowStartRejection(err interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSubFlowStartRejection", reflect.TypeOf((*MockWorkflowProvider)(nil).IsSubFlowStartRejection), err)
 }
 
 // MapToFlowResultError mocks base method.

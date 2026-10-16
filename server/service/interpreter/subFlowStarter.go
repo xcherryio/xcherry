@@ -19,6 +19,7 @@ import (
 
 type SubFlowStarter struct {
 	provider         interfaces.WorkflowProvider
+	globalVersioner  *GlobalVersioner
 	activities       *Activities
 	tracker          *SubFlowTracker
 	stepExecutionID  string
@@ -31,6 +32,7 @@ type SubFlowStarter struct {
 
 func NewSubFlowStarter(
 	provider interfaces.WorkflowProvider,
+	globalVersioner *GlobalVersioner,
 	activities *Activities,
 	tracker *SubFlowTracker,
 	stepExecutionID string,
@@ -39,11 +41,12 @@ func NewSubFlowStarter(
 	condition *dexpb.WaitingCondition,
 	activityConfig *config.InterpreterActivityConfig,
 ) *SubFlowStarter {
-	if activityConfig == nil {
-		panic("SubFlow starter requires non-nil configuration")
+	if activityConfig == nil || globalVersioner == nil {
+		panic("SubFlow starter requires non-nil configuration and versioner")
 	}
 	return &SubFlowStarter{
 		provider:         provider,
+		globalVersioner:  globalVersioner,
 		activities:       activities,
 		tracker:          tracker,
 		stepExecutionID:  stepExecutionID,
@@ -77,6 +80,7 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 		Condition:             condition,
 		ParentFlowConfig:      s.parentFlowConfig,
 		ParentStepExecutionId: s.stepExecutionID,
+		TypedRejectionEnabled: s.globalVersioner.UsesTypedSubFlowStartFailures(),
 	}
 	err := s.provider.ExecuteLocalActivity(&output, ctx, s.activities.StartSubFlow, startInput)
 	if err != nil {
@@ -92,10 +96,14 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 
 func (s *SubFlowStarter) activityOptions() interfaces.ActivityOptions {
 	activityConfig := s.activityConfig.EffectiveSubFlowStartActivityConfig()
-	return interfaces.ActivityOptions{
+	options := interfaces.ActivityOptions{
 		LocalActivityScheduleToCloseTimeout: activityConfig.ScheduleToCloseTimeout,
 		RetryPolicy:                         activityConfig.RetryPolicy,
 	}
+	if s.globalVersioner.UsesTypedSubFlowStartFailures() {
+		options.NonRetryableErrorTypes = []string{interfaces.SubFlowStartRejectionErrorType}
+	}
+	return options
 }
 
 func (s *SubFlowStarter) isAllDone() bool {

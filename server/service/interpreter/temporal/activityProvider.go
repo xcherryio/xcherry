@@ -26,6 +26,10 @@ func (a *activityProvider) GetLogger(ctx context.Context) interfaces.UnifiedLogg
 	return activity.GetLogger(ctx)
 }
 
+func (a *activityProvider) NewSubFlowStartRejection(detail string) error {
+	return temporal.NewApplicationError(detail, interfaces.SubFlowStartRejectionErrorType, detail)
+}
+
 func (a *activityProvider) NewActivityError(
 	errType dexpb.FlowErrorType,
 	activityError *dexpb.InternalActivityError,

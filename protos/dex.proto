@@ -1664,6 +1664,8 @@ message StartSubFlowActivityInput {
   FlowConfig parent_flow_config = 2;
   // Source Step; activity context supplies parent Flow and run IDs.
   string parent_step_execution_id = 3;
+  // Preserve legacy activity errors when older interpreter versions schedule this activity.
+  bool typed_rejection_enabled = 6;
 }
 
 message StartSubFlowActivityOutput {

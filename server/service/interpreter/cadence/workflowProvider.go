@@ -86,6 +86,20 @@ func (w *workflowProvider) IsApplicationError(err error) bool {
 	return errors.As(err, &applicationError)
 }
 
+func (w *workflowProvider) IsSubFlowStartRejection(err error) (string, bool, error) {
+	var customError *cadence.CustomError
+	if !errors.As(err, &customError) ||
+		customError.Reason() != interfaces.SubFlowStartRejectionErrorType {
+		return "", false, nil
+	}
+	var detail string
+	detailsErr := customError.Details(&detail)
+	if detailsErr != nil {
+		return "", false, detailsErr
+	}
+	return detail, true, nil
+}
+
 func (w *workflowProvider) MapToFlowResultError(
 	err error,
 ) (dexpb.FlowErrorType, *dexpb.RecoveryErrorInfo, error) {
@@ -136,6 +150,16 @@ func (w *workflowProvider) MapToRecoveryError(err error) (*dexpb.RecoveryErrorIn
 		return &dexpb.RecoveryErrorInfo{
 			Detail:    timeoutError.Error(),
 			ErrorType: timeoutError.TimeoutType().String(),
+		}, nil
+	}
+	detail, isRejection, rejectionErr := w.IsSubFlowStartRejection(err)
+	if rejectionErr != nil {
+		return nil, fmt.Errorf("decode SubFlow start rejection: %w", rejectionErr)
+	}
+	if isRejection {
+		return &dexpb.RecoveryErrorInfo{
+			Detail:    detail,
+			ErrorType: interfaces.SubFlowStartRejectionErrorType,
 		}, nil
 	}
 
@@ -510,12 +534,14 @@ func cadenceActivityOptions(options interfaces.ActivityOptions) workflow.Activit
 		// unlimited to match Temporal for default
 		startToCloseTimeout = unlimited
 	}
+	retryPolicy := retry.ConvertCadenceActivityRetryPolicy(options.RetryPolicy)
+	retryPolicy.NonRetriableErrorReasons = options.NonRetryableErrorTypes
 	return workflow.ActivityOptions{
 		ActivityID:             options.ActivityID,
 		StartToCloseTimeout:    startToCloseTimeout,
 		ScheduleToStartTimeout: time.Second * 10,
 		HeartbeatTimeout:       options.HeartbeatTimeout,
-		RetryPolicy:            retry.ConvertCadenceActivityRetryPolicy(options.RetryPolicy),
+		RetryPolicy:            retryPolicy,
 	}
 }
 
@@ -529,9 +555,13 @@ func cadenceLocalActivityOptions(options interfaces.ActivityOptions) workflow.Lo
 		localActivityTimeout = options.RetryPolicy.TotalDuration
 	}
 	localRetryPolicy := retry.LocalActivityRetryPolicy(options.RetryPolicy, localActivityTimeout)
+	retryPolicy := retry.ConvertCadenceLocalActivityRetryPolicy(localRetryPolicy)
+	if retryPolicy != nil {
+		retryPolicy.NonRetriableErrorReasons = options.NonRetryableErrorTypes
+	}
 	return workflow.LocalActivityOptions{
 		ScheduleToCloseTimeout: localActivityTimeout,
-		RetryPolicy:            retry.ConvertCadenceLocalActivityRetryPolicy(localRetryPolicy),
+		RetryPolicy:            retryPolicy,
 	}
 }
 
