@@ -782,6 +782,9 @@ static SELLER_OK: LazyLock<Channel<String>> = LazyLock::new(|| Channel::new("sel
 
 Point a Registry, Worker, and Client at **dexcli** (**127.0.0.1:8801**). Construct the Flow with the service, then register it.
 
+This local example uses a listening Worker. See [Pull Workers](/production/pull-workers)
+for outbound Worker connections in production.
+
 <SdkTabs
   examples={{
     python: 'examples/python/dex_examples/products/order-processing',

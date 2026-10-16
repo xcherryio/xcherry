@@ -74,7 +74,9 @@ dex-server start --services web,api
 **/healthz** 只报告 Web process 的健康状态。在 FlowService 可用前，Web API request
 会返回 upstream error。
 
-## Pull Worker 路由
+## Pull Worker 路由 {#pull-worker-routing}
+
+Worker 设置、路由行为和容量规划见 [Pull Workers](/production/pull-workers)。
 
 **matching** 角色拥有 pull Worker 队列。API 实例接收 **PollWorkerTask** stream，
 并将每条 stream 转发到队列 owner。Interpreter 和 API 实例即使不拥有队列，也会加入
@@ -161,7 +163,7 @@ network path 内。
 
 **web.startFlowWorkerTargetHeadless** 控制所有从 Dex Web 启动的 Flow 的 Worker routing。默认值为 false，启动后不可变。对应的环境变量是 **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**。只有操作员填写 Kubernetes headless Service address 时才启用它。
 
-## 身份认证
+## 身份认证 {#authentication}
 
 公开 API 默认不启用身份认证。配置 **auth.authenticators** 后，所有公开的 unary
 调用和 stream 都必须携带 bearer credential；健康检查仍然开放。Dex 按配置顺序尝试
@@ -203,6 +205,8 @@ JWT 配置省略 **jwksURL** 时，Dex 通过 issuer 的 OpenID 配置发现 key
 
 目前启用 **auth** 后只有 Go SDK 能连接。Dex Web、CLI，以及 Java、Python、
 TypeScript 和 Rust SDK 还不能提供所需 credential。
+
+## Worker 唤醒 hook {#worker-wake-hook}
 
 可选的 Worker wake hook 配置在 **worker.wake** 下：
 

@@ -778,6 +778,9 @@ static SELLER_OK: LazyLock<Channel<String>> = LazyLock::new(|| Channel::new("sel
 
 把 Registry、Worker、Client 指到 **dexcli**（**127.0.0.1:8801**）。用 service 构造 Flow，再注册。
 
+此本地示例使用监听式 Worker。生产环境中的 Worker 出站连接见
+[Pull Workers](/production/pull-workers)。
+
 <SdkTabs
   examples={{
     python: 'examples/python/dex_examples/products/order-processing',

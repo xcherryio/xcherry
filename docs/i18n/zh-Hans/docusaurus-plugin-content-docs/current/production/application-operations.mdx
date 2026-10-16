@@ -19,8 +19,9 @@ Dex Server 的网络路径健康。
    将它们写入故障记录。
 2. 检查 Worker 日志中的 handler 异常、注册失败和启动配置。使用 Flow ID 或 Run ID
    搜索日志。
-3. 检查 Dex Server 到 Worker 的网络路径：服务发现、地址、TLS、认证和负载均衡器
-   健康检查。
+3. 检查 Dex Server 与 Worker 之间的网络路径：服务发现、地址、TLS、认证和负载均衡器
+   健康检查。对于[拉取模式 Worker](/production/pull-workers)，检查出站 stream 和
+   Matching 的可用性。
 4. 确认已部署的 Worker 注册了打开的 Flow 所使用的 Flow、Step 和 RPC 名称。即使
    部署健康，旧 Step type 也可能在该 Worker 版本中缺失。
 5. 在 Dex Web 中检查受影响的 Step。重试次数、Worker 错误、gRPC 状态和 stack trace
