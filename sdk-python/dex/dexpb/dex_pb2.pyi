@@ -429,7 +429,7 @@ class PollWorkerTaskPing(_message.Message):
     def __init__(self) -> None: ...
 
 class DispatchTaskRequest(_message.Message):
-    __slots__ = ("queue", "fallback_queue", "flow_id", "sticky_wait", "dispatch_wait", "deadline", "task_id", "wait_for", "execute", "rpc")
+    __slots__ = ("queue", "fallback_queue", "flow_id", "sticky_wait", "dispatch_wait", "deadline", "task_id", "wait_for", "execute", "rpc", "supports_assignment_state")
     QUEUE_FIELD_NUMBER: _ClassVar[int]
     FALLBACK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
@@ -440,6 +440,7 @@ class DispatchTaskRequest(_message.Message):
     WAIT_FOR_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     RPC_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_ASSIGNMENT_STATE_FIELD_NUMBER: _ClassVar[int]
     queue: str
     fallback_queue: str
     flow_id: str
@@ -450,23 +451,28 @@ class DispatchTaskRequest(_message.Message):
     wait_for: InvokeWaitForMethodRequest
     execute: InvokeExecuteMethodRequest
     rpc: InvokeWorkerRPCRequest
-    def __init__(self, queue: _Optional[str] = ..., fallback_queue: _Optional[str] = ..., flow_id: _Optional[str] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., task_id: _Optional[str] = ..., wait_for: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCRequest, _Mapping]] = ...) -> None: ...
+    supports_assignment_state: bool
+    def __init__(self, queue: _Optional[str] = ..., fallback_queue: _Optional[str] = ..., flow_id: _Optional[str] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., task_id: _Optional[str] = ..., wait_for: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCRequest, _Mapping]] = ..., supports_assignment_state: _Optional[bool] = ...) -> None: ...
 
 class DispatchTaskResponse(_message.Message):
-    __slots__ = ("wait_for", "execute", "rpc", "worker_error", "dispatch_error", "served_by_app_worker_id")
+    __slots__ = ("wait_for", "execute", "rpc", "worker_error", "dispatch_error", "assigned", "unassigned", "served_by_app_worker_id")
     WAIT_FOR_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     RPC_FIELD_NUMBER: _ClassVar[int]
     WORKER_ERROR_FIELD_NUMBER: _ClassVar[int]
     DISPATCH_ERROR_FIELD_NUMBER: _ClassVar[int]
+    ASSIGNED_FIELD_NUMBER: _ClassVar[int]
+    UNASSIGNED_FIELD_NUMBER: _ClassVar[int]
     SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     wait_for: InvokeWaitForMethodOutput
     execute: InvokeExecuteMethodOutput
     rpc: InvokeWorkerRPCResponse
     worker_error: WorkerErrorResponse
     dispatch_error: DispatchTaskError
+    assigned: _empty_pb2.Empty
+    unassigned: _empty_pb2.Empty
     served_by_app_worker_id: str
-    def __init__(self, wait_for: _Optional[_Union[InvokeWaitForMethodOutput, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodOutput, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCResponse, _Mapping]] = ..., worker_error: _Optional[_Union[WorkerErrorResponse, _Mapping]] = ..., dispatch_error: _Optional[_Union[DispatchTaskError, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, wait_for: _Optional[_Union[InvokeWaitForMethodOutput, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodOutput, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCResponse, _Mapping]] = ..., worker_error: _Optional[_Union[WorkerErrorResponse, _Mapping]] = ..., dispatch_error: _Optional[_Union[DispatchTaskError, _Mapping]] = ..., assigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., unassigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class DispatchTaskError(_message.Message):
     __slots__ = ("reason", "detail")

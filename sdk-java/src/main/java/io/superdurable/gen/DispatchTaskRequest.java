@@ -496,6 +496,21 @@ private static final long serialVersionUID = 0L;
     return io.superdurable.gen.InvokeWorkerRPCRequest.getDefaultInstance();
   }
 
+  public static final int SUPPORTS_ASSIGNMENT_STATE_FIELD_NUMBER = 11;
+  private boolean supportsAssignmentState_ = false;
+  /**
+   * <pre>
+   * Allows matching to send assignment state frames to capable callers.
+   * </pre>
+   *
+   * <code>bool supports_assignment_state = 11;</code>
+   * @return The supportsAssignmentState.
+   */
+  @java.lang.Override
+  public boolean getSupportsAssignmentState() {
+    return supportsAssignmentState_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -540,6 +555,9 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 10) {
       output.writeMessage(10, (io.superdurable.gen.InvokeWorkerRPCRequest) request_);
     }
+    if (supportsAssignmentState_ != false) {
+      output.writeBool(11, supportsAssignmentState_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -579,6 +597,10 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 10) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(10, (io.superdurable.gen.InvokeWorkerRPCRequest) request_);
+    }
+    if (supportsAssignmentState_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(11, supportsAssignmentState_);
     }
     return size;
   }
@@ -627,6 +649,8 @@ private static final long serialVersionUID = 0L;
     }
     if (!getTaskId()
         .equals(other.getTaskId())) return false;
+    if (getSupportsAssignmentState()
+        != other.getSupportsAssignmentState()) return false;
     if (!getRequestCase().equals(other.getRequestCase())) return false;
     switch (requestCase_) {
       case 8:
@@ -675,6 +699,9 @@ private static final long serialVersionUID = 0L;
     }
     hash = (37 * hash) + TASK_ID_FIELD_NUMBER;
     hash = (53 * hash) + getTaskId().hashCode();
+    hash = (37 * hash) + SUPPORTS_ASSIGNMENT_STATE_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getSupportsAssignmentState());
     switch (requestCase_) {
       case 8:
         hash = (37 * hash) + WAIT_FOR_FIELD_NUMBER;
@@ -862,6 +889,7 @@ private static final long serialVersionUID = 0L;
       if (rpcBuilder_ != null) {
         rpcBuilder_.clear();
       }
+      supportsAssignmentState_ = false;
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -929,6 +957,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000040) != 0)) {
         result.taskId_ = taskId_;
       }
+      if (((from_bitField0_ & 0x00000400) != 0)) {
+        result.supportsAssignmentState_ = supportsAssignmentState_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -989,6 +1020,9 @@ private static final long serialVersionUID = 0L;
         taskId_ = other.taskId_;
         bitField0_ |= 0x00000040;
         onChanged();
+      }
+      if (other.getSupportsAssignmentState() != false) {
+        setSupportsAssignmentState(other.getSupportsAssignmentState());
       }
       switch (other.getRequestCase()) {
         case WAIT_FOR: {
@@ -1095,6 +1129,11 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 10;
               break;
             } // case 82
+            case 88: {
+              supportsAssignmentState_ = input.readBool();
+              bitField0_ |= 0x00000400;
+              break;
+            } // case 88
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2390,6 +2429,50 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 10;
       onChanged();
       return rpcBuilder_;
+    }
+
+    private boolean supportsAssignmentState_ ;
+    /**
+     * <pre>
+     * Allows matching to send assignment state frames to capable callers.
+     * </pre>
+     *
+     * <code>bool supports_assignment_state = 11;</code>
+     * @return The supportsAssignmentState.
+     */
+    @java.lang.Override
+    public boolean getSupportsAssignmentState() {
+      return supportsAssignmentState_;
+    }
+    /**
+     * <pre>
+     * Allows matching to send assignment state frames to capable callers.
+     * </pre>
+     *
+     * <code>bool supports_assignment_state = 11;</code>
+     * @param value The supportsAssignmentState to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSupportsAssignmentState(boolean value) {
+
+      supportsAssignmentState_ = value;
+      bitField0_ |= 0x00000400;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Allows matching to send assignment state frames to capable callers.
+     * </pre>
+     *
+     * <code>bool supports_assignment_state = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSupportsAssignmentState() {
+      bitField0_ = (bitField0_ & ~0x00000400);
+      supportsAssignmentState_ = false;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.DispatchTaskRequest)

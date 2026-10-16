@@ -87,6 +87,60 @@ public interface DispatchTaskResponseOrBuilder extends
 
   /**
    * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   * @return Whether the assigned field is set.
+   */
+  boolean hasAssigned();
+  /**
+   * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   * @return The assigned.
+   */
+  com.google.protobuf.Empty getAssigned();
+  /**
+   * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   */
+  com.google.protobuf.EmptyOrBuilder getAssignedOrBuilder();
+
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   * @return Whether the unassigned field is set.
+   */
+  boolean hasUnassigned();
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   * @return The unassigned.
+   */
+  com.google.protobuf.Empty getUnassigned();
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   */
+  com.google.protobuf.EmptyOrBuilder getUnassignedOrBuilder();
+
+  /**
+   * <pre>
    * Identifies the Worker that produced the final result or Worker error.
    * </pre>
    *

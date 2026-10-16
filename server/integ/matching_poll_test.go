@@ -273,8 +273,7 @@ func testPullWorkerRouting(t *testing.T, backend service.BackendType) {
 		stopped := make(chan error, 1)
 		go func() { stopped <- first.stop() }()
 		require.NoError(t, registration.worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
-		response, err := dispatch.Recv()
-		require.NoError(t, err)
+		response := receivePullDispatchOutput(t, dispatch)
 		require.NotNil(t, response.GetRpc())
 		reconnect, err := registration.worker.Recv()
 		require.NoError(t, err)
@@ -336,7 +335,7 @@ func registerPullWorker(t *testing.T, connection *grpc.ClientConn, queue string)
 }
 
 func pullDispatchRequest(queue string) *dexpb.DispatchTaskRequest {
-	return &dexpb.DispatchTaskRequest{Queue: queue, FlowId: uuid.NewString(), DispatchWait: durationpb.New(5 * time.Second), Deadline: timestamppb.New(time.Now().Add(10 * time.Second)), Request: &dexpb.DispatchTaskRequest_Rpc{Rpc: &dexpb.InvokeWorkerRPCRequest{}}}
+	return &dexpb.DispatchTaskRequest{Queue: queue, FlowId: uuid.NewString(), DispatchWait: durationpb.New(5 * time.Second), Deadline: timestamppb.New(time.Now().Add(10 * time.Second)), Request: &dexpb.DispatchTaskRequest_Rpc{Rpc: &dexpb.InvokeWorkerRPCRequest{}}, SupportsAssignmentState: true}
 }
 
 func dispatchPullTask(t *testing.T, client dexpb.MatchingServiceClient, worker dexpb.WorkerTaskService_PollWorkerTaskClient, queue string) {
@@ -353,12 +352,21 @@ func dispatchPullTask(t *testing.T, client dexpb.MatchingServiceClient, worker d
 		require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
 		break
 	}
-	response, err := dispatch.Recv()
-	require.NoError(t, err)
+	response := receivePullDispatchOutput(t, dispatch)
 	require.NotNil(t, response.GetRpc())
 	require.NotEmpty(t, response.GetServedByAppWorkerId())
 	_, err = dispatch.Recv()
 	require.ErrorIs(t, err, io.EOF)
+}
+
+func receivePullDispatchOutput(t *testing.T, stream dexpb.MatchingService_DispatchTaskClient) *dexpb.DispatchTaskResponse {
+	t.Helper()
+	assigned, err := stream.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, assigned.GetAssigned())
+	response, err := stream.Recv()
+	require.NoError(t, err)
+	return response
 }
 
 func requireMatchingUnavailableOnPublic(t *testing.T, connection *grpc.ClientConn) {
