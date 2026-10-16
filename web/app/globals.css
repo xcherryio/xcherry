@@ -284,14 +284,13 @@ a {
 }
 
 /* Both flats lift on a dark ground. The deep track is 1.33:1 on the dark header
-   if left alone — invisible — so it is not optional. The pair still clears 3:1
-   against each other, so the head reads as a separate object and not a bulge. */
+   if left alone — invisible — so it is not optional. The gap between the bar and
+   the chevron, not contrast, makes the head read as a separate object. */
 [data-theme='dark'] {
   /* The track moves rather than the head, because the head is pinned to the CTA.
-     At L 0.52 it clears 3:1 against both the head (3.65) and the header (3.58);
-     the previous L 0.56 only managed 2.33 against the CTA green, which is how
-     the mark and the button came to disagree in dark and not in light. */
-  --brand-track: #367854;
+     It takes the near-white the mark uses on every dark ground, so the bar
+     reads as the same object as the header text. */
+  --brand-track: #f6f8f4;
   --brand-head: #70eea9;
 }
 

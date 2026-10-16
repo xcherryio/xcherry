@@ -1,7 +1,7 @@
 import React, {type ReactNode} from 'react';
 
 /**
- * The Dex mark: a durable track, most of it travelled, and one live head.
+ * The Dex mark: the pipe operator |> set as a D, passing a result to the next step.
  *
  * The same geometry as the app's mark (web/app/components/DexMark.tsx), kept as a
  * second small component rather than shared through a package because the two
@@ -14,32 +14,35 @@ import React, {type ReactNode} from 'react';
  * circle with negative offsets.
  */
 export default function DexMark({size = 30}: {size?: number}): ReactNode {
-  const c = size / 2;
-  const r = size * 0.336;
-  const w = size * 0.15;
-  const at = (deg: number): readonly [number, number] => {
-    const a = (deg * Math.PI) / 180;
-    return [c + r * Math.cos(a), c + r * Math.sin(a)] as const;
-  };
-  const [hx, hy] = at(-62);
-  const [x0, y0] = at(-88);
-  const [x1, y1] = at(-362);
+  // A 64-unit grid. At 32px and below, heavier strokes keep the shape legible.
+  const isSmall = size <= 32;
+  const strokeWidth = isSmall ? 12 : 10.5;
+  const top = isSmall ? 12 : 11;
+  const bottom = 64 - top;
+  const chevronStart = isSmall ? 30.5 : 29.5;
   return (
     <svg
       aria-hidden="true"
       focusable="false"
       height={size}
-      viewBox={`0 0 ${size} ${size}`}
+      viewBox="0 0 64 64"
       width={size}
       xmlns="http://www.w3.org/2000/svg">
       <path
-        d={`M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 1 ${x0.toFixed(2)} ${y0.toFixed(2)}`}
+        d={`M 13.5 ${top} V ${bottom}`}
         fill="none"
         stroke="var(--brand-track)"
         strokeLinecap="round"
-        strokeWidth={w.toFixed(2)}
+        strokeWidth={strokeWidth}
       />
-      <circle cx={hx.toFixed(2)} cy={hy.toFixed(2)} fill="var(--brand-head)" r={(w * 0.8).toFixed(2)} />
+      <path
+        d={`M ${chevronStart} ${top} L 50.5 32 L ${chevronStart} ${bottom}`}
+        fill="none"
+        stroke="var(--brand-head)"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={strokeWidth}
+      />
     </svg>
   );
 }
