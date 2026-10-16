@@ -8,7 +8,16 @@
 
 import { readFileSync, statSync } from "node:fs";
 
-import { InterceptingCall, Metadata, status, type Interceptor } from "@grpc/grpc-js";
+import {
+  InterceptingCall,
+  Metadata,
+  status,
+  type InterceptingListener,
+  type Interceptor,
+  type InterceptorOptions,
+  type Listener,
+  type NextCall,
+} from "@grpc/grpc-js";
 
 /**
  * Supplies the current bearer token for Client and Worker calls.
@@ -17,6 +26,7 @@ import { InterceptingCall, Metadata, status, type Interceptor } from "@grpc/grpc
  * A call may overlap another call, so implementations must support concurrent requests.
  * Throwing or rejecting fails the call locally without contacting Dex. The token travels
  * over the same plaintext connection as other calls; protect the network path.
+ * A call deadline or cancellation ends the call even if token() remains pending.
  *
  * @example
  * ```ts
@@ -100,18 +110,139 @@ export class FileCredential implements Credential {
 
 export function credentialInterceptors(credential: Credential | undefined): Interceptor[] {
   if (credential === undefined) return [];
-  return [(options, nextCall) => new InterceptingCall(nextCall(options), {
-    start(metadata, listener, next) {
-      Promise.resolve().then(() => credential.token()).then((token) => {
-        metadata.set("authorization", `Bearer ${token}`);
-        next(metadata, listener);
-      }).catch((failure: unknown) => {
-        listener.onReceiveStatus({
-          code: status.UNAUTHENTICATED,
-          details: failure instanceof Error ? failure.message : String(failure),
-          metadata: new Metadata(),
-        });
+  const interceptor = new CredentialInterceptor(credential);
+  return [interceptor.intercept.bind(interceptor)];
+}
+
+class CredentialInterceptor {
+  public constructor(private readonly credential: Credential) {}
+
+  public intercept(options: InterceptorOptions, nextCall: NextCall): InterceptingCall {
+    const downstream = nextCall(options);
+    const requester = new CredentialRequester(this.credential, options, downstream);
+    return new InterceptingCall(downstream, {
+      start: requester.start.bind(requester),
+      cancel: requester.cancel.bind(requester),
+    });
+  }
+}
+
+class CredentialRequester {
+  private isSettled = false;
+  private listener: InterceptingListener | undefined;
+  private metadata: Metadata | undefined;
+  private next: ((metadata: Metadata, listener: InterceptingListener | Listener) => void) | undefined;
+  private deadlineAtMs: number | undefined;
+  private deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
+  public constructor(
+    private readonly credential: Credential,
+    private readonly options: InterceptorOptions,
+    private readonly downstream: ReturnType<NextCall>,
+  ) {}
+
+  public start(
+    metadata: Metadata,
+    listener: InterceptingListener,
+    next: (metadata: Metadata, listener: InterceptingListener | Listener) => void,
+  ): void {
+    this.metadata = metadata;
+    this.listener = listener;
+    this.next = next;
+    this.startDeadline();
+    if (this.isSettled) return;
+    void Promise.resolve().then(this.readToken.bind(this)).then(
+      this.onToken.bind(this),
+      this.onCredentialFailure.bind(this),
+    );
+  }
+
+  public cancel(next: () => void): void {
+    if (this.isSettled) {
+      next();
+      return;
+    }
+    this.isSettled = true;
+    this.clearDeadline();
+    try {
+      next();
+    } finally {
+      this.listener?.onReceiveStatus({
+        code: status.CANCELLED,
+        details: "Cancelled on client",
+        metadata: new Metadata(),
       });
-    },
-  })];
+    }
+  }
+
+  private readToken(): string | Promise<string> {
+    return this.credential.token();
+  }
+
+  private onToken(token: string): void {
+    if (this.isSettled) return;
+    if (this.deadlineAtMs !== undefined && Date.now() >= this.deadlineAtMs) {
+      this.fail(status.DEADLINE_EXCEEDED, "Deadline exceeded");
+      return;
+    }
+    try {
+      this.metadata!.set("authorization", `Bearer ${token}`);
+    } catch (failure) {
+      this.fail(status.UNAUTHENTICATED, failure instanceof Error ? failure.message : String(failure), failure);
+      return;
+    }
+    this.isSettled = true;
+    this.clearDeadline();
+    try {
+      this.next!(this.metadata!, this.listener!);
+    } catch (failure) {
+      const details = failure instanceof Error ? failure.message : String(failure);
+      this.downstream.cancelWithStatus(status.INTERNAL, details);
+      this.listener?.onReceiveStatus(Object.assign({
+        code: status.INTERNAL,
+        details,
+        metadata: new Metadata(),
+      }, { cause: failure }));
+    }
+  }
+
+  private onCredentialFailure(failure: unknown): void {
+    this.fail(status.UNAUTHENTICATED, failure instanceof Error ? failure.message : String(failure), failure);
+  }
+
+  private startDeadline(): void {
+    const deadline = this.options.deadline;
+    if (deadline === undefined) return;
+    const deadlineAtMs = deadline instanceof Date ? deadline.getTime() : deadline;
+    if (!Number.isFinite(deadlineAtMs)) return;
+    this.deadlineAtMs = deadlineAtMs;
+    this.checkDeadline();
+  }
+
+  private checkDeadline(): void {
+    if (this.isSettled || this.deadlineAtMs === undefined) return;
+    const remainingMs = this.deadlineAtMs - Date.now();
+    if (remainingMs <= 0) {
+      this.fail(status.DEADLINE_EXCEEDED, "Deadline exceeded");
+      return;
+    }
+    this.deadlineTimer = setTimeout(this.checkDeadline.bind(this), Math.min(remainingMs, 2_147_483_647));
+  }
+
+  private fail(code: status, details: string, cause?: unknown): void {
+    if (this.isSettled) return;
+    this.isSettled = true;
+    this.clearDeadline();
+    this.downstream.cancelWithStatus(code, details);
+    this.listener?.onReceiveStatus(Object.assign({
+      code,
+      details,
+      metadata: new Metadata(),
+    }, cause === undefined ? {} : { cause }));
+  }
+
+  private clearDeadline(): void {
+    if (this.deadlineTimer !== undefined) clearTimeout(this.deadlineTimer);
+    this.deadlineTimer = undefined;
+  }
 }

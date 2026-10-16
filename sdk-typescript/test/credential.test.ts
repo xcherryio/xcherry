@@ -15,19 +15,27 @@ import test from "node:test";
 import {
   Server,
   ServerCredentials,
+  credentials,
+  Metadata,
   status,
+  type ServiceError,
   type ServerDuplexStream,
 } from "@grpc/grpc-js";
 
 import { Client, FileCredential, Registry, Worker, type BlobCache, type Credential } from "../src/index.js";
 import {
   FlowServiceService,
+  FlowServiceClient,
   WorkerTaskServiceService,
+  WorkerTaskServiceClient,
   type FlowServiceServer,
   type PollWorkerTaskRequest,
   type PollWorkerTaskResponse,
   type WorkerTaskServiceServer,
 } from "../src/gen/dex.js";
+import { credentialInterceptors } from "../src/credential.js";
+import { PullWorker } from "../src/pull-worker.js";
+import { WorkerDispatcher } from "../src/worker-dispatcher.js";
 
 type TaskStream = ServerDuplexStream<PollWorkerTaskRequest, PollWorkerTaskResponse>;
 
@@ -69,6 +77,120 @@ test("credential errors fail unary calls without contacting Dex", async () => {
     assert.deepEqual(server.flowHeaders, []);
   } finally {
     await client.close();
+    await server.close();
+  }
+});
+
+test("a unary deadline settles before a pending token and drops the late token", async () => {
+  const server = await startServer();
+  let provideToken!: (token: string) => void;
+  const tokenPromise = new Promise<string>((resolve) => { provideToken = resolve; });
+  const client = new FlowServiceClient(server.address, credentials.createInsecure(), {
+    interceptors: credentialInterceptors({ token: () => tokenPromise }),
+  });
+  try {
+    const result = new Promise<ServiceError>((resolve, reject) => {
+      client.searchFlows({ query: "", pageSize: 1, nextPageToken: "", includeContinuedAsNew: false },
+        new Metadata(), { deadline: Date.now() + 80 }, (failure) => {
+          if (failure === null) reject(new Error("expected deadline failure"));
+          else resolve(failure);
+        });
+    });
+    const failure = await within(result);
+    assert.equal(failure.code, status.DEADLINE_EXCEEDED);
+    await until(() => (client.getChannel() as unknown as { internalChannel: { callCount: number } }).internalChannel.callCount === 0);
+    provideToken("too-late");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(server.flowHeaders, []);
+  } finally {
+    provideToken("too-late");
+    client.close();
+    await server.close();
+  }
+});
+
+test("cancelling a pull stream settles before a pending token", async () => {
+  const server = await startServer();
+  let provideToken!: (token: string) => void;
+  const tokenPromise = new Promise<string>((resolve) => { provideToken = resolve; });
+  const client = new WorkerTaskServiceClient(server.address, credentials.createInsecure(), {
+    interceptors: credentialInterceptors({ token: () => tokenPromise }),
+  });
+  try {
+    const stream = client.pollWorkerTask();
+    const result = new Promise<ServiceError>((resolve) => stream.once("error", resolve));
+    stream.cancel();
+    const failure = await within(result);
+    assert.equal(failure.code, status.CANCELLED);
+    await until(() => (client.getChannel() as unknown as { internalChannel: { callCount: number } }).internalChannel.callCount === 0);
+    provideToken("too-late");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(server.taskHeaders, []);
+  } finally {
+    provideToken("too-late");
+    client.close();
+    await server.close();
+  }
+});
+
+test("synchronous credential throws preserve the cause and never contact Dex", async () => {
+  const server = await startServer();
+  const original = new Error("read failed");
+  const client = new Client(new Registry([]), {} as BlobCache, {
+    serverAddress: server.address,
+    credential: { token() { throw original; } },
+  });
+  try {
+    await assert.rejects(client.searchFlows("", 1), (failure: unknown) => {
+      assert.equal((failure as { code?: number }).code, status.UNAUTHENTICATED);
+      assert.equal(((failure as Error).cause as Error).cause, original);
+      return true;
+    });
+    assert.deepEqual(server.flowHeaders, []);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("pull stream credential failures back off without opening a stream", async () => {
+  const server = await startServer();
+  const previousConsoleError = console.error;
+  const loggedFailures: unknown[][] = [];
+  console.error = (...values: unknown[]) => { loggedFailures.push(values); };
+  const worker = new PullWorker(new Registry([]), {} as WorkerDispatcher, server.address, {}, {
+    token: () => { throw new Error("file unavailable"); },
+  });
+  try {
+    worker.start();
+    const polls = (worker as unknown as { streams: Set<{ retryTimer: unknown; failure?: ServiceError }> }).streams;
+    await until(() => [...polls].some((poll) => poll.retryTimer !== undefined));
+    assert.equal([...polls][0]?.failure?.code, status.UNAUTHENTICATED);
+    assert.equal(loggedFailures.length, 1);
+    assert.deepEqual(server.taskHeaders, []);
+  } finally {
+    await worker.close();
+    console.error = previousConsoleError;
+    await server.close();
+  }
+});
+
+test("Worker startup deadline settles while its credential is pending", async () => {
+  const server = await startServer();
+  let provideToken!: (token: string) => void;
+  const tokenPromise = new Promise<string>((resolve) => { provideToken = resolve; });
+  const worker = new Worker(new Registry([]), {} as BlobCache, {
+    serverAddress: server.address,
+    pull: {},
+    attributeIndexSyncTimeoutMs: 80,
+    credential: { token: () => tokenPromise },
+  });
+  try {
+    await assert.rejects(within(worker.start()), /cannot start TypeScript pull Worker/);
+    assert.deepEqual(server.flowHeaders, []);
+  } finally {
+    provideToken("too-late");
+    await worker.close();
     await server.close();
   }
 });
@@ -204,5 +326,19 @@ async function until(predicate: () => boolean): Promise<void> {
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error("timed out waiting for credential update");
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function within<T>(result: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      result,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("credential call did not settle")), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

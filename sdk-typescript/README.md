@@ -471,7 +471,9 @@ rereads a changed file. Construction fails if the file is unreadable or empty;
 later calls fail if it becomes unreadable or empty, instead of sending a stale
 token. A custom credential may return a string or `Promise<string>` from
 `token()`. Calls can ask for tokens concurrently. A thrown or rejected error
-fails the call before contacting Dex.
+fails the call before contacting Dex and reports gRPC `UNAUTHENTICATED` with
+the original error as its cause. Failed pull streams retry after 60–90 seconds.
+File checks use small synchronous stat and read operations.
 
 The bearer token travels over the SDK's plaintext gRPC connection. Protect
 the network path between the application and Dex.
