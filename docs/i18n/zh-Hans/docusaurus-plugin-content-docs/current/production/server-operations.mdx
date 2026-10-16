@@ -76,7 +76,7 @@ dex-server start --services web,api
 
 ## Pull Worker 路由 {#pull-worker-routing}
 
-Worker 设置、路由行为和容量规划见 [Pull Workers](/production/pull-workers)。
+Worker 设置、路由行为和容量规划见[拉取模式 Worker](/production/pull-workers)。
 
 **matching** 角色拥有 pull Worker 队列。API 实例接收 **PollWorkerTask** stream，
 并将每条 stream 转发到队列 owner。Interpreter 和 API 实例即使不拥有队列，也会加入

@@ -10,7 +10,7 @@ If a stream ends before its first output frame, Matching may assign the task aga
 
 Matching sends a final response frame for a completed WaitFor or Execute result, an RPC result, or a Worker error. The final task frame completes that task but does not half-close its reusable queue stream. A half-close of the Worker request side ends the stream; it is not a substitute for a final task frame. Forwarding proxies propagate the half-close to their upstream stream and drain the downstream response. `WorkerErrorResponse.grpc_status` carries the gRPC code that listening mode would have returned. The interpreter maps a valid non-OK code to the same status and preserves Worker error details; zero or out-of-range codes become `Unknown`.
 
-When no Worker is available by the end of the dispatch wait, the interpreter returns `Unavailable`. That error is retryable and consumes a Step retry. Pull dispatch uses the matching wait settings, with shorter local waits to reserve execution time. The wake hook can notify an external controller for the Flow type queue after the sticky wait; it does not extend the dispatch budget.
+When no Worker is available by the end of the dispatch wait, the interpreter returns `Unavailable`. That error is retryable and consumes a Step retry. An RPC caller receives `Unavailable` directly. Pull dispatch uses the matching wait settings, with shorter local waits to reserve execution time. The wake hook can notify an external controller for the Flow type queue after the sticky wait; it does not extend the dispatch budget.
 
 ## Capacity and lifecycle
 
