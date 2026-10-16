@@ -28,8 +28,13 @@ AsyncClient and AsyncWorker also accept an awaitable token. Synchronous tokens
 run in a dedicated four-thread executor per async Client or Worker, created
 lazily and shut down without waiting for a blocked token call on close. Sync
 calls run token lookup on the calling thread. Async calls bound token lookup
-by the RPC deadline when set;
-pull stream opens use a 30-second lookup budget. Sync token lookup must return
+by the RPC deadline when set; pull stream opens use a 30-second lookup budget.
+Declare token with `async def` to invoke it on the event loop. A plain token
+function runs once in the SDK executor; if it returns a coroutine, that
+coroutine runs on the event loop. A loop-bound Future from another loop raises
+TypeError; use `async def` to create it on the right loop. A blocked token keeps
+one executor thread busy until it returns, and an unclosed Client or Worker may
+retain up to four idle credential threads. Sync token lookup must return
 promptly. By default, no authorization metadata is sent. Dex uses plaintext
 gRPC, so protect the network path that carries the token.
 

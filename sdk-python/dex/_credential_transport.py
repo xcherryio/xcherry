@@ -16,9 +16,9 @@ import asyncio
 import inspect
 import queue
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any, NamedTuple, cast, get_args, get_origin
+from typing import Any, NamedTuple, cast
 
 import grpc
 
@@ -30,60 +30,41 @@ _TOKEN_WORKERS = 4
 class AsyncCredentialRunner:
     def __init__(self, credential: Credential) -> None:
         self._credential = credential
-        self._invoke_on_loop = self._returns_awaitable(credential.token)
         self._lock = threading.Lock()
         self._jobs: queue.SimpleQueue[Future[Any] | None] = queue.SimpleQueue()
         self._threads: list[threading.Thread] = []
+        self._pending: set[Future[Any]] = set()
         self._closed = False
 
     async def token(self) -> str:
-        if self._invoke_on_loop:
-            token = self._credential.token()
+        token_method = self._credential.token
+        if inspect.iscoroutinefunction(token_method) or inspect.iscoroutinefunction(
+            getattr(token_method, "__call__", None)
+        ):
+            token = token_method()
             if inspect.isawaitable(token):
                 return await token
             return token
-        try:
-            token = await asyncio.wrap_future(self._submit())
-        except RuntimeError as error:
-            if str(error) != "no running event loop":
-                raise
-            self._invoke_on_loop = True
-            token = self._credential.token()
+        token = await asyncio.wrap_future(self._submit())
         if inspect.isawaitable(token):
-            self._invoke_on_loop = True
+            if isinstance(token, asyncio.Future):
+                try:
+                    token_loop = token.get_loop()
+                except RuntimeError as error:
+                    raise TypeError(
+                        "loop-bound credentials must use async def token()"
+                    ) from error
+                if token_loop is not asyncio.get_running_loop():
+                    raise TypeError("loop-bound credentials must use async def token()")
             return await token
         return token
-
-    @staticmethod
-    def _returns_awaitable(token_method: Callable[..., Any]) -> bool:
-        if inspect.iscoroutinefunction(token_method):
-            return True
-        try:
-            annotation = inspect.signature(token_method).return_annotation
-        except (TypeError, ValueError):
-            return False
-        if isinstance(annotation, str):
-            return any(
-                marker in annotation for marker in ("Awaitable", "Coroutine", "Future")
-            )
-        origin = get_origin(annotation) or annotation
-        if isinstance(origin, type) and issubclass(origin, Awaitable):
-            return True
-        return any(
-            AsyncCredentialRunner._returns_awaitable_annotation(argument)
-            for argument in get_args(annotation)
-        )
-
-    @staticmethod
-    def _returns_awaitable_annotation(annotation: Any) -> bool:
-        origin = get_origin(annotation) or annotation
-        return isinstance(origin, type) and issubclass(origin, Awaitable)
 
     def _submit(self) -> Future[Any]:
         with self._lock:
             if self._closed:
                 raise RuntimeError("credential runner is closed")
             future: Future[Any] = Future()
+            self._pending.add(future)
             if len(self._threads) < _TOKEN_WORKERS:
                 thread = threading.Thread(
                     target=self._run,
@@ -100,24 +81,38 @@ class AsyncCredentialRunner:
             future = self._jobs.get()
             if future is None:
                 return
-            if future.set_running_or_notify_cancel():
-                try:
-                    future.set_result(self._credential.token())
-                except BaseException as error:
-                    future.set_exception(error)
+            with self._lock:
+                if future.done() or not future.set_running_or_notify_cancel():
+                    self._pending.discard(future)
+                    continue
+            try:
+                token = self._credential.token()
+                failure = None
+            except BaseException as error:
+                token = None
+                failure = error
+            with self._lock:
+                if not future.done():
+                    if failure is None:
+                        future.set_result(token)
+                    else:
+                        future.set_exception(failure)
+                self._pending.discard(future)
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            for future in self._pending:
+                if not future.done():
+                    future.set_exception(RuntimeError("credential runner is closed"))
+            self._pending.clear()
             while True:
                 try:
-                    future = self._jobs.get_nowait()
+                    self._jobs.get_nowait()
                 except queue.Empty:
                     break
-                if future is not None:
-                    future.cancel()
             for _ in self._threads:
                 self._jobs.put(None)
 

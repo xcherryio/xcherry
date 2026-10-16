@@ -179,12 +179,12 @@ class AsyncWorker:
             )
         except grpc.RpcError as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise server_info_request_error(self._sdk_version, failure) from failure
         except Exception as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot get Dex server info") from failure
         try:
@@ -194,7 +194,7 @@ class AsyncWorker:
             )
         except RuntimeError:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise
         try:
@@ -206,12 +206,12 @@ class AsyncWorker:
             )
         except grpc.RpcError as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot synchronize Attribute indexes") from failure
         except Exception as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot synchronize Attribute indexes") from failure
         if self._pull is None:
@@ -219,7 +219,7 @@ class AsyncWorker:
             self._bound_port = self._server.add_insecure_port(self.options.bind_address)
             if self._bound_port == 0:
                 self._state = "stopped"
-                await self._flow_channel.close(None)
+                await self._close_failed_start_channel()
                 self._stopped.set()
                 raise RuntimeError(
                     f"cannot bind Python AsyncWorker to {self.options.bind_address}"
@@ -275,6 +275,13 @@ class AsyncWorker:
             if self._credential_runner is not None:
                 self._credential_runner.close()
             self._state = "closed"
+
+    async def _close_failed_start_channel(self) -> None:
+        try:
+            await self._flow_channel.close(None)
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
 
     @staticmethod
     def _target_address(bind_address: str, bound_port: int) -> str:
