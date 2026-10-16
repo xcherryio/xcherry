@@ -209,8 +209,8 @@ JWT 配置省略 **jwksURL** 时，Dex 通过 issuer 的 OpenID 配置发现 key
 **interpreter.interpreterActivityConfig.internalServiceTarget** 指向此 listener。
 关闭 **auth** 且未配置独立 internal listener 时，这两个 service 使用公开 API listener。
 
-启用 **auth** 后，Go SDK、Dex Web 和 **dexcli** 可以提供 credential。
-Java、Python、TypeScript 和 Rust SDK 还不能提供所需 credential。
+启用 **auth** 后，Go、Python、TypeScript 和 Rust SDK、Dex Web 以及 **dexcli**
+可以提供 bearer credential。Java SDK 的 credential 支持仍在开发中。
 
 Dex Web 没有最终用户身份认证。任何能够访问 Web 端口的人都能使用 Web 的
 FlowService credential 操作 Dex。即使启用了 **auth**，也必须通过网络访问控制或
