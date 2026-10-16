@@ -357,6 +357,21 @@ cleanup 保留每个 Flow prefix 开头的 UTC date。它按字典序分页列�
 Flow 和可选 Run，并且只在 execution 已不存在时删除整个 prefix。随后使用返回的
 continuation token 继续 list；该过程不使用 manifest。
 
+[Hard-delete Attribute](/primitives/attribute#hard-delete-attributes) 对每个 Flow 和
+Attribute key 使用一个固定的 object。无论 payload 大小，Dex 都会写入这个 object，并在原位置
+覆盖。写入 null 时，Dex 会从所有 supported storage 中删除这个 object。reference 和物理路径如下：
+
+~~~text
+Reference: <storageId>|hd/<objectId>
+Path:      <namespace>/000101$<escapedFlowId>/hd/<objectId>
+~~~
+
+固定的 **000101** 日期让路径在多次写入之间保持不变。cleanup 会像解析其他 Flow prefix 一样
+解析它，并在 Flow 不存在后删除它。Dex 不会把 hard-delete object 存入 Server blob cache，
+**LoadBlobs** 也会跳过它们的 reference。Blob Store 未启用时，Dex 会拒绝所有 hard-delete
+写入。请关闭 Blob Store bucket 的 versioning，或者让 noncurrent version 尽快过期，因为保留下来的
+version 仍然包含已删除的 value。
+
 ASYNC Step input snapshot 在 Blob Store 启用时默认开启。它会保留成功的 ASYNC local
 Step method 收到的准确 input，供 semantic history 展示。snapshot 不受 payload offload
 threshold 影响，也不是 Flow execution、retry 或 recovery 所必需。将

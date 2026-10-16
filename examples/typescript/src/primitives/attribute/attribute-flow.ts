@@ -38,6 +38,10 @@ const status = new Attribute("primitive-attribute-status", stringCodec, {
   indexKey: "keyword1",
 });
 const email = new Attribute("primitive-attribute-email", stringCodec).syncToAttributeStore();
+const modelApiKey = new Attribute(
+  "primitive-attribute-model-api-key",
+  stringCodec,
+).hardDeleteOnNull();
 const progress = new AttributeMap("primitive-attribute-progress", stringCodec, {
   type: IndexType.KEYWORD,
   indexKey: "keyword2",
@@ -67,6 +71,8 @@ class AttributeStep implements Step<string> {
 
   public execute(context: Context, input: string): StepDecision {
     this.flow.status.set(context, "completed");
+    // The Flow no longer needs the short-lived key, so delete it permanently.
+    this.flow.modelApiKey.delete(context);
     return gracefulComplete(input);
   }
 }
@@ -74,6 +80,7 @@ class AttributeStep implements Step<string> {
 export class AttributeFlow implements Flow<string> {
   public readonly status = status;
   public readonly email = email;
+  public readonly modelApiKey = modelApiKey;
   public readonly progress = progress;
   public readonly attributeStoreConfig: FlowConfig = { attributeStoreNames: ["profiles"] };
   private readonly start = new AttributeStep(this);
@@ -87,7 +94,7 @@ export class AttributeFlow implements Flow<string> {
   }
 
   public getPersistenceSchema(): PersistenceSchema {
-    return { attributes: [this.status, this.progress, this.email] };
+    return { attributes: [this.status, this.progress, this.email, this.modelApiKey] };
   }
 
   @rpc({

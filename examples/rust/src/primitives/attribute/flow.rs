@@ -27,6 +27,8 @@ static STATUS: LazyLock<Attribute<String>> = LazyLock::new(|| {
 });
 static EMAIL: LazyLock<Attribute<String>> =
     LazyLock::new(|| Attribute::new("primitive-attribute-email").sync_to_attribute_store());
+static MODEL_API_KEY: LazyLock<Attribute<String>> =
+    LazyLock::new(|| Attribute::new("primitive-attribute-model-api-key").hard_delete_on_null());
 
 pub fn attribute_store_config() -> FlowConfig {
     FlowConfig::new().attribute_store_names(vec!["profiles".to_owned()])
@@ -61,6 +63,7 @@ impl Flow for AttributeFlow {
         PersistenceSchema::new()
             .attribute(&STATUS)
             .attribute(&EMAIL)
+            .attribute(&MODEL_API_KEY)
             .attribute_map(&self.progress)
     }
 
@@ -110,6 +113,8 @@ impl Step for AttributeStep {
 
     fn execute(&self, context: &mut Context, input: Self::Input) -> HandlerResult<StepDecision> {
         STATUS.set(context, "completed".to_owned())?;
+        // The Flow no longer needs the short-lived key, so delete it permanently.
+        MODEL_API_KEY.delete(context)?;
         Ok(StepDecision::graceful_complete(input))
     }
 }

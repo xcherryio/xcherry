@@ -409,6 +409,23 @@ in lexical pages, decodes the escaped Flow and optional Run, and deletes the
 whole prefix only after the execution no longer exists. Continue listing with
 the returned continuation token; no manifest is involved.
 
+[Hard-delete Attributes](/primitives/attribute#hard-delete-attributes) use one
+fixed object per Flow and Attribute key. Dex writes it whatever the payload size
+and overwrites it in place. A null write deletes the object from every supported
+storage. The reference and physical path are:
+
+~~~text
+Reference: <storageId>|hd/<objectId>
+Path:      <namespace>/000101$<escapedFlowId>/hd/<objectId>
+~~~
+
+The fixed **000101** date keeps the path stable across writes. Cleanup parses it
+like any other Flow prefix and removes it after the Flow no longer exists. Dex
+never stores hard-delete objects in the Server blob cache, and **LoadBlobs**
+omits their references. When the Blob Store is disabled, Dex rejects every
+hard-delete write. Disable bucket versioning for the Blob Store, or expire
+noncurrent versions quickly, because a retained version keeps the deleted value.
+
 Async Step input snapshots are enabled by default when Blob Store is enabled.
 They retain the exact inputs sent to successful ASYNC local Step methods so
 semantic history can show them. The snapshot is independent of the payload
