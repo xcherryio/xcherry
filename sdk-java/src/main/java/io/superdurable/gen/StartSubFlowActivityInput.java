@@ -149,6 +149,21 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int TYPED_REJECTION_ENABLED_FIELD_NUMBER = 6;
+  private boolean typedRejectionEnabled_ = false;
+  /**
+   * <pre>
+   * Preserve legacy activity errors when older interpreter versions schedule this activity.
+   * </pre>
+   *
+   * <code>bool typed_rejection_enabled = 6;</code>
+   * @return The typedRejectionEnabled.
+   */
+  @java.lang.Override
+  public boolean getTypedRejectionEnabled() {
+    return typedRejectionEnabled_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -172,6 +187,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(parentStepExecutionId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, parentStepExecutionId_);
     }
+    if (typedRejectionEnabled_ != false) {
+      output.writeBool(6, typedRejectionEnabled_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -186,6 +204,10 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(parentStepExecutionId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, parentStepExecutionId_);
+    }
+    if (typedRejectionEnabled_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(6, typedRejectionEnabled_);
     }
     return size;
   }
@@ -223,6 +245,8 @@ private static final long serialVersionUID = 0L;
     }
     if (!getParentStepExecutionId()
         .equals(other.getParentStepExecutionId())) return false;
+    if (getTypedRejectionEnabled()
+        != other.getTypedRejectionEnabled()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -244,6 +268,9 @@ private static final long serialVersionUID = 0L;
     }
     hash = (37 * hash) + PARENT_STEP_EXECUTION_ID_FIELD_NUMBER;
     hash = (53 * hash) + getParentStepExecutionId().hashCode();
+    hash = (37 * hash) + TYPED_REJECTION_ENABLED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getTypedRejectionEnabled());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -393,6 +420,7 @@ private static final long serialVersionUID = 0L;
         parentFlowConfigBuilder_ = null;
       }
       parentStepExecutionId_ = "";
+      typedRejectionEnabled_ = false;
       return this;
     }
 
@@ -442,6 +470,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.parentStepExecutionId_ = parentStepExecutionId_;
       }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.typedRejectionEnabled_ = typedRejectionEnabled_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -467,6 +498,9 @@ private static final long serialVersionUID = 0L;
         parentStepExecutionId_ = other.parentStepExecutionId_;
         bitField0_ |= 0x00000004;
         onChanged();
+      }
+      if (other.getTypedRejectionEnabled() != false) {
+        setTypedRejectionEnabled(other.getTypedRejectionEnabled());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -513,6 +547,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 26
+            case 48: {
+              typedRejectionEnabled_ = input.readBool();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 48
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -860,6 +899,50 @@ private static final long serialVersionUID = 0L;
       checkByteStringIsUtf8(value);
       parentStepExecutionId_ = value;
       bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+
+    private boolean typedRejectionEnabled_ ;
+    /**
+     * <pre>
+     * Preserve legacy activity errors when older interpreter versions schedule this activity.
+     * </pre>
+     *
+     * <code>bool typed_rejection_enabled = 6;</code>
+     * @return The typedRejectionEnabled.
+     */
+    @java.lang.Override
+    public boolean getTypedRejectionEnabled() {
+      return typedRejectionEnabled_;
+    }
+    /**
+     * <pre>
+     * Preserve legacy activity errors when older interpreter versions schedule this activity.
+     * </pre>
+     *
+     * <code>bool typed_rejection_enabled = 6;</code>
+     * @param value The typedRejectionEnabled to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTypedRejectionEnabled(boolean value) {
+
+      typedRejectionEnabled_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Preserve legacy activity errors when older interpreter versions schedule this activity.
+     * </pre>
+     *
+     * <code>bool typed_rejection_enabled = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTypedRejectionEnabled() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      typedRejectionEnabled_ = false;
       onChanged();
       return this;
     }

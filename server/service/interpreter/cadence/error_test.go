@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/interpreter/interfaces"
 	"go.uber.org/cadence"
 	"go.uber.org/cadence/.gen/go/shared"
 	"go.uber.org/cadence/workflow"
@@ -108,4 +109,13 @@ func TestWorkflowProviderMapsWorkerAndTimeoutErrors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, shared.TimeoutTypeStartToClose.String(), timeoutError.GetErrorType())
 	require.NotEmpty(t, timeoutError.GetDetail())
+}
+
+func TestWorkflowProviderMapsSubFlowStartRejection(t *testing.T) {
+	const detail = "pull worker_target cannot specify address"
+	rejection := (&activityProvider{}).NewSubFlowStartRejection(detail)
+	recoveryError, err := (&workflowProvider{}).MapToRecoveryError(rejection)
+	require.NoError(t, err)
+	require.Equal(t, detail, recoveryError.GetDetail())
+	require.Equal(t, interfaces.SubFlowStartRejectionErrorType, recoveryError.GetErrorType())
 }

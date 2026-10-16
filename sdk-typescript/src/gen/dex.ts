@@ -1735,6 +1735,8 @@ export interface StartSubFlowActivityInput {
     | undefined;
   /** Source Step; activity context supplies parent Flow and run IDs. */
   parentStepExecutionId: string;
+  /** Preserve legacy activity errors when older interpreter versions schedule this activity. */
+  typedRejectionEnabled: boolean;
 }
 
 export interface StartSubFlowActivityOutput {
@@ -17857,7 +17859,7 @@ export const SyncAttributeBatchActivityInput: MessageFns<SyncAttributeBatchActiv
 };
 
 function createBaseStartSubFlowActivityInput(): StartSubFlowActivityInput {
-  return { condition: undefined, parentFlowConfig: undefined, parentStepExecutionId: "" };
+  return { condition: undefined, parentFlowConfig: undefined, parentStepExecutionId: "", typedRejectionEnabled: false };
 }
 
 export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = {
@@ -17870,6 +17872,9 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
     }
     if (message.parentStepExecutionId !== "") {
       writer.uint32(26).string(message.parentStepExecutionId);
+    }
+    if (message.typedRejectionEnabled !== false) {
+      writer.uint32(48).bool(message.typedRejectionEnabled);
     }
     return writer;
   },
@@ -17905,6 +17910,14 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
           message.parentStepExecutionId = reader.string();
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.typedRejectionEnabled = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -17926,6 +17939,7 @@ export const StartSubFlowActivityInput: MessageFns<StartSubFlowActivityInput> = 
       ? FlowConfig.fromPartial(object.parentFlowConfig)
       : undefined;
     message.parentStepExecutionId = object.parentStepExecutionId ?? "";
+    message.typedRejectionEnabled = object.typedRejectionEnabled ?? false;
     return message;
   },
 };

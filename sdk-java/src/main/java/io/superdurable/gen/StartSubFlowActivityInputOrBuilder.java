@@ -59,4 +59,14 @@ public interface StartSubFlowActivityInputOrBuilder extends
    */
   com.google.protobuf.ByteString
       getParentStepExecutionIdBytes();
+
+  /**
+   * <pre>
+   * Preserve legacy activity errors when older interpreter versions schedule this activity.
+   * </pre>
+   *
+   * <code>bool typed_rejection_enabled = 6;</code>
+   * @return The typedRejectionEnabled.
+   */
+  boolean getTypedRejectionEnabled();
 }

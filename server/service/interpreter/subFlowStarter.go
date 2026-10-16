@@ -80,6 +80,7 @@ func (s *SubFlowStarter) startOne(ctx interfaces.UnifiedContext) {
 		Condition:             condition,
 		ParentFlowConfig:      s.parentFlowConfig,
 		ParentStepExecutionId: s.stepExecutionID,
+		TypedRejectionEnabled: s.globalVersioner.UsesTypedSubFlowStartFailures(),
 	}
 	err := s.provider.ExecuteLocalActivity(&output, ctx, s.activities.StartSubFlow, startInput)
 	if err != nil {

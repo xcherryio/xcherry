@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/interpreter/interfaces"
 	"go.temporal.io/api/enums/v1"
 	temporalsdk "go.temporal.io/sdk/temporal"
 )
@@ -131,4 +132,17 @@ func TestWorkflowProviderMapsWorkerAndTimeoutErrors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, enums.TIMEOUT_TYPE_START_TO_CLOSE.String(), timeoutError.GetErrorType())
 	require.NotEmpty(t, timeoutError.GetDetail())
+}
+
+func TestWorkflowProviderMapsSubFlowStartRejection(t *testing.T) {
+	const detail = "pull worker_target cannot specify address"
+	rejection := (&activityProvider{}).NewSubFlowStartRejection(detail)
+	var applicationError *temporalsdk.ApplicationError
+	require.ErrorAs(t, rejection, &applicationError)
+	require.Equal(t, detail, applicationError.Message())
+
+	recoveryError, err := (&workflowProvider{}).MapToRecoveryError(rejection)
+	require.NoError(t, err)
+	require.Equal(t, detail, recoveryError.GetDetail())
+	require.Equal(t, interfaces.SubFlowStartRejectionErrorType, recoveryError.GetErrorType())
 }

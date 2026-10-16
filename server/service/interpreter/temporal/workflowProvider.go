@@ -155,6 +155,16 @@ func (w *workflowProvider) MapToRecoveryError(err error) (*dexpb.RecoveryErrorIn
 			ErrorType: timeoutError.TimeoutType().String(),
 		}, nil
 	}
+	detail, isRejection, rejectionErr := w.IsSubFlowStartRejection(err)
+	if rejectionErr != nil {
+		return nil, fmt.Errorf("decode SubFlow start rejection: %w", rejectionErr)
+	}
+	if isRejection {
+		return &dexpb.RecoveryErrorInfo{
+			Detail:    detail,
+			ErrorType: interfaces.SubFlowStartRejectionErrorType,
+		}, nil
+	}
 
 	var applicationError *temporal.ApplicationError
 	if errors.As(err, &applicationError) {
