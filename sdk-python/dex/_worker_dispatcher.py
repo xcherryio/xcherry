@@ -22,6 +22,7 @@ from dex.attribute import (
     AttributeMapLoad,
     _apply_attribute_store_sync,
     _apply_hard_delete_on_null,
+    _require_matching_hard_delete_on_null,
 )
 from dex.channel import Channel, ChannelMap, ChannelMapLoad
 from dex.condition import ChannelCondition, Condition, SubFlowCondition, TimerCondition
@@ -678,7 +679,9 @@ class WorkerDispatcher:
             mapped.retry_policy.CopyFrom(self._map_flow_retry(options.retry_policy))
         for initialization in options._attribute_initializations:
             definition = initialization.definition
-            if target.persistence.get(definition.name) is not definition:
+            registered = target.persistence.get(definition.name)
+            _require_matching_hard_delete_on_null(target.name, registered, definition)
+            if registered is not definition:
                 raise ValueError(
                     f"SubFlow Attribute does not belong to {target.name}: {definition.name}"
                 )

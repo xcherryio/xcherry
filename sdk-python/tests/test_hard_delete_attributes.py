@@ -34,6 +34,7 @@ from dex import (
     Flow,
     FlowDefinitionError,
     IndexType,
+    InvalidStepResultError,
     PersistenceSchema,
     Registry,
     StartFlowOptions,
@@ -195,7 +196,7 @@ def test_start_and_subflow_initial_attributes_carry_hard_delete_flag() -> None:
         .with_attribute(flow.plain, "visible")
     )
     client = Client(registry, cast(BlobCache, object()))
-    start = client._map_start_options(options)
+    start = client._map_start_options(registry._flow_for_instance(flow), options)
     client.close()
     assert [write.is_hard_delete_on_null for write in start.attributes] == [
         True,
@@ -234,6 +235,16 @@ class WriteSecretStep(Step[str]):
                     None,
                     SubFlowOptions().with_attribute(
                         SUB_FLOW_TARGET.api_key, "sub-flow-secret"
+                    ),
+                )
+            )
+        if input == "sub-flow-mismatch":
+            return Wait.until(
+                SubFlow.run(
+                    SUB_FLOW_TARGET,
+                    None,
+                    SubFlowOptions().with_attribute(
+                        Attribute("api-key", str), "inline-secret"
                     ),
                 )
             )
@@ -381,6 +392,98 @@ def test_dispatcher_sends_hard_delete_results_on_protocol_3() -> None:
         0
     ].options.attributes
     assert [write.is_hard_delete_on_null for write in sub_flow_attributes] == [True]
+
+
+def test_sub_flow_rejects_initial_attribute_with_mismatched_hard_delete() -> None:
+    dispatcher, values = _writer_dispatcher(3)
+    with pytest.raises(
+        InvalidStepResultError,
+        match=(
+            "initial Attribute api-key uses hard_delete_on_null=False, but Flow "
+            "SecretFlow registers it with hard_delete_on_null=True"
+        ),
+    ):
+        _wait_for_result(dispatcher, values, "sub-flow-mismatch")
+
+
+def test_start_flow_rejects_initial_attributes_with_mismatched_hard_delete() -> None:
+    flow = SecretFlow()
+    service = ProtocolService(current_protocol_version=3)
+    server, port = _start_flow_server(service)
+    client = Client(Registry((flow,)), cast(BlobCache, object()), _options(port))
+    try:
+        with pytest.raises(
+            ValueError,
+            match=(
+                "initial Attribute api-key uses hard_delete_on_null=False, but Flow "
+                "SecretFlow registers it with hard_delete_on_null=True"
+            ),
+        ):
+            client.start_flow(
+                flow,
+                "flow-1",
+                None,
+                StartFlowOptions().with_attribute(Attribute("api-key", str), "leak"),
+            )
+        with pytest.raises(ValueError, match="initial Attribute token uses"):
+            client.start_flow(
+                flow,
+                "flow-1",
+                None,
+                StartFlowOptions().with_attribute(
+                    AttributeMap("token", str), "payments", "leak"
+                ),
+            )
+        with pytest.raises(
+            ValueError,
+            match=(
+                "initial Attribute plain uses hard_delete_on_null=True, but Flow "
+                "SecretFlow registers it with hard_delete_on_null=False"
+            ),
+        ):
+            client.start_flow(
+                flow,
+                "flow-1",
+                None,
+                StartFlowOptions().with_attribute(
+                    Attribute("plain", str, hard_delete_on_null=True), "value"
+                ),
+            )
+        client.start_flow(
+            flow,
+            "flow-2",
+            None,
+            StartFlowOptions()
+            .with_attribute(Attribute("plain", str), "equal-definition")
+            .with_attribute(Attribute("unregistered", str), "unregistered"),
+        )
+    finally:
+        client.close()
+        server.stop(grace=None).wait(timeout=5)
+    assert service.calls == ["StartFlow:flow-2"]
+
+
+def test_async_start_flow_rejects_initial_attribute_with_mismatched_hard_delete() -> (
+    None
+):
+    asyncio.run(_test_async_start_flow_rejects_mismatched_hard_delete())
+
+
+async def _test_async_start_flow_rejects_mismatched_hard_delete() -> None:
+    flow = SecretFlow()
+    client = AsyncClient(
+        Registry((flow,), allow_async_handlers=True), cast(BlobCache, object())
+    )
+    try:
+        with pytest.raises(ValueError, match="initial Attribute api-key uses"):
+            await client.start_flow(
+                flow,
+                "flow-1",
+                None,
+                StartFlowOptions().with_attribute(Attribute("api-key", str), "leak"),
+            )
+    finally:
+        await client.close()
 
 
 def test_async_dispatcher_rejects_hard_delete_results_below_protocol_3() -> None:

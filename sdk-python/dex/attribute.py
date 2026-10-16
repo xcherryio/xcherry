@@ -111,7 +111,10 @@ class Attribute(Generic[ValueT]):
     numeric or Boolean value is rejected when it is written. The option cannot
     be combined with ``index`` or ``sync_to_attribute_store``.
     ``Client.wait_for_attribute_match`` and ``AsyncClient.wait_for_attribute_match``
-    reject a hard-delete Attribute before contacting Dex.
+    reject a hard-delete Attribute before contacting Dex. ``start_flow`` and
+    SubFlow starts reject an initial value whose definition sets
+    ``hard_delete_on_null`` differently from the target Flow's registered
+    definition of that name, so a secret is never sent inline by mistake.
 
     Hard-delete writes require a Dex Server with an enabled blob store and Server
     protocol version 3 or later. A ``Worker`` or ``AsyncWorker`` still starts
@@ -515,6 +518,22 @@ def _apply_hard_delete_on_null(
             f"object values, not {value_kind}",
         )
     write.is_hard_delete_on_null = True
+
+
+def _require_matching_hard_delete_on_null(
+    flow_name: str,
+    registered: object,
+    definition: Attribute[Any] | AttributeMap[Any],
+) -> None:
+    if not isinstance(registered, (Attribute, AttributeMap)):
+        return
+    if registered.hard_delete_on_null == definition.hard_delete_on_null:
+        return
+    raise ValueError(
+        f"initial Attribute {definition.name} uses hard_delete_on_null="
+        f"{definition.hard_delete_on_null}, but Flow {flow_name} registers it with "
+        f"hard_delete_on_null={registered.hard_delete_on_null}"
+    )
 
 
 def _require_attribute_wait_supported(

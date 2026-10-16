@@ -902,10 +902,11 @@ def test_attribute_store_sync_mapping_preserves_presence() -> None:
 
     client = ClientModuleClient(Registry((ORDERS,)), cast(BlobCache, object()))
     start = client._map_start_options(
+        client.registry._flow_for_instance(ORDERS),
         StartFlowOptions()
         .with_attribute(plain, "plain")
         .with_attribute(synced, "synced")
-        .with_attribute(synced_map, "tenant-1", "mapped")
+        .with_attribute(synced_map, "tenant-1", "mapped"),
     )
     assert not start.attributes[0].HasField("sync_config")
     assert start.attributes[1].sync_config.enabled

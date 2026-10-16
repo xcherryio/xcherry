@@ -37,6 +37,7 @@ from dex.attribute import (
     _apply_attribute_store_sync,
     _apply_hard_delete_on_null,
     _require_attribute_wait_supported,
+    _require_matching_hard_delete_on_null,
 )
 from dex.attribute_match import AttributeMatch, _encode_attribute_match
 from dex.blob_cache import BlobCache
@@ -45,7 +46,7 @@ from dex.client_options import ClientOptions
 from dex.context import Context
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
-from dex.flow import Flow, Registry, RPCResult
+from dex.flow import Flow, Registry, RPCResult, _RegisteredFlow
 from dex.flow_config import ActiveStepSearchMode, FlowConfig
 from dex.flow_info import FlowInfo, FlowStatus, SearchFlowEntry, SearchFlowsPage
 from dex.flow_options import (
@@ -190,6 +191,8 @@ class AsyncClient:
             FlowDefinitionError: If ``flow`` is not registered.
             ValueMappingError: If an input or initial Attribute cannot be encoded,
                 including a numeric or Boolean value for a hard-delete Attribute.
+            ValueError: If an initial Attribute uses a different ``hard_delete_on_null``
+                setting than the Flow's registered definition of that name.
             RuntimeError: If a hard-delete Attribute is initialized and the Server
                 protocol is incompatible, below version 3, or cannot be requested.
             DexServiceError: If FlowService rejects or cannot perform the request.
@@ -199,7 +202,7 @@ class AsyncClient:
             flow_id=require_name(flow_id),
             flow_type=registered.name,
             request_id=options.request_id or str(uuid4()),
-            flow_start_options=self._map_start_options(options),
+            flow_start_options=self._map_start_options(registered, options),
         )
         if registered.start_step is not None:
             start = registered.start_step
@@ -1149,7 +1152,9 @@ class AsyncClient:
         )
         return response
 
-    def _map_start_options(self, options: StartFlowOptions) -> pb.FlowStartOptions:
+    def _map_start_options(
+        self, registered: _RegisteredFlow, options: StartFlowOptions
+    ) -> pb.FlowStartOptions:
         mapped = pb.FlowStartOptions(
             id_reuse_policy={
                 IdReusePolicy.DEFAULT: pb.ID_REUSE_POLICY_UNSPECIFIED,
@@ -1174,6 +1179,9 @@ class AsyncClient:
             mapped.retry_policy.CopyFrom(self._map_flow_retry(options.retry_policy))
         for initialization in options._attribute_initializations:
             definition = initialization.definition
+            _require_matching_hard_delete_on_null(
+                registered.name, registered.persistence.get(definition.name), definition
+            )
             key = self._definition_name(definition, initialization.instance)
             write = pb.AttributeWrite(
                 key=key,
