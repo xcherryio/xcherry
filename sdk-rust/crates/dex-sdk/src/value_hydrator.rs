@@ -13,20 +13,21 @@ use dex_blob_cache::BlobCache;
 use dex_protocol::dex::flow_service_client::FlowServiceClient;
 use dex_protocol::dex::{EncodedObject, LoadBlobRequestEntry, LoadBlobsRequest, Value, value};
 use prost::Message;
-use tonic::transport::Channel;
+
+use crate::credential::CredentialChannel;
 
 use crate::sdk_error::FlowTargetRequirement;
 use crate::{SdkError, SdkResult};
 
 #[derive(Clone)]
 pub(crate) struct ValueHydrator {
-    service: FlowServiceClient<Channel>,
+    service: FlowServiceClient<CredentialChannel>,
     cache: std::sync::Arc<BlobCache>,
 }
 
 impl ValueHydrator {
     pub(crate) fn new(
-        service: FlowServiceClient<Channel>,
+        service: FlowServiceClient<CredentialChannel>,
         cache: std::sync::Arc<BlobCache>,
     ) -> Self {
         Self { service, cache }

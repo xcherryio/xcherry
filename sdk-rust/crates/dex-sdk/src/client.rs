@@ -28,6 +28,7 @@ use tokio::runtime::Runtime;
 use tonic::{Code, Request, transport::Endpoint};
 use uuid::Uuid;
 
+use crate::credential::{CredentialChannel, CredentialInterceptor};
 use crate::sdk_error::{FlowTargetRequirement, ServiceError};
 use crate::stop_flow_options::StopType;
 use crate::time_travel_options::{TimeTravelPoint, TimeTravelStepMethod};
@@ -66,7 +67,7 @@ use crate::{
 pub struct Client {
     runtime: Runtime,
     registry: Registry,
-    service: FlowServiceClient<tonic::transport::Channel>,
+    service: FlowServiceClient<CredentialChannel>,
     hydrator: ValueHydrator,
     options: ClientOptions,
 }
@@ -104,7 +105,10 @@ impl Client {
             .map_err(service_error)?;
         let service = {
             let _runtime_guard = runtime.enter();
-            FlowServiceClient::new(endpoint.connect_lazy())
+            FlowServiceClient::new(CredentialChannel::new(
+                endpoint.connect_lazy(),
+                CredentialInterceptor::new(options.credential_value()),
+            ))
         };
         let hydrator = ValueHydrator::new(service.clone(), blob_cache);
         Ok(Self {
@@ -1178,7 +1182,7 @@ impl Client {
         call: Call,
     ) -> SdkResult<()>
     where
-        Call: FnOnce(FlowServiceClient<tonic::transport::Channel>) -> Future,
+        Call: FnOnce(FlowServiceClient<CredentialChannel>) -> Future,
         Future: std::future::Future<Output = Result<tonic::Response<Response>, tonic::Status>>,
     {
         let service = self.service.clone();

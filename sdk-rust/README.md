@@ -1,5 +1,36 @@
 # Dex Rust SDK
 
+## Authentication
+
+Set a credential on each Client and Worker when Dex authentication is enabled.
+`FileCredential::new` reads a bearer token file at construction and checks for
+rotation at most once per second. It trims surrounding whitespace. Missing,
+unreadable, or empty files fail requests instead of sending a stale token.
+The same credential can be shared across threads and across a Client and Worker.
+Replace token files atomically by writing a temporary file and renaming it.
+An empty or partial file fails closed, and failed pull streams back off for about
+one minute. File checks are synchronous and briefly serialize callers; use a
+local filesystem. Custom credentials should return a bare token promptly and
+refresh slow sources in the background.
+
+```rust
+use std::sync::Arc;
+use dex_sdk::{ClientOptions, FileCredential, WorkerOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let credential = Arc::new(FileCredential::new("/var/run/secrets/dex/token")?);
+    let client_options = ClientOptions::new().credential(credential.clone());
+    let worker_options = WorkerOptions::new().credential(credential);
+    Ok(())
+}
+```
+
+The Client sends the token with every FlowService call. The Worker sends it with
+FlowService calls, including startup synchronization and blob hydration, and
+when each pull task stream opens. Reconnected streams use the current token.
+Without a credential, the SDK sends no authorization metadata. Dex uses
+plaintext gRPC, so protect the network path carrying the token.
+
 ## Flow state I/O
 
 Applications read and write Flow state through typed RPCs. The Client does not

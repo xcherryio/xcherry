@@ -20,6 +20,7 @@ mod channel;
 mod client;
 mod client_options;
 mod context;
+mod credential;
 mod flow;
 mod flow_config;
 mod flow_info;
@@ -60,6 +61,7 @@ pub use channel::{Channel, ChannelGuard, ChannelMap, ChannelMapLoad, ChannelMess
 pub use client::Client;
 pub use client_options::ClientOptions;
 pub use context::{Context, RecoveryErrorInfo};
+pub use credential::{Credential, CredentialError, FileCredential};
 pub use dex_blob_cache::{BlobCache, BlobCacheConfig};
 pub use flow::{Flow, FlowTimeoutHandler};
 pub use flow_config::{ActiveStepSearchMode, FlowConfig};

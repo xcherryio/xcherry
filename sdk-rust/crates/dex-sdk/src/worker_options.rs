@@ -6,7 +6,10 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::Credential;
 
 #[derive(Clone, Debug)]
 /// Selects how Dex dispatches work to an application Worker.
@@ -173,6 +176,7 @@ pub struct WorkerOptions {
     worker_target: Option<WorkerTarget>,
     pull: Option<PullWorkerOptions>,
     attribute_index_sync_timeout: Duration,
+    credential: Option<Arc<dyn Credential>>,
 }
 
 impl WorkerOptions {
@@ -184,6 +188,7 @@ impl WorkerOptions {
             worker_target: None,
             pull: None,
             attribute_index_sync_timeout: Duration::from_secs(120),
+            credential: None,
         }
     }
 
@@ -196,6 +201,16 @@ impl WorkerOptions {
     /// Sets the plaintext Dex FlowService `host:port` used by the Worker.
     pub fn server_address(mut self, value: impl Into<String>) -> Self {
         self.server_address = value.into();
+        self
+    }
+
+    /// Sends a bearer token on FlowService calls and pull Worker task streams.
+    ///
+    /// The default sends no authorization metadata. The credential may be called concurrently;
+    /// errors fail calls locally. Pull streams evaluate it at opening and again on reconnect.
+    /// The token uses Dex's plaintext connection, so protect the network path.
+    pub fn credential(mut self, value: Arc<dyn Credential>) -> Self {
+        self.credential = Some(value);
         self
     }
 
@@ -247,6 +262,10 @@ impl WorkerOptions {
 
     pub(crate) fn attribute_index_sync_timeout_value(&self) -> Duration {
         self.attribute_index_sync_timeout
+    }
+
+    pub(crate) fn credential_value(&self) -> Option<Arc<dyn Credential>> {
+        self.credential.clone()
     }
 }
 

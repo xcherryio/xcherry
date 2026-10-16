@@ -6,7 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use crate::WorkerTarget;
+use std::sync::Arc;
+
+use crate::{Credential, WorkerTarget};
 
 #[derive(Clone, Debug)]
 /// Configures how a [`crate::Client`] reaches Dex and identifies application workers.
@@ -16,6 +18,7 @@ use crate::WorkerTarget;
 pub struct ClientOptions {
     server_address: String,
     worker_target: Option<WorkerTarget>,
+    credential: Option<Arc<dyn Credential>>,
 }
 
 impl ClientOptions {
@@ -24,6 +27,7 @@ impl ClientOptions {
         Self {
             server_address: "127.0.0.1:8801".to_string(),
             worker_target: None,
+            credential: None,
         }
     }
 
@@ -42,12 +46,26 @@ impl ClientOptions {
         self
     }
 
+    /// Sends a bearer token before every FlowService request.
+    ///
+    /// The default sends no authorization metadata. The credential may be called concurrently;
+    /// its error fails the request locally. The token uses the plaintext Dex connection, so
+    /// protect the network path. See [`crate::FileCredential`] for file rotation.
+    pub fn credential(mut self, value: Arc<dyn Credential>) -> Self {
+        self.credential = Some(value);
+        self
+    }
+
     pub(crate) fn server_address_value(&self) -> &str {
         &self.server_address
     }
 
     pub(crate) fn worker_target_value(&self) -> Option<&WorkerTarget> {
         self.worker_target.as_ref()
+    }
+
+    pub(crate) fn credential_value(&self) -> Option<Arc<dyn Credential>> {
+        self.credential.clone()
     }
 }
 
