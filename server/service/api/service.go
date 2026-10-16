@@ -1205,6 +1205,10 @@ func (s *serviceImpl) LoadBlobs(ctx context.Context, req *dexpb.LoadBlobsRequest
 		if err != nil {
 			return nil, makeInvalidRequestError(err.Error())
 		}
+		// Hard-delete values are omitted like unavailable Blobs so they never reach a client cache.
+		if blobstore.IsHardDeleteBlobID(blobId) {
+			continue
+		}
 		if err := blobstore.HydrateValue(ctx, entry.GetFlowId(), hydrateValue, s.store); err != nil {
 			if blobstore.IsObjectUnavailable(err) {
 				continue
@@ -1215,9 +1219,6 @@ func (s *serviceImpl) LoadBlobs(ctx context.Context, req *dexpb.LoadBlobsRequest
 	}
 	return &dexpb.LoadBlobsResponse{Values: values}, nil
 }
-
-// errLoadBlobsRejectsHardDelete keeps hard-delete payloads out of Worker and Client blob caches.
-var errLoadBlobsRejectsHardDelete = errors.New("LoadBlobs does not serve hard-delete Attributes")
 
 // validateHardDeleteAttributeStorage rejects hard-delete writes when no blob store can hold them.
 func (s *serviceImpl) validateHardDeleteAttributeStorage(attributes []*dexpb.AttributeWrite) error {
@@ -1242,9 +1243,6 @@ func blobArmForLoad(value *dexpb.Value) (blobId string, hydrateValue *dexpb.Valu
 		if kind.InternalBlobIdForStringValue == "" {
 			return "", nil, fmt.Errorf("blob ID is required")
 		}
-		if blobstore.IsHardDeleteBlobID(kind.InternalBlobIdForStringValue) {
-			return "", nil, errLoadBlobsRejectsHardDelete
-		}
 		return kind.InternalBlobIdForStringValue, &dexpb.Value{
 			Kind: &dexpb.Value_InternalBlobIdForStringValue{
 				InternalBlobIdForStringValue: kind.InternalBlobIdForStringValue,
@@ -1253,9 +1251,6 @@ func blobArmForLoad(value *dexpb.Value) (blobId string, hydrateValue *dexpb.Valu
 	case *dexpb.Value_InternalBlobIdForObjValue:
 		if kind.InternalBlobIdForObjValue == "" {
 			return "", nil, fmt.Errorf("blob ID is required")
-		}
-		if blobstore.IsHardDeleteBlobID(kind.InternalBlobIdForObjValue) {
-			return "", nil, errLoadBlobsRejectsHardDelete
 		}
 		return kind.InternalBlobIdForObjValue, &dexpb.Value{
 			Kind: &dexpb.Value_InternalBlobIdForObjValue{

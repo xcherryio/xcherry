@@ -832,6 +832,13 @@ func validateSubFlowAttributes(target *registeredFlow, attributes []InitialAttri
 				target.flowType,
 			)
 		}
+		if registered.isHardDeleteOnNull != attribute.isHardDeleteOnNull {
+			return fmt.Errorf(
+				"dex: SubFlow attribute %q hard-delete setting does not match its definition in %q",
+				attribute.name,
+				target.flowType,
+			)
+		}
 	}
 	return nil
 }

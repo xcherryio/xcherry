@@ -141,6 +141,12 @@ class Attribute(Generic[ValueT]):
     * Executions that reuse a Flow ID share the stored value.
     * ``Client.time_travel`` does not restore a deleted value. The value stays
       absent.
+    * A Flow retry or a restarted SubFlow starts from the original initial
+      value. If an earlier run deleted that value, the new run reads it as
+      absent.
+    * Removing ``hard_delete_on_null`` from a definition leaves the stored value
+      in place until Dex removes the Flow. Delete the value with the
+      hard-delete definition first.
     * Values remain until deleted, or until the Flow is removed by retention and
       blob cleanup.
     * Blob store backups or bucket versioning can retain copies outside Dex.

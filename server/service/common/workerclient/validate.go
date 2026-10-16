@@ -48,6 +48,9 @@ func ValidateHardDeleteAttributeWrites(writes []*dexpb.AttributeWrite) error {
 		if !write.GetIsHardDeleteOnNull() {
 			continue
 		}
+		if write.GetValue() != nil && write.GetValue().GetKind() == nil {
+			return fmt.Errorf("hard-delete attribute %q has an empty value; use null to delete it", write.GetKey())
+		}
 		switch write.GetValue().GetKind().(type) {
 		case nil, *dexpb.Value_NullValue, *dexpb.Value_StringValue, *dexpb.Value_ObjValue:
 		default:

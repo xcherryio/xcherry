@@ -148,6 +148,10 @@ impl<T> Attribute<T> {
     ///   starts.
     /// - Executions that reuse a Flow ID share the stored value.
     /// - Resetting a Flow does not restore a deleted value. A deleted value reads as absent.
+    /// - A Flow retry or a restarted SubFlow starts from the original initial value. If an
+    ///   earlier run deleted that value, the new run reads it as absent.
+    /// - Removing `hard_delete_on_null` from a definition leaves the stored value in place until
+    ///   Dex removes the Flow. Delete the value with the hard-delete definition before removing it.
     /// - Stored values remain until they are deleted, or until Dex removes the Flow through
     ///   retention and blob cleanup.
     /// - Blob store backups and bucket versioning can retain copies of stored values.

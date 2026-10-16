@@ -194,3 +194,54 @@ func hardDeleteTestRPCRequest(t *testing.T, rpcName string, input any) *dexpb.In
 		Input:    mustEncodeWorkerTestValue(t, input),
 	}
 }
+
+// hardDeleteSecretWithoutMarker shares the hard-delete Attribute name but omits HardDeleteOnNull.
+var hardDeleteSecretWithoutMarker = DefineAttribute[string]("hard-delete-test-secret")
+
+type hardDeleteParentTestFlow struct {
+	FlowDefaults
+}
+
+func (hardDeleteParentTestFlow) GetSteps() []StepDef {
+	return []StepDef{DefineStartStep(hardDeleteParentTestStep{})}
+}
+
+func (hardDeleteParentTestFlow) GetPersistenceSchema() PersistenceSchema {
+	return PersistenceSchema{}
+}
+
+type hardDeleteParentTestStep struct {
+	StepDefaults
+}
+
+func (hardDeleteParentTestStep) WaitFor(Context, None) (*Wait, error) {
+	secret, err := InitialAttribute(hardDeleteSecretWithoutMarker, "secret")
+	if err != nil {
+		return nil, err
+	}
+	return Until(SubFlow(hardDeleteTestFlow{}, nil, SubFlowOptions{
+		Attributes: []InitialAttributeDef{secret},
+	})), nil
+}
+
+func (hardDeleteParentTestStep) Execute(Context, None) (*StepDecision, error) {
+	return DeadEnd(), nil
+}
+
+func TestHardDeleteAttributeSubFlowRejectsMismatchedDefinition(t *testing.T) {
+	client, closeService := newWorkerClientForServerProtocol(
+		t,
+		[]Flow{hardDeleteParentTestFlow{}, hardDeleteTestFlow{}},
+		nil,
+		hardDeleteAttributeProtocolVersion,
+	)
+	defer closeService()
+
+	_, err := collectWaitForOutputs(client, &dexpb.InvokeWaitForMethodRequest{
+		Context:   workerStepContext(),
+		FlowType:  GetFinalFlowType(hardDeleteParentTestFlow{}),
+		StepType:  GetFinalStepType(hardDeleteParentTestStep{}),
+		StepInput: mustEncodeWorkerTestValue(t, nil),
+	})
+	require.ErrorContains(t, err, "hard-delete setting does not match")
+}

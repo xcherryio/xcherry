@@ -138,15 +138,17 @@ func doTestHardDeleteAttributes(
 	requireHardDeleteAttribute(t, ctx, flowClient, flowID, hardDeleteAttributes.SecretKey, hardDeleteAttributes.StepSecret)
 	require.Len(t, hardDeleteObjectFiles(t, blobDirectory, flowID), 2)
 
-	_, err = flowClient.LoadBlobs(ctx, &dexpb.LoadBlobsRequest{
+	const hardDeleteBlobID = "local-store-id|hd/0123456789"
+	loadResponse, err := flowClient.LoadBlobs(ctx, &dexpb.LoadBlobsRequest{
 		Entries: []*dexpb.LoadBlobRequestEntry{{
 			FlowId: flowID,
 			BlobValue: &dexpb.Value{Kind: &dexpb.Value_InternalBlobIdForStringValue{
-				InternalBlobIdForStringValue: "local-store-id|hd/0123456789",
+				InternalBlobIdForStringValue: hardDeleteBlobID,
 			}},
 		}},
 	})
-	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.NoError(t, err)
+	require.NotContains(t, loadResponse.GetValues(), hardDeleteBlobID)
 
 	for _, isTransactional := range []bool{true, false} {
 		selector, nextSecret := hardDeleteSignalRPCSelector, hardDeleteSignalRPCSecret
@@ -383,6 +385,45 @@ func TestHardDeleteAttributeRequiresBlobStoreTemporal(t *testing.T) {
 		}},
 	})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), err)
+}
+
+// TestHardDeleteAttributeStepWriteRequiresBlobStoreTemporal verifies a Step write fails instead of storing the value inline.
+func TestHardDeleteAttributeStepWriteRequiresBlobStoreTemporal(t *testing.T) {
+	if !*temporalIntegTest {
+		t.Skip()
+	}
+	runtime := startDexService(t, DexServiceTestConfig{
+		BackendType:      service.BackendTypeTemporal,
+		BlobStoreEnabled: ptr.Any(false),
+	})
+	workerHandler := hardDeleteAttributes.NewHandler()
+	workerTarget := startWorker(t, workerHandler)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	flowID := hardDeleteAttributes.WorkflowType + "-" + uuid.NewString()
+	_, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId:          newRequestID(),
+		FlowId:             flowID,
+		FlowType:           hardDeleteAttributes.WorkflowType,
+		FlowTimeoutSeconds: 100,
+		StartStepType:      hardDeleteAttributes.State1,
+		StepOptions: &dexpb.StepOptions{
+			SkipWaitFor:        true,
+			ExecuteRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1},
+		},
+		FlowStartOptions: withWorkerTarget(nil, workerTarget),
+	})
+	require.NoError(t, err)
+	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
+	require.Contains(t, result.GetErrorMessage(), "hard-delete Attributes require an enabled blob store")
+	_, isS2Reached := workerHandler.SeenAttributes("S2_waitFor")
+	require.False(t, isS2Reached)
+	historyText := flowHistoryText(t, ctx, runtime, flowID)
+	require.Contains(t, historyText, hardDeleteAttributes.WorkflowType)
+	require.NotContains(t, historyText, hardDeleteAttributes.StepSecret)
 }
 
 // TestHardDeleteAttributeBlobCacheTemporal verifies S3 storage overwrites in place and never fills the blob cache.

@@ -328,6 +328,10 @@ func SyncToAttributeStore() AttributeOption {
 //     overwrites the running Flow's value, or deletes it when the initial value is nil.
 //   - Flows that reuse a Flow ID share the stored value.
 //   - ResetFlow does not restore a deleted value. A deleted value reads as absent.
+//   - A Flow retry or a restarted SubFlow starts from the original initial value. If an earlier
+//     run deleted that value, the new run reads it as absent.
+//   - Removing HardDeleteOnNull from a definition leaves the stored value in place until Dex
+//     removes the Flow. Delete the value with the hard-delete definition before removing it.
 //
 // A value remains stored until it is deleted, or until Dex removes the Flow after its retention
 // period. Blob store backups or bucket versioning outside Dex can keep copies.

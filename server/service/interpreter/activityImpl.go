@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/superdurable/dex/config"
@@ -45,6 +46,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Activities struct {
@@ -210,6 +212,11 @@ func (a *Activities) IWaitForM(
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := a.rejectHardDeleteWritesWithoutBlobStore(
+		resp.GetUpsertAttributes(), resp.GetWaitingCondition().GetSubFlowConditions(),
+	); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.offloadSubFlowStartInputs(
@@ -425,6 +432,9 @@ func (a *Activities) IExecuteM(
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := a.rejectHardDeleteWritesWithoutBlobStore(resp.GetUpsertAttributes(), nil); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -763,18 +773,9 @@ func (a *Activities) waitForMethodRequestForWorker(
 	if err != nil {
 		return nil, err
 	}
-	return &dexpb.InvokeWaitForMethodRequest{
-		Context:                     req.GetContext(),
-		FlowType:                    req.GetFlowType(),
-		StepType:                    req.GetStepType(),
-		StepInput:                   req.GetStepInput(),
-		Attributes:                  attributes,
-		ChannelInfos:                req.GetChannelInfos(),
-		LoadedChannelMessages:       req.GetLoadedChannelMessages(),
-		LoadedAttributeMapInstances: req.GetLoadedAttributeMapInstances(),
-		LoadedChannelNames:          req.GetLoadedChannelNames(),
-		LoadedChannelMapInstances:   req.GetLoadedChannelMapInstances(),
-	}, nil
+	workerReq := shallowCopyMessage(req)
+	workerReq.Attributes = attributes
+	return workerReq, nil
 }
 
 // executeMethodRequestForWorker returns req, or a copy whose hard-delete Attributes are hydrated.
@@ -790,20 +791,20 @@ func (a *Activities) executeMethodRequestForWorker(
 	if err != nil {
 		return nil, err
 	}
-	return &dexpb.InvokeExecuteMethodRequest{
-		Context:                     req.GetContext(),
-		FlowType:                    req.GetFlowType(),
-		StepType:                    req.GetStepType(),
-		StepInput:                   req.GetStepInput(),
-		Attributes:                  attributes,
-		StepExeLocals:               req.GetStepExeLocals(),
-		ConditionResults:            req.GetConditionResults(),
-		ChannelInfos:                req.GetChannelInfos(),
-		LoadedChannelMessages:       req.GetLoadedChannelMessages(),
-		LoadedAttributeMapInstances: req.GetLoadedAttributeMapInstances(),
-		LoadedChannelNames:          req.GetLoadedChannelNames(),
-		LoadedChannelMapInstances:   req.GetLoadedChannelMapInstances(),
-	}, nil
+	workerReq := shallowCopyMessage(req)
+	workerReq.Attributes = attributes
+	return workerReq, nil
+}
+
+// shallowCopyMessage copies every populated top-level field, sharing nested values with message.
+func shallowCopyMessage[T proto.Message](message T) T {
+	source := message.ProtoReflect()
+	copied := source.New()
+	source.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		copied.Set(field, value)
+		return true
+	})
+	return copied.Interface().(T)
 }
 
 func workerContextForAttempt(workerContext *dexpb.Context) *dexpb.Context {
@@ -1288,12 +1289,33 @@ func (a *Activities) offloadWorkerAttributeWrites(
 	flowId string,
 	invocationId string,
 ) error {
-	if !a.cfg.BlobStore.EffectiveEnabled() || a.blobStore == nil {
+	return blobstore.OffloadLargeAttributeWrites(
+		ctx,
+		writes,
+		flowId,
+		invocationId,
+		a.cfg.BlobStore.EffectiveThresholdInBytes(),
+		a.blobStore,
+		a.cfg.BlobStore.EffectiveEnabled() && a.blobStore != nil,
+	)
+}
+
+// rejectHardDeleteWritesWithoutBlobStore fails the Worker result so its hard-delete values never reach history.
+func (a *Activities) rejectHardDeleteWritesWithoutBlobStore(
+	writes []*dexpb.AttributeWrite,
+	subFlowConditions []*dexpb.SubFlowCondition,
+) error {
+	if a.cfg.BlobStore.EffectiveEnabled() && a.blobStore != nil {
 		return nil
 	}
-	return blobstore.OffloadLargeAttributeWrites(
-		ctx, writes, flowId, invocationId, a.cfg.BlobStore.EffectiveThresholdInBytes(), a.blobStore, true,
-	)
+	allWrites := slices.Clone(writes)
+	for _, condition := range subFlowConditions {
+		allWrites = append(allWrites, condition.GetOptions().GetAttributes()...)
+	}
+	if slices.ContainsFunc(allWrites, (*dexpb.AttributeWrite).GetIsHardDeleteOnNull) {
+		return blobstore.ErrHardDeleteRequiresBlobStore
+	}
+	return nil
 }
 
 func (a *Activities) offloadWorkerSideEffects(
