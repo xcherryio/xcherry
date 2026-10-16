@@ -997,6 +997,7 @@ func (i *Interpreter) processStepExecution(
 			subFlowTracker.Register(stepExeId, waitingCondition, completedSubFlowResults)
 			starter := NewSubFlowStarter(
 				provider,
+				globalVersioner,
 				i.activities,
 				subFlowTracker,
 				stepExeId,
@@ -1006,11 +1007,17 @@ func (i *Interpreter) processStepExecution(
 				&i.sharedConfig.Interpreter.InterpreterActivityConfig,
 			)
 			if err := starter.StartAll(ctx); err != nil {
-				if globalVersioner.UsesTypedSubFlowStartFailures() {
-					err = provider.NewFlowError(
-						dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE,
-						fmt.Sprintf("SubFlow start rejected: %v", err),
-					)
+				if globalVersioner.UsesTypedSubFlowStartFailures() && !provider.IsCanceledError(err) {
+					detail, isRejection, rejectionErr := provider.IsSubFlowStartRejection(err)
+					if rejectionErr != nil {
+						return nil, service.StepExecutionStatusInternalError, fmt.Errorf("read SubFlow start rejection: %w", rejectionErr)
+					}
+					if isRejection {
+						err = provider.NewFlowError(
+							dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE,
+							"SubFlow start rejected: "+detail,
+						)
+					}
 				}
 				return nil, service.StepExecutionStatusInternalError, err
 			}

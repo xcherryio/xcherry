@@ -818,9 +818,6 @@ func TestPullSubFlowRejectsInvalidTargetCadence(t *testing.T) {
 func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	cfg := createTestConfig(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{}})
-	cfg.Interpreter.InterpreterActivityConfig.SubFlowStartActivityConfig = &config.SubFlowStartActivityConfig{
-		ScheduleToCloseTimeout: 3 * time.Second, RetryPolicy: &config.RetryPolicy{MaximumAttempts: 1},
-	}
 	runtime := startPullRuntime(t, &cfg, bootstrap.Services{API: true, Interpreter: true, Matching: true})
 	connection := newDexClientConnectionWithCredential(t, runtime.publicAddress, "", config.DefaultGrpcMaxMessageBytes)
 	flowClient := dexpb.NewFlowServiceClient(connection)
@@ -830,12 +827,13 @@ func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendTy
 	flowID := "invalid-subflow-" + uuid.NewString()
 	require.NoError(t, startDispatchProbe(ctx, flowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true},
 		&dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1}}))
+	startedAt := time.Now()
 	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
 	require.Equal(t, dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE, result.GetErrorType())
-	require.Contains(t, result.GetErrorMessage(), "SubFlow start rejected")
-	require.Contains(t, result.GetErrorMessage(), "pull worker_target cannot specify address")
+	require.Equal(t, "SubFlow start rejected: pull worker_target cannot specify address", result.GetErrorMessage())
+	require.Less(t, time.Since(startedAt), 10*time.Second)
 }
 
 func TestPullParallelLastWriteTemporal(t *testing.T) {

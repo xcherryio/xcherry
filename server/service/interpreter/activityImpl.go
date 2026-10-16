@@ -966,7 +966,7 @@ func (a *Activities) StartSubFlow(
 		options.GetFlowTimeoutPolicy(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, a.newSubFlowStartRejection(err)
 	}
 	if err := service.ValidateFlowTimeoutHandlerOptions(
 		options.GetFlowTimeoutSeconds(),
@@ -974,10 +974,10 @@ func (a *Activities) StartSubFlow(
 		options.GetTimeoutHandlerOptions(),
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 	); err != nil {
-		return nil, err
+		return nil, a.newSubFlowStartRejection(err)
 	}
 	if options.GetFlowStartDelaySeconds() < 0 {
-		return nil, fmt.Errorf("SubFlow start delay must be non-negative")
+		return nil, a.newSubFlowStartRejection(fmt.Errorf("SubFlow start delay must be non-negative"))
 	}
 
 	parentFlowConfig := input.GetParentFlowConfig()
@@ -986,11 +986,11 @@ func (a *Activities) StartSubFlow(
 	}
 	flowConfig, err := buildSubFlowConfig(parentFlowConfig, options.GetFlowConfigOverride())
 	if err != nil {
-		return nil, err
+		return nil, a.newSubFlowStartRejection(err)
 	}
 	for _, storeName := range flowConfig.GetAttributeStoreNames().GetNames() {
 		if !a.attributeStore.HasStore(storeName) {
-			return nil, fmt.Errorf("Attribute Store %q is unavailable", storeName)
+			return nil, a.newSubFlowStartRejection(fmt.Errorf("Attribute Store %q is unavailable", storeName))
 		}
 	}
 
@@ -1027,6 +1027,10 @@ func (a *Activities) StartSubFlow(
 		return nil, fmt.Errorf("transfer immediate SubFlow result Blob ownership: %w", err)
 	}
 	return output, nil
+}
+
+func (a *Activities) newSubFlowStartRejection(err error) error {
+	return a.activityProvider.NewSubFlowStartRejection(err.Error())
 }
 
 func (a *Activities) subFlowStartIdentity(

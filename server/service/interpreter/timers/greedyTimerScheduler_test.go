@@ -44,6 +44,10 @@ func (p *fakeWorkflowProvider) IsApplicationError(error) bool {
 	return false
 }
 
+func (p *fakeWorkflowProvider) IsSubFlowStartRejection(error) (string, bool, error) {
+	return "", false, nil
+}
+
 func (p *fakeWorkflowProvider) MapToRecoveryError(error) (*dexpb.RecoveryErrorInfo, error) {
 	return nil, nil
 }

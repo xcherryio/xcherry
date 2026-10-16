@@ -89,6 +89,20 @@ func (w *workflowProvider) IsApplicationError(err error) bool {
 	return errors.As(err, &applicationError)
 }
 
+func (w *workflowProvider) IsSubFlowStartRejection(err error) (string, bool, error) {
+	var applicationError *temporal.ApplicationError
+	if !errors.As(err, &applicationError) ||
+		applicationError.Type() != interfaces.SubFlowStartRejectionErrorType {
+		return "", false, nil
+	}
+	var detail string
+	detailsErr := applicationError.Details(&detail)
+	if detailsErr != nil {
+		return "", false, detailsErr
+	}
+	return detail, true, nil
+}
+
 func (w *workflowProvider) MapToFlowResultError(
 	err error,
 ) (dexpb.FlowErrorType, *dexpb.RecoveryErrorInfo, error) {
@@ -508,11 +522,15 @@ func temporalActivityOptions(options interfaces.ActivityOptions) workflow.Activi
 	if options.RetryPolicy != nil && options.RetryPolicy.TotalDuration > 0 {
 		scheduleToCloseTimeout = options.RetryPolicy.TotalDuration
 	}
+	retryPolicy := retry.ConvertTemporalActivityRetryPolicy(options.RetryPolicy)
+	if retryPolicy != nil {
+		retryPolicy.NonRetryableErrorTypes = options.NonRetryableErrorTypes
+	}
 	return workflow.ActivityOptions{
 		ActivityID:             options.ActivityID,
 		ScheduleToCloseTimeout: scheduleToCloseTimeout,
 		StartToCloseTimeout:    options.StartToCloseTimeout,
-		RetryPolicy:            retry.ConvertTemporalActivityRetryPolicy(options.RetryPolicy),
+		RetryPolicy:            retryPolicy,
 		HeartbeatTimeout:       options.HeartbeatTimeout,
 	}
 }
@@ -527,9 +545,11 @@ func temporalLocalActivityOptions(options interfaces.ActivityOptions) workflow.L
 		localActivityTimeout = options.RetryPolicy.TotalDuration
 	}
 	localRetryPolicy := retry.LocalActivityRetryPolicy(options.RetryPolicy, localActivityTimeout)
+	retryPolicy := retry.ConvertTemporalActivityRetryPolicy(localRetryPolicy)
+	retryPolicy.NonRetryableErrorTypes = options.NonRetryableErrorTypes
 	return workflow.LocalActivityOptions{
 		ScheduleToCloseTimeout: localActivityTimeout,
-		RetryPolicy:            retry.ConvertTemporalActivityRetryPolicy(localRetryPolicy),
+		RetryPolicy:            retryPolicy,
 	}
 }
 

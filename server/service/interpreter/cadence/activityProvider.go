@@ -29,6 +29,10 @@ func (a *activityProvider) GetLogger(ctx context.Context) interfaces.UnifiedLogg
 	}
 }
 
+func (a *activityProvider) NewSubFlowStartRejection(detail string) error {
+	return cadence.NewCustomError(interfaces.SubFlowStartRejectionErrorType, detail)
+}
+
 func (a *activityProvider) NewActivityError(
 	errType dexpb.FlowErrorType,
 	activityError *dexpb.InternalActivityError,
