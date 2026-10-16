@@ -26,6 +26,12 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
+worker_mode="${DEX_INTEG_WORKER_MODE:-push}"
+if [[ "$worker_mode" != push && "$worker_mode" != pull ]]; then
+  echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+
 available_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
@@ -119,6 +125,7 @@ DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
 DEX_WEB_ADDRESS="127.0.0.1:${web_port}" \
 DEX_WORKER_HOST=127.0.0.1 \
 DEX_WORKER_PORT="$worker_port" \
+DEX_INTEG_WORKER_MODE="$worker_mode" \
   run_go_test -count=1 -race -v ./integ -run "${DEX_GO_INTEG_TEST_PATTERN:-.}"
 
 if $coverage; then

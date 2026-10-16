@@ -144,6 +144,9 @@ func TestMessageSizeDefaultLimitCarriesValuesAboveGrpcDefault(t *testing.T) {
 }
 
 func TestMessageSizeHydrationSplitsBlobBatchesAboveLimit(t *testing.T) {
+	if isPullWorkerMode {
+		t.Skip("push-only Worker listener message-size limit")
+	}
 	ctx := integrationContext(t)
 	limitBytes := grpcDefaultReceiveLimitBytes
 	worker := startMessageSizeWorker(t, limitBytes)

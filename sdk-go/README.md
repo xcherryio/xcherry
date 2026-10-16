@@ -862,6 +862,9 @@ on, and starts both Flows under the names the Worker registers.
 `DEX_INTEG_DEX_PORT`, `DEX_INTEG_WEB_PORT`, and `DEX_INTEG_WORKER_PORT` pin
 the Dex gRPC, Dex Web, and integration Worker ports; each defaults to a free
 port.
+Set `DEX_INTEG_WORKER_MODE=pull` to run the integration suite with a pull Worker
+and pull Client target. The default is `push`. Each script run starts a fresh
+`dexcli dev` environment.
 
 `integTests` runs `./integ` against a Dex you start yourself. Start it with
 `dexcli dev -flow-rendering-dir` pointing at the two visualized fixtures, and

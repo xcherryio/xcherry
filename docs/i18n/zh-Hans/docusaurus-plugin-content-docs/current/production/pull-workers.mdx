@@ -44,6 +44,9 @@ Dex 在 matching dispatch 等待时间内寻找可用 Worker。如果没有 Work
 任务至少投递一次。如果 Worker 在 Dex 收到任何输出前断开连接，同一个调用可能再次分配。
 外部副作用应具备幂等性，例如使用 Flow ID 和 Step execution ID 作为幂等键。
 
+使用拉取模式 Worker 时，**ASYNC** durability 的本地阶段只有一次 attempt；后续 attempt
+会收到该阶段结束后记录的上一次 heartbeat。
+
 ## 容量和关闭
 
 并发任务上限限制同时运行的调用数。每队列的空闲 stream 数量使 stream 随时可用。
