@@ -139,7 +139,10 @@ class PullWorkerRuntime:
             return
         for queue in self.queues:
             idle = sum(
-                stream.queue == queue and not stream.is_busy for stream in self._streams
+                stream.queue == queue
+                and not stream.is_busy
+                and not stream.is_half_closing
+                for stream in self._streams
             )
             for _ in range(self.idle_streams_per_queue - idle):
                 stream = PullStream(self, stub, queue)
@@ -338,6 +341,7 @@ class PullStream:
                             ):
                                 await self._reject_task(frame.task)
                         self.is_half_closing = True
+                        self.runtime.signal()
                         await self._call.done_writing()
                         await self._await_stream_eof(reader)
                         reader = None
