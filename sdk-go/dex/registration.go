@@ -61,6 +61,7 @@ type registeredAttribute struct {
 	isMap                bool
 	valueType            reflect.Type
 	syncToAttributeStore bool
+	isHardDeleteOnNull   bool
 }
 
 type registeredChannel struct {
@@ -229,6 +230,11 @@ func (flow *registeredFlow) registerAttribute(
 	}
 	index := definition.attributeIndex()
 	isMap := definition.attributeIsMap()
+	if definition.attributeIsHardDeleteOnNull() {
+		if err := validateHardDeleteAttributeDefinition(definition); err != nil {
+			return fmt.Errorf("attribute %q: %w", name, err)
+		}
+	}
 	if index != nil {
 		if _, err := mapIndexType(index.Type); err != nil {
 			return fmt.Errorf("attribute %q: %w", name, err)
@@ -258,6 +264,28 @@ func (flow *registeredFlow) registerAttribute(
 		isMap:                isMap,
 		valueType:            definition.attributeValueType(),
 		syncToAttributeStore: definition.attributeSyncToAttributeStore(),
+		isHardDeleteOnNull:   definition.attributeIsHardDeleteOnNull(),
+	}
+	return nil
+}
+
+func validateHardDeleteAttributeDefinition(definition AttributeDef) error {
+	if definition.attributeIndex() != nil {
+		return fmt.Errorf("HardDeleteOnNull cannot be combined with Indexed")
+	}
+	if definition.attributeSyncToAttributeStore() {
+		return fmt.Errorf("HardDeleteOnNull cannot be combined with SyncToAttributeStore")
+	}
+	valueType := definition.attributeValueType()
+	for valueType.Kind() == reflect.Pointer {
+		valueType = valueType.Elem()
+	}
+	switch valueType.Kind() {
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return fmt.Errorf("HardDeleteOnNull supports only string and object values, not %s", valueType)
 	}
 	return nil
 }
@@ -850,7 +878,8 @@ func (registry *Registry) resolveAttribute(
 		registered, found := flow.attributes[name]
 		if found && registered.isMap == expectMap &&
 			reflect.DeepEqual(registered.index, reference.attributeIndex()) &&
-			registered.syncToAttributeStore == reference.attributeSyncToAttributeStore() {
+			registered.syncToAttributeStore == reference.attributeSyncToAttributeStore() &&
+			registered.isHardDeleteOnNull == reference.attributeIsHardDeleteOnNull() {
 			return registered, nil
 		}
 	}

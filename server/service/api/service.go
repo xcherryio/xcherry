@@ -171,6 +171,9 @@ func (s *serviceImpl) StartFlow(
 	if err := validateAttributeWrites(attributes); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
 	}
+	if err := s.validateHardDeleteAttributeStorage(attributes); err != nil {
+		return nil, err
+	}
 
 	searchAttributes := index.ConvertAttributeWritesToSearchAttributeUpsertMap(attributes)
 	searchAttributes[service.SearchAttributeDexWorkflowType] = req.GetFlowType()
@@ -1124,7 +1127,10 @@ func (s *serviceImpl) GetAttributes(
 	); err != nil {
 		return nil, s.handleError(err)
 	}
-	attributes := queryResponse.GetAttributes()
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetFlowId(), queryResponse.GetAttributes(), s.store)
+	if err != nil {
+		return nil, s.handleError(err)
+	}
 	if !s.blobStoreCfg.EffectiveLazyLoading() {
 		if err := blobstore.HydrateKVs(ctx, req.GetFlowId(), attributes, s.store); err != nil {
 			return nil, s.handleError(err)
@@ -1145,6 +1151,9 @@ func (s *serviceImpl) SetAttributes(
 	}
 	if err := validateAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
+	}
+	if err := s.validateHardDeleteAttributeStorage(req.GetAttributes()); err != nil {
+		return nil, err
 	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(req.GetAttributes()); err != nil {
 		return nil, makeInvalidRequestError(err.Error())
@@ -1196,6 +1205,10 @@ func (s *serviceImpl) LoadBlobs(ctx context.Context, req *dexpb.LoadBlobsRequest
 		if err != nil {
 			return nil, makeInvalidRequestError(err.Error())
 		}
+		// Hard-delete values are omitted like unavailable Blobs so they never reach a client cache.
+		if blobstore.IsHardDeleteBlobID(blobId) {
+			continue
+		}
 		if err := blobstore.HydrateValue(ctx, entry.GetFlowId(), hydrateValue, s.store); err != nil {
 			if blobstore.IsObjectUnavailable(err) {
 				continue
@@ -1205,6 +1218,19 @@ func (s *serviceImpl) LoadBlobs(ctx context.Context, req *dexpb.LoadBlobsRequest
 		values[blobId] = hydrateValue
 	}
 	return &dexpb.LoadBlobsResponse{Values: values}, nil
+}
+
+// validateHardDeleteAttributeStorage rejects hard-delete writes when no blob store can hold them.
+func (s *serviceImpl) validateHardDeleteAttributeStorage(attributes []*dexpb.AttributeWrite) error {
+	if s.blobStoreCfg.EffectiveEnabled() && s.store != nil {
+		return nil
+	}
+	for _, attribute := range attributes {
+		if attribute.GetIsHardDeleteOnNull() {
+			return makeInvalidRequestError(blobstore.ErrHardDeleteRequiresBlobStore.Error())
+		}
+	}
+	return nil
 }
 
 // blobArmForLoad requires a blob-id arm and returns a fresh Value for hydrate.

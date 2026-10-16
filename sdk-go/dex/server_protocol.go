@@ -12,14 +12,17 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 )
 
 const (
 	minimumSupportedServerProtocolVersion uint32 = 2
-	maximumSupportedServerProtocolVersion uint32 = 2
-	goSDKModulePath                              = "github.com/superdurable/dex/sdk-go"
+	maximumSupportedServerProtocolVersion uint32 = 3
+	// hardDeleteAttributeProtocolVersion is the first Server protocol that keeps hard-delete Attributes out of history.
+	hardDeleteAttributeProtocolVersion uint32 = 3
+	goSDKModulePath                           = "github.com/superdurable/dex/sdk-go"
 )
 
 func negotiateServerProtocol(
@@ -69,6 +72,30 @@ func negotiateServerProtocol(
 		)
 	}
 	return negotiatedProtocolVersion, nil
+}
+
+// negotiatedServerProtocol holds the protocol version agreed with the Server; zero means not negotiated.
+type negotiatedServerProtocol struct {
+	version atomic.Uint32
+}
+
+// requireHardDeleteAttributeSupport fails closed because older Servers would store hard-delete values in history.
+func (protocol *negotiatedServerProtocol) requireHardDeleteAttributeSupport(
+	writes []*dexpb.AttributeWrite,
+) error {
+	if protocol.version.Load() >= hardDeleteAttributeProtocolVersion {
+		return nil
+	}
+	for _, write := range writes {
+		if write.GetIsHardDeleteOnNull() {
+			return &HardDeleteAttributeUnsupportedError{
+				AttributeName:                 write.GetKey(),
+				NegotiatedServerProtocol:      protocol.version.Load(),
+				RequiredServerProtocolVersion: hardDeleteAttributeProtocolVersion,
+			}
+		}
+	}
+	return nil
 }
 
 func serverProtocolRequestError(sdkVersion string, err error) error {

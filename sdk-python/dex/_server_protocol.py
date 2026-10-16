@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from typing import Iterable
 
 import grpc
 
 from dex.dexpb import dex_pb2 as pb
 
 MINIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 1
-MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 1
+MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 3
+HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION = 3
 
 
 def sdk_version() -> str:
@@ -62,6 +64,36 @@ def negotiate_server_protocol(server_info: pb.ServerInfo, artifact_version: str)
             "protocol intervals do not overlap",
         )
     return negotiated
+
+
+class NegotiatedServerProtocol:
+    def __init__(self) -> None:
+        self._version = 0
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    def record_version(self, version: int) -> None:
+        self._version = version
+
+    def require_hard_delete_attribute_support(
+        self,
+        writes: Iterable[pb.AttributeWrite],
+    ) -> None:
+        attribute_names = [
+            write.key for write in writes if write.is_hard_delete_on_null
+        ]
+        if (
+            not attribute_names
+            or self._version >= HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION
+        ):
+            return
+        raise RuntimeError(
+            "hard-delete Attribute writes require Dex Server protocol version "
+            f"{HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION} or later, but the negotiated "
+            f"protocol version is {self._version}: {', '.join(attribute_names)}"
+        )
 
 
 def server_info_request_error(

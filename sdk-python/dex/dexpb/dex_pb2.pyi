@@ -511,16 +511,18 @@ class EncodedObject(_message.Message):
     def __init__(self, encoding: _Optional[str] = ..., payload: _Optional[bytes] = ...) -> None: ...
 
 class AttributeWrite(_message.Message):
-    __slots__ = ("key", "value", "index_config", "sync_config")
+    __slots__ = ("key", "value", "index_config", "sync_config", "is_hard_delete_on_null")
     KEY_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     INDEX_CONFIG_FIELD_NUMBER: _ClassVar[int]
     SYNC_CONFIG_FIELD_NUMBER: _ClassVar[int]
+    IS_HARD_DELETE_ON_NULL_FIELD_NUMBER: _ClassVar[int]
     key: str
     value: Value
     index_config: IndexConfig
     sync_config: AttributeSyncConfig
-    def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., index_config: _Optional[_Union[IndexConfig, _Mapping]] = ..., sync_config: _Optional[_Union[AttributeSyncConfig, _Mapping]] = ...) -> None: ...
+    is_hard_delete_on_null: bool
+    def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., index_config: _Optional[_Union[IndexConfig, _Mapping]] = ..., sync_config: _Optional[_Union[AttributeSyncConfig, _Mapping]] = ..., is_hard_delete_on_null: _Optional[bool] = ...) -> None: ...
 
 class ActionPermissionMapping(_message.Message):
     __slots__ = ("attribute_key", "equal_values", "required_permission")

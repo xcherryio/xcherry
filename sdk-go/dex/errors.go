@@ -121,6 +121,42 @@ func (e *InvalidStepResultError) Unwrap() error {
 	return e.Err
 }
 
+// HardDeleteAttributeUnsupportedError reports a hard-delete Attribute write to a Server that cannot keep it out of history.
+//
+// Attributes defined with HardDeleteOnNull require Server protocol version 3 or later. Older Servers
+// would ignore the hard-delete marker and store the value in Flow history, so the SDK refuses the
+// write instead. Client.StartFlow returns this error before sending initial values. A Step or RPC
+// that writes such an Attribute fails with this error, and Dex retries it according to its retry
+// policy. Upgrade the Dex Server to resolve it.
+//
+// Example:
+//
+//	var unsupported *dex.HardDeleteAttributeUnsupportedError
+//	if errors.As(err, &unsupported) {
+//		log.Printf("upgrade Dex: %s needs protocol %d", unsupported.AttributeName, unsupported.RequiredServerProtocolVersion)
+//	}
+type HardDeleteAttributeUnsupportedError struct {
+	// AttributeName is the physical Attribute key of the refused write, including any map instance.
+	AttributeName string
+	// NegotiatedServerProtocol is the protocol version agreed with the Server.
+	NegotiatedServerProtocol uint32
+	// RequiredServerProtocolVersion is the minimum Server protocol version for hard-delete Attributes.
+	RequiredServerProtocolVersion uint32
+}
+
+// Error describes the refused write and the required Server protocol version.
+func (e *HardDeleteAttributeUnsupportedError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"dex: hard-delete attribute %q requires Server protocol %d or later, but the Server negotiated %d",
+		e.AttributeName,
+		e.RequiredServerProtocolVersion,
+		e.NegotiatedServerProtocol,
+	)
+}
+
 // ValueMappingError reports a Dex value conversion failure.
 type ValueMappingError struct {
 	// Operation describes whether encoding, decoding, indexing, or hydration failed.

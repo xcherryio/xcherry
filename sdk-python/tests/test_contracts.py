@@ -70,6 +70,7 @@ from dex._value_mapper import ValueMapper
 from dex._worker_dispatcher import WorkerDispatcher
 from dex.client import Client as ClientModuleClient
 from dex.client_options import ClientOptions as ClientModuleOptions
+from dex._server_protocol import NegotiatedServerProtocol
 from dex.dexpb import dex_pb2 as pb
 
 
@@ -422,6 +423,7 @@ def test_step_and_timeout_handler_options_map_state_and_execution_policy() -> No
         registry,
         ValueMapper(registry.codec_registry),
         cast(Any, object()),
+        NegotiatedServerProtocol(),
     )
     step_options = StepOptions(
         wait_for_load_attribute_maps=(attributes,),
@@ -632,9 +634,7 @@ def test_invalid_step_result_has_flow_and_step_context() -> None:
     registry = Registry((InvalidFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
     request = pb.InvokeExecuteMethodRequest(
         flow_type="InvalidFlow",
@@ -725,9 +725,7 @@ def test_worker_maps_only_user_provided_condition_ids() -> None:
     registry = Registry((ConditionFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
 
     def invoke(input: str) -> pb.InvokeWaitForMethodResponse:
@@ -904,10 +902,11 @@ def test_attribute_store_sync_mapping_preserves_presence() -> None:
 
     client = ClientModuleClient(Registry((ORDERS,)), cast(BlobCache, object()))
     start = client._map_start_options(
+        client.registry._flow_for_instance(ORDERS),
         StartFlowOptions()
         .with_attribute(plain, "plain")
         .with_attribute(synced, "synced")
-        .with_attribute(synced_map, "tenant-1", "mapped")
+        .with_attribute(synced_map, "tenant-1", "mapped"),
     )
     assert not start.attributes[0].HasField("sync_config")
     assert start.attributes[1].sync_config.enabled
@@ -1111,9 +1110,7 @@ def test_sync_step_generator_maps_ordered_progress_and_result() -> None:
     registry = Registry((StreamingFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
     encoded_input = values.encode("input", values.codec(str))
 
@@ -1198,7 +1195,9 @@ def test_sync_buffered_text_stream_is_cooperative() -> None:
 
     registry = Registry((BufferedFlow(),))
     values = ValueMapper(registry.codec_registry)
-    dispatcher = WorkerDispatcher(registry, values, cast(Any, PassthroughHydrator()))
+    dispatcher = WorkerDispatcher(
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
+    )
     outputs = list(
         dispatcher.invoke_execute(
             pb.InvokeExecuteMethodRequest(
@@ -1247,9 +1246,7 @@ def test_sync_step_generator_rejects_invalid_yields(invalid_output: object) -> N
     registry = Registry((InvalidGeneratorFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
     with pytest.raises(InvalidStepResultError, match="must yield StepOutput"):
         list(
@@ -1289,9 +1286,7 @@ def test_sync_step_generator_requires_final_return() -> None:
     registry = Registry((MissingResultFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
     with pytest.raises(InvalidStepResultError, match="must return StepDecision"):
         list(
@@ -1332,9 +1327,7 @@ def test_sync_step_generator_preserves_application_errors() -> None:
     registry = Registry((FailingGeneratorFlow(),))
     values = ValueMapper(registry.codec_registry)
     dispatcher = WorkerDispatcher(
-        registry,
-        values,
-        cast(Any, PassthroughHydrator()),
+        registry, values, cast(Any, PassthroughHydrator()), NegotiatedServerProtocol()
     )
     with pytest.raises(ValueError, match="application failure"):
         list(
@@ -1517,6 +1510,7 @@ async def _assert_async_step_outputs_preserve_call_order() -> None:
         registry,
         values,
         cast(Any, AsyncPassthroughHydrator()),
+        NegotiatedServerProtocol(),
     )
     outputs = [
         output
@@ -1585,6 +1579,7 @@ async def _assert_async_buffered_text_stream_flushes() -> None:
         registry,
         values,
         cast(Any, AsyncPassthroughHydrator()),
+        NegotiatedServerProtocol(),
     )
     invocation = dispatcher.invoke_execute(
         pb.InvokeExecuteMethodRequest(
@@ -1659,6 +1654,7 @@ async def _assert_async_step_stream_cancellation_cancels_handler() -> None:
         registry,
         values,
         cast(Any, AsyncPassthroughHydrator()),
+        NegotiatedServerProtocol(),
     )
     outputs = dispatcher.invoke_execute(
         pb.InvokeExecuteMethodRequest(

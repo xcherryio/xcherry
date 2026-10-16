@@ -39,6 +39,30 @@ func ValidateAttributeWrites(attributes []*dexpb.AttributeWrite) error {
 			return err
 		}
 	}
+	return ValidateHardDeleteAttributeWrites(attributes)
+}
+
+// ValidateHardDeleteAttributeWrites validates untrusted hard-delete writes before they reach blob storage.
+func ValidateHardDeleteAttributeWrites(writes []*dexpb.AttributeWrite) error {
+	for _, write := range writes {
+		if !write.GetIsHardDeleteOnNull() {
+			continue
+		}
+		if write.GetValue() != nil && write.GetValue().GetKind() == nil {
+			return fmt.Errorf("hard-delete attribute %q has an empty value; use null to delete it", write.GetKey())
+		}
+		switch write.GetValue().GetKind().(type) {
+		case nil, *dexpb.Value_NullValue, *dexpb.Value_StringValue, *dexpb.Value_ObjValue:
+		default:
+			return fmt.Errorf("hard-delete attribute %q must be a string, an object, or null", write.GetKey())
+		}
+		if write.GetIndexConfig().GetEnable() {
+			return fmt.Errorf("hard-delete attribute %q must not be indexed", write.GetKey())
+		}
+		if write.GetSyncConfig().GetEnabled() {
+			return fmt.Errorf("hard-delete attribute %q must not sync to an Attribute Store", write.GetKey())
+		}
+	}
 	return nil
 }
 

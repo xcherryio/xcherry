@@ -554,11 +554,17 @@ func (invocation *invocationContext) setAttributeValue(
 	if err != nil {
 		return err
 	}
+	if attribute.isHardDeleteOnNull {
+		if err := validateHardDeleteAttributeValue(physical, encoded); err != nil {
+			return err
+		}
+	}
 	invocation.bufferAttributeWrite(&dexpb.AttributeWrite{
-		Key:         physical,
-		Value:       encoded,
-		IndexConfig: indexConfig,
-		SyncConfig:  mapAttributeSyncConfig(attribute.syncToAttributeStore),
+		Key:                physical,
+		Value:              encoded,
+		IndexConfig:        indexConfig,
+		SyncConfig:         mapAttributeSyncConfig(attribute.syncToAttributeStore),
+		IsHardDeleteOnNull: attribute.isHardDeleteOnNull,
 	})
 	return nil
 }
@@ -583,6 +589,7 @@ func (invocation *invocationContext) deleteAttributeValue(
 		physical,
 		attribute.index,
 		attribute.syncToAttributeStore,
+		attribute.isHardDeleteOnNull,
 	)
 	if err != nil {
 		return err

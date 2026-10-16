@@ -621,6 +621,7 @@ final class InvocationContext implements Context {
             write.setIndexConfig(indexConfig);
         }
         applyAttributeSync(write, definition);
+        HardDeleteAttributes.applyHardDeleteOnNull(write, definition);
         attributeWrites.put(key, write.build());
     }
 
@@ -639,6 +640,7 @@ final class InvocationContext implements Context {
             write.setIndexConfig(indexConfig);
         }
         applyAttributeSync(write, definition);
+        HardDeleteAttributes.applyHardDeleteOnNull(write, definition);
         attributeWrites.put(key, write.build());
     }
 

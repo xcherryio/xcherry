@@ -7,6 +7,11 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import type { Channel, ChannelMap } from "./wait.js";
+import {
+  markHardDeleteOnNull,
+  requireHardDeleteOnNullCompatible,
+  requireNotHardDeleteOnNull,
+} from "./attribute-hard-delete.js";
 import { markAttributeStoreSynced } from "./attribute-store-sync.js";
 import type { Codec } from "./codec.js";
 import type { Context } from "./context.js";
@@ -117,9 +122,102 @@ export class Attribute<T> {
    * Projection is asynchronous and latest-state only. Deletion writes SQL `NULL`, projection failures do
    * not roll back Flow Attribute writes, and the Flow must select a configured Attribute Store name.
    * @returns A new synced definition; this definition remains unchanged.
+   * @throws {TypeError} When this definition uses {@link Attribute.hardDeleteOnNull}.
    */
   public syncToAttributeStore(): Attribute<T> {
+    requireNotHardDeleteOnNull(this, "syncToAttributeStore");
     return markAttributeStoreSynced(new Attribute(this.name, this.codec, this.index));
+  }
+
+  /**
+   * Returns an immutable Attribute definition for short-lived secrets that Dex can permanently delete.
+   *
+   * Use this option for values such as API keys that must not remain in Flow history. Dex stores
+   * each value of a hard-delete Attribute only in the Dex blob store, never in Flow history.
+   * Deleting the Attribute or setting it to `null` or `undefined` permanently deletes the stored value.
+   * Register the returned definition in the Flow's PersistenceSchema. Use that same definition for
+   * handler reads and writes, InitialAttribute values, and SubFlow initial Attributes.
+   *
+   * Only string and object values are supported. Object values include JSON values and byte arrays.
+   * Numeric and Boolean values are rejected. A built-in numeric or Boolean codec fails here. A custom
+   * codec that encodes a number or Boolean fails when the value is written. Deletion is always allowed.
+   * A hard-delete Attribute cannot have an index and cannot use {@link Attribute.syncToAttributeStore}.
+   * {@link Client.waitForAttributeMatch} rejects a hard-delete Attribute before contacting Dex.
+   *
+   * Writes require a Dex Server with an enabled blob store and Server protocol version 3 or later.
+   * Otherwise, the write fails. The Client checks the Server protocol version once before its first
+   * hard-delete write. The Worker checks it at startup and fails any handler result that writes a
+   * hard-delete Attribute to an older Server. Step and RPC handlers receive the value inline. The SDK
+   * never stores it in the local blob cache.
+   *
+   * Limitations:
+   * - Each Flow keeps one stored copy per Attribute key and overwrites it in place.
+   * - A Step or RPC attempt writes or deletes the stored value before Dex commits its result.
+   *   A retried attempt, other Steps and RPCs, and Client reads can therefore observe a write or
+   *   deletion from an attempt that later failed.
+   * - When concurrent Steps or RPCs write the same key, the final stored value may not be the value
+   *   of the last committed write.
+   * - A failed `startFlow` or SubFlow start for a Flow ID that is already running still overwrites
+   *   the running Flow's stored value. A null initial value deletes it.
+   * - Executions that reuse a Flow ID share the stored value.
+   * - {@link Client.timeTravel} does not restore a deleted value. A deleted value reads as absent.
+   * - A Flow retry or a restarted SubFlow starts from the original initial value. If an
+   *   earlier run deleted that value, the new run reads it as absent.
+   * - Removing {@link Attribute.hardDeleteOnNull} from a definition leaves the stored value in place
+   *   until Dex removes the Flow. Delete the value with the hard-delete definition first.
+   * - Values remain until they are deleted, or until Dex removes the Flow through retention and
+   *   blob cleanup.
+   * - Blob store backups or bucket versioning can retain copies outside Dex's control.
+   *
+   * @example
+   * ```ts
+   * const apiKey = new Attribute("api-key", stringCodec).hardDeleteOnNull();
+   *
+   * class CallVendorStep implements Step<string> {
+   *   public readonly inputCodec = stringCodec;
+   *
+   *   public getStepType(): string {
+   *     return "CallVendorStep";
+   *   }
+   *
+   *   public async execute(context: Context, vendorUrl: string): Promise<StepDecision> {
+   *     const response = await fetch(vendorUrl, {
+   *       headers: { authorization: `Bearer ${apiKey.get(context)}` },
+   *     });
+   *     apiKey.delete(context);
+   *     return gracefulComplete(response.status);
+   *   }
+   * }
+   *
+   * class VendorCallFlow implements Flow<string> {
+   *   private readonly callVendor = new CallVendorStep();
+   *
+   *   public getFlowType(): string {
+   *     return "VendorCallFlow";
+   *   }
+   *
+   *   public getSteps() {
+   *     return StepList.startStep(this.callVendor);
+   *   }
+   *
+   *   public getPersistenceSchema(): PersistenceSchema {
+   *     return { attributes: [apiKey] };
+   *   }
+   * }
+   *
+   * const flow = new VendorCallFlow();
+   * const client = new Client(new Registry([flow]), cache);
+   * await client.startFlow(flow, "vendor-call-42", "https://vendor.example/report", {
+   *   attributes: [InitialAttribute.of(apiKey, process.env.VENDOR_API_KEY ?? "")],
+   * });
+   * ```
+   * @returns A new hard-delete definition; this definition remains unchanged.
+   * @throws {TypeError} When this definition has an index, uses Attribute Store synchronization, or
+   * uses a built-in numeric or Boolean codec.
+   */
+  public hardDeleteOnNull(): Attribute<T> {
+    requireHardDeleteOnNullCompatible(this as Attribute<unknown>);
+    return markHardDeleteOnNull(new Attribute(this.name, this.codec, this.index));
   }
 
   /**
@@ -215,9 +313,108 @@ export class AttributeMap<T> {
    * Deletion writes SQL `NULL`, projection failures do not roll back Flow Attribute writes, and the Flow
    * must select a configured Attribute Store name.
    * @returns A new synced definition; this definition remains unchanged.
+   * @throws {TypeError} When this definition uses {@link AttributeMap.hardDeleteOnNull}.
    */
   public syncToAttributeStore(): AttributeMap<T> {
+    requireNotHardDeleteOnNull(this, "syncToAttributeStore");
     return markAttributeStoreSynced(new AttributeMap(this.name, this.codec, this.index));
+  }
+
+  /**
+   * Returns an immutable AttributeMap definition for short-lived secrets that Dex can permanently delete.
+   *
+   * Use this option for per-instance values such as API keys or access tokens that must not remain
+   * in Flow history. Dex stores each instance value only in the Dex blob store, never in Flow history.
+   * Deleting an instance or setting it to `null` or `undefined` permanently deletes its stored value.
+   * Register the returned definition in the Flow's PersistenceSchema. Use that same definition for
+   * handler reads and writes, InitialAttribute values, and SubFlow initial Attributes.
+   *
+   * Only string and object values are supported. Object values include JSON values and byte arrays.
+   * Numeric and Boolean values are rejected. A built-in numeric or Boolean codec fails here. A custom
+   * codec that encodes a number or Boolean fails when the value is written. Deletion is always allowed.
+   * A hard-delete AttributeMap cannot have an index and cannot use
+   * {@link AttributeMap.syncToAttributeStore}. {@link Client.waitForAttributeMatch} rejects a
+   * hard-delete AttributeMap before contacting Dex.
+   *
+   * Writes require a Dex Server with an enabled blob store and Server protocol version 3 or later.
+   * Otherwise, the write fails. The Client checks the Server protocol version once before its first
+   * hard-delete write. The Worker checks it at startup and fails any handler result that writes a
+   * hard-delete AttributeMap instance to an older Server. Step and RPC handlers receive instance
+   * values inline. The SDK never stores them in the local blob cache.
+   *
+   * Limitations:
+   * - Each Flow keeps one stored copy per map instance and overwrites it in place.
+   * - A Step or RPC attempt writes or deletes the stored value before Dex commits its result.
+   *   A retried attempt, other Steps and RPCs, and Client reads can therefore observe a write or
+   *   deletion from an attempt that later failed.
+   * - When concurrent Steps or RPCs write the same instance, the final stored value may not be the
+   *   value of the last committed write.
+   * - A failed `startFlow` or SubFlow start for a Flow ID that is already running still overwrites
+   *   the running Flow's stored value. A null initial value deletes it.
+   * - Executions that reuse a Flow ID share the stored values.
+   * - {@link Client.timeTravel} does not restore a deleted value. A deleted instance reads as absent.
+   * - A Flow retry or a restarted SubFlow starts from the original initial value. If an
+   *   earlier run deleted that value, the new run reads it as absent.
+   * - Removing {@link AttributeMap.hardDeleteOnNull} from a definition leaves the stored value in place
+   *   until Dex removes the Flow. Delete the value with the hard-delete definition first.
+   * - Values remain until they are deleted, or until Dex removes the Flow through retention and
+   *   blob cleanup.
+   * - Blob store backups or bucket versioning can retain copies outside Dex's control.
+   *
+   * @example
+   * ```ts
+   * type VendorToken = { readonly token: string };
+   * const vendorTokens = new AttributeMap("vendor-tokens", jsonCodec<VendorToken>())
+   *   .hardDeleteOnNull();
+   *
+   * class RevokeTokenStep implements Step<string> {
+   *   public readonly inputCodec = stringCodec;
+   *
+   *   public getStepType(): string {
+   *     return "RevokeTokenStep";
+   *   }
+   *
+   *   public getStepOptions(): StepOptions {
+   *     return { executeLoadAttributeMapInstances: [vendorTokens.load("billing")] };
+   *   }
+   *
+   *   public async execute(context: Context, revokeUrl: string): Promise<StepDecision> {
+   *     const { token } = vendorTokens.get(context, "billing");
+   *     await fetch(revokeUrl, { method: "POST", body: token });
+   *     vendorTokens.delete(context, "billing");
+   *     return gracefulComplete("revoked");
+   *   }
+   * }
+   *
+   * class TokenRevocationFlow implements Flow<string> {
+   *   private readonly revokeToken = new RevokeTokenStep();
+   *
+   *   public getFlowType(): string {
+   *     return "TokenRevocationFlow";
+   *   }
+   *
+   *   public getSteps() {
+   *     return StepList.startStep(this.revokeToken);
+   *   }
+   *
+   *   public getPersistenceSchema(): PersistenceSchema {
+   *     return { attributes: [vendorTokens] };
+   *   }
+   * }
+   *
+   * const flow = new TokenRevocationFlow();
+   * const client = new Client(new Registry([flow]), cache);
+   * await client.startFlow(flow, "revoke-42", "https://vendor.example/revoke", {
+   *   attributes: [InitialAttribute.mapValue(vendorTokens, "billing", { token: "token-value" })],
+   * });
+   * ```
+   * @returns A new hard-delete definition; this definition remains unchanged.
+   * @throws {TypeError} When this definition has an index, uses Attribute Store synchronization, or
+   * uses a built-in numeric or Boolean codec.
+   */
+  public hardDeleteOnNull(): AttributeMap<T> {
+    requireHardDeleteOnNullCompatible(this as AttributeMap<unknown>);
+    return markHardDeleteOnNull(new AttributeMap(this.name, this.codec, this.index));
   }
 
   /**

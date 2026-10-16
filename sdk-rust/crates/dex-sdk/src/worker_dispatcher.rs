@@ -34,6 +34,7 @@ use crate::context::{Context, ContextInput, InvocationCancellation, InvocationMe
 use crate::persistence::PersistenceKind;
 use crate::registry::{RegisteredFlow, physical_name};
 use crate::rpc::encode_rpc_output;
+use crate::server_protocol::NegotiatedServerProtocolVersion;
 use crate::step::{StepDecisionKind, StepMovement};
 use crate::step_options::ErasedStepOptions;
 use crate::value_hydrator::ValueHydrator;
@@ -51,11 +52,20 @@ const TIMEOUT_HANDLER_STEP_TYPE: &str = "sys:timeout_handler";
 pub(crate) struct WorkerDispatcher {
     registry: Registry,
     hydrator: ValueHydrator,
+    negotiated_protocol_version: NegotiatedServerProtocolVersion,
 }
 
 impl WorkerDispatcher {
-    pub(crate) fn new(registry: Registry, hydrator: ValueHydrator) -> Self {
-        Self { registry, hydrator }
+    pub(crate) fn new(
+        registry: Registry,
+        hydrator: ValueHydrator,
+        negotiated_protocol_version: NegotiatedServerProtocolVersion,
+    ) -> Self {
+        Self {
+            registry,
+            hydrator,
+            negotiated_protocol_version,
+        }
     }
 
     pub(crate) fn flow_types(&self) -> Vec<String> {
@@ -126,6 +136,7 @@ impl WorkerDispatcher {
                 loaded_attribute_map_instances: request.loaded_attribute_map_instances,
                 loaded_channel_names: request.loaded_channel_names,
                 loaded_channel_map_instances: request.loaded_channel_map_instances,
+                negotiated_protocol_version: self.negotiated_protocol_version.clone(),
             },
             Some(output_emitter),
             cancellation,
@@ -135,10 +146,11 @@ impl WorkerDispatcher {
             .ok_or_else(|| HandlerError::new("dex_sdk::HandlerError", "Step input is required"))?;
         let cancellation = context.cancellation();
         let registry = self.registry.clone();
+        let negotiated_protocol_version = self.negotiated_protocol_version.clone();
         run_handler(cancellation, move || {
             let handler_result = catch_handler_panic(|| {
                 let wait = flow.handler.wait_for(step.name, &mut context, &input)?;
-                map_wait(&registry, &flow, wait).map_err(|error| {
+                map_wait(&registry, &flow, &negotiated_protocol_version, wait).map_err(|error| {
                     HandlerError::invalid_step_result(flow.name, Some(step.name), "wait_for", error)
                 })
             });
@@ -227,6 +239,7 @@ impl WorkerDispatcher {
                 loaded_attribute_map_instances: request.loaded_attribute_map_instances,
                 loaded_channel_names: request.loaded_channel_names,
                 loaded_channel_map_instances: request.loaded_channel_map_instances,
+                negotiated_protocol_version: self.negotiated_protocol_version.clone(),
             },
             Some(output_emitter),
             cancellation,
@@ -295,6 +308,7 @@ impl WorkerDispatcher {
                 loaded_attribute_map_instances: request.loaded_attribute_map_instances,
                 loaded_channel_names: request.loaded_channel_names,
                 loaded_channel_map_instances: request.loaded_channel_map_instances,
+                negotiated_protocol_version: self.negotiated_protocol_version.clone(),
             },
             Some(output_emitter),
             cancellation,
@@ -371,6 +385,7 @@ impl WorkerDispatcher {
                 loaded_attribute_map_instances: request.loaded_attribute_map_instances,
                 loaded_channel_names: request.loaded_channel_names,
                 loaded_channel_map_instances: request.loaded_channel_map_instances,
+                negotiated_protocol_version: self.negotiated_protocol_version.clone(),
             },
             None,
             cancellation,
@@ -983,9 +998,10 @@ fn map_durability(durability: StepDurability) -> i32 {
 fn map_wait(
     registry: &Registry,
     flow: &RegisteredFlow,
+    negotiated_protocol_version: &NegotiatedServerProtocolVersion,
     wait: Wait,
 ) -> HandlerResult<Option<WaitingCondition>> {
-    let mut mapper = ConditionMapper::new(registry, flow);
+    let mut mapper = ConditionMapper::new(registry, flow, negotiated_protocol_version);
     let (waiting_type, combinations) = match wait.kind {
         WaitKind::SkipImmediately => return Ok(None),
         WaitKind::AllOf(conditions) => {
@@ -1171,6 +1187,7 @@ fn map_movement(flow: &RegisteredFlow, movement: StepMovement) -> HandlerResult<
 struct ConditionMapper<'a> {
     registry: &'a Registry,
     flow: &'a RegisteredFlow,
+    negotiated_protocol_version: &'a NegotiatedServerProtocolVersion,
     used_ids: HashSet<String>,
     ids_by_condition: HashMap<usize, String>,
     timers: Vec<TimerCondition>,
@@ -1179,10 +1196,15 @@ struct ConditionMapper<'a> {
 }
 
 impl<'a> ConditionMapper<'a> {
-    fn new(registry: &'a Registry, flow: &'a RegisteredFlow) -> Self {
+    fn new(
+        registry: &'a Registry,
+        flow: &'a RegisteredFlow,
+        negotiated_protocol_version: &'a NegotiatedServerProtocolVersion,
+    ) -> Self {
         Self {
             registry,
             flow,
+            negotiated_protocol_version,
             used_ids: HashSet::new(),
             ids_by_condition: HashMap::new(),
             timers: Vec::new(),
@@ -1285,7 +1307,11 @@ impl<'a> ConditionMapper<'a> {
                 })?;
                 let step_options =
                     map_step_options(target, target.handler.step_options(start.name)?)?;
-                let options = map_sub_flow_options(target, &definition.options)?;
+                let options = map_sub_flow_options(
+                    target,
+                    &definition.options,
+                    self.negotiated_protocol_version,
+                )?;
                 self.sub_flows.push(ProtoSubFlowCondition {
                     condition_id: id.clone(),
                     sub_flow_type: target.name.to_string(),
@@ -1306,6 +1332,7 @@ impl<'a> ConditionMapper<'a> {
 fn map_sub_flow_options(
     target: &RegisteredFlow,
     options: &crate::SubFlowOptions,
+    negotiated_protocol_version: &NegotiatedServerProtocolVersion,
 ) -> HandlerResult<ProtoSubFlowOptions> {
     let flow_timeout_seconds = optional_seconds(options.timeout)?;
     let flow_timeout_policy = crate::client::map_flow_timeout_policy(
@@ -1318,19 +1345,24 @@ fn map_sub_flow_options(
         .attributes
         .iter()
         .map(|attribute| {
-            let logical_name = attribute.key.split('/').next().unwrap_or(&attribute.key);
-            if !target.persistence.contains_key(logical_name) {
-                return Err(HandlerError::new(
-                    "dex_sdk::HandlerError",
-                    format!("SubFlow Attribute is not registered: {}", attribute.key),
-                ));
+            let definition = target
+                .persistence
+                .get(&attribute.attribute_name)
+                .ok_or_else(|| {
+                    HandlerError::new(
+                        "dex_sdk::HandlerError",
+                        format!("SubFlow Attribute is not registered: {}", attribute.key),
+                    )
+                })?;
+            let write = attribute
+                .encode_attribute_write(definition)
+                .map_err(handler_error)?;
+            if write.is_hard_delete_on_null {
+                negotiated_protocol_version
+                    .require_hard_delete_attribute_support(&write.key)
+                    .map_err(|error| HandlerError::new("dex_sdk::HandlerError", error))?;
             }
-            Ok(AttributeWrite {
-                key: attribute.key.clone(),
-                value: Some(attribute.value.encode().map_err(handler_error)?),
-                index_config: attribute.index_config.clone(),
-                sync_config: attribute.sync_config,
-            })
+            Ok(write)
         })
         .collect::<HandlerResult<Vec<_>>>()?;
     Ok(ProtoSubFlowOptions {
@@ -1528,11 +1560,12 @@ fn _keep_output_types(
 #[cfg(test)]
 mod tests {
     use super::{map_flow_timeout_handler_options, map_step_options, map_wait};
+    use crate::server_protocol::NegotiatedServerProtocolVersion;
     use crate::{
         Attribute, AttributeMap, Channel, ChannelMap, ConditionCombination, Context, Flow,
         FlowTimeoutHandler, FlowTimeoutHandlerFailure, FlowTimeoutHandlerOptions, HandlerResult,
         PersistenceSchema, Registry, RetryPolicy, Step, StepDecision, StepDurability, StepList,
-        StepOptions, Timer, Wait,
+        StepOptions, SubFlow, SubFlowOptions, Timer, Wait,
     };
     use std::time::Duration;
 
@@ -1611,6 +1644,7 @@ mod tests {
         let unnamed = map_wait(
             &registry,
             flow,
+            &NegotiatedServerProtocolVersion::default(),
             Wait::any_of([
                 Timer::by_duration(Duration::from_secs(1)),
                 channel.for_one(),
@@ -1625,6 +1659,7 @@ mod tests {
         let reused_wait = map_wait(
             &registry,
             flow,
+            &NegotiatedServerProtocolVersion::default(),
             Wait::any_combination_of([
                 ConditionCombination::all_of([reused.clone()]),
                 ConditionCombination::all_of([reused]),
@@ -1645,6 +1680,7 @@ mod tests {
         let missing = map_wait(
             &registry,
             flow,
+            &NegotiatedServerProtocolVersion::default(),
             Wait::any_combination_of([ConditionCombination::all_of([channel.for_one()])]),
         )
         .expect_err("unnamed combination must fail");
@@ -1653,6 +1689,7 @@ mod tests {
         let duplicate = map_wait(
             &registry,
             flow,
+            &NegotiatedServerProtocolVersion::default(),
             Wait::any_combination_of([ConditionCombination::all_of([
                 channel.for_one().with_id("same"),
                 Timer::by_duration(Duration::from_secs(1)).with_id("same"),
@@ -1664,6 +1701,7 @@ mod tests {
         let empty = map_wait(
             &registry,
             flow,
+            &NegotiatedServerProtocolVersion::default(),
             Wait::all_of([channel.for_one().with_id("")]),
         )
         .expect_err("empty ID must fail");
@@ -1760,5 +1798,86 @@ mod tests {
         assert_eq!("TimeoutRecovery", mapped_timeout.failure_proceed_step_type);
         assert!(mapped_timeout.failure_proceed_step_options.is_some());
         assert!(map_flow_timeout_handler_options(flow, 0, 0, Some(&timeout_options)).is_err());
+    }
+
+    struct HardDeleteSubFlowTarget {
+        start: TimeoutRecovery,
+        api_key: Attribute<String>,
+    }
+
+    impl Flow for HardDeleteSubFlowTarget {
+        type StartInput = ();
+
+        fn steps(&self) -> StepList<'_, Self::StartInput> {
+            StepList::start(&self.start)
+        }
+
+        fn persistence(&self) -> PersistenceSchema {
+            PersistenceSchema::new().attribute(&self.api_key)
+        }
+    }
+
+    #[test]
+    fn sub_flow_hard_delete_attributes_require_protocol_version_three() {
+        let api_key = Attribute::<String>::new("api-key").hard_delete_on_null();
+        let target = HardDeleteSubFlowTarget {
+            start: TimeoutRecovery,
+            api_key: api_key.clone(),
+        };
+        let registry = Registry::new()
+            .register(ConditionFlow {
+                channel: Channel::new("commands"),
+            })
+            .and_then(|registry| {
+                registry.register(HardDeleteSubFlowTarget {
+                    start: TimeoutRecovery,
+                    api_key: api_key.clone(),
+                })
+            })
+            .expect("register SubFlow Flows");
+        let parent = registry.flow("ConditionFlow").expect("lookup parent Flow");
+        let sub_flow_wait = |attribute: &Attribute<String>| {
+            Wait::until(
+                SubFlow::run_with_options(
+                    &target,
+                    (),
+                    SubFlowOptions::new().initial_attribute(attribute, "key-1".to_string()),
+                )
+                .expect("SubFlow Condition"),
+            )
+        };
+
+        for version in [0, 2] {
+            let negotiated = NegotiatedServerProtocolVersion::default();
+            negotiated.store(version);
+            let error = map_wait(&registry, parent, &negotiated, sub_flow_wait(&api_key))
+                .expect_err("old Server rejects SubFlow hard-delete writes");
+            assert!(error.to_string().contains("protocol version 3 or later"));
+        }
+
+        let negotiated = NegotiatedServerProtocolVersion::default();
+        negotiated.store(3);
+        let error = map_wait(
+            &registry,
+            parent,
+            &negotiated,
+            sub_flow_wait(&Attribute::new("api-key")),
+        )
+        .expect_err("mismatched SubFlow definition");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its registered definition")
+        );
+        let condition = map_wait(&registry, parent, &negotiated, sub_flow_wait(&api_key))
+            .expect("map SubFlow wait")
+            .expect("waiting condition");
+        let write = &condition.sub_flow_conditions[0]
+            .options
+            .as_ref()
+            .expect("SubFlow options")
+            .attributes[0];
+        assert_eq!("api-key", write.key);
+        assert!(write.is_hard_delete_on_null);
     }
 }

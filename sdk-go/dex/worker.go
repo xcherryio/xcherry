@@ -117,7 +117,7 @@ type Worker struct {
 	flowService               dexpb.FlowServiceClient
 	attributeIndexSyncTimeout time.Duration
 	sdkVersion                string
-	negotiatedProtocolVersion uint32
+	serverProtocol            *negotiatedServerProtocol
 	logger                    Logger
 	pull                      *pullWorker
 
@@ -176,6 +176,7 @@ func NewWorker(
 	logger := resolveLogger(options.Logger, cache.Logger())
 	grpcServer := grpc.NewServer(messageLimits.workerServiceServerOptions()...)
 	flowService := dexpb.NewFlowServiceClient(flowConn)
+	serverProtocol := &negotiatedServerProtocol{}
 	service := newWorkerService(
 		registry,
 		newValueHydrator(
@@ -185,6 +186,7 @@ func NewWorker(
 			flowServiceAddress,
 		),
 		logger,
+		serverProtocol,
 	)
 	dexpb.RegisterWorkerServiceServer(grpcServer, service)
 	var pull *pullWorker
@@ -206,6 +208,7 @@ func NewWorker(
 		flowService:               flowService,
 		attributeIndexSyncTimeout: syncTimeout,
 		sdkVersion:                currentGoSDKVersion(),
+		serverProtocol:            serverProtocol,
 		logger:                    logger,
 		pull:                      pull,
 		state:                     workerCreated,
@@ -358,13 +361,14 @@ func (worker *Worker) Start() error {
 		worker.finish()
 		return serverProtocolRequestError(worker.sdkVersion, err)
 	}
-	worker.negotiatedProtocolVersion, err = negotiateServerProtocol(serverInfo, worker.sdkVersion)
+	negotiatedProtocolVersion, err := negotiateServerProtocol(serverInfo, worker.sdkVersion)
 	if err != nil {
 		worker.state = workerStopped
 		worker.lifecycleMu.Unlock()
 		worker.finish()
 		return err
 	}
+	worker.serverProtocol.version.Store(negotiatedProtocolVersion)
 	syncCtx, cancelSync := context.WithTimeout(context.Background(), worker.attributeIndexSyncTimeout)
 	_, err = worker.flowService.SyncAttributeIndexes(syncCtx, &dexpb.SyncAttributeIndexRequest{
 		AttributeIndexes: worker.registry.attributeIndexes,

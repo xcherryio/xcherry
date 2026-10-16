@@ -12,14 +12,20 @@ package blobstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/superdurable/dex/gen/dexpb"
 	"google.golang.org/protobuf/proto"
 )
 
+// ErrHardDeleteRequiresBlobStore reports a hard-delete Attribute write while the blob store is disabled.
+var ErrHardDeleteRequiresBlobStore = errors.New("hard-delete Attributes require an enabled blob store")
+
 // OffloadLargeAttributeWrites replaces oversized string/object Value arms with server-minted blob ids.
+// Hard-delete writes always replace their value with a fixed blob id, and their null writes delete it.
 func OffloadLargeAttributeWrites(
 	ctx context.Context,
 	writes []*dexpb.AttributeWrite,
@@ -29,11 +35,20 @@ func OffloadLargeAttributeWrites(
 	blobStore BlobStore,
 	enabled bool,
 ) error {
-	if !enabled || threshold <= 0 {
-		return nil
-	}
 	for _, write := range writes {
-		if write == nil || write.GetValue() == nil {
+		if write == nil {
+			continue
+		}
+		if write.GetIsHardDeleteOnNull() {
+			if !enabled || blobStore == nil {
+				return ErrHardDeleteRequiresBlobStore
+			}
+			if err := offloadHardDeleteAttributeWrite(ctx, write, flowId, blobStore); err != nil {
+				return err
+			}
+			continue
+		}
+		if !enabled || threshold <= 0 || write.GetValue() == nil {
 			continue
 		}
 		if err := offloadValue(ctx, write.Value, flowId, invocationId, threshold, blobStore); err != nil {
@@ -41,6 +56,44 @@ func OffloadLargeAttributeWrites(
 		}
 	}
 	return nil
+}
+
+func offloadHardDeleteAttributeWrite(
+	ctx context.Context,
+	write *dexpb.AttributeWrite,
+	flowID string,
+	blobStore BlobStore,
+) error {
+	switch kind := write.GetValue().GetKind().(type) {
+	case nil, *dexpb.Value_NullValue:
+		return blobStore.DeleteHardDeleteObject(ctx, flowID, write.GetKey())
+	case *dexpb.Value_StringValue:
+		storeID, locator, err := blobStore.WriteHardDeleteObject(
+			ctx, flowID, write.GetKey(), []byte(kind.StringValue),
+		)
+		if err != nil {
+			return err
+		}
+		write.Value.Kind = &dexpb.Value_InternalBlobIdForStringValue{
+			InternalBlobIdForStringValue: formatBlobID(storeID, locator),
+		}
+		return nil
+	case *dexpb.Value_ObjValue:
+		encodedObject, err := proto.MarshalOptions{Deterministic: true}.Marshal(kind.ObjValue)
+		if err != nil {
+			return fmt.Errorf("marshal EncodedObject: %w", err)
+		}
+		storeID, locator, err := blobStore.WriteHardDeleteObject(ctx, flowID, write.GetKey(), encodedObject)
+		if err != nil {
+			return err
+		}
+		write.Value.Kind = &dexpb.Value_InternalBlobIdForObjValue{
+			InternalBlobIdForObjValue: formatBlobID(storeID, locator),
+		}
+		return nil
+	default:
+		return fmt.Errorf("hard-delete Attribute %q must be a string, an object, or null", write.GetKey())
+	}
 }
 
 // OffloadLargeKVs replaces oversized KV values with server-minted blob ids.
@@ -176,9 +229,10 @@ func HydrateAttributeWrites(
 }
 
 // HydrateKVs hydrates Value arms on KV pairs.
+// It skips hard-delete Attributes, which only HydrateHardDeleteKVs hydrates into new KVs.
 func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore BlobStore) error {
 	for _, kv := range kvs {
-		if kv == nil {
+		if kv == nil || isHardDeleteKV(kv) {
 			continue
 		}
 		if err := HydrateValue(ctx, flowID, kv.GetValue(), blobStore); err != nil {
@@ -186,6 +240,55 @@ func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore B
 		}
 	}
 	return nil
+}
+
+// HydrateHardDeleteKVs returns kvs with every hard-delete Attribute replaced by a new hydrated KV.
+// It never mutates kvs or their Values, so callers can keep the input free of payloads.
+// A deleted hard-delete object omits its Attribute. Other KVs keep their original pointers.
+// It returns kvs itself when no KV references a hard-delete object.
+func HydrateHardDeleteKVs(
+	ctx context.Context,
+	flowID string,
+	kvs []*dexpb.KV,
+	blobStore BlobStore,
+) ([]*dexpb.KV, error) {
+	if !HasHardDeleteKV(kvs) {
+		return kvs, nil
+	}
+	if blobStore == nil {
+		return nil, ErrHardDeleteRequiresBlobStore
+	}
+	hydrated := make([]*dexpb.KV, 0, len(kvs))
+	for _, kv := range kvs {
+		if !isHardDeleteKV(kv) {
+			hydrated = append(hydrated, kv)
+			continue
+		}
+		value := &dexpb.Value{Kind: kv.GetValue().GetKind()}
+		if err := HydrateValue(ctx, flowID, value, blobStore); err != nil {
+			if IsObjectNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		hydrated = append(hydrated, &dexpb.KV{Key: kv.GetKey(), Value: value})
+	}
+	return hydrated, nil
+}
+
+// HasHardDeleteKV reports whether any KV references a hard-delete Attribute object.
+func HasHardDeleteKV(kvs []*dexpb.KV) bool {
+	return slices.ContainsFunc(kvs, isHardDeleteKV)
+}
+
+func isHardDeleteKV(kv *dexpb.KV) bool {
+	return IsHardDeleteValue(kv.GetValue())
+}
+
+// IsHardDeleteValue reports whether value references a hard-delete Attribute object.
+func IsHardDeleteValue(value *dexpb.Value) bool {
+	blobID, isBlobReference, err := blobIDFromValue(value)
+	return err == nil && isBlobReference && IsHardDeleteBlobID(blobID)
 }
 
 // HydrateChannelValues hydrates every pending Channel message Value.

@@ -460,6 +460,29 @@ failures do not roll back Flow Attributes. Omitting the builder preserves
 current targets; passing an empty vector disables future synchronization while
 retaining protocol presence.
 
+Mark an Attribute or AttributeMap with `hard_delete_on_null` to keep short-lived
+secrets, such as API keys, out of Flow history:
+
+```rust
+use dex_sdk::Attribute;
+
+let api_key = Attribute::<String>::new("api-key").hard_delete_on_null();
+```
+
+Dex stores these values only in its blob store. Deleting the Attribute or
+setting it to null permanently deletes the stored value, and the Attribute then
+reads as absent. Handlers and Attribute reads receive values inline, and the SDK
+never caches them in the local blob cache. Only string and object values,
+including bytes, are supported. Registration rejects numeric and Boolean types,
+an index, or `sync_to_attribute_store`. Every write also rejects values that
+encode to numbers or Booleans. `wait_for_attribute_match` rejects hard-delete
+Attributes, and Action conditions cannot read them. Writes require a Server with an enabled blob store and protocol
+version 3 or later. The Worker checks the protocol at startup, and the Client
+checks it once before its first hard-delete write. Each Flow keeps one stored
+copy per Attribute key, so writes from failed attempts, concurrent writers, and
+failed starts for a running Flow ID can affect the stored value. See the
+`Attribute::hard_delete_on_null` documentation for every limitation.
+
 ## Blob cache
 
 The shared cache keeps opaque payload bytes on disk and uses Stretto only for

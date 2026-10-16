@@ -6,9 +6,10 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::any::TypeId;
 use std::marker::PhantomData;
 
-use dex_protocol::dex::{AttributeSyncConfig, IndexConfig};
+use dex_protocol::dex::{AttributeSyncConfig, AttributeWrite, IndexConfig, value};
 
 use crate::{Context, HandlerError, HandlerResult, Value};
 
@@ -40,6 +41,8 @@ pub struct Attribute<T> {
     name: String,
     index: Option<AttributeIndex>,
     sync_to_attribute_store: bool,
+    is_hard_delete_on_null: bool,
+    numeric_or_boolean_type_name: Option<&'static str>,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -52,6 +55,8 @@ impl<T> Attribute<T> {
             name: name.into(),
             index: None,
             sync_to_attribute_store: false,
+            is_hard_delete_on_null: false,
+            numeric_or_boolean_type_name: None,
             marker: PhantomData,
         }
     }
@@ -70,6 +75,121 @@ impl<T> Attribute<T> {
     #[must_use]
     pub fn sync_to_attribute_store(mut self) -> Self {
         self.sync_to_attribute_store = true;
+        self
+    }
+
+    /// Stores this Attribute's values only in the Dex blob store and permanently deletes the stored
+    /// value when the Attribute is deleted or set to null.
+    ///
+    /// Use this option for short-lived secrets, such as API keys or access tokens. Dex never writes
+    /// the value into Flow history, regardless of its size. Flow history keeps only a reference to
+    /// the stored value. [`Self::delete`], [`Context::delete_attribute`], and a write whose value
+    /// encodes to null permanently delete the stored value before the write commits. A deleted
+    /// value reads as an absent Attribute, so [`Self::get`] returns `Ok(None)`.
+    ///
+    /// Step handlers, RPC handlers, and Attribute reads receive the value inline. The SDK never
+    /// stores the value in the local [`BlobCache`](crate::BlobCache).
+    ///
+    /// # Supported values
+    ///
+    /// Only values that encode to a string or an object are supported. Strings, Serde structs,
+    /// maps, sequences, and bytes are supported. Numeric and Boolean values are rejected.
+    /// [`Registry::register`](crate::Registry::register) returns
+    /// [`SdkError::FlowDefinition`](crate::SdkError::FlowDefinition) when `T` is a Rust integer,
+    /// floating-point, or `bool` type, or an `Option` of one. Every write also checks its encoded
+    /// value. A value of another type that encodes to a number or a Boolean, such as a newtype
+    /// around `u64`, fails when it is written. Deletion and null values are always allowed.
+    ///
+    /// To store a numeric or Boolean secret, wrap it in a struct so that it encodes as an object:
+    ///
+    /// ```
+    /// use dex_sdk::Attribute;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize, Serialize)]
+    /// struct OneTimeCode {
+    ///     code: u32,
+    /// }
+    ///
+    /// let one_time_code = Attribute::<OneTimeCode>::new("one-time-code").hard_delete_on_null();
+    /// ```
+    ///
+    /// # Restrictions
+    ///
+    /// - This option cannot be combined with [`Self::indexed`] or
+    ///   [`Self::sync_to_attribute_store`]. Registration returns
+    ///   [`SdkError::FlowDefinition`](crate::SdkError::FlowDefinition) for either combination.
+    /// - [`Client::wait_for_attribute_match`](crate::Client::wait_for_attribute_match) rejects a
+    ///   hard-delete Attribute with [`SdkError::InvalidArgument`](crate::SdkError::InvalidArgument)
+    ///   before it contacts Dex.
+    /// - Action and Action permission conditions cannot read a hard-delete Attribute. Dex
+    ///   matches those conditions against stored Attribute values, which hard-delete Attributes
+    ///   never keep in Flow history. Use an ordinary Attribute as the condition source instead.
+    /// - Every write must use a definition whose hard-delete setting matches the definition that
+    ///   the Flow registered. A mismatched write is rejected.
+    /// - The Dex Server must have an enabled blob store. The Server rejects writes when its blob
+    ///   store is disabled.
+    /// - The Dex Server must support protocol version 3 or later. A Worker learns the protocol
+    ///   version when it starts. A Client requests it once, before its first hard-delete write,
+    ///   and reuses the result. Writes fail with an error when the Server is older.
+    ///
+    /// # Limitations
+    ///
+    /// - Each Flow keeps one stored copy per Attribute key. Every write overwrites it in place.
+    /// - A Step or RPC attempt writes or deletes the stored value before Dex commits the attempt's
+    ///   result. A retried attempt, other Steps, and Attribute reads can therefore observe a write
+    ///   or deletion from an attempt that later failed.
+    /// - When concurrent Steps or RPCs write the same key, the final stored value may not be the
+    ///   value of the last committed write.
+    /// - A Flow start can fail because a Flow with the same Flow ID is already running. That
+    ///   failed start still overwrites the running Flow's stored value. A null initial value
+    ///   deletes it. This applies to
+    ///   [`Client::start_flow_with_options`](crate::Client::start_flow_with_options) and to SubFlow
+    ///   starts.
+    /// - Executions that reuse a Flow ID share the stored value.
+    /// - Resetting a Flow does not restore a deleted value. A deleted value reads as absent.
+    /// - A Flow retry or a restarted SubFlow starts from the original initial value. If an
+    ///   earlier run deleted that value, the new run reads it as absent.
+    /// - Removing `hard_delete_on_null` from a definition leaves the stored value in place until
+    ///   Dex removes the Flow. Delete the value with the hard-delete definition before removing it.
+    /// - Stored values remain until they are deleted, or until Dex removes the Flow through
+    ///   retention and blob cleanup.
+    /// - Blob store backups and bucket versioning can retain copies of stored values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dex_sdk::{Attribute, Context, HandlerResult, PersistenceSchema, StartFlowOptions};
+    /// use std::sync::LazyLock;
+    ///
+    /// static API_KEY: LazyLock<Attribute<String>> =
+    ///     LazyLock::new(|| Attribute::new("api-key").hard_delete_on_null());
+    ///
+    /// // Register the definition in the Flow's persistence schema.
+    /// let schema = PersistenceSchema::new().attribute(&API_KEY);
+    ///
+    /// // Supply the first secret when the Flow starts.
+    /// let options = StartFlowOptions::new().initial_attribute(&API_KEY, "key-1".to_owned());
+    ///
+    /// // A Step reads the secret inline and rotates it.
+    /// fn rotate_api_key(context: &mut Context) -> HandlerResult<()> {
+    ///     let current = API_KEY.get_required(context)?;
+    ///     API_KEY.set(context, format!("{current}-rotated"))
+    /// }
+    ///
+    /// // A later Step permanently deletes the stored secret.
+    /// fn revoke_api_key(context: &mut Context) -> HandlerResult<()> {
+    ///     API_KEY.delete(context)
+    /// }
+    /// # let _ = (schema, options, rotate_api_key, revoke_api_key);
+    /// ```
+    #[must_use]
+    pub fn hard_delete_on_null(mut self) -> Self
+    where
+        T: 'static,
+    {
+        self.is_hard_delete_on_null = true;
+        self.numeric_or_boolean_type_name = numeric_or_boolean_type_name::<T>();
         self
     }
 
@@ -147,6 +267,22 @@ impl<T> Attribute<T> {
     pub(crate) fn is_sync_to_attribute_store(&self) -> bool {
         self.sync_to_attribute_store
     }
+
+    pub(crate) fn is_hard_delete_on_null(&self) -> bool {
+        self.is_hard_delete_on_null
+    }
+
+    pub(crate) fn numeric_or_boolean_type_name(&self) -> Option<&'static str> {
+        self.numeric_or_boolean_type_name
+    }
+
+    pub(crate) fn write_settings(&self) -> AttributeWriteSettings {
+        AttributeWriteSettings {
+            index_config: self.index().map(|index| index.proto_config(false)),
+            sync_config: self.sync_config(),
+            is_hard_delete_on_null: self.is_hard_delete_on_null,
+        }
+    }
 }
 
 impl<T> Clone for Attribute<T> {
@@ -155,6 +291,8 @@ impl<T> Clone for Attribute<T> {
             name: self.name.clone(),
             index: self.index.clone(),
             sync_to_attribute_store: self.sync_to_attribute_store,
+            is_hard_delete_on_null: self.is_hard_delete_on_null,
+            numeric_or_boolean_type_name: self.numeric_or_boolean_type_name,
             marker: PhantomData,
         }
     }
@@ -169,6 +307,8 @@ pub struct AttributeMap<T> {
     name: String,
     index: Option<AttributeIndex>,
     sync_to_attribute_store: bool,
+    is_hard_delete_on_null: bool,
+    numeric_or_boolean_type_name: Option<&'static str>,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -181,6 +321,8 @@ impl<T> AttributeMap<T> {
             name: name.into(),
             index: None,
             sync_to_attribute_store: false,
+            is_hard_delete_on_null: false,
+            numeric_or_boolean_type_name: None,
             marker: PhantomData,
         }
     }
@@ -199,6 +341,62 @@ impl<T> AttributeMap<T> {
     #[must_use]
     pub fn sync_to_attribute_store(mut self) -> Self {
         self.sync_to_attribute_store = true;
+        self
+    }
+
+    /// Stores every instance's values only in the Dex blob store and permanently deletes an
+    /// instance's stored value when that instance is deleted or set to null.
+    ///
+    /// Use this option for keyed short-lived secrets, such as one API key per tenant. Each
+    /// instance has its own stored value. Dex never writes instance values into Flow history.
+    /// [`Self::delete`] and a write whose value encodes to null permanently delete the instance's
+    /// stored value. The instance then reads as absent. Handlers and Attribute reads receive
+    /// values inline. The SDK never stores them in the local [`BlobCache`](crate::BlobCache).
+    ///
+    /// Only string and object values, including bytes, are supported. Numeric and Boolean values
+    /// are rejected. This option cannot be combined with [`Self::indexed`] or
+    /// [`Self::sync_to_attribute_store`].
+    /// [`Client::wait_for_attribute_map_instance_match`](crate::Client::wait_for_attribute_map_instance_match)
+    /// rejects it before it contacts Dex. Action and Action permission conditions cannot read
+    /// it. Writes require a Server with an enabled blob store and
+    /// protocol version 3 or later. Each instance key keeps one stored copy, and later writes
+    /// overwrite it in place.
+    ///
+    /// Supported values, restrictions, Server requirements, and limitations are otherwise the same
+    /// as for [`Attribute::hard_delete_on_null`]. Read that method before storing secrets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dex_sdk::{AttributeMap, Context, HandlerResult, PersistenceSchema, StartFlowOptions};
+    /// use std::sync::LazyLock;
+    ///
+    /// static TENANT_API_KEYS: LazyLock<AttributeMap<String>> =
+    ///     LazyLock::new(|| AttributeMap::new("tenant-api-keys").hard_delete_on_null());
+    ///
+    /// let schema = PersistenceSchema::new().attribute_map(&TENANT_API_KEYS);
+    /// let options = StartFlowOptions::new().initial_attribute_map(
+    ///     &TENANT_API_KEYS,
+    ///     "tenant-1",
+    ///     "key-1".to_owned(),
+    /// );
+    ///
+    /// // The Step or RPC must load the instance before reading it.
+    /// fn revoke_tenant_api_key(context: &mut Context, tenant: &str) -> HandlerResult<()> {
+    ///     if TENANT_API_KEYS.get(context, tenant)?.is_some() {
+    ///         TENANT_API_KEYS.delete(context, tenant)?;
+    ///     }
+    ///     Ok(())
+    /// }
+    /// # let _ = (schema, options, revoke_tenant_api_key);
+    /// ```
+    #[must_use]
+    pub fn hard_delete_on_null(mut self) -> Self
+    where
+        T: 'static,
+    {
+        self.is_hard_delete_on_null = true;
+        self.numeric_or_boolean_type_name = numeric_or_boolean_type_name::<T>();
         self
     }
 
@@ -295,6 +493,22 @@ impl<T> AttributeMap<T> {
     pub(crate) fn is_sync_to_attribute_store(&self) -> bool {
         self.sync_to_attribute_store
     }
+
+    pub(crate) fn is_hard_delete_on_null(&self) -> bool {
+        self.is_hard_delete_on_null
+    }
+
+    pub(crate) fn numeric_or_boolean_type_name(&self) -> Option<&'static str> {
+        self.numeric_or_boolean_type_name
+    }
+
+    pub(crate) fn write_settings(&self) -> AttributeWriteSettings {
+        AttributeWriteSettings {
+            index_config: self.index().map(|index| index.proto_config(true)),
+            sync_config: self.sync_config(),
+            is_hard_delete_on_null: self.is_hard_delete_on_null,
+        }
+    }
 }
 
 impl<T> Clone for AttributeMap<T> {
@@ -303,9 +517,106 @@ impl<T> Clone for AttributeMap<T> {
             name: self.name.clone(),
             index: self.index.clone(),
             sync_to_attribute_store: self.sync_to_attribute_store,
+            is_hard_delete_on_null: self.is_hard_delete_on_null,
+            numeric_or_boolean_type_name: self.numeric_or_boolean_type_name,
             marker: PhantomData,
         }
     }
+}
+
+/// Carries the definition-derived fields copied onto every write of one Attribute definition.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AttributeWriteSettings {
+    pub(crate) index_config: Option<IndexConfig>,
+    pub(crate) sync_config: Option<AttributeSyncConfig>,
+    pub(crate) is_hard_delete_on_null: bool,
+}
+
+impl AttributeWriteSettings {
+    pub(crate) fn attribute_write(
+        self,
+        key: String,
+        value: dex_protocol::dex::Value,
+    ) -> AttributeWrite {
+        AttributeWrite {
+            key,
+            value: Some(value),
+            index_config: self.index_config,
+            sync_config: self.sync_config,
+            is_hard_delete_on_null: self.is_hard_delete_on_null,
+        }
+    }
+}
+
+/// Returns `Ok(())` for a valid hard-delete write and for every write without the flag.
+///
+/// Returns an error when a hard-delete write also enables indexing or Attribute Store
+/// synchronization, or when its value encodes to an integer, floating-point, or Boolean value.
+pub(crate) fn validate_hard_delete_attribute_write(write: &AttributeWrite) -> Result<(), String> {
+    if !write.is_hard_delete_on_null {
+        return Ok(());
+    }
+    let key = &write.key;
+    if write
+        .index_config
+        .as_ref()
+        .is_some_and(|config| config.enable)
+    {
+        return Err(format!(
+            "hard-delete Attribute {key} cannot be combined with an index"
+        ));
+    }
+    if write
+        .sync_config
+        .as_ref()
+        .is_some_and(|config| config.enabled)
+    {
+        return Err(format!(
+            "hard-delete Attribute {key} cannot be combined with sync_to_attribute_store"
+        ));
+    }
+    match write.value.as_ref().and_then(|value| value.kind.as_ref()) {
+        Some(value::Kind::IntValue(_))
+        | Some(value::Kind::DoubleValue(_))
+        | Some(value::Kind::BoolValue(_)) => Err(format!(
+            "hard-delete Attribute {key} supports only string and object values; numeric and \
+             Boolean values are rejected"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Returns `Ok(())` when a write's hard-delete setting matches the registered definition of
+/// `attribute_name`, and an error naming the Attribute otherwise.
+pub(crate) fn require_registered_hard_delete_setting(
+    attribute_name: &str,
+    is_registered_hard_delete_on_null: bool,
+    is_write_hard_delete_on_null: bool,
+) -> Result<(), String> {
+    if is_registered_hard_delete_on_null == is_write_hard_delete_on_null {
+        return Ok(());
+    }
+    Err(format!(
+        "Attribute {attribute_name} hard_delete_on_null setting does not match its registered \
+         definition"
+    ))
+}
+
+/// Returns the type name when `T` is a Rust numeric or Boolean type, or an `Option` of one.
+///
+/// Returns `None` for every other type, including newtypes that still encode to numbers.
+fn numeric_or_boolean_type_name<T: 'static>() -> Option<&'static str> {
+    macro_rules! scalar_type_ids {
+        ($($scalar:ty),* $(,)?) => {
+            [$(TypeId::of::<$scalar>(), TypeId::of::<Option<$scalar>>()),*]
+        };
+    }
+    let scalar_type_ids = scalar_type_ids!(
+        i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, bool,
+    );
+    scalar_type_ids
+        .contains(&TypeId::of::<T>())
+        .then(std::any::type_name::<T>)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

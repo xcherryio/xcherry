@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/superdurable/dex/config"
@@ -45,6 +46,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Activities struct {
@@ -157,13 +159,16 @@ func (a *Activities) IWaitForM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
+	workerReq, err := a.waitForMethodRequestForWorker(ctx, req)
+	if err != nil {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	var stream waitForMethodOutputStream
 	var callCtx = ctx
 	var pullStream *pullWaitForStream
-	var err error
 	if input.GetWorkerTarget().GetIsPullMode() {
-		pullStream, err = a.openPullWaitFor(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		pullStream, err = a.openPullWaitFor(ctx, input, workerReq, activityInfo.IsLocalActivity, heartbeat)
 		stream = pullStream
 	} else {
 		dispatch, openErr := openWorkerStream(
@@ -171,7 +176,7 @@ func (a *Activities) IWaitForM(
 			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 				grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
 			) {
-				return client.InvokeWaitForMethod(callCtx, req)
+				return client.InvokeWaitForMethod(callCtx, workerReq)
 			},
 		)
 		if openErr != nil && !dispatch.isOpened {
@@ -207,6 +212,11 @@ func (a *Activities) IWaitForM(
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := a.rejectHardDeleteWritesWithoutBlobStore(
+		resp.GetUpsertAttributes(), resp.GetWaitingCondition().GetSubFlowConditions(),
+	); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.offloadSubFlowStartInputs(
@@ -291,6 +301,20 @@ func (a *Activities) offloadSubFlowStartInputs(
 			if attribute == nil {
 				continue
 			}
+			if attribute.GetIsHardDeleteOnNull() {
+				if err := blobstore.OffloadLargeAttributeWrites(
+					ctx,
+					[]*dexpb.AttributeWrite{attribute},
+					subFlowID,
+					requestID,
+					a.cfg.BlobStore.EffectiveThresholdInBytes(),
+					a.blobStore,
+					a.cfg.BlobStore.EffectiveEnabled(),
+				); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := blobstore.TransferValueBlobOwnership(
 				ctx,
 				attribute.GetValue(),
@@ -358,13 +382,16 @@ func (a *Activities) IExecuteM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
+	workerReq, err := a.executeMethodRequestForWorker(ctx, req)
+	if err != nil {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	var stream executeMethodOutputStream
 	var callCtx = ctx
 	var pullStream *pullExecuteStream
-	var err error
 	if input.GetWorkerTarget().GetIsPullMode() {
-		pullStream, err = a.openPullExecute(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		pullStream, err = a.openPullExecute(ctx, input, workerReq, activityInfo.IsLocalActivity, heartbeat)
 		stream = pullStream
 	} else {
 		dispatch, openErr := openWorkerStream(
@@ -372,7 +399,7 @@ func (a *Activities) IExecuteM(
 			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 				grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
 			) {
-				return client.InvokeExecuteMethod(callCtx, req)
+				return client.InvokeExecuteMethod(callCtx, workerReq)
 			},
 		)
 		if openErr != nil && !dispatch.isOpened {
@@ -405,6 +432,9 @@ func (a *Activities) IExecuteM(
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+	}
+	if err := a.rejectHardDeleteWritesWithoutBlobStore(resp.GetUpsertAttributes(), nil); err != nil {
 		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
 	}
 	if err := a.persistStepEventInput(
@@ -728,6 +758,53 @@ func executeMethodRequestForAttempt(
 		LoadedChannelNames:          request.GetLoadedChannelNames(),
 		LoadedChannelMapInstances:   request.GetLoadedChannelMapInstances(),
 	}
+}
+
+// waitForMethodRequestForWorker returns req, or a copy whose hard-delete Attributes are hydrated.
+// The copy keeps payloads out of req, which also feeds logs and the step-input snapshot.
+func (a *Activities) waitForMethodRequestForWorker(
+	ctx context.Context,
+	req *dexpb.InvokeWaitForMethodRequest,
+) (*dexpb.InvokeWaitForMethodRequest, error) {
+	if !blobstore.HasHardDeleteKV(req.GetAttributes()) {
+		return req, nil
+	}
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetContext().GetFlowId(), req.GetAttributes(), a.blobStore)
+	if err != nil {
+		return nil, err
+	}
+	workerReq := shallowCopyMessage(req)
+	workerReq.Attributes = attributes
+	return workerReq, nil
+}
+
+// executeMethodRequestForWorker returns req, or a copy whose hard-delete Attributes are hydrated.
+// The copy keeps payloads out of req, which also feeds logs and the step-input snapshot.
+func (a *Activities) executeMethodRequestForWorker(
+	ctx context.Context,
+	req *dexpb.InvokeExecuteMethodRequest,
+) (*dexpb.InvokeExecuteMethodRequest, error) {
+	if !blobstore.HasHardDeleteKV(req.GetAttributes()) {
+		return req, nil
+	}
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetContext().GetFlowId(), req.GetAttributes(), a.blobStore)
+	if err != nil {
+		return nil, err
+	}
+	workerReq := shallowCopyMessage(req)
+	workerReq.Attributes = attributes
+	return workerReq, nil
+}
+
+// shallowCopyMessage copies every populated top-level field, sharing nested values with message.
+func shallowCopyMessage[T proto.Message](message T) T {
+	source := message.ProtoReflect()
+	copied := source.New()
+	source.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		copied.Set(field, value)
+		return true
+	})
+	return copied.Interface().(T)
 }
 
 func workerContextForAttempt(workerContext *dexpb.Context) *dexpb.Context {
@@ -1212,12 +1289,33 @@ func (a *Activities) offloadWorkerAttributeWrites(
 	flowId string,
 	invocationId string,
 ) error {
-	if !a.cfg.BlobStore.EffectiveEnabled() || a.blobStore == nil {
+	return blobstore.OffloadLargeAttributeWrites(
+		ctx,
+		writes,
+		flowId,
+		invocationId,
+		a.cfg.BlobStore.EffectiveThresholdInBytes(),
+		a.blobStore,
+		a.cfg.BlobStore.EffectiveEnabled() && a.blobStore != nil,
+	)
+}
+
+// rejectHardDeleteWritesWithoutBlobStore fails the Worker result so its hard-delete values never reach history.
+func (a *Activities) rejectHardDeleteWritesWithoutBlobStore(
+	writes []*dexpb.AttributeWrite,
+	subFlowConditions []*dexpb.SubFlowCondition,
+) error {
+	if a.cfg.BlobStore.EffectiveEnabled() && a.blobStore != nil {
 		return nil
 	}
-	return blobstore.OffloadLargeAttributeWrites(
-		ctx, writes, flowId, invocationId, a.cfg.BlobStore.EffectiveThresholdInBytes(), a.blobStore, true,
-	)
+	allWrites := slices.Clone(writes)
+	for _, condition := range subFlowConditions {
+		allWrites = append(allWrites, condition.GetOptions().GetAttributes()...)
+	}
+	if slices.ContainsFunc(allWrites, (*dexpb.AttributeWrite).GetIsHardDeleteOnNull) {
+		return blobstore.ErrHardDeleteRequiresBlobStore
+	}
+	return nil
 }
 
 func (a *Activities) offloadWorkerSideEffects(
@@ -1402,6 +1500,9 @@ func validateWorkerWaitForResponse(
 	if err := workerclient.RejectWorkerAttributeWriteBlobIDs(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
+	if err := workerclient.ValidateHardDeleteAttributeWrites(resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
@@ -1442,6 +1543,9 @@ func validateWorkerExecuteResponse(
 		return fmt.Errorf("nil InvokeExecuteMethodResponse")
 	}
 	if err := workerclient.RejectWorkerAttributeWriteBlobIDs(resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
+	if err := workerclient.ValidateHardDeleteAttributeWrites(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(resp.GetUpsertAttributes()); err != nil {

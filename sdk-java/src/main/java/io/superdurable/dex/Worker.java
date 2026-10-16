@@ -69,8 +69,8 @@ public final class Worker implements AutoCloseable {
     private final JavaWorkerService workerService;
     private final PullWorker pullWorker;
     private final String sdkVersion;
+    private final NegotiatedServerProtocol serverProtocol = new NegotiatedServerProtocol();
     private Server server;
-    private int negotiatedProtocolVersion;
     private State state = State.CREATED;
 
     /**
@@ -126,7 +126,8 @@ public final class Worker implements AutoCloseable {
                 registry,
                 values,
                 new ValueHydrator(flowService, blobCache),
-                bufferedStreamScheduler);
+                bufferedStreamScheduler,
+                serverProtocol);
         this.workerService = new JavaWorkerService(
                 dispatcher,
                 handlers,
@@ -189,8 +190,8 @@ public final class Worker implements AutoCloseable {
                 throw ServerProtocolCompatibility.requestFailure(sdkVersion, failure);
             }
             try {
-                negotiatedProtocolVersion =
-                        ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion);
+                serverProtocol.recordNegotiatedVersion(
+                        ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion));
             } catch (IllegalStateException failure) {
                 state = State.STOPPED;
                 shutdownResources();

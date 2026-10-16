@@ -46,11 +46,17 @@ func mapInitialAttributes(
 		if err := validateConcreteValue(concrete.encoded); err != nil {
 			return nil, fmt.Errorf("dex: initial attribute %q: %w", key, err)
 		}
+		if concrete.isHardDeleteOnNull {
+			if err := validateHardDeleteAttributeValue(key, concrete.encoded); err != nil {
+				return nil, err
+			}
+		}
 		mapped = append(mapped, &dexpb.AttributeWrite{
-			Key:         key,
-			Value:       concrete.encoded,
-			IndexConfig: concrete.indexConfig,
-			SyncConfig:  mapAttributeSyncConfig(concrete.syncToAttributeStore),
+			Key:                key,
+			Value:              concrete.encoded,
+			IndexConfig:        concrete.indexConfig,
+			SyncConfig:         mapAttributeSyncConfig(concrete.syncToAttributeStore),
+			IsHardDeleteOnNull: concrete.isHardDeleteOnNull,
 		})
 	}
 	return mapped, nil
@@ -60,6 +66,7 @@ func mapAttributeDelete(
 	name string,
 	index *AttributeIndex,
 	syncToAttributeStore bool,
+	isHardDeleteOnNull bool,
 ) (*dexpb.AttributeWrite, error) {
 	if name == "" {
 		return nil, fmt.Errorf("dex: attribute delete name must not be empty")
@@ -69,11 +76,25 @@ func mapAttributeDelete(
 		return nil, err
 	}
 	return &dexpb.AttributeWrite{
-		Key:         name,
-		Value:       value,
-		IndexConfig: indexConfig,
-		SyncConfig:  mapAttributeSyncConfig(syncToAttributeStore),
+		Key:                name,
+		Value:              value,
+		IndexConfig:        indexConfig,
+		SyncConfig:         mapAttributeSyncConfig(syncToAttributeStore),
+		IsHardDeleteOnNull: isHardDeleteOnNull,
 	}, nil
+}
+
+// validateHardDeleteAttributeValue rejects encodings that hard-delete Attributes cannot store.
+func validateHardDeleteAttributeValue(key string, value *dexpb.Value) error {
+	switch value.GetKind().(type) {
+	case *dexpb.Value_StringValue, *dexpb.Value_ObjValue, *dexpb.Value_NullValue:
+		return nil
+	default:
+		return &ValueMappingError{
+			Operation: "encode hard-delete",
+			Err:       fmt.Errorf("dex: hard-delete attribute %q supports only string and object values", key),
+		}
+	}
 }
 
 func mapAttributeSyncConfig(enabled bool) *dexpb.AttributeSyncConfig {
@@ -807,6 +828,13 @@ func validateSubFlowAttributes(target *registeredFlow, attributes []InitialAttri
 		if !found || registered.isMap != attribute.isMap {
 			return fmt.Errorf(
 				"dex: SubFlow attribute %q is not registered by %q",
+				attribute.name,
+				target.flowType,
+			)
+		}
+		if registered.isHardDeleteOnNull != attribute.isHardDeleteOnNull {
+			return fmt.Errorf(
+				"dex: SubFlow attribute %q hard-delete setting does not match its definition in %q",
 				attribute.name,
 				target.flowType,
 			)

@@ -24,7 +24,7 @@ from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Flow, PersistenceSchema, Registry
 from dex.worker import Worker
-from dex.worker_options import WorkerOptions
+from dex.worker_options import PullWorkerOptions, WorkerOptions
 from google.protobuf import empty_pb2
 
 
@@ -40,6 +40,16 @@ class IndexedFlow(Flow[None]):
 
     def get_persistence_schema(self) -> PersistenceSchema:
         return PersistenceSchema.of(self.status)
+
+
+class HardDeleteFlow(Flow[None]):
+    api_key = Attribute("api-key", str, hard_delete_on_null=True)
+
+    def get_flow_type(self) -> str:
+        return "HardDeleteFlow"
+
+    def get_persistence_schema(self) -> PersistenceSchema:
+        return PersistenceSchema.of(self.api_key)
 
 
 class MemoryBlobCache:
@@ -176,8 +186,8 @@ def test_worker_sync_failure_keeps_port_closed() -> None:
         (
             pb.ServerInfo(
                 server_version="future",
-                minimum_supported_protocol_version=2,
-                current_protocol_version=2,
+                minimum_supported_protocol_version=4,
+                current_protocol_version=4,
             ),
             None,
             "do not overlap",
@@ -223,6 +233,87 @@ def test_worker_protocol_failure_precedes_sync_and_binding(
         assert not _can_connect(worker_port)
     finally:
         worker.close()
+        flow_server.stop(grace=None).wait(timeout=5)
+
+
+PROTOCOL_2_SERVER_INFO = pb.ServerInfo(
+    server_version="previous",
+    minimum_supported_protocol_version=1,
+    current_protocol_version=2,
+)
+
+
+@pytest.mark.parametrize("is_pull_mode", (False, True))
+@pytest.mark.parametrize("flow_type", (IndexedFlow, HardDeleteFlow))
+def test_worker_starts_on_protocol_2_server_and_records_version(
+    is_pull_mode: bool,
+    flow_type: type[Flow[None]],
+) -> None:
+    worker_port = _available_port()
+    service = SyncService(worker_port, server_info=PROTOCOL_2_SERVER_INFO)
+    flow_server, flow_port = _start_flow_server(service)
+    worker = Worker(
+        Registry((flow_type(),)),
+        MemoryBlobCache(),
+        (
+            WorkerOptions(
+                server_address=f"127.0.0.1:{flow_port}", pull=PullWorkerOptions()
+            )
+            if is_pull_mode
+            else WorkerOptions(
+                bind_address=f"127.0.0.1:{worker_port}",
+                server_address=f"127.0.0.1:{flow_port}",
+            )
+        ),
+    )
+    failures: list[BaseException] = []
+
+    def run_worker() -> None:
+        try:
+            worker.start()
+        except BaseException as failure:
+            failures.append(failure)
+
+    thread = threading.Thread(target=run_worker)
+    thread.start()
+    try:
+        assert service.called.wait(timeout=5)
+        if not is_pull_mode:
+            _await_listening(worker_port)
+        assert service.calls[:2] == ["GetServerInfo", "SyncAttributeIndexes"]
+        assert worker._server_protocol.version == 2
+    finally:
+        worker.stop()
+        thread.join(timeout=10)
+        flow_server.stop(grace=None).wait(timeout=5)
+    assert not thread.is_alive()
+    assert failures == []
+
+
+def test_async_worker_with_hard_delete_attributes_starts_on_protocol_2_server() -> None:
+    asyncio.run(_test_async_worker_starts_on_protocol_2_server())
+
+
+async def _test_async_worker_starts_on_protocol_2_server() -> None:
+    worker_port = _available_port()
+    service = SyncService(worker_port, server_info=PROTOCOL_2_SERVER_INFO)
+    flow_server, flow_port = _start_flow_server(service)
+    worker = AsyncWorker(
+        Registry((HardDeleteFlow(),), allow_async_handlers=True),
+        MemoryBlobCache(),
+        WorkerOptions(
+            bind_address=f"127.0.0.1:{worker_port}",
+            server_address=f"127.0.0.1:{flow_port}",
+        ),
+    )
+    worker_task = asyncio.create_task(worker.start())
+    try:
+        await asyncio.to_thread(_await_listening, worker_port)
+        assert service.calls == ["GetServerInfo", "SyncAttributeIndexes"]
+        assert worker._server_protocol.version == 2
+    finally:
+        await worker.stop()
+        await asyncio.wait_for(worker_task, timeout=5)
         flow_server.stop(grace=None).wait(timeout=5)
 
 

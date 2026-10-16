@@ -15,7 +15,12 @@ from urllib.parse import unquote
 
 from dex._utils import require_map_instance, require_name
 from dex._value_mapper import ValueMapper
-from dex.attribute import Attribute, AttributeMap, _apply_attribute_store_sync
+from dex.attribute import (
+    Attribute,
+    AttributeMap,
+    _apply_attribute_store_sync,
+    _apply_hard_delete_on_null,
+)
 from dex.channel import Channel, ChannelMap, ChannelMessage
 from dex.codec import Codec
 from dex.context import RecoveryErrorInfo
@@ -349,6 +354,7 @@ class InvocationContext:
         if index is not None:
             write.index_config.CopyFrom(index)
         _apply_attribute_store_sync(write, definition)
+        _apply_hard_delete_on_null(write, definition)
         self.attribute_writes[key] = write
 
     def _delete_attribute(
@@ -366,6 +372,7 @@ class InvocationContext:
         if index is not None:
             write.index_config.CopyFrom(index)
         _apply_attribute_store_sync(write, definition)
+        _apply_hard_delete_on_null(write, definition)
         self.attribute_writes[key] = write
 
     def _publish_channel(

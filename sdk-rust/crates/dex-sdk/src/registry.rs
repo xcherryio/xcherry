@@ -344,6 +344,7 @@ fn assemble_persistence(
                 definition.name
             )));
         }
+        validate_hard_delete_definition(flow_name, definition)?;
         if persistence
             .insert(definition.name.clone(), definition.clone())
             .is_some()
@@ -355,6 +356,34 @@ fn assemble_persistence(
         }
     }
     Ok(persistence)
+}
+
+fn validate_hard_delete_definition(
+    flow_name: &str,
+    definition: &PersistenceDefinition,
+) -> SdkResult<()> {
+    if !definition.is_hard_delete_on_null {
+        return Ok(());
+    }
+    let name = &definition.name;
+    if definition.index.is_some() {
+        return Err(definition_error(format!(
+            "Flow {flow_name} hard-delete Attribute {name} cannot be combined with an index"
+        )));
+    }
+    if definition.sync_to_attribute_store {
+        return Err(definition_error(format!(
+            "Flow {flow_name} hard-delete Attribute {name} cannot be combined with \
+             sync_to_attribute_store"
+        )));
+    }
+    if let Some(type_name) = definition.numeric_or_boolean_type_name {
+        return Err(definition_error(format!(
+            "Flow {flow_name} hard-delete Attribute {name} supports only string and object \
+             values, but its value type is {type_name}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_rpc(
@@ -647,6 +676,7 @@ fn hex_value(byte: u8) -> Result<u8, String> {
 #[cfg(test)]
 mod tests {
     use super::{PersistenceDefinition, PersistenceKind, assemble_persistence, physical_name};
+    use crate::{Attribute, AttributeIndex, AttributeMap, PersistenceSchema, SdkError};
 
     #[test]
     fn persistence_definition_names_reserve_slash() {
@@ -658,18 +688,53 @@ mod tests {
         ] {
             let result = assemble_persistence(
                 "TestFlow",
-                &[PersistenceDefinition {
-                    name: "orders/by-id".to_string(),
-                    kind,
-                    index: None,
-                    sync_to_attribute_store: false,
-                    stream_identity: None,
-                    stream_capacity_bytes: None,
-                }],
+                &[PersistenceDefinition::new("orders/by-id", kind)],
             );
             assert!(result.is_err());
         }
 
         assert!(std::panic::catch_unwind(|| physical_name("messages", "orders/by-id")).is_err());
+    }
+
+    #[test]
+    fn hard_delete_definitions_reject_index_sync_and_scalar_types() {
+        let indexed = PersistenceSchema::new().attribute(
+            &Attribute::<String>::new("secret")
+                .indexed(AttributeIndex::keyword())
+                .hard_delete_on_null(),
+        );
+        let synced = PersistenceSchema::new().attribute_map(
+            &AttributeMap::<String>::new("secrets")
+                .hard_delete_on_null()
+                .sync_to_attribute_store(),
+        );
+        let boolean = PersistenceSchema::new()
+            .attribute(&Attribute::<Option<bool>>::new("flag").hard_delete_on_null());
+        let floating = PersistenceSchema::new()
+            .attribute_map(&AttributeMap::<f64>::new("ratios").hard_delete_on_null());
+        for (schema, expected) in [
+            (indexed, "cannot be combined with an index"),
+            (synced, "cannot be combined with sync_to_attribute_store"),
+            (boolean, "supports only string and object values"),
+            (floating, "supports only string and object values"),
+        ] {
+            let error = assemble_persistence("TestFlow", schema.definitions())
+                .expect_err("invalid hard-delete definition");
+            let SdkError::FlowDefinition { message } = error else {
+                panic!("unexpected error {error}");
+            };
+            assert!(message.contains(expected), "{message}");
+        }
+
+        let valid = PersistenceSchema::new()
+            .attribute(&Attribute::<String>::new("secret").hard_delete_on_null())
+            .attribute(&Attribute::<Vec<u8>>::new("bytes").hard_delete_on_null())
+            .attribute_map(
+                &AttributeMap::<std::collections::HashMap<String, u64>>::new("tokens")
+                    .hard_delete_on_null(),
+            );
+        let persistence =
+            assemble_persistence("TestFlow", valid.definitions()).expect("valid definitions");
+        assert!(persistence["secret"].is_hard_delete_on_null);
     }
 }

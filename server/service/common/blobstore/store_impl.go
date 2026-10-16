@@ -200,6 +200,89 @@ func (b *blobStoreImpl) WriteObject(
 	return
 }
 
+func (b *blobStoreImpl) WriteHardDeleteObject(
+	ctx context.Context,
+	flowID string,
+	attributeKey string,
+	data []byte,
+) (storeID, locator string, err error) {
+	objectID, err := b.hardDeleteObjectID(attributeKey)
+	if err != nil {
+		return "", "", err
+	}
+	if err := b.writeObject(ctx, b.activeStorage, hardDeleteObjectPath(flowID, objectID), data); err != nil {
+		b.writeObjectErrorCounter.Inc(1)
+		b.logger.Error("Hard-delete Attribute write failed",
+			tag.StoreID(b.activeStorage.StorageId),
+			tag.WorkflowID(flowID),
+			tag.Error(err))
+		return "", "", fmt.Errorf("write hard-delete Attribute object: %w", err)
+	}
+	b.writeObjectSuccessHistogram.Record(time.Duration(len(data)))
+	return b.activeStorage.StorageId, hardDeleteLocatorPrefix + objectID, nil
+}
+
+func (b *blobStoreImpl) DeleteHardDeleteObject(ctx context.Context, flowID string, attributeKey string) error {
+	objectID, err := b.hardDeleteObjectID(attributeKey)
+	if err != nil {
+		return err
+	}
+	path := hardDeleteObjectPath(flowID, objectID)
+	storeIDs := make([]string, 0, len(b.supportedStore))
+	for storeID := range b.supportedStore {
+		storeIDs = append(storeIDs, storeID)
+	}
+	sort.Strings(storeIDs)
+	for _, storeID := range storeIDs {
+		if err := b.deleteObject(ctx, b.supportedStore[storeID], path); err != nil {
+			b.logger.Error("Hard-delete Attribute delete failed",
+				tag.StoreID(storeID),
+				tag.WorkflowID(flowID),
+				tag.Error(err))
+			return fmt.Errorf("delete hard-delete Attribute object: %w", err)
+		}
+	}
+	b.logger.Info("Hard-delete Attribute object deleted",
+		tag.WorkflowID(flowID),
+		tag.Path(b.pathPrefix+path))
+	return nil
+}
+
+// hardDeleteObjectID derives the fixed object ID of one Attribute key within a Flow.
+func (b *blobStoreImpl) hardDeleteObjectID(attributeKey string) (string, error) {
+	if attributeKey == "" {
+		return "", errors.New("hard-delete Attribute requires a key")
+	}
+	hasher := sha256.New()
+	for _, component := range [][]byte{[]byte("dex-hard-delete-v1"), []byte(attributeKey)} {
+		if err := writeHashComponent(hasher, component); err != nil {
+			return "", err
+		}
+	}
+	return fixedWidthBase36(hasher.Sum(nil), b.objectIDLength), nil
+}
+
+func (b *blobStoreImpl) deleteObject(ctx context.Context, storage config.BlobStoreConfigEntry, path string) error {
+	switch storage.StorageType {
+	case config.StorageTypeS3:
+		if b.s3Client == nil {
+			return errors.New("S3 client is not configured")
+		}
+		_, err := b.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(storage.S3Bucket),
+			Key:    aws.String(b.objectKey(storage, path)),
+		})
+		if IsObjectNotFound(err) {
+			return nil
+		}
+		return err
+	case config.StorageTypeLocal:
+		return deleteLocalObject(ctx, storage.LocalDirectory, b.objectKey(storage, path))
+	default:
+		return fmt.Errorf("unsupported blob storage type %q", storage.StorageType)
+	}
+}
+
 func (b *blobStoreImpl) WriteStepEventInput(
 	ctx context.Context,
 	runStarted time.Time,
@@ -334,7 +417,9 @@ func (b *blobStoreImpl) ReadObject(ctx context.Context, storeID, flowID, locator
 		b.readObjectErrorCounter.Inc(1)
 		return nil, fmt.Errorf("%w for %s", errStoreNotFound, storeID)
 	}
-	if storeConfig.StorageType == config.StorageTypeS3 && b.blobCache != nil {
+	// Hard-delete objects are mutable and must not outlive deletion in a disk cache.
+	isCacheable := storeConfig.StorageType == config.StorageTypeS3 && !isHardDeleteLocator(locator)
+	if isCacheable && b.blobCache != nil {
 		data, found, err := b.readCachedAttributeObject(storeID, path)
 		if err != nil {
 			b.readObjectErrorCounter.Inc(1)
@@ -351,6 +436,9 @@ func (b *blobStoreImpl) ReadObject(ctx context.Context, storeID, flowID, locator
 	}
 	data, err := b.readObject(ctx, storeConfig, path)
 	if err != nil {
+		if isHardDeleteLocator(locator) && IsObjectNotFound(err) {
+			return nil, err
+		}
 		b.readObjectErrorCounter.Inc(1)
 		var re s3.ResponseError
 		if errors.As(err, &re) {
@@ -371,7 +459,7 @@ func (b *blobStoreImpl) ReadObject(ctx context.Context, storeID, flowID, locator
 			tag.Error(err))
 		return nil, fmt.Errorf("failed to read object: %w", err)
 	}
-	if storeConfig.StorageType == config.StorageTypeS3 {
+	if isCacheable {
 		if err := b.cacheAttributeObject(storeID, path, data, b.blobCacheReadFillCounter); err != nil {
 			b.readObjectErrorCounter.Inc(1)
 			b.logger.Error("Attribute blob cache fill failed",

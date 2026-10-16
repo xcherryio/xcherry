@@ -20,6 +20,7 @@ from dex._async_worker_dispatcher import AsyncWorkerDispatcher
 from dex._async_worker_service import AsyncWorkerService
 from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
+    NegotiatedServerProtocol,
     negotiate_server_protocol,
     sdk_version,
     server_info_request_error,
@@ -90,12 +91,13 @@ class AsyncWorker:
             self._flow_channel
         )
         self._sdk_version = sdk_version()
-        self._negotiated_protocol_version = 0
+        self._server_protocol = NegotiatedServerProtocol()
         values = ValueMapper(registry.codec_registry)
         dispatcher = AsyncWorkerDispatcher(
             registry,
             values,
             AsyncValueHydrator(self._flow_service, blob_cache),
+            self._server_protocol,
         )
         self._server = None
         self._pull = None
@@ -188,9 +190,8 @@ class AsyncWorker:
             self._stopped.set()
             raise RuntimeError("cannot get Dex server info") from failure
         try:
-            self._negotiated_protocol_version = negotiate_server_protocol(
-                server_info,
-                self._sdk_version,
+            self._server_protocol.record_version(
+                negotiate_server_protocol(server_info, self._sdk_version)
             )
         except RuntimeError:
             self._state = "stopped"

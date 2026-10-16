@@ -7,6 +7,10 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import type { Codec } from "./codec.js";
+import {
+  isHardDeleteOnNullDefinition,
+  requireHardDeleteOnNullValueKind,
+} from "./attribute-hard-delete.js";
 import { mapAttributeStoreSync } from "./attribute-store-sync.js";
 import type { AsyncContext, RecoveryErrorInfo } from "./context.js";
 import {
@@ -281,9 +285,10 @@ export class InvocationContext implements AsyncContext {
     const key = definitionName(attribute, instance);
     this.attributeWrites.set(key, {
       key,
-      value: encodeValue(attribute.codec, value),
+      value: requireHardDeleteOnNullValueKind(attribute, key, encodeValue(attribute.codec, value)),
       indexConfig: mapIndex(attribute.index),
       syncConfig: mapAttributeStoreSync(attribute),
+      isHardDeleteOnNull: isHardDeleteOnNullDefinition(attribute),
     });
   }
 
@@ -298,6 +303,7 @@ export class InvocationContext implements AsyncContext {
       value: deletionValue(),
       indexConfig: mapIndex(attribute.index),
       syncConfig: mapAttributeStoreSync(attribute),
+      isHardDeleteOnNull: isHardDeleteOnNullDefinition(attribute),
     });
   }
 

@@ -54,23 +54,30 @@ final class WorkerDispatcher {
     private final ValueMapper values;
     private final ValueHydrator hydrator;
     private final ScheduledExecutorService bufferedStreamScheduler;
+    private final NegotiatedServerProtocol serverProtocol;
 
     WorkerDispatcher(
             final Registry registry,
             final ValueMapper values,
-            final ValueHydrator hydrator) {
-        this(registry, values, hydrator, null);
+            final ValueHydrator hydrator,
+            final NegotiatedServerProtocol serverProtocol) {
+        this(registry, values, hydrator, null, serverProtocol);
     }
 
     WorkerDispatcher(
             final Registry registry,
             final ValueMapper values,
             final ValueHydrator hydrator,
-            final ScheduledExecutorService bufferedStreamScheduler) {
+            final ScheduledExecutorService bufferedStreamScheduler,
+            final NegotiatedServerProtocol serverProtocol) {
+        if (serverProtocol == null) {
+            throw new IllegalArgumentException("serverProtocol is required");
+        }
         this.registry = registry;
         this.values = values;
         this.hydrator = hydrator;
         this.bufferedStreamScheduler = bufferedStreamScheduler;
+        this.serverProtocol = serverProtocol;
     }
 
     InvokeWaitForMethodResponse invokeWaitFor(
@@ -97,6 +104,7 @@ final class WorkerDispatcher {
         final Object input = values.decode(request.getStepInput(), step.getStep().getInputType());
         try {
             final Wait wait = callWaitFor(step.getStep(), context, input);
+            serverProtocol.requireHardDeleteAttributeSupport(context.getAttributeWrites());
             final InvokeWaitForMethodResponse.Builder response =
                     InvokeWaitForMethodResponse.newBuilder()
                             .addAllUpsertAttributes(context.getAttributeWrites())
@@ -145,6 +153,7 @@ final class WorkerDispatcher {
         final Object input = values.decode(request.getStepInput(), step.getStep().getInputType());
         try {
             final StepDecision decision = callExecute(step.getStep(), context, input);
+            serverProtocol.requireHardDeleteAttributeSupport(context.getAttributeWrites());
             final InvokeExecuteMethodResponse response = InvokeExecuteMethodResponse.newBuilder()
                     .setStepDecision(mapDecision(flow, step, decision))
                     .addAllUpsertAttributes(context.getAttributeWrites())
@@ -190,6 +199,7 @@ final class WorkerDispatcher {
                 request.getLoadedChannelNamesList(),
                 request.getLoadedChannelMapInstancesList());
         final StepDecision decision = flow.getFlow().handleTimeout(context);
+        serverProtocol.requireHardDeleteAttributeSupport(context.getAttributeWrites());
         return InvokeExecuteMethodResponse.newBuilder()
                 .setStepDecision(mapDecision(
                         flow,
@@ -233,6 +243,7 @@ final class WorkerDispatcher {
             arguments = new Object[] {context};
         }
         final Object returned = invoke(flow.getFlow(), method, arguments);
+        serverProtocol.requireHardDeleteAttributeSupport(context.getAttributeWrites());
         final InvokeWorkerRPCResponse.Builder response = InvokeWorkerRPCResponse.newBuilder()
                 .addAllUpsertAttributes(context.getAttributeWrites())
                 .addAllRecordEvents(context.getEvents())
@@ -866,6 +877,14 @@ final class WorkerDispatcher {
                     : options.getAttributes()) {
                 final PersistenceDefinition registered = target.getPersistence().get(
                         initialization.getDefinition().getName());
+                if (registered != null && registered.isHardDeleteOnNull()
+                        != initialization.getDefinition().isHardDeleteOnNull()) {
+                    throw new InvalidStepResultException(
+                            "SubFlow " + target.getName() + " initial Attribute "
+                                    + initialization.getDefinition().getName()
+                                    + " hardDeleteOnNull setting differs from Flow "
+                                    + target.getName() + " registration");
+                }
                 if (registered != initialization.getDefinition()) {
                     throw new InvalidStepResultException(
                             "SubFlow " + target.getName() + " Attribute does not belong to Flow: "
@@ -888,6 +907,10 @@ final class WorkerDispatcher {
                 if (registered.isSyncToAttributeStore()) {
                     write.setSyncConfig(io.superdurable.gen.AttributeSyncConfig.newBuilder()
                             .setEnabled(true));
+                }
+                HardDeleteAttributes.applyHardDeleteOnNull(write, registered);
+                if (write.getIsHardDeleteOnNull()) {
+                    serverProtocol.requireHardDeleteAttributeSupport(key);
                 }
                 mappedOptions.addAttributes(write);
             }

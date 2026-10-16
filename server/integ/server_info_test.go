@@ -44,5 +44,5 @@ func testServerInfo(t *testing.T, backendType service.BackendType) {
 	require.NoError(t, err)
 	require.Equal(t, "integration-test-version", serverInfo.GetServerVersion())
 	require.Equal(t, uint32(1), serverInfo.GetMinimumSupportedProtocolVersion())
-	require.Equal(t, uint32(2), serverInfo.GetCurrentProtocolVersion())
+	require.Equal(t, uint32(3), serverInfo.GetCurrentProtocolVersion())
 }

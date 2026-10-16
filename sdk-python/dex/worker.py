@@ -22,6 +22,7 @@ from google.protobuf import empty_pb2
 from dex._credential_transport import AsyncCredentialRunner, sync_channel
 from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
+    NegotiatedServerProtocol,
     negotiate_server_protocol,
     sdk_version,
     server_info_request_error,
@@ -98,12 +99,13 @@ class Worker:
             self._flow_channel
         )
         self._sdk_version = sdk_version()
-        self._negotiated_protocol_version = 0
+        self._server_protocol = NegotiatedServerProtocol()
         values = ValueMapper(registry.codec_registry)
         dispatcher = WorkerDispatcher(
             registry,
             values,
             ValueHydrator(self._flow_service, blob_cache),
+            self._server_protocol,
         )
         concurrency = (
             self.options.pull.max_concurrent_tasks or os.cpu_count() or 1
@@ -211,9 +213,8 @@ class Worker:
                 self._executor.shutdown(wait=True, cancel_futures=True)
                 raise RuntimeError("cannot get Dex server info") from failure
             try:
-                self._negotiated_protocol_version = negotiate_server_protocol(
-                    server_info,
-                    self._sdk_version,
+                self._server_protocol.record_version(
+                    negotiate_server_protocol(server_info, self._sdk_version)
                 )
             except RuntimeError:
                 self._state = "stopped"

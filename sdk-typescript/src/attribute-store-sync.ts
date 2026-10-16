@@ -18,6 +18,10 @@ export function markAttributeStoreSynced<Definition extends object>(
   return definition;
 }
 
+export function isAttributeStoreSynced(definition: object): boolean {
+  return syncedDefinitions.has(definition);
+}
+
 export function mapAttributeStoreSync(
   definition: object,
 ): AttributeSyncConfig | undefined {

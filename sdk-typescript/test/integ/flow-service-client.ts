@@ -14,6 +14,7 @@ import { credentials } from "@grpc/grpc-js";
 import {
   FlowServiceClient,
   type GetFlowStateResponse,
+  type KV,
   type StepMethodFailure,
 } from "../../src/gen/dex.js";
 
@@ -36,6 +37,23 @@ function getFlowState(
       resolve(response ?? { activeStepExecutions: [] });
     });
   });
+}
+
+export async function getFlowAttributes(flowId: string, keys: readonly string[]): Promise<readonly KV[]> {
+  const client = flowServiceClient();
+  try {
+    return await new Promise((resolve, reject) => {
+      client.getAttributes({ flowId, runId: "", keys: [...keys], allKeys: false }, (error, response) => {
+        if (error !== null && error !== undefined) {
+          reject(error);
+          return;
+        }
+        resolve(response?.attributes ?? []);
+      });
+    });
+  } finally {
+    client.close();
+  }
 }
 
 export async function awaitLiveWorkerFailure(

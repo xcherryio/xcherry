@@ -33,8 +33,25 @@ pub(crate) struct PersistenceDefinition {
     pub(crate) kind: PersistenceKind,
     pub(crate) index: Option<AttributeIndex>,
     pub(crate) sync_to_attribute_store: bool,
+    pub(crate) is_hard_delete_on_null: bool,
+    pub(crate) numeric_or_boolean_type_name: Option<&'static str>,
     pub(crate) stream_identity: Option<usize>,
     pub(crate) stream_capacity_bytes: Option<i64>,
+}
+
+impl PersistenceDefinition {
+    pub(crate) fn new(name: &str, kind: PersistenceKind) -> Self {
+        Self {
+            name: name.to_string(),
+            kind,
+            index: None,
+            sync_to_attribute_store: false,
+            is_hard_delete_on_null: false,
+            numeric_or_boolean_type_name: None,
+            stream_identity: None,
+            stream_capacity_bytes: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,90 +71,58 @@ impl PersistenceSchema {
 
     /// Adds one single-value Attribute definition.
     pub fn attribute<T>(mut self, attribute: &Attribute<T>) -> Self {
-        self.add(
-            attribute.name(),
-            PersistenceKind::Attribute,
-            attribute.index().cloned(),
-            attribute.is_sync_to_attribute_store(),
-            None,
-            None,
-        );
+        self.definitions.push(PersistenceDefinition {
+            index: attribute.index().cloned(),
+            sync_to_attribute_store: attribute.is_sync_to_attribute_store(),
+            is_hard_delete_on_null: attribute.is_hard_delete_on_null(),
+            numeric_or_boolean_type_name: attribute.numeric_or_boolean_type_name(),
+            ..PersistenceDefinition::new(attribute.name(), PersistenceKind::Attribute)
+        });
         self
     }
 
     /// Adds one keyed Attribute-map definition.
     pub fn attribute_map<T>(mut self, attribute: &AttributeMap<T>) -> Self {
-        self.add(
-            attribute.name(),
-            PersistenceKind::AttributeMap,
-            attribute.index().cloned(),
-            attribute.is_sync_to_attribute_store(),
-            None,
-            None,
-        );
+        self.definitions.push(PersistenceDefinition {
+            index: attribute.index().cloned(),
+            sync_to_attribute_store: attribute.is_sync_to_attribute_store(),
+            is_hard_delete_on_null: attribute.is_hard_delete_on_null(),
+            numeric_or_boolean_type_name: attribute.numeric_or_boolean_type_name(),
+            ..PersistenceDefinition::new(attribute.name(), PersistenceKind::AttributeMap)
+        });
         self
     }
 
     /// Adds one Channel definition.
     pub fn channel<T>(mut self, channel: &Channel<T>) -> Self {
-        self.add(
+        self.definitions.push(PersistenceDefinition::new(
             channel.name(),
             PersistenceKind::Channel,
-            None,
-            false,
-            None,
-            None,
-        );
+        ));
         self
     }
 
     /// Adds one keyed Channel-map definition.
     pub fn channel_map<T>(mut self, channel: &ChannelMap<T>) -> Self {
-        self.add(
+        self.definitions.push(PersistenceDefinition::new(
             channel.name(),
             PersistenceKind::ChannelMap,
-            None,
-            false,
-            None,
-            None,
-        );
+        ));
         self
     }
 
     /// Adds one best-effort Stream definition.
     pub fn stream<T>(mut self, stream: &Stream<T>) -> Self {
-        self.add(
-            stream.name(),
-            PersistenceKind::Stream,
-            None,
-            false,
-            Some(stream.identity()),
-            Some(stream.stream_capacity_bytes()),
-        );
+        self.definitions.push(PersistenceDefinition {
+            stream_identity: Some(stream.identity()),
+            stream_capacity_bytes: Some(stream.stream_capacity_bytes()),
+            ..PersistenceDefinition::new(stream.name(), PersistenceKind::Stream)
+        });
         self
     }
 
     pub(crate) fn definitions(&self) -> &[PersistenceDefinition] {
         &self.definitions
-    }
-
-    fn add(
-        &mut self,
-        name: &str,
-        kind: PersistenceKind,
-        index: Option<AttributeIndex>,
-        sync_to_attribute_store: bool,
-        stream_identity: Option<usize>,
-        stream_capacity_bytes: Option<i64>,
-    ) {
-        self.definitions.push(PersistenceDefinition {
-            name: name.to_string(),
-            kind,
-            index,
-            sync_to_attribute_store,
-            stream_identity,
-            stream_capacity_bytes,
-        });
     }
 }
 
@@ -156,6 +141,30 @@ mod tests {
 
         assert!(!schema.definitions[0].sync_to_attribute_store);
         assert!(schema.definitions[1].sync_to_attribute_store);
+    }
+
+    #[test]
+    fn registration_metadata_retains_hard_delete_configuration() {
+        let plain = Attribute::<String>::new("plain");
+        let secret = Attribute::<String>::new("secret").hard_delete_on_null();
+        let counter = Attribute::<Option<u64>>::new("counter").hard_delete_on_null();
+        let secrets = AttributeMap::<Vec<u8>>::new("secrets").hard_delete_on_null();
+        let schema = PersistenceSchema::new()
+            .attribute(&plain)
+            .attribute(&secret)
+            .attribute(&counter)
+            .attribute_map(&secrets.clone());
+
+        assert!(!schema.definitions[0].is_hard_delete_on_null);
+        assert!(schema.definitions[1].is_hard_delete_on_null);
+        assert_eq!(schema.definitions[1].numeric_or_boolean_type_name, None);
+        assert!(
+            schema.definitions[2]
+                .numeric_or_boolean_type_name
+                .is_some_and(|type_name| type_name.contains("u64"))
+        );
+        assert!(schema.definitions[3].is_hard_delete_on_null);
+        assert_eq!(schema.definitions[3].numeric_or_boolean_type_name, None);
     }
 
     #[test]

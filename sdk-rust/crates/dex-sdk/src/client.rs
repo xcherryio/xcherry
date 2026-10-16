@@ -13,16 +13,15 @@ use std::time::{Duration, SystemTime};
 
 use dex_protocol::dex::flow_service_client::FlowServiceClient;
 use dex_protocol::dex::{
-    ActiveStepSearchMode as ProtoSearchMode, AttributeStoreNames, AttributeWrite,
-    FlowAlreadyStartedOptions, FlowConfig as ProtoFlowConfig, FlowResetStepMethod, FlowResetType,
-    FlowRetryPolicy, FlowStartOptions, FlowStatus as ProtoFlowStatus,
-    FlowTimeoutPolicy as ProtoFlowTimeoutPolicy, GetFlowSummaryRequest,
-    IdReusePolicy as ProtoIdReusePolicy, InvokeRpcRequest, ListStreamMessagesRequest,
-    ReadStreamRequest, ResetFlowRequest, SearchFlowsRequest, SkipTimerRequest, StartFlowRequest,
-    StepDurability as ProtoStepDurability, StopFlowRequest, StopType as ProtoStopType,
-    TriggerContinueAsNewRequest, UpdateFlowConfigRequest, WaitForAttributeRequest,
-    WaitForFlowRequest, WaitForStepCompletionRequest, WorkerTarget as ProtoWorkerTarget,
-    WriteStreamRequest,
+    ActiveStepSearchMode as ProtoSearchMode, AttributeStoreNames, FlowAlreadyStartedOptions,
+    FlowConfig as ProtoFlowConfig, FlowResetStepMethod, FlowResetType, FlowRetryPolicy,
+    FlowStartOptions, FlowStatus as ProtoFlowStatus, FlowTimeoutPolicy as ProtoFlowTimeoutPolicy,
+    GetFlowSummaryRequest, IdReusePolicy as ProtoIdReusePolicy, InvokeRpcRequest,
+    ListStreamMessagesRequest, ReadStreamRequest, ResetFlowRequest, SearchFlowsRequest,
+    SkipTimerRequest, StartFlowRequest, StepDurability as ProtoStepDurability, StopFlowRequest,
+    StopType as ProtoStopType, TriggerContinueAsNewRequest, UpdateFlowConfigRequest,
+    WaitForAttributeRequest, WaitForFlowRequest, WaitForStepCompletionRequest,
+    WorkerTarget as ProtoWorkerTarget, WriteStreamRequest,
 };
 use tokio::runtime::Runtime;
 use tonic::{Code, Request, transport::Endpoint};
@@ -30,6 +29,9 @@ use uuid::Uuid;
 
 use crate::credential::{CredentialChannel, CredentialInterceptor};
 use crate::sdk_error::{FlowTargetRequirement, ServiceError};
+use crate::server_protocol::{
+    NegotiatedServerProtocolVersion, negotiate_server_protocol, server_info_request_error,
+};
 use crate::stop_flow_options::StopType;
 use crate::time_travel_options::{TimeTravelPoint, TimeTravelStepMethod};
 use crate::value_hydrator::ValueHydrator;
@@ -70,6 +72,7 @@ pub struct Client {
     service: FlowServiceClient<CredentialChannel>,
     hydrator: ValueHydrator,
     options: ClientOptions,
+    negotiated_protocol_version: NegotiatedServerProtocolVersion,
 }
 
 impl Client {
@@ -117,6 +120,7 @@ impl Client {
             service,
             hydrator,
             options,
+            negotiated_protocol_version: NegotiatedServerProtocolVersion::default(),
         })
     }
 
@@ -140,11 +144,16 @@ impl Client {
     /// Starts a registered Flow with explicit lifecycle, retry, and initial persistence options.
     ///
     /// Returns the server-assigned run ID. A missing request ID is replaced with a generated UUID.
+    /// When the options contain an initial value for a hard-delete Attribute, the Client first
+    /// requests the Server protocol version once and reuses the result for later calls.
     ///
     /// # Errors
     ///
     /// Returns [`SdkError`] for invalid IDs, unregistered or mismatched Flow types, encoding
-    /// failures, invalid option durations, reuse conflicts, and service failures.
+    /// failures, invalid option durations, reuse conflicts, and service failures. Returns
+    /// [`SdkError::InvalidArgument`] for an invalid initial hard-delete Attribute value or a
+    /// definition that does not match the registered one. Returns [`SdkError::Service`] when an
+    /// initial hard-delete Attribute targets a Server older than protocol version 3.
     pub fn start_flow_with_options<SomeFlow: Flow>(
         &self,
         flow: &SomeFlow,
@@ -754,7 +763,9 @@ impl Client {
     /// Returns the current value observed by the successful wait. The server derives a stable
     /// Request ID from the condition when none is supplied. String and Boolean
     /// Attributes support equality matches. Integer and floating-point Attributes support every
-    /// match. A positive request-timeout expiry returns [`SdkError::RequestTimeout`].
+    /// match. A positive request-timeout expiry returns [`SdkError::RequestTimeout`]. A
+    /// hard-delete Attribute, defined with [`Attribute::hard_delete_on_null`], returns
+    /// [`SdkError::InvalidArgument`] before the Client contacts Dex.
     pub fn wait_for_attribute_match<T: Value>(
         &self,
         flow_id: &str,
@@ -762,13 +773,16 @@ impl Client {
         attribute_match: AttributeMatch<T>,
         options: WaitForAttributeOptions,
     ) -> SdkResult<T> {
+        require_waitable_attribute(attribute.name(), attribute.is_hard_delete_on_null())?;
         self.wait_for_attribute_value(flow_id, attribute.name(), &attribute_match, options)
     }
 
     /// Blocks until one AttributeMap instance satisfies `attribute_match`.
     ///
     /// This targets the current run and otherwise has the same match, request-timeout and handler-generation,
-    /// request-ID, return-value, and error behavior as [`Self::wait_for_attribute_match`].
+    /// request-ID, return-value, and error behavior as [`Self::wait_for_attribute_match`]. A
+    /// hard-delete AttributeMap, defined with [`AttributeMap::hard_delete_on_null`], returns
+    /// [`SdkError::InvalidArgument`] before the Client contacts Dex.
     pub fn wait_for_attribute_map_instance_match<T: Value>(
         &self,
         flow_id: &str,
@@ -777,6 +791,7 @@ impl Client {
         attribute_match: AttributeMatch<T>,
         options: WaitForAttributeOptions,
     ) -> SdkResult<T> {
+        require_waitable_attribute(attribute.name(), attribute.is_hard_delete_on_null())?;
         self.wait_for_attribute_value(
             flow_id,
             &map_physical_name(attribute.name(), instance)?,
@@ -1114,21 +1129,21 @@ impl Client {
             .attributes
             .iter()
             .map(|attribute| {
-                let logical_name = attribute.key.split('/').next().unwrap_or(&attribute.key);
-                if !flow.persistence.contains_key(logical_name) {
-                    return Err(invalid(format!(
-                        "initial Attribute is not registered: {}",
-                        attribute.key
-                    )));
-                }
-                Ok(AttributeWrite {
-                    key: attribute.key.clone(),
-                    value: Some(attribute.value.encode()?),
-                    index_config: attribute.index_config.clone(),
-                    sync_config: attribute.sync_config,
-                })
+                let definition =
+                    flow.persistence
+                        .get(&attribute.attribute_name)
+                        .ok_or_else(|| {
+                            invalid(format!(
+                                "initial Attribute is not registered: {}",
+                                attribute.key
+                            ))
+                        })?;
+                attribute.encode_attribute_write(definition)
             })
             .collect::<SdkResult<Vec<_>>>()?;
+        if let Some(write) = attributes.iter().find(|write| write.is_hard_delete_on_null) {
+            self.require_hard_delete_attribute_support("start_flow", &write.key)?;
+        }
         let config = options.config_override.as_ref();
         let flow_config_override =
             if config.is_some() || self.options.worker_target_value().is_some() {
@@ -1168,6 +1183,34 @@ impl Client {
             ..Default::default()
         };
         Ok(flow_start_options)
+    }
+
+    fn require_hard_delete_attribute_support(
+        &self,
+        operation: &'static str,
+        attribute_key: &str,
+    ) -> SdkResult<()> {
+        if !self.negotiated_protocol_version.has_negotiated() {
+            let mut service = self.service.clone();
+            let server_info = self
+                .runtime
+                .block_on(service.get_server_info(()))
+                .map_err(|status| SdkError::Service {
+                    service: ServiceError::local(operation, server_info_request_error(status)),
+                })?
+                .into_inner();
+            let negotiated_protocol_version =
+                negotiate_server_protocol(&server_info).map_err(|error| SdkError::Service {
+                    service: ServiceError::local(operation, error),
+                })?;
+            self.negotiated_protocol_version
+                .store(negotiated_protocol_version);
+        }
+        self.negotiated_protocol_version
+            .require_hard_delete_attribute_support(attribute_key)
+            .map_err(|error| SdkError::Service {
+                service: ServiceError::local(operation, error),
+            })
     }
 
     fn map_flow_config(&self, config: Option<&FlowConfig>) -> SdkResult<ProtoFlowConfig> {
@@ -1438,6 +1481,15 @@ fn map_physical_name(name: &str, instance: &str) -> SdkResult<String> {
     Ok(crate::registry::physical_name(name, instance))
 }
 
+fn require_waitable_attribute(attribute_name: &str, is_hard_delete_on_null: bool) -> SdkResult<()> {
+    if is_hard_delete_on_null {
+        return Err(invalid(format!(
+            "wait_for_attribute_match does not support hard-delete Attribute {attribute_name}"
+        )));
+    }
+    Ok(())
+}
+
 fn sdk_handler_error(error: impl std::fmt::Display) -> SdkError {
     invalid(error.to_string())
 }
@@ -1486,5 +1538,245 @@ mod tests {
                 .names,
             Vec::<String>::new()
         );
+    }
+
+    mod hard_delete {
+        use std::convert::Infallible;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::{Arc, LazyLock, Mutex};
+        use std::task::{Context, Poll};
+
+        use dex_protocol::dex::ServerInfo;
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+        use tokio_stream::wrappers::TcpListenerStream;
+        use tonic::codegen::{BoxFuture, Service, http};
+        use tonic::server::{NamedService, UnaryService};
+        use tonic::transport::Server;
+        use tonic::{Request, Response, Status};
+
+        use crate::{
+            Attribute, AttributeMap, AttributeMatch, BlobCache, BlobCacheConfig, Client,
+            ClientOptions, Flow, PersistenceSchema, Registry, SdkError, StartFlowOptions,
+            WaitForAttributeOptions,
+        };
+
+        static API_KEY: LazyLock<Attribute<String>> =
+            LazyLock::new(|| Attribute::new("api-key").hard_delete_on_null());
+        static TENANT_KEYS: LazyLock<AttributeMap<String>> =
+            LazyLock::new(|| AttributeMap::new("tenant-keys").hard_delete_on_null());
+        static PLAIN_NOTE: LazyLock<Attribute<String>> =
+            LazyLock::new(|| Attribute::new("plain-note"));
+
+        struct HardDeleteClientFlow;
+
+        impl Flow for HardDeleteClientFlow {
+            type StartInput = ();
+
+            fn persistence(&self) -> PersistenceSchema {
+                PersistenceSchema::new()
+                    .attribute(&API_KEY)
+                    .attribute_map(&TENANT_KEYS)
+                    .attribute(&PLAIN_NOTE)
+            }
+        }
+
+        #[derive(Clone)]
+        struct OldFlowService {
+            paths: Arc<Mutex<Vec<String>>>,
+            current_protocol_version: Arc<AtomicU32>,
+        }
+
+        impl NamedService for OldFlowService {
+            const NAME: &'static str = "dex.FlowService";
+        }
+
+        impl<B> Service<http::Request<B>> for OldFlowService
+        where
+            B: tonic::codegen::Body + Send + 'static,
+            B::Error: Into<tonic::codegen::StdError> + Send + 'static,
+        {
+            type Response = http::Response<tonic::body::Body>;
+            type Error = Infallible;
+            type Future = BoxFuture<Self::Response, Self::Error>;
+
+            fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, request: http::Request<B>) -> Self::Future {
+                let path = request.uri().path().to_string();
+                self.paths.lock().expect("paths lock").push(path.clone());
+                let server_info = GetServerInfo {
+                    current_protocol_version: self.current_protocol_version.load(Ordering::SeqCst),
+                };
+                Box::pin(async move {
+                    if path == "/dex.FlowService/GetServerInfo" {
+                        let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+                        Ok(grpc.unary(server_info, request).await)
+                    } else {
+                        Ok(Status::unimplemented("fake FlowService").into_http())
+                    }
+                })
+            }
+        }
+
+        struct GetServerInfo {
+            current_protocol_version: u32,
+        }
+
+        impl UnaryService<()> for GetServerInfo {
+            type Response = ServerInfo;
+            type Future = BoxFuture<Response<Self::Response>, Status>;
+
+            fn call(&mut self, _: Request<()>) -> Self::Future {
+                let current_protocol_version = self.current_protocol_version;
+                Box::pin(async move {
+                    Ok(Response::new(ServerInfo {
+                        server_version: "fake".to_string(),
+                        minimum_supported_protocol_version: 1,
+                        current_protocol_version,
+                    }))
+                })
+            }
+        }
+
+        fn client_for(address: &str, cache_directory: &tempfile::TempDir) -> Client {
+            let cache = Arc::new(
+                BlobCache::open(
+                    BlobCacheConfig::new(cache_directory.path(), 1024 * 1024, 0)
+                        .expect("blob cache config"),
+                )
+                .expect("blob cache"),
+            );
+            Client::try_new(
+                Registry::new()
+                    .register(HardDeleteClientFlow)
+                    .expect("register hard-delete Flow"),
+                cache,
+                ClientOptions::new().server_address(address),
+            )
+            .expect("Client")
+        }
+
+        #[test]
+        fn wait_for_attribute_rejects_hard_delete_attributes_before_contacting_dex() {
+            let cache_directory = tempfile::tempdir().expect("blob cache directory");
+            let client = client_for("127.0.0.1:1", &cache_directory);
+            let single = client.wait_for_attribute_match(
+                "flow-1",
+                &API_KEY,
+                AttributeMatch::equal_to("key-1".to_string()),
+                WaitForAttributeOptions::new(),
+            );
+            let map = client.wait_for_attribute_map_instance_match(
+                "flow-1",
+                &TENANT_KEYS,
+                "tenant-a",
+                AttributeMatch::equal_to("key-a".to_string()),
+                WaitForAttributeOptions::new(),
+            );
+            for result in [single, map] {
+                let Err(SdkError::InvalidArgument { message }) = result else {
+                    panic!("expected a local InvalidArgument");
+                };
+                assert!(message.contains("does not support hard-delete Attribute"));
+            }
+        }
+
+        #[test]
+        fn start_flow_negotiates_once_and_rejects_hard_delete_writes_to_old_servers() {
+            let runtime = tokio::runtime::Runtime::new().expect("server runtime");
+            let listener = runtime
+                .block_on(TcpListener::bind("127.0.0.1:0"))
+                .expect("bind fake FlowService");
+            let address = listener.local_addr().expect("fake server address");
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let current_protocol_version = Arc::new(AtomicU32::new(2));
+            let (shutdown, stopped) = oneshot::channel::<()>();
+            runtime.spawn(
+                Server::builder()
+                    .add_service(OldFlowService {
+                        paths: Arc::clone(&paths),
+                        current_protocol_version: Arc::clone(&current_protocol_version),
+                    })
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                        stopped.await.expect("FlowService shutdown signal");
+                    }),
+            );
+            let cache_directory = tempfile::tempdir().expect("blob cache directory");
+            let client = client_for(&address.to_string(), &cache_directory);
+
+            for options in [
+                StartFlowOptions::new().initial_attribute(&API_KEY, "key-1".to_string()),
+                StartFlowOptions::new().initial_attribute_map(
+                    &TENANT_KEYS,
+                    "tenant-a",
+                    "key-a".to_string(),
+                ),
+            ] {
+                let error = client
+                    .start_flow_with_options(&HardDeleteClientFlow, "flow-1", (), options)
+                    .expect_err("old Server rejects hard-delete writes");
+                let SdkError::Service { service } = error else {
+                    panic!("expected a Service error, got {error}");
+                };
+                assert!(service.detail().contains("protocol version 3 or later"));
+                assert!(
+                    service
+                        .detail()
+                        .contains("negotiated protocol version is 2")
+                );
+            }
+            assert_eq!(
+                vec!["/dex.FlowService/GetServerInfo".to_string()],
+                *paths.lock().expect("paths lock")
+            );
+
+            current_protocol_version.store(3, Ordering::SeqCst);
+            let error = client
+                .start_flow_with_options(
+                    &HardDeleteClientFlow,
+                    "flow-1",
+                    (),
+                    StartFlowOptions::new().initial_attribute(&API_KEY, "key-1".to_string()),
+                )
+                .expect_err("cached negotiation still rejects the write");
+            assert!(
+                error
+                    .to_string()
+                    .contains("negotiated protocol version is 2")
+            );
+            client
+                .start_flow_with_options(
+                    &HardDeleteClientFlow,
+                    "flow-1",
+                    (),
+                    StartFlowOptions::new().initial_attribute(&PLAIN_NOTE, "note".to_string()),
+                )
+                .expect_err("fake StartFlow is unimplemented");
+            assert_eq!(
+                vec![
+                    "/dex.FlowService/GetServerInfo".to_string(),
+                    "/dex.FlowService/StartFlow".to_string(),
+                ],
+                *paths.lock().expect("paths lock")
+            );
+
+            let fresh_client = client_for(&address.to_string(), &cache_directory);
+            fresh_client
+                .start_flow_with_options(
+                    &HardDeleteClientFlow,
+                    "flow-1",
+                    (),
+                    StartFlowOptions::new().initial_attribute(&API_KEY, "key-1".to_string()),
+                )
+                .expect_err("fake StartFlow is unimplemented");
+            assert_eq!(
+                Some(&"/dex.FlowService/StartFlow".to_string()),
+                paths.lock().expect("paths lock").last()
+            );
+            shutdown.send(()).expect("stop fake FlowService");
+        }
     }
 }

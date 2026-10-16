@@ -480,7 +480,17 @@ export interface AttributeWrite {
     | IndexConfig
     | undefined;
   /** Omit or disable to keep this write out of the configured Attribute Store. */
-  syncConfig: AttributeSyncConfig | undefined;
+  syncConfig:
+    | AttributeSyncConfig
+    | undefined;
+  /**
+   * Stores a string or object value only in blob storage, regardless of the
+   * size threshold, so Flow history keeps only a reference. A null write
+   * permanently deletes the stored value. Requires an enabled blob store and
+   * must not be combined with index_config or sync_config. Requires Server
+   * protocol version 3 or later.
+   */
+  isHardDeleteOnNull: boolean;
 }
 
 export interface ActionPermissionMapping {
@@ -3386,7 +3396,7 @@ export const EncodedObject: MessageFns<EncodedObject> = {
 };
 
 function createBaseAttributeWrite(): AttributeWrite {
-  return { key: "", value: undefined, indexConfig: undefined, syncConfig: undefined };
+  return { key: "", value: undefined, indexConfig: undefined, syncConfig: undefined, isHardDeleteOnNull: false };
 }
 
 export const AttributeWrite: MessageFns<AttributeWrite> = {
@@ -3402,6 +3412,9 @@ export const AttributeWrite: MessageFns<AttributeWrite> = {
     }
     if (message.syncConfig !== undefined) {
       AttributeSyncConfig.encode(message.syncConfig, writer.uint32(34).fork()).join();
+    }
+    if (message.isHardDeleteOnNull !== false) {
+      writer.uint32(40).bool(message.isHardDeleteOnNull);
     }
     return writer;
   },
@@ -3445,6 +3458,14 @@ export const AttributeWrite: MessageFns<AttributeWrite> = {
           message.syncConfig = AttributeSyncConfig.decode(reader, reader.uint32());
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.isHardDeleteOnNull = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3467,6 +3488,7 @@ export const AttributeWrite: MessageFns<AttributeWrite> = {
     message.syncConfig = (object.syncConfig !== undefined && object.syncConfig !== null)
       ? AttributeSyncConfig.fromPartial(object.syncConfig)
       : undefined;
+    message.isHardDeleteOnNull = object.isHardDeleteOnNull ?? false;
     return message;
   },
 };

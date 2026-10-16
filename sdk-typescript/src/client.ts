@@ -11,6 +11,12 @@ import { credentials, Metadata, status, type ServiceError } from "@grpc/grpc-js"
 import type { BlobCache } from "./blob-cache.js";
 import { AttributeMatch } from "./attribute-match.js";
 import { credentialInterceptors } from "./credential.js";
+import {
+  isHardDeleteOnNullDefinition,
+  requireHardDeleteAttributeWriteSupport,
+  requireHardDeleteOnNullValueKind,
+  requireNotHardDeleteOnNull,
+} from "./attribute-hard-delete.js";
 import { mapAttributeStoreNames, mapAttributeStoreSync } from "./attribute-store-sync.js";
 import type { Codec } from "./codec.js";
 import type { Context } from "./context.js";
@@ -33,6 +39,8 @@ import {
   type SearchFlowsResponse,
   type SearchFlowsResponseEntry,
   type StartFlowResponse,
+  type AttributeWrite,
+  type ServerInfo,
   StartFlowRequest,
   StepDurability as ProtoStepDurability,
   StepOptions as ProtoStepOptions,
@@ -84,6 +92,7 @@ import {
   type FlowInfo,
   type FlowTimeoutHandlerOptions,
   type FlowStatus,
+  type InitialAttribute,
   type TimeTravelOptions,
   type SearchFlowEntry,
   type SearchFlowsPage,
@@ -97,6 +106,8 @@ import {
 } from "./options.js";
 import { Attribute, AttributeMap, IndexType, type AttributeLock } from "./persistence.js";
 import type { RPCInvokeOptions, RPCResult } from "./rpc.js";
+import { sdkVersion } from "./sdk-version.generated.js";
+import { negotiateServerProtocol, serverInfoRequestError } from "./server-protocol.js";
 import type { RetryPolicy, StepOptions } from "./step.js";
 import { physicalMapName, requireName } from "./validation.js";
 import { voidCodec } from "./codec.js";
@@ -125,6 +136,7 @@ const defaultServerAddress = "localhost:8801";
 export class Client {
   private readonly service: FlowServiceClientType;
   private readonly hydrator: ValueHydrator;
+  private negotiatedServerProtocolVersion: Promise<number> | undefined;
 
   /**
    * Constructs a Client and lazy plaintext gRPC connection.
@@ -158,6 +170,9 @@ export class Client {
    * @returns The server-assigned run ID.
    * @throws {@link FlowAlreadyStartedError} when reuse policy rejects the Flow ID.
    * @throws {@link FlowDefinitionError} when `flow` is not registered.
+   * @throws {@link TypeError} when a hard-delete initial Attribute is not the definition registered with `flow`.
+   * @throws {@link ValueMappingError} when a hard-delete initial value encodes to a number or Boolean.
+   * @throws {@link Error} when the Server cannot accept hard-delete writes because its protocol version is below 3.
    */
   public async startFlow<StartInput>(
     flow: Flow<StartInput>,
@@ -172,6 +187,9 @@ export class Client {
       flowTimeoutSeconds,
       options.timeoutPolicy,
     );
+    const initialAttributeWrites = (options.attributes ?? []).map((initial) =>
+      mapInitialAttributeWrite(registered, initial),
+    );
     const request = StartFlowRequest.create({
       flowId: requireName(flowId),
       flowType: registered.name,
@@ -182,12 +200,7 @@ export class Client {
         idReusePolicy: mapIdReusePolicy(options.idReusePolicy),
         flowStartDelaySeconds: seconds(options.startDelayMs),
         retryPolicy: mapFlowRetryPolicy(options.retryPolicy),
-        attributes: (options.attributes ?? []).map((initial) => ({
-          key: physicalName(initial.attribute.name, initial.instance),
-          value: encodeValue(initial.attribute.codec, initial.value),
-          indexConfig: mapIndex(initial.attribute.index),
-          syncConfig: mapAttributeStoreSync(initial.attribute),
-        })),
+        attributes: initialAttributeWrites,
         flowConfigOverride: mapFlowConfig(options.configOverride, this.options),
         flowAlreadyStartedOptions: {
           ignoreAlreadyStartedError: options.ignoreAlreadyStarted ?? false,
@@ -213,11 +226,47 @@ export class Client {
         registered,
       );
     }
+    await this.requireHardDeleteAttributeWriteSupport(initialAttributeWrites);
     return (await unary<StartFlowResponse>(
       { operation: "startFlow", flowId, requirement: "none" },
       (callback) => this.service.startFlow(request, callback),
     ))
       .runId;
+  }
+
+  private async requireHardDeleteAttributeWriteSupport(
+    writes: readonly AttributeWrite[],
+  ): Promise<void> {
+    if (!writes.some((write) => write.isHardDeleteOnNull)) {
+      return;
+    }
+    requireHardDeleteAttributeWriteSupport(await this.negotiateServerProtocol(), writes);
+  }
+
+  private negotiateServerProtocol(): Promise<number> {
+    if (this.negotiatedServerProtocolVersion === undefined) {
+      const negotiation = this.getServerInfo().then((serverInfo) =>
+        negotiateServerProtocol(serverInfo, sdkVersion),
+      );
+      this.negotiatedServerProtocolVersion = negotiation;
+      negotiation.catch(() => {
+        if (this.negotiatedServerProtocolVersion === negotiation) {
+          this.negotiatedServerProtocolVersion = undefined;
+        }
+      });
+    }
+    return this.negotiatedServerProtocolVersion;
+  }
+
+  private async getServerInfo(): Promise<ServerInfo> {
+    try {
+      return await unary<ServerInfo>(
+        { operation: "getServerInfo", requirement: "none" },
+        (callback) => this.service.getServerInfo({}, callback),
+      );
+    } catch (failure) {
+      throw serverInfoRequestError(sdkVersion, failure);
+    }
   }
 
   /**
@@ -876,6 +925,7 @@ export class Client {
    * @param match - Scalar predicate whose operand has the Attribute value type.
    * @param options - Optional Request ID override and request and internal handler timeout controls.
    * @returns The matched current Attribute value.
+   * @throws {@link TypeError} when `attribute` uses {@link Attribute.hardDeleteOnNull}; no request is sent.
    */
   public waitForAttributeMatch<T>(
     flowId: string,
@@ -894,6 +944,7 @@ export class Client {
    * @param match - Scalar predicate whose operand has the AttributeMap value type.
    * @param options - Optional Request ID override and request and internal handler timeout controls.
    * @returns The matched current AttributeMap value.
+   * @throws {@link TypeError} when `attribute` uses {@link AttributeMap.hardDeleteOnNull}; no request is sent.
    */
   public waitForAttributeMatch<T>(
     flowId: string,
@@ -915,6 +966,7 @@ export class Client {
     attribute: Attribute<unknown> | AttributeMap<unknown>,
     ...args: unknown[]
   ): Promise<unknown> {
+    requireNotHardDeleteOnNull(attribute, "waitForAttributeMatch");
     if (attribute instanceof Attribute) {
       if (args.length !== 2 || !isWaitForAttributeOptions(args[1])) {
         throw new TypeError("waitForAttributeMatch received invalid Attribute arguments");
@@ -1332,6 +1384,32 @@ function mapFlowConfig(
       workerTarget === undefined
         ? undefined
         : mapWorkerTarget(workerTarget),
+  };
+}
+
+function mapInitialAttributeWrite(
+  registered: RegisteredFlow,
+  initial: InitialAttribute<unknown>,
+): AttributeWrite {
+  const attribute = initial.attribute;
+  const registeredDefinition = registered.persistence.get(attribute.name);
+  const isHardDeleteOnNull = isHardDeleteOnNullDefinition(attribute);
+  if (
+    (isHardDeleteOnNull
+      || (registeredDefinition !== undefined && isHardDeleteOnNullDefinition(registeredDefinition)))
+    && registeredDefinition !== attribute
+  ) {
+    throw new TypeError(
+      `hard-delete Attribute ${attribute.name} must use the definition registered with Flow ${registered.name}`,
+    );
+  }
+  const key = physicalName(attribute.name, initial.instance);
+  return {
+    key,
+    value: requireHardDeleteOnNullValueKind(attribute, key, encodeValue(attribute.codec, initial.value)),
+    indexConfig: mapIndex(attribute.index),
+    syncConfig: mapAttributeStoreSync(attribute),
+    isHardDeleteOnNull,
   };
 }
 

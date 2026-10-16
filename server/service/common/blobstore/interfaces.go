@@ -25,6 +25,12 @@ const (
 	StepEventInputMethodExecute = "execute"
 )
 
+const (
+	hardDeleteLocatorPrefix = "hd/"
+	// hardDeleteDirectoryDate keeps hard-delete paths stable and parseable by blob cleanup.
+	hardDeleteDirectoryDate = "000101"
+)
+
 var (
 	blobReferenceDateEpoch   = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
 	blobReferenceMaximumDate = time.Date(2099, time.December, 31, 0, 0, 0, 0, time.UTC)
@@ -94,6 +100,12 @@ func valueObjectPath(flowID string, locator string) (string, error) {
 	if flowID == "" {
 		return "", fmt.Errorf("Blob locator requires a Flow ID")
 	}
+	if objectID, isHardDelete := strings.CutPrefix(locator, hardDeleteLocatorPrefix); isHardDelete {
+		if !isBase36ObjectID(objectID) {
+			return "", fmt.Errorf("invalid hard-delete Blob locator %q", locator)
+		}
+		return hardDeleteObjectPath(flowID, objectID), nil
+	}
 	parts := strings.Split(locator, "/")
 	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid Blob locator %q", locator)
@@ -106,12 +118,37 @@ func valueObjectPath(flowID string, locator string) (string, error) {
 	if objectID == "" {
 		return "", fmt.Errorf("invalid empty Blob object ID")
 	}
-	for _, character := range objectID {
-		if (character < '0' || character > '9') && (character < 'a' || character > 'z') {
-			return "", fmt.Errorf("invalid Blob object ID %q", objectID)
-		}
+	if !isBase36ObjectID(objectID) {
+		return "", fmt.Errorf("invalid Blob object ID %q", objectID)
 	}
 	return workflowDirectory(formatBlobStorageDate(writeDate), flowID) + "/" + objectID, nil
+}
+
+// hardDeleteObjectPath returns <hardDeleteDirectoryDate>$<escaped Flow ID>/hd/<object ID>.
+func hardDeleteObjectPath(flowID string, objectID string) string {
+	return workflowDirectory(hardDeleteDirectoryDate, flowID) + "/" + hardDeleteLocatorPrefix + objectID
+}
+
+// IsHardDeleteBlobID reports whether blobID references a hard-delete Attribute object.
+func IsHardDeleteBlobID(blobID string) bool {
+	_, locator, err := parseBlobID(blobID)
+	return err == nil && isHardDeleteLocator(locator)
+}
+
+func isHardDeleteLocator(locator string) bool {
+	return strings.HasPrefix(locator, hardDeleteLocatorPrefix)
+}
+
+func isBase36ObjectID(objectID string) bool {
+	if objectID == "" {
+		return false
+	}
+	for _, character := range objectID {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeFlowIDPathPart(flowID string) string {
@@ -240,6 +277,12 @@ type BlobStore interface {
 	WriteObject(ctx context.Context, flowID, invocationID string, data []byte) (storeID, locator string, err error)
 	// ReadObject resolves a compact locator under its owning Flow.
 	ReadObject(ctx context.Context, storeID, flowID, locator string) ([]byte, error)
+	// WriteHardDeleteObject overwrites the fixed object of a hard-delete Attribute in the active store
+	// and returns its store ID and locator. It never uses the blob cache.
+	WriteHardDeleteObject(ctx context.Context, flowID, attributeKey string, data []byte) (storeID, locator string, err error)
+	// DeleteHardDeleteObject deletes the fixed object of a hard-delete Attribute from every supported store.
+	// It returns nil when the object does not exist.
+	DeleteHardDeleteObject(ctx context.Context, flowID, attributeKey string) error
 	WriteStepEventInput(
 		ctx context.Context,
 		runStarted time.Time,

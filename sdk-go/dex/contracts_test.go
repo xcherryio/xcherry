@@ -489,6 +489,12 @@ var _ = dex.ForceComplete("done")
 var _ = dex.GracefulComplete("done")
 var _ = dex.ForceFail("failed")
 var _ = dex.DeadEnd()
+var _ = dex.DefineAttribute[string]("contract-secret", dex.HardDeleteOnNull())
+var _ error = &dex.HardDeleteAttributeUnsupportedError{
+	AttributeName:                 "contract-secret",
+	NegotiatedServerProtocol:      2,
+	RequiredServerProtocolVersion: 3,
+}
 var _ = dex.ForceCompleteIfChannelsEmpty(
 	"done",
 	[]dex.ChannelDef{commandChannel},

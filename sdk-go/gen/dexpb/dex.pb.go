@@ -2935,9 +2935,15 @@ type AttributeWrite struct {
 	// Omit when indexing is inferred or attribute is not indexed.
 	IndexConfig *IndexConfig `protobuf:"bytes,3,opt,name=index_config,json=indexConfig,proto3" json:"index_config,omitempty"`
 	// Omit or disable to keep this write out of the configured Attribute Store.
-	SyncConfig    *AttributeSyncConfig `protobuf:"bytes,4,opt,name=sync_config,json=syncConfig,proto3" json:"sync_config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SyncConfig *AttributeSyncConfig `protobuf:"bytes,4,opt,name=sync_config,json=syncConfig,proto3" json:"sync_config,omitempty"`
+	// Stores a string or object value only in blob storage, regardless of the
+	// size threshold, so Flow history keeps only a reference. A null write
+	// permanently deletes the stored value. Requires an enabled blob store and
+	// must not be combined with index_config or sync_config. Requires Server
+	// protocol version 3 or later.
+	IsHardDeleteOnNull bool `protobuf:"varint,5,opt,name=is_hard_delete_on_null,json=isHardDeleteOnNull,proto3" json:"is_hard_delete_on_null,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AttributeWrite) Reset() {
@@ -2996,6 +3002,13 @@ func (x *AttributeWrite) GetSyncConfig() *AttributeSyncConfig {
 		return x.SyncConfig
 	}
 	return nil
+}
+
+func (x *AttributeWrite) GetIsHardDeleteOnNull() bool {
+	if x != nil {
+		return x.IsHardDeleteOnNull
+	}
+	return false
 }
 
 type ActionPermissionMapping struct {
@@ -14602,14 +14615,15 @@ const file_dex_proto_rawDesc = "" +
 	"\x04kind\"E\n" +
 	"\rEncodedObject\x12\x1a\n" +
 	"\bencoding\x18\x01 \x01(\tR\bencoding\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\"\xb4\x01\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\"\xe8\x01\n" +
 	"\x0eAttributeWrite\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12 \n" +
 	"\x05value\x18\x02 \x01(\v2\n" +
 	".dex.ValueR\x05value\x123\n" +
 	"\findex_config\x18\x03 \x01(\v2\x10.dex.IndexConfigR\vindexConfig\x129\n" +
 	"\vsync_config\x18\x04 \x01(\v2\x18.dex.AttributeSyncConfigR\n" +
-	"syncConfig\"\x9e\x01\n" +
+	"syncConfig\x122\n" +
+	"\x16is_hard_delete_on_null\x18\x05 \x01(\bR\x12isHardDeleteOnNull\"\x9e\x01\n" +
 	"\x17ActionPermissionMapping\x12#\n" +
 	"\rattribute_key\x18\x01 \x01(\tR\fattributeKey\x12-\n" +
 	"\fequal_values\x18\x02 \x03(\v2\n" +

@@ -606,6 +606,27 @@ failures do not roll back Flow Attributes. Omitting `attributeStoreNames`
 preserves current targets; `attributeStoreNames()` disables future
 synchronization with protocol presence.
 
+Hard-delete Attributes hold short-lived secrets, such as API keys:
+
+```java
+Attribute<String> apiKey = Attribute.define("api-key", String.class)
+        .hardDeleteOnNull();
+AttributeMap<String> tenantKeys = AttributeMap.define("tenant-keys", String.class)
+        .hardDeleteOnNull();
+```
+
+Dex stores their values only in the blob store, never in Flow history. Deleting
+the Attribute or setting it to `null` permanently deletes the stored value, and
+the Attribute then reads as absent. Only string and object values, including
+`byte[]`, are supported. Numeric and Boolean value types fail at definition
+time; broader types such as `Object` fail when a numeric or Boolean value is
+written. The option cannot be combined with an index or
+`syncToAttributeStore()`, and `waitForAttributeMatch` rejects it. Steps and RPC
+handlers receive values inline, and the SDK never caches them in the local
+BlobCache. Writes require a Server with an enabled blob store and protocol
+version 3 or later. See the `Attribute.hardDeleteOnNull()` Javadoc for retry,
+concurrency, Flow ID reuse, reset, retention, and backup limitations.
+
 The IWF integration inventory is implemented as real Dex E2E tests under
 [`src/test/java/io/superdurable/dex/integ`](src/test/java/io/superdurable/dex/integ/README.md).
 They run Java Client and Java Worker against `dexcli dev`, with Rust used only
@@ -807,9 +828,15 @@ use the local publishing command:
 ## Server protocol compatibility
 
 Worker startup calls `GetServerInfo`, negotiates the highest common protocol,
-synchronizes Attribute indexes, and then binds WorkerService. The initial Java
-SDK interval is `[1,1]`. An absent RPC, invalid or nonoverlapping intervals, and
+synchronizes Attribute indexes, and then binds WorkerService. The Java SDK
+interval is `[1,3]`. An absent RPC, invalid or nonoverlapping intervals, and
 request failures stop startup before binding.
+
+Protocol 3 adds hard-delete Attributes. A Worker invocation that writes a
+hard-delete Attribute fails when the negotiated protocol is below 3. The Client
+calls `GetServerInfo` once, before its first StartFlow request that carries a
+hard-delete initial value, caches a successful negotiation, and fails that
+request when the Server is older. Other Client calls do not negotiate.
 
 Published JARs store the diagnostic SDK version in the
 `Implementation-Version` manifest attribute. Direct class-directory builds use

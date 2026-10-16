@@ -29,4 +29,8 @@ public abstract class PersistenceDefinition {
     boolean isSyncToAttributeStore() {
         return false;
     }
+
+    boolean isHardDeleteOnNull() {
+        return false;
+    }
 }

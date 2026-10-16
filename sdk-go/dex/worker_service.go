@@ -25,15 +25,17 @@ const timeoutHandlerStepType = "sys:timeout_handler"
 
 type workerService struct {
 	dexpb.UnimplementedWorkerServiceServer
-	registry *Registry
-	hydrator valueHydrator
-	logger   Logger
+	registry       *Registry
+	hydrator       valueHydrator
+	logger         Logger
+	serverProtocol *negotiatedServerProtocol
 }
 
 func newWorkerService(
 	registry *Registry,
 	hydrator valueHydrator,
 	logger Logger,
+	serverProtocol *negotiatedServerProtocol,
 ) *workerService {
 	if registry == nil {
 		panic("dex: WorkerService requires registry")
@@ -41,10 +43,14 @@ func newWorkerService(
 	if hydrator == nil {
 		panic("dex: WorkerService requires value hydrator")
 	}
+	if serverProtocol == nil {
+		panic("dex: WorkerService requires negotiated Server protocol")
+	}
 	return &workerService{
-		registry: registry,
-		hydrator: hydrator,
-		logger:   resolveLogger(logger, nil),
+		registry:       registry,
+		hydrator:       hydrator,
+		logger:         resolveLogger(logger, nil),
+		serverProtocol: serverProtocol,
 	}
 }
 
@@ -134,6 +140,14 @@ func (service *workerService) invokeWaitForMethod(
 	}
 	attributeWrites, actionPermissionMappings :=
 		invocation.mappedAttributeWritesWithActionPermissionMappings()
+	if err := service.serverProtocol.requireHardDeleteAttributeSupport(attributeWrites); err != nil {
+		return err
+	}
+	for _, subFlow := range waiting.GetSubFlowConditions() {
+		if err := service.serverProtocol.requireHardDeleteAttributeSupport(subFlow.GetOptions().GetAttributes()); err != nil {
+			return err
+		}
+	}
 	return output.sendResult(&dexpb.InvokeWaitForMethodResponse{
 		UpsertAttributes:         attributeWrites,
 		WaitingCondition:         waiting,
@@ -234,6 +248,9 @@ func (service *workerService) invokeExecuteMethod(
 	}
 	attributeWrites, actionPermissionMappings :=
 		invocation.mappedAttributeWritesWithActionPermissionMappings()
+	if err := service.serverProtocol.requireHardDeleteAttributeSupport(attributeWrites); err != nil {
+		return err
+	}
 	return output.sendResult(&dexpb.InvokeExecuteMethodResponse{
 		StepDecision:             mapped,
 		UpsertAttributes:         attributeWrites,
@@ -318,6 +335,9 @@ func (service *workerService) invokeTimeoutHandler(
 	}
 	attributeWrites, actionPermissionMappings :=
 		invocation.mappedAttributeWritesWithActionPermissionMappings()
+	if err := service.serverProtocol.requireHardDeleteAttributeSupport(attributeWrites); err != nil {
+		return err
+	}
 	return output.sendResult(&dexpb.InvokeExecuteMethodResponse{
 		StepDecision:             mapped,
 		UpsertAttributes:         attributeWrites,
@@ -408,6 +428,9 @@ func (service *workerService) invokeWorkerRPC(
 	}
 	attributeWrites, actionPermissionMappings :=
 		invocation.mappedAttributeWritesWithActionPermissionMappings()
+	if err := service.serverProtocol.requireHardDeleteAttributeSupport(attributeWrites); err != nil {
+		return nil, err
+	}
 	response.UpsertAttributes = attributeWrites
 	response.ActionPermissionMappings = actionPermissionMappings
 	response.RecordEvents = invocation.recordedEvents

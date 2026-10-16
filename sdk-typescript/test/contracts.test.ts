@@ -287,7 +287,7 @@ test("object Step and RPC omit codecs and still encode JSON", async () => {
   const hydrator = {
     hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
   } as unknown as ValueHydrator;
-  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator);
+  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator, () => 3);
   const executed = await dispatcher.invokeExecute(
     InvokeExecuteMethodRequest.create({
       context: ProtoContext.create(),
@@ -400,7 +400,7 @@ test("invalid Step results include Flow and Step context", async () => {
   const hydrator = {
     hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
   } as unknown as ValueHydrator;
-  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator);
+  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator, () => 3);
   const invocation = dispatcher.invokeExecute(
     InvokeExecuteMethodRequest.create({
       context: ProtoContext.create(),
@@ -474,7 +474,7 @@ test("Worker maps only user-provided Condition IDs", async () => {
   const hydrator = {
     hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
   } as unknown as ValueHydrator;
-  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator);
+  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator, () => 3);
   const invoke = (input: string) =>
     dispatcher.invokeWaitFor(
       InvokeWaitForMethodRequest.create({
@@ -553,7 +553,7 @@ test("Step Stream writes emit every message on the active invocation", async () 
     hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
   } as unknown as ValueHydrator;
   const registry = new Registry([flow]);
-  const dispatcher = new WorkerDispatcher(registry, hydrator);
+  const dispatcher = new WorkerDispatcher(registry, hydrator, () => 3);
   await dispatcher.invokeExecute(
     InvokeExecuteMethodRequest.create({
       context: ProtoContext.create({
@@ -667,6 +667,7 @@ test("buffered text Stream flushes on timer and before the final result", async 
     {
       hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
     } as unknown as ValueHydrator,
+    () => 3,
   );
   await dispatcher.invokeExecute(
     InvokeExecuteMethodRequest.create({
@@ -734,7 +735,7 @@ test("Async Step Context preserves heartbeat Value presence and codecs", async (
   const hydrator = {
     hydrateAll: async (_flowId: string, values: readonly unknown[]) => values,
   } as unknown as ValueHydrator;
-  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator);
+  const dispatcher = new WorkerDispatcher(new Registry([flow]), hydrator, () => 3);
   const invoke = async (input: string, lastHeartbeatValue?: Value): Promise<void> => {
     await dispatcher.invokeExecute(
       InvokeExecuteMethodRequest.create({

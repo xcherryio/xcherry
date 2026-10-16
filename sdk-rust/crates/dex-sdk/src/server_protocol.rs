@@ -6,11 +6,56 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use dex_protocol::dex::ServerInfo;
 
 pub(crate) const MINIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION: u32 = 1;
-pub(crate) const MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION: u32 = 3;
 pub(crate) const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Shares one negotiated Server protocol version; zero means negotiation has not succeeded.
+#[derive(Clone, Default)]
+pub(crate) struct NegotiatedServerProtocolVersion {
+    version: Arc<AtomicU32>,
+}
+
+impl NegotiatedServerProtocolVersion {
+    pub(crate) fn store(&self, version: u32) {
+        self.version.store(version, Ordering::Release);
+    }
+
+    pub(crate) fn has_negotiated(&self) -> bool {
+        self.version() != 0
+    }
+
+    /// Returns `Ok(())` when the negotiated Server accepts hard-delete Attribute writes, and an
+    /// error naming `attribute_key` when negotiation is missing or below protocol version 3.
+    pub(crate) fn require_hard_delete_attribute_support(
+        &self,
+        attribute_key: &str,
+    ) -> Result<(), String> {
+        let version = self.version();
+        if version >= HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION {
+            return Ok(());
+        }
+        let negotiated = if version == 0 {
+            "no protocol version was negotiated".to_string()
+        } else {
+            format!("the negotiated protocol version is {version}")
+        };
+        Err(format!(
+            "hard-delete Attribute {attribute_key} requires Server protocol version \
+             {HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION} or later, but {negotiated}"
+        ))
+    }
+
+    fn version(&self) -> u32 {
+        self.version.load(Ordering::Acquire)
+    }
+}
 
 pub(crate) fn negotiate_server_protocol(server_info: &ServerInfo) -> Result<u32, String> {
     let server_minimum = server_info.minimum_supported_protocol_version;
@@ -70,13 +115,37 @@ mod tests {
 
     #[test]
     fn negotiates_highest_common_protocol() {
-        let negotiated = negotiate_server_protocol(&ServerInfo {
-            server_version: "newer".to_string(),
-            minimum_supported_protocol_version: 1,
-            current_protocol_version: 2,
-        })
-        .expect("compatible interval");
-        assert_eq!(negotiated, 1);
+        for (server_current, expected) in [(1, 1), (2, 2), (3, 3), (4, 3)] {
+            let negotiated = negotiate_server_protocol(&ServerInfo {
+                server_version: "newer".to_string(),
+                minimum_supported_protocol_version: 1,
+                current_protocol_version: server_current,
+            })
+            .expect("compatible interval");
+            assert_eq!(negotiated, expected);
+        }
+    }
+
+    #[test]
+    fn hard_delete_attribute_writes_require_protocol_version_three() {
+        let negotiated = NegotiatedServerProtocolVersion::default();
+        let error = negotiated
+            .require_hard_delete_attribute_support("api-key")
+            .expect_err("missing negotiation fails closed");
+        assert!(error.contains("api-key"));
+        assert!(error.contains("no protocol version was negotiated"));
+        for version in [1, 2] {
+            negotiated.store(version);
+            let error = negotiated
+                .require_hard_delete_attribute_support("api-key")
+                .expect_err("old Server is rejected");
+            assert!(error.contains("protocol version 3 or later"));
+            assert!(error.contains(&format!("negotiated protocol version is {version}")));
+        }
+        negotiated.store(3);
+        negotiated
+            .require_hard_delete_attribute_support("api-key")
+            .expect("protocol 3 accepts hard-delete writes");
     }
 
     #[test]
@@ -94,8 +163,8 @@ mod tests {
             },
             ServerInfo {
                 server_version: "future".to_string(),
-                minimum_supported_protocol_version: 2,
-                current_protocol_version: 2,
+                minimum_supported_protocol_version: 4,
+                current_protocol_version: 4,
             },
         ] {
             let error = negotiate_server_protocol(&server_info).expect_err("incompatible interval");

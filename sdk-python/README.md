@@ -290,6 +290,39 @@ failures do not roll back Flow Attributes. `None` preserves current targets;
 an explicit empty list disables future synchronization while retaining protocol
 presence.
 
+Declare short-lived secrets, such as API keys, with `hard_delete_on_null=True`:
+
+```python
+api_key = dex.Attribute("api-key", str, hard_delete_on_null=True)
+provider_tokens = dex.AttributeMap("provider-token", str, hard_delete_on_null=True)
+```
+
+Dex stores these values only in its blob store, never in Flow history. Deleting
+the Attribute or setting it to `None` permanently deletes the stored value, and a
+deleted value reads as absent. Only string and object values, including
+`bytes`, are supported; `int`, `bool`, and `float` types are rejected. The
+option cannot be combined with an index or `sync_to_attribute_store`, and
+`wait_for_attribute_match` rejects it. Handlers receive the value inline, and
+the SDK never stores it in the local blob cache.
+
+Hard-delete writes require a Server with an enabled blob store and Server
+protocol version 3 or later. Workers still start against older Servers.
+There, a Step, RPC, or timeout handler result that writes a hard-delete
+Attribute fails that handler attempt with `RuntimeError`, as does a `wait_for`
+result whose SubFlow start initializes one. A Client checks the Server protocol
+once, before its first `start_flow` that initializes one.
+
+Each Flow keeps one stored copy per Attribute key, overwritten in place. A Step
+or RPC attempt writes or deletes the stored value before its result commits, so
+retries, other Steps, and RPCs can observe a write or deletion from an attempt
+that later failed. Concurrent writers of one key may leave a value other than
+the last committed write. A failed `start_flow` or SubFlow start for a running
+Flow ID still overwrites, or for `None` deletes, the running Flow's value.
+Executions that reuse a Flow ID share the value, and time travel does not
+restore a deleted value. Values remain until deleted or until retention and blob
+cleanup remove the Flow. Blob store backups or bucket versioning can retain
+copies.
+
 ```
 pip install dex-python-sdk==0.1.0
 ```
@@ -698,6 +731,11 @@ Both `Worker` and `AsyncWorker` call `GetServerInfo`, negotiate the highest
 common protocol, synchronize Attribute indexes, and only then bind
 WorkerService. The initial Python SDK interval is `[1,1]`. Missing information,
 invalid or disjoint intervals, and RPC failures stop startup before binding.
+The current Python SDK interval is `[1,3]`. Protocol 3 adds hard-delete
+Attributes. Workers record the negotiated version at startup and reject each
+handler result that contains a hard-delete Attribute write when it is below 3.
+Clients negotiate lazily, once, before the first `start_flow` that initializes
+a hard-delete Attribute.
 
 The diagnostic SDK version comes from Python distribution metadata for
 `dex-python-sdk` and falls back to `dev` when the distribution is unavailable.
