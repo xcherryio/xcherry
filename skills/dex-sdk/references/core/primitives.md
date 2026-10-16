@@ -48,7 +48,9 @@ Assign every application Indexed Attribute an explicit generic index key from a 
 
 Generic slots can mean different things for different Flow types. Application run searches using a generic slot must constrain **FlowType**. Combine that scope predicate with parenthesized caller filters so an OR cannot bypass it. Do not index sensitive data or PII. Before assigning many distinct index keys, read [Indexed Attribute capacity](operations.md#indexed-attribute-capacity). The default local **dexcli dev** stack has a smaller SQLite index pool than an Elasticsearch-backed production deployment.
 
-Read [data-handling.md](data-handling.md) for large values, map chunking, BlobCache locality, and external projections.
+For a short-lived secret that the Flow itself must hold, such as an API key, define a hard-delete Attribute or AttributeMap. Dex keeps its values out of Flow history and permanently deletes them on delete or a null write. It supports only string and object values. It cannot be indexed, synced to an Attribute Store, or used with WaitForAttributeMatch. Writes can become visible before the attempt commits. Read [hard-delete Attributes](data-handling.md#hard-delete-attributes-for-short-lived-secrets) for every requirement and limitation before using one.
+
+Read [data-handling.md](data-handling.md) for large values, map chunking, BlobCache locality, hard-delete secrets, and external projections.
 
 Docs: https://docs.superdurable.io/primitives/attribute
 

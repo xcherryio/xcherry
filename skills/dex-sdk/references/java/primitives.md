@@ -17,7 +17,7 @@ Choose the primitive from the behavior the application needs, not from a preferr
 
 ## Wait composition
 
-[Pinned wait example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/waittypes/WaitTypesFlow.java)
+[Pinned wait example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/primitives/waittypes/WaitTypesFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/waittypes/WaitTypesFlow.java -->
 ```java
 case "any":
@@ -42,7 +42,7 @@ Use condition IDs when code must distinguish winners, and for every condition in
 
 ## Durable state and locking
 
-[Pinned Attribute example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/attribute/AttributeFlow.java)
+[Pinned Attribute example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/primitives/attribute/AttributeFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/attribute/AttributeFlow.java -->
 ```java
 @Override
@@ -56,7 +56,7 @@ public StepOptions getStepOptions() {
 }
 ```
 
-Locks coordinate only Steps and RPCs that request the same lock. They do not make external calls transactional. AttributeMap and ChannelMap instance names must be stable business keys.
+Locks coordinate only Steps and RPCs that request the same lock. They do not make external calls transactional. AttributeMap and ChannelMap instance names must be stable business keys. For a short-lived secret, such as an API key, use a [hard-delete Attribute](data-handling.md#hard-delete-attributes); it supports only string and object values and cannot be indexed or synced.
 
 Pending-message reads inside a Step or RPC are invocation snapshots. Other handlers may consume, delete, or publish concurrently. Transactional execution validates selected deletions and commits writes atomically, but does not lock the whole snapshot. Read and write pending messages directly only when the operation explicitly tolerates that race. When a decision requires the queue to remain unchanged, every cooperating Step and RPC writer must use the same Attribute lock.
 
@@ -66,7 +66,7 @@ An RPC without Attribute locks or `isTransactional` can query a retained termina
 
 Use `Client.readStream` for forward, one-at-a-time, optionally long-polling consumption. Use `Client.listStreamMessages` for non-blocking newest-first pages. Pass the typed Stream directly, and pass `getNextPageToken()` unchanged until it is empty.
 
-[Pinned runnable listing](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/stream/StreamController.java)
+[Pinned runnable listing](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/primitives/stream/StreamController.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/stream/StreamController.java -->
 ```java
 final StreamMessagesPage<String> page = client.listStreamMessages(

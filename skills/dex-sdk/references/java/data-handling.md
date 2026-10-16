@@ -14,7 +14,7 @@ Define each Attribute, AttributeMap, Channel, ChannelMap, and Stream once per Fl
 
 Use Attributes for current authoritative state and Channels for ordered pending work. AttributeMap and ChannelMap isolate values by stable instance key. Avoid loading an entire map when one instance is enough. RPC and Step load options control what reaches the Worker; reads outside the selected scope fail rather than silently fetching.
 
-For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one page by token. Archived chunks remain immutable. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside a fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII input, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/patterns/sequentiallychunkedattributemap/ChunkedSubscriberFlow.java) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/patterns/hashpartitionedattributemap/CustomerDirectoryFlow.java).
+For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one page by token. Archived chunks remain immutable. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside a fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII input, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/patterns/sequentiallychunkedattributemap/ChunkedSubscriberFlow.java) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/patterns/hashpartitionedattributemap/CustomerDirectoryFlow.java).
 
 Locks provide cooperation among handlers using the same lock. Mark an RPC transactional when Channel deletion must abort the whole RPC on a missing message. A staged publish or Attribute write commits only with the successful handler result.
 
@@ -26,13 +26,42 @@ The Server keeps payloads through 100 bytes inline by default. Treat internal bl
 
 ASYNC local Step input snapshots are disabled by default. Enable the Server's `blobStore.asyncStepInputSnapshotsEnabled` only when semantic history needs exact method inputs; it does not affect execution, retry, or recovery.
 
-Java `null` uses the Value null arm and decodes back to `null`. In an Attribute write it deletes the Attribute, and as a Flow completion output it is discarded. Return an explicit result DTO when terminal null and no output must differ.
+Java `null` uses the Value null arm and decodes back to `null`. In an Attribute write it deletes the Attribute, permanently for a hard-delete Attribute, and as a Flow completion output it is discarded. Return an explicit result DTO when terminal null and no output must differ.
 
-[Pinned cache construction](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
+[Pinned cache construction](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java -->
 ```java
         return BlobCache.open(new BlobCacheConfig(blobCacheDir, 1L << 30));
 ```
+
+## Hard-delete Attributes
+
+Call `hardDeleteOnNull()` on an `Attribute` or `AttributeMap` definition for a short-lived secret, such as an API key. It returns a new immutable definition. Register that definition in `PersistenceSchema`. Read the Core [hard-delete Attribute](../core/data-handling.md#hard-delete-attributes-for-short-lived-secrets) requirements and limitations first; it needs Java SDK v1.11.0 and Server v1.11.0.
+
+[Pinned SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-java/README.md)
+<!-- dex-source: sdk-java/README.md -->
+```java
+Attribute<String> apiKey = Attribute.define("api-key", String.class)
+        .hardDeleteOnNull();
+```
+
+Delete the secret as soon as the Flow no longer needs it. `delete`, or `set` with `null`, permanently deletes it. An AttributeMap deletes one instance:
+
+[Pinned SDK integration test](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-java/src/test/java/io/superdurable/dex/integ/HardDeleteAttributeWorkflow.java)
+<!-- dex-source: sdk-java/src/test/java/io/superdurable/dex/integ/HardDeleteAttributeWorkflow.java -->
+```java
+            apiKey.delete(context);
+            tenantCredentials.delete(context, "tenant-a");
+            tenantCredentials.set(context, "tenant-b", null);
+```
+
+- A deleted value reads as absent, so `get` returns `null`. Handle it by requesting a fresh secret.
+- Pass the secret at start with `StartFlowOptions.newBuilder().addAttribute(flow.apiKey, value)`, or `addAttribute(map, instanceKey, value)` for a map instance, using the definition registered with the target Flow. `startFlow` throws `IllegalArgumentException` when an initial Attribute's hard-delete setting differs from that definition.
+- `hardDeleteOnNull()` throws `IllegalStateException` for an indexed definition, `syncToAttributeStore()`, or a numeric or Boolean value type such as `Integer`, `Long`, `Double`, or `Boolean`. With a broader type such as `Object`, `set` throws `IllegalArgumentException` for a numeric or Boolean value.
+- `Client.waitForAttributeMatch` rejects it before contacting the Server. Use an RPC that reads the value.
+- A Step, RPC, `startFlow`, or SubFlow start that writes it fails with `IllegalStateException` when the negotiated Server protocol is below 3.
+- When concurrent writers must keep order, use a single writer, or make every Step and RPC that writes the key hold an `AttributeLock` on it. A failed locked attempt can still overwrite the value.
+- Writes and deletes can become visible before the attempt commits, and `Client.timeTravel` does not restore a deleted value. Keep handlers safe to repeat. See the [released API documentation](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-java/src/main/java/io/superdurable/dex/Attribute.java) and [AttributeMap documentation](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-java/src/main/java/io/superdurable/dex/AttributeMap.java) for every limitation.
 
 ## Attribute Store
 

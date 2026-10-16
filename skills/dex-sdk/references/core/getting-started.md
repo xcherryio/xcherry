@@ -56,6 +56,6 @@ Before debugging code, verify:
 
 - Quick start: https://docs.superdurable.io/quick-start
 - Primitive overview: https://docs.superdurable.io/primitives
-- Baseline runnable examples: https://github.com/superdurable/dex/tree/sdk-go/v1.10.1/examples
+- Baseline runnable examples: https://github.com/superdurable/dex/tree/sdk-go/v1.11.0/examples
 
 When a local Dex checkout is available, copy API usage from its runnable **examples/** files rather than from prose or memory.

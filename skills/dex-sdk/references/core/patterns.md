@@ -114,7 +114,7 @@ Use Channels for durable commands, Attributes for durable state, and Streams for
 
 Initialize the revision to zero. Every Step and RPC that advances the represented state must declare the same Attribute lock, then read, increment, and write the revision inside that invocation. Do not advance it through concurrent Client Attribute writes.
 
-Call **WaitForAttributeMatch** with greater-than and the last observed revision. The wait returns the current matched revision; use that value as the next watermark, then call the application's Describe or read RPC. A rapid `0 → 1 → 2 → 3` transition may return `3` from one wait for greater than `0`. This is coalescing, not an event stream, and it does not expose Flow history or run IDs.
+Call **WaitForAttributeMatch** with greater-than and the last observed revision. The wait returns the current matched revision; use that value as the next watermark, then call the application's Describe or read RPC. A rapid `0 → 1 → 2 → 3` transition may return `3` from one wait for greater than `0`. This is coalescing, not an event stream, and it does not expose Flow history or run IDs. WaitForAttributeMatch rejects [hard-delete Attributes](data-handling.md#hard-delete-attributes-for-short-lived-secrets); keep the revision in a regular Attribute and read the hard-delete value through a typed RPC when a caller needs it.
 
 Request IDs are optional for both waits. Step completion derives `wait-for-step-completion:<StepExecutionID>`. Attribute matching derives `wait-for-attribute:<AttributeName><Condition>` from the exact predicate. The SDK automatically reattaches transport long polls with the effective ID, so one logical wait remains one accepted durable wait rather than a new wait for every transport window. An explicit Request ID overrides the derived value and must identify only that logical wait.
 
@@ -152,4 +152,4 @@ Sources:
 - Polling: https://docs.superdurable.io/design-patterns/polling
 - Sequential chunking: https://docs.superdurable.io/design-patterns/sequentially-chunked-attribute-map
 - Hash partitioning: https://docs.superdurable.io/design-patterns/hash-partitioned-attribute-map
-- Baseline runnable implementations: https://github.com/superdurable/dex/tree/sdk-go/v1.10.1/examples
+- Baseline runnable implementations: https://github.com/superdurable/dex/tree/sdk-go/v1.11.0/examples

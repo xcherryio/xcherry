@@ -17,7 +17,7 @@ Choose primitives from the business behavior first, then encode them with the SD
 
 ## Wait composition
 
-[Pinned wait example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/wait-types/wait-types-flow.ts)
+[Pinned wait example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/typescript/src/primitives/wait-types/wait-types-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/wait-types/wait-types-flow.ts -->
 ```typescript
 if (input.mode === "any") {
@@ -40,13 +40,13 @@ Use condition IDs when execution must distinguish winners and for every conditio
 
 ## Codecs and schema
 
-Use `stringCodec`, `booleanCodec`, `int64Codec`, `doubleCodec`, `bytesCodec`, or a deliberate `jsonCodec<T>` with validation for application models. Default JSON encoding does not validate TypeScript shapes at runtime. Register every Attribute, Channel, and Stream in exactly one Flow schema.
+Use `stringCodec`, `booleanCodec`, `int64Codec`, `doubleCodec`, `bytesCodec`, or a deliberate `jsonCodec<T>` with validation for application models. Default JSON encoding does not validate TypeScript shapes at runtime. Register every Attribute, Channel, and Stream in exactly one Flow schema. For a short-lived secret, such as an API key, use a [hard-delete Attribute](data-handling.md#hard-delete-attributes); it supports only string and object values and cannot be indexed or synced.
 
 ## Stream reads
 
 Use `Client.readStream` for forward, one-at-a-time, optionally long-polling consumption. Use `Client.listStreamMessages` for non-blocking newest-first pages. Pass the typed Stream directly, and pass `nextPageToken` unchanged until it is empty.
 
-[Pinned runnable listing](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/stream/controller.ts)
+[Pinned runnable listing](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/typescript/src/primitives/stream/controller.ts)
 <!-- dex-source: examples/typescript/src/primitives/stream/controller.ts -->
 ```typescript
 const page = await client.listStreamMessages(
@@ -61,7 +61,7 @@ The before-page token is exclusive and scope-bound. The first page uses an empty
 
 ## State, locks, and transaction
 
-[Pinned Channel transaction example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/channel/channel-flow.ts)
+[Pinned Channel transaction example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/typescript/src/primitives/channel/channel-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/channel/channel-flow.ts -->
 ```typescript
 @rpc({
