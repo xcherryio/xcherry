@@ -35,6 +35,7 @@ import io.superdurable.gen.WorkerTaskServiceGrpc;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -135,9 +136,10 @@ final class PullWorkerTest {
             assertTrue(result.getSerializedSize() > 3_000_000);
             assertTrue(first.closed.await(5, TimeUnit.SECONDS));
             assertEquals(1, flow.executeCalls.get());
-            assertNotNull(pollServer.awaitQueue("PullTestFlow"));
+            second.assign(executeTask("third", "small"));
+            assertEquals("third", second.awaitFrame().getTaskFrame().getTaskId());
             running.stop();
-            assertEquals(1, flow.executeCalls.get());
+            assertEquals(2, flow.executeCalls.get());
         }
     }
 
@@ -263,6 +265,34 @@ final class PullWorkerTest {
             assertTrue(result.getSerializedSize() > 3_000_000);
             assertTrue(stream.closed.await(8, TimeUnit.SECONDS));
             assertEquals(1, flow.executeCalls.get());
+        }
+    }
+
+    @Test
+    void reconnectRetiresSurplusStreamsAfterDelayedEof() throws Exception {
+        final TestFlow flow = new TestFlow();
+        final PollServer pollServer = new PollServer(Duration.ofSeconds(1));
+        try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
+            final java.util.List<Integer> streamCounts = new java.util.ArrayList<Integer>();
+            for (int round = 0; round < 6; round++) {
+                final Cycle cycle = new Cycle();
+                flow.cycles.add(cycle);
+                final PollStream busy = pollServer.awaitQueue("PullTestFlow");
+                busy.assign(executeTask("reconnect-" + round, "cycle"));
+                assertTrue(cycle.entered.await(5, TimeUnit.SECONDS));
+                final java.util.List<PollStream> draining = pollServer.reconnectAll(busy);
+                cycle.release.countDown();
+                assertTrue(busy.awaitFrame().hasTaskFrame());
+                for (PollStream stream : draining) {
+                    assertTrue(stream.serverEof.await(5, TimeUnit.SECONDS));
+                }
+                streamCounts.add(running.awaitStableStreamCount());
+                assertEquals(1, running.idleStreamCount("PullTestFlow"));
+                assertEquals(1, running.idleStreamCount("pull-java-unit"));
+            }
+            assertEquals(6, flow.executeCalls.get());
+            assertTrue(java.util.Collections.max(streamCounts) <= 4, "stream counts: " + streamCounts);
+            assertEquals(2, streamCounts.get(streamCounts.size() - 1));
         }
     }
 
@@ -450,6 +480,7 @@ final class PullWorkerTest {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
         private final AtomicInteger executeCalls = new AtomicInteger();
+        private final BlockingQueue<Cycle> cycles = new LinkedBlockingQueue<Cycle>();
 
         @Override
         public StepList<String> getSteps() {
@@ -465,6 +496,11 @@ final class PullWorkerTest {
         public String getFlowType() {
             return "PullTestFlow";
         }
+    }
+
+    private static final class Cycle {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
     }
 
     private static final class TestStep implements Step<String> {
@@ -507,6 +543,19 @@ final class PullWorkerTest {
                     throw new IllegalStateException("handler canceled", canceled);
                 }
             }
+            if ("cycle".equals(input)) {
+                try {
+                    final Cycle cycle = flow.cycles.poll(5, TimeUnit.SECONDS);
+                    if (cycle == null) {
+                        throw new IllegalStateException("missing reconnect cycle");
+                    }
+                    cycle.entered.countDown();
+                    cycle.release.await();
+                } catch (InterruptedException canceled) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("handler canceled", canceled);
+                }
+            }
             return StepDecision.gracefulComplete("large".equals(input)
                     ? repeat("x", 3_100_000) : input);
         }
@@ -518,6 +567,7 @@ final class PullWorkerTest {
         private final AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         private final Status rejection;
         private final boolean isReaderPaused;
+        private final Duration closeResponseDelay;
         private final java.util.List<PollStream> allStreams =
                 new java.util.concurrent.CopyOnWriteArrayList<PollStream>();
         private final ScheduledExecutorService readScheduler =
@@ -528,20 +578,26 @@ final class PullWorkerTest {
                 });
 
         private PollServer() {
-            this(null, false);
+            this(null, false, Duration.ZERO);
         }
 
         private PollServer(final Status rejection) {
-            this(rejection, false);
+            this(rejection, false, Duration.ZERO);
         }
 
         private PollServer(final boolean isReaderPaused) {
-            this(null, isReaderPaused);
+            this(null, isReaderPaused, Duration.ZERO);
         }
 
-        private PollServer(final Status rejection, final boolean isReaderPaused) {
+        private PollServer(final Duration closeResponseDelay) {
+            this(null, false, closeResponseDelay);
+        }
+
+        private PollServer(final Status rejection, final boolean isReaderPaused,
+                final Duration closeResponseDelay) {
             this.rejection = rejection;
             this.isReaderPaused = isReaderPaused;
+            this.closeResponseDelay = closeResponseDelay;
         }
 
         @Override
@@ -583,7 +639,15 @@ final class PullWorkerTest {
                 @Override
                 public void onCompleted() {
                     stream.closed.countDown();
-                    responses.onCompleted();
+                    if (closeResponseDelay.isZero()) {
+                        responses.onCompleted();
+                        stream.serverEof.countDown();
+                    } else {
+                        readScheduler.schedule(() -> {
+                            responses.onCompleted();
+                            stream.serverEof.countDown();
+                        }, closeResponseDelay.toMillis(), TimeUnit.MILLISECONDS);
+                    }
                 }
             };
         }
@@ -597,6 +661,9 @@ final class PullWorkerTest {
                         throw new AssertionError("Worker failed before registration", workerFailure.get());
                     }
                     final PollStream stream = registrations.poll(1, TimeUnit.SECONDS);
+                    if (stream != null && stream.closed.getCount() == 0) {
+                        continue;
+                    }
                     if (stream != null && queue.equals(stream.queue)) {
                         return stream;
                     }
@@ -612,6 +679,25 @@ final class PullWorkerTest {
 
         private void shutdown() {
             readScheduler.shutdownNow();
+        }
+
+        private java.util.List<PollStream> reconnectAll(final PollStream busy)
+                throws InterruptedException {
+            final java.util.List<PollStream> draining = new java.util.ArrayList<PollStream>();
+            for (PollStream stream : allStreams) {
+                if (stream != busy && stream.queue != null && stream.closed.getCount() > 0) {
+                    stream.respond(PollWorkerTaskResponse.newBuilder()
+                            .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+                    draining.add(stream);
+                }
+            }
+            for (PollStream stream : draining) {
+                assertTrue(stream.closed.await(5, TimeUnit.SECONDS));
+            }
+            busy.respond(PollWorkerTaskResponse.newBuilder()
+                    .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+            draining.add(busy);
+            return draining;
         }
 
         private void releasePendingReadsAfter(final Duration delay) {
@@ -630,6 +716,7 @@ final class PullWorkerTest {
         private final BlockingQueue<PollWorkerTaskRequest> frames =
                 new LinkedBlockingQueue<PollWorkerTaskRequest>();
         private final CountDownLatch closed = new CountDownLatch(1);
+        private final CountDownLatch serverEof = new CountDownLatch(1);
         private ServerCallStreamObserver<PollWorkerTaskResponse> readControl;
         private String queue;
 
@@ -658,6 +745,60 @@ final class PullWorkerTest {
         private final Worker worker;
         private final Thread workerThread;
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
+
+        private int awaitStableStreamCount() throws Exception {
+            final PullWorker pullWorker = pullWorker();
+            final Field streamsField = PullWorker.class.getDeclaredField("streams");
+            streamsField.setAccessible(true);
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            long stableSince = System.nanoTime();
+            int previous = -1;
+            synchronized (pullWorker) {
+                while (System.nanoTime() < deadline) {
+                    final int current = ((java.util.List<?>) streamsField.get(pullWorker)).size();
+                    if (current != previous) {
+                        previous = current;
+                        stableSince = System.nanoTime();
+                    }
+                    if (System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(300)) {
+                        return current;
+                    }
+                    pullWorker.wait(25L);
+                }
+            }
+            throw new AssertionError("Worker stream count did not stabilize");
+        }
+
+        private int idleStreamCount(final String queue) throws Exception {
+            final PullWorker pullWorker = pullWorker();
+            final Field streamsField = PullWorker.class.getDeclaredField("streams");
+            streamsField.setAccessible(true);
+            int idle = 0;
+            synchronized (pullWorker) {
+                for (Object stream : (java.util.List<?>) streamsField.get(pullWorker)) {
+                    final Class<?> streamClass = stream.getClass();
+                    final Field queueField = streamClass.getDeclaredField("queue");
+                    final Field busyField = streamClass.getDeclaredField("isBusy");
+                    final Field drainingField = streamClass.getDeclaredField("isDraining");
+                    final Field closedField = streamClass.getDeclaredField("isClosed");
+                    queueField.setAccessible(true);
+                    busyField.setAccessible(true);
+                    drainingField.setAccessible(true);
+                    closedField.setAccessible(true);
+                    if (queue.equals(queueField.get(stream)) && !busyField.getBoolean(stream)
+                            && !drainingField.getBoolean(stream) && !closedField.getBoolean(stream)) {
+                        idle++;
+                    }
+                }
+            }
+            return idle;
+        }
+
+        private PullWorker pullWorker() throws ReflectiveOperationException {
+            final Field pullWorkerField = Worker.class.getDeclaredField("pullWorker");
+            pullWorkerField.setAccessible(true);
+            return (PullWorker) pullWorkerField.get(worker);
+        }
 
         private RunningWorker(final PollServer pollServer, final TestFlow flow, final int capacity)
                 throws IOException {
