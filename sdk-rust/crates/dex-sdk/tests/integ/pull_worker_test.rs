@@ -15,7 +15,7 @@ use std::time::Duration;
 use dex_sdk::{
     BlobCache, BlobCacheConfig, Client, ClientOptions, Context, Flow, HandlerError, HandlerResult,
     PullWorkerOptions, Registry, Rpc, RpcList, RpcResult, Step, StepDecision, StepList,
-    StopFlowOptions, Wait, Worker, WorkerOptions,
+    StepOptions, StopFlowOptions, Wait, Worker, WorkerOptions,
 };
 
 use crate::basic_workflow::BasicWorkflow;
@@ -278,7 +278,15 @@ impl Step for CancelStep {
 
     fn execute(&self, context: &mut Context, _input: ()) -> HandlerResult<StepDecision> {
         self.observed.send("started").expect("observe started Step");
-        context.wait_for_cancellation();
+        while !context.is_cancelled() {
+            if let Err(error) = context.record_heartbeat() {
+                if !context.is_cancelled() {
+                    return Err(error);
+                }
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
         self.observed
             .send("cancelled")
             .expect("observe cancelled Step");
@@ -291,6 +299,10 @@ impl Step for CancelStep {
             .send("returned")
             .expect("observe returned Step");
         Err(HandlerError::new("Cancelled", "Step handler was cancelled"))
+    }
+
+    fn options(&self) -> StepOptions<Self::Input> {
+        StepOptions::new().heartbeat_timeout(Duration::from_secs(10))
     }
 }
 
