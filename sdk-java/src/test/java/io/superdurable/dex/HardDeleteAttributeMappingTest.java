@@ -20,6 +20,7 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.protobuf.StatusProto;
 import io.grpc.stub.StreamObserver;
+import io.superdurable.dex.exceptions.InvalidStepResultException;
 import io.superdurable.gen.AttributeWrite;
 import io.superdurable.gen.FlowServiceGrpc;
 import io.superdurable.gen.FlowStartOptions;
@@ -248,6 +249,25 @@ final class HardDeleteAttributeMappingTest {
     }
 
     @Test
+    void rejectsSubFlowInitialAttributesWithMismatchedHardDeleteSettings() {
+        final Registry registry = new Registry(Arrays.<Flow<?>>asList(
+                new HardDeleteMappingFlow(), new HardDeleteMappingChildFlow()));
+        final ValueMapper values = new ValueMapper(new ObjectMapper());
+        final NegotiatedServerProtocol protocol = new NegotiatedServerProtocol();
+        protocol.recordNegotiatedVersion(3);
+        final WorkerDispatcher dispatcher = new WorkerDispatcher(
+                registry, values, unusedHydrator(), protocol);
+        for (String input : Arrays.asList(
+                "plain-definition-for-hard-delete", "hard-delete-definition-for-plain")) {
+            final InvalidStepResultException failure = assertThrows(
+                    InvalidStepResultException.class,
+                    () -> dispatcher.invokeWaitFor(subFlowRequest(values, input), null));
+            assertTrue(failure.getMessage().contains("hardDeleteOnNull setting differs from Flow "
+                    + "HardDeleteMappingChildFlow registration"), failure.getMessage());
+        }
+    }
+
+    @Test
     void workerUsesTheProtocolNegotiatedAtStartup() throws Exception {
         try (FakeFlowService protocolTwo = new FakeFlowService(2);
                 RunningWorker worker = new RunningWorker(protocolTwo)) {
@@ -437,11 +457,17 @@ final class HardDeleteAttributeMappingTest {
     }
 
     private static InvokeWaitForMethodRequest subFlowRequest(final ValueMapper values) {
+        return subFlowRequest(values, "child-input");
+    }
+
+    private static InvokeWaitForMethodRequest subFlowRequest(
+            final ValueMapper values,
+            final String input) {
         return InvokeWaitForMethodRequest.newBuilder()
                 .setContext(context())
                 .setFlowType("HardDeleteMappingFlow")
                 .setStepType("HardDeleteMappingSubFlowStep")
-                .setStepInput(values.encode("child-input"))
+                .setStepInput(values.encode(input))
                 .build();
     }
 
@@ -533,13 +559,18 @@ final class HardDeleteAttributeMappingTest {
 
         @Override
         public Wait waitFor(final Context context, final String input) {
-            return Wait.until(SubFlow.run(
-                    HardDeleteMappingChildFlow.class,
-                    input,
-                    SubFlowOptions.newBuilder()
-                            .addAttribute(CHILD_SECRET, "child-secret-value")
-                            .addAttribute(CHILD_PLAIN, "child-plain-value")
-                            .build()));
+            final SubFlowOptions.Builder options = SubFlowOptions.newBuilder();
+            if ("plain-definition-for-hard-delete".equals(input)) {
+                options.addAttribute(Attribute.define("child-secret", String.class), "leaked-secret");
+            } else if ("hard-delete-definition-for-plain".equals(input)) {
+                options.addAttribute(
+                        Attribute.define("child-plain", String.class).hardDeleteOnNull(),
+                        "child-plain-value");
+            } else {
+                options.addAttribute(CHILD_SECRET, "child-secret-value")
+                        .addAttribute(CHILD_PLAIN, "child-plain-value");
+            }
+            return Wait.until(SubFlow.run(HardDeleteMappingChildFlow.class, input, options.build()));
         }
 
         @Override

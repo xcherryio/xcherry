@@ -877,6 +877,14 @@ final class WorkerDispatcher {
                     : options.getAttributes()) {
                 final PersistenceDefinition registered = target.getPersistence().get(
                         initialization.getDefinition().getName());
+                if (registered != null && registered.isHardDeleteOnNull()
+                        != initialization.getDefinition().isHardDeleteOnNull()) {
+                    throw new InvalidStepResultException(
+                            "SubFlow " + target.getName() + " initial Attribute "
+                                    + initialization.getDefinition().getName()
+                                    + " hardDeleteOnNull setting differs from Flow "
+                                    + target.getName() + " registration");
+                }
                 if (registered != initialization.getDefinition()) {
                     throw new InvalidStepResultException(
                             "SubFlow " + target.getName() + " Attribute does not belong to Flow: "
