@@ -22,21 +22,37 @@ use tonic::{Request, Status};
 
 /// Supplies the current bearer token before each Dex request.
 ///
-/// Implementations may be called concurrently and should return promptly. An error prevents the
-/// request from reaching Dex. Pull Worker streams evaluate the token when each stream opens, so
-/// reconnects use a rotated token. The token travels over the same plaintext gRPC connection as
-/// other Dex data; protect the network path.
+/// Return the bare token without a `Bearer ` prefix. Implementations may be called concurrently.
+/// The synchronous call can run on a Tokio worker thread; it must return promptly without network
+/// I/O. A call deadline cannot interrupt a blocked implementation. Sources requiring slow I/O
+/// should refresh in the background and return a cached token. An error fails the request locally
+/// with gRPC `Unauthenticated`. Pull Worker streams evaluate the token when each stream opens; a
+/// failed open backs off for about one minute. The token travels over Dex's plaintext gRPC
+/// connection, so protect the network path.
 ///
 /// ```no_run
-/// use std::sync::Arc;
-/// use dex_sdk::{ClientOptions, FileCredential, WorkerOptions};
-/// let credential = Arc::new(FileCredential::new("/var/run/secrets/dex/token")?);
-/// let client_options = ClientOptions::new().credential(credential.clone());
-/// let worker_options = WorkerOptions::new().credential(credential);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// use std::sync::{Arc, RwLock};
+/// use dex_sdk::{ClientOptions, Credential, CredentialError};
+/// struct RotatingCredential { current: RwLock<Option<String>> }
+/// impl Credential for RotatingCredential {
+///     fn token(&self) -> Result<String, CredentialError> {
+///         self.current.read()
+///             .map_err(|_| CredentialError::new("credential lock poisoned"))?
+///             .clone()
+///             .ok_or_else(|| CredentialError::new("token unavailable"))
+///     }
+/// }
+/// let credential = Arc::new(RotatingCredential {
+///     current: RwLock::new(Some("example-token".to_string())),
+/// });
+/// let client_options = ClientOptions::new().credential(credential);
 /// ```
 pub trait Credential: Send + Sync {
-    /// Returns the current token, or an error that fails the request locally.
+    /// Returns the current bare token, or an error that fails the request locally.
+    ///
+    /// Implementations must be safe for concurrent synchronous calls and return promptly. Do not
+    /// include the `Bearer ` prefix. A credential failure maps to gRPC `Unauthenticated` without
+    /// contacting Dex.
     fn token(&self) -> Result<String, CredentialError>;
 }
 
@@ -47,6 +63,15 @@ impl fmt::Debug for dyn Credential {
 }
 
 /// An error obtaining a bearer token before a Dex request.
+///
+/// Return this from a custom [`Credential`] when no usable token is available. Avoid including
+/// token contents in the error message.
+///
+/// ```
+/// use dex_sdk::CredentialError;
+/// let error = CredentialError::new("token unavailable");
+/// assert_eq!(error.to_string(), "token unavailable");
+/// ```
 #[derive(Debug, Clone)]
 pub struct CredentialError {
     message: String,
@@ -54,6 +79,9 @@ pub struct CredentialError {
 
 impl CredentialError {
     /// Creates an error for a credential source failure.
+    ///
+    /// `message` is shown in the local service error and must not contain a token. See the
+    /// [`CredentialError`] example.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -73,19 +101,40 @@ impl Error for CredentialError {}
 ///
 /// File metadata is checked at most once per second. Surrounding whitespace is removed. If the
 /// file becomes empty or unreadable, requests fail until a later check succeeds; no stale token
-/// is sent. The constructor fails when the initial file is unreadable or empty.
-#[derive(Debug)]
+/// is sent. The constructor fails when the initial file is unreadable or empty. Checks and reads
+/// use a mutex, briefly serializing concurrent callers. Use a local filesystem; slow network
+/// filesystems can delay calls. Replace the token atomically by writing a temporary file and
+/// renaming it. An empty or partial token can fail pull stream opens, which back off for about one
+/// minute.
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use dex_sdk::{ClientOptions, FileCredential, WorkerOptions};
+/// let credential = Arc::new(FileCredential::new("/var/run/secrets/dex/token")?);
+/// let client_options = ClientOptions::new().credential(credential.clone());
+/// let worker_options = WorkerOptions::new().credential(credential);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct FileCredential {
     path: PathBuf,
     state: Mutex<FileCredentialState>,
 }
 
-#[derive(Debug)]
 struct FileCredentialState {
     token: Result<String, CredentialError>,
     modified: SystemTime,
     size: u64,
     checked_at: Instant,
+}
+
+impl fmt::Debug for FileCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FileCredential")
+            .field("path", &self.path)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl FileCredential {
@@ -94,6 +143,7 @@ impl FileCredential {
     /// # Errors
     ///
     /// Returns an I/O error if the file cannot be inspected or read, or contains only whitespace.
+    /// See the [`FileCredential`] example for sharing the credential with a Client and Worker.
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let metadata = fs::metadata(&path)?;
@@ -320,7 +370,7 @@ mod tests {
         assert_eq!(credential.token().expect("initial token"), "first");
         fs::write(&path, " second-token \n").expect("rotate token");
         assert_eq!(credential.token().expect("cached token"), "first");
-        std::thread::sleep(Duration::from_millis(1010));
+        credential.state.lock().expect("file state lock").checked_at -= Duration::from_secs(1);
         assert_eq!(credential.token().expect("rotated token"), "second-token");
         fs::write(&path, " \n").expect("empty token");
         credential.state.lock().expect("file state lock").checked_at -= Duration::from_secs(1);
@@ -331,6 +381,17 @@ mod tests {
         fs::write(&path, "restored").expect("restore token");
         credential.state.lock().expect("file state lock").checked_at -= Duration::from_secs(1);
         assert_eq!(credential.token().expect("restored token"), "restored");
+    }
+
+    #[test]
+    fn file_credential_debug_redacts_token() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let path = directory.path().join("token");
+        fs::write(&path, "private-token-value").expect("write token");
+        let credential = Arc::new(FileCredential::new(&path).expect("file credential"));
+        let debug = format!("{credential:?}");
+        assert!(!debug.contains("private-token-value"));
+        assert!(debug.contains("<redacted>"));
     }
 
     #[test]
@@ -348,7 +409,7 @@ mod tests {
                     headers: Arc::clone(&headers),
                 })
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                    let _ = stopped.await;
+                    stopped.await.expect("FlowService shutdown signal");
                 }),
         );
         let credential = Arc::new(MutableCredential {
@@ -382,7 +443,11 @@ mod tests {
         with_credential.health_check().expect("rotated call");
         *credential.token.lock().expect("token lock") =
             Err(CredentialError::new("token unavailable"));
-        with_credential.health_check().expect_err("local error");
+        let error = with_credential.health_check().expect_err("local error");
+        assert_eq!(
+            error.service_error().expect("service error").code(),
+            tonic::Code::Unauthenticated
+        );
         *credential.token.lock().expect("token lock") = Ok("worker".to_string());
         let worker = Worker::try_new(
             Registry::new(),
@@ -423,7 +488,7 @@ mod tests {
                     headers: Arc::clone(&headers),
                 }))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                    let _ = stopped.await;
+                    stopped.await.expect("WorkerTaskService shutdown signal");
                 }),
         );
         let credential = Arc::new(MutableCredential {
@@ -454,7 +519,14 @@ mod tests {
                 .await
                 .expect("open task stream");
         }
-        assert_eq!(credential.calls.load(Ordering::SeqCst), 2);
+        *credential.token.lock().expect("token lock") =
+            Err(CredentialError::new("token unavailable"));
+        let error = client
+            .poll_worker_task(tokio_stream::empty::<PollWorkerTaskRequest>())
+            .await
+            .expect_err("local task stream error");
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        assert_eq!(credential.calls.load(Ordering::SeqCst), 3);
         assert_eq!(
             *headers.lock().expect("headers lock"),
             vec![

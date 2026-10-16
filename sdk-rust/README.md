@@ -7,6 +7,11 @@ Set a credential on each Client and Worker when Dex authentication is enabled.
 rotation at most once per second. It trims surrounding whitespace. Missing,
 unreadable, or empty files fail requests instead of sending a stale token.
 The same credential can be shared across threads and across a Client and Worker.
+Replace token files atomically by writing a temporary file and renaming it.
+An empty or partial file fails closed, and failed pull streams back off for about
+one minute. File checks are synchronous and briefly serialize callers; use a
+local filesystem. Custom credentials should return a bare token promptly and
+refresh slow sources in the background.
 
 ```rust
 use std::sync::Arc;
