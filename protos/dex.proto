@@ -278,6 +278,10 @@ message DispatchTaskResponse {
     InvokeWorkerRPCResponse rpc = 3;
     WorkerErrorResponse worker_error = 4;
     DispatchTaskError dispatch_error = 5;
+    // Stops matching-wait heartbeats after Worker assignment.
+    google.protobuf.Empty assigned = 7;
+    // Resumes matching-wait heartbeats after a pre-output retry.
+    google.protobuf.Empty unassigned = 8;
   }
   // Identifies the Worker that produced the final result or Worker error.
   string served_by_app_worker_id = 6;

@@ -150,7 +150,22 @@ func receiveDispatch(t *testing.T, stream dexpb.MatchingService_DispatchTaskClie
 			return frames
 		}
 		require.NoError(t, err)
+		if frame.GetAssigned() != nil || frame.GetUnassigned() != nil {
+			continue
+		}
 		frames = append(frames, frame)
+	}
+}
+
+func requireDispatchError(t *testing.T, stream dexpb.MatchingService_DispatchTaskClient) {
+	t.Helper()
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			require.Error(t, err)
+			return
+		}
+		require.True(t, frame.GetAssigned() != nil || frame.GetUnassigned() != nil)
 	}
 }
 
@@ -195,6 +210,27 @@ func TestMatchingFallbackAndUnavailableIntegration(t *testing.T) {
 	require.Equal(t, dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, frames[0].GetDispatchError().Reason)
 }
 
+func TestMatchingAssignmentStateAfterCapacityRejectIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	worker := registerWorker(t, server, "flow", "worker-rejecting")
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, 100*time.Millisecond))
+	require.NoError(t, err)
+	assignment, err := worker.Recv()
+	require.NoError(t, err)
+	assigned, err := dispatch.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, assigned.GetAssigned())
+	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{
+		Reject: &dexpb.PollWorkerTaskReject{TaskId: assignment.GetTask().GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY},
+	}}))
+	unassigned, err := dispatch.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, unassigned.GetUnassigned())
+	final, err := dispatch.Recv()
+	require.NoError(t, err)
+	require.Equal(t, dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, final.GetDispatchError().GetReason())
+}
+
 func TestMatchingRejectDisconnectAndCancelIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
 	first := registerWorker(t, server, "flow", "worker-a")
@@ -225,8 +261,7 @@ func TestMatchingRejectDisconnectAndCancelIntegration(t *testing.T) {
 	control, err := first.Recv()
 	require.NoError(t, err)
 	require.Equal(t, assigned.GetTask().TaskId, control.GetCancelTask().TaskId)
-	_, err = canceled.Recv()
-	require.Error(t, err)
+	requireDispatchError(t, canceled)
 }
 
 func TestMatchingDisconnectAfterOutputIntegration(t *testing.T) {
@@ -247,12 +282,18 @@ func TestMatchingDisconnectAfterOutputIntegration(t *testing.T) {
 func TestMatchingDisconnectBeforeOutputExhaustsWaitIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
 	worker := registerWorker(t, server, "flow", "worker-disconnecting")
-	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, 100*time.Millisecond))
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("flow", "", 0, 500*time.Millisecond))
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
 	require.NotNil(t, assigned.GetTask())
+	assignmentState, err := dispatch.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, assignmentState.GetAssigned())
 	require.NoError(t, worker.CloseSend())
+	unassignedState, err := dispatch.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, unassignedState.GetUnassigned())
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
 	require.Equal(t, dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, frames[0].GetDispatchError().GetReason())
@@ -716,8 +757,7 @@ func TestMatchingAbandonedTaskReleasesStreamIntegration(t *testing.T) {
 			control, err := worker.Recv()
 			require.NoError(t, err)
 			require.Equal(t, assigned.GetTask().TaskId, control.GetCancelTask().TaskId)
-			_, err = dispatch.Recv()
-			require.Error(t, err)
+			requireDispatchError(t, dispatch)
 			for index := 0; index < frameCount; index++ {
 				frame := &dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Heartbeat{}}}}}}
 				if sendErr := worker.Send(frame); sendErr != nil {
@@ -749,8 +789,7 @@ func TestMatchingCanceledTaskFinalFrameReusesStreamIntegration(t *testing.T) {
 	control, err := worker.Recv()
 	require.NoError(t, err)
 	require.Equal(t, assigned.GetTask().TaskId, control.GetCancelTask().TaskId)
-	_, err = dispatch.Recv()
-	require.Error(t, err)
+	requireDispatchError(t, dispatch)
 	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
 	secondRequest := dispatchRequest("flow", "", 0, time.Second)
 	secondRequest.TaskId = "second-task"

@@ -64,6 +64,8 @@ private static final long serialVersionUID = 0L;
     RPC(3),
     WORKER_ERROR(4),
     DISPATCH_ERROR(5),
+    ASSIGNED(7),
+    UNASSIGNED(8),
     OUTPUT_NOT_SET(0);
     private final int value;
     private OutputCase(int value) {
@@ -86,6 +88,8 @@ private static final long serialVersionUID = 0L;
         case 3: return RPC;
         case 4: return WORKER_ERROR;
         case 5: return DISPATCH_ERROR;
+        case 7: return ASSIGNED;
+        case 8: return UNASSIGNED;
         case 0: return OUTPUT_NOT_SET;
         default: return null;
       }
@@ -256,6 +260,92 @@ private static final long serialVersionUID = 0L;
     return io.superdurable.gen.DispatchTaskError.getDefaultInstance();
   }
 
+  public static final int ASSIGNED_FIELD_NUMBER = 7;
+  /**
+   * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   * @return Whether the assigned field is set.
+   */
+  @java.lang.Override
+  public boolean hasAssigned() {
+    return outputCase_ == 7;
+  }
+  /**
+   * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   * @return The assigned.
+   */
+  @java.lang.Override
+  public com.google.protobuf.Empty getAssigned() {
+    if (outputCase_ == 7) {
+       return (com.google.protobuf.Empty) output_;
+    }
+    return com.google.protobuf.Empty.getDefaultInstance();
+  }
+  /**
+   * <pre>
+   * Stops matching-wait heartbeats after Worker assignment.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty assigned = 7;</code>
+   */
+  @java.lang.Override
+  public com.google.protobuf.EmptyOrBuilder getAssignedOrBuilder() {
+    if (outputCase_ == 7) {
+       return (com.google.protobuf.Empty) output_;
+    }
+    return com.google.protobuf.Empty.getDefaultInstance();
+  }
+
+  public static final int UNASSIGNED_FIELD_NUMBER = 8;
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   * @return Whether the unassigned field is set.
+   */
+  @java.lang.Override
+  public boolean hasUnassigned() {
+    return outputCase_ == 8;
+  }
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   * @return The unassigned.
+   */
+  @java.lang.Override
+  public com.google.protobuf.Empty getUnassigned() {
+    if (outputCase_ == 8) {
+       return (com.google.protobuf.Empty) output_;
+    }
+    return com.google.protobuf.Empty.getDefaultInstance();
+  }
+  /**
+   * <pre>
+   * Resumes matching-wait heartbeats after a pre-output retry.
+   * </pre>
+   *
+   * <code>.google.protobuf.Empty unassigned = 8;</code>
+   */
+  @java.lang.Override
+  public com.google.protobuf.EmptyOrBuilder getUnassignedOrBuilder() {
+    if (outputCase_ == 8) {
+       return (com.google.protobuf.Empty) output_;
+    }
+    return com.google.protobuf.Empty.getDefaultInstance();
+  }
+
   public static final int SERVED_BY_APP_WORKER_ID_FIELD_NUMBER = 6;
   @SuppressWarnings("serial")
   private volatile java.lang.Object servedByAppWorkerId_ = "";
@@ -335,6 +425,12 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(servedByAppWorkerId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 6, servedByAppWorkerId_);
     }
+    if (outputCase_ == 7) {
+      output.writeMessage(7, (com.google.protobuf.Empty) output_);
+    }
+    if (outputCase_ == 8) {
+      output.writeMessage(8, (com.google.protobuf.Empty) output_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -361,6 +457,14 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(servedByAppWorkerId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(6, servedByAppWorkerId_);
+    }
+    if (outputCase_ == 7) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(7, (com.google.protobuf.Empty) output_);
+    }
+    if (outputCase_ == 8) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(8, (com.google.protobuf.Empty) output_);
     }
     return size;
   }
@@ -410,6 +514,14 @@ private static final long serialVersionUID = 0L;
         if (!getDispatchError()
             .equals(other.getDispatchError())) return false;
         break;
+      case 7:
+        if (!getAssigned()
+            .equals(other.getAssigned())) return false;
+        break;
+      case 8:
+        if (!getUnassigned()
+            .equals(other.getUnassigned())) return false;
+        break;
       case 0:
       default:
     }
@@ -446,6 +558,14 @@ private static final long serialVersionUID = 0L;
       case 5:
         hash = (37 * hash) + DISPATCH_ERROR_FIELD_NUMBER;
         hash = (53 * hash) + getDispatchError().hashCode();
+        break;
+      case 7:
+        hash = (37 * hash) + ASSIGNED_FIELD_NUMBER;
+        hash = (53 * hash) + getAssigned().hashCode();
+        break;
+      case 8:
+        hash = (37 * hash) + UNASSIGNED_FIELD_NUMBER;
+        hash = (53 * hash) + getUnassigned().hashCode();
         break;
       case 0:
       default:
@@ -600,6 +720,12 @@ private static final long serialVersionUID = 0L;
       if (dispatchErrorBuilder_ != null) {
         dispatchErrorBuilder_.clear();
       }
+      if (assignedBuilder_ != null) {
+        assignedBuilder_.clear();
+      }
+      if (unassignedBuilder_ != null) {
+        unassignedBuilder_.clear();
+      }
       servedByAppWorkerId_ = "";
       outputCase_ = 0;
       output_ = null;
@@ -637,7 +763,7 @@ private static final long serialVersionUID = 0L;
 
     private void buildPartial0(io.superdurable.gen.DispatchTaskResponse result) {
       int from_bitField0_ = bitField0_;
-      if (((from_bitField0_ & 0x00000020) != 0)) {
+      if (((from_bitField0_ & 0x00000080) != 0)) {
         result.servedByAppWorkerId_ = servedByAppWorkerId_;
       }
     }
@@ -665,6 +791,14 @@ private static final long serialVersionUID = 0L;
           dispatchErrorBuilder_ != null) {
         result.output_ = dispatchErrorBuilder_.build();
       }
+      if (outputCase_ == 7 &&
+          assignedBuilder_ != null) {
+        result.output_ = assignedBuilder_.build();
+      }
+      if (outputCase_ == 8 &&
+          unassignedBuilder_ != null) {
+        result.output_ = unassignedBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -681,7 +815,7 @@ private static final long serialVersionUID = 0L;
       if (other == io.superdurable.gen.DispatchTaskResponse.getDefaultInstance()) return this;
       if (!other.getServedByAppWorkerId().isEmpty()) {
         servedByAppWorkerId_ = other.servedByAppWorkerId_;
-        bitField0_ |= 0x00000020;
+        bitField0_ |= 0x00000080;
         onChanged();
       }
       switch (other.getOutputCase()) {
@@ -703,6 +837,14 @@ private static final long serialVersionUID = 0L;
         }
         case DISPATCH_ERROR: {
           mergeDispatchError(other.getDispatchError());
+          break;
+        }
+        case ASSIGNED: {
+          mergeAssigned(other.getAssigned());
+          break;
+        }
+        case UNASSIGNED: {
+          mergeUnassigned(other.getUnassigned());
           break;
         }
         case OUTPUT_NOT_SET: {
@@ -772,9 +914,23 @@ private static final long serialVersionUID = 0L;
             } // case 42
             case 50: {
               servedByAppWorkerId_ = input.readStringRequireUtf8();
-              bitField0_ |= 0x00000020;
+              bitField0_ |= 0x00000080;
               break;
             } // case 50
+            case 58: {
+              input.readMessage(
+                  internalGetAssignedFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              outputCase_ = 7;
+              break;
+            } // case 58
+            case 66: {
+              input.readMessage(
+                  internalGetUnassignedFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              outputCase_ = 8;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1517,6 +1673,362 @@ private static final long serialVersionUID = 0L;
       return dispatchErrorBuilder_;
     }
 
+    private com.google.protobuf.SingleFieldBuilder<
+        com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder> assignedBuilder_;
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     * @return Whether the assigned field is set.
+     */
+    @java.lang.Override
+    public boolean hasAssigned() {
+      return outputCase_ == 7;
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     * @return The assigned.
+     */
+    @java.lang.Override
+    public com.google.protobuf.Empty getAssigned() {
+      if (assignedBuilder_ == null) {
+        if (outputCase_ == 7) {
+          return (com.google.protobuf.Empty) output_;
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      } else {
+        if (outputCase_ == 7) {
+          return assignedBuilder_.getMessage();
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      }
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    public Builder setAssigned(com.google.protobuf.Empty value) {
+      if (assignedBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        output_ = value;
+        onChanged();
+      } else {
+        assignedBuilder_.setMessage(value);
+      }
+      outputCase_ = 7;
+      return this;
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    public Builder setAssigned(
+        com.google.protobuf.Empty.Builder builderForValue) {
+      if (assignedBuilder_ == null) {
+        output_ = builderForValue.build();
+        onChanged();
+      } else {
+        assignedBuilder_.setMessage(builderForValue.build());
+      }
+      outputCase_ = 7;
+      return this;
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    public Builder mergeAssigned(com.google.protobuf.Empty value) {
+      if (assignedBuilder_ == null) {
+        if (outputCase_ == 7 &&
+            output_ != com.google.protobuf.Empty.getDefaultInstance()) {
+          output_ = com.google.protobuf.Empty.newBuilder((com.google.protobuf.Empty) output_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          output_ = value;
+        }
+        onChanged();
+      } else {
+        if (outputCase_ == 7) {
+          assignedBuilder_.mergeFrom(value);
+        } else {
+          assignedBuilder_.setMessage(value);
+        }
+      }
+      outputCase_ = 7;
+      return this;
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    public Builder clearAssigned() {
+      if (assignedBuilder_ == null) {
+        if (outputCase_ == 7) {
+          outputCase_ = 0;
+          output_ = null;
+          onChanged();
+        }
+      } else {
+        if (outputCase_ == 7) {
+          outputCase_ = 0;
+          output_ = null;
+        }
+        assignedBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    public com.google.protobuf.Empty.Builder getAssignedBuilder() {
+      return internalGetAssignedFieldBuilder().getBuilder();
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    @java.lang.Override
+    public com.google.protobuf.EmptyOrBuilder getAssignedOrBuilder() {
+      if ((outputCase_ == 7) && (assignedBuilder_ != null)) {
+        return assignedBuilder_.getMessageOrBuilder();
+      } else {
+        if (outputCase_ == 7) {
+          return (com.google.protobuf.Empty) output_;
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      }
+    }
+    /**
+     * <pre>
+     * Stops matching-wait heartbeats after Worker assignment.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty assigned = 7;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder> 
+        internalGetAssignedFieldBuilder() {
+      if (assignedBuilder_ == null) {
+        if (!(outputCase_ == 7)) {
+          output_ = com.google.protobuf.Empty.getDefaultInstance();
+        }
+        assignedBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder>(
+                (com.google.protobuf.Empty) output_,
+                getParentForChildren(),
+                isClean());
+        output_ = null;
+      }
+      outputCase_ = 7;
+      onChanged();
+      return assignedBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder> unassignedBuilder_;
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     * @return Whether the unassigned field is set.
+     */
+    @java.lang.Override
+    public boolean hasUnassigned() {
+      return outputCase_ == 8;
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     * @return The unassigned.
+     */
+    @java.lang.Override
+    public com.google.protobuf.Empty getUnassigned() {
+      if (unassignedBuilder_ == null) {
+        if (outputCase_ == 8) {
+          return (com.google.protobuf.Empty) output_;
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      } else {
+        if (outputCase_ == 8) {
+          return unassignedBuilder_.getMessage();
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      }
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    public Builder setUnassigned(com.google.protobuf.Empty value) {
+      if (unassignedBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        output_ = value;
+        onChanged();
+      } else {
+        unassignedBuilder_.setMessage(value);
+      }
+      outputCase_ = 8;
+      return this;
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    public Builder setUnassigned(
+        com.google.protobuf.Empty.Builder builderForValue) {
+      if (unassignedBuilder_ == null) {
+        output_ = builderForValue.build();
+        onChanged();
+      } else {
+        unassignedBuilder_.setMessage(builderForValue.build());
+      }
+      outputCase_ = 8;
+      return this;
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    public Builder mergeUnassigned(com.google.protobuf.Empty value) {
+      if (unassignedBuilder_ == null) {
+        if (outputCase_ == 8 &&
+            output_ != com.google.protobuf.Empty.getDefaultInstance()) {
+          output_ = com.google.protobuf.Empty.newBuilder((com.google.protobuf.Empty) output_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          output_ = value;
+        }
+        onChanged();
+      } else {
+        if (outputCase_ == 8) {
+          unassignedBuilder_.mergeFrom(value);
+        } else {
+          unassignedBuilder_.setMessage(value);
+        }
+      }
+      outputCase_ = 8;
+      return this;
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    public Builder clearUnassigned() {
+      if (unassignedBuilder_ == null) {
+        if (outputCase_ == 8) {
+          outputCase_ = 0;
+          output_ = null;
+          onChanged();
+        }
+      } else {
+        if (outputCase_ == 8) {
+          outputCase_ = 0;
+          output_ = null;
+        }
+        unassignedBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    public com.google.protobuf.Empty.Builder getUnassignedBuilder() {
+      return internalGetUnassignedFieldBuilder().getBuilder();
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    @java.lang.Override
+    public com.google.protobuf.EmptyOrBuilder getUnassignedOrBuilder() {
+      if ((outputCase_ == 8) && (unassignedBuilder_ != null)) {
+        return unassignedBuilder_.getMessageOrBuilder();
+      } else {
+        if (outputCase_ == 8) {
+          return (com.google.protobuf.Empty) output_;
+        }
+        return com.google.protobuf.Empty.getDefaultInstance();
+      }
+    }
+    /**
+     * <pre>
+     * Resumes matching-wait heartbeats after a pre-output retry.
+     * </pre>
+     *
+     * <code>.google.protobuf.Empty unassigned = 8;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder> 
+        internalGetUnassignedFieldBuilder() {
+      if (unassignedBuilder_ == null) {
+        if (!(outputCase_ == 8)) {
+          output_ = com.google.protobuf.Empty.getDefaultInstance();
+        }
+        unassignedBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            com.google.protobuf.Empty, com.google.protobuf.Empty.Builder, com.google.protobuf.EmptyOrBuilder>(
+                (com.google.protobuf.Empty) output_,
+                getParentForChildren(),
+                isClean());
+        output_ = null;
+      }
+      outputCase_ = 8;
+      onChanged();
+      return unassignedBuilder_;
+    }
+
     private java.lang.Object servedByAppWorkerId_ = "";
     /**
      * <pre>
@@ -1572,7 +2084,7 @@ private static final long serialVersionUID = 0L;
         java.lang.String value) {
       if (value == null) { throw new NullPointerException(); }
       servedByAppWorkerId_ = value;
-      bitField0_ |= 0x00000020;
+      bitField0_ |= 0x00000080;
       onChanged();
       return this;
     }
@@ -1586,7 +2098,7 @@ private static final long serialVersionUID = 0L;
      */
     public Builder clearServedByAppWorkerId() {
       servedByAppWorkerId_ = getDefaultInstance().getServedByAppWorkerId();
-      bitField0_ = (bitField0_ & ~0x00000020);
+      bitField0_ = (bitField0_ & ~0x00000080);
       onChanged();
       return this;
     }
@@ -1604,7 +2116,7 @@ private static final long serialVersionUID = 0L;
       if (value == null) { throw new NullPointerException(); }
       checkByteStringIsUtf8(value);
       servedByAppWorkerId_ = value;
-      bitField0_ |= 0x00000020;
+      bitField0_ |= 0x00000080;
       onChanged();
       return this;
     }

@@ -70,6 +70,15 @@ type pullTaskObservation struct {
 	attempt int32
 }
 
+type pullExecuteBehavior int
+
+const (
+	pullExecuteDefault pullExecuteBehavior = iota
+	pullExecuteSilentFirst
+	pullExecuteCheckpointFirst
+	pullExecutePeriodicHeartbeat
+)
+
 type rawPullWorker struct {
 	events                  chan pullTaskObservation
 	started                 chan pullTaskObservation
@@ -88,6 +97,12 @@ type rawPullWorker struct {
 	releaseParallel         chan struct{}
 	rejectNextStickyTask    chan struct{}
 	rejectedStickyTasks     chan pullTaskObservation
+	executeBehavior         pullExecuteBehavior
+	restoredHeartbeats      chan string
+}
+
+func startHeartbeatPullWorker(t *testing.T, address string, flowType string, behavior pullExecuteBehavior) *rawPullWorker {
+	return newRawPullWorkerWithExecuteBehavior(t, address, flowType, "heartbeat-worker-"+uuid.NewString(), nil, false, false, false, false, false, false, false, behavior)
 }
 
 func startRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse) *rawPullWorker {
@@ -119,6 +134,10 @@ func startCancelPullWorker(t *testing.T, address string, flowType string, worker
 }
 
 func newRawPullWorker(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool, holdWaitFor bool, hasInvalidSubFlowTarget bool) *rawPullWorker {
+	return newRawPullWorkerWithExecuteBehavior(t, address, flowType, workerID, rpcError, disconnectOnWaitFor, spawnSubFlow, spawnParallel, blockParallel, sendProgress, holdWaitFor, hasInvalidSubFlowTarget, pullExecuteDefault)
+}
+
+func newRawPullWorkerWithExecuteBehavior(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool, holdWaitFor bool, hasInvalidSubFlowTarget bool, executeBehavior pullExecuteBehavior) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -127,6 +146,7 @@ func newRawPullWorker(t *testing.T, address string, flowType string, workerID st
 		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
 		rejectNextStickyTask: make(chan struct{}, 1), rejectedStickyTasks: make(chan pullTaskObservation, 1),
+		restoredHeartbeats: make(chan string, 2), executeBehavior: executeBehavior,
 		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
 		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress, holdWaitFor: holdWaitFor,
 		hasInvalidSubFlowTarget: hasInvalidSubFlowTarget,
@@ -150,6 +170,12 @@ func newRawPullWorker(t *testing.T, address string, flowType string, workerID st
 }
 
 func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollWorkerTaskClient) {
+	heldTaskCancels := make(map[string]context.CancelFunc)
+	defer func() {
+		for _, cancel := range heldTaskCancels {
+			cancel()
+		}
+	}()
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
@@ -163,6 +189,10 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			continue
 		}
 		if cancellation := frame.GetCancelTask(); cancellation != nil {
+			if cancel, exists := heldTaskCancels[cancellation.GetTaskId()]; exists {
+				cancel()
+				delete(heldTaskCancels, cancellation.GetTaskId())
+			}
 			w.canceled <- cancellation.GetTaskId()
 			continue
 		}
@@ -194,6 +224,9 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 				break
 			}
 			if w.holdWaitFor {
+				heldContext, cancel := context.WithCancel(context.Background())
+				heldTaskCancels[task.GetTaskId()] = cancel
+				go w.sendHeldWaitForHeartbeats(heldContext, stream, task.GetTaskId())
 				w.events <- pullTaskObservation{queue: queue, method: method, flowID: request.WaitFor.GetContext().GetFlowId(), attempt: request.WaitFor.GetContext().GetAttempt()}
 				continue
 			}
@@ -247,6 +280,32 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 				}},
 			}}
 			observation = pullTaskObservation{queue: queue, method: method, flowID: request.Execute.GetContext().GetFlowId(), attempt: request.Execute.GetContext().GetAttempt()}
+			if observation.attempt == 1 && w.executeBehavior == pullExecuteSilentFirst {
+				w.events <- observation
+				continue
+			}
+			if observation.attempt == 1 && w.executeBehavior == pullExecuteCheckpointFirst {
+				heartbeat := &dexpb.PollWorkerTaskFrame{TaskId: task.GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Execute{
+					Execute: &dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_Heartbeat{
+						Heartbeat: &dexpb.StepMethodHeartbeat{Value: stringValue("pull-checkpoint")},
+					}},
+				}}
+				if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: heartbeat}}); err != nil {
+					w.errors <- err
+					return
+				}
+				w.events <- observation
+				continue
+			}
+			if observation.attempt > 1 && w.executeBehavior == pullExecuteCheckpointFirst {
+				w.restoredHeartbeats <- request.Execute.GetContext().GetLastHeartbeatValue().GetStringValue()
+			}
+			if w.executeBehavior == pullExecutePeriodicHeartbeat {
+				if err := w.sendPeriodicExecuteHeartbeats(stream, task.GetTaskId()); err != nil {
+					w.errors <- err
+					return
+				}
+			}
 			if w.blockParallel && request.Execute.GetStepType() != dispatchProbeStep {
 				w.started <- observation
 				<-w.releaseParallel
@@ -277,6 +336,40 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		}
 		w.events <- observation
 	}
+}
+
+func (w *rawPullWorker) sendHeldWaitForHeartbeats(ctx context.Context, stream dexpb.WorkerTaskService_PollWorkerTaskClient, taskID string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			frame := &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_WaitFor{
+				WaitFor: &dexpb.InvokeWaitForMethodOutput{Output: &dexpb.InvokeWaitForMethodOutput_Heartbeat{Heartbeat: &dexpb.StepMethodHeartbeat{}}},
+			}}
+			if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: frame}}); err != nil {
+				w.errors <- err
+				return
+			}
+		}
+	}
+}
+
+func (w *rawPullWorker) sendPeriodicExecuteHeartbeats(stream dexpb.WorkerTaskService_PollWorkerTaskClient, taskID string) error {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for heartbeatCount := 0; heartbeatCount < 4; heartbeatCount++ {
+		<-ticker.C
+		frame := &dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_Execute{
+			Execute: &dexpb.InvokeExecuteMethodOutput{Output: &dexpb.InvokeExecuteMethodOutput_Heartbeat{Heartbeat: &dexpb.StepMethodHeartbeat{}}},
+		}}
+		if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: frame}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func taskFlowType(task *dexpb.PollWorkerTask) string {
@@ -460,6 +553,96 @@ func TestPullWorkerCancellationCadence(t *testing.T) {
 		t.Skip()
 	}
 	testPullWorkerCancellation(t, service.BackendTypeCadence)
+}
+
+func TestPullWorkerHeartbeatTimeoutTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerHeartbeatTimeout(t, service.BackendTypeTemporal)
+}
+
+func TestPullWorkerHeartbeatTimeoutCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullWorkerHeartbeatTimeout(t, service.BackendTypeCadence)
+}
+
+func testPullWorkerHeartbeatTimeout(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name     string
+		behavior pullExecuteBehavior
+	}{
+		{name: "silent_assigned_worker", behavior: pullExecuteSilentFirst},
+		{name: "checkpoint_restored_on_retry", behavior: pullExecuteCheckpointFirst},
+		{name: "periodic_worker_heartbeat", behavior: pullExecutePeriodicHeartbeat},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := startInProcessDexService(t, DexServiceTestConfig{
+				BackendType: backend,
+				Matching:    &config.MatchingConfig{DispatchWait: 6 * time.Second, StickyWait: 100 * time.Millisecond},
+			})
+			worker := startHeartbeatPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, testCase.behavior)
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			flowID := "pull-heartbeat-" + uuid.NewString()
+			stepOptions := &dexpb.StepOptions{
+				SkipWaitFor: true, HeartbeatTimeoutSeconds: 2,
+				ExecuteRetryPolicy: &dexpb.RetryPolicy{InitialIntervalSeconds: 1, MaximumIntervalSeconds: 1, MaximumAttempts: 2},
+			}
+			require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+				&dexpb.WorkerTarget{IsPullMode: true}, stepOptions))
+			if testCase.behavior != pullExecutePeriodicHeartbeat {
+				first := waitForPullTask(t, worker, flowID)
+				require.Equal(t, "execute", first.method)
+				require.Equal(t, int32(1), first.attempt)
+				replacement := startHeartbeatPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, testCase.behavior)
+				startedAt := time.Now()
+				second := waitForPullTask(t, replacement, flowID)
+				require.Equal(t, "execute", second.method)
+				require.Equal(t, int32(2), second.attempt)
+				require.GreaterOrEqual(t, time.Since(startedAt), 1500*time.Millisecond)
+				require.Less(t, time.Since(startedAt), 8*time.Second)
+				if testCase.behavior == pullExecuteCheckpointFirst {
+					require.Equal(t, "pull-checkpoint", <-replacement.restoredHeartbeats)
+				}
+			}
+			result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 20})
+			require.NoError(t, err)
+			require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+			if testCase.behavior == pullExecutePeriodicHeartbeat {
+				observed := waitForPullTask(t, worker, flowID)
+				require.Equal(t, int32(1), observed.attempt)
+			}
+		})
+	}
+	t.Run("unassigned_wait", func(t *testing.T) {
+		runtime := startInProcessDexService(t, DexServiceTestConfig{
+			BackendType: backend,
+			Matching:    &config.MatchingConfig{DispatchWait: 6 * time.Second, StickyWait: 100 * time.Millisecond},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		flowID := "pull-unassigned-" + uuid.NewString()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep,
+			&dexpb.WorkerTarget{IsPullMode: true}, &dexpb.StepOptions{
+				SkipWaitFor: true, HeartbeatTimeoutSeconds: 2,
+				ExecuteRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1},
+			}))
+		select {
+		case <-time.After(3500 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("timed out while waiting to register Worker")
+		}
+		worker := startHeartbeatPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, pullExecuteDefault)
+		observed := waitForPullTask(t, worker, flowID)
+		require.Equal(t, int32(1), observed.attempt)
+		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 15})
+		require.NoError(t, err)
+		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+	})
 }
 
 func testPullWorkerCancellation(t *testing.T, backend service.BackendType) {

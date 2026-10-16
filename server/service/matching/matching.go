@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const forwardedHeader = "dex-matching-forwarded"
@@ -818,6 +819,9 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 		isMatched := false
 		hasForwardedOutput := false
 		err := e.forwardDispatch(ctx, remoteRequest, owner.RPCAddress, func(frame *dexpb.DispatchTaskResponse) error {
+			if frame.GetAssigned() != nil || frame.GetUnassigned() != nil {
+				return send(frame)
+			}
 			if dispatchErr := frame.GetDispatchError(); dispatchErr != nil {
 				// Remote sticky waits can expire before the overall dispatch budget.
 				if dispatchErr.Reason == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE ||
@@ -876,6 +880,9 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			continue
 		}
 		outcome, attemptErr := worker.dispatchTaskAssignment(ctx, request, dispatchEnd, deadlineTimer.C, send)
+		if attemptErr != nil {
+			return false, attemptErr
+		}
 		switch outcome {
 		case dispatchAttemptRetryCapacity:
 			excludeCapacityReject(worker, excludedUntil, capacityBackoffs)
@@ -922,12 +929,16 @@ func (w *workerStream) dispatchTaskAssignment(
 		}
 		return dispatchAttemptRetryDisconnected, nil
 	}
+	if err := send(&dexpb.DispatchTaskResponse{Output: &dexpb.DispatchTaskResponse_Assigned{Assigned: &emptypb.Empty{}}}); err != nil {
+		w.cancelTask(request.TaskId)
+		return dispatchAttemptTerminal, err
+	}
 	hasReceivedOutput := false
 	for {
 		select {
 		case frame := <-assignment.frames:
 			if frame.GetReject() != nil {
-				return dispatchAttemptRetryCapacity, nil
+				return dispatchAttemptRetryCapacity, send(dispatchUnassigned())
 			}
 			output := frame.GetTaskFrame()
 			hasReceivedOutput = true
@@ -943,7 +954,7 @@ func (w *workerStream) dispatchTaskAssignment(
 				select {
 				case frame := <-assignment.frames:
 					if frame.GetReject() != nil {
-						return dispatchAttemptRetryDisconnected, nil
+						return dispatchAttemptRetryDisconnected, send(dispatchUnassigned())
 					}
 					if output := frame.GetTaskFrame(); output != nil {
 						hasReceivedOutput = true
@@ -957,7 +968,7 @@ func (w *workerStream) dispatchTaskAssignment(
 				default:
 					if !hasReceivedOutput && time.Now().Before(dispatchEnd) {
 						// Pre-output disconnects can replay tasks because delivery is at least once.
-						return dispatchAttemptRetryDisconnected, nil
+						return dispatchAttemptRetryDisconnected, send(dispatchUnassigned())
 					}
 					return dispatchAttemptTerminal, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, "Worker stream disconnected"))
 				}
@@ -1016,6 +1027,10 @@ func durationUntil(deadline time.Time) *durationpb.Duration {
 
 func dispatchError(reason dexpb.DispatchTaskErrorReason, detail string) *dexpb.DispatchTaskResponse {
 	return &dexpb.DispatchTaskResponse{Output: &dexpb.DispatchTaskResponse_DispatchError{DispatchError: &dexpb.DispatchTaskError{Reason: reason, Detail: detail}}}
+}
+
+func dispatchUnassigned() *dexpb.DispatchTaskResponse {
+	return &dexpb.DispatchTaskResponse{Output: &dexpb.DispatchTaskResponse_Unassigned{Unassigned: &emptypb.Empty{}}}
 }
 
 func relayFrame(frame *dexpb.PollWorkerTaskFrame, workerID string) *dexpb.DispatchTaskResponse {

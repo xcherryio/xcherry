@@ -39,6 +39,11 @@ type routedDispatcher struct {
 
 type unavailableDispatcher struct{}
 
+type receivedFrame struct {
+	frame *dexpb.DispatchTaskResponse
+	err   error
+}
+
 // ServerError marks a failure before matching assigns a Worker.
 type ServerError struct{ Err error }
 
@@ -53,15 +58,8 @@ func ReceiveFirstFrame(
 	heartbeat func(),
 	wake func(),
 ) (*dexpb.DispatchTaskResponse, error) {
-	type result struct {
-		frame *dexpb.DispatchTaskResponse
-		err   error
-	}
-	frames := make(chan result, 1)
-	go func() {
-		frame, err := stream.Recv()
-		frames <- result{frame: frame, err: err}
-	}()
+	frames := make(chan receivedFrame, 1)
+	go receiveNextFrame(stream, frames)
 	var wakeTimer *time.Timer
 	var wakeChannel <-chan time.Time
 	if wake != nil {
@@ -76,19 +74,40 @@ func ReceiveFirstFrame(
 		heartbeatChannel = heartbeatTicker.C
 		defer heartbeatTicker.Stop()
 	}
+	isAssigned := false
 	for {
 		select {
 		case received := <-frames:
+			if received.err != nil {
+				return nil, received.err
+			}
+			if received.frame.GetAssigned() != nil {
+				isAssigned = true
+				go receiveNextFrame(stream, frames)
+				continue
+			}
+			if received.frame.GetUnassigned() != nil {
+				isAssigned = false
+				go receiveNextFrame(stream, frames)
+				continue
+			}
 			return received.frame, received.err
 		case <-wakeChannel:
 			wake()
 			wakeChannel = nil
 		case <-heartbeatChannel:
-			heartbeat()
+			if !isAssigned {
+				heartbeat()
+			}
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func receiveNextFrame(stream grpc.ServerStreamingClient[dexpb.DispatchTaskResponse], frames chan<- receivedFrame) {
+	frame, err := stream.Recv()
+	frames <- receivedFrame{frame: frame, err: err}
 }
 
 // NewUnavailableDispatcher preserves push-only service construction.

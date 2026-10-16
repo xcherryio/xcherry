@@ -426,6 +426,12 @@ export interface DispatchTaskResponse {
     | { $case: "rpc"; value: InvokeWorkerRPCResponse }
     | { $case: "workerError"; value: WorkerErrorResponse }
     | { $case: "dispatchError"; value: DispatchTaskError }
+    | //
+    /** Stops matching-wait heartbeats after Worker assignment. */
+    { $case: "assigned"; value: Empty }
+    | //
+    /** Resumes matching-wait heartbeats after a pre-output retry. */
+    { $case: "unassigned"; value: Empty }
     | undefined;
   /** Identifies the Worker that produced the final result or Worker error. */
   servedByAppWorkerId: string;
@@ -2924,6 +2930,12 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
       case "dispatchError":
         DispatchTaskError.encode(message.output.value, writer.uint32(42).fork()).join();
         break;
+      case "assigned":
+        Empty.encode(message.output.value, writer.uint32(58).fork()).join();
+        break;
+      case "unassigned":
+        Empty.encode(message.output.value, writer.uint32(66).fork()).join();
+        break;
     }
     if (message.servedByAppWorkerId !== "") {
       writer.uint32(50).string(message.servedByAppWorkerId);
@@ -2978,6 +2990,22 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
           message.output = { $case: "dispatchError", value: DispatchTaskError.decode(reader, reader.uint32()) };
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.output = { $case: "assigned", value: Empty.decode(reader, reader.uint32()) };
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.output = { $case: "unassigned", value: Empty.decode(reader, reader.uint32()) };
+          continue;
+        }
         case 6: {
           if (tag !== 50) {
             break;
@@ -3028,6 +3056,18 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
       case "dispatchError": {
         if (object.output?.value !== undefined && object.output?.value !== null) {
           message.output = { $case: "dispatchError", value: DispatchTaskError.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "assigned": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "assigned", value: Empty.fromPartial(object.output.value) };
+        }
+        break;
+      }
+      case "unassigned": {
+        if (object.output?.value !== undefined && object.output?.value !== null) {
+          message.output = { $case: "unassigned", value: Empty.fromPartial(object.output.value) };
         }
         break;
       }
