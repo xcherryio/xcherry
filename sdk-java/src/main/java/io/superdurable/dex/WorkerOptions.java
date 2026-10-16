@@ -47,6 +47,7 @@ public final class WorkerOptions {
     private final GrpcErrorStatusMapping grpcErrorStatusMapping;
     private final Duration attributeIndexSyncTimeout;
     private final PullWorkerOptions pull;
+    private final Credential credential;
     private final boolean isBindAddressConfigured;
 
     private WorkerOptions(final Builder builder) {
@@ -57,6 +58,7 @@ public final class WorkerOptions {
         this.grpcErrorStatusMapping = builder.grpcErrorStatusMapping;
         this.attributeIndexSyncTimeout = builder.attributeIndexSyncTimeout;
         this.pull = builder.pull;
+        this.credential = builder.credential;
         this.isBindAddressConfigured = builder.isBindAddressConfigured;
     }
 
@@ -97,6 +99,10 @@ public final class WorkerOptions {
         return pull;
     }
 
+    Credential getCredential() {
+        return credential;
+    }
+
     boolean isBindAddressConfigured() {
         return isBindAddressConfigured;
     }
@@ -111,6 +117,7 @@ public final class WorkerOptions {
                 GrpcErrorStatusMapping.newBuilder().build();
         private Duration attributeIndexSyncTimeout = Duration.ofMinutes(2);
         private PullWorkerOptions pull;
+        private Credential credential;
         private boolean isBindAddressConfigured;
 
         private Builder() {
@@ -177,6 +184,30 @@ public final class WorkerOptions {
          */
         public Builder serverAddress(final String value) {
             this.serverAddress = value;
+            return this;
+        }
+
+        /**
+         * Sets the token source for Worker FlowService calls and pull stream opens.
+         *
+         * <p>The source can be called concurrently and must not block. A failure ends the call
+         * locally; Worker startup throws {@link IllegalStateException} on authentication failure,
+         * and pull streams retry opening after a backoff. The default {@code null} sends no
+         * authorization metadata.
+         *
+         * <pre>{@code
+         * WorkerOptions options = WorkerOptions.newBuilder()
+         *         .serverAddress("dex:8801")
+         *         .pull(PullWorkerOptions.newBuilder().build())
+         *         .credential(new FileCredential("/var/run/secrets/dex/token"))
+         *         .build();
+         * }</pre>
+         *
+         * @param value the credential, or {@code null} to send no token
+         * @return this builder
+         */
+        public Builder credential(final Credential value) {
+            this.credential = value;
             return this;
         }
 

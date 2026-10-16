@@ -149,7 +149,9 @@ public final class Client implements AutoCloseable {
         this.channel = ManagedChannelBuilder.forTarget(options.getServerAddress())
                 .usePlaintext()
                 .build();
-        this.service = FlowServiceGrpc.newBlockingStub(channel);
+        final FlowServiceGrpc.FlowServiceBlockingStub serviceStub = FlowServiceGrpc.newBlockingStub(channel);
+        this.service = options.getCredential() == null ? serviceStub
+                : serviceStub.withCallCredentials(new GrpcCredential(options.getCredential()));
         this.hydrator = new ValueHydrator(service, blobCache);
         this.mappings = new WorkerDispatcher(registry, values, hydrator);
     }
