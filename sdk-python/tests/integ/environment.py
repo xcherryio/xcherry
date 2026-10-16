@@ -32,9 +32,9 @@ from dex import (
 
 
 class DexDevTestEnvironment:
-    def __init__(self, *flows: Flow[Any]) -> None:
+    def __init__(self, *flows: Flow[Any], worker_mode: str | None = None) -> None:
         server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
-        is_pull_worker_mode = integ_worker_mode() == "pull"
+        is_pull_worker_mode = (worker_mode or integ_worker_mode()) == "pull"
         worker_port = None if is_pull_worker_mode else _available_port()
         registry = Registry(flows)
         self._cache_directory = TemporaryDirectory(
