@@ -13,6 +13,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -72,6 +73,8 @@ type forwardDispatchRelay struct {
 	hasForwardedOutput bool
 	isMatched          bool
 	isAssigned         bool
+	isSticky           bool
+	excludedWorkerIDs  map[string]struct{}
 }
 
 type queueState struct {
@@ -118,6 +121,7 @@ const (
 	dispatchAttemptMatched dispatchAttemptOutcome = iota
 	dispatchAttemptRetryCapacity
 	dispatchAttemptRetryDisconnected
+	dispatchAttemptRetryUnknownName
 	dispatchAttemptTerminal
 )
 
@@ -426,7 +430,9 @@ func (e *Engine) servePoll(transport pollTransport) error {
 				e.logger.Debug("dropping Worker rejection for another task", zap.String("task_id", rejection.TaskId))
 				continue
 			}
-			if rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY {
+			if rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY &&
+				rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP &&
+				rejection.Reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC {
 				return status.Error(codes.InvalidArgument, "invalid task rejection")
 			}
 			select {
@@ -691,7 +697,7 @@ func (w *workerStream) disconnect() {
 	})
 }
 
-func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time) (*workerStream, <-chan struct{}) {
+func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time, excludedWorkerIDs map[string]struct{}) (*workerStream, <-chan struct{}) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	preferredElement := q.affinity[flowID]
@@ -701,6 +707,9 @@ func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time) (
 	}
 	selected := -1
 	for index, worker := range q.idle {
+		if _, isRejected := excludedWorkerIDs[worker.registration.AppWorkerId]; isRejected {
+			continue
+		}
 		if _, isRejected := excluded[worker]; isRejected {
 			continue
 		}
@@ -749,6 +758,10 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 	if request.TaskId == "" {
 		request.TaskId = uuid.NewString()
 	}
+	excludedWorkerIDs := make(map[string]struct{}, len(request.GetExcludedAppWorkerIds()))
+	for _, workerID := range request.GetExcludedAppWorkerIds() {
+		excludedWorkerIDs[workerID] = struct{}{}
+	}
 	ctx := stream.Context()
 	dispatchEnd := time.Now().Add(request.DispatchWait.AsDuration())
 	if deadline := request.Deadline.AsTime(); deadline.Before(dispatchEnd) {
@@ -764,7 +777,7 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 			stickyEnd = dispatchEnd
 		}
 	}
-	isMatched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, dispatchEnd, stream.Send)
+	isMatched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, dispatchEnd, excludedWorkerIDs, stream.Send)
 	if err != nil {
 		return err
 	}
@@ -772,7 +785,7 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 		return nil
 	}
 	if request.FallbackQueue != "" && request.FallbackQueue != request.Queue && time.Now().Before(dispatchEnd) {
-		isMatched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, dispatchEnd, stream.Send)
+		isMatched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, dispatchEnd, excludedWorkerIDs, stream.Send)
 		if err != nil {
 			return err
 		}
@@ -780,7 +793,7 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 			return nil
 		}
 	}
-	return stream.Send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, "no Worker accepted the task"))
+	return stream.Send(unmatchedDispatchError(request, excludedWorkerIDs))
 }
 
 func (e *Engine) forwardDispatch(ctx context.Context, request *dexpb.DispatchTaskRequest, address string, send func(*dexpb.DispatchTaskResponse) error) error {
@@ -809,7 +822,7 @@ func (e *Engine) forwardDispatch(ctx context.Context, request *dexpb.DispatchTas
 	}
 }
 
-func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskRequest, queueName string, waitEnd time.Time, dispatchEnd time.Time, send func(*dexpb.DispatchTaskResponse) error) (bool, error) {
+func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskRequest, queueName string, waitEnd time.Time, dispatchEnd time.Time, excludedWorkerIDs map[string]struct{}, send func(*dexpb.DispatchTaskResponse) error) (bool, error) {
 	if !time.Now().Before(waitEnd) {
 		return false, nil
 	}
@@ -825,8 +838,12 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			Queue: queueName, FlowId: request.FlowId, DispatchWait: durationUntil(waitEnd),
 			Deadline: request.Deadline, TaskId: request.TaskId, Request: request.Request,
 			SupportsAssignmentState: request.GetSupportsAssignmentState(),
+			StopAfterUnknownName:    queueName != request.FallbackQueue && request.FallbackQueue != "",
 		}
-		relay := &forwardDispatchRelay{request: request, send: send, dispatchEnd: dispatchEnd}
+		for workerID := range excludedWorkerIDs {
+			remoteRequest.ExcludedAppWorkerIds = append(remoteRequest.ExcludedAppWorkerIds, workerID)
+		}
+		relay := &forwardDispatchRelay{request: request, send: send, dispatchEnd: dispatchEnd, isSticky: queueName != request.FallbackQueue && request.FallbackQueue != "", excludedWorkerIDs: excludedWorkerIDs}
 		err := e.forwardDispatch(ctx, remoteRequest, owner.RPCAddress, relay.relay)
 		return relay.isMatched, err
 	}
@@ -849,7 +866,7 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			return false, nil
 		}
 		nextRetry := clearExpiredExclusions(excludedUntil)
-		worker, changed := queue.take(request.FlowId, excludedUntil)
+		worker, changed := queue.take(request.FlowId, excludedUntil, excludedWorkerIDs)
 		if worker == nil {
 			wakeAt := waitEnd
 			if !nextRetry.IsZero() && nextRetry.Before(wakeAt) {
@@ -882,6 +899,16 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			excludeCapacityReject(worker, excludedUntil, capacityBackoffs)
 		case dispatchAttemptRetryDisconnected:
 			excludedUntil[worker] = time.Time{}
+		case dispatchAttemptRetryUnknownName:
+			excludedWorkerIDs[worker.registration.AppWorkerId] = struct{}{}
+			if queueName != request.FallbackQueue && request.FallbackQueue != "" {
+				return false, nil
+			}
+			if request.GetStopAfterUnknownName() {
+				response := unmatchedDispatchError(request, excludedWorkerIDs)
+				response.RejectedByAppWorkerId = worker.registration.AppWorkerId
+				return true, send(response)
+			}
 		case dispatchAttemptMatched, dispatchAttemptTerminal:
 			return true, attemptErr
 		default:
@@ -900,6 +927,16 @@ func (r *forwardDispatchRelay) relay(frame *dexpb.DispatchTaskResponse) error {
 		return r.send(frame)
 	}
 	if dispatchErr := frame.GetDispatchError(); dispatchErr != nil {
+		if dispatchErr.Reason == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME && r.isSticky {
+			if workerID := frame.GetRejectedByAppWorkerId(); workerID != "" {
+				r.excludedWorkerIDs[workerID] = struct{}{}
+			}
+			if r.isAssigned {
+				r.isAssigned = false
+				return sendAssignmentState(r.request, false, r.send)
+			}
+			return nil
+		}
 		// Remote sticky waits can expire before the overall dispatch budget.
 		if dispatchErr.Reason == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE ||
 			(dispatchErr.Reason == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED && !r.hasForwardedOutput && time.Now().Before(r.dispatchEnd)) {
@@ -957,11 +994,11 @@ func (w *workerStream) dispatchTaskAssignment(
 	for {
 		select {
 		case frame := <-assignment.frames:
-			if frame.GetReject() != nil {
+			if rejection := frame.GetReject(); rejection != nil {
 				if hasReceivedOutput {
 					return dispatchAttemptTerminal, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, "Worker rejected task after output"))
 				}
-				return dispatchAttemptRetryCapacity, sendAssignmentState(request, false, send)
+				return rejectionOutcome(request, rejection.Reason), sendAssignmentState(request, false, send)
 			}
 			output := frame.GetTaskFrame()
 			hasReceivedOutput = true
@@ -976,11 +1013,11 @@ func (w *workerStream) dispatchTaskAssignment(
 			for {
 				select {
 				case frame := <-assignment.frames:
-					if frame.GetReject() != nil {
+					if rejection := frame.GetReject(); rejection != nil {
 						if hasReceivedOutput {
 							return dispatchAttemptTerminal, send(dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED, "Worker rejected task after output"))
 						}
-						return dispatchAttemptRetryDisconnected, sendAssignmentState(request, false, send)
+						return rejectionOutcome(request, rejection.Reason), sendAssignmentState(request, false, send)
 					}
 					if output := frame.GetTaskFrame(); output != nil {
 						hasReceivedOutput = true
@@ -1007,6 +1044,17 @@ func (w *workerStream) dispatchTaskAssignment(
 			return dispatchAttemptTerminal, status.Error(codes.DeadlineExceeded, "task deadline elapsed")
 		}
 	}
+}
+
+func rejectionOutcome(request *dexpb.DispatchTaskRequest, reason dexpb.PollWorkerTaskRejectReason) dispatchAttemptOutcome {
+	if reason == dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY {
+		return dispatchAttemptRetryCapacity
+	}
+	if (reason == dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP && request.GetRpc() == nil) ||
+		(reason == dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC && request.GetRpc() != nil) {
+		return dispatchAttemptRetryUnknownName
+	}
+	return dispatchAttemptRetryDisconnected
 }
 
 func excludeCapacityReject(worker *workerStream, excludedUntil map[*workerStream]time.Time, capacityBackoffs map[*workerStream]time.Duration) {
@@ -1049,6 +1097,22 @@ func (w *workerStream) cancelTask(taskID string) {
 
 func durationUntil(deadline time.Time) *durationpb.Duration {
 	return durationpb.New(time.Until(deadline))
+}
+
+func unmatchedDispatchError(request *dexpb.DispatchTaskRequest, excludedWorkerIDs map[string]struct{}) *dexpb.DispatchTaskResponse {
+	if len(excludedWorkerIDs) == 0 {
+		return dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, "no Worker accepted the task")
+	}
+	var detail string
+	switch task := request.Request.(type) {
+	case *dexpb.DispatchTaskRequest_WaitFor:
+		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow %q", task.WaitFor.GetStepType(), task.WaitFor.GetFlowType())
+	case *dexpb.DispatchTaskRequest_Execute:
+		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow %q", task.Execute.GetStepType(), task.Execute.GetFlowType())
+	case *dexpb.DispatchTaskRequest_Rpc:
+		detail = fmt.Sprintf("no pull Worker registered RPC %q for Flow %q", task.Rpc.GetRpcName(), task.Rpc.GetFlowType())
+	}
+	return dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME, detail)
 }
 
 func dispatchError(reason dexpb.DispatchTaskErrorReason, detail string) *dexpb.DispatchTaskResponse {

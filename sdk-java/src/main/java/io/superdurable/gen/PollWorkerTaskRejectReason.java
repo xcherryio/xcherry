@@ -31,6 +31,22 @@ public enum PollWorkerTaskRejectReason
    * <code>POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1;</code>
    */
   POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY(1),
+  /**
+   * <pre>
+   * The Flow has no registration for the requested Step type.
+   * </pre>
+   *
+   * <code>POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP = 2;</code>
+   */
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP(2),
+  /**
+   * <pre>
+   * The Flow has no registration for the requested RPC name.
+   * </pre>
+   *
+   * <code>POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC = 3;</code>
+   */
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC(3),
   UNRECOGNIZED(-1),
   ;
 
@@ -59,6 +75,22 @@ public enum PollWorkerTaskRejectReason
    * <code>POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1;</code>
    */
   public static final int POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY_VALUE = 1;
+  /**
+   * <pre>
+   * The Flow has no registration for the requested Step type.
+   * </pre>
+   *
+   * <code>POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP = 2;</code>
+   */
+  public static final int POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP_VALUE = 2;
+  /**
+   * <pre>
+   * The Flow has no registration for the requested RPC name.
+   * </pre>
+   *
+   * <code>POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC = 3;</code>
+   */
+  public static final int POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC_VALUE = 3;
 
 
   public final int getNumber() {
@@ -87,6 +119,8 @@ public enum PollWorkerTaskRejectReason
     switch (value) {
       case 0: return POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED;
       case 1: return POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY;
+      case 2: return POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+      case 3: return POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC;
       default: return null;
     }
   }

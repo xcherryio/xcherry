@@ -658,8 +658,15 @@ if err := worker.Start(); err != nil {
 Pull mode polls the Worker's sticky queue and every registered Flow type queue.
 Flow type names must be unique within a Dex server. `MaxConcurrentTasks` defaults
 to the CPU count, and `IdleStreamsPerQueue` defaults to one. When capacity is
-full, the Worker rejects additional assignments for reassignment. The generated
-Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
+full, the Worker rejects additional assignments for reassignment. The Worker
+also rejects a pull task when its Flow registration lacks the requested
+Step type or RPC name. Dex retries that task with another Worker without using
+another Step attempt. The rejecting Worker is excluded from that dispatch.
+If no capable Worker accepts before the dispatch wait ends, the Step follows
+its failure policy with an error naming the missing Step or RPC. Push mode keeps
+its existing missing-name error behavior.
+
+The generated Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
 `HOSTNAME`, or the system hostname, plus a random suffix. An `AppWorkerID`
 override must identify one Worker process uniquely and change when that process
 restarts. It must contain 1-63 ASCII letters, digits, dots, underscores, or

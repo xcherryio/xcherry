@@ -7,7 +7,7 @@ package io.superdurable.gen;
 
 /**
  * <pre>
- * Distinguishes absence of a Worker from loss of an assigned Worker.
+ * Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
  * </pre>
  *
  * Protobuf enum {@code dex.DispatchTaskErrorReason}
@@ -27,6 +27,10 @@ public enum DispatchTaskErrorReason
    * <code>DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2;</code>
    */
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED(2),
+  /**
+   * <code>DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;</code>
+   */
+  DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME(3),
   UNRECOGNIZED(-1),
   ;
 
@@ -51,6 +55,10 @@ public enum DispatchTaskErrorReason
    * <code>DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2;</code>
    */
   public static final int DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED_VALUE = 2;
+  /**
+   * <code>DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;</code>
+   */
+  public static final int DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME_VALUE = 3;
 
 
   public final int getNumber() {
@@ -80,6 +88,7 @@ public enum DispatchTaskErrorReason
       case 0: return DISPATCH_TASK_ERROR_REASON_UNSPECIFIED;
       case 1: return DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE;
       case 2: return DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED;
+      case 3: return DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME;
       default: return null;
     }
   }

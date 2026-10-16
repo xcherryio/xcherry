@@ -131,6 +131,20 @@ type rawPullWorker struct {
 	rejectedStickyTasks     chan pullTaskObservation
 	executeBehavior         pullExecuteBehavior
 	restoredHeartbeats      chan string
+	unknownStepType         string
+	unknownExecuteStepType  string
+	unknownRPCName          string
+	unknownRejections       chan pullTaskObservation
+}
+
+type rawPullWorkerConfig struct {
+	unknownStepType        string
+	unknownExecuteStepType string
+	unknownRPCName         string
+}
+
+func startUnknownRejectingPullWorker(t *testing.T, address string, flowType string, workerID string, configuration rawPullWorkerConfig) *rawPullWorker {
+	return newRawPullWorkerWithExecuteBehavior(t, address, flowType, workerID, nil, false, false, false, false, false, false, false, pullExecuteDefault, configuration)
 }
 
 func startHeartbeatPullWorker(t *testing.T, address string, flowType string, behavior pullExecuteBehavior) *rawPullWorker {
@@ -169,11 +183,15 @@ func newRawPullWorker(t *testing.T, address string, flowType string, workerID st
 	return newRawPullWorkerWithExecuteBehavior(t, address, flowType, workerID, rpcError, disconnectOnWaitFor, spawnSubFlow, spawnParallel, blockParallel, sendProgress, holdWaitFor, hasInvalidSubFlowTarget, pullExecuteDefault)
 }
 
-func newRawPullWorkerWithExecuteBehavior(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool, holdWaitFor bool, hasInvalidSubFlowTarget bool, executeBehavior pullExecuteBehavior) *rawPullWorker {
+func newRawPullWorkerWithExecuteBehavior(t *testing.T, address string, flowType string, workerID string, rpcError *dexpb.WorkerErrorResponse, disconnectOnWaitFor bool, spawnSubFlow bool, spawnParallel bool, blockParallel bool, sendProgress bool, holdWaitFor bool, hasInvalidSubFlowTarget bool, executeBehavior pullExecuteBehavior, configurations ...rawPullWorkerConfig) *rawPullWorker {
 	t.Helper()
 	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	configuration := rawPullWorkerConfig{}
+	if len(configurations) > 0 {
+		configuration = configurations[0]
+	}
 	worker := &rawPullWorker{
 		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
@@ -182,6 +200,9 @@ func newRawPullWorkerWithExecuteBehavior(t *testing.T, address string, flowType 
 		rpcError: rpcError, disconnectOnWaitFor: disconnectOnWaitFor, spawnSubFlow: spawnSubFlow,
 		spawnParallel: spawnParallel, blockParallel: blockParallel, sendProgress: sendProgress, holdWaitFor: holdWaitFor,
 		hasInvalidSubFlowTarget: hasInvalidSubFlowTarget,
+		unknownStepType:         configuration.unknownStepType, unknownExecuteStepType: configuration.unknownExecuteStepType,
+		unknownRPCName:    configuration.unknownRPCName,
+		unknownRejections: make(chan pullTaskObservation, 16),
 	}
 	for _, queue := range []string{flowType, workerID} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -230,6 +251,14 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 		}
 		task := frame.GetTask()
 		if task == nil {
+			continue
+		}
+		if reason := w.unknownTaskReason(task); reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
+			if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: task.GetTaskId(), Reason: reason}}}); err != nil {
+				w.errors <- err
+				return
+			}
+			w.unknownRejections <- pullTaskObservation{queue: queue, flowID: taskFlowID(task), attempt: taskAttempt(task)}
 			continue
 		}
 		if queue != taskFlowType(task) {
@@ -370,6 +399,24 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 	}
 }
 
+func (w *rawPullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.PollWorkerTaskRejectReason {
+	if request := task.GetExecute(); request != nil && request.GetStepType() == w.unknownExecuteStepType && w.unknownExecuteStepType != "" {
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+	}
+	if w.unknownStepType != "" {
+		if request := task.GetWaitFor(); request != nil && request.GetStepType() == w.unknownStepType {
+			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+		}
+		if request := task.GetExecute(); request != nil && request.GetStepType() == w.unknownStepType {
+			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+		}
+	}
+	if request := task.GetRpc(); request != nil && request.GetRpcName() == w.unknownRPCName && w.unknownRPCName != "" {
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC
+	}
+	return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+}
+
 func (w *rawPullWorker) sendHeldWaitForHeartbeats(ctx context.Context, stream dexpb.WorkerTaskService_PollWorkerTaskClient, taskID string) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -414,6 +461,32 @@ func taskFlowType(task *dexpb.PollWorkerTask) string {
 		return request.Rpc.GetFlowType()
 	default:
 		return ""
+	}
+}
+
+func taskFlowID(task *dexpb.PollWorkerTask) string {
+	switch request := task.GetRequest().(type) {
+	case *dexpb.PollWorkerTask_WaitFor:
+		return request.WaitFor.GetContext().GetFlowId()
+	case *dexpb.PollWorkerTask_Execute:
+		return request.Execute.GetContext().GetFlowId()
+	case *dexpb.PollWorkerTask_Rpc:
+		return request.Rpc.GetContext().GetFlowId()
+	default:
+		return ""
+	}
+}
+
+func taskAttempt(task *dexpb.PollWorkerTask) int32 {
+	switch request := task.GetRequest().(type) {
+	case *dexpb.PollWorkerTask_WaitFor:
+		return request.WaitFor.GetContext().GetAttempt()
+	case *dexpb.PollWorkerTask_Execute:
+		return request.Execute.GetContext().GetAttempt()
+	case *dexpb.PollWorkerTask_Rpc:
+		return request.Rpc.GetContext().GetAttempt()
+	default:
+		return 0
 	}
 }
 
@@ -1233,6 +1306,134 @@ func testPullWorkerStickyFallback(t *testing.T, backend service.BackendType) {
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, secondWorker, flowID).queue)
+}
+
+func TestPullUnknownNameRedispatchTemporal(t *testing.T) {
+	if !*temporalIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullUnknownNameRedispatch(t, service.BackendTypeTemporal)
+}
+
+func TestPullUnknownNameRedispatchCadence(t *testing.T) {
+	if !*cadenceIntegTest || *dexServerAddress != "" {
+		t.Skip()
+	}
+	testPullUnknownNameRedispatch(t, service.BackendTypeCadence)
+}
+
+func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
+	t.Helper()
+	t.Run("Step", func(t *testing.T) {
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: 2 * time.Second}})
+		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-old-"+uuid.NewString(), rawPullWorkerConfig{unknownStepType: dispatchProbeStep})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flowID := "pull-unknown-step-" + uuid.NewString()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+		select {
+		case rejected := <-oldWorker.unknownRejections:
+			require.Equal(t, int32(1), rejected.attempt)
+		case <-ctx.Done():
+			t.Fatal("old Worker did not reject the Step")
+		}
+		newWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-new-"+uuid.NewString(), nil)
+		require.Equal(t, int32(1), waitForPullTask(t, newWorker, flowID).attempt)
+		_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}}})
+		require.NoError(t, err)
+		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+		require.NoError(t, err)
+		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+		require.Empty(t, oldWorker.unknownRejections)
+	})
+	t.Run("RPC and sticky fallback", func(t *testing.T) {
+		stickyWait := 4 * time.Second
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
+		oldWorkerID := "pull-old-" + uuid.NewString()
+		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownRPCName: "getProbe"})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flowID := "pull-unknown-rpc-" + uuid.NewString()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+		require.Equal(t, int32(1), waitForPullTask(t, oldWorker, flowID).attempt)
+		waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, oldWorkerID)
+		newWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-new-"+uuid.NewString(), nil)
+		startedAt := time.Now()
+		response, err := runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", TimeoutSeconds: 15})
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		require.Less(t, time.Since(startedAt), stickyWait/2)
+		select {
+		case rejected := <-oldWorker.unknownRejections:
+			require.Equal(t, oldWorkerID, rejected.queue)
+		case <-ctx.Done():
+			t.Fatal("sticky Worker did not reject the RPC")
+		}
+		require.Equal(t, "rpc", waitForPullTask(t, newWorker, flowID).method)
+		require.Empty(t, oldWorker.unknownRejections)
+		_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+		require.NoError(t, err)
+	})
+	t.Run("sticky Step", func(t *testing.T) {
+		stickyWait := 4 * time.Second
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
+		oldWorkerID := "pull-old-" + uuid.NewString()
+		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownExecuteStepType: dispatchProbeStep})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flowID := "pull-unknown-sticky-step-" + uuid.NewString()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, nil))
+		require.Equal(t, int32(1), waitForPullTask(t, oldWorker, flowID).attempt)
+		waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, oldWorkerID)
+		newWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-new-"+uuid.NewString(), nil)
+		startedAt := time.Now()
+		_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}}})
+		require.NoError(t, err)
+		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+		require.NoError(t, err)
+		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+		require.Less(t, time.Since(startedAt), stickyWait/2)
+		require.Equal(t, int32(1), waitForPullTask(t, newWorker, flowID).attempt)
+		select {
+		case rejected := <-oldWorker.unknownRejections:
+			require.Equal(t, oldWorkerID, rejected.queue)
+			require.Equal(t, int32(1), rejected.attempt)
+		case <-ctx.Done():
+			t.Fatal("sticky Worker did not reject the Step")
+		}
+		require.Empty(t, oldWorker.unknownRejections)
+	})
+	t.Run("bounded failure", func(t *testing.T) {
+		dispatchWait := 700 * time.Millisecond
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: dispatchWait, StickyWait: 100 * time.Millisecond, LocalDispatchWait: dispatchWait, LocalStickyWait: 100 * time.Millisecond}})
+		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-old-"+uuid.NewString(), rawPullWorkerConfig{unknownStepType: dispatchProbeStep})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flowID := "pull-unknown-bound-" + uuid.NewString()
+		require.NoError(t, startDispatchProbe(ctx, runtime.FlowClient, flowID, dispatchProbeStep, &dexpb.WorkerTarget{IsPullMode: true}, &dexpb.StepOptions{WaitForRetryPolicy: &dexpb.RetryPolicy{MaximumAttempts: 1}}))
+		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
+		require.NoError(t, err)
+		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
+		require.Contains(t, result.GetErrorMessage(), dispatchProbeStep)
+		require.Len(t, oldWorker.unknownRejections, 1)
+	})
+	t.Run("legacy Worker error", func(t *testing.T) {
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: time.Second, StickyWait: 100 * time.Millisecond}})
+		oldWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-legacy-"+uuid.NewString(), &dexpb.WorkerErrorResponse{Detail: "RPC is not registered: getProbe", GrpcStatus: int32(codes.NotFound)})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flowID := "pull-legacy-rpc-" + uuid.NewString()
+		_, err := runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{RequestId: newRequestID(), FlowId: flowID, FlowType: dispatchProbeFlowType, FlowTimeoutSeconds: 120, FlowStartOptions: withWorkerTarget(nil, &dexpb.WorkerTarget{IsPullMode: true})})
+		require.NoError(t, err)
+		_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", TimeoutSeconds: 10})
+		require.Error(t, err)
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+		require.Contains(t, err.Error(), "RPC is not registered: getProbe")
+		require.Equal(t, "rpc", waitForPullTask(t, oldWorker, flowID).method)
+		require.Empty(t, oldWorker.unknownRejections)
+		_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{FlowId: flowID})
+		require.NoError(t, err)
+	})
 }
 
 func TestPullWorkerUnavailableCadence(t *testing.T) {

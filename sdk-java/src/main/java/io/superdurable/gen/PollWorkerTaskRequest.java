@@ -187,7 +187,7 @@ private static final long serialVersionUID = 0L;
   public static final int REJECT_FIELD_NUMBER = 3;
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -199,7 +199,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -214,7 +214,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1077,7 +1077,7 @@ private static final long serialVersionUID = 0L;
         io.superdurable.gen.PollWorkerTaskReject, io.superdurable.gen.PollWorkerTaskReject.Builder, io.superdurable.gen.PollWorkerTaskRejectOrBuilder> rejectBuilder_;
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1089,7 +1089,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1111,7 +1111,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1131,7 +1131,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1149,7 +1149,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1176,7 +1176,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1199,7 +1199,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1209,7 +1209,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -1227,7 +1227,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Declines an assigned task when the Worker has no capacity.
+     * Declines an assigned task before output when the Worker lacks capacity or the named handler.
      * </pre>
      *
      * <code>.dex.PollWorkerTaskReject reject = 3;</code>

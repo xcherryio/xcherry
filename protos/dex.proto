@@ -141,7 +141,7 @@ message PollWorkerTaskRequest {
     PollWorkerTaskRegister register = 1;
     // Reports task progress or its final result.
     PollWorkerTaskFrame task_frame = 2;
-    // Declines an assigned task when the Worker has no capacity.
+    // Declines an assigned task before output when the Worker lacks capacity or the named handler.
     PollWorkerTaskReject reject = 3;
     // Acknowledges a server liveness check.
     PollWorkerTaskPong pong = 4;
@@ -192,6 +192,10 @@ enum PollWorkerTaskRejectReason {
   POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED = 0;
   // All Worker execution slots are occupied.
   POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1;
+  // The Flow has no registration for the requested Step type.
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP = 2;
+  // The Flow has no registration for the requested RPC name.
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC = 3;
 }
 
 // Acknowledges a server Ping on the same stream.
@@ -270,6 +274,10 @@ message DispatchTaskRequest {
   }
   // Allows matching to send assignment state frames to capable callers.
   bool supports_assignment_state = 11;
+  // Worker processes already found unable to serve this task.
+  repeated string excluded_app_worker_ids = 12;
+  // Ends an internal sticky queue search immediately after an unknown-name rejection.
+  bool stop_after_unknown_name = 13;
 }
 
 // Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
@@ -287,6 +295,8 @@ message DispatchTaskResponse {
   }
   // Identifies the Worker that produced the final result or Worker error.
   string served_by_app_worker_id = 6;
+  // Identifies a Worker that rejected the task's Step type or RPC name.
+  string rejected_by_app_worker_id = 9;
 }
 
 // Reports a failure before Dex receives a Worker result.
@@ -295,11 +305,12 @@ message DispatchTaskError {
   string detail = 2;
 }
 
-// Distinguishes absence of a Worker from loss of an assigned Worker.
+// Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
 enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0;
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1;
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2;
+  DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;
 }
 
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
