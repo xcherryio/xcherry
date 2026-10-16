@@ -512,6 +512,127 @@ let progress = AttributeMap::new("primitive-attribute-progress")
 </SdkSnippet>
 </SdkTabs>
 
+## Hard-delete Attribute {#hard-delete-attributes}
+
+Hard-delete Attribute 适合保存短期使用的 secret，例如 Flow 只用几次、用完就丢弃的 API key。
+
+无论 value 大小，Dex 都只把 hard-delete Attribute 的 value 存在 Blob Store 中，Flow history 里只保留一个 reference。删除这个 Attribute，或把它设为 null，会永久删除存储的 value。之后，无论是 Dex API 还是 Flow history，都无法再恢复它。
+
+Step 和 RPC handler 会直接收到 value。SDK 不会把它写入本地 blob cache，Dex Server 也不会把它写入自己的 blob cache。
+
+在定义上开启这个 option：Go 用 **HardDeleteOnNull**，Java 和 TypeScript 用 **hardDeleteOnNull**，Python 和 Rust 用 **hard_delete_on_null**。Attribute 和 AttributeMap 都支持。
+
+<SdkTabs examples={{ python: 'examples/python/dex_examples/primitives/attribute/attribute_flow.py', go: 'examples/go/primitives/attribute/workflow.go', java: 'examples/java/src/main/java/io/superdurable/dex/primitives/attribute/AttributeFlow.java', typescript: 'examples/typescript/src/primitives/attribute/attribute-flow.ts', rust: 'examples/rust/src/primitives/attribute/flow.rs' }}>
+<SdkSnippet lang="python">
+
+```python
+class AttributeFlow(Flow[str]):
+    model_api_key = Attribute(
+        "primitive-attribute-model-api-key",
+        str,
+        hard_delete_on_null=True,
+    )
+
+
+class AttributeStep(Step[str]):
+    def execute(self, context: Context, input: str) -> StepDecision:
+        self.flow.status.set(context, "completed")
+        # The Flow no longer needs the short-lived key, so delete it permanently.
+        self.flow.model_api_key.delete(context)
+        return graceful_complete(input)
+```
+
+</SdkSnippet>
+<SdkSnippet lang="go">
+
+```go
+ModelAPIKey = dex.DefineAttribute[string](
+	"primitive-attribute-model-api-key",
+	dex.HardDeleteOnNull(),
+)
+
+func (attributeStep) Execute(ctx dex.Context, input string) (*dex.StepDecision, error) {
+	if err := Status.Set(ctx, "completed"); err != nil {
+		return nil, err
+	}
+	// The Flow no longer needs the short-lived key, so delete it permanently.
+	if err := ModelAPIKey.Delete(ctx); err != nil {
+		return nil, err
+	}
+	return dex.GracefulComplete(input), nil
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="java">
+
+```java
+private final Attribute<String> modelApiKey = Attribute.define(
+        "primitive-attribute-model-api-key",
+        String.class).hardDeleteOnNull();
+
+@Override
+public StepDecision execute(final Context context, final String input) {
+    status.set(context, "completed");
+    // The Flow no longer needs the short-lived key, so delete it permanently.
+    modelApiKey.delete(context);
+    return StepDecision.gracefulComplete(input);
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="typescript">
+
+```typescript
+const modelApiKey = new Attribute(
+  "primitive-attribute-model-api-key",
+  stringCodec,
+).hardDeleteOnNull();
+
+public execute(context: Context, input: string): StepDecision {
+  this.flow.status.set(context, "completed");
+  // The Flow no longer needs the short-lived key, so delete it permanently.
+  this.flow.modelApiKey.delete(context);
+  return gracefulComplete(input);
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="rust">
+
+```rust
+static MODEL_API_KEY: LazyLock<Attribute<String>> =
+    LazyLock::new(|| Attribute::new("primitive-attribute-model-api-key").hard_delete_on_null());
+
+fn execute(&self, context: &mut Context, input: Self::Input) -> HandlerResult<StepDecision> {
+    STATUS.set(context, "completed".to_owned())?;
+    // The Flow no longer needs the short-lived key, so delete it permanently.
+    MODEL_API_KEY.delete(context)?;
+    Ok(StepDecision::graceful_complete(input))
+}
+```
+
+</SdkSnippet>
+</SdkTabs>
+
+
+Hard-delete Attribute 有以下要求：
+
+- 只支持 string 和 object value（包括 bytes），不支持数值和 Boolean 类型。
+- 不能设置 index，也不能同步到 Attribute Store。**WaitForAttributeMatch** 和 Action condition 都不接受它。
+- 需要 Dex Server v1.11.0 或更高版本，并且启用 Blob Store。SDK 不会向更早版本的 Server 写入这个 Attribute；没有启用 Blob Store 的 Server 会拒绝写入。
+
+每个 Flow 对每个 Attribute key 只保存一份 value，并在原位置覆盖。需要注意以下影响：
+
+- Step 或 RPC 的 attempt 在结果提交之前就会写入或删除存储的 value。因此，重试的 attempt、其他 Step 和 RPC，以及 Attribute 读取，都可能看到之后失败的 attempt 做的写入或删除。handler 应该可以安全地重复执行，不要依赖对这个 Attribute 的「先读再写」。
+- 多个 Step 或 RPC 并发写同一个 key 时，最终的 value 不一定是最后提交的那次写入。
+- 如果 Flow ID 已经在运行，Flow start 或 SubFlow start 会失败，但仍然会覆盖正在运行的 Flow 的 value；initial value 为 null 时会删除它。
+- 复用同一个 Flow ID 的 Flow 共用这份存储的 value。
+- 已删除的 value 总是读作不存在，time travel 也不会恢复它。Flow retry 或重新启动的 SubFlow 从原来的 initial value 开始；如果之前的 run 已经删除了这个 value，新的 run 会读到不存在。
+- 从定义上移除这个 option 后，已存储的 value 会一直保留，直到 Dex 删除这个 Flow。请先用 hard-delete 定义删除 value，再移除 option。
+
+value 会一直保存，直到被删除，或者 Dex 在 retention period 结束后删除这个 Flow。Dex 之外的 Blob Store 备份和 bucket versioning 可能会保留副本。参见 [Blob Store](/production/server-operations#blob-store)。
+
 ## Attribute Sync {#attribute-store-projection}
 
 Dex Attribute 不是用来替代 database 的。Attribute Sync feature 会把 Attribute values 同步到 application database，无需你写一行代码。

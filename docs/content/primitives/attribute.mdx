@@ -512,6 +512,127 @@ let progress = AttributeMap::new("primitive-attribute-progress")
 </SdkSnippet>
 </SdkTabs>
 
+## Hard-delete Attributes {#hard-delete-attributes}
+
+Use a hard-delete Attribute for a short-lived secret, such as an API key that a Flow uses a few times and then discards.
+
+Dex stores every value of a hard-delete Attribute only in its Blob Store, whatever the value size. Flow history keeps only a reference. Deleting the Attribute, or setting it to null, permanently deletes the stored value. After that, neither Dex APIs nor Flow history can recover it.
+
+Step and RPC handlers receive the value directly. The SDKs never write it to their local blob cache, and Dex Server never writes it to its blob cache.
+
+Enable it on the definition with **HardDeleteOnNull** in Go, **hardDeleteOnNull** in Java and TypeScript, and **hard_delete_on_null** in Python and Rust. The option works for both Attributes and AttributeMaps.
+
+<SdkTabs examples={{ python: 'examples/python/dex_examples/primitives/attribute/attribute_flow.py', go: 'examples/go/primitives/attribute/workflow.go', java: 'examples/java/src/main/java/io/superdurable/dex/primitives/attribute/AttributeFlow.java', typescript: 'examples/typescript/src/primitives/attribute/attribute-flow.ts', rust: 'examples/rust/src/primitives/attribute/flow.rs' }}>
+<SdkSnippet lang="python">
+
+```python
+class AttributeFlow(Flow[str]):
+    model_api_key = Attribute(
+        "primitive-attribute-model-api-key",
+        str,
+        hard_delete_on_null=True,
+    )
+
+
+class AttributeStep(Step[str]):
+    def execute(self, context: Context, input: str) -> StepDecision:
+        self.flow.status.set(context, "completed")
+        # The Flow no longer needs the short-lived key, so delete it permanently.
+        self.flow.model_api_key.delete(context)
+        return graceful_complete(input)
+```
+
+</SdkSnippet>
+<SdkSnippet lang="go">
+
+```go
+ModelAPIKey = dex.DefineAttribute[string](
+	"primitive-attribute-model-api-key",
+	dex.HardDeleteOnNull(),
+)
+
+func (attributeStep) Execute(ctx dex.Context, input string) (*dex.StepDecision, error) {
+	if err := Status.Set(ctx, "completed"); err != nil {
+		return nil, err
+	}
+	// The Flow no longer needs the short-lived key, so delete it permanently.
+	if err := ModelAPIKey.Delete(ctx); err != nil {
+		return nil, err
+	}
+	return dex.GracefulComplete(input), nil
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="java">
+
+```java
+private final Attribute<String> modelApiKey = Attribute.define(
+        "primitive-attribute-model-api-key",
+        String.class).hardDeleteOnNull();
+
+@Override
+public StepDecision execute(final Context context, final String input) {
+    status.set(context, "completed");
+    // The Flow no longer needs the short-lived key, so delete it permanently.
+    modelApiKey.delete(context);
+    return StepDecision.gracefulComplete(input);
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="typescript">
+
+```typescript
+const modelApiKey = new Attribute(
+  "primitive-attribute-model-api-key",
+  stringCodec,
+).hardDeleteOnNull();
+
+public execute(context: Context, input: string): StepDecision {
+  this.flow.status.set(context, "completed");
+  // The Flow no longer needs the short-lived key, so delete it permanently.
+  this.flow.modelApiKey.delete(context);
+  return gracefulComplete(input);
+}
+```
+
+</SdkSnippet>
+<SdkSnippet lang="rust">
+
+```rust
+static MODEL_API_KEY: LazyLock<Attribute<String>> =
+    LazyLock::new(|| Attribute::new("primitive-attribute-model-api-key").hard_delete_on_null());
+
+fn execute(&self, context: &mut Context, input: Self::Input) -> HandlerResult<StepDecision> {
+    STATUS.set(context, "completed".to_owned())?;
+    // The Flow no longer needs the short-lived key, so delete it permanently.
+    MODEL_API_KEY.delete(context)?;
+    Ok(StepDecision::graceful_complete(input))
+}
+```
+
+</SdkSnippet>
+</SdkTabs>
+
+
+A hard-delete Attribute has these requirements:
+
+- Only string and object values are supported, including bytes. Numeric and Boolean value types are rejected.
+- It cannot be indexed or synced to an Attribute Store. **WaitForAttributeMatch** and Action conditions reject it.
+- Dex Server v1.11.0 or later, with its Blob Store enabled. The SDKs refuse to write the Attribute to an older Server, and a Server without a Blob Store rejects the write.
+
+Each Flow keeps one stored value per Attribute key and overwrites it in place. Plan for these consequences:
+
+- A Step or RPC attempt writes or deletes the stored value before its result is committed. A retried attempt, other Steps and RPCs, and Attribute reads can observe a write or deletion made by an attempt that later failed. Make handlers safe to repeat instead of relying on a read-modify-write of the Attribute.
+- When concurrent Steps or RPCs write the same key, the final value may not be the last committed write.
+- A Flow start or SubFlow start that fails because the Flow ID is already running still overwrites the running Flow's value. A null initial value deletes it.
+- Flows that reuse a Flow ID share the stored value.
+- A deleted value always reads as absent. Time travel does not restore it. A Flow retry or a restarted SubFlow starts from the original initial value, so it reads as absent when an earlier run deleted that value.
+- Removing the option from a definition leaves the stored value in place until Dex removes the Flow. Delete the value with the hard-delete definition first.
+
+A value remains stored until it is deleted, or until Dex removes the Flow after its retention period. Blob Store backups and bucket versioning outside Dex can keep copies. See [Blob Store](/production/server-operations#blob-store).
+
 ## Attribute Sync {#attribute-store-projection}
 
 Dex Attribute is not to replace your databases. Attribute Sync feature will sync the attribute values to your application database, without you writing a single line of code.

@@ -59,6 +59,8 @@ class AttributeStep(Step[str]):
 
     def execute(self, context: Context, input: str) -> StepDecision:
         self.flow.status.set(context, "completed")
+        # The Flow no longer needs the short-lived key, so delete it permanently.
+        self.flow.model_api_key.delete(context)
         return graceful_complete(input)
 
 
@@ -69,6 +71,11 @@ class AttributeFlow(Flow[str]):
         index=AttributeIndex(IndexType.KEYWORD, "keyword1"),
     )
     email = Attribute("primitive-attribute-email", str, sync_to_attribute_store=True)
+    model_api_key = Attribute(
+        "primitive-attribute-model-api-key",
+        str,
+        hard_delete_on_null=True,
+    )
     progress = AttributeMap(
         "primitive-attribute-progress",
         str,
@@ -83,7 +90,9 @@ class AttributeFlow(Flow[str]):
         return StepList.start_step(self.start)
 
     def get_persistence_schema(self) -> PersistenceSchema:
-        return PersistenceSchema.of(self.status, self.progress, self.email)
+        return PersistenceSchema.of(
+            self.status, self.progress, self.email, self.model_api_key
+        )
 
     @rpc(lock_attributes=(status.lock(), progress.lock("payment")))
     def update_status(self, context: Context, input: str) -> RPCResult[str]:
