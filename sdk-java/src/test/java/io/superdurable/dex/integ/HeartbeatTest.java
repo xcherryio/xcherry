@@ -50,7 +50,8 @@ public final class HeartbeatTest {
     private void assertHeartbeatRetry(
             final HeartbeatTestWorkflow.Scenario scenario,
             final String expectedOutput) throws Exception {
-        final HeartbeatTestWorkflow workflow = new HeartbeatTestWorkflow(scenario);
+        final HeartbeatTestWorkflow workflow = new HeartbeatTestWorkflow(
+                scenario, DexDevTestEnvironment.isPullMode());
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 workflow)) {

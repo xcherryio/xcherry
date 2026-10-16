@@ -15,6 +15,7 @@ import io.superdurable.dex.BlobCacheConfig;
 import io.superdurable.dex.Client;
 import io.superdurable.dex.ClientOptions;
 import io.superdurable.dex.Flow;
+import io.superdurable.dex.PullWorkerOptions;
 import io.superdurable.dex.Registry;
 import io.superdurable.dex.Worker;
 import io.superdurable.dex.WorkerOptions;
@@ -52,22 +53,40 @@ public final class DexDevTestEnvironment implements AutoCloseable {
     public static DexDevTestEnvironment start(
             final Path cacheDirectory,
             final Flow<?>... flows) throws IOException {
+        return start(cacheDirectory, isPullMode(), flows);
+    }
+
+    public static DexDevTestEnvironment startPush(
+            final Path cacheDirectory,
+            final Flow<?>... flows) throws IOException {
+        return start(cacheDirectory, false, flows);
+    }
+
+    private static DexDevTestEnvironment start(
+            final Path cacheDirectory,
+            final boolean isPullMode,
+            final Flow<?>... flows) throws IOException {
         final String serverAddress = System.getProperty(
                 "dex.test.serverAddress",
                 "127.0.0.1:8801");
-        final int workerPort = availablePort();
-        final String workerAddress = "127.0.0.1:" + workerPort;
         final Registry registry = new Registry(Arrays.asList(flows));
         final BlobCache blobCache = BlobCache.open(new BlobCacheConfig(
                 cacheDirectory.toString(),
                 CACHE_SIZE_BYTES));
+        final WorkerOptions.Builder workerOptions = WorkerOptions.newBuilder()
+                .serverAddress(serverAddress);
+        final int workerPort;
+        if (isPullMode) {
+            workerPort = 0;
+            workerOptions.pull(PullWorkerOptions.newBuilder().build());
+        } else {
+            workerPort = availablePort();
+            workerOptions.bindAddress("127.0.0.1:" + workerPort);
+        }
         final Worker worker = new Worker(
                 registry,
                 blobCache,
-                WorkerOptions.newBuilder()
-                        .bindAddress(workerAddress)
-                        .serverAddress(serverAddress)
-                        .build());
+                workerOptions.build());
         final AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         final Thread workerThread = new Thread(() -> {
             try {
@@ -77,7 +96,9 @@ public final class DexDevTestEnvironment implements AutoCloseable {
             }
         }, "dex-java-integration-worker");
         workerThread.start();
-        awaitWorker(workerPort, workerFailure);
+        if (!isPullMode) {
+            awaitWorker(workerPort, workerFailure);
+        }
         final Client client = new Client(
                 registry,
                 blobCache,
@@ -88,6 +109,17 @@ public final class DexDevTestEnvironment implements AutoCloseable {
                 workerThread,
                 workerFailure,
                 client);
+    }
+
+    public static boolean isPullMode() {
+        final String workerMode = System.getenv("DEX_INTEG_WORKER_MODE");
+        if (workerMode == null || "push".equals(workerMode)) {
+            return false;
+        }
+        if ("pull".equals(workerMode)) {
+            return true;
+        }
+        throw new IllegalArgumentException("DEX_INTEG_WORKER_MODE must be push or pull");
     }
 
     public Client client() {

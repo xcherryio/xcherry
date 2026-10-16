@@ -91,14 +91,19 @@ jobs:
         run: ./validate-publication.sh "0.0.2-ci.${GITHUB_RUN_NUMBER}"
 
   tests:
-    name: Integration tests
+    name: Integration tests (${{ matrix.worker-mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        worker-mode: [push, pull]
     permissions:
       contents: read
       id-token: write
     env:
       RUSTUP_TOOLCHAIN: "1.97.1"
+      DEX_INTEG_WORKER_MODE: ${{ matrix.worker-mode }}
     defaults:
       run:
         working-directory: sdk-java
@@ -153,19 +158,19 @@ jobs:
           fail_ci_if_error: true
           files: ./sdk-java/build/reports/jacoco/integration/jacoco.xml
           flags: sdk-java-integration
-          name: sdk-java-integration
+          name: sdk-java-integration-${{ matrix.worker-mode }}
           use_oidc: true
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-java-integration-coverage
+          name: sdk-java-integration-coverage-${{ matrix.worker-mode }}
           path: sdk-java/build/reports/jacoco/integration/
           if-no-files-found: ignore
       - name: Upload service logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-java-integration-services
+          name: sdk-java-integration-services-${{ matrix.worker-mode }}
           path: /tmp/test-java-sdk-integration-services.log
           if-no-files-found: ignore

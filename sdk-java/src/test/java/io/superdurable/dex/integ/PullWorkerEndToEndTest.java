@@ -136,7 +136,7 @@ public final class PullWorkerEndToEndTest {
         }
 
         final PushFlow registered = new PushFlow();
-        try (DexDevTestEnvironment push = DexDevTestEnvironment.start(
+        try (DexDevTestEnvironment push = DexDevTestEnvironment.startPush(
                 cacheDirectory.resolve("push"), registered)) {
             final String flowID = "java-push-" + UUID.randomUUID();
             push.client().startFlow(registered, flowID, "push");
