@@ -5,6 +5,13 @@ sidebar_label: Dex Web
 
 # Dex Web
 
+Dex Web has no end-user authentication. When Dex Server **auth** is enabled,
+Web sends its configured **web.flowServiceCredentialFile** bearer credential to
+FlowService for every request. Anyone who can reach the Web port can act with
+that credential. Protect the Web port with network controls or an
+authenticating proxy. See [server authentication](/production/server-operations#authentication)
+and [Dex Web access control](/production/server-operations#dex-web-access-control).
+
 Dex Web has two URL prefixes. **v1** is the existing Flows search, run details, and Flow Rendering workspace. **v2** is the operator workspace: a run list and filters on the left, and the Flow Definition Graph on the right.
 
 Start Dex without a JSON directory to open **v1** at **/v1/flows**. Start Dex with **--flow-rendering-dir** to open **v2** at **/v2**. The top-right Version menu switches back to **v1**.

@@ -43,6 +43,8 @@ web:
   bindAddress: 0.0.0.0
   port: 8802
   flowServiceTarget: localhost:8801
+  # Required when auth is enabled and Dex Web runs. Protect the Web port separately.
+  # flowServiceCredentialFile: /etc/dex/web-token
   flowRenderingDirectory: ""
   # Apply headless routing to every Worker target submitted through Dex Web Start Flow.
   startFlowWorkerTargetHeadless: false

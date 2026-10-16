@@ -21,7 +21,7 @@ type App struct {
 	stdin           io.Reader
 	stdout          io.Writer
 	stderr          io.Writer
-	getenv          func(string) string
+	lookupEnv       func(string) (string, bool)
 	openBrowser     func(string) error
 	artifactVersion string
 }
@@ -47,14 +47,14 @@ func NewApp(stdin io.Reader, stdout io.Writer, stderr io.Writer, artifactVersion
 		stdin:           stdin,
 		stdout:          stdout,
 		stderr:          stderr,
-		getenv:          os.Getenv,
+		lookupEnv:       os.LookupEnv,
 		openBrowser:     openVisualizationBrowser,
 		artifactVersion: artifactVersion,
 	}
 }
 
 func (a *App) Execute(ctx context.Context, args []string) error {
-	options := defaultOptions(a.getenv)
+	options := defaultOptions(a.lookupEnv)
 	remaining, err := parseRootOptions(args, &options)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -132,6 +132,9 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Global flags:")
 	fmt.Fprintln(a.stdout, "  --server host:port                 Dex FlowService target")
+	fmt.Fprintln(a.stdout, "  --credential-file path             bearer token file (overrides DEX_CREDENTIAL_FILE and DEX_CREDENTIAL)")
+	fmt.Fprintln(a.stdout, "  DEX_CREDENTIAL_FILE                fallback bearer token file")
+	fmt.Fprintln(a.stdout, "  DEX_CREDENTIAL                     fallback bearer token value; no token flag to avoid shell history and process listings")
 	fmt.Fprintln(a.stdout, "  --output json|table                output format (default json)")
 	fmt.Fprintln(a.stdout, "  --timeout duration                 request timeout (default 30s; 0 disables)")
 	fmt.Fprintln(a.stdout, "  --no-hydrate                       return blob references without loading values")

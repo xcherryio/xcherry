@@ -152,6 +152,7 @@ web:
   bindAddress: 0.0.0.0
   port: 8802
   flowServiceTarget: dex-api:8801
+  flowServiceCredentialFile: /etc/dex/web-token
   flowRenderingDirectory: ""
   startFlowWorkerTargetHeadless: false
 ~~~
@@ -160,6 +161,11 @@ bind address 默认监听所有 interface，port 默认是 8802。空的
 **flowServiceTarget** 使用 localhost 和已配置的 API port。Web connection 使用
 plaintext gRPC，并复用 **api.grpcMaxMessageBytes**，因此应将其限制在可信
 network path 内。
+
+**web.flowServiceCredentialFile** 默认值为空。配置后，Web 会将文件中的 bearer token
+发送给 FlowService，即使 **auth** 关闭也是如此。Dex Web 至多每秒检查一次文件轮换。
+当前进程启用 **auth** 并运行 Web 时，此字段为必填。仅运行 Web、并连接启用了身份认证的
+远程 FlowService 的进程也必须配置此字段。
 
 **web.startFlowWorkerTargetHeadless** 控制所有从 Dex Web 启动的 Flow 的 Worker routing。默认值为 false，启动后不可变。对应的环境变量是 **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**。只有操作员填写 Kubernetes headless Service address 时才启用它。
 
@@ -203,8 +209,12 @@ JWT 配置省略 **jwksURL** 时，Dex 通过 issuer 的 OpenID 配置发现 key
 **interpreter.interpreterActivityConfig.internalServiceTarget** 指向此 listener。
 关闭 **auth** 且未配置独立 internal listener 时，这两个 service 使用公开 API listener。
 
-目前启用 **auth** 后只有 Go SDK 能连接。Dex Web、CLI，以及 Java、Python、
-TypeScript 和 Rust SDK 还不能提供所需 credential。
+启用 **auth** 后，Go SDK、Dex Web 和 **dexcli** 可以提供 credential。
+Java、Python、TypeScript 和 Rust SDK 还不能提供所需 credential。
+
+Dex Web 没有最终用户身份认证。任何能够访问 Web 端口的人都能使用 Web 的
+FlowService credential 操作 Dex。即使启用了 **auth**，也必须通过网络访问控制或
+强制认证的代理保护 Web 端口。参见[Dex Web 访问控制](#dex-web-access-control)。
 
 ## Worker 唤醒 hook {#worker-wake-hook}
 
@@ -382,7 +392,7 @@ approximate charging、trim watermark、trim batch、lease 和 worker concurrenc
 [自定义 Attribute Store](/production/attribute-store)中的 schema 和 retry 要求。将其
 数据库、凭据、migration 和 backup 作为 Dex deployment 的生产依赖。
 
-## Dex Web 访问控制
+## Dex Web 访问控制 {#dex-web-access-control}
 
 Dex Web 可以显示 Flow input、output、Attribute 和 Worker stack trace。将它放在 TLS 以及
 强制认证的 reverse proxy 或 gateway 后。按 role 授权生产访问，并将其限制给需要检查

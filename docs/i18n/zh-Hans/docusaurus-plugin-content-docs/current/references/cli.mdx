@@ -20,6 +20,22 @@ DEX_FLOW_SERVICE_ADDRESS=dex.example.internal:8801 dexcli health
 dexcli --server 127.0.0.1:9901 flow search
 ```
 
+## 身份认证
+
+Dex 要求 bearer credential 时，可用 **--credential-file** 指定 token 文件，
+用 **DEX_CREDENTIAL_FILE** 指定 token 文件路径，或用 **DEX_CREDENTIAL** 提供 token 值。
+优先级按上述顺序排列。CLI 会在首次调用前读取文件；**flow watch** 等长时间运行的
+command 至多每秒检查一次文件变化。文件为空或无法读取时，调用会在连接 Dex 前失败。
+CLI 会去除 token 两端的空白字符。
+
+```bash
+dexcli flow search --credential-file /run/secrets/dex/token
+DEX_CREDENTIAL_FILE=/run/secrets/dex/token dexcli flow watch order-123
+```
+
+CLI 不提供原始 token flag，因为 command 参数可能出现在 shell history 和 process list 中。
+FlowService 使用明文 gRPC connection，因此需要保护其 network path。
+
 ## 易用的 Flow 操作
 
 使用 **flow search**、**summary**、**state**、**history** 和 **inspect** 获取有界的

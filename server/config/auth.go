@@ -142,6 +142,14 @@ func (c Config) ValidateGeneralAccess() error {
 	return nil
 }
 
+// ValidateWebFlowServiceCredential requires a Web credential when public authentication is enabled.
+func (c Config) ValidateWebFlowServiceCredential(isWebEnabled bool) error {
+	if isWebEnabled && c.Auth.IsEnabled() && c.Web.FlowServiceCredentialFile == "" {
+		return fmt.Errorf("web.flowServiceCredentialFile is required when auth is enabled and Dex Web is started")
+	}
+	return nil
+}
+
 // ValidateIssuerURL requires https, or http for a loopback host.
 func ValidateIssuerURL(name string, rawURL string) error {
 	if rawURL == "" {

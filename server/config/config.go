@@ -455,6 +455,14 @@ type (
 		Port int `yaml:"port"`
 		// FlowServiceTarget is the plaintext FlowService gRPC target. Default localhost:<api.port>. Immutable after startup.
 		FlowServiceTarget string `yaml:"flowServiceTarget"`
+		// FlowServiceCredentialFile holds the bearer token Dex Web sends to FlowService on every call.
+		// Default empty sends no credential. When Web starts, a configured file must exist and contain a non-empty token;
+		// surrounding whitespace is trimmed.
+		// The token is sent even when auth is disabled. Dex checks file changes at most once per second; an empty or
+		// unreadable file then fails each call with Unauthenticated until restored. The path is immutable after startup.
+		// When auth is enabled and Web runs in this process, an empty path fails startup. Validation uses this process's
+		// auth config only; a Web-only process connecting to an authenticated remote FlowService must also set this field.
+		FlowServiceCredentialFile string `yaml:"flowServiceCredentialFile"`
 		// FlowRenderingDirectory supplies Flow Definition Graph JSON files. Default empty disables definitions. Immutable after startup.
 		FlowRenderingDirectory string `yaml:"flowRenderingDirectory"`
 		// StartFlowWorkerTargetHeadless applies headless routing to every Flow started from Dex Web. Default false. Immutable after startup.

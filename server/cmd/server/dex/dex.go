@@ -38,6 +38,7 @@ import (
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/bootstrap"
+	"github.com/superdurable/dex/service/common/credential"
 	dexweb "github.com/superdurable/dex/web"
 	"github.com/superdurable/dex/web/assets"
 	"github.com/urfave/cli"
@@ -128,14 +129,27 @@ func newApplication(cfg *config.Config, services serviceSelection) (*application
 		panic("Dex Server config must not be nil")
 	}
 	serverApplication := &application{}
+	if err := cfg.ValidateWebFlowServiceCredential(services.isWebEnabled); err != nil {
+		return nil, err
+	}
 	if services.isWebEnabled {
-		connection, err := grpc.NewClient(
-			cfg.GetWebFlowServiceTargetWithDefault(),
+		dialOptions := []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(cfg.Api.EffectiveGrpcMaxMessageBytes()),
 				grpc.MaxCallSendMsgSize(cfg.Api.EffectiveGrpcMaxMessageBytes()),
 			),
+		}
+		if cfg.Web.FlowServiceCredentialFile != "" {
+			perRPCCredential, err := credential.File(cfg.Web.FlowServiceCredentialFile)
+			if err != nil {
+				return nil, fmt.Errorf("load Dex Web FlowService credential: %w", err)
+			}
+			dialOptions = append(dialOptions, grpc.WithPerRPCCredentials(perRPCCredential))
+		}
+		connection, err := grpc.NewClient(
+			cfg.GetWebFlowServiceTargetWithDefault(),
+			dialOptions...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create Dex Web FlowService client: %w", err)

@@ -20,21 +20,40 @@ import (
 const defaultServerAddress = "127.0.0.1:8801"
 
 type options struct {
-	server    string
-	output    string
-	timeout   time.Duration
-	noHydrate bool
+	server         string
+	credentialFile string
+	credential     string
+	hasFile        bool
+	hasCredential  bool
+	output         string
+	timeout        time.Duration
+	noHydrate      bool
 }
 
-func defaultOptions(getenv func(string) string) options {
-	server := strings.TrimSpace(getenv("DEX_FLOW_SERVICE_ADDRESS"))
+func defaultOptions(lookupEnv func(string) (string, bool)) options {
+	serverValue, _ := lookupEnv("DEX_FLOW_SERVICE_ADDRESS")
+	server := strings.TrimSpace(serverValue)
 	if server == "" {
 		server = defaultServerAddress
 	}
+	credentialFile, hasFile := lookupEnv("DEX_CREDENTIAL_FILE")
+	credentialValue, hasCredential := lookupEnv("DEX_CREDENTIAL")
+	hasFile = hasFile && strings.TrimSpace(credentialFile) != ""
+	hasCredential = hasCredential && strings.TrimSpace(credentialValue) != ""
+	if !hasFile {
+		credentialFile = ""
+	}
+	if !hasCredential {
+		credentialValue = ""
+	}
 	return options{
-		server:  server,
-		output:  "json",
-		timeout: 30 * time.Second,
+		server:         server,
+		credentialFile: credentialFile,
+		credential:     credentialValue,
+		hasFile:        hasFile,
+		hasCredential:  hasCredential,
+		output:         "json",
+		timeout:        30 * time.Second,
 	}
 }
 
@@ -49,9 +68,20 @@ func parseRootOptions(args []string, options *options) ([]string, error) {
 
 func addCommonFlags(flags *flag.FlagSet, options *options) {
 	flags.StringVar(&options.server, "server", options.server, "Dex FlowService host:port")
+	flags.Var(credentialFileFlag{options: options}, "credential-file", "bearer token file; use DEX_CREDENTIAL for a token value (no token flag, to avoid shell history and process listings)")
 	flags.StringVar(&options.output, "output", options.output, "json or table")
 	flags.DurationVar(&options.timeout, "timeout", options.timeout, "request timeout; 0 disables")
 	flags.BoolVar(&options.noHydrate, "no-hydrate", options.noHydrate, "return blob references")
+}
+
+type credentialFileFlag struct{ options *options }
+
+func (c credentialFileFlag) String() string { return c.options.credentialFile }
+
+func (c credentialFileFlag) Set(path string) error {
+	c.options.credentialFile = path
+	c.options.hasFile = true
+	return nil
 }
 
 func newFlagSet(name string, output io.Writer) *flag.FlagSet {

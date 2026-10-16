@@ -31,6 +31,17 @@ web:
 	require.True(t, cfg.Web.IsStartFlowWorkerTargetHeadless)
 }
 
+func TestWebCredentialRequiredOnlyForAuthenticatedWeb(t *testing.T) {
+	cfg := Config{Auth: AuthConfig{Authenticators: []AuthenticatorConfig{{Kind: AuthenticatorKindStaticTokens}}}}
+	require.ErrorContains(t, cfg.ValidateWebFlowServiceCredential(true), "web.flowServiceCredentialFile is required")
+	require.NoError(t, cfg.ValidateWebFlowServiceCredential(false))
+	cfg.Web.FlowServiceCredentialFile = "/run/secrets/dex/web-token"
+	require.NoError(t, cfg.ValidateWebFlowServiceCredential(true))
+	cfg.Auth.Authenticators = nil
+	cfg.Web.FlowServiceCredentialFile = ""
+	require.NoError(t, cfg.ValidateWebFlowServiceCredential(true))
+}
+
 func TestRemovedTenancyConfigReportsMigration(t *testing.T) {
 	configurations := map[string]string{
 		"tenancy section":               "tenancy:\n  mode: multi\n",

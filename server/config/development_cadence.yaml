@@ -26,6 +26,7 @@ web:
   bindAddress: 0.0.0.0
   port: 8802
   flowServiceTarget: localhost:8801
+  # flowServiceCredentialFile: /etc/dex/web-token
 interpreter:
   attributeIndexSyncTimeout: 2m
   interpreterActivityConfig:
