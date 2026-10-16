@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from dex._async_value_hydrator import AsyncValueHydrator
 from dex._invocation_context import InvocationContext, InvocationMethod
+from dex._server_protocol import NegotiatedServerProtocol
 from dex._value_mapper import ValueMapper
 from dex._worker_dispatcher import _TIMEOUT_HANDLER_STEP_TYPE, WorkerDispatcher
 from dex.dexpb import dex_pb2 as pb
@@ -64,10 +65,16 @@ class AsyncWorkerDispatcher(WorkerDispatcher):
         registry: Registry,
         values: ValueMapper,
         hydrator: AsyncValueHydrator,
+        server_protocol: NegotiatedServerProtocol,
     ) -> None:
+        if server_protocol is None:
+            raise ValueError(
+                "AsyncWorkerDispatcher requires a NegotiatedServerProtocol"
+            )
         self._registry = registry
         self._values = values
         self._async_hydrator = hydrator
+        self._server_protocol = server_protocol
 
     async def invoke_wait_for(  # type: ignore[override]
         self,
@@ -127,7 +134,7 @@ class AsyncWorkerDispatcher(WorkerDispatcher):
             if not isinstance(wait, Wait):
                 raise TypeError("wait_for must return Wait")
             response = pb.InvokeWaitForMethodResponse(
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 upsert_step_exe_locals=list(context.local_writes.values()),
                 record_events=context.events,
                 publish_to_channel=context.publications,
@@ -229,7 +236,7 @@ class AsyncWorkerDispatcher(WorkerDispatcher):
                 raise TypeError("execute must return StepDecision")
             response = pb.InvokeExecuteMethodResponse(
                 step_decision=self._map_decision(flow, decision),
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 record_events=context.events,
                 upsert_step_exe_locals=list(context.local_writes.values()),
                 publish_to_channel=context.publications,
@@ -309,7 +316,7 @@ class AsyncWorkerDispatcher(WorkerDispatcher):
                 raise TypeError("handle_timeout must return StepDecision")
             response = pb.InvokeExecuteMethodResponse(
                 step_decision=self._map_decision(flow, decision),
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 record_events=context.events,
                 upsert_step_exe_locals=list(context.local_writes.values()),
                 publish_to_channel=context.publications,
@@ -361,7 +368,7 @@ class AsyncWorkerDispatcher(WorkerDispatcher):
             returned = await returned
         try:
             response = pb.InvokeWorkerRPCResponse(
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 record_events=context.events,
                 delete_from_channel=context.channel_deletions,
                 publish_to_channel=context.publications,

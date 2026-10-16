@@ -10,20 +10,34 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import timedelta, timezone
 from types import TracebackType
 from typing import Any, Callable, TypeVar, cast, overload
 from uuid import uuid4
 
 import grpc
+from google.protobuf import empty_pb2
 
 from dex._credential_transport import sync_channel
 from dex._grpc_errors import FlowTargetRequirement, translate_rpc_error
+from dex._server_protocol import (
+    NegotiatedServerProtocol,
+    negotiate_server_protocol,
+    sdk_version,
+    server_info_request_error,
+)
 from dex._utils import require_name
 from dex._value_hydrator import ValueHydrator
 from dex._value_mapper import ValueMapper
 from dex._worker_dispatcher import WorkerDispatcher
-from dex.attribute import Attribute, AttributeMap, _apply_attribute_store_sync
+from dex.attribute import (
+    Attribute,
+    AttributeMap,
+    _apply_attribute_store_sync,
+    _apply_hard_delete_on_null,
+    _require_attribute_wait_supported,
+)
 from dex.attribute_match import AttributeMatch, _encode_attribute_match
 from dex.blob_cache import BlobCache
 from dex.channel import Channel, ChannelMap
@@ -106,11 +120,14 @@ class Client:
         )
         self._values = ValueMapper(registry.codec_registry)
         self._hydrator = ValueHydrator(self._service, blob_cache)
+        self._server_protocol = NegotiatedServerProtocol()
         self._mappings = WorkerDispatcher(
             registry,
             self._values,
             self._hydrator,
+            self._server_protocol,
         )
+        self._server_protocol_lock = threading.Lock()
         self._closed = False
 
     def __enter__(self) -> Client:
@@ -150,6 +167,11 @@ class Client:
         match its starting Step annotation. Options control timeout, reuse, retries,
         configuration, idempotency, and initial Attributes.
 
+        When ``options`` initializes an Attribute defined with
+        ``hard_delete_on_null=True``, the first such call also requests Dex Server
+        information and caches the negotiated Server protocol version for later
+        calls. The Flow is not started when that version is below 3.
+
         Args:
             flow: The registered Flow instance to start.
             flow_id: A non-empty application ID stable across runs.
@@ -162,7 +184,10 @@ class Client:
         Raises:
             FlowAlreadyStartedError: If reuse policy rejects an existing Flow ID.
             FlowDefinitionError: If ``flow`` is not registered.
-            ValueMappingError: If ``input`` or an initial Attribute cannot be encoded.
+            ValueMappingError: If ``input`` or an initial Attribute cannot be encoded,
+                including a numeric or Boolean value for a hard-delete Attribute.
+            RuntimeError: If a hard-delete Attribute is initialized and the Server
+                protocol is incompatible, below version 3, or cannot be requested.
             DexServiceError: If FlowService rejects or cannot perform the request.
         """
         registered = self.registry._flow_for_instance(flow)
@@ -203,6 +228,12 @@ class Client:
         if timeout_handler_options is not None:
             request.flow_start_options.timeout_handler_options.CopyFrom(
                 timeout_handler_options
+            )
+        start_attributes = request.flow_start_options.attributes
+        if any(write.is_hard_delete_on_null for write in start_attributes):
+            self._negotiate_server_protocol()
+            self._server_protocol.require_hard_delete_attribute_support(
+                start_attributes
             )
         response = cast(
             pb.StartFlowResponse,
@@ -855,6 +886,8 @@ class Client:
 
         Raises:
             ValueError: If an identifier, option, or match operand is invalid.
+                Also raised before transport when the Attribute uses
+                ``hard_delete_on_null``.
             RequestTimeoutError: If a positive request timeout expires first.
             FlowNotActiveOrNotFoundError: If the Flow is missing or closes first.
             DexServiceError: If FlowService cannot perform the wait.
@@ -888,6 +921,8 @@ class Client:
 
         Raises:
             ValueError: If an identifier, option, or match operand is invalid.
+                Also raised before transport when the Attribute uses
+                ``hard_delete_on_null``.
             RequestTimeoutError: If a positive request timeout expires first.
             FlowNotActiveOrNotFoundError: If the Flow is missing or closes first.
             DexServiceError: If FlowService cannot perform the wait.
@@ -918,6 +953,8 @@ class Client:
         Raises:
             TypeError: If arguments do not match the Attribute definition.
             ValueError: If an identifier, option, or expected value is invalid.
+                Also raised before transport when the Attribute uses
+                ``hard_delete_on_null``.
             RequestTimeoutError: If a positive request timeout expires first.
             FlowNotActiveOrNotFoundError: If the Flow is missing or closes first.
             DexServiceError: If FlowService cannot perform the wait.
@@ -937,6 +974,7 @@ class Client:
         match: object,
         options: WaitForAttributeOptions,
     ) -> Any:
+        _require_attribute_wait_supported(attribute)
         encoded_match = _encode_attribute_match(
             cast(AttributeMatch[Any], match),
             self._values,
@@ -1066,6 +1104,20 @@ class Client:
         self._closed = True
         self._channel.close()
 
+    def _negotiate_server_protocol(self) -> None:
+        with self._server_protocol_lock:
+            if self._server_protocol.version == 0:
+                artifact_version = sdk_version()
+                try:
+                    server_info = self._service.GetServerInfo(empty_pb2.Empty())
+                except grpc.RpcError as failure:
+                    raise server_info_request_error(
+                        artifact_version, failure
+                    ) from failure
+                self._server_protocol.record_version(
+                    negotiate_server_protocol(server_info, artifact_version)
+                )
+
     def _wait_for_flow_response(
         self,
         flow_id: str,
@@ -1123,6 +1175,7 @@ class Client:
                 ),
             )
             _apply_attribute_store_sync(write, definition)
+            _apply_hard_delete_on_null(write, definition)
             mapped.attributes.append(write)
         if (
             options.config_override is not None

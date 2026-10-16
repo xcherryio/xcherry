@@ -142,6 +142,11 @@ stream_page_value: str = stream_page.messages[0].value
 
 status = Attribute("status", str, sync_to_attribute_store=True)
 items = AttributeMap("items", int, sync_to_attribute_store=True)
+api_key: Attribute[str] = Attribute("api-key", str, hard_delete_on_null=True)
+provider_tokens: AttributeMap[bytes] = AttributeMap(
+    "provider-token", bytes, hard_delete_on_null=True
+)
+is_hard_delete_on_null: bool = api_key.hard_delete_on_null
 persistence: PersistenceSchema = PersistenceSchema.of(status, items)
 start_options: StartFlowOptions = (
     StartFlowOptions(

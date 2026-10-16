@@ -13,6 +13,7 @@ from inspect import isawaitable, isgenerator
 from typing import Any, Callable, Generator, cast
 
 from dex._invocation_context import InvocationContext, InvocationMethod
+from dex._server_protocol import NegotiatedServerProtocol
 from dex._value_hydrator import ValueHydrator
 from dex._value_mapper import ValueMapper
 from dex.attribute import (
@@ -20,6 +21,7 @@ from dex.attribute import (
     AttributeMap,
     AttributeMapLoad,
     _apply_attribute_store_sync,
+    _apply_hard_delete_on_null,
 )
 from dex.channel import Channel, ChannelMap, ChannelMapLoad
 from dex.condition import ChannelCondition, Condition, SubFlowCondition, TimerCondition
@@ -58,10 +60,14 @@ class WorkerDispatcher:
         registry: Registry,
         values: ValueMapper,
         hydrator: ValueHydrator,
+        server_protocol: NegotiatedServerProtocol,
     ) -> None:
+        if server_protocol is None:
+            raise ValueError("WorkerDispatcher requires a NegotiatedServerProtocol")
         self._registry = registry
         self._values = values
         self._hydrator = hydrator
+        self._server_protocol = server_protocol
 
     def invoke_wait_for(
         self,
@@ -99,7 +105,7 @@ class WorkerDispatcher:
             if not isinstance(wait, Wait):
                 raise TypeError("wait_for must return Wait")
             response = pb.InvokeWaitForMethodResponse(
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 upsert_step_exe_locals=list(context.local_writes.values()),
                 record_events=context.events,
                 publish_to_channel=context.publications,
@@ -161,7 +167,7 @@ class WorkerDispatcher:
             yield pb.InvokeExecuteMethodOutput(
                 result=pb.InvokeExecuteMethodResponse(
                     step_decision=self._map_decision(flow, decision),
-                    upsert_attributes=list(context.attribute_writes.values()),
+                    upsert_attributes=self._result_attribute_writes(context),
                     record_events=context.events,
                     upsert_step_exe_locals=list(context.local_writes.values()),
                     publish_to_channel=context.publications,
@@ -232,7 +238,7 @@ class WorkerDispatcher:
                 raise TypeError("handle_timeout must return StepDecision")
             return pb.InvokeExecuteMethodResponse(
                 step_decision=self._map_decision(flow, decision),
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 record_events=context.events,
                 upsert_step_exe_locals=list(context.local_writes.values()),
                 publish_to_channel=context.publications,
@@ -274,7 +280,7 @@ class WorkerDispatcher:
             )
         try:
             response = pb.InvokeWorkerRPCResponse(
-                upsert_attributes=list(context.attribute_writes.values()),
+                upsert_attributes=self._result_attribute_writes(context),
                 record_events=context.events,
                 delete_from_channel=context.channel_deletions,
                 publish_to_channel=context.publications,
@@ -695,12 +701,22 @@ class WorkerDispatcher:
             if index is not None:
                 write.index_config.CopyFrom(index)
             _apply_attribute_store_sync(write, definition)
+            _apply_hard_delete_on_null(write, definition)
             mapped.attributes.append(write)
+        self._server_protocol.require_hard_delete_attribute_support(mapped.attributes)
         if options.config_override is not None:
             mapped.flow_config_override.CopyFrom(
                 self._map_sub_flow_config(options.config_override)
             )
         return mapped
+
+    def _result_attribute_writes(
+        self,
+        context: InvocationContext,
+    ) -> list[pb.AttributeWrite]:
+        writes = list(context.attribute_writes.values())
+        self._server_protocol.require_hard_delete_attribute_support(writes)
+        return writes
 
     @staticmethod
     def _map_flow_retry(retry: RetryPolicy) -> pb.FlowRetryPolicy:

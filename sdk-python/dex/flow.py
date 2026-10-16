@@ -37,7 +37,7 @@ from urllib.parse import quote
 from dex._utils import require_map_instance, require_name
 from dex.attribute import Attribute, AttributeLock, AttributeMap, AttributeMapLoad
 from dex.channel import Channel, ChannelMap, ChannelMapLoad
-from dex.codec import Codec, CodecRegistry
+from dex.codec import Codec, CodecRegistry, WireKind
 from dex.context import AsyncContext, Context
 from dex.dexpb import dex_pb2 as pb
 from dex.runtime_errors import FlowDefinitionError
@@ -543,6 +543,7 @@ class Registry:
         if not isinstance(schema, PersistenceSchema):
             raise TypeError("Flow persistence schema must be a PersistenceSchema")
         persistence = Registry._assemble_persistence(schema, attribute_indexes)
+        Registry._validate_hard_delete_attribute_codecs(schema, codec_registry)
         registered_rpcs: dict[str, _RegisteredRPC] = {}
         for attribute_name in dir(flow):
             method = getattr(flow, attribute_name)
@@ -661,6 +662,21 @@ class Registry:
                 f"Attribute index {key} has conflicting types {existing} and {index_type}"
             )
         attribute_indexes[key] = index_type
+
+    @staticmethod
+    def _validate_hard_delete_attribute_codecs(
+        schema: PersistenceSchema,
+        codec_registry: CodecRegistry,
+    ) -> None:
+        for definition in schema.attributes:
+            if not definition.hard_delete_on_null:
+                continue
+            wire_kind = codec_registry.resolve(definition.value_type).wire_kind
+            if wire_kind in (WireKind.BOOL, WireKind.INT64, WireKind.DOUBLE):
+                raise TypeError(
+                    f"hard-delete Attribute {definition.name} supports only string "
+                    f"and object values, not {wire_kind.name} codec values"
+                )
 
     @staticmethod
     def _map_index_type(index_type: Any) -> pb.IndexType:
