@@ -14,6 +14,7 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
+from dex._credential_transport import async_channel
 from dex._async_value_hydrator import AsyncValueHydrator
 from dex._async_worker_dispatcher import AsyncWorkerDispatcher
 from dex._async_worker_service import AsyncWorkerService
@@ -62,7 +63,8 @@ class AsyncWorker:
         Args:
             registry: A Registry created with ``allow_async_handlers=True``.
             blob_cache: An open cache shared for asynchronous value hydration.
-            options: Networking and startup options; ``None`` uses defaults.
+            options: Networking, startup, and bearer credential options;
+                ``None`` uses defaults and sends no authorization metadata.
 
         Raises:
             ValueError: If a target, bind address, or pull Worker ID is invalid.
@@ -76,7 +78,9 @@ class AsyncWorker:
             else None
         )
         self._state = "created"
-        self._flow_channel = grpc.aio.insecure_channel(self.options.server_address)
+        self._flow_channel = async_channel(
+            self.options.server_address, self.options.credential
+        )
         self._flow_service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
             self._flow_channel
         )
@@ -98,6 +102,7 @@ class AsyncWorker:
                 self.options.server_address,
                 None,
                 app_worker_id,
+                self.options.credential,
             )
         else:
             self._server = grpc.aio.server()
@@ -172,6 +177,11 @@ class AsyncWorker:
             await self._flow_channel.close(None)
             self._stopped.set()
             raise server_info_request_error(self._sdk_version, failure) from failure
+        except Exception as failure:
+            self._state = "stopped"
+            await self._flow_channel.close(None)
+            self._stopped.set()
+            raise RuntimeError("cannot get Dex server info") from failure
         try:
             self._negotiated_protocol_version = negotiate_server_protocol(
                 server_info,
@@ -190,6 +200,11 @@ class AsyncWorker:
                 timeout=self.options.attribute_index_sync_timeout.total_seconds(),
             )
         except grpc.RpcError as failure:
+            self._state = "stopped"
+            await self._flow_channel.close(None)
+            self._stopped.set()
+            raise RuntimeError("cannot synchronize Attribute indexes") from failure
+        except Exception as failure:
             self._state = "stopped"
             await self._flow_channel.close(None)
             self._stopped.set()

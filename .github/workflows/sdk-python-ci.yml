@@ -102,6 +102,7 @@ jobs:
           --color=always \
           --files \
             dex/__init__.py \
+            dex/_credential_transport.py \
             dex/_grpc_errors.py \
             dex/_invocation_context.py \
             dex/_native.pyi \
@@ -121,6 +122,7 @@ jobs:
             dex/client_options.py \
             dex/codec.py \
             dex/condition.py \
+            dex/credential.py \
             dex/context.py \
             dex/flow.py \
             dex/flow_config.py \

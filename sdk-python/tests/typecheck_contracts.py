@@ -16,7 +16,10 @@ from dex import (
     BlobCache,
     ChannelMap,
     Client,
+    ClientOptions,
     Context,
+    Credential,
+    FileCredential,
     Flow,
     FlowConfig,
     PersistenceSchema,
@@ -40,6 +43,11 @@ from dex import (
     heartbeat,
     rpc,
 )
+
+
+def credential_options_contract(token_path: str) -> tuple[ClientOptions, WorkerOptions]:
+    credential: Credential = FileCredential(token_path)
+    return ClientOptions(credential=credential), WorkerOptions(credential=credential)
 
 
 @dataclass(frozen=True)

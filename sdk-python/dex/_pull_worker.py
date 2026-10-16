@@ -22,11 +22,13 @@ from typing import Any
 
 import grpc
 
+from dex._credential_transport import async_credential_metadata
 from dex._grpc_errors import _worker_error_status
 from dex._server_protocol import sdk_version
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
+from dex.credential import Credential
 from dex.worker_options import PullWorkerOptions
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,6 +81,7 @@ class PullWorkerRuntime:
         server_address: str,
         executor: ThreadPoolExecutor | None,
         app_worker_id: str | None = None,
+        credential: Credential | None = None,
     ) -> None:
         self.app_worker_id = app_worker_id or resolve_app_worker_id(registry, options)
         self.flow_types = sorted(registry._registered_flows)
@@ -89,6 +92,7 @@ class PullWorkerRuntime:
         self._dispatcher = dispatcher
         self._server_address = server_address
         self._executor = executor
+        self._credential = credential
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread_id: int | None = None
         self._started = threading.Event()
@@ -278,7 +282,13 @@ class PullStream:
                 backoff = min(backoff * 2, 5)
 
     async def _poll(self) -> bool:
-        self._call = self.stub.PollWorkerTask()
+        if self.runtime._credential is None:
+            self._call = self.stub.PollWorkerTask()
+        else:
+            metadata = await async_credential_metadata(
+                self.runtime._credential, timeout=30.0
+            )
+            self._call = self.stub.PollWorkerTask(metadata=metadata)
         await self._send(
             pb.PollWorkerTaskRequest(
                 register=pb.PollWorkerTaskRegister(

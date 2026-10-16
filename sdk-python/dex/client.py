@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import grpc
 
+from dex._credential_transport import sync_channel
 from dex._grpc_errors import FlowTargetRequirement, translate_rpc_error
 from dex._utils import require_name
 from dex._value_hydrator import ValueHydrator
@@ -91,12 +92,15 @@ class Client:
         Args:
             registry: The Flow Registry used for call validation and codecs.
             blob_cache: An open cache used to hydrate large response values.
-            options: Service address and default Worker target; ``None`` uses defaults.
+            options: Service address, default Worker target, and bearer credential;
+                ``None`` uses defaults and sends no authorization metadata.
         """
         self.registry = registry
         self.blob_cache = blob_cache
         self.options = options or ClientOptions()
-        self._channel = grpc.insecure_channel(self.options.server_address)
+        self._channel = sync_channel(
+            self.options.server_address, self.options.credential
+        )
         self._service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
             self._channel
         )
