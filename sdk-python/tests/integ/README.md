@@ -10,6 +10,13 @@ Run the complete suite against a fresh `dexcli dev` environment:
 ./run-integration-tests.sh
 ```
 
+The default runs listening Workers. Set `DEX_INTEG_WORKER_MODE=pull` to run
+the same suite with outbound polling Workers and pull Client defaults:
+
+```shell
+DEX_INTEG_WORKER_MODE=pull ./run-integration-tests.sh
+```
+
 The compile-oriented call-site modules remain part of strict static checking:
 
 ```shell

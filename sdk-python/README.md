@@ -612,6 +612,9 @@ environment:
 ./run-integration-tests.sh
 ```
 
+Set `DEX_INTEG_WORKER_MODE=pull` to run the suite with pull Workers instead of
+listening Workers. The default is `push`.
+
 ### Measure integration coverage
 
 Run the same integration suite with Python source coverage:

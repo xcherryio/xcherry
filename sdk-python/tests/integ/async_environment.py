@@ -23,17 +23,20 @@ from dex import (
     BlobCacheConfig,
     ClientOptions,
     Flow,
+    PullWorkerOptions,
     Registry,
     WorkerOptions,
     open_blob_cache,
 )
 
+from .environment import integ_worker_mode
+
 
 class AsyncDexDevTestEnvironment:
     def __init__(self, *flows: Flow[Any], allow_async_handlers: bool = False) -> None:
         self._server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
-        self._worker_port = _available_port()
-        self._worker_address = f"127.0.0.1:{self._worker_port}"
+        is_pull_worker_mode = integ_worker_mode() == "pull"
+        self._worker_port = None if is_pull_worker_mode else _available_port()
         self._registry = Registry(flows, allow_async_handlers=allow_async_handlers)
         self._cache_directory = TemporaryDirectory(
             prefix="dex-python-async-integration-cache-"
@@ -47,9 +50,15 @@ class AsyncDexDevTestEnvironment:
         self._worker = AsyncWorker(
             self._registry,
             self._cache,
-            WorkerOptions(
-                bind_address=self._worker_address,
-                server_address=self._server_address,
+            (
+                WorkerOptions(
+                    server_address=self._server_address, pull=PullWorkerOptions()
+                )
+                if is_pull_worker_mode
+                else WorkerOptions(
+                    bind_address=f"127.0.0.1:{self._worker_port}",
+                    server_address=self._server_address,
+                )
             ),
         )
         self._worker_task: asyncio.Task[None] | None = None
@@ -63,7 +72,8 @@ class AsyncDexDevTestEnvironment:
 
     async def __aenter__(self) -> AsyncDexDevTestEnvironment:
         self._worker_task = asyncio.create_task(self._worker.start())
-        await _await_worker(self._worker_port, self._worker_task)
+        if self._worker_port is not None:
+            await _await_worker(self._worker_port, self._worker_task)
         self._client = AsyncClient(
             self._registry,
             self._cache,
