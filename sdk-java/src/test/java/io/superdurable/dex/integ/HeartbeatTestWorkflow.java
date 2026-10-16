@@ -35,9 +35,11 @@ final class HeartbeatTestWorkflow implements Flow<Void> {
     final Stream<String> progress = Stream.define("heartbeat-progress", String.class, 1L << 20);
     private final HeartbeatStep start = new HeartbeatStep();
     private final Scenario scenario;
+    private final boolean isPullMode;
 
-    HeartbeatTestWorkflow(final Scenario scenario) {
+    HeartbeatTestWorkflow(final Scenario scenario, final boolean isPullMode) {
         this.scenario = scenario;
+        this.isPullMode = isPullMode;
     }
 
     @Override
@@ -64,7 +66,12 @@ final class HeartbeatTestWorkflow implements Flow<Void> {
                     progress.write(context, "local-attempt-" + context.getAttempt());
                     throw new IllegalStateException("retry local activity");
                 }
-                if (context.hasLastHeartbeatValue()) {
+                if (isPullMode) {
+                    if (!context.hasLastHeartbeatValue()
+                            || !"local-checkpoint".equals(context.getLastHeartbeatValue(String.class))) {
+                        throw new IllegalStateException("regular retry heartbeat was not restored");
+                    }
+                } else if (context.hasLastHeartbeatValue()) {
                     throw new IllegalStateException("local heartbeat reached fallback");
                 }
                 return StepDecision.gracefulComplete("local-ignored");

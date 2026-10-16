@@ -20,6 +20,12 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
+export DEX_INTEG_WORKER_MODE="${DEX_INTEG_WORKER_MODE:-push}"
+if [[ "$DEX_INTEG_WORKER_MODE" != push && "$DEX_INTEG_WORKER_MODE" != pull ]]; then
+  echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 dex_port="${DEX_INTEG_DEX_PORT:-18801}"
