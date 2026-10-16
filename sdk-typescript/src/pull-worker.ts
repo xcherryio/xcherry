@@ -16,6 +16,7 @@ import {
   type ServiceError,
 } from "@grpc/grpc-js";
 
+import { credentialInterceptors, type Credential } from "./credential.js";
 import { registeredFlow, type Registry } from "./flow.js";
 import {
   InvokeExecuteMethodOutput,
@@ -79,6 +80,7 @@ export class PullWorker {
     private readonly dispatcher: WorkerDispatcher,
     serverAddress: string,
     options: PullWorkerOptions,
+    credential?: Credential,
   ) {
     this.maxConcurrentTasks = positiveOption(options.maxConcurrentTasks, availableParallelism(), "maxConcurrentTasks");
     this.idleStreamsPerQueue = positiveOption(options.idleStreamsPerQueue, 1, "idleStreamsPerQueue");
@@ -96,7 +98,7 @@ export class PullWorker {
       throw new TypeError(`appWorkerID conflicts with Flow type ${this.appWorkerID}`);
     }
     this.queues = [this.appWorkerID, ...this.flowTypes];
-    this.client = createWorkerTaskClient(serverAddress);
+    this.client = createWorkerTaskClient(serverAddress, credential);
   }
 
   public start(): void {
@@ -500,6 +502,8 @@ function generateAppWorkerID(): string {
   return `${sanitized}-${suffix}`;
 }
 
-function createWorkerTaskClient(serverAddress: string): InstanceType<typeof WorkerTaskServiceClient> {
-  return new WorkerTaskServiceClient(serverAddress, credentials.createInsecure());
+function createWorkerTaskClient(serverAddress: string, credential: Credential | undefined): InstanceType<typeof WorkerTaskServiceClient> {
+  return new WorkerTaskServiceClient(serverAddress, credentials.createInsecure(), {
+    interceptors: credentialInterceptors(credential),
+  });
 }

@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import type { Credential } from "./credential.js";
 import type { Attribute, AttributeLock, AttributeMap, AttributeMapLoad } from "./persistence.js";
 import type { RetryPolicy, StepClass, StepDurability, StepOptions } from "./step.js";
 import type { Channel, ChannelMap, ChannelMapLoad } from "./wait.js";
@@ -15,6 +16,8 @@ import { requireMapInstance, requireName } from "./validation.js";
 export interface ClientOptions {
   /** Plaintext Dex gRPC target; defaults to `localhost:8801`. */
   readonly serverAddress?: string;
+  /** Bearer token provider for every FlowService call; omitted sends no authorization metadata. */
+  readonly credential?: Credential;
   /** Worker endpoint advertised by `startFlow` unless a Flow overrides it; use `{ pull: true }` for pull Workers. */
   readonly workerTarget?: WorkerTarget | PullWorkerTarget;
 }
@@ -441,6 +444,8 @@ export interface WorkerOptions {
   readonly workerTarget?: WorkerTarget;
   /** Dex FlowService target; defaults to `localhost:8801`. */
   readonly serverAddress?: string;
+  /** Bearer token provider for startup, hydration, and pull streams; omitted sends no authorization metadata. */
+  readonly credential?: Credential;
   /** Startup Indexed Attribute synchronization deadline in milliseconds. Defaults to 120000. */
   readonly attributeIndexSyncTimeoutMs?: number;
 }
