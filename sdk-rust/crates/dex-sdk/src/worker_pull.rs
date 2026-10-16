@@ -22,7 +22,7 @@ use dex_protocol::dex::{
 };
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{Instant, sleep, sleep_until, timeout};
+use tokio::time::{Instant, sleep, sleep_until, timeout_at};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tonic::transport::Endpoint;
 use tonic::{Code, Status};
@@ -36,6 +36,12 @@ use crate::{PullWorkerOptions, SdkError, SdkResult};
 
 const DRAINING: u8 = 1;
 const FORCED: u8 = 2;
+
+#[derive(Clone, Copy)]
+struct StopSignal {
+    phase: u8,
+    deadline: Option<Instant>,
+}
 
 pub(crate) fn outbound_task_channel(
     endpoint: Endpoint,
@@ -171,7 +177,10 @@ impl PullWorker {
             notify: Notify::new(),
             max_concurrent_tasks: self.max_concurrent_tasks,
         });
-        let (stop, stop_receiver) = watch::channel(0u8);
+        let (stop, stop_receiver) = watch::channel(StopSignal {
+            phase: 0,
+            deadline: None,
+        });
         let mut streams = JoinSet::new();
         loop {
             if *shutdown.borrow() {
@@ -189,8 +198,12 @@ impl PullWorker {
             }
         }
         shared.state.lock().expect("pull state lock").is_stopping = true;
-        stop.send_replace(DRAINING);
-        if timeout(self.stop_drain_timeout, async {
+        let stop_deadline = Instant::now() + self.stop_drain_timeout;
+        stop.send_replace(StopSignal {
+            phase: DRAINING,
+            deadline: Some(stop_deadline),
+        });
+        if timeout_at(stop_deadline, async {
             while let Some(result) = streams.join_next().await {
                 if let Err(error) = result {
                     eprintln!("ERROR: pull Worker stream failed: {error}");
@@ -200,7 +213,10 @@ impl PullWorker {
         .await
         .is_err()
         {
-            stop.send_replace(FORCED);
+            stop.send_replace(StopSignal {
+                phase: FORCED,
+                deadline: Some(stop_deadline),
+            });
             while let Some(result) = streams.join_next().await {
                 if let Err(error) = result {
                     eprintln!("ERROR: pull Worker stream failed: {error}");
@@ -213,7 +229,7 @@ impl PullWorker {
     fn reconcile(
         &self,
         shared: &Arc<PullShared>,
-        stop: &watch::Receiver<u8>,
+        stop: &watch::Receiver<StopSignal>,
         streams: &mut JoinSet<()>,
     ) {
         let mut state = shared.state.lock().expect("pull state lock");
@@ -245,6 +261,7 @@ impl PullWorker {
                     stream_id,
                     shared: Arc::clone(shared),
                     stop: stop.clone(),
+                    stop_drain_timeout: self.stop_drain_timeout,
                 };
                 streams.spawn(async move { worker.run().await });
             }
@@ -260,7 +277,8 @@ struct PullStream {
     queue: String,
     stream_id: u64,
     shared: Arc<PullShared>,
-    stop: watch::Receiver<u8>,
+    stop: watch::Receiver<StopSignal>,
+    stop_drain_timeout: Duration,
 }
 
 impl PullStream {
@@ -271,11 +289,11 @@ impl PullStream {
         };
         let mut backoff = Duration::from_millis(100);
         loop {
-            if *self.stop.borrow() != 0 {
+            if self.stop.borrow().phase != 0 {
                 break;
             }
             let (was_registered, is_reconnecting, result) = self.poll().await;
-            if *self.stop.borrow() != 0 {
+            if self.stop.borrow().phase != 0 {
                 break;
             }
             if was_registered || is_reconnecting {
@@ -315,7 +333,7 @@ impl PullStream {
             );
             tokio::select! {
                 () = sleep(backoff + jitter) => {}
-                change = self.stop.changed() => { if change.is_err() || *self.stop.borrow() != 0 { break; } }
+                change = self.stop.changed() => { if change.is_err() || self.stop.borrow().phase != 0 { break; } }
             }
             if !has_permanent_error {
                 backoff = (backoff * 2).min(Duration::from_secs(5));
@@ -351,7 +369,7 @@ impl PullStream {
         let opening = tokio::select! {
             result = self.client.poll_worker_task(ReceiverStream::new(receiver)) => result,
             change = self.stop.changed() => {
-                if change.is_err() || *self.stop.borrow() != 0 {
+                if change.is_err() || self.stop.borrow().phase != 0 {
                     return (false, false, Ok(()));
                 }
                 return (false, false, Err(Status::unavailable("Worker poll interrupted")));
@@ -431,9 +449,9 @@ impl PullStream {
                     if let Err(error) = result { eprintln!("ERROR: pull Worker handler failed: {error}"); }
                     active = None;
                     self.shared.release(self.stream_id);
-                    if is_draining || *self.stop.borrow() != 0 {
-                        let is_reconnecting = is_draining && *self.stop.borrow() == 0;
-                        let result = close_poll_send_and_wait(&mut sender, &mut response_stream).await;
+                    if is_draining || self.stop.borrow().phase != 0 {
+                        let is_reconnecting = is_draining && self.stop.borrow().phase == 0;
+                        let result = close_poll_send_and_wait(&mut sender, &mut response_stream, &mut self.stop, self.stop_drain_timeout).await;
                         return (was_registered, is_reconnecting, result);
                     }
                 }
@@ -445,9 +463,9 @@ impl PullStream {
                     }
                 }
                 change = self.stop.changed() => {
-                    if change.is_err() || *self.stop.borrow() != 0 {
+                    if change.is_err() || self.stop.borrow().phase != 0 {
                         is_draining = true;
-                        if *self.stop.borrow() >= FORCED && let Some(task) = &active {
+                        if self.stop.borrow().phase >= FORCED && let Some(task) = &active {
                             task.cancel_code.store(Code::Cancelled as i32, Ordering::Release);
                             task.cancellation.cancel();
                             task.transport_cancellation.cancel();
@@ -609,14 +627,32 @@ async fn send_control_frame(
 async fn close_poll_send_and_wait(
     sender: &mut Option<mpsc::Sender<PollWorkerTaskRequest>>,
     responses: &mut tonic::Streaming<dex_protocol::dex::PollWorkerTaskResponse>,
+    stop: &mut watch::Receiver<StopSignal>,
+    stop_drain_timeout: Duration,
 ) -> Result<(), Status> {
     sender.take();
-    timeout(Duration::from_secs(5), async {
-        while responses.message().await?.is_some() {}
-        Ok(())
-    })
-    .await
-    .map_err(|_| Status::deadline_exceeded("Worker task stream did not close after drain"))?
+    let mut deadline = stop
+        .borrow()
+        .deadline
+        .unwrap_or_else(|| Instant::now() + stop_drain_timeout);
+    loop {
+        tokio::select! {
+            response = responses.message() => {
+                if response?.is_none() { return Ok(()); }
+            }
+            () = sleep_until(deadline) => {
+                return Err(Status::deadline_exceeded("Worker task stream did not close after drain"));
+            }
+            change = stop.changed() => {
+                if change.is_err() {
+                    return Err(Status::cancelled("Worker stop signal closed"));
+                }
+                if let Some(stop_deadline) = stop.borrow_and_update().deadline {
+                    deadline = stop_deadline;
+                }
+            }
+        }
+    }
 }
 
 fn with_cancel_status(
@@ -782,9 +818,11 @@ mod tests {
         PollWorkerTaskPing, PollWorkerTaskReconnect, PollWorkerTaskRegistered,
         PollWorkerTaskResponse,
     };
+    use prost::Message;
     use std::sync::Condvar;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::net::TcpListener;
+    use tokio::time::timeout;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response};
@@ -1236,7 +1274,10 @@ mod tests {
             notify: Notify::new(),
             max_concurrent_tasks: 1,
         });
-        let (_stop, stop_receiver) = watch::channel(0u8);
+        let (_stop, stop_receiver) = watch::channel(StopSignal {
+            phase: 0,
+            deadline: None,
+        });
         let mut stream = PullStream {
             client: WorkerTaskServiceClient::new(channel),
             dispatcher,
@@ -1246,6 +1287,7 @@ mod tests {
             stream_id: 1,
             shared,
             stop: stop_receiver,
+            stop_drain_timeout: Duration::from_secs(30),
         };
         let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
             .await
@@ -1269,6 +1311,7 @@ mod tests {
         started: Arc<Notify>,
         release: Arc<(Mutex<bool>, Condvar)>,
         wait_for_cancel: bool,
+        result_size: Option<usize>,
     }
 
     impl DrainFlow {
@@ -1283,7 +1326,10 @@ mod tests {
             while !*is_released {
                 is_released = changed.wait(is_released).expect("drain gate lock");
             }
-            Ok(RpcResult::new("done".to_string()))
+            Ok(RpcResult::new(match self.result_size {
+                Some(result_size) => "x".repeat(result_size),
+                None => "done".to_string(),
+            }))
         }
     }
 
@@ -1306,6 +1352,9 @@ mod tests {
         events: mpsc::Sender<DrainEvent>,
         assigned: Arc<AtomicBool>,
         cancel_kind: Option<Code>,
+        read_delay: Duration,
+        is_reconnecting: bool,
+        ready: Option<mpsc::Sender<()>>,
     }
 
     #[tonic::async_trait]
@@ -1375,9 +1424,51 @@ mod tests {
                         .await
                         .map_err(|_| Status::internal("cancel response closed"))?;
                 }
+                if self.is_reconnecting {
+                    sender
+                        .send(Ok(PollWorkerTaskResponse {
+                            frame: Some(ResponseFrame::Reconnect(PollWorkerTaskReconnect {
+                                reason: "test".to_string(),
+                            })),
+                        }))
+                        .await
+                        .map_err(|_| Status::internal("reconnect response closed"))?;
+                }
+                if !self.read_delay.is_zero() {
+                    sender
+                        .send(Ok(PollWorkerTaskResponse {
+                            frame: Some(ResponseFrame::Ping(PollWorkerTaskPing {})),
+                        }))
+                        .await
+                        .map_err(|_| Status::internal("ping response closed"))?;
+                }
             }
             let events = self.events.clone();
+            let read_delay = self.read_delay;
+            let ready = self.ready.clone();
             tokio::spawn(async move {
+                if is_task_stream && !read_delay.is_zero() {
+                    match incoming.message().await {
+                        Ok(Some(PollWorkerTaskRequest {
+                            frame: Some(RequestFrame::Pong(_)),
+                        })) => {}
+                        Ok(other) => {
+                            eprintln!("expected Pong before delayed read, received {other:?}");
+                            return;
+                        }
+                        Err(error) => {
+                            eprintln!("read Pong before delayed read: {error}");
+                            return;
+                        }
+                    }
+                    if let Some(ready) = ready
+                        && let Err(error) = ready.send(()).await
+                    {
+                        eprintln!("record delayed read readiness: {error}");
+                        return;
+                    }
+                    sleep(read_delay).await;
+                }
                 loop {
                     match incoming.message().await {
                         Ok(Some(PollWorkerTaskRequest {
@@ -1429,6 +1520,9 @@ mod tests {
                     events,
                     assigned: Arc::new(AtomicBool::new(false)),
                     cancel_kind: None,
+                    read_delay: Duration::ZERO,
+                    is_reconnecting: false,
+                    ready: None,
                 }))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
                     while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok() {}
@@ -1446,6 +1540,7 @@ mod tests {
                 started: Arc::clone(&started),
                 release: Arc::clone(&release),
                 wait_for_cancel: false,
+                result_size: None,
             })
             .expect("register Drain Flow");
         let dispatcher = WorkerDispatcher::new(
@@ -1498,6 +1593,128 @@ mod tests {
             .expect("server result");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_drain_delivers_large_result_after_delayed_read() {
+        delayed_read_delivers_large_result(false, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn busy_reconnect_delivers_large_result_after_delayed_read() {
+        delayed_read_delivers_large_result(true, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_rebounds_busy_reconnect_half_close() {
+        delayed_read_delivers_large_result(true, true).await;
+    }
+
+    async fn delayed_read_delivers_large_result(
+        is_reconnecting: bool,
+        should_stop_during_reconnect: bool,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake task service");
+        let address = listener.local_addr().expect("fake service address");
+        let (events, mut received) = mpsc::channel(4);
+        let (ready, mut ready_receiver) = mpsc::channel(1);
+        let (server_stop, mut server_shutdown) = watch::channel(false);
+        let server = tokio::spawn(
+            Server::builder()
+                .add_service(WorkerTaskServiceServer::new(DrainService {
+                    events,
+                    assigned: Arc::new(AtomicBool::new(false)),
+                    cancel_kind: None,
+                    read_delay: if should_stop_during_reconnect {
+                        Duration::from_secs(8)
+                    } else {
+                        Duration::from_millis(6_100)
+                    },
+                    is_reconnecting,
+                    ready: Some(ready),
+                }))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                    while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok() {}
+                }),
+        );
+        let channel = Endpoint::from_shared(format!("http://{address}"))
+            .expect("endpoint")
+            .connect_lazy();
+        let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
+        let (cache, _directory) = test_cache();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let registry = Registry::new()
+            .register(DrainFlow {
+                started: Arc::clone(&started),
+                release: Arc::clone(&release),
+                wait_for_cancel: false,
+                result_size: Some(3_000_000),
+            })
+            .expect("register Drain Flow");
+        let dispatcher = WorkerDispatcher::new(
+            registry,
+            ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+        );
+        let worker = PullWorker::new(
+            &PullWorkerOptions::new()
+                .app_worker_id("worker-drain")
+                .stop_drain_timeout(Duration::from_secs(7)),
+            &dispatcher,
+            channel,
+        )
+        .expect("pull Worker");
+        let (stop, shutdown) = watch::channel(false);
+        let running = tokio::spawn(async move { worker.run(shutdown).await });
+        timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("RPC started");
+        timeout(Duration::from_secs(5), ready_receiver.recv())
+            .await
+            .expect("delayed read ready")
+            .expect("readiness event");
+        if !is_reconnecting {
+            stop.send_replace(true);
+        }
+        let (lock, changed) = &*release;
+        *lock.lock().expect("drain gate lock") = true;
+        changed.notify_all();
+        if should_stop_during_reconnect {
+            sleep(Duration::from_secs(3)).await;
+            stop.send_replace(true);
+        }
+        let final_frame = timeout(Duration::from_secs(10), received.recv())
+            .await
+            .expect("final frame received")
+            .expect("final frame event");
+        match final_frame {
+            DrainEvent::FinalFrame(frame) => {
+                assert_eq!("drain-task", frame.task_id);
+                assert!(matches!(frame.output, Some(Output::Rpc(_))));
+                assert!(frame.encoded_len() > 3_000_000);
+            }
+            DrainEvent::HalfClosed => panic!("stream closed before final frame"),
+            DrainEvent::ReadError(error) => panic!("stream failed before final frame: {error}"),
+        }
+        let closed = timeout(Duration::from_secs(5), received.recv())
+            .await
+            .expect("half-close received")
+            .expect("half-close event");
+        assert!(matches!(closed, DrainEvent::HalfClosed));
+        stop.send_replace(true);
+        timeout(Duration::from_secs(5), running)
+            .await
+            .expect("Worker stopped")
+            .expect("join Worker")
+            .expect("Worker result");
+        server_stop.send_replace(true);
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("fake server stopped")
+            .expect("join server")
+            .expect("server result");
+    }
+
     async fn cancellation_frame_has_status(cancel_kind: Code) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1511,6 +1728,9 @@ mod tests {
                     events,
                     assigned: Arc::new(AtomicBool::new(false)),
                     cancel_kind: Some(cancel_kind),
+                    read_delay: Duration::ZERO,
+                    is_reconnecting: false,
+                    ready: None,
                 }))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
                     while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok() {}
@@ -1528,6 +1748,7 @@ mod tests {
                 started,
                 release,
                 wait_for_cancel: true,
+                result_size: None,
             })
             .expect("register cancellation Flow");
         let dispatcher = WorkerDispatcher::new(

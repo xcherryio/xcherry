@@ -293,7 +293,8 @@ impl Worker {
     ///
     /// Calling `stop` before or after `start` is safe; [`Self::start`] observes the shutdown signal.
     /// Pull mode first drains active handlers. After the drain timeout it cancels them, and
-    /// [`Self::start`] waits for their return. Stop is idempotent.
+    /// [`Self::start`] waits for their return. Half-closed pull streams wait for server EOF
+    /// until the remaining drain deadline. Stop is idempotent.
     pub fn stop(&self) {
         self.shutdown.send_replace(true);
     }

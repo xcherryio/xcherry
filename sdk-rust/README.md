@@ -349,8 +349,10 @@ Worker process, change after restart, contain 1–63 ASCII letters, digits, dots
 underscores, or hyphens, and differ from every registered Flow type.
 
 The Worker reconnects after stream failures and drains an active task before a
-server-directed reconnect. Registration failures back off; an older server
-without pull support logs one explicit error and retries. `Worker::start`
+server-directed reconnect. After sending the final frame, that stream waits up
+to `PullWorkerOptions::stop_drain_timeout` for the server to close it.
+Registration failures back off; an older server without pull support logs one
+explicit error and retries. `Worker::start`
 returns startup errors, while later polling failures are logged and retried.
 A permanent registration error waits one minute. If the next attempt fails
 transiently before registration, that retry also waits one minute; subsequent
@@ -364,8 +366,10 @@ and per-queue stream limits.
 
 `Worker::stop` begins a graceful drain. After 30 seconds by default, the Worker
 cancels active handlers; `Worker::start` waits for them to return before it
-exits. Set `PullWorkerOptions::stop_drain_timeout` to change that deadline.
-Handlers should check `Context::is_cancelled` during interruptible work.
+exits. Half-closed streams wait for server EOF until the remaining Stop drain
+deadline before the connection closes. Set `PullWorkerOptions::stop_drain_timeout`
+to change that deadline. Handlers should check `Context::is_cancelled` during
+interruptible work.
 
 ### Step progress and Streams
 

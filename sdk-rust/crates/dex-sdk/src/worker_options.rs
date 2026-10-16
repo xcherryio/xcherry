@@ -157,6 +157,8 @@ impl PullWorkerOptions {
     ///
     /// The default is 30 seconds. Zero returns [`crate::SdkError::FlowDefinition`] from
     /// [`crate::Worker::try_new`].
+    /// A busy server-directed Reconnect uses this duration to wait for server EOF after the final frame.
+    /// During Stop, half-closed streams use the remaining drain deadline.
     /// [`crate::Worker::start`] waits for cancelled handlers to return before it exits.
     pub fn stop_drain_timeout(mut self, value: Duration) -> Self {
         self.stop_drain_timeout = Some(value);
