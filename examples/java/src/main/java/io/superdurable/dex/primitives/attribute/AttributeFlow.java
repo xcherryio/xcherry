@@ -43,6 +43,9 @@ public class AttributeFlow implements Flow<String> {
     private final Attribute<String> email = Attribute.define(
             "primitive-attribute-email",
             String.class).syncToAttributeStore();
+    private final Attribute<String> modelApiKey = Attribute.define(
+            "primitive-attribute-model-api-key",
+            String.class).hardDeleteOnNull();
     private final AttributeMap<String> progress =
             AttributeMap.define(
                     "primitive-attribute-progress",
@@ -60,7 +63,7 @@ public class AttributeFlow implements Flow<String> {
 
     @Override
     public PersistenceSchema getPersistenceSchema() {
-        return PersistenceSchema.of(status, progress, email);
+        return PersistenceSchema.of(status, progress, email, modelApiKey);
     }
 
     final class AttributeStep implements Step<String> {
@@ -89,6 +92,8 @@ public class AttributeFlow implements Flow<String> {
         @Override
         public StepDecision execute(final Context context, final String input) {
             status.set(context, "completed");
+            // The Flow no longer needs the short-lived key, so delete it permanently.
+            modelApiKey.delete(context);
             return StepDecision.gracefulComplete(input);
         }
     }

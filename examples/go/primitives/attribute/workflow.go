@@ -33,6 +33,10 @@ var (
 		"primitive-attribute-email",
 		dex.SyncToAttributeStore(),
 	)
+	ModelAPIKey = dex.DefineAttribute[string](
+		"primitive-attribute-model-api-key",
+		dex.HardDeleteOnNull(),
+	)
 	Progress = dex.DefineAttributeMap[string](
 		"primitive-attribute-progress",
 		dex.Indexed(dex.AttributeIndex{Type: dex.IndexKeyword, IndexKey: "keyword2"}),
@@ -64,7 +68,7 @@ func (flow *AttributeFlow) GetRPCs() []dex.RPCDef {
 }
 
 func (*AttributeFlow) GetPersistenceSchema() dex.PersistenceSchema {
-	return dex.PersistenceSchema{Attributes: []dex.AttributeDef{Status, Progress, Email}}
+	return dex.PersistenceSchema{Attributes: []dex.AttributeDef{Status, Progress, Email, ModelAPIKey}}
 }
 
 type attributeStep struct {
@@ -96,6 +100,10 @@ func (attributeStep) WaitFor(ctx dex.Context, input string) (*dex.Wait, error) {
 
 func (attributeStep) Execute(ctx dex.Context, input string) (*dex.StepDecision, error) {
 	if err := Status.Set(ctx, "completed"); err != nil {
+		return nil, err
+	}
+	// The Flow no longer needs the short-lived key, so delete it permanently.
+	if err := ModelAPIKey.Delete(ctx); err != nil {
 		return nil, err
 	}
 	return dex.GracefulComplete(input), nil
