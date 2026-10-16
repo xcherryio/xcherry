@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+worker_mode="${DEX_INTEG_WORKER_MODE:-push}"
+case "$worker_mode" in
+  push|pull) ;;
+  *) echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2; exit 2 ;;
+esac
+
 pytest_args=(-q)
 if [[ "${1:-}" == "--coverage" ]]; then
   pytest_args+=(
@@ -93,4 +99,5 @@ fi
 
 cd "$script_dir"
 DEX_SERVER_ADDRESS="$dex_address" \
+  DEX_INTEG_WORKER_MODE="$worker_mode" \
   uv run --frozen pytest "${pytest_args[@]}" "${test_paths[@]}"

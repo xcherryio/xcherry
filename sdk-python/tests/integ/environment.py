@@ -23,6 +23,7 @@ from dex import (
     Client,
     ClientOptions,
     Flow,
+    PullWorkerOptions,
     Registry,
     Worker,
     WorkerOptions,
@@ -33,8 +34,8 @@ from dex import (
 class DexDevTestEnvironment:
     def __init__(self, *flows: Flow[Any]) -> None:
         server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
-        worker_port = _available_port()
-        worker_address = f"127.0.0.1:{worker_port}"
+        is_pull_worker_mode = integ_worker_mode() == "pull"
+        worker_port = None if is_pull_worker_mode else _available_port()
         registry = Registry(flows)
         self._cache_directory = TemporaryDirectory(
             prefix="dex-python-integration-cache-"
@@ -48,9 +49,13 @@ class DexDevTestEnvironment:
         self._worker = Worker(
             registry,
             self._cache,
-            WorkerOptions(
-                bind_address=worker_address,
-                server_address=server_address,
+            (
+                WorkerOptions(server_address=server_address, pull=PullWorkerOptions())
+                if is_pull_worker_mode
+                else WorkerOptions(
+                    bind_address=f"127.0.0.1:{worker_port}",
+                    server_address=server_address,
+                )
             ),
         )
         self._failure: BaseException | None = None
@@ -59,7 +64,8 @@ class DexDevTestEnvironment:
             name="dex-python-integration-worker",
         )
         self._thread.start()
-        _await_worker(worker_port, self)
+        if worker_port is not None:
+            _await_worker(worker_port, self)
         self.client = Client(
             registry,
             self._cache,
@@ -90,6 +96,13 @@ class DexDevTestEnvironment:
             self._worker.start()
         except BaseException as error:
             self._failure = error
+
+
+def integ_worker_mode() -> str:
+    worker_mode = os.environ.get("DEX_INTEG_WORKER_MODE", "push")
+    if worker_mode not in ("push", "pull"):
+        raise ValueError("DEX_INTEG_WORKER_MODE must be push or pull")
+    return worker_mode
 
 
 def _available_port() -> int:

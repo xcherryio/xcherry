@@ -142,15 +142,21 @@ jobs:
             uv.lock
 
   integration:
-    name: Integration tests
+    name: Integration tests (${{ matrix.worker-mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        worker-mode: [push, pull]
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
         working-directory: sdk-python
+    env:
+      DEX_INTEG_WORKER_MODE: ${{ matrix.worker-mode }}
     steps:
     - uses: actions/checkout@v7
     - uses: actions/setup-node@v6
@@ -187,19 +193,19 @@ jobs:
         fail_ci_if_error: true
         files: ./sdk-python/coverage/lcov.info
         flags: sdk-python-integration
-        name: sdk-python-integration
+        name: sdk-python-integration-${{ matrix.worker-mode }}
         use_oidc: true
     - name: Upload coverage report
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: sdk-python-integration-coverage
+        name: sdk-python-integration-coverage-${{ matrix.worker-mode }}
         path: sdk-python/coverage/
         if-no-files-found: ignore
     - name: Upload service logs
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: sdk-python-integration-services
+        name: sdk-python-integration-services-${{ matrix.worker-mode }}
         path: /tmp/test-python-sdk-integration-services.log
         if-no-files-found: ignore

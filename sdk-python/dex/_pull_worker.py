@@ -187,6 +187,8 @@ class PullWorkerRuntime:
         try:
             for stream in tuple(self._streams):
                 stream.drain()
+                if not stream.is_busy and not stream.is_half_closing:
+                    stream.run_task.cancel()
             self.signal()
             active = [
                 stream.handler_task for stream in self._streams if stream.handler_task
