@@ -492,7 +492,7 @@ async def _register_pong_and_idle_reconnect() -> None:
         "register",
         "pong",
     ]
-    assert stream._immediate_reconnect
+    assert stream._is_reconnecting
     assert call.is_canceled
 
 
@@ -653,6 +653,60 @@ async def _transient_reconnect_uses_exponential_backoff() -> None:
     assert timeouts == [0.1, 0.2]
 
 
+@pytest.mark.parametrize("was_registered", [False, True])
+def test_server_reconnect_waits_for_backoff_and_jitter(
+    was_registered: bool,
+) -> None:
+    asyncio.run(_server_reconnect_waits_for_backoff_and_jitter(was_registered))
+
+
+async def _server_reconnect_waits_for_backoff_and_jitter(
+    was_registered: bool,
+) -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(app_worker_id="reconnect-backoff-worker"),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    stream = PullStream(runtime, None, "reconnect-backoff-worker")
+    poll_count = 0
+    virtual_time = 0.0
+    poll_times: list[float] = []
+
+    async def poll() -> bool:
+        nonlocal poll_count
+        poll_count += 1
+        poll_times.append(virtual_time)
+        if poll_count == 1:
+            stream._is_reconnecting = True
+        else:
+            assert runtime._stopping is not None
+            runtime._stopping.set()
+        return was_registered
+
+    async def capture_wait(
+        awaitable: Coroutine[Any, Any, bool], *, timeout: float
+    ) -> bool:
+        nonlocal virtual_time
+        awaitable.close()
+        assert poll_count == 1
+        virtual_time += timeout
+        raise asyncio.TimeoutError
+
+    with patch("dex._pull_worker.asyncio.wait_for", new=capture_wait), patch(
+        "dex._pull_worker.random.uniform", return_value=0.025
+    ) as jitter_mock, patch.object(stream, "_poll", new=poll):
+        await stream.run()
+
+    assert poll_count == 2
+    assert poll_times == [0.0, 0.125]
+    assert 0.1 <= poll_times[1] - poll_times[0] < 0.15
+    jitter_mock.assert_called_once_with(0, 0.05)
+
+
 class QueueCall:
     def __init__(self, frames: list[pb.PollWorkerTaskResponse]) -> None:
         self.frames: asyncio.Queue[Any] = asyncio.Queue()
@@ -755,7 +809,7 @@ async def _busy_reconnect_drains_before_closing_stream() -> None:
         assert await asyncio.wait_for(polling, timeout=1)
     assert call.is_half_closed
     assert call.is_closed
-    assert stream._immediate_reconnect
+    assert stream._is_reconnecting
     assert [request.WhichOneof("frame") for request in call.requests] == [
         "register",
         "task_frame",

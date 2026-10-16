@@ -248,7 +248,7 @@ class PullStream:
         self._active = threading.Event()
         self._call: Any = None
         self._send_lock = asyncio.Lock()
-        self._immediate_reconnect = False
+        self._is_reconnecting = False
         self._deadline_handle: asyncio.TimerHandle | None = None
 
     def on_done(self, completed: asyncio.Task[None]) -> None:
@@ -270,10 +270,9 @@ class PullStream:
                 )
             if self.runtime.is_stopping:
                 break
-            if self._immediate_reconnect:
-                self._immediate_reconnect = False
+            if self._is_reconnecting:
+                self._is_reconnecting = False
                 backoff = 0.1
-                continue
             if was_registered:
                 backoff = 0.1
             code = error.code() if error is not None else None
@@ -347,7 +346,7 @@ class PullStream:
                         await self._call.done_writing()
                         await self._await_stream_eof(reader)
                         reader = None
-                        self._immediate_reconnect = True
+                        self._is_reconnecting = True
                         return was_registered
                 if reader not in completed:
                     continue
@@ -358,7 +357,7 @@ class PullStream:
                 kind = frame.WhichOneof("frame")
                 if not was_registered:
                     if kind == "reconnect":
-                        self._immediate_reconnect = True
+                        self._is_reconnecting = True
                         return False
                     if kind != "registered":
                         raise RuntimeError("Worker task stream did not register")
@@ -377,7 +376,7 @@ class PullStream:
                 elif kind == "reconnect":
                     self.drain()
                     if not self.is_busy:
-                        self._immediate_reconnect = True
+                        self._is_reconnecting = True
                         return was_registered
         finally:
             self.is_half_closing = False
