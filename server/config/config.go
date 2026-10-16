@@ -468,7 +468,7 @@ type (
 		// StartFlowWorkerTargetHeadless applies headless routing to address targets started from Dex Web. Default false. Immutable after startup.
 		IsStartFlowWorkerTargetHeadless bool `yaml:"startFlowWorkerTargetHeadless"`
 		// IsStartFlowWorkerTargetPull selects a pull target when a Dex Web start omits the Worker target. Default false.
-		// Explicit address targets still work. Cannot be combined with startFlowWorkerTargetHeadless. Immutable after startup.
+		// Explicit address targets still work; startFlowWorkerTargetHeadless applies to them only. Immutable after startup.
 		IsStartFlowWorkerTargetPull bool `yaml:"startFlowWorkerTargetPull"`
 	}
 
@@ -666,9 +666,6 @@ func NewConfig(configPath string) (*Config, error) {
 	}
 	if err := applyWebEnvironment(cfg); err != nil {
 		return nil, err
-	}
-	if cfg.Web.IsStartFlowWorkerTargetPull && cfg.Web.IsStartFlowWorkerTargetHeadless {
-		return nil, fmt.Errorf("web.startFlowWorkerTargetPull and web.startFlowWorkerTargetHeadless cannot both be true")
 	}
 	if cfg.Interpreter.Temporal != nil {
 		if err := cfg.Interpreter.Temporal.ValidateTemporalConnection(); err != nil {

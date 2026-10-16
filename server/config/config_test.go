@@ -71,7 +71,7 @@ func TestWebStartFlowWorkerTargetHeadlessDefaultsFalseAndReadsYAML(t *testing.T)
 	require.True(t, yamlConfig.Web.IsStartFlowWorkerTargetHeadless)
 }
 
-func TestWebStartFlowWorkerTargetPullDefaultAndConflict(t *testing.T) {
+func TestWebStartFlowWorkerTargetPullDefaultAndHeadlessAddresses(t *testing.T) {
 	defaultConfig, err := NewConfig(writeTestConfig(t, "web: {}\n"))
 	require.NoError(t, err)
 	require.False(t, defaultConfig.Web.IsStartFlowWorkerTargetPull)
@@ -80,8 +80,10 @@ func TestWebStartFlowWorkerTargetPullDefaultAndConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, pullConfig.Web.IsStartFlowWorkerTargetPull)
 
-	_, err = NewConfig(writeTestConfig(t, "web:\n  startFlowWorkerTargetPull: true\n  startFlowWorkerTargetHeadless: true\n"))
-	require.ErrorContains(t, err, "web.startFlowWorkerTargetPull and web.startFlowWorkerTargetHeadless cannot both be true")
+	combinedConfig, err := NewConfig(writeTestConfig(t, "web:\n  startFlowWorkerTargetPull: true\n  startFlowWorkerTargetHeadless: true\n"))
+	require.NoError(t, err)
+	require.True(t, combinedConfig.Web.IsStartFlowWorkerTargetPull)
+	require.True(t, combinedConfig.Web.IsStartFlowWorkerTargetHeadless)
 }
 
 func TestWebStartFlowWorkerTargetPullEnvironment(t *testing.T) {

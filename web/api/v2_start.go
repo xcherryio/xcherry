@@ -42,7 +42,7 @@ type v2StartRequest struct {
 	FlowType                string          `json:"flowType"`
 	FlowID                  string          `json:"flowId"`
 	WorkerTargetAddress     *string         `json:"workerTargetAddress"`
-	WorkerTargetPull        bool            `json:"workerTargetPull"`
+	WorkerTargetPull        *bool           `json:"workerTargetPull"`
 	BypassWorkerHealthCheck bool            `json:"bypassWorkerHealthCheck"`
 	Input                   json.RawMessage `json:"input"`
 }
@@ -140,15 +140,16 @@ func (h *v2Handler) checkWorkerHealth(response http.ResponseWriter, request *htt
 	writeJSON(response, http.StatusOK, v2WorkerHealthResponse{Healthy: true})
 }
 
-func (h *v2Handler) validateStartWorkerTarget(address *string, isPull bool) (*dexpb.WorkerTarget, error) {
-	if isPull && address != nil {
+func (h *v2Handler) validateStartWorkerTarget(address *string, isPull *bool) (*dexpb.WorkerTarget, error) {
+	isPullTarget := isPull != nil && *isPull
+	if isPullTarget && address != nil {
 		return nil, fmt.Errorf("workerTargetPull and workerTargetAddress cannot both be set")
 	}
-	if isPull || (address == nil && h.isStartFlowWorkerTargetPull) {
+	if isPullTarget || (address == nil && isPull == nil && h.isStartFlowWorkerTargetPull) {
 		return grpctarget.NormalizeWorkerTarget(&dexpb.WorkerTarget{IsPullMode: true})
 	}
 	if address == nil {
-		return h.validateWorkerTarget("")
+		return nil, fmt.Errorf("workerTargetAddress or workerTargetPull is required")
 	}
 	return h.validateWorkerTarget(*address)
 }

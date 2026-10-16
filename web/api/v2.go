@@ -330,9 +330,10 @@ func (h *v2Handler) catalog(response http.ResponseWriter, request *http.Request)
 	}
 	setDefinitionETag(response, snapshot.Revision)
 	writeJSON(response, http.StatusOK, map[string]interface{}{
-		"enabled":            len(entries) > 0,
-		"flows":              entries,
-		"definitionRevision": snapshot.Revision,
+		"enabled":                   len(entries) > 0,
+		"flows":                     entries,
+		"definitionRevision":        snapshot.Revision,
+		"startFlowWorkerTargetPull": h.isStartFlowWorkerTargetPull,
 	})
 }
 

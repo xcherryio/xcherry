@@ -84,6 +84,8 @@ between the check and dispatch.
 
 `POST /api/v2/start` accepts `flowType`, `flowId`, raw JSON `input`, and either
 `workerTargetAddress` or `workerTargetPull: true`. Supplying both returns HTTP 400.
+An explicit `workerTargetPull: false` requires an address, even when the pull
+default is enabled.
 With an address, it also accepts `bypassWorkerHealthCheck`; false performs the
 server-side port check and returns `WORKER_UNHEALTHY` with HTTP 412 when the
 target is unreachable. `POST /api/v2/worker-health` checks the same address for
@@ -111,9 +113,10 @@ are Kubernetes headless Service targets.
 For deployments using pull Workers, `web.startFlowWorkerTargetPull: true` selects
 a pull target when an API request omits both target fields. The equivalent
 environment variable is `DEX_WEB_START_FLOW_WORKER_TARGET_PULL`. The default is
-false; an explicit address still selects address routing. This setting cannot
-be true alongside `web.startFlowWorkerTargetHeadless`. Dex rejects that
-configuration at startup.
+false; an explicit address still selects address routing. Headless routing
+applies only to address targets, so both settings can be enabled together.
+`GET /api/v2/catalog` reports this default so the dialog opens with **Pull Worker**
+selected when it is true.
 
 The v2 Work Queue is available at `/v2/work-queue`. Its **Working as** control
 selects one Action permission and filters on the Server-maintained

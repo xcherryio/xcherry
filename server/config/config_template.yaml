@@ -46,9 +46,9 @@ web:
   # Required when auth is enabled and Dex Web runs. Protect the Web port separately.
   # flowServiceCredentialFile: /etc/dex/web-token
   flowRenderingDirectory: ""
-  # Apply headless routing to every Worker target submitted through Dex Web Start Flow.
+  # Apply headless routing to address targets submitted through Dex Web Start Flow.
   startFlowWorkerTargetHeadless: false
-  # Use a pull target when Dex Web Start Flow omits a Worker address.
+  # Use a pull target when Dex Web Start Flow omits both target fields.
   startFlowWorkerTargetPull: false
 worker:
 # Optional hook for unavailable Workers. The POST body contains target and kind.

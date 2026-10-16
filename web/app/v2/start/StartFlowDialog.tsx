@@ -32,6 +32,7 @@ export function StartFlowDialog({
   definition,
   definitionRevision,
   flowType,
+  isDefaultPull,
   onClose,
   onDefinitionChanged,
   onStarted,
@@ -39,12 +40,13 @@ export function StartFlowDialog({
   definition: FlowV2StartDefinition;
   definitionRevision: string;
   flowType: string;
+  isDefaultPull: boolean;
   onClose: () => void;
   onDefinitionChanged: (error: unknown) => boolean;
   onStarted: (flowID: string) => void;
 }) {
   const [flowID, setFlowID] = useState('');
-  const [workerTargetMode, setWorkerTargetMode] = useState<'address' | 'pull'>('address');
+  const [workerTargetMode, setWorkerTargetMode] = useState<'address' | 'pull'>(isDefaultPull ? 'pull' : 'address');
   const [workerAddress, setWorkerAddress] = useState('');
   const [draft, setDraft] = useState(() => createStartInputDraft(definition.input));
   const [errors, setErrors] = useState<StartInputError[]>([]);
@@ -198,6 +200,7 @@ export function StartFlowDialog({
                   workerHealthSequence.current += 1;
                   setWorkerHealth('idle');
                   setWorkerHealthWarning('');
+                  setBypassWorkerHealthCheck(false);
                   setWorkerTargetMode('address');
                 }}
               />
@@ -212,6 +215,7 @@ export function StartFlowDialog({
                   workerHealthSequence.current += 1;
                   setWorkerHealth('idle');
                   setWorkerHealthWarning('');
+                  setBypassWorkerHealthCheck(false);
                   setWorkerTargetMode('pull');
                 }}
               />

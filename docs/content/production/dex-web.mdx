@@ -85,7 +85,7 @@ The Server reloads the current definition revision and validates the complete in
 
 Set **web.startFlowWorkerTargetHeadless** or **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS** for address targets entered through this Dex Web instance. The default is false. Set it to true when operators enter Kubernetes headless Service targets.
 
-The **POST /api/v2/start** request accepts **workerTargetAddress** or **workerTargetPull: true**. Sending both returns HTTP 400. If neither is supplied, **web.startFlowWorkerTargetPull** selects a pull target when true. Its default is false, and an explicit address still works. **DEX_WEB_START_FLOW_WORKER_TARGET_PULL** sets the same default through the environment. Do not enable it with **web.startFlowWorkerTargetHeadless**; Dex rejects the combination at startup. Dex Web does not check for a registered pull Worker before starting because registrations can change before dispatch.
+The **POST /api/v2/start** request accepts **workerTargetAddress** or **workerTargetPull: true**. Sending both returns HTTP 400. If neither is supplied, **web.startFlowWorkerTargetPull** selects a pull target when true. Its default is false, and an explicit address still works. **workerTargetPull: false** requires an address even when the pull default is enabled. **DEX_WEB_START_FLOW_WORKER_TARGET_PULL** sets the same default through the environment. The dialog initially selects **Pull Worker** when this default is true. Headless routing applies only to address targets, so both settings can be enabled together. Dex Web does not check for a registered pull Worker before starting because registrations can change before dispatch.
 
 ## Search and Summary
 

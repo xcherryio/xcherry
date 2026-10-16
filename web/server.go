@@ -36,7 +36,7 @@ type Config struct {
 	FlowRenderingDirectory string
 	// StartFlowWorkerTargetHeadless defaults false and applies headless routing to Dex Web address targets.
 	IsStartFlowWorkerTargetHeadless bool
-	// IsStartFlowWorkerTargetPull defaults false and selects pull routing when no address is supplied. Incompatible with headless routing.
+	// IsStartFlowWorkerTargetPull defaults false and selects pull routing when no target is supplied. Headless routing applies to address targets.
 	IsStartFlowWorkerTargetPull bool
 	// ConnectorSetupEnabled defaults false and enables Connector configuration APIs.
 	ConnectorSetupEnabled bool
@@ -84,9 +84,6 @@ func NewFlowRenderingServer(cfg *Config, graph []byte, assets fs.FS) (*Server, e
 }
 
 func newServer(cfg *Config, client dexpb.FlowServiceClient, assets fs.FS, flowDefinitions FlowDefinitionProvider) (*Server, error) {
-	if cfg.IsStartFlowWorkerTargetPull && cfg.IsStartFlowWorkerTargetHeadless {
-		return nil, fmt.Errorf("Dex Web startFlowWorkerTargetPull and startFlowWorkerTargetHeadless cannot both be true")
-	}
 	connectorSetup, err := newConnectorSetup(cfg, flowDefinitions)
 	if err != nil {
 		return nil, err

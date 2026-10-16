@@ -84,7 +84,7 @@ Server 会重新加载当前 definition revision，并在调用 **StartFlow** �
 
 通过 **web.startFlowWorkerTargetHeadless** 或 **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS** 为该 Dex Web instance 的 address target 配置 headless routing。默认值为 false。当操作员填写 Kubernetes headless Service target 时，将它设为 true。
 
-**POST /api/v2/start** 接受 **workerTargetAddress** 或 **workerTargetPull: true**，同时提供两者会返回 HTTP 400。如果都未提供，**web.startFlowWorkerTargetPull** 为 true 时会选择 pull target。默认值为 false；显式提供 address 仍会使用 address target。也可以通过环境变量 **DEX_WEB_START_FLOW_WORKER_TARGET_PULL** 设置相同的默认值。不要同时启用它和 **web.startFlowWorkerTargetHeadless**，否则 Dex 会在启动时拒绝配置。Dex Web 启动 Flow 前不会检查 pull Worker 是否已注册，因为注册状态在 dispatch 前可能变化。
+**POST /api/v2/start** 接受 **workerTargetAddress** 或 **workerTargetPull: true**，同时提供两者会返回 HTTP 400。如果都未提供，**web.startFlowWorkerTargetPull** 为 true 时会选择 pull target。默认值为 false；显式提供 address 仍会使用 address target。即使启用了 pull 默认值，**workerTargetPull: false** 仍要求提供 address。也可以通过环境变量 **DEX_WEB_START_FLOW_WORKER_TARGET_PULL** 设置相同的默认值。默认值为 true 时，弹窗最初会选择 **Pull Worker**。Headless routing 仅适用于 address target，因此可以同时启用这两个设置。Dex Web 启动 Flow 前不会检查 pull Worker 是否已注册，因为注册状态在 dispatch 前可能变化。
 
 ## 搜索与 Summary
 
