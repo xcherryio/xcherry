@@ -21,6 +21,7 @@ import {
   ChannelMap,
   ChannelMessagesNotLoadedError,
   Client,
+  FileCredential,
   ConditionCombination,
   FlowDefinitionError,
   InvalidStepResultError,
@@ -41,6 +42,7 @@ import {
   type BlobCache,
   type AsyncContext,
   type Context,
+  type Credential,
   type Flow,
   type FlowConfig,
   type RPCResult,
@@ -176,6 +178,15 @@ class Orders implements Flow<OrderInput> {
 
 const orders = new Orders();
 const blobCache = {} as BlobCache;
+
+test("credential contracts accept synchronous and asynchronous token providers", () => {
+  const synchronous: Credential = { token: () => "current-token" };
+  const asynchronous: Credential = { token: async () => "rotated-token" };
+  const options: WorkerOptions = { credential: asynchronous, pull: {} };
+  assert.equal(synchronous.token(), "current-token");
+  assert.equal(options.credential, asynchronous);
+  assert.equal(typeof FileCredential, "function");
+});
 
 test("typed definitions construct without runtime", () => {
   const registry = new Registry([orders]);

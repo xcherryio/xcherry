@@ -11,6 +11,8 @@ export * from "./attribute-match.js";
 export * from "./client.js";
 export * from "./codec.js";
 export * from "./context.js";
+export { FileCredential } from "./credential.js";
+export type { Credential } from "./credential.js";
 export * from "./errors.js";
 export { Registry } from "./flow.js";
 export type { Flow } from "./flow.js";

@@ -446,6 +446,36 @@ public execute(context: Context, _input: ChargeInput): StepDecision {
 `SubFlowOptions` configures timing, timeout policy, retry, initial target Attributes,
 Flow config, Condition ID, and reuse. Parent completion does not cancel an unfinished SubFlow.
 
+## Authentication
+
+Set `ClientOptions.credential` and `WorkerOptions.credential` when Dex Server
+authentication is enabled. Each FlowService call requests the current token.
+Workers also send it during startup index synchronization, blob hydration, and
+when opening pull task streams. A reconnect requests the token again. Omitted
+credentials send no authorization metadata.
+
+```typescript
+import { Client, FileCredential, Worker } from "@superdurable/dex";
+
+const credential = new FileCredential("/var/run/secrets/dex/token");
+const worker = new Worker(registry, cache, { credential, pull: {} });
+const client = new Client(registry, cache, {
+  credential,
+  workerTarget: worker.workerTarget,
+});
+```
+
+`FileCredential` reads the file at construction and checks its modification
+time and size at most once per second. It trims surrounding whitespace and
+rereads a changed file. Construction fails if the file is unreadable or empty;
+later calls fail if it becomes unreadable or empty, instead of sending a stale
+token. A custom credential may return a string or `Promise<string>` from
+`token()`. Calls can ask for tokens concurrently. A thrown or rejected error
+fails the call before contacting Dex.
+
+The bearer token travels over the SDK's plaintext gRPC connection. Protect
+the network path between the application and Dex.
+
 ## Errors
 
 Client calls reject with concrete `DexServiceError` subclasses. Existing-Flow

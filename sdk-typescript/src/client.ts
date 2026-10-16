@@ -10,6 +10,7 @@ import { credentials, Metadata, status, type ServiceError } from "@grpc/grpc-js"
 
 import type { BlobCache } from "./blob-cache.js";
 import { AttributeMatch } from "./attribute-match.js";
+import { credentialInterceptors } from "./credential.js";
 import { mapAttributeStoreNames, mapAttributeStoreSync } from "./attribute-store-sync.js";
 import type { Codec } from "./codec.js";
 import type { Context } from "./context.js";
@@ -129,7 +130,7 @@ export class Client {
    * Constructs a Client and lazy plaintext gRPC connection.
    * @param registry - Flow definitions used for validation and routing.
    * @param blobCache - Open cache used to hydrate large response values.
-   * @param options - Service address and default Worker target.
+   * @param options - Service address, default Worker target, and optional bearer credential.
    */
   public constructor(
     public readonly registry: Registry,
@@ -142,6 +143,7 @@ export class Client {
     this.service = new FlowServiceClient(
       options.serverAddress ?? defaultServerAddress,
       credentials.createInsecure(),
+      { interceptors: credentialInterceptors(options.credential) },
     );
     this.hydrator = new ValueHydrator(this.service, blobCache);
   }

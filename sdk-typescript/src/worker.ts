@@ -17,6 +17,7 @@ import {
 } from "@grpc/grpc-js";
 
 import type { BlobCache } from "./blob-cache.js";
+import { credentialInterceptors } from "./credential.js";
 import {
   FlowServiceClient,
   InvokeExecuteMethodOutput,
@@ -80,7 +81,7 @@ export class Worker {
    * Constructs a Worker without starting its listener or task streams.
    * @param registry - Flow definitions served by this Worker.
    * @param blobCache - Open cache used to hydrate large handler values.
-   * @param options - Networking, pull mode, and startup settings; uses local defaults when omitted.
+   * @param options - Networking, pull mode, bearer credential, and startup settings; uses local defaults when omitted.
    * @throws {TypeError} When pull mode conflicts with a listener or has an invalid Worker ID.
    * @throws {RangeError} When a pull capacity or drain timeout is invalid.
    */
@@ -100,6 +101,7 @@ export class Worker {
     this.flowService = new FlowServiceClient(
       options.serverAddress ?? "localhost:8801",
       credentials.createInsecure(),
+      { interceptors: credentialInterceptors(options.credential) },
     );
     const dispatcher = new WorkerDispatcher(
       registry,
@@ -108,7 +110,7 @@ export class Worker {
     try {
       this.pullWorker = options.pull === undefined
         ? undefined
-        : new PullWorker(registry, dispatcher, options.serverAddress ?? "localhost:8801", options.pull);
+        : new PullWorker(registry, dispatcher, options.serverAddress ?? "localhost:8801", options.pull, options.credential);
     } catch (failure) {
       this.flowService.close();
       throw failure;
