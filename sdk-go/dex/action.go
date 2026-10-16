@@ -257,9 +257,16 @@ func (flow *registeredFlow) compileAction(definition ActionDef) (*registeredActi
 			flow.flowType,
 		)
 	}
+	if registered.isHardDeleteOnNull {
+		return nil, fmt.Errorf(
+			"Action condition Attribute %q uses HardDeleteOnNull, which conditions cannot read",
+			condition.attribute.attributeName(),
+		)
+	}
 	if registered.valueType != condition.valueType ||
 		!reflect.DeepEqual(registered.index, condition.attribute.attributeIndex()) ||
-		registered.syncToAttributeStore != condition.attribute.attributeSyncToAttributeStore() {
+		registered.syncToAttributeStore != condition.attribute.attributeSyncToAttributeStore() ||
+		registered.isHardDeleteOnNull != condition.attribute.attributeIsHardDeleteOnNull() {
 		return nil, fmt.Errorf(
 			"Action condition Attribute %q does not match its registered definition",
 			condition.attribute.attributeName(),
@@ -307,6 +314,7 @@ func (flow *registeredFlow) projectWorkQueuePermissions(
 		return mapAttributeDelete(
 			WorkQueuePermissionsIndexKey,
 			workQueuePermissionsAttributeIndex,
+			false,
 			false,
 		)
 	}

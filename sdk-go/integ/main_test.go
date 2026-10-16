@@ -182,6 +182,7 @@ func integrationFlows() []dex.Flow {
 		noStartStepFlow{},
 		noStepFlow{},
 		persistenceFlow{},
+		hardDeleteAttributeFlow{},
 		rpcFlow{},
 		selectiveRPCFlow{},
 		channelFlow{},

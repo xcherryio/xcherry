@@ -32,6 +32,7 @@ type Attribute[T any] struct {
 	name                 string
 	index                *AttributeIndex
 	syncToAttributeStore bool
+	isHardDeleteOnNull   bool
 }
 
 // DefineAttribute creates a typed Attribute with a stable name and definition options.
@@ -43,6 +44,7 @@ func DefineAttribute[T any](key string, options ...AttributeOption) Attribute[T]
 		name:                 key,
 		index:                config.index,
 		syncToAttributeStore: config.syncToAttributeStore,
+		isHardDeleteOnNull:   config.isHardDeleteOnNull,
 	}
 }
 
@@ -57,6 +59,7 @@ type AttributeDef interface {
 	attributeIndex() *AttributeIndex
 	attributeIsMap() bool
 	attributeSyncToAttributeStore() bool
+	attributeIsHardDeleteOnNull() bool
 }
 
 // Get returns the current value. Missing values return AttributeNotFoundError.
@@ -121,6 +124,10 @@ func (a Attribute[T]) attributeSyncToAttributeStore() bool {
 	return a.syncToAttributeStore
 }
 
+func (a Attribute[T]) attributeIsHardDeleteOnNull() bool {
+	return a.isHardDeleteOnNull
+}
+
 // AttributeMap defines keyed typed persisted values.
 //
 // Register the map once in PersistenceSchema, then supply an instance string for every access and lock.
@@ -130,6 +137,7 @@ type AttributeMap[T any] struct {
 	name                 string
 	index                *AttributeIndex
 	syncToAttributeStore bool
+	isHardDeleteOnNull   bool
 }
 
 // AttributeMapLoad selects one AttributeMap instance for a handler invocation.
@@ -154,6 +162,7 @@ func DefineAttributeMap[T any](name string, options ...AttributeOption) Attribut
 		name:                 name,
 		index:                config.index,
 		syncToAttributeStore: config.syncToAttributeStore,
+		isHardDeleteOnNull:   config.isHardDeleteOnNull,
 	}
 }
 
@@ -239,8 +248,12 @@ func (a AttributeMap[T]) attributeSyncToAttributeStore() bool {
 	return a.syncToAttributeStore
 }
 
+func (a AttributeMap[T]) attributeIsHardDeleteOnNull() bool {
+	return a.isHardDeleteOnNull
+}
+
 // AttributeOption configures an Attribute or AttributeMap definition.
-// Use Indexed and SyncToAttributeStore to create values; custom implementations are not supported.
+// Use Indexed, SyncToAttributeStore, and HardDeleteOnNull to create values; custom implementations are not supported.
 type AttributeOption interface {
 	applyAttribute(*attributeConfig)
 }
@@ -286,6 +299,67 @@ func SyncToAttributeStore() AttributeOption {
 	return syncToAttributeStoreOption{}
 }
 
+// HardDeleteOnNull keeps an Attribute's values out of Flow history and permanently deletes them on Delete.
+//
+// Use it for short-lived secrets, such as an API key that a Flow uses a few times and then
+// discards. Dex stores every value of the Attribute only in its blob store, whatever the value
+// size, and Flow history keeps only a reference. Delete, or Set with a nil value, permanently
+// deletes the stored value, so neither Dex APIs nor Flow history can recover it afterward.
+// Step and RPC handlers receive the value inline, and the SDK never writes it to the local blob
+// cache.
+//
+// Only string and object values are supported, including []byte. Registration rejects integer,
+// unsigned integer, floating-point, and Boolean value types. An interface value type is checked
+// when a value is encoded. The option cannot be combined with Indexed or SyncToAttributeStore,
+// and the Attribute cannot be used by WaitForAttributeMatch, WaitForAttributeMapInstanceMatch,
+// or an Action condition. The Dex Server must enable its blob store and support Server protocol
+// version 3 or later. Otherwise StartFlow returns an error, and a Step or RPC that writes the
+// Attribute fails.
+//
+// Each Flow keeps one stored value per Attribute key and overwrites it in place. This has
+// user-visible consequences:
+//   - A Step or RPC attempt writes or deletes the stored value before the attempt's result is
+//     committed. A retried attempt, other Steps and RPCs, and Attribute reads through the Dex API
+//     can therefore observe a write or deletion made by an attempt that later failed. Make
+//     handlers safe to repeat instead of relying on a read-modify-write of this Attribute.
+//   - When concurrent Steps or RPCs write the same key, the final value may not be the value of
+//     the last committed write.
+//   - A StartFlow or SubFlow start that fails because the Flow ID is already running still
+//     overwrites the running Flow's value, or deletes it when the initial value is nil.
+//   - Flows that reuse a Flow ID share the stored value.
+//   - ResetFlow does not restore a deleted value. A deleted value reads as absent.
+//
+// A value remains stored until it is deleted, or until Dex removes the Flow after its retention
+// period. Blob store backups or bucket versioning outside Dex can keep copies.
+//
+// Example:
+//
+//	var ModelAPIKey = dex.DefineAttribute[string]("model-api-key", dex.HardDeleteOnNull())
+//
+//	type CallModelStep struct {
+//		dex.StepDefaultsNoWaitFor[CallModelInput]
+//	}
+//
+//	func (CallModelStep) Execute(ctx dex.Context, input CallModelInput) (*dex.StepDecision, error) {
+//		apiKey, err := ModelAPIKey.Get(ctx)
+//		if err != nil {
+//			return nil, err
+//		}
+//		if err := callModel(ctx, apiKey, input.Prompt); err != nil {
+//			return nil, err
+//		}
+//		if err := ModelAPIKey.Delete(ctx); err != nil {
+//			return nil, err
+//		}
+//		return dex.GracefulComplete(nil), nil
+//	}
+//
+// Pass the secret when the Flow starts with InitialAttribute(ModelAPIKey, apiKey) in
+// StartFlowOptions.Attributes, and include ModelAPIKey in the Flow's PersistenceSchema.
+func HardDeleteOnNull() AttributeOption {
+	return hardDeleteOnNullOption{}
+}
+
 // AttributeLock identifies one Attribute or Attribute-map instance lock.
 // Create locks with LockAttribute or LockAttributeMap, then place them in StepOptions or RPCOptions.
 type AttributeLock interface {
@@ -320,6 +394,7 @@ func InitialAttribute[T any](
 		value:                value,
 		index:                attribute.index,
 		syncToAttributeStore: attribute.syncToAttributeStore,
+		isHardDeleteOnNull:   attribute.isHardDeleteOnNull,
 		encoded:              encoded,
 		indexConfig:          indexConfig,
 	}, nil
@@ -353,6 +428,7 @@ func InitialAttributeMapValue[T any](
 		index:                attribute.index,
 		isMap:                true,
 		syncToAttributeStore: attribute.syncToAttributeStore,
+		isHardDeleteOnNull:   attribute.isHardDeleteOnNull,
 		encoded:              encoded,
 		indexConfig:          indexConfig,
 	}, nil
@@ -371,6 +447,7 @@ type attributeInvocation interface {
 type attributeConfig struct {
 	index                *AttributeIndex
 	syncToAttributeStore bool
+	isHardDeleteOnNull   bool
 }
 
 func applyAttributeOptions(options []AttributeOption) attributeConfig {
@@ -396,6 +473,12 @@ func (syncToAttributeStoreOption) applyAttribute(config *attributeConfig) {
 	config.syncToAttributeStore = true
 }
 
+type hardDeleteOnNullOption struct{}
+
+func (hardDeleteOnNullOption) applyAttribute(config *attributeConfig) {
+	config.isHardDeleteOnNull = true
+}
+
 type attributeLock struct {
 	name     string
 	instance string
@@ -411,6 +494,7 @@ type initialAttribute struct {
 	index                *AttributeIndex
 	isMap                bool
 	syncToAttributeStore bool
+	isHardDeleteOnNull   bool
 	encoded              *dexpb.Value
 	indexConfig          *dexpb.IndexConfig
 }

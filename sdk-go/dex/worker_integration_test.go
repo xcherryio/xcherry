@@ -1393,7 +1393,7 @@ func TestWorkerSynchronizesAttributeIndexesBeforeListening(t *testing.T) {
 		"WorkerTestStatus": dexpb.IndexType_INDEX_TYPE_KEYWORD,
 	}, request.AttributeIndexes)
 	require.False(t, <-flowService.wasListening)
-	require.Equal(t, uint32(2), worker.negotiatedProtocolVersion)
+	require.Equal(t, uint32(2), worker.serverProtocol.version.Load())
 	require.Equal(t, "dev", worker.sdkVersion)
 	require.Equal(t, []string{"GetServerInfo", "SyncAttributeIndexes"}, flowService.recordedCalls())
 	require.Eventually(t, func() bool {
@@ -1419,8 +1419,8 @@ func TestWorkerProtocolFailureKeepsIndexesUnsynchronizedAndPortClosed(t *testing
 			name: "Server minimum exceeds SDK maximum",
 			serverInfo: &dexpb.ServerInfo{
 				ServerVersion:                   "future",
-				MinimumSupportedProtocolVersion: 3,
-				CurrentProtocolVersion:          3,
+				MinimumSupportedProtocolVersion: maximumSupportedServerProtocolVersion + 1,
+				CurrentProtocolVersion:          maximumSupportedServerProtocolVersion + 1,
 			},
 			errorDetail: "do not overlap",
 		},
@@ -2118,6 +2118,17 @@ func newWorkerClientForFlows(
 	flows []Flow,
 	hydrator valueHydrator,
 ) (dexpb.WorkerServiceClient, func()) {
+	return newWorkerClientForServerProtocol(t, flows, hydrator, maximumSupportedServerProtocolVersion)
+}
+
+func newWorkerClientForServerProtocol(
+	t *testing.T,
+	flows []Flow,
+	hydrator valueHydrator,
+	serverProtocolVersion uint32,
+) (dexpb.WorkerServiceClient, func()) {
+	serverProtocol := &negotiatedServerProtocol{}
+	serverProtocol.version.Store(serverProtocolVersion)
 	if hydrator == nil {
 		hydrator = concreteValueHydrator{}
 	}
@@ -2127,7 +2138,7 @@ func newWorkerClientForFlows(
 	grpcServer := grpc.NewServer()
 	dexpb.RegisterWorkerServiceServer(
 		grpcServer,
-		newWorkerService(registered, hydrator, nil),
+		newWorkerService(registered, hydrator, nil, serverProtocol),
 	)
 	serveResult := make(chan error, 1)
 	go func() {

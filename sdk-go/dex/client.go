@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,6 +76,8 @@ type Client struct {
 	connection   *grpc.ClientConn
 	workerTarget *WorkerTarget
 	logger       Logger
+	// serverProtocol is negotiated lazily because only hard-delete writes depend on it.
+	serverProtocol negotiatedServerProtocol
 
 	lifecycleMu sync.RWMutex
 	closed      bool
@@ -409,6 +412,9 @@ func (client *Client) StartFlow(
 	if err != nil {
 		return "", err
 	}
+	if err := client.requireHardDeleteAttributeSupport(ctx, flowOptions.Attributes); err != nil {
+		return "", err
+	}
 	requestID, err := resolveStartRequestID(options.RequestID)
 	if err != nil {
 		return "", err
@@ -431,6 +437,29 @@ func (client *Client) StartFlow(
 		return "", fmt.Errorf("dex: StartFlow response has no run ID")
 	}
 	return response.RunId, nil
+}
+
+// requireHardDeleteAttributeSupport negotiates the Server protocol before the first hard-delete write.
+func (client *Client) requireHardDeleteAttributeSupport(
+	ctx context.Context,
+	writes []*dexpb.AttributeWrite,
+) error {
+	if !slices.ContainsFunc(writes, (*dexpb.AttributeWrite).GetIsHardDeleteOnNull) {
+		return nil
+	}
+	if client.serverProtocol.version.Load() == 0 {
+		sdkVersion := currentGoSDKVersion()
+		serverInfo, err := client.service.GetServerInfo(ctx, &emptypb.Empty{})
+		if err != nil {
+			return serverProtocolRequestError(sdkVersion, err)
+		}
+		negotiatedProtocolVersion, err := negotiateServerProtocol(serverInfo, sdkVersion)
+		if err != nil {
+			return err
+		}
+		client.serverProtocol.version.Store(negotiatedProtocolVersion)
+	}
+	return client.serverProtocol.requireHardDeleteAttributeSupport(writes)
 }
 
 func mapStartingStep(
@@ -559,6 +588,12 @@ func validateInitialAttributes(
 				concrete.name,
 			)
 		}
+		if registered.isHardDeleteOnNull != concrete.isHardDeleteOnNull {
+			return nil, fmt.Errorf(
+				"dex: attribute %q hard-delete setting does not match its registered definition",
+				concrete.name,
+			)
+		}
 		physical, err := physicalName(concrete.name, concrete.instance, concrete.isMap)
 		if err != nil {
 			return nil, err
@@ -570,6 +605,11 @@ func validateInitialAttributes(
 		encoded, indexConfig, err := encodeAttributeValue(concrete.value, registered.index)
 		if err != nil {
 			return nil, err
+		}
+		if registered.isHardDeleteOnNull {
+			if err := validateHardDeleteAttributeValue(physical, encoded); err != nil {
+				return nil, err
+			}
 		}
 		concrete.index = registered.index
 		concrete.encoded = encoded
@@ -1253,6 +1293,9 @@ func (client *Client) waitForAttributeMatch(
 	registered, err := client.registry.resolveAttribute(attribute, isMap)
 	if err != nil {
 		return err
+	}
+	if registered.isHardDeleteOnNull {
+		return fmt.Errorf("dex: attribute %q uses HardDeleteOnNull and cannot be waited on", registered.name)
 	}
 	name, err := physicalName(registered.name, instance, isMap)
 	if err != nil {

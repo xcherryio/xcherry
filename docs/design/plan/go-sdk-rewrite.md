@@ -2066,6 +2066,7 @@ type AttributeIndex struct {
 
 func Indexed(index AttributeIndex) AttributeOption
 func SyncToAttributeStore() AttributeOption
+func HardDeleteOnNull() AttributeOption
 ```
 
 An empty `IndexKey` uses the concrete attribute key. A non-empty key supports
@@ -2075,6 +2076,16 @@ that encoded values are compatible with the selected index type.
 `SyncToAttributeStore` marks every write from the definition for asynchronous
 latest-state projection to the Flow's selected Attribute Store. Deletes project
 SQL `NULL`; Store failures do not roll back Flow Attribute writes.
+
+`HardDeleteOnNull` marks every write from the definition with
+`is_hard_delete_on_null`. The Server stores string and object values only in its
+blob store, at one object per Flow and Attribute key, and deletes that object on
+a null write. Registration rejects numeric and Boolean value types and the
+combination with `Indexed` or `SyncToAttributeStore`; Action conditions and
+`WaitForAttributeMatch` reject the Attribute. Hard-delete writes require Server
+protocol 3: the Worker checks its negotiated protocol before returning a result,
+and the Client negotiates lazily before a `StartFlow` with hard-delete initial
+values, returning `HardDeleteAttributeUnsupportedError` otherwise.
 
 ### Typed channels
 

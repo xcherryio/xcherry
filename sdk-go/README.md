@@ -508,6 +508,27 @@ failure does not roll back the Flow Attribute. A `nil` `AttributeStoreNames`
 preserves current targets; an empty non-nil slice disables future synchronization
 while preserving protocol presence.
 
+## Hard-delete Attributes
+
+Use `HardDeleteOnNull` for short-lived secrets that must not stay in Flow
+history:
+
+```go
+var ModelAPIKey = dex.DefineAttribute[string](
+	"model-api-key",
+	dex.HardDeleteOnNull(),
+)
+```
+
+Dex stores the value only in its blob store, and `Delete` permanently removes
+it. Handlers receive the value inline. Only string and object values are
+supported, and the option cannot be combined with `Indexed` or
+`SyncToAttributeStore`. It requires a Server with an enabled blob store and
+protocol version 3. Each Flow keeps one stored value per key and overwrites it
+in place, so a retried Step or RPC attempt can observe a write or deletion made
+by a failed attempt. See the `HardDeleteOnNull` documentation for every
+limitation.
+
 `DefineStep` and `DefineStartStep` retain the step input type behind a private
 `typedStepDef` that implements the sealed `StepDef` interface. Runtime
 movements resolve through the current Flow's registered step definitions, so a
