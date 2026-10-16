@@ -121,8 +121,16 @@ func (asyncHeartbeatStep) Execute(
 ) (*dex.StepDecision, error) {
 	checkpoint := "unchanged"
 	found, err := ctx.GetLastHeartbeatValue(&checkpoint)
-	if err != nil || found || checkpoint != "unchanged" {
-		return nil, fmt.Errorf("local heartbeat reached attempt %d: found=%t value=%q: %w", ctx.Attempt(), found, checkpoint, err)
+	if err != nil {
+		return nil, err
+	}
+	shouldFindHeartbeat := isPullWorkerMode && ctx.Attempt() > 2
+	expectedCheckpoint := "unchanged"
+	if shouldFindHeartbeat {
+		expectedCheckpoint = fmt.Sprintf("attempt-%d", ctx.Attempt()-1)
+	}
+	if found != shouldFindHeartbeat || checkpoint != expectedCheckpoint {
+		return nil, fmt.Errorf("unexpected heartbeat on attempt %d: found=%t value=%q, want found=%t value=%q", ctx.Attempt(), found, checkpoint, shouldFindHeartbeat, expectedCheckpoint)
 	}
 	if err := ctx.RecordHeartbeat(fmt.Sprintf("attempt-%d", ctx.Attempt())); err != nil {
 		return nil, err
@@ -160,7 +168,7 @@ func TestAsyncLocalHeartbeatIsIgnoredAndStreamsAreRetained(t *testing.T) {
 	require.NoError(t, err)
 
 	result := waitForFlow(t, flowID, true)
-	require.Equal(t, dex.FlowCompleted, result.Status)
+	require.Equal(t, dex.FlowCompleted, result.Status, result.ErrorMessage)
 	assertHeartbeatStreamMessages(t, ctx, flowID, asyncHeartbeatProgress, []string{
 		"attempt-1",
 		"attempt-2",

@@ -184,21 +184,26 @@ func TestDexWebV2ServesGoFlowsWithoutTypeOverrides(t *testing.T) {
 		require.Equal(t, dex.FlowCompleted, waitForFlow(t, flowID, false).Status)
 	}
 
-	webStartedFlowID := newFlowID(t, "web-v2-start")
-	status, err := web.sendJSON(http.MethodPost, "/api/v2/start", map[string]any{
-		"flowType": flows[0].flowType, "flowId": webStartedFlowID, "workerTargetAddress": integWorkerTargetAddress,
-		"input": flows[0].input,
-	}, nil)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	runIDsByFlowType[flows[0].flowType] = append(runIDsByFlowType[flows[0].flowType], webStartedFlowID)
-	var webStartedSummary dexWebFlowSummary
-	status, err = web.getJSON("/api/flows/summary?flowId="+url.QueryEscape(webStartedFlowID), &webStartedSummary)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, flows[0].flowType, webStartedSummary.FlowType)
-	web.approveDecision(t, flows[0], webStartedFlowID)
-	require.Equal(t, dex.FlowCompleted, waitForFlow(t, webStartedFlowID, false).Status)
+	t.Run("StartFromDexWeb", func(t *testing.T) {
+		if isPullWorkerMode {
+			t.Skip("Dex Web v2 start requires a push Worker address")
+		}
+		webStartedFlowID := newFlowID(t, "web-v2-start")
+		status, err := web.sendJSON(http.MethodPost, "/api/v2/start", map[string]any{
+			"flowType": flows[0].flowType, "flowId": webStartedFlowID, "workerTargetAddress": integWorkerTargetAddress,
+			"input": flows[0].input,
+		}, nil)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		runIDsByFlowType[flows[0].flowType] = append(runIDsByFlowType[flows[0].flowType], webStartedFlowID)
+		var webStartedSummary dexWebFlowSummary
+		status, err = web.getJSON("/api/flows/summary?flowId="+url.QueryEscape(webStartedFlowID), &webStartedSummary)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, flows[0].flowType, webStartedSummary.FlowType)
+		web.approveDecision(t, flows[0], webStartedFlowID)
+		require.Equal(t, dex.FlowCompleted, waitForFlow(t, webStartedFlowID, false).Status)
+	})
 
 	stepNames := web.definitionStepNames(t)
 	for flowType, flowIDs := range runIDsByFlowType {

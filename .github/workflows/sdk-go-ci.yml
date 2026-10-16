@@ -90,9 +90,15 @@ jobs:
         run: make clientIntegTests
 
   e2e:
-    name: Integration coverage
+    name: Integration coverage (${{ matrix.worker-mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        worker-mode: [push, pull]
+    env:
+      DEX_INTEG_WORKER_MODE: ${{ matrix.worker-mode }}
     permissions:
       contents: read
       id-token: write
@@ -125,19 +131,19 @@ jobs:
           fail_ci_if_error: true
           files: ./sdk-go/coverage/coverage.out
           flags: sdk-go-integration
-          name: sdk-go-integration
+          name: sdk-go-integration-${{ matrix.worker-mode }}
           use_oidc: true
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-go-integration-coverage
+          name: sdk-go-integration-coverage-${{ matrix.worker-mode }}
           path: sdk-go/coverage/
           if-no-files-found: ignore
       - name: Upload service logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-go-e2e-services
+          name: sdk-go-e2e-services-${{ matrix.worker-mode }}
           path: /tmp/test-go-sdk-phase5-e2e-services.log
           if-no-files-found: ignore

@@ -31,6 +31,8 @@ var integClient *dex.Client
 
 var integWorkerTargetAddress string
 
+var isPullWorkerMode bool
+
 type emptyFlowSchema struct {
 	dex.FlowDefaults
 }
@@ -63,17 +65,18 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(cacheDir))
 	}
-	workerPort, err := integrationWorkerPort()
-	if err != nil {
-		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
+	workerOptions := dex.WorkerOptions{FlowServiceAddress: flowServiceAddress()}
+	if isPullWorkerMode {
+		workerOptions.Pull = &dex.PullWorkerOptions{}
+	} else {
+		workerPort, portErr := integrationWorkerPort()
+		if portErr != nil {
+			return nil, errors.Join(portErr, cache.Close(), os.RemoveAll(cacheDir))
+		}
+		workerOptions.BindAddress = net.JoinHostPort("127.0.0.1", workerPort)
+		workerOptions.WorkerTarget = dex.WorkerTarget{Address: net.JoinHostPort(workerHost(), workerPort)}
 	}
-	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
-		BindAddress:        net.JoinHostPort("127.0.0.1", workerPort),
-		FlowServiceAddress: flowServiceAddress(),
-		WorkerTarget: dex.WorkerTarget{
-			Address: net.JoinHostPort(workerHost(), workerPort),
-		},
-	})
+	worker, err := dex.NewWorker(registry, cache, workerOptions)
 	if err != nil {
 		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
 	}
@@ -97,8 +100,10 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 		worker:       worker,
 		workerResult: workerResult,
 	}
-	if err := environment.waitUntilReady(); err != nil {
-		return nil, errors.Join(err, environment.Close())
+	if !isPullWorkerMode {
+		if err := environment.waitUntilReady(); err != nil {
+			return nil, errors.Join(err, environment.Close())
+		}
 	}
 	return environment, nil
 }
@@ -140,6 +145,12 @@ func (environment *integrationEnvironment) Close() error {
 }
 
 func TestMain(tests *testing.M) {
+	workerMode := os.Getenv("DEX_INTEG_WORKER_MODE")
+	if workerMode != "" && workerMode != "push" && workerMode != "pull" {
+		fmt.Fprintf(os.Stderr, "invalid DEX_INTEG_WORKER_MODE %q: expected push or pull\n", workerMode)
+		os.Exit(2)
+	}
+	isPullWorkerMode = workerMode == "pull"
 	environment, err := newIntegrationEnvironment()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -52,6 +52,9 @@ disconnects before Dex receives any output. Make external side effects
 idempotent, for example by using the Flow ID and Step execution ID as an
 idempotency key.
 
+With a pull Worker, the local phase of **ASYNC** durability lasts one attempt;
+later attempts receive the last heartbeat recorded after that phase.
+
 ## Capacity and shutdown
 
 The concurrent task limit caps active calls. The idle stream count keeps
