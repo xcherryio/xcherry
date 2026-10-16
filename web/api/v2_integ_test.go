@@ -704,6 +704,71 @@ func TestV2StartFlowRejectsBrowserRoutingOverrideAndInvalidInput(t *testing.T) {
 	}
 }
 
+func TestV2StartFlowWorkerTargetSelection(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		workerTarget   string
+		isDefaultPull  bool
+		wantStatus     int
+		wantPull       bool
+		wantAddress    string
+		wantHealthCall bool
+	}{
+		{name: "address", workerTarget: `"workerTargetAddress":"worker:9000",`, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHealthCall: true},
+		{name: "pull", workerTarget: `"workerTargetPull":true,`, wantStatus: http.StatusOK, wantPull: true},
+		{name: "both", workerTarget: `"workerTargetAddress":"worker:9000","workerTargetPull":true,`, wantStatus: http.StatusBadRequest},
+		{name: "both with empty address", workerTarget: `"workerTargetAddress":"","workerTargetPull":true,`, wantStatus: http.StatusBadRequest},
+		{name: "neither", wantStatus: http.StatusBadRequest},
+		{name: "default pull", isDefaultPull: true, wantStatus: http.StatusOK, wantPull: true},
+		{name: "explicit empty address does not use pull default", workerTarget: `"workerTargetAddress":"",`, isDefaultPull: true, wantStatus: http.StatusBadRequest},
+		{name: "explicit pull with pull default", workerTarget: `"workerTargetPull":true,`, isDefaultPull: true, wantStatus: http.StatusOK, wantPull: true},
+		{name: "explicit address overrides pull default", workerTarget: `"workerTargetAddress":"worker:9000",`, isDefaultPull: true, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHealthCall: true},
+		{name: "both with pull default", workerTarget: `"workerTargetAddress":"worker:9000","workerTargetPull":true,`, isDefaultPull: true, wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &v2TestClient{}
+			definition := testV2Definition()
+			definition.Start = testV2StartDefinition()
+			healthCalls := 0
+			mux := http.NewServeMux()
+			RegisterDynamicV2Handlers(mux, client, func(context.Context) (V2DefinitionSnapshot, error) {
+				return V2DefinitionSnapshot{Definitions: map[string]V2Definition{"RefundFlow": definition}}, nil
+			}, V2HandlerConfig{
+				IsStartFlowWorkerTargetPull: testCase.isDefaultPull,
+				WorkerHealthChecker: func(context.Context, string) error {
+					healthCalls++
+					return nil
+				},
+			})
+			body := `{"flowType":"RefundFlow","flowId":"new",` + testCase.workerTarget + `"input":{"count":1,"labels":[]}}`
+			response := performV2JSON(t, mux, http.MethodPost, "/api/v2/start", body)
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d body=%q", response.Code, response.Body.String())
+			}
+			expectedHealthCalls := 0
+			if testCase.wantHealthCall {
+				expectedHealthCalls = 1
+			}
+			if healthCalls != expectedHealthCalls {
+				t.Fatalf("Worker health calls = %d", healthCalls)
+			}
+			if testCase.wantStatus != http.StatusOK {
+				if len(client.startRequests) != 0 {
+					t.Fatalf("StartFlow requests = %d", len(client.startRequests))
+				}
+				return
+			}
+			if len(client.startRequests) != 1 {
+				t.Fatalf("StartFlow requests = %d", len(client.startRequests))
+			}
+			target := client.startRequests[0].GetFlowStartOptions().GetFlowConfigOverride().GetWorkerTarget()
+			if target.GetIsPullMode() != testCase.wantPull || target.GetAddress() != testCase.wantAddress || target.GetIsHeadlessAddress() {
+				t.Fatalf("Worker target = %+v", target)
+			}
+		})
+	}
+}
+
 func TestV2StartFlowHandlesScalarConflict(t *testing.T) {
 	client := &v2TestClient{}
 	client.startFlowHandler = func(context.Context, *dexpb.StartFlowRequest) (*dexpb.StartFlowResponse, error) {

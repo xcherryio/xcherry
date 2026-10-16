@@ -41,7 +41,8 @@ var integerJSONPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)$`)
 type v2StartRequest struct {
 	FlowType                string          `json:"flowType"`
 	FlowID                  string          `json:"flowId"`
-	WorkerTargetAddress     string          `json:"workerTargetAddress"`
+	WorkerTargetAddress     *string         `json:"workerTargetAddress"`
+	WorkerTargetPull        bool            `json:"workerTargetPull"`
 	BypassWorkerHealthCheck bool            `json:"bypassWorkerHealthCheck"`
 	Input                   json.RawMessage `json:"input"`
 }
@@ -83,7 +84,7 @@ func (h *v2Handler) startFlow(response http.ResponseWriter, request *http.Reques
 		WriteError(response, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	workerTarget, err := h.validateWorkerTarget(body.WorkerTargetAddress)
+	workerTarget, err := h.validateStartWorkerTarget(body.WorkerTargetAddress, body.WorkerTargetPull)
 	if err != nil {
 		WriteError(response, http.StatusBadRequest, err.Error(), nil)
 		return
@@ -93,7 +94,7 @@ func (h *v2Handler) startFlow(response http.ResponseWriter, request *http.Reques
 		WriteError(response, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	if !body.BypassWorkerHealthCheck {
+	if !workerTarget.GetIsPullMode() && !body.BypassWorkerHealthCheck {
 		if err := h.checkWorkerTargetHealth(request.Context(), workerTarget.GetAddress()); err != nil {
 			warning := workerHealthWarning(workerTarget.GetAddress(), err)
 			WriteCodedError(response, http.StatusPreconditionFailed, v2WorkerUnhealthyResponseCode, warning)
@@ -137,6 +138,19 @@ func (h *v2Handler) checkWorkerHealth(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, v2WorkerHealthResponse{Healthy: true})
+}
+
+func (h *v2Handler) validateStartWorkerTarget(address *string, isPull bool) (*dexpb.WorkerTarget, error) {
+	if isPull && address != nil {
+		return nil, fmt.Errorf("workerTargetPull and workerTargetAddress cannot both be set")
+	}
+	if isPull || (address == nil && h.isStartFlowWorkerTargetPull) {
+		return grpctarget.NormalizeWorkerTarget(&dexpb.WorkerTarget{IsPullMode: true})
+	}
+	if address == nil {
+		return h.validateWorkerTarget("")
+	}
+	return h.validateWorkerTarget(*address)
 }
 
 func (h *v2Handler) validateWorkerTarget(address string) (*dexpb.WorkerTarget, error) {

@@ -48,6 +48,8 @@ web:
   flowRenderingDirectory: ""
   # Apply headless routing to every Worker target submitted through Dex Web Start Flow.
   startFlowWorkerTargetHeadless: false
+  # Use a pull target when Dex Web Start Flow omits a Worker address.
+  startFlowWorkerTargetPull: false
 worker:
 # Optional hook for unavailable Workers. The POST body contains target and kind.
 #   wake:

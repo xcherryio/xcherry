@@ -26,6 +26,13 @@ Greeting Flow。Step 写入问候语，问候语 RPC 读取它。启动细节见
 [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
 SDK 的 README。
 
+Dex Web v2 可以通过拉取模式 Worker 启动 Flow。在 **Start Flow** 中选择
+**Pull Worker**，无需填写 Worker address。启动请求也可以发送
+**workerTargetPull: true**。如果部署默认使用拉取模式 Worker，可设置
+**web.startFlowWorkerTargetPull: true**，使未指定目标的请求使用 pull routing。
+Dex Web 不会在启动前检查 pull Worker 是否已注册；Dex 在分配工作时确定其可用性。
+Address 选项和配置规则见 [Dex Web](/production/dex-web)。
+
 <SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
 
 <SdkSnippet lang="python">

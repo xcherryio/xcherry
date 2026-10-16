@@ -71,6 +71,32 @@ func TestWebStartFlowWorkerTargetHeadlessDefaultsFalseAndReadsYAML(t *testing.T)
 	require.True(t, yamlConfig.Web.IsStartFlowWorkerTargetHeadless)
 }
 
+func TestWebStartFlowWorkerTargetPullDefaultAndConflict(t *testing.T) {
+	defaultConfig, err := NewConfig(writeTestConfig(t, "web: {}\n"))
+	require.NoError(t, err)
+	require.False(t, defaultConfig.Web.IsStartFlowWorkerTargetPull)
+
+	pullConfig, err := NewConfig(writeTestConfig(t, "web:\n  startFlowWorkerTargetPull: true\n"))
+	require.NoError(t, err)
+	require.True(t, pullConfig.Web.IsStartFlowWorkerTargetPull)
+
+	_, err = NewConfig(writeTestConfig(t, "web:\n  startFlowWorkerTargetPull: true\n  startFlowWorkerTargetHeadless: true\n"))
+	require.ErrorContains(t, err, "web.startFlowWorkerTargetPull and web.startFlowWorkerTargetHeadless cannot both be true")
+}
+
+func TestWebStartFlowWorkerTargetPullEnvironment(t *testing.T) {
+	t.Setenv("DEX_WEB_START_FLOW_WORKER_TARGET_PULL", "true")
+	cfg, err := NewConfig(writeTestConfig(t, "web: {}\n"))
+	require.NoError(t, err)
+	require.True(t, cfg.Web.IsStartFlowWorkerTargetPull)
+}
+
+func TestWebStartFlowWorkerTargetPullRejectsInvalidEnvironment(t *testing.T) {
+	t.Setenv("DEX_WEB_START_FLOW_WORKER_TARGET_PULL", "sometimes")
+	_, err := NewConfig(writeTestConfig(t, "web: {}\n"))
+	require.ErrorContains(t, err, "DEX_WEB_START_FLOW_WORKER_TARGET_PULL must be a boolean")
+}
+
 func TestWebEnvironmentRejectsInvalidStartFlowHeadlessRouting(t *testing.T) {
 	t.Setenv("DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS", "sometimes")
 	_, err := NewConfig(writeTestConfig(t, "web: {}\n"))

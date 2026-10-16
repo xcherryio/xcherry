@@ -68,19 +68,23 @@ Rendering but does not appear as a **v2** Flow type.
 ### Start Flow
 
 The v2 Run workspace shows **Start Flow** when the selected definition contains
-a `v2.start` schema. The dialog asks for a Flow ID, a plaintext Worker gRPC address, and the generated
+a `v2.start` schema. The dialog asks for a Flow ID, a Worker target mode, and the generated
 start input. It recursively renders objects, arrays, string-key maps, enums,
 booleans, datetime values, optional fields, and nullable fields. Integer input
 stays as decimal text until the request is serialized, so int64 values do not
 pass through JavaScript floating-point numbers.
 
-Dex Web checks the Worker `host:port` from the BFF when the address loses focus
+For an address target, Dex Web asks for a plaintext Worker gRPC `host:port` and checks it from the BFF when the address loses focus
 and again before starting. An unreachable port shows a warning and blocks the
 start until the operator explicitly selects **Bypass worker health check**.
 The probe opens a TCP connection and does not invoke a Worker method.
+For a pull target, Dex Web sends no address and skips the port check. It does not
+check whether a pull Worker is currently registered, because registration can change
+between the check and dispatch.
 
-`POST /api/v2/start` accepts `flowType`, `flowId`, `workerTargetAddress`, and the
-raw JSON `input`. It also accepts `bypassWorkerHealthCheck`; false performs the
+`POST /api/v2/start` accepts `flowType`, `flowId`, raw JSON `input`, and either
+`workerTargetAddress` or `workerTargetPull: true`. Supplying both returns HTTP 400.
+With an address, it also accepts `bypassWorkerHealthCheck`; false performs the
 server-side port check and returns `WORKER_UNHEALTHY` with HTTP 412 when the
 target is unreachable. `POST /api/v2/worker-health` checks the same address for
 the dialog. Start requires `X-Dex-Flow-Definition-Revision`, reloads the current
@@ -91,7 +95,7 @@ Execute, while `wait_for+execute` retains WaitFor. Missing, repeated, or unknown
 Start phases are invalid definitions; the browser cannot supply Step options.
 The browser cannot set Worker headless routing.
 
-Configure headless routing once for every Flow started from this Dex Web
+Configure headless routing once for address targets started from this Dex Web
 instance:
 
 ```yaml
@@ -103,6 +107,13 @@ The equivalent environment variable is
 `DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS`. The default is false and the value
 is immutable after startup. Set it to true when the entered Worker addresses
 are Kubernetes headless Service targets.
+
+For deployments using pull Workers, `web.startFlowWorkerTargetPull: true` selects
+a pull target when an API request omits both target fields. The equivalent
+environment variable is `DEX_WEB_START_FLOW_WORKER_TARGET_PULL`. The default is
+false; an explicit address still selects address routing. This setting cannot
+be true alongside `web.startFlowWorkerTargetHeadless`. Dex rejects that
+configuration at startup.
 
 The v2 Work Queue is available at `/v2/work-queue`. Its **Working as** control
 selects one Action permission and filters on the Server-maintained

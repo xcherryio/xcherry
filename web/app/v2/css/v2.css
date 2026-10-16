@@ -1088,6 +1088,27 @@
   color: var(--p-ink-0);
 }
 
+.sfd-target-mode {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sfd-target-mode legend {
+  margin-bottom: 8px;
+  color: var(--p-ink-2);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.sfd-target-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sfd-worker-control {
   display: grid;
   gap: 8px;
