@@ -24,10 +24,12 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep, sleep_until, timeout};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::Endpoint;
 use tonic::{Code, Status};
 
+use crate::Credential;
 use crate::context::InvocationCancellation;
+use crate::credential::{CredentialChannel, CredentialInterceptor};
 use crate::worker::worker_error_response;
 use crate::worker_dispatcher::WorkerDispatcher;
 use crate::{PullWorkerOptions, SdkError, SdkResult};
@@ -35,13 +37,19 @@ use crate::{PullWorkerOptions, SdkError, SdkResult};
 const DRAINING: u8 = 1;
 const FORCED: u8 = 2;
 
-pub(crate) fn outbound_task_channel(endpoint: Endpoint) -> Channel {
-    endpoint.connect_lazy()
+pub(crate) fn outbound_task_channel(
+    endpoint: Endpoint,
+    credential: Option<Arc<dyn Credential>>,
+) -> CredentialChannel {
+    CredentialChannel::new(
+        endpoint.connect_lazy(),
+        CredentialInterceptor::new(credential),
+    )
 }
 
 pub(crate) struct PullWorker {
     dispatcher: WorkerDispatcher,
-    client: WorkerTaskServiceClient<Channel>,
+    client: WorkerTaskServiceClient<CredentialChannel>,
     app_worker_id: String,
     flow_types: Vec<String>,
     queues: Vec<String>,
@@ -99,7 +107,7 @@ impl PullWorker {
     pub(crate) fn new(
         options: &PullWorkerOptions,
         dispatcher: &WorkerDispatcher,
-        channel: Channel,
+        channel: CredentialChannel,
     ) -> SdkResult<Self> {
         let max_concurrent_tasks = match options.max_concurrent_tasks {
             Some(value) => value,
@@ -245,7 +253,7 @@ impl PullWorker {
 }
 
 struct PullStream {
-    client: WorkerTaskServiceClient<Channel>,
+    client: WorkerTaskServiceClient<CredentialChannel>,
     dispatcher: WorkerDispatcher,
     app_worker_id: String,
     flow_types: Vec<String>,
@@ -979,6 +987,16 @@ mod tests {
         registrations: Arc<AtomicUsize>,
         pongs: Arc<AtomicUsize>,
         notify: Arc<Notify>,
+        headers: Arc<Mutex<Vec<Option<String>>>>,
+        credential_token: Arc<Mutex<String>>,
+    }
+
+    struct RotatingCredential(Arc<Mutex<String>>);
+
+    impl Credential for RotatingCredential {
+        fn token(&self) -> Result<String, crate::CredentialError> {
+            Ok(self.0.lock().expect("credential token lock").clone())
+        }
     }
 
     #[tonic::async_trait]
@@ -989,6 +1007,12 @@ mod tests {
             &self,
             request: Request<tonic::Streaming<PollWorkerTaskRequest>>,
         ) -> Result<Response<Self::PollWorkerTaskStream>, Status> {
+            self.headers.lock().expect("headers lock").push(
+                request
+                    .metadata()
+                    .get("authorization")
+                    .map(|value| value.to_str().expect("ASCII bearer header").to_string()),
+            );
             let mut incoming = request.into_inner();
             let first = incoming
                 .message()
@@ -999,7 +1023,10 @@ mod tests {
             };
             assert_eq!("rust", register.sdk_name);
             assert_eq!(register.queue, register.app_worker_id);
-            self.registrations.fetch_add(1, Ordering::SeqCst);
+            if self.registrations.fetch_add(1, Ordering::SeqCst) == 0 {
+                *self.credential_token.lock().expect("credential token lock") =
+                    "rotated".to_string();
+            }
             self.notify.notify_one();
             let (sender, receiver) = mpsc::channel(4);
             let pongs = Arc::clone(&self.pongs);
@@ -1054,6 +1081,8 @@ mod tests {
             registrations: Arc::new(AtomicUsize::new(0)),
             pongs: Arc::new(AtomicUsize::new(0)),
             notify: Arc::new(Notify::new()),
+            headers: Arc::new(Mutex::new(Vec::new())),
+            credential_token: Arc::new(Mutex::new("initial".to_string())),
         };
         let (server_stop, mut server_shutdown) = watch::channel(false);
         let server = tokio::spawn(
@@ -1066,6 +1095,12 @@ mod tests {
         let channel = Endpoint::from_shared(format!("http://{address}"))
             .expect("endpoint")
             .connect_lazy();
+        let channel = CredentialChannel::new(
+            channel,
+            CredentialInterceptor::new(Some(Arc::new(RotatingCredential(Arc::clone(
+                &service.credential_token,
+            ))))),
+        );
         let (cache, _directory) = test_cache();
         let dispatcher = WorkerDispatcher::new(
             Registry::new(),
@@ -1083,6 +1118,13 @@ mod tests {
         .await
         .expect("second registration");
         assert!(service.pongs.load(Ordering::SeqCst) >= 1);
+        assert_eq!(
+            &service.headers.lock().expect("headers lock")[..2],
+            &[
+                Some("Bearer initial".to_string()),
+                Some("Bearer rotated".to_string())
+            ]
+        );
         stop.send_replace(true);
         timeout(Duration::from_secs(5), running)
             .await
@@ -1171,6 +1213,7 @@ mod tests {
         let channel = Endpoint::from_shared(format!("http://{address}"))
             .expect("endpoint")
             .connect_lazy();
+        let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
         let (cache, _directory) = test_cache();
         let dispatcher = WorkerDispatcher::new(
             Registry::new(),
@@ -1394,6 +1437,7 @@ mod tests {
         let channel = Endpoint::from_shared(format!("http://{address}"))
             .expect("endpoint")
             .connect_lazy();
+        let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
         let (cache, _directory) = test_cache();
         let started = Arc::new(Notify::new());
         let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -1475,6 +1519,7 @@ mod tests {
         let channel = Endpoint::from_shared(format!("http://{address}"))
             .expect("endpoint")
             .connect_lazy();
+        let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
         let (cache, _directory) = test_cache();
         let started = Arc::new(Notify::new());
         let release = Arc::new((Mutex::new(false), Condvar::new()));

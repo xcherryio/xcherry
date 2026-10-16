@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
+use crate::credential::{CredentialChannel, CredentialInterceptor};
 use dex_protocol::dex::WorkerErrorResponse;
 use dex_protocol::dex::flow_service_client::FlowServiceClient;
 use dex_protocol::dex::worker_service_server::{WorkerService, WorkerServiceServer};
@@ -23,7 +24,7 @@ use prost::Message;
 use prost_types::Any;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
-use tonic::transport::{Channel, Endpoint, Server};
+use tonic::transport::{Endpoint, Server};
 use tonic::{Code, Request, Response, Status};
 
 use crate::server_protocol::{negotiate_server_protocol, server_info_request_error};
@@ -70,7 +71,7 @@ const STOPPED: u8 = 2;
 pub struct Worker {
     runtime: Runtime,
     service: RustWorkerService,
-    flow_service: FlowServiceClient<Channel>,
+    flow_service: FlowServiceClient<CredentialChannel>,
     attribute_indexes: HashMap<String, i32>,
     attribute_index_sync_timeout: std::time::Duration,
     bind_address: Option<SocketAddr>,
@@ -159,13 +160,19 @@ impl Worker {
             .map_err(service_error)?;
         let flow_service = {
             let _runtime_guard = runtime.enter();
-            FlowServiceClient::new(endpoint.connect_lazy())
+            FlowServiceClient::new(CredentialChannel::new(
+                endpoint.connect_lazy(),
+                CredentialInterceptor::new(options.credential_value()),
+            ))
         };
         let pull_channel = {
             let _runtime_guard = runtime.enter();
-            options
-                .pull_value()
-                .map(|_| crate::worker_pull::outbound_task_channel(endpoint.clone()))
+            options.pull_value().map(|_| {
+                crate::worker_pull::outbound_task_channel(
+                    endpoint.clone(),
+                    options.credential_value(),
+                )
+            })
         };
         let attribute_indexes = registry.attribute_indexes().clone();
         let hydrator = ValueHydrator::new(flow_service.clone(), blob_cache);

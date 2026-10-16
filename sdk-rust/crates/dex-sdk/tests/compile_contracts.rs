@@ -108,3 +108,18 @@ fn pull_worker_options_and_targets_compile() {
     let _sub_flow_options = dex_sdk::SubFlowOptions::new()
         .config_override(dex_sdk::FlowConfig::new().worker_target(_target));
 }
+
+#[test]
+fn credential_options_compile() {
+    use std::sync::Arc;
+
+    struct TestCredential;
+    impl dex_sdk::Credential for TestCredential {
+        fn token(&self) -> Result<String, dex_sdk::CredentialError> {
+            Ok("token".to_string())
+        }
+    }
+    let credential: Arc<dyn dex_sdk::Credential> = Arc::new(TestCredential);
+    let _client_options = dex_sdk::ClientOptions::new().credential(credential.clone());
+    let _worker_options = dex_sdk::WorkerOptions::new().credential(credential);
+}
