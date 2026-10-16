@@ -133,6 +133,23 @@ final class JavaWorkerService extends WorkerServiceGrpc.WorkerServiceImplBase {
         }
     }
 
+    WorkerErrorResponse pullWorkerError(final Throwable failure, final Status.Code cancellationStatus) {
+        if (cancellationStatus != null) {
+            return WorkerErrorResponse.newBuilder()
+                    .setDetail(cancellationStatus == Status.Code.DEADLINE_EXCEEDED
+                            ? "Java Worker invocation deadline exceeded"
+                            : "Java Worker invocation canceled")
+                    .setGrpcStatus(cancellationStatus.value())
+                    .build();
+        }
+        final com.google.rpc.Status status = StatusProto.fromThrowable(mapFailure(failure));
+        try {
+            return status.getDetails(0).unpack(WorkerErrorResponse.class);
+        } catch (com.google.protobuf.InvalidProtocolBufferException invalid) {
+            throw new IllegalStateException("cannot encode Worker error", invalid);
+        }
+    }
+
     private Throwable mapFailure(final Throwable failure) {
         final RetryAfterException retryAfter = failure instanceof RetryAfterException
                 ? (RetryAfterException) failure

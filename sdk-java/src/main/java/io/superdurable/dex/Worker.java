@@ -33,7 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Hosts synchronous Java Step and RPC implementations for registered Flows.
  *
- * <p>The worker exposes a gRPC listener to Dex and dispatches invocations on a bounded JVM executor.
+ * <p>The worker exposes a gRPC listener or opens outbound pull streams to Dex. It dispatches
+ * invocations on a bounded JVM executor.
  * User methods are ordinary blocking Java methods; slow external I/O occupies a handler thread and
  * should respect the configured Step or RPC timeout. Call {@link #start} on a dedicated application
  * thread because it blocks until the worker stops. A worker can be started only once. The supplied
@@ -65,6 +66,7 @@ public final class Worker implements AutoCloseable {
     private final ManagedChannel flowChannel;
     private final FlowServiceGrpc.FlowServiceBlockingStub flowService;
     private final JavaWorkerService workerService;
+    private final PullWorker pullWorker;
     private final String sdkVersion;
     private Server server;
     private int negotiatedProtocolVersion;
@@ -82,12 +84,13 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Creates a worker with explicit listener, routing, connection, and serialization options.
+     * Creates a worker with explicit listener or pull, routing, connection, and serialization options.
      *
      * @param registry the nonnull registry of Flow implementations
      * @param blobCache the nonnull cache used to hydrate blob-backed invocation values
      * @param options the nonnull worker options
-     * @throws IllegalArgumentException if any argument is {@code null}
+     * @throws IllegalArgumentException if any argument is {@code null} or the pull Worker ID
+     *     conflicts with a registered Flow type
      */
     public Worker(
             final Registry registry,
@@ -98,18 +101,20 @@ public final class Worker implements AutoCloseable {
         }
         this.registry = registry;
         this.options = options;
-        this.workerTarget = options.getWorkerTarget() == null
-                ? targetFromBindAddress(options.getBindAddress())
-                : options.getWorkerTarget();
-        this.handlers = newHandlerExecutor();
+        this.workerTarget = options.getPull() != null
+                ? WorkerTarget.pull()
+                : options.getWorkerTarget() == null
+                        ? targetFromBindAddress(options.getBindAddress())
+                        : options.getWorkerTarget();
+        this.handlers = newHandlerExecutor(options.getPull() == null
+                ? Math.max(2, Math.min(32, Runtime.getRuntime().availableProcessors()))
+                : options.getPull().getMaxConcurrentTasks());
         this.bufferedStreamScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             final Thread thread = new Thread(runnable, "dex-java-buffered-stream");
             thread.setDaemon(true);
             return thread;
         });
-        this.flowChannel = ManagedChannelBuilder.forTarget(options.getServerAddress())
-                .usePlaintext()
-                .build();
+        this.flowChannel = createOutboundChannel(options.getServerAddress());
         this.flowService = FlowServiceGrpc.newBlockingStub(flowChannel);
         this.sdkVersion = ServerProtocolCompatibility.sdkVersion();
         final ValueMapper values = new ValueMapper(options.getObjectMapper());
@@ -122,6 +127,14 @@ public final class Worker implements AutoCloseable {
                 dispatcher,
                 handlers,
                 options.getGrpcErrorStatusMapping());
+        try {
+            this.pullWorker = options.getPull() == null ? null : new PullWorker(
+                    registry, workerService, dispatcher, handlers, flowChannel,
+                    options.getPull(), sdkVersion);
+        } catch (RuntimeException failure) {
+            shutdownResources();
+            throw failure;
+        }
     }
 
     Registry getRegistry() {
@@ -129,9 +142,10 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Returns the address this worker advertises for Dex routing.
+     * Returns the target this worker advertises for Dex routing.
      *
-     * <p>When options do not specify a target, the worker derives one from its bind address.
+     * <p>A pull Worker returns a pull target. Otherwise, when options do not specify a target,
+     * the worker derives one from its bind address.
      *
      * @return the effective worker target
      */
@@ -140,10 +154,10 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Starts the worker listener and blocks until termination.
+     * Starts the worker listener or pull streams and blocks until termination.
      *
      * <p>Only a newly created worker may start. It negotiates the Server protocol before syncing
-     * Attribute indexes and binding the listener. If the waiting thread is interrupted, the worker
+     * Attribute indexes and opening the listener or pull streams. If the waiting thread is interrupted, the worker
      * stops and restores the thread's interruption status before returning.
      *
      * @throws IllegalStateException if the worker was already started or its address cannot bind
@@ -187,17 +201,19 @@ public final class Worker implements AutoCloseable {
                 shutdownResources();
                 throw new IllegalStateException("cannot synchronize Attribute indexes", failure);
             }
-            try {
-                server = NettyServerBuilder.forAddress(bindAddress(options.getBindAddress()))
-                        .addService(workerService)
-                        .build()
-                        .start();
-            } catch (IOException failure) {
-                state = State.STOPPED;
-                shutdownResources();
-                throw new IllegalStateException(
-                        "cannot bind Java Worker to " + options.getBindAddress(),
-                        failure);
+            if (pullWorker == null) {
+                try {
+                    server = NettyServerBuilder.forAddress(bindAddress(options.getBindAddress()))
+                            .addService(workerService)
+                            .build()
+                            .start();
+                } catch (IOException failure) {
+                    state = State.STOPPED;
+                    shutdownResources();
+                    throw new IllegalStateException(
+                            "cannot bind Java Worker to " + options.getBindAddress(),
+                            failure);
+                }
             }
             state = State.RUNNING;
             runningServer = server;
@@ -205,11 +221,17 @@ public final class Worker implements AutoCloseable {
 
         boolean interrupted = false;
         try {
-            runningServer.awaitTermination();
+            if (pullWorker != null) {
+                pullWorker.runBlocking();
+            } else {
+                runningServer.awaitTermination();
+            }
         } catch (InterruptedException interruption) {
             interrupted = true;
         } finally {
-            stop();
+            if (pullWorker == null || interrupted || Thread.currentThread().isInterrupted()) {
+                stop();
+            }
             if (interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -217,10 +239,12 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Gracefully stops the listener, handler executor, and server channel.
+     * Gracefully stops the listener or pull streams, handler executor, and server channel.
      *
-     * <p>The method is idempotent. It waits up to 30 seconds for in-flight handlers before forcing
-     * shutdown and preserves interruption status.
+     * <p>The method is idempotent. Pull mode drains for the configured stop timeout, then cancels
+     * remaining handlers and waits for them to return. A handler ignoring cancellation can block
+     * Stop. Listener mode waits up to 30 seconds before forcing shutdown. Interruption status is
+     * preserved.
      */
     public void stop() {
         final Server runningServer;
@@ -242,6 +266,9 @@ public final class Worker implements AutoCloseable {
                 runningServer.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+        if (pullWorker != null) {
+            pullWorker.stop();
         }
         shutdownResources();
         synchronized (this) {
@@ -286,10 +313,7 @@ public final class Worker implements AutoCloseable {
         }
     }
 
-    private static ExecutorService newHandlerExecutor() {
-        final int concurrency = Math.max(
-                2,
-                Math.min(32, Runtime.getRuntime().availableProcessors()));
+    private static ExecutorService newHandlerExecutor(final int concurrency) {
         final int queueCapacity = concurrency * 2;
         final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
         final AtomicInteger nextThread = new AtomicInteger();
@@ -308,6 +332,10 @@ public final class Worker implements AutoCloseable {
                     return thread;
                 },
                 new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private static ManagedChannel createOutboundChannel(final String address) {
+        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
     }
 
     private static InetSocketAddress bindAddress(final String address) {
