@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import grpc
 
@@ -64,8 +64,8 @@ async def _resolve_async_token(credential: Credential) -> str:
 def credential_deadline_error() -> grpc.aio.AioRpcError:
     return grpc.aio.AioRpcError(
         grpc.StatusCode.DEADLINE_EXCEEDED,
-        None,
-        None,
+        grpc.aio.Metadata(),
+        grpc.aio.Metadata(),
         "credential lookup exceeded RPC deadline",
         None,
     )
@@ -135,5 +135,8 @@ def async_channel(
     if credential is None:
         return grpc.aio.insecure_channel(server_address)
     return grpc.aio.insecure_channel(
-        server_address, interceptors=[_AsyncCredentialInterceptor(credential)]
+        server_address,
+        interceptors=[
+            cast(grpc.aio.ClientInterceptor, _AsyncCredentialInterceptor(credential))
+        ],
     )
