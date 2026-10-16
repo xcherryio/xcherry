@@ -69,6 +69,7 @@ Then load only the references required by the task:
 | Public API authentication or bearer credentials | [Operations](references/core/operations.md#public-api-authentication) | selected language's entry |
 | Connector selection, local credentials, or named connections | [Operations](references/core/operations.md) | language entry for runtime support |
 | Large state, maps, or projections | [Data handling](references/core/data-handling.md) | selected language's **data-handling.md** |
+| Short-lived secrets or hard-delete Attributes | [Hard-delete Attributes](references/core/data-handling.md#hard-delete-attributes-for-short-lived-secrets) | selected language's **data-handling.md** |
 | Open-Flow compatibility or upgrade | [Versioning](references/core/versioning.md) | selected language's **versioning.md** |
 | Cancellation, BlobCache, or other advanced behavior | relevant core topic | selected language's **advanced-features.md** |
 | Durable AI agent | [AI agents](references/core/ai-agents.md) | selected language's primitives, data, patterns, and advanced features |

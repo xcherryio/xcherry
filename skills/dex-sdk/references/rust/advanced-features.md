@@ -6,7 +6,7 @@ Load this page only after the Flow model and basic primitives are settled.
 
 A Flow may return a `FlowTimeoutHandler<Self>`. The handler is one retryable logical execution and returns a normal `StepDecision`. Start/SubFlow options select handler policy and can configure handler retries, locks, and selective loads. Keep the handler bounded; it runs because the original deadline has already expired.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/primitives/flow/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/rust/src/primitives/flow/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/flow/flow.rs -->
 ```rust
 fn timeout_handler(&self) -> Option<FlowTimeoutHandler<Self>> {
@@ -20,7 +20,7 @@ Use `force_complete` only if the timed-out outcome is a valid result; use `force
 
 Dex cancellation becomes observable through `Context::is_cancelled`. Long-running Execute loops should check it between bounded units of work and heartbeat progress. Cancellation is cooperative at the application boundary: blocking a single call indefinitely prevents timely observation.
 
-For interruptible orchestration, store the interrupt request in an Attribute through an RPC, have concurrent Steps read it at safe points, and choose a deliberate graceful or forced terminal decision. See the runnable [Interruptible Flow](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/patterns/interruptible/flow.rs).
+For interruptible orchestration, store the interrupt request in an Attribute through an RPC, have concurrent Steps read it at safe points, and choose a deliberate graceful or forced terminal decision. See the runnable [Interruptible Flow](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/rust/src/patterns/interruptible/flow.rs).
 
 ## Buffered Stream durability
 
@@ -30,7 +30,7 @@ For interruptible orchestration, store the interrupt request in an Attribute thr
 
 `StepOptions` offers separate WaitFor and Execute loads. `Rpc` and timeout handler options have their own loads. Prefer one map instance or ChannelMap instance when possible. This keeps Worker payloads bounded and makes data dependencies visible in the definition.
 
-`Rpc` registration defines fixed timeout, locks, transactionality, and loads. `RpcInvokeOptions` adds only exact AttributeMap instance locks, exact AttributeMap instance loads, and exact ChannelMap instance loads. Pass it to `Client::invoke_rpc_with_options` or `invoke_rpc_without_input_with_options`. A read-modify-write uses both `lock_attribute_map_instance(attribute_map.lock(instance))` and `load_attribute_map_instance(attribute_map.load(instance))` for the same bucket. The Client unions, sorts, and deduplicates both layers and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/patterns/hash_partitioned_attribute_map/controller.rs).
+`Rpc` registration defines fixed timeout, locks, transactionality, and loads. `RpcInvokeOptions` adds only exact AttributeMap instance locks, exact AttributeMap instance loads, and exact ChannelMap instance loads. Pass it to `Client::invoke_rpc_with_options` or `invoke_rpc_without_input_with_options`. A read-modify-write uses both `lock_attribute_map_instance(attribute_map.lock(instance))` and `load_attribute_map_instance(attribute_map.load(instance))` for the same bucket. The Client unions, sorts, and deduplicates both layers and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/rust/src/patterns/hash_partitioned_attribute_map/controller.rs).
 
 ## Atomic updates
 
@@ -48,11 +48,11 @@ StepOptions also owns method timeouts, heartbeat timeout, retries, selected load
 
 ## Waiting for durable acceptance
 
-`Client::wait_for_step_completion` lets a controller wait until a selected Step reaches its defined completion, then return while background branches continue. The server derives a stable namespaced Request ID from the Step execution when options omit one. `request_timeout` is the caller-visible budget across transparent transport reattachments; zero waits indefinitely. `internal_handler_timeout` is an advanced capacity safeguard for abandoned accepted waits and is normally zero. A positive value rolls an active call to the next `-N` generation without surfacing an error. This is useful when an API needs a durable acceptance point rather than full Flow completion. The runnable [Wait for Step completion pattern](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/patterns/wait_for_step_completion/flow.rs) persists the request before launching background work.
+`Client::wait_for_step_completion` lets a controller wait until a selected Step reaches its defined completion, then return while background branches continue. The server derives a stable namespaced Request ID from the Step execution when options omit one. `request_timeout` is the caller-visible budget across transparent transport reattachments; zero waits indefinitely. `internal_handler_timeout` is an advanced capacity safeguard for abandoned accepted waits and is normally zero. A positive value rolls an active call to the next `-N` generation without surfacing an error. This is useful when an API needs a durable acceptance point rather than full Flow completion. The runnable [Wait for Step completion pattern](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/rust/src/patterns/wait_for_step_completion/flow.rs) persists the request before launching background work.
 
 ## Attribute Store entity projection
 
-Attributes marked for synchronization can project a long-lived entity Flow into an Attribute Store. Configure the store on the Flow and use RPCs as the mutation boundary. The runnable [Entity Store pattern](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/patterns/entity_store/flow.rs) covers typed profile fields and read/update/clear RPCs.
+Attributes marked for synchronization can project a long-lived entity Flow into an Attribute Store. Configure the store on the Flow and use RPCs as the mutation boundary. The runnable [Entity Store pattern](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/rust/src/patterns/entity_store/flow.rs) covers typed profile fields and read/update/clear RPCs.
 
 ## Feature gaps
 

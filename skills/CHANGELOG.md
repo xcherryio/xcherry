@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.39.0 - 2026-10-16
+
+- Advance the SDK, Server, and CLI baselines to the published Dex 1.11.0 tags and refresh pinned Dex source links, including the Go pull Worker example's new `production/pull-workers` path. The example manifests at those tags select SDK 1.10.1; application lockfiles remain authoritative.
+- Add hard-delete Attribute guidance to the core references and all five language references: short-lived secrets kept out of Flow history and permanently deleted on delete or null, string and object values only, no index, Attribute Store sync, WaitForAttributeMatch, or Action conditions, the Server v1.11.0 and Blob Store requirement, fail-closed SDK behavior against older Servers, matching initial-value definitions, inline delivery without BlobCache, and every limitation of the one in-place stored value per Flow and key. Each language reference shows the definition and deletion from the pinned SDK README or integration test.
+- Note hard-delete visibility in read-after-write consistency, the WaitForAttributeMatch restriction in the revision-watermark pattern, and Blob Store backup and versioning retention in operations.
+- Update Python credential guidance for SDK 1.11.0: `async def` tokens on the event loop, the SDK-owned executor for synchronous tokens, unchanged Client exceptions, and Worker stop cancelling a pending lookup.
+- Update App Builder's storage, credential, and FDG guidance for hard-delete secrets. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.39.0.
+
 ## 0.38.0 - 2026-10-15
 
 - Advance the SDK, Server, and CLI baselines to the published Dex 1.10.1 tags and refresh pinned Dex source links. The example manifests at those tags still select SDK 1.10.0; application lockfiles remain authoritative.

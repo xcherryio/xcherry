@@ -28,6 +28,13 @@ database, cache, or ORM.
 - Use indexed Attributes and Dex search for supported list and lookup paths,
   typed RPCs for application reads and mutations, Channels for queued intent,
   and Dex's blob path for large durable values.
+- When a Flow must carry a short-lived secret, such as an API key supplied at
+  start, use a Go
+  [hard-delete Attribute](../../dex-sdk/references/go/data-handling.md#hard-delete-attributes)
+  and delete it after its last use. Never index it, sync it, use it in an Action
+  condition, or expose it in Summary, Display, or anything else Dex Web shows to
+  users. Return it only from an RPC whose callers are authorized to hold the
+  secret. Model the Step to request a fresh secret when the value is absent.
 - When several processes need the same durable domain facts, prefer a dedicated
   stable domain/entity Flow that owns those Attributes or AttributeMaps and
   exposes typed application operations. Cross-Flow reuse alone is not a reason

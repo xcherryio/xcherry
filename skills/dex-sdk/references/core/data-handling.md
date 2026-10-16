@@ -44,6 +44,8 @@ The SDK hydrates each blob-backed value before application code uses it:
 4. Store fetched values in the bounded disk cache.
 5. Decode the hydrated values for the handler.
 
+[Hard-delete Attributes](#hard-delete-attributes-for-short-lived-secrets) skip this path: handlers receive their values inline, and the SDK never stores them in the BlobCache.
+
 A cache hit avoids another remote blob fetch. It still incurs local cache reading and decoding. Treat the BlobCache as disposable acceleration; Dex remains the durable source of truth.
 
 Create one cache-owned, writable directory per Worker replica. Share the opened BlobCache between that process's Worker and Client when the SDK supports it, size it for the hot set, and close it after both stop. A persistent volume can preserve entries across process restarts, but correctness must not depend on that volume or on cache admission.
@@ -56,7 +58,32 @@ The default server threshold keeps payloads through 100 bytes inline and offload
 
 ASYNC local Step input snapshots are separate from normal payload offload and are disabled by default. Enable `blobStore.asyncStepInputSnapshotsEnabled` only when semantic history needs those exact inputs; execution and recovery do not require them.
 
-The Value null arm represents an ordinary application null in inputs, Channel messages, RPC values, and other general Value positions. SDKs encode and decode it as the language's native null value. Two narrower boundaries intentionally assign it control semantics: an Attribute write with null deletes the Attribute, and Flow completion discards null output instead of storing an empty result. Do not use null when the distinction between “completed with null” and “completed without output” matters; return an explicit result object instead.
+The Value null arm represents an ordinary application null in inputs, Channel messages, RPC values, and other general Value positions. SDKs encode and decode it as the language's native null value. Two narrower boundaries intentionally assign it control semantics: an Attribute write with null deletes the Attribute, and Flow completion discards null output instead of storing an empty result. Do not use null when the distinction between “completed with null” and “completed without output” matters; return an explicit result object instead. For a hard-delete Attribute, a null write permanently deletes the stored value.
+
+## Hard-delete Attributes for short-lived secrets
+
+Use a hard-delete Attribute or AttributeMap when a Flow must hold a short-lived secret, such as an API key that it uses a few times and then discards. Keep long-lived credentials and connection secrets in the deployment's secret management instead. The product guide is [Hard-delete Attributes](https://docs.superdurable.io/primitives/attribute#hard-delete-attributes).
+
+A regular Attribute value is recorded in Flow history. A hard-delete value never is. Dex stores it only in the Blob Store, whatever its size, and Flow history keeps only a reference. Deleting the Attribute or AttributeMap instance, or writing null to it, permanently deletes the stored value. After that, neither Dex APIs nor Flow history can recover it, and the value reads as absent. Every write through the definition carries the setting: Step, RPC, and timeout-handler writes and deletes, StartFlow initial Attributes, and SubFlow initial Attributes. Handlers receive the value inline, and the SDK never writes it to the local BlobCache.
+
+Check these constraints before choosing it:
+
+- Only string and object values are supported, including bytes. Definitions reject numeric and Boolean value types. When the declared type is broader, a write that encodes a number or Boolean fails. Null is always allowed. To store a numeric secret, such as a one-time code, wrap it in an object type with one field.
+- The option cannot be combined with an index or Attribute Store sync. A hard-delete value therefore never appears in Dex search or an external projection.
+- WaitForAttributeMatch rejects a hard-delete Attribute, and Action conditions cannot use one. When a caller needs the value, read it through an RPC.
+- It requires Dex Server v1.11.0 or later with Blob Store enabled, and SDK v1.11.0 or later. Blob Store is enabled by default. With `blobStore.enabled: false`, the Server rejects hard-delete writes.
+- SDKs fail closed against an older Server. A Worker fails the Step, RPC, or timeout-handler result that writes a hard-delete Attribute or starts a SubFlow with one. A Client fails a StartFlow that carries a hard-delete initial value.
+- Build StartFlow and SubFlow initial values from the same definition that the target Flow registers. A value built from a definition with a different hard-delete setting is rejected.
+
+Each Flow keeps one stored value per Attribute key and overwrites it in place. Unlike regular Attribute writes, this value does not wait for the invocation's commit:
+
+- A Step or RPC attempt writes or deletes the stored value before Dex commits the attempt's result. A retried attempt, other Steps and RPCs, and Attribute reads can therefore observe a write or deletion from an attempt that later failed. Make handlers safe to repeat. Do not build a read-modify-write on a hard-delete Attribute.
+- When concurrent Steps or RPCs write the same key, the final value may not be the last committed write. When the order matters, write each key from a single writer.
+- A StartFlow or SubFlow start that fails because the Flow ID is already running still overwrites the running Flow's value. With a null initial value, it deletes that value.
+- Flows that reuse a Flow ID share the stored value.
+- Time travel does not restore a deleted value. A Flow retry or a restarted SubFlow starts from the original initial value. If an earlier run deleted that value, the new run reads it as absent. Design the Flow to request a fresh secret when the value is absent.
+- Removing the hard-delete option from a definition leaves the stored value in place until Dex removes the Flow. Delete the value through the hard-delete definition first.
+- A value remains until it is deleted, or until retention removes the Flow. Delete the secret as soon as the Flow no longer needs it. Blob Store backups and bucket versioning outside Dex can keep copies, so configure them separately when deleted secrets must not survive.
 
 ## Combine caching with headless Worker locality
 
