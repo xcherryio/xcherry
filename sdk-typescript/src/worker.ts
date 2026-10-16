@@ -52,7 +52,8 @@ type WorkerState = "created" | "running" | "stopping" | "stopped" | "closed";
  * A Worker is one-shot. Call `start` for non-blocking startup or `run` to await
  * shutdown, then call `close`. Concurrent handlers must synchronize shared state.
  * In pull mode, `close` drains for `stopDrainTimeoutMs`, then cancels handlers and
- * waits for them to return. A handler that ignores cancellation can delay shutdown.
+ * waits for them to return. Half-closed streams wait for server EOF until the
+ * remaining drain deadline. A handler that ignores cancellation can delay shutdown.
  *
  * @example
  * ```ts
@@ -172,6 +173,7 @@ export class Worker {
   /**
    * Gracefully stops the listener or drains pull tasks, then releases connections.
    * A pull Worker force-cancels after its drain timeout and waits for handlers to return.
+   * Half-closed pull streams wait for server EOF until the remaining drain deadline.
    * Calls before `start` and repeated calls after shutdown are safe.
    */
   public async close(): Promise<void> {

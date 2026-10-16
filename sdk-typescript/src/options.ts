@@ -471,7 +471,7 @@ export interface PullWorkerOptions {
   readonly idleStreamsPerQueue?: number;
   /** Process-unique Worker ID; defaults to host identity plus eight random base32 characters. Use a new ID after every restart. Values contain 1-63 ASCII letters, digits, dots, underscores, or hyphens and cannot equal a registered Flow type. */
   readonly appWorkerID?: string;
-  /** Milliseconds allowed for graceful shutdown; defaults to 30000. Requires a non-negative finite value. After expiry, Worker.close cancels active handlers and waits for them to return. */
+  /** Milliseconds allowed for graceful shutdown and busy Reconnect final-frame delivery; defaults to 30000. Requires a non-negative finite value. After shutdown expiry, Worker.close cancels active handlers and waits for them to return. */
   readonly stopDrainTimeoutMs?: number;
 }
 

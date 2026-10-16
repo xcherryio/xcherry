@@ -71,7 +71,7 @@ export class PullWorker {
   private readonly streams = new Set<PollStream>();
   private readonly activeTasks = new Set<Promise<void>>();
   private isStopping = false;
-  private isForceStopping = false;
+  private stopDeadlineMs: number | undefined;
   private hasLoggedUnsupportedServer = false;
   private busyTaskCount = 0;
 
@@ -106,9 +106,11 @@ export class PullWorker {
   }
 
   public async close(): Promise<void> {
+    const stopDeadlineMs = this.stopDeadlineMs ??= Date.now() + this.stopDrainTimeoutMs;
     this.isStopping = true;
     for (const poll of this.streams) {
       poll.isDraining = true;
+      if (poll.isHalfClosed) this.armHalfCloseTimer(poll, stopDeadlineMs);
       if (poll.retryTimer !== undefined) {
         clearTimeout(poll.retryTimer);
         poll.retryTimer = undefined;
@@ -123,16 +125,15 @@ export class PullWorker {
       const didDrain = await Promise.race([
         drained.then(() => true),
         new Promise<boolean>((resolve) => {
-          drainTimer = setTimeout(() => resolve(false), this.stopDrainTimeoutMs);
+          drainTimer = setTimeout(() => resolve(false), Math.max(stopDeadlineMs - Date.now(), 0));
+          drainTimer.unref();
         }),
       ]);
       if (drainTimer !== undefined) clearTimeout(drainTimer);
       if (!didDrain) {
-        this.isForceStopping = true;
         for (const poll of this.streams) {
           if (poll.task !== undefined) {
             poll.task.controller.abort();
-            this.closeStream(poll);
           }
         }
         await drained;
@@ -326,8 +327,6 @@ export class PullWorker {
     this.busyTaskCount--;
     if (poll.isDisconnected) {
       if (!this.isStopping) this.scheduleReconnect(poll);
-    } else if (this.isForceStopping) {
-      this.closeStream(poll);
     } else if (this.isStopping || poll.isDraining) {
       this.halfCloseStream(poll);
     }
@@ -371,12 +370,23 @@ export class PullWorker {
     poll.isHalfClosed = true;
     poll.halfClosePromise = new Promise((resolve) => { poll.resolveHalfClose = resolve; });
     const stream = poll.stream;
-    poll.halfCloseTimer = setTimeout(() => {
-      stream.cancel();
-      this.completeHalfClose(poll);
-    }, 5_000);
-    poll.halfCloseTimer.unref();
+    this.armHalfCloseTimer(poll, this.stopDeadlineMs ?? Date.now() + this.stopDrainTimeoutMs);
     stream.end();
+  }
+
+  private armHalfCloseTimer(poll: PollStream, deadlineMs: number): void {
+    if (poll.halfCloseTimer !== undefined) clearTimeout(poll.halfCloseTimer);
+    const remainingMs = deadlineMs - Date.now();
+    poll.halfCloseTimer = setTimeout(() => {
+      if (!poll.isHalfClosed) return;
+      if (Date.now() < deadlineMs) {
+        this.armHalfCloseTimer(poll, deadlineMs);
+        return;
+      }
+      poll.stream?.cancel();
+      this.completeHalfClose(poll);
+    }, Math.min(Math.max(remainingMs, 0), 2_147_483_647));
+    poll.halfCloseTimer.unref();
   }
 
   private completeHalfClose(poll: PollStream): void {
@@ -387,7 +397,17 @@ export class PullWorker {
     poll.resolveHalfClose?.();
     poll.resolveHalfClose = undefined;
     poll.halfClosePromise = undefined;
-    if (!this.isStopping) this.scheduleReconnect(poll);
+    poll.stream = undefined;
+    if (!this.isStopping) {
+      const idleStreamCount = [...this.streams].filter((candidate) =>
+        candidate !== poll && candidate.queue === poll.queue && candidate.task === undefined && !candidate.isDraining
+      ).length;
+      if (poll.isReconnectRequested && idleStreamCount >= this.idleStreamsPerQueue) {
+        this.streams.delete(poll);
+      } else {
+        this.scheduleReconnect(poll);
+      }
+    }
   }
 
   private scheduleReconnect(poll: PollStream): void {
