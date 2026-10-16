@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.37.1 - 2026-10-15
+
+- Replace the plugin logo (`assets/logo.png`) with the Dex mark, the pipe operator |> set as a D. There is no skill content change.
+- Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.37.1.
+
 ## 0.37.0 - 2026-10-14
 
 - Move Dex Skills development and validation to superdurable/dex `skills/`. The dex-skills repository is a read-only mirror and remains the plugin installation and release source. Remove the mirror pull request template and its obsolete package check.

@@ -1,4 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Dex">
-  <path d="M 53.49 31.25 A 21.50 21.50 0 1 1 32.75 10.51" fill="none" stroke="#00321b" stroke-width="9.60" stroke-linecap="round"/>
-  <circle cx="42.10" cy="13.01" r="7.68" fill="#008650"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Dex"><style>.b{stroke:#00321b}.h{stroke:#008650}@media (prefers-color-scheme: dark){.b{stroke:#f6f8f4}.h{stroke:#70eea9}}</style><path d="M 13.5 12 V 52" fill="none" class="b" stroke-width="12" stroke-linecap="round"/><path d="M 30.5 12 L 50.5 32 L 30.5 52" fill="none" class="h" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></svg>
