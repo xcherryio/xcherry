@@ -191,6 +191,25 @@ private static final long serialVersionUID = 0L;
     return syncConfig_ == null ? io.superdurable.gen.AttributeSyncConfig.getDefaultInstance() : syncConfig_;
   }
 
+  public static final int IS_HARD_DELETE_ON_NULL_FIELD_NUMBER = 5;
+  private boolean isHardDeleteOnNull_ = false;
+  /**
+   * <pre>
+   * Stores a string or object value only in blob storage, regardless of the
+   * size threshold, so Flow history keeps only a reference. A null write
+   * permanently deletes the stored value. Requires an enabled blob store and
+   * must not be combined with index_config or sync_config. Requires Server
+   * protocol version 3 or later.
+   * </pre>
+   *
+   * <code>bool is_hard_delete_on_null = 5;</code>
+   * @return The isHardDeleteOnNull.
+   */
+  @java.lang.Override
+  public boolean getIsHardDeleteOnNull() {
+    return isHardDeleteOnNull_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -217,6 +236,9 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000004) != 0)) {
       output.writeMessage(4, getSyncConfig());
     }
+    if (isHardDeleteOnNull_ != false) {
+      output.writeBool(5, isHardDeleteOnNull_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -235,6 +257,10 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000004) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(4, getSyncConfig());
+    }
+    if (isHardDeleteOnNull_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(5, isHardDeleteOnNull_);
     }
     return size;
   }
@@ -277,6 +303,8 @@ private static final long serialVersionUID = 0L;
       if (!getSyncConfig()
           .equals(other.getSyncConfig())) return false;
     }
+    if (getIsHardDeleteOnNull()
+        != other.getIsHardDeleteOnNull()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -302,6 +330,9 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + SYNC_CONFIG_FIELD_NUMBER;
       hash = (53 * hash) + getSyncConfig().hashCode();
     }
+    hash = (37 * hash) + IS_HARD_DELETE_ON_NULL_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getIsHardDeleteOnNull());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -457,6 +488,7 @@ private static final long serialVersionUID = 0L;
         syncConfigBuilder_.dispose();
         syncConfigBuilder_ = null;
       }
+      isHardDeleteOnNull_ = false;
       return this;
     }
 
@@ -512,6 +544,9 @@ private static final long serialVersionUID = 0L;
             : syncConfigBuilder_.build();
         to_bitField0_ |= 0x00000004;
       }
+      if (((from_bitField0_ & 0x00000010) != 0)) {
+        result.isHardDeleteOnNull_ = isHardDeleteOnNull_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -540,6 +575,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.hasSyncConfig()) {
         mergeSyncConfig(other.getSyncConfig());
+      }
+      if (other.getIsHardDeleteOnNull() != false) {
+        setIsHardDeleteOnNull(other.getIsHardDeleteOnNull());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -593,6 +631,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000008;
               break;
             } // case 34
+            case 40: {
+              isHardDeleteOnNull_ = input.readBool();
+              bitField0_ |= 0x00000010;
+              break;
+            } // case 40
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1115,6 +1158,62 @@ private static final long serialVersionUID = 0L;
         syncConfig_ = null;
       }
       return syncConfigBuilder_;
+    }
+
+    private boolean isHardDeleteOnNull_ ;
+    /**
+     * <pre>
+     * Stores a string or object value only in blob storage, regardless of the
+     * size threshold, so Flow history keeps only a reference. A null write
+     * permanently deletes the stored value. Requires an enabled blob store and
+     * must not be combined with index_config or sync_config. Requires Server
+     * protocol version 3 or later.
+     * </pre>
+     *
+     * <code>bool is_hard_delete_on_null = 5;</code>
+     * @return The isHardDeleteOnNull.
+     */
+    @java.lang.Override
+    public boolean getIsHardDeleteOnNull() {
+      return isHardDeleteOnNull_;
+    }
+    /**
+     * <pre>
+     * Stores a string or object value only in blob storage, regardless of the
+     * size threshold, so Flow history keeps only a reference. A null write
+     * permanently deletes the stored value. Requires an enabled blob store and
+     * must not be combined with index_config or sync_config. Requires Server
+     * protocol version 3 or later.
+     * </pre>
+     *
+     * <code>bool is_hard_delete_on_null = 5;</code>
+     * @param value The isHardDeleteOnNull to set.
+     * @return This builder for chaining.
+     */
+    public Builder setIsHardDeleteOnNull(boolean value) {
+
+      isHardDeleteOnNull_ = value;
+      bitField0_ |= 0x00000010;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Stores a string or object value only in blob storage, regardless of the
+     * size threshold, so Flow history keeps only a reference. A null write
+     * permanently deletes the stored value. Requires an enabled blob store and
+     * must not be combined with index_config or sync_config. Requires Server
+     * protocol version 3 or later.
+     * </pre>
+     *
+     * <code>bool is_hard_delete_on_null = 5;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearIsHardDeleteOnNull() {
+      bitField0_ = (bitField0_ & ~0x00000010);
+      isHardDeleteOnNull_ = false;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.AttributeWrite)

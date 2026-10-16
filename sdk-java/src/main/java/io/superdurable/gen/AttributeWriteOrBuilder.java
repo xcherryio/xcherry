@@ -90,4 +90,18 @@ public interface AttributeWriteOrBuilder extends
    * <code>.dex.AttributeSyncConfig sync_config = 4;</code>
    */
   io.superdurable.gen.AttributeSyncConfigOrBuilder getSyncConfigOrBuilder();
+
+  /**
+   * <pre>
+   * Stores a string or object value only in blob storage, regardless of the
+   * size threshold, so Flow history keeps only a reference. A null write
+   * permanently deletes the stored value. Requires an enabled blob store and
+   * must not be combined with index_config or sync_config. Requires Server
+   * protocol version 3 or later.
+   * </pre>
+   *
+   * <code>bool is_hard_delete_on_null = 5;</code>
+   * @return The isHardDeleteOnNull.
+   */
+  boolean getIsHardDeleteOnNull();
 }

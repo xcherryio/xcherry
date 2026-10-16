@@ -44,3 +44,6 @@ TestParallelFlowCadence
 TestLockingWorkflowCadence
 TestSearchRunsCadence
 TestPullWorkerHeartbeatTimeoutCadence
+TestHardDeleteAttributesCadence
+TestHardDeleteAttributeResetCadence
+TestHardDeleteAttributeSubFlowCadence

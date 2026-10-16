@@ -77,6 +77,20 @@ func readLocalObject(ctx context.Context, root string, key string) ([]byte, erro
 	return data, ctx.Err()
 }
 
+func deleteLocalObject(ctx context.Context, root string, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := localObjectPath(root, key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete local blob: %w", err)
+	}
+	return nil
+}
+
 func deleteLocalWorkflowObjects(ctx context.Context, root string, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err

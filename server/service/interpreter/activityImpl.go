@@ -157,13 +157,16 @@ func (a *Activities) IWaitForM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
+	workerReq, err := a.waitForMethodRequestForWorker(ctx, req)
+	if err != nil {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	var stream waitForMethodOutputStream
 	var callCtx = ctx
 	var pullStream *pullWaitForStream
-	var err error
 	if input.GetWorkerTarget().GetIsPullMode() {
-		pullStream, err = a.openPullWaitFor(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		pullStream, err = a.openPullWaitFor(ctx, input, workerReq, activityInfo.IsLocalActivity, heartbeat)
 		stream = pullStream
 	} else {
 		dispatch, openErr := openWorkerStream(
@@ -171,7 +174,7 @@ func (a *Activities) IWaitForM(
 			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 				grpc.ServerStreamingClient[dexpb.InvokeWaitForMethodOutput], error,
 			) {
-				return client.InvokeWaitForMethod(callCtx, req)
+				return client.InvokeWaitForMethod(callCtx, workerReq)
 			},
 		)
 		if openErr != nil && !dispatch.isOpened {
@@ -291,6 +294,20 @@ func (a *Activities) offloadSubFlowStartInputs(
 			if attribute == nil {
 				continue
 			}
+			if attribute.GetIsHardDeleteOnNull() {
+				if err := blobstore.OffloadLargeAttributeWrites(
+					ctx,
+					[]*dexpb.AttributeWrite{attribute},
+					subFlowID,
+					requestID,
+					a.cfg.BlobStore.EffectiveThresholdInBytes(),
+					a.blobStore,
+					a.cfg.BlobStore.EffectiveEnabled(),
+				); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := blobstore.TransferValueBlobOwnership(
 				ctx,
 				attribute.GetValue(),
@@ -358,13 +375,16 @@ func (a *Activities) IExecuteM(
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
 	}
+	workerReq, err := a.executeMethodRequestForWorker(ctx, req)
+	if err != nil {
+		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
+	}
 	heartbeat := a.dispatchHeartbeat(ctx, activityInfo, req.GetContext())
 	var stream executeMethodOutputStream
 	var callCtx = ctx
 	var pullStream *pullExecuteStream
-	var err error
 	if input.GetWorkerTarget().GetIsPullMode() {
-		pullStream, err = a.openPullExecute(ctx, input, req, activityInfo.IsLocalActivity, heartbeat)
+		pullStream, err = a.openPullExecute(ctx, input, workerReq, activityInfo.IsLocalActivity, heartbeat)
 		stream = pullStream
 	} else {
 		dispatch, openErr := openWorkerStream(
@@ -372,7 +392,7 @@ func (a *Activities) IExecuteM(
 			func(client dexpb.WorkerServiceClient, callCtx context.Context) (
 				grpc.ServerStreamingClient[dexpb.InvokeExecuteMethodOutput], error,
 			) {
-				return client.InvokeExecuteMethod(callCtx, req)
+				return client.InvokeExecuteMethod(callCtx, workerReq)
 			},
 		)
 		if openErr != nil && !dispatch.isOpened {
@@ -728,6 +748,62 @@ func executeMethodRequestForAttempt(
 		LoadedChannelNames:          request.GetLoadedChannelNames(),
 		LoadedChannelMapInstances:   request.GetLoadedChannelMapInstances(),
 	}
+}
+
+// waitForMethodRequestForWorker returns req, or a copy whose hard-delete Attributes are hydrated.
+// The copy keeps payloads out of req, which also feeds logs and the step-input snapshot.
+func (a *Activities) waitForMethodRequestForWorker(
+	ctx context.Context,
+	req *dexpb.InvokeWaitForMethodRequest,
+) (*dexpb.InvokeWaitForMethodRequest, error) {
+	if !blobstore.HasHardDeleteKV(req.GetAttributes()) {
+		return req, nil
+	}
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetContext().GetFlowId(), req.GetAttributes(), a.blobStore)
+	if err != nil {
+		return nil, err
+	}
+	return &dexpb.InvokeWaitForMethodRequest{
+		Context:                     req.GetContext(),
+		FlowType:                    req.GetFlowType(),
+		StepType:                    req.GetStepType(),
+		StepInput:                   req.GetStepInput(),
+		Attributes:                  attributes,
+		ChannelInfos:                req.GetChannelInfos(),
+		LoadedChannelMessages:       req.GetLoadedChannelMessages(),
+		LoadedAttributeMapInstances: req.GetLoadedAttributeMapInstances(),
+		LoadedChannelNames:          req.GetLoadedChannelNames(),
+		LoadedChannelMapInstances:   req.GetLoadedChannelMapInstances(),
+	}, nil
+}
+
+// executeMethodRequestForWorker returns req, or a copy whose hard-delete Attributes are hydrated.
+// The copy keeps payloads out of req, which also feeds logs and the step-input snapshot.
+func (a *Activities) executeMethodRequestForWorker(
+	ctx context.Context,
+	req *dexpb.InvokeExecuteMethodRequest,
+) (*dexpb.InvokeExecuteMethodRequest, error) {
+	if !blobstore.HasHardDeleteKV(req.GetAttributes()) {
+		return req, nil
+	}
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetContext().GetFlowId(), req.GetAttributes(), a.blobStore)
+	if err != nil {
+		return nil, err
+	}
+	return &dexpb.InvokeExecuteMethodRequest{
+		Context:                     req.GetContext(),
+		FlowType:                    req.GetFlowType(),
+		StepType:                    req.GetStepType(),
+		StepInput:                   req.GetStepInput(),
+		Attributes:                  attributes,
+		StepExeLocals:               req.GetStepExeLocals(),
+		ConditionResults:            req.GetConditionResults(),
+		ChannelInfos:                req.GetChannelInfos(),
+		LoadedChannelMessages:       req.GetLoadedChannelMessages(),
+		LoadedAttributeMapInstances: req.GetLoadedAttributeMapInstances(),
+		LoadedChannelNames:          req.GetLoadedChannelNames(),
+		LoadedChannelMapInstances:   req.GetLoadedChannelMapInstances(),
+	}, nil
 }
 
 func workerContextForAttempt(workerContext *dexpb.Context) *dexpb.Context {
@@ -1402,6 +1478,9 @@ func validateWorkerWaitForResponse(
 	if err := workerclient.RejectWorkerAttributeWriteBlobIDs(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
+	if err := workerclient.ValidateHardDeleteAttributeWrites(resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
@@ -1442,6 +1521,9 @@ func validateWorkerExecuteResponse(
 		return fmt.Errorf("nil InvokeExecuteMethodResponse")
 	}
 	if err := workerclient.RejectWorkerAttributeWriteBlobIDs(resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
+	if err := workerclient.ValidateHardDeleteAttributeWrites(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(resp.GetUpsertAttributes()); err != nil {

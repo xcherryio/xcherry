@@ -92,6 +92,12 @@ func InvokeWorkerRpc(
 	)
 	defer cancel()
 
+	// Hydrate into new KVs so rpcPrep keeps hard-delete references only.
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetFlowId(), rpcPrep.GetAttributes(), blobStore)
+	if err != nil {
+		return nil, "", err
+	}
+
 	channelInfos := rpcPrep.GetChannelInfos()
 	if channelInfos == nil {
 		channelInfos = map[string]*dexpb.ChannelInfo{}
@@ -106,7 +112,7 @@ func InvokeWorkerRpc(
 		FlowType:                    rpcPrep.GetFlowType(),
 		RpcName:                     req.GetRpcName(),
 		Input:                       workerInput,
-		Attributes:                  rpcPrep.GetAttributes(),
+		Attributes:                  attributes,
 		ChannelInfos:                channelInfos,
 		LoadedChannelMessages:       rpcPrep.GetLoadedChannelMessages(),
 		LoadedAttributeMapInstances: rpcPrep.GetLoadedAttributeMapInstances(),
@@ -120,7 +126,6 @@ func InvokeWorkerRpc(
 
 	var resp *dexpb.InvokeWorkerRPCResponse
 	var servedByAppWorkerID string
-	var err error
 	if rpcPrep.GetWorkerTarget().GetIsPullMode() {
 		resp, servedByAppWorkerID, err = invokePullWorkerRPC(
 			rpcCtx, pullDispatcher, matchingCfg, wakeNotifier,
@@ -233,6 +238,9 @@ func validateWorkerRpcResponse(
 		return err
 	}
 	if err := workerclient.RejectWorkerAttributeWriteBlobIDs(resp.GetUpsertAttributes()); err != nil {
+		return err
+	}
+	if err := workerclient.ValidateHardDeleteAttributeWrites(resp.GetUpsertAttributes()); err != nil {
 		return err
 	}
 	if err := workerclient.ValidateRuntimeAttributeWrites(resp.GetUpsertAttributes()); err != nil {

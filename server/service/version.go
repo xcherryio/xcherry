@@ -12,7 +12,7 @@ const (
 	// MinimumSupportedProtocolVersion is the oldest client protocol accepted by this Server.
 	MinimumSupportedProtocolVersion uint32 = 1
 	// CurrentProtocolVersion is the newest client protocol implemented by this Server.
-	CurrentProtocolVersion uint32 = 2
+	CurrentProtocolVersion uint32 = 3
 )
 
 // DexServerVersion identifies the running artifact and is replaced by release builds.
