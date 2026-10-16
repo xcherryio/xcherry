@@ -11,6 +11,7 @@ publish = ["crates-io"]
 [dependencies]
 dex-blob-cache.workspace = true
 dex-protocol.workspace = true
+gethostname.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 serde.workspace = true

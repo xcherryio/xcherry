@@ -58,13 +58,24 @@ impl WorkerDispatcher {
         Self { registry, hydrator }
     }
 
+    pub(crate) fn flow_types(&self) -> Vec<String> {
+        self.registry.flow_types()
+    }
+
     pub(crate) fn invoke_wait_for(
         &self,
         request: InvokeWaitForMethodRequest,
     ) -> WorkerInvocation<InvokeWaitForMethodOutput> {
+        self.invoke_wait_for_with_cancellation(request, InvocationCancellation::new())
+    }
+
+    pub(crate) fn invoke_wait_for_with_cancellation(
+        &self,
+        request: InvokeWaitForMethodRequest,
+        cancellation: InvocationCancellation,
+    ) -> WorkerInvocation<InvokeWaitForMethodOutput> {
         let (output_emitter, receiver) = StepOutputEmitter::wait_for();
         let sender = output_emitter.wait_for_sender();
-        let cancellation = InvocationCancellation::new();
         let producer_cancellation = cancellation.clone();
         let dispatcher = self.clone();
         let producer = tokio::spawn(async move {
@@ -151,9 +162,16 @@ impl WorkerDispatcher {
         &self,
         request: InvokeExecuteMethodRequest,
     ) -> WorkerInvocation<InvokeExecuteMethodOutput> {
+        self.invoke_execute_with_cancellation(request, InvocationCancellation::new())
+    }
+
+    pub(crate) fn invoke_execute_with_cancellation(
+        &self,
+        request: InvokeExecuteMethodRequest,
+        cancellation: InvocationCancellation,
+    ) -> WorkerInvocation<InvokeExecuteMethodOutput> {
         let (output_emitter, receiver) = StepOutputEmitter::execute();
         let sender = output_emitter.execute_sender();
-        let cancellation = InvocationCancellation::new();
         let producer_cancellation = cancellation.clone();
         let dispatcher = self.clone();
         let producer = tokio::spawn(async move {
@@ -314,6 +332,15 @@ impl WorkerDispatcher {
         &self,
         request: InvokeWorkerRpcRequest,
     ) -> HandlerResult<InvokeWorkerRpcResponse> {
+        self.invoke_rpc_with_cancellation(request, InvocationCancellation::new())
+            .await
+    }
+
+    pub(crate) async fn invoke_rpc_with_cancellation(
+        &self,
+        request: InvokeWorkerRpcRequest,
+        cancellation: InvocationCancellation,
+    ) -> HandlerResult<InvokeWorkerRpcResponse> {
         let request = self.hydrate_rpc(request).await?;
         let flow = self.registered_flow(&request.flow_type)?;
         let rpc = flow
@@ -346,7 +373,7 @@ impl WorkerDispatcher {
                 loaded_channel_map_instances: request.loaded_channel_map_instances,
             },
             None,
-            InvocationCancellation::new(),
+            cancellation,
         )?;
         let input = request
             .input

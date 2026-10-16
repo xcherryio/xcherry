@@ -20,6 +20,7 @@ rust-version = "1.97"
 crc32c = "0.6"
 dex-blob-cache = { path = "crates/dex-blob-cache", version = "0.6.0" }
 dex-protocol = { path = "crates/dex-protocol", version = "0.6.0" }
+gethostname = "1.1"
 jni = "0.21"
 napi = { version = "3.12.0", default-features = false }
 napi-build = "2.4.0"

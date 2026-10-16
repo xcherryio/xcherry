@@ -33,7 +33,10 @@ impl ClientOptions {
         self
     }
 
-    /// Sets the WorkerService target advertised by newly started Flows.
+    /// Sets the Worker target advertised by newly started Flows.
+    ///
+    /// Use [`WorkerTarget::pull`](crate::WorkerTarget::pull) with a pull Worker. An invalid pull
+    /// combination returns [`crate::SdkError::FlowDefinition`] from [`crate::Client::try_new`].
     pub fn worker_target(mut self, value: WorkerTarget) -> Self {
         self.worker_target = Some(value);
         self
