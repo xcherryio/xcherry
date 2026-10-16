@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import grpc
 
-from dex._credential_transport import async_channel
+from dex._credential_transport import AsyncCredentialRunner, async_channel
 from dex._async_value_hydrator import AsyncValueHydrator
 from dex._grpc_errors import FlowTargetRequirement, translate_rpc_error
 from dex._utils import require_name
@@ -98,7 +98,14 @@ class AsyncClient:
         self.registry = registry
         self.blob_cache = blob_cache
         self.options = options or ClientOptions()
-        self._channel = async_channel(self.options.server_address, self.options.credential)
+        self._credential_runner = (
+            AsyncCredentialRunner(self.options.credential)
+            if self.options.credential is not None
+            else None
+        )
+        self._channel = async_channel(
+            self.options.server_address, self._credential_runner
+        )
         self._service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
             self._channel
         )
@@ -1061,7 +1068,11 @@ class AsyncClient:
         if self._closed:
             return
         self._closed = True
-        await self._channel.close(None)
+        try:
+            await self._channel.close(None)
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
 
     async def _wait_for_flow_response(
         self,

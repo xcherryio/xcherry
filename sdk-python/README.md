@@ -22,9 +22,13 @@ startup synchronization, blob hydration, and pull WorkerTaskService streams. A
 pull stream reads the token when it opens and again on every reconnect. For a
 custom credential, implement Credential.token() to return the current token;
 the method may be called concurrently, and an exception fails the call before
-it contacts Dex. AsyncClient and AsyncWorker also accept an awaitable token.
-Synchronous tokens run in an executor for async calls and on the calling thread
-for sync calls. Async calls bound token lookup by the RPC deadline when set;
+it contacts Dex. Client and AsyncClient calls raise the credential's exception
+unchanged, including TimeoutError when the RPC deadline has not expired.
+AsyncClient and AsyncWorker also accept an awaitable token. Synchronous tokens
+run in a dedicated four-thread executor per async Client or Worker, created
+lazily and shut down without waiting for a blocked token call on close. Sync
+calls run token lookup on the calling thread. Async calls bound token lookup
+by the RPC deadline when set;
 pull stream opens use a 30-second lookup budget. Sync token lookup must return
 promptly. By default, no authorization metadata is sent. Dex uses plaintext
 gRPC, so protect the network path that carries the token.

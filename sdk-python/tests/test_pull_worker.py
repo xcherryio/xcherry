@@ -102,6 +102,7 @@ def test_sync_close_after_start_returns_on_same_thread() -> None:
     context_worker._lock = threading.Lock()
     context_worker._state = "stopped"
     context_worker._pull = runtime
+    context_worker._credential_runner = None
     with context_worker:
         pass
     assert context_worker._state == "closed"
@@ -110,6 +111,7 @@ def test_sync_close_after_start_returns_on_same_thread() -> None:
     finally_worker._lock = threading.Lock()
     finally_worker._state = "stopped"
     finally_worker._pull = runtime
+    finally_worker._credential_runner = None
     try:
         pass
     finally:

@@ -19,7 +19,7 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
-from dex._credential_transport import sync_channel
+from dex._credential_transport import AsyncCredentialRunner, sync_channel
 from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
     negotiate_server_protocol,
@@ -79,6 +79,11 @@ class Worker:
         self.registry = registry
         self.blob_cache = blob_cache
         self.options = options or WorkerOptions()
+        self._credential_runner = (
+            AsyncCredentialRunner(self.options.credential)
+            if self.options.pull is not None and self.options.credential is not None
+            else None
+        )
         app_worker_id = (
             resolve_app_worker_id(registry, self.options.pull)
             if self.options.pull is not None
@@ -119,7 +124,7 @@ class Worker:
                 self.options.server_address,
                 self._executor,
                 app_worker_id,
-                self.options.credential,
+                self._credential_runner,
             )
         else:
             self._server = grpc.server(
@@ -292,6 +297,8 @@ class Worker:
             self._server.stop(grace=5).wait(timeout=10)
         self._flow_channel.close()
         self._executor.shutdown(wait=True, cancel_futures=True)
+        if self._credential_runner is not None:
+            self._credential_runner.close()
         with self._lock:
             if self._state != "closed":
                 self._state = "stopped"
@@ -302,9 +309,13 @@ class Worker:
         Pull streams finish their bounded EOF wait before the channel closes.
         ``close`` is idempotent; a closed Worker cannot be started again.
         """
-        self.stop()
-        with self._lock:
-            self._state = "closed"
+        try:
+            self.stop()
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
+            with self._lock:
+                self._state = "closed"
 
     @staticmethod
     def _target_address(bind_address: str, bound_port: int) -> str:
