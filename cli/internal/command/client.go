@@ -14,7 +14,9 @@ import (
 	"fmt"
 
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/common/credential"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -31,7 +33,7 @@ func withFlowService(
 	options options,
 	call func(context.Context, *flowService) error,
 ) error {
-	client, err := newFlowService(options.server)
+	client, err := newFlowService(options)
 	if err != nil {
 		return newOperationError("connect", err)
 	}
@@ -53,7 +55,7 @@ func withStreamingFlowService(
 	options options,
 	call func(*flowService) error,
 ) error {
-	client, err := newFlowService(options.server)
+	client, err := newFlowService(options)
 	if err != nil {
 		return newOperationError("connect", err)
 	}
@@ -68,14 +70,30 @@ func withStreamingFlowService(
 	return nil
 }
 
-func newFlowService(server string) (*flowService, error) {
-	connection, err := grpc.NewClient(
-		server,
+func newFlowService(options options) (*flowService, error) {
+	var perRPCCredential credentials.PerRPCCredentials
+	var err error
+	if options.hasFile || options.credentialFile != "" {
+		perRPCCredential, err = credential.File(options.credentialFile)
+	} else if options.hasCredential || options.credential != "" {
+		perRPCCredential, err = credential.Static(options.credential)
+	}
+	if err != nil {
+		return nil, err
+	}
+	dialOptions := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(defaultMaxMessageBytes),
 			grpc.MaxCallSendMsgSize(defaultMaxMessageBytes),
 		),
+	}
+	if perRPCCredential != nil {
+		dialOptions = append(dialOptions, grpc.WithPerRPCCredentials(perRPCCredential))
+	}
+	connection, err := grpc.NewClient(
+		options.server,
+		dialOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create FlowService client: %w", err)

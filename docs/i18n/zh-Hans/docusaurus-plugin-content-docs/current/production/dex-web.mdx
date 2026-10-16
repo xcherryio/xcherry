@@ -5,6 +5,12 @@ sidebar_label: Dex Web
 
 # Dex Web
 
+Dex Web 没有最终用户身份认证。启用 Dex Server **auth** 后，Web 会在每次请求中向
+FlowService 发送 **web.flowServiceCredentialFile** 中的 bearer credential。
+任何能够访问 Web 端口的人都能使用该 credential 操作 Dex。必须通过网络访问控制或
+强制认证的代理保护 Web 端口。参见[Server 身份认证](/production/server-operations#authentication)和
+[Dex Web 访问控制](/production/server-operations#dex-web-access-control)。
+
 Dex Web 使用两个 URL 前缀。**v1** 是原有的 Flows 搜索、run 详情和 Flow Rendering。**v2** 是操作工作区：左边是 run 列表和过滤器，右边是该 Flow type 的 Flow Definition Graph。
 
 不带 JSON 目录启动 Dex 时，打开 **v1** 的 **/v1/flows**。使用 **--flow-rendering-dir** 启动时，默认打开 **v2** 的 **/v2**。右上角 Version 菜单可以回到 **v1**。

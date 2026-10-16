@@ -20,6 +20,24 @@ DEX_FLOW_SERVICE_ADDRESS=dex.example.internal:8801 dexcli health
 dexcli --server 127.0.0.1:9901 flow search
 ```
 
+## Authentication
+
+When Dex requires a bearer credential, set **--credential-file** to a token file,
+set **DEX_CREDENTIAL_FILE** to a token file path, or set **DEX_CREDENTIAL** to the
+token value. That is the precedence order. The file is read before the first
+call and checked for changes at most once per second during long-running
+commands such as **flow watch**. Empty or unreadable files stop the call before
+it contacts Dex. Surrounding whitespace is removed from the token.
+
+```bash
+dexcli flow search --credential-file /run/secrets/dex/token
+DEX_CREDENTIAL_FILE=/run/secrets/dex/token dexcli flow watch order-123
+```
+
+There is no flag for a raw token because command arguments can appear in shell
+history and process listings. The FlowService connection is plaintext gRPC, so
+protect its network path.
+
 ## Friendly Flow operations
 
 Use **flow search**, **summary**, **state**, **history**, and **inspect** for bounded JSON

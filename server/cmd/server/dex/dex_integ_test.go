@@ -13,6 +13,7 @@ package dex
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"io"
@@ -27,8 +28,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/auth"
+	"github.com/superdurable/dex/service/common/log/loggerimpl"
 	"github.com/urfave/cli"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 type flowService struct {
@@ -112,6 +118,73 @@ func TestWebOnlyStartsWithoutWorkflowBackend(t *testing.T) {
 	releasedListener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(webPort)))
 	require.NoError(t, err)
 	require.NoError(t, releasedListener.Close())
+}
+
+func TestWebUsesCredentialForFlowSearch(t *testing.T) {
+	grpcListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	credentialPath := filepath.Join(t.TempDir(), "web-token")
+	require.NoError(t, os.WriteFile(credentialPath, []byte(" web-token \n"), 0o600))
+	staticTokensPath := filepath.Join(t.TempDir(), "static-tokens.yaml")
+	tokenHash := sha256.Sum256([]byte("web-token"))
+	require.NoError(t, os.WriteFile(staticTokensPath, []byte(fmt.Sprintf("tokens:\n  - sha256: %x\n", tokenHash)), 0o600))
+	publicAuthConfig := &config.AuthConfig{Authenticators: []config.AuthenticatorConfig{{Kind: config.AuthenticatorKindStaticTokens, File: staticTokensPath}}}
+	logger, err := loggerimpl.NewDevelopment()
+	require.NoError(t, err)
+	authenticator, err := auth.NewAuthenticator(publicAuthConfig, logger)
+	require.NoError(t, err)
+	interceptors := auth.NewPublicServiceInterceptors(authenticator)
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(interceptors.Unary), grpc.StreamInterceptor(interceptors.Stream))
+	dexpb.RegisterFlowServiceServer(grpcServer, &flowService{})
+	grpcExit := make(chan error, 1)
+	go func() { grpcExit <- grpcServer.Serve(grpcListener) }()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		serveErr := <-grpcExit
+		if serveErr != nil {
+			require.ErrorIs(t, serveErr, grpc.ErrServerStopped)
+		}
+	})
+	unauthenticatedConnection, err := grpc.NewClient(grpcListener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, unauthenticatedConnection.Close()) })
+	_, err = dexpb.NewFlowServiceClient(unauthenticatedConnection).SearchFlows(context.Background(), &dexpb.SearchFlowsRequest{})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+	internalTokenPath := filepath.Join(t.TempDir(), "internal-token")
+	require.NoError(t, os.WriteFile(internalTokenPath, []byte("0123456789abcdef0123456789abcdef"), 0o600))
+	webPort := reservePort(t)
+	configPath := filepath.Join(t.TempDir(), "web-auth.yaml")
+	configBody := fmt.Sprintf("auth:\n  authenticators:\n    - kind: staticTokens\n      file: %s\ninternal:\n  listen: 127.0.0.1:8803\n  tokenFile: %s\nweb:\n  bindAddress: 127.0.0.1\n  port: %d\n  flowServiceTarget: %s\n  flowServiceCredentialFile: %s\n", staticTokensPath, internalTokenPath, webPort, grpcListener.Addr().String(), credentialPath)
+	require.NoError(t, os.WriteFile(configPath, []byte(configBody), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	serverExit := make(chan error, 1)
+	go func() {
+		serverExit <- BuildCLI(ctx).Run([]string{"dex-server", "--config", configPath, "start", "--services", "web"})
+	}()
+	httpClient := &http.Client{Timeout: time.Second}
+	webAddress := "http://127.0.0.1:" + strconv.Itoa(webPort)
+	require.Eventually(t, func() bool {
+		response, requestErr := httpClient.Get(webAddress + "/healthz")
+		if requestErr != nil {
+			return false
+		}
+		require.NoError(t, response.Body.Close())
+		return response.StatusCode == http.StatusOK
+	}, 5*time.Second, 25*time.Millisecond)
+	response, err := httpClient.Post(webAddress+"/api/flows/search", "application/json", bytes.NewBufferString(`{"pageSize":1}`))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	cancel()
+	require.NoError(t, <-serverExit)
+}
+
+func TestAuthenticatedWebRejectsMissingCredentialAtStartup(t *testing.T) {
+	cfg := &config.Config{Auth: config.AuthConfig{Authenticators: []config.AuthenticatorConfig{{Kind: config.AuthenticatorKindStaticTokens}}}}
+	_, err := newApplication(cfg, serviceSelection{isWebEnabled: true})
+	require.ErrorContains(t, err, "web.flowServiceCredentialFile is required")
 }
 
 func TestWebOnlyStartsBeforeFlowService(t *testing.T) {

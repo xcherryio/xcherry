@@ -95,7 +95,8 @@ Worker 可能缩容到零时，配置 [Worker 唤醒 hook](/production/server-op
 [服务器运维](/production/server-operations#pull-worker-routing)列出了 matching 限制、
 等待设置和多节点配置。
 
-目前只有 Go SDK 能发送所需的 bearer credential。使用 **WorkerOptions.Credential**
-为其 Worker stream 配置凭据，使用 **ClientOptions.Credential** 为 Client 调用配置凭据。
-启用公开 **auth** 后，Python、TypeScript 和 Rust 拉取模式 Worker、CLI 和 Dex Web
-都无法连接。参阅[身份认证设置](/production/server-operations#authentication)。
+Go SDK、**dexcli** 和 Dex Web 可以发送所需的 bearer credential。使用
+**WorkerOptions.Credential** 为 Go Worker stream 配置凭据，使用
+**ClientOptions.Credential** 为 Go Client 调用配置凭据。启用公开 **auth** 后，
+Python、TypeScript 和 Rust 拉取模式 Worker 仍无法连接。参阅
+[身份认证设置](/production/server-operations#authentication)。

@@ -110,8 +110,8 @@ process. Use the same backend namespace and membership seeds across instances.
 to reach it. The [Server operation](/production/server-operations#pull-worker-routing)
 page shows the matching limits, wait settings, and multi-node configuration.
 
-Only the Go SDK can send the required bearer credential today. Configure
-**WorkerOptions.Credential** for its Worker streams and **ClientOptions.Credential**
-for Client calls. Python, TypeScript, and Rust pull Workers, the CLI, and Dex
-Web cannot connect while public **auth** is enabled. See the
+The Go SDK, **dexcli**, and Dex Web can send the required bearer credential.
+Configure **WorkerOptions.Credential** for Go Worker streams and
+**ClientOptions.Credential** for Go Client calls. Python, TypeScript, and Rust
+pull Workers cannot connect while public **auth** is enabled. See the
 [authentication settings](/production/server-operations#authentication).

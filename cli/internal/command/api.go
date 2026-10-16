@@ -171,6 +171,7 @@ func parseAPIFlags(flags *flag.FlagSet, args []string, output io.Writer, usage s
 
 func optionsFromFlags(flags *flag.FlagSet) (options, error) {
 	server := flags.Lookup("server").Value.String()
+	credentialFile := flags.Lookup("credential-file").Value.String()
 	output := flags.Lookup("output").Value.String()
 	timeout, err := time.ParseDuration(flags.Lookup("timeout").Value.String())
 	if err != nil {
@@ -184,7 +185,7 @@ func optionsFromFlags(flags *flag.FlagSet) (options, error) {
 	if !ok {
 		return options{}, fmt.Errorf("no-hydrate flag is not boolean")
 	}
-	return options{server: server, output: output, timeout: timeout, noHydrate: noHydrate}, nil
+	return options{server: server, credentialFile: credentialFile, output: output, timeout: timeout, noHydrate: noHydrate}, nil
 }
 
 func (c *apiCommand) oneMethod(flags *flag.FlagSet, operation string) (protoreflect.MethodDescriptor, error) {
