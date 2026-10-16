@@ -200,6 +200,11 @@ class Worker:
                 self._flow_channel.close()
                 self._executor.shutdown(wait=True, cancel_futures=True)
                 raise server_info_request_error(self._sdk_version, failure) from failure
+            except Exception as failure:
+                self._state = "stopped"
+                self._flow_channel.close()
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                raise RuntimeError("cannot get Dex server info") from failure
             try:
                 self._negotiated_protocol_version = negotiate_server_protocol(
                     server_info,
@@ -218,6 +223,11 @@ class Worker:
                     timeout=self.options.attribute_index_sync_timeout.total_seconds(),
                 )
             except grpc.RpcError as failure:
+                self._state = "stopped"
+                self._flow_channel.close()
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                raise RuntimeError("cannot synchronize Attribute indexes") from failure
+            except Exception as failure:
                 self._state = "stopped"
                 self._flow_channel.close()
                 self._executor.shutdown(wait=True, cancel_futures=True)

@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -30,7 +32,38 @@ class _SyncCallDetails(NamedTuple):
 def credential_metadata(credential: Credential | None, metadata: Any = None) -> Any:
     if credential is None:
         return metadata
-    return tuple(metadata or ()) + (("authorization", "Bearer " + credential.token()),)
+    token = credential.token()
+    if inspect.isawaitable(token):
+        if inspect.iscoroutine(token):
+            token.close()
+        raise TypeError("synchronous calls require a synchronous credential")
+    return tuple(metadata or ()) + (("authorization", "Bearer " + token),)
+
+
+async def async_credential_metadata(
+    credential: Credential, metadata: Any = None, timeout: float | None = None
+) -> Any:
+    try:
+        token = await asyncio.wait_for(
+            _resolve_async_token(credential), timeout=timeout
+        )
+    except TimeoutError as error:
+        raise credential_deadline_error() from error
+    return tuple(metadata or ()) + (("authorization", "Bearer " + token),)
+
+
+async def _resolve_async_token(credential: Credential) -> str:
+    token = await asyncio.to_thread(credential.token)
+    if inspect.isawaitable(token):
+        return await token
+    return token
+
+
+def credential_deadline_error() -> grpc.aio.AioRpcError:
+    return grpc.aio.AioRpcError(
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        details="credential lookup exceeded RPC deadline",
+    )
 
 
 class _SyncCredentialInterceptor(grpc.UnaryUnaryClientInterceptor):
@@ -64,10 +97,20 @@ class _AsyncCredentialInterceptor(grpc.aio.UnaryUnaryClientInterceptor):
         client_call_details: grpc.aio.ClientCallDetails,
         request: Any,
     ) -> Any:
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        metadata = await async_credential_metadata(
+            self._credential, client_call_details.metadata, client_call_details.timeout
+        )
+        remaining_timeout = client_call_details.timeout
+        if remaining_timeout is not None:
+            remaining_timeout -= loop.time() - started_at
+            if remaining_timeout <= 0:
+                raise credential_deadline_error()
         details = grpc.aio.ClientCallDetails(
             client_call_details.method,
-            client_call_details.timeout,
-            credential_metadata(self._credential, client_call_details.metadata),
+            remaining_timeout,
+            metadata,
             client_call_details.credentials,
             client_call_details.wait_for_ready,
         )

@@ -10,30 +10,39 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import threading
 import time
 from pathlib import Path
-from typing import Protocol
+from typing import Awaitable, Protocol
 
 
 class Credential(Protocol):
     """Supply a bearer token for each Client or Worker service call.
 
-    token may be called concurrently and should return quickly. A raised
-    exception fails that call before it contacts Dex. The token travels over
-    Dex's plaintext gRPC connection; protect the network path.
+    token may be called concurrently. AsyncClient and AsyncWorker accept an
+    awaitable token; synchronous callers require a string. Synchronous tokens
+    run on the calling thread for sync APIs and in an executor for async APIs.
+    Async calls bound token lookup by the RPC deadline when one is set. Pull
+    stream opens use a 30-second lookup budget. Sync calls do not bound token
+    lookup separately, so synchronous implementations must return promptly.
+    A raised exception fails the call before it contacts Dex. The token travels
+    over Dex's plaintext gRPC connection; protect the network path.
 
     Example:
-        >>> credential = FileCredential("/var/run/secrets/dex/token")
+        >>> class FixedCredential:
+        ...     def token(self) -> str:
+        ...         return "my-token"
+        >>> credential = FixedCredential()
         >>> options = ClientOptions(credential=credential)
     """
 
-    def token(self) -> str:
+    def token(self) -> str | Awaitable[str]:
         """Return the current bearer token, or raise when unavailable.
 
         Returns:
-            Token without the Bearer prefix.
+            Token without the Bearer prefix, or an awaitable for async callers.
 
         Raises:
             Exception: Any failure prevents the service call from reaching Dex.
@@ -48,6 +57,7 @@ class FileCredential:
     once per second, and changed contents are reloaded before the next call.
     Surrounding whitespace is removed. A file that becomes empty or unreadable
     fails subsequent calls until restored. Concurrent calls share a lock.
+    Async callers check the file in an executor, outside the event loop.
 
     Example:
         >>> credential = FileCredential("/var/run/secrets/dex/token")
@@ -84,7 +94,7 @@ class FileCredential:
         with self._lock:
             self._refresh()
             if self._error is not None:
-                raise self._error
+                raise copy.copy(self._error)
 
     def token(self) -> str:
         """Return the current trimmed token, checking for file changes once per second.
@@ -101,7 +111,7 @@ class FileCredential:
             if self._clock() - self._checked_at >= 1.0:
                 self._refresh()
             if self._error is not None:
-                raise self._error
+                raise copy.copy(self._error)
             return self._token
 
     def _refresh(self) -> None:
@@ -120,7 +130,7 @@ class FileCredential:
                 raise ValueError(f"credential file {self._path} is empty")
         except (OSError, UnicodeError, ValueError) as error:
             self._token = ""
-            self._error = error
+            self._error = copy.copy(error)
             return
         self._token = token
         self._mtime_ns = stat.st_mtime_ns

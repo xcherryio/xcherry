@@ -132,6 +132,8 @@ class WorkerOptions:
             each pull stream open. ``None`` sends no authorization metadata.
             Token errors fail calls before Dex is contacted. Protect the plaintext
             network path. A rotated token is used on the next call or reconnect.
+            AsyncWorker accepts awaitable tokens and bounds pull stream token
+            lookup to 30 seconds. Synchronous token lookup must return promptly.
     """
 
     bind_address: str = _DEFAULT_BIND_ADDRESS

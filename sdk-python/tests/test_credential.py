@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import traceback
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -41,8 +42,11 @@ class RecordingService(
     def __init__(self) -> None:
         self.headers: list[tuple[str, str | bytes | None]] = []
         self.poll_opened = threading.Event()
-        self.poll_count = 0
-        self.reconnect_first_poll = False
+        self.second_poll_opened = threading.Event()
+        self.reconnect_allowed = threading.Event()
+        self._poll_lock = threading.Lock()
+        self._poll_count = 0
+        self.should_reconnect_first_poll = False
 
     def _record(self, method: str, context: grpc.ServicerContext) -> None:
         metadata = dict(context.invocation_metadata())
@@ -76,10 +80,15 @@ class RecordingService(
         context: grpc.ServicerContext,
     ) -> Iterator[pb.PollWorkerTaskResponse]:
         self._record("PollWorkerTask", context)
-        self.poll_count += 1
+        with self._poll_lock:
+            self._poll_count += 1
+            poll_count = self._poll_count
         self.poll_opened.set()
+        if poll_count >= 2:
+            self.second_poll_opened.set()
         next(request_iterator)
-        if self.reconnect_first_poll and self.poll_count == 1:
+        if self.should_reconnect_first_poll and poll_count == 1:
+            assert self.reconnect_allowed.wait(3)
             yield pb.PollWorkerTaskResponse(reconnect=pb.PollWorkerTaskReconnect())
         else:
             yield pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())
@@ -118,6 +127,55 @@ class FailedCredential:
         raise ValueError("token unavailable")
 
 
+class FailOnSecondCredential:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+
+    def token(self) -> str:
+        with self._lock:
+            self._calls += 1
+            if self._calls == 2:
+                raise ValueError("second token unavailable")
+        return "first-token"
+
+
+class FailAfterStartupCredential:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+        self.failed = threading.Event()
+
+    def token(self) -> str:
+        with self._lock:
+            self._calls += 1
+            if self._calls > 2:
+                self.failed.set()
+                raise ValueError("pull token unavailable")
+        return "startup-token"
+
+
+class AsyncCredential:
+    async def token(self) -> str:
+        await asyncio.sleep(0)
+        return "async-token"
+
+
+class BlockedAsyncCredential:
+    async def token(self) -> str:
+        await asyncio.Event().wait()
+        return "unreachable"
+
+
+class BlockedSyncCredential:
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    def token(self) -> str:
+        self.release.wait(2)
+        return "late-token"
+
+
 def test_sync_client_bearer_and_default(
     service_endpoint: tuple[str, RecordingService],
 ) -> None:
@@ -139,6 +197,20 @@ def test_sync_client_bearer_and_default(
         ("HealthCheck", "Bearer first"),
         ("HealthCheck", "Bearer second"),
     ]
+
+
+def test_sync_client_credential_failure_stays_local(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    with Client(
+        Registry([]),
+        cast(BlobCache, object()),
+        ClientOptions(server_address=address, credential=FailedCredential()),
+    ) as client:
+        with pytest.raises(ValueError, match="token unavailable"):
+            client.health_check()
+    assert service.headers == []
 
 
 def test_async_client_bearer_and_local_failure(
@@ -165,6 +237,12 @@ async def _check_async_client_bearer_and_local_failure(
     async with AsyncClient(
         Registry([]),
         cache,
+        ClientOptions(server_address=address, credential=AsyncCredential()),
+    ) as client:
+        assert await client.health_check()
+    async with AsyncClient(
+        Registry([]),
+        cache,
         ClientOptions(server_address=address, credential=FailedCredential()),
     ) as client:
         with pytest.raises(ValueError, match="token unavailable"):
@@ -172,7 +250,34 @@ async def _check_async_client_bearer_and_local_failure(
     assert service.headers == [
         ("HealthCheck", None),
         ("HealthCheck", "Bearer async"),
+        ("HealthCheck", "Bearer async-token"),
     ]
+
+
+def test_async_credential_deadline_stays_local(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_async_credential_deadline_stays_local(service_endpoint))
+
+
+async def _check_async_credential_deadline_stays_local(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    for credential in (BlockedAsyncCredential(), BlockedSyncCredential()):
+        async with AsyncClient(
+            Registry([]),
+            cast(BlobCache, object()),
+            ClientOptions(server_address=address, credential=credential),
+        ) as client:
+            try:
+                with pytest.raises(grpc.aio.AioRpcError) as failure:
+                    await client._service.HealthCheck(empty_pb2.Empty(), timeout=0.05)
+                assert failure.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+            finally:
+                if isinstance(credential, BlockedSyncCredential):
+                    credential.release.set()
+    assert service.headers == []
 
 
 def test_file_credential_rotation_and_empty_file(
@@ -207,6 +312,14 @@ def test_file_credential_rotation_and_empty_file(
         credential.token()
     with pytest.raises(ValueError, match="empty"):
         client.health_check()
+    with pytest.raises(ValueError, match="empty") as first_failure:
+        credential.token()
+    with pytest.raises(ValueError, match="empty") as second_failure:
+        credential.token()
+    assert first_failure.value is not second_failure.value
+    assert len(traceback.extract_tb(first_failure.value.__traceback__)) == len(
+        traceback.extract_tb(second_failure.value.__traceback__)
+    )
     path.unlink()
     credential._clock = lambda: checked_at + 3.3
     with pytest.raises(OSError):
@@ -243,6 +356,61 @@ def test_sync_worker_flow_calls_use_credential(
     ]
 
 
+def test_sync_worker_start_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    worker = Worker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(server_address=address, credential=FailedCredential()),
+    )
+    with pytest.raises(RuntimeError, match="server info"):
+        worker.start()
+    assert worker._state == "stopped"
+    assert service.headers == []
+
+
+def test_sync_worker_index_sync_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    worker = Worker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(server_address=address, credential=FailOnSecondCredential()),
+    )
+    with pytest.raises(RuntimeError, match="synchronize Attribute indexes"):
+        worker.start()
+    assert worker._state == "stopped"
+    assert service.headers == [("GetServerInfo", "Bearer first-token")]
+
+
+def test_sync_pull_worker_stream_uses_credential(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    worker = Worker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(
+            server_address=address,
+            pull=PullWorkerOptions(app_worker_id="sync-credential-worker"),
+            credential=MutableCredential("sync-worker"),
+        ),
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        started = executor.submit(worker.start)
+        try:
+            assert service.poll_opened.wait(3)
+        finally:
+            worker.stop()
+        started.result(timeout=3)
+    assert ("GetServerInfo", "Bearer sync-worker") in service.headers
+    assert ("SyncAttributeIndexes", "Bearer sync-worker") in service.headers
+    assert ("PollWorkerTask", "Bearer sync-worker") in service.headers
+
+
 def test_async_worker_pull_reconnect_rotates_token(
     service_endpoint: tuple[str, RecordingService],
 ) -> None:
@@ -253,6 +421,85 @@ def test_async_worker_pull_default_has_no_authorization(
     service_endpoint: tuple[str, RecordingService],
 ) -> None:
     asyncio.run(_check_async_worker_pull_default_has_no_authorization(service_endpoint))
+
+
+def test_async_worker_start_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(
+        _check_async_worker_start_credential_failure_cleans_up(service_endpoint)
+    )
+
+
+async def _check_async_worker_start_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    worker = AsyncWorker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(server_address=address, credential=FailedCredential()),
+    )
+    with pytest.raises(RuntimeError, match="server info"):
+        await worker.start()
+    assert worker._state == "stopped"
+    assert worker._stopped.is_set()
+    assert service.headers == []
+
+
+def test_async_worker_index_sync_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(
+        _check_async_worker_index_sync_credential_failure_cleans_up(service_endpoint)
+    )
+
+
+async def _check_async_worker_index_sync_credential_failure_cleans_up(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    worker = AsyncWorker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(server_address=address, credential=FailOnSecondCredential()),
+    )
+    with pytest.raises(RuntimeError, match="synchronize Attribute indexes"):
+        await worker.start()
+    assert worker._state == "stopped"
+    assert worker._stopped.is_set()
+    assert service.headers == [("GetServerInfo", "Bearer first-token")]
+
+
+def test_pull_credential_failure_does_not_open_stream(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_pull_credential_failure_does_not_open_stream(service_endpoint))
+
+
+async def _check_pull_credential_failure_does_not_open_stream(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    credential = FailAfterStartupCredential()
+    worker = AsyncWorker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(
+            server_address=address,
+            pull=PullWorkerOptions(app_worker_id="failed-pull-credential-worker"),
+            credential=credential,
+        ),
+    )
+    started = asyncio.create_task(worker.start())
+    try:
+        assert await asyncio.to_thread(credential.failed.wait, 3)
+    finally:
+        await worker.stop()
+        await started
+    assert ("GetServerInfo", "Bearer startup-token") in service.headers
+    assert ("SyncAttributeIndexes", "Bearer startup-token") in service.headers
+    assert all(method != "PollWorkerTask" for method, _ in service.headers)
 
 
 async def _check_async_worker_pull_default_has_no_authorization(
@@ -282,7 +529,7 @@ async def _check_async_worker_pull_reconnect_rotates_token(
     service_endpoint: tuple[str, RecordingService],
 ) -> None:
     address, service = service_endpoint
-    service.reconnect_first_poll = True
+    service.should_reconnect_first_poll = True
     credential = MutableCredential("first")
     worker = AsyncWorker(
         Registry([]),
@@ -297,12 +544,10 @@ async def _check_async_worker_pull_reconnect_rotates_token(
     try:
         assert await asyncio.to_thread(service.poll_opened.wait, 3)
         credential.value = "second"
-        for _ in range(100):
-            if service.poll_count >= 2:
-                break
-            await asyncio.sleep(0.01)
-        assert service.poll_count >= 2
+        service.reconnect_allowed.set()
+        assert await asyncio.to_thread(service.second_poll_opened.wait, 3)
     finally:
+        service.reconnect_allowed.set()
         await worker.stop()
         await started
     assert ("GetServerInfo", "Bearer first") in service.headers

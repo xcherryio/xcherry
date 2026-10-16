@@ -22,7 +22,7 @@ from typing import Any
 
 import grpc
 
-from dex._credential_transport import credential_metadata
+from dex._credential_transport import async_credential_metadata
 from dex._grpc_errors import _worker_error_status
 from dex._server_protocol import sdk_version
 from dex.dexpb import dex_pb2 as pb
@@ -285,9 +285,10 @@ class PullStream:
         if self.runtime._credential is None:
             self._call = self.stub.PollWorkerTask()
         else:
-            self._call = self.stub.PollWorkerTask(
-                metadata=credential_metadata(self.runtime._credential)
+            metadata = await async_credential_metadata(
+                self.runtime._credential, timeout=30.0
             )
+            self._call = self.stub.PollWorkerTask(metadata=metadata)
         await self._send(
             pb.PollWorkerTaskRequest(
                 register=pb.PollWorkerTaskRegister(
