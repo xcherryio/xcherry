@@ -27,7 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
-	"github.com/superdurable/dex/examples/go/pull-workers"
+	"github.com/superdurable/dex/examples/go/production/pull-workers"
 	"github.com/superdurable/dex/sdk-go/dex"
 )
 
@@ -37,11 +37,9 @@ func TestPullWorkerServesGreetingFlow(t *testing.T) {
 	flow, worker, client, workerResult, err := pullworkers.StartPullGreeting(cache, flowServiceAddress())
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, client.Close())
 		stopContext, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		require.NoError(t, worker.Stop(stopContext))
-		require.NoError(t, <-workerResult)
+		require.NoError(t, pullworkers.StopPullGreeting(stopContext, worker, client, workerResult))
 		require.NoError(t, cache.Close())
 	})
 

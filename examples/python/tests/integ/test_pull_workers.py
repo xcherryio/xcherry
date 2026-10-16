@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,7 +21,7 @@ import pytest
 from dex import AsyncClient, BlobCacheConfig, open_blob_cache
 
 from dex_examples.config import start_options
-from dex_examples.production.pull_workers import start_pull_greeting
+from dex_examples.production.pull_workers import start_pull_greeting, stop_pull_greeting
 from tests.integ.conftest import WAIT_TIMEOUT, server_address
 
 pytestmark = pytest.mark.integ
@@ -45,10 +44,5 @@ async def test_pull_worker_serves_greeting_flow(
         assert await pull_client.invoke_rpc(flow.get_greeting, flow_id) == "Hello, Dex!"
         assert not worker_task.done()
     finally:
-        await pull_client.close()
-        # Remove this cancellation when SDK 1.10.1 ships the #690 shutdown fix.
-        worker_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await worker_task
-        await worker.close()
+        await stop_pull_greeting(worker, pull_client, worker_task)
         cache.close()

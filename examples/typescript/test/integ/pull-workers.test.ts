@@ -22,7 +22,10 @@ import test from "node:test";
 
 import { openBlobCache, stringCodec } from "@superdurable/dex";
 
-import { startPullGreeting } from "../../src/production/pull-workers.js";
+import {
+  startPullGreeting,
+  stopPullGreeting,
+} from "../../src/production/pull-workers.js";
 import {
   acquireIntegEnvironment,
   releaseIntegEnvironment,
@@ -51,8 +54,7 @@ test("pull Worker serves Greeting Flow", async () => {
     assert.equal(result.singleOutput(stringCodec), "Hello, Dex!");
     assert.equal(await client.invokeRPC(flow.getGreeting, flowId), "Hello, Dex!");
   } finally {
-    await client.close();
-    await worker.close();
+    await stopPullGreeting(worker, client);
     cache.close();
     await rm(cacheDirectory, { recursive: true, force: true });
     await releaseIntegEnvironment();

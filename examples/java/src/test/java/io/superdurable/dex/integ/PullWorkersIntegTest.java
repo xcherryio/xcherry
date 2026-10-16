@@ -20,7 +20,6 @@ import io.superdurable.dex.BlobCache;
 import io.superdurable.dex.BlobCacheConfig;
 import io.superdurable.dex.Client;
 import io.superdurable.dex.StartFlowOptions;
-import io.superdurable.dex.Worker;
 import io.superdurable.dex.production.pullworkers.GreetingFlow;
 import io.superdurable.dex.production.pullworkers.PullGreetingExample;
 import io.superdurable.dex.production.pullworkers.PullGreetingExample.RunningPullGreeting;
@@ -32,7 +31,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 @ExtendWith(SharedIntegExtension.class)
 public class PullWorkersIntegTest {
@@ -44,8 +42,8 @@ public class PullWorkersIntegTest {
                 "DEX_FLOW_SERVICE_ADDRESS", "127.0.0.1:8801");
         try (BlobCache cache = BlobCache.open(new BlobCacheConfig(
                 cacheDirectory.resolve("pull-cache").toString(), 64L << 20))) {
-            final RunningPullGreeting running = PullGreetingExample.start(cache, serverAddress);
-            try (Client client = running.client(); Worker worker = running.worker()) {
+            try (RunningPullGreeting running = PullGreetingExample.start(cache, serverAddress)) {
+                final Client client = running.client();
                 final GreetingFlow flow = running.flow();
                 final String flowId = environment.newFlowId("pull-greeting");
                 client.startFlow(flow, flowId, "Dex", StartFlowOptions.newBuilder()
@@ -54,10 +52,6 @@ public class PullWorkersIntegTest {
                         .getSingleOutput(String.class));
                 final GreetingFlow stub = client.newRpcStub(GreetingFlow.class, flowId);
                 assertEquals("Hello, Dex!", client.invokeRPC(stub::getGreeting));
-            } finally {
-                running.workerThread().join(10_000L);
-                assertFalse(running.workerThread().isAlive());
-                running.workerResult().join();
             }
         }
     }

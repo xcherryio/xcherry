@@ -25,7 +25,7 @@ e2eTests:
 	./run-e2e-tests.sh
 
 fmt:
-	gofmt -s -w ./cmd ./integ ./products ./patterns ./registry ./server ./shared
+	gofmt -s -w ./cmd ./integ ./products ./patterns ./production ./registry ./server ./shared
 
 tests: unitTests
 
