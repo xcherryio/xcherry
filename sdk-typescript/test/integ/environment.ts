@@ -34,17 +34,19 @@ export interface TestEnvironment {
 
 export async function startEnvironment(...flows: readonly Flow<any>[]): Promise<TestEnvironment> {
   const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
-  const workerAddress = `127.0.0.1:${await availablePort()}`;
+  const workerMode = process.env.DEX_INTEG_WORKER_MODE ?? "push";
+  if (workerMode !== "push" && workerMode !== "pull") {
+    throw new Error(`invalid DEX_INTEG_WORKER_MODE: ${workerMode}`);
+  }
   const registry = new Registry(flows);
   const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-integration-cache-"));
   const blobCache = openBlobCache({
     directory: cacheDirectory,
     maxBytes: 64 * 1_024 * 1_024,
   });
-  const worker = new Worker(registry, blobCache, {
-    bindAddress: workerAddress,
-    serverAddress,
-  });
+  const worker = new Worker(registry, blobCache, workerMode === "pull"
+    ? { serverAddress, pull: { appWorkerID: flowId("integ-worker") } }
+    : { serverAddress, bindAddress: `127.0.0.1:${await availablePort()}` });
   await worker.start();
   const client = new Client(registry, blobCache, {
     serverAddress,
