@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+export DEX_INTEG_WORKER_MODE="${DEX_INTEG_WORKER_MODE:-push}"
+if [[ "$DEX_INTEG_WORKER_MODE" != "push" && "$DEX_INTEG_WORKER_MODE" != "pull" ]]; then
+  echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+
 test_script="test:integration"
 pull_only=false
 if [[ "${1:-}" == "--coverage" ]]; then
