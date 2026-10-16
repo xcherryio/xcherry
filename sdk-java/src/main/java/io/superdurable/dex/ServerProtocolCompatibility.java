@@ -14,7 +14,8 @@ import io.superdurable.gen.ServerInfo;
 
 final class ServerProtocolCompatibility {
     static final int MINIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 1;
-    static final int MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 1;
+    static final int MAXIMUM_SUPPORTED_SERVER_PROTOCOL_VERSION = 3;
+    static final int HARD_DELETE_ATTRIBUTE_PROTOCOL_VERSION = 3;
 
     private ServerProtocolCompatibility() {
     }

@@ -49,6 +49,7 @@ import io.superdurable.gen.ResetFlowRequest;
 import io.superdurable.gen.SearchFlowsRequest;
 import io.superdurable.gen.SearchFlowsResponse;
 import io.superdurable.gen.SearchFlowsResponseEntry;
+import io.superdurable.gen.ServerInfo;
 import io.superdurable.gen.SkipTimerRequest;
 import io.superdurable.gen.StartFlowRequest;
 import io.superdurable.gen.StopFlowRequest;
@@ -105,6 +106,8 @@ import java.util.concurrent.TimeUnit;
  * }</pre>
  */
 public final class Client implements AutoCloseable {
+    private static final long SERVER_INFO_TIMEOUT_SECONDS = 30L;
+
     private final Registry registry;
     private final BlobCache blobCache;
     private final ClientOptions options;
@@ -113,6 +116,7 @@ public final class Client implements AutoCloseable {
     private final ValueMapper values;
     private final ValueHydrator hydrator;
     private final WorkerDispatcher mappings;
+    private final NegotiatedServerProtocol serverProtocol = new NegotiatedServerProtocol();
     private final ThreadLocal<RPCInvokeOptions> rpcInvokeOptions =
             new ThreadLocal<RPCInvokeOptions>();
 
@@ -153,7 +157,7 @@ public final class Client implements AutoCloseable {
         this.service = options.getCredential() == null ? serviceStub
                 : serviceStub.withCallCredentials(new GrpcCredential(options.getCredential()));
         this.hydrator = new ValueHydrator(service, blobCache);
-        this.mappings = new WorkerDispatcher(registry, values, hydrator);
+        this.mappings = new WorkerDispatcher(registry, values, hydrator, serverProtocol);
     }
 
     Registry getRegistry() {
@@ -197,7 +201,13 @@ public final class Client implements AutoCloseable {
      * @param startOptions timeout, scheduling, initial state, routing, and idempotency settings
      * @param <I> the Flow start input type
      * @return the server-assigned run ID
-     * @throws IllegalArgumentException if the Flow, ID, input, or duration settings are invalid
+     * @throws IllegalArgumentException if the Flow, ID, input, or duration settings are invalid, if
+     *     an initial value targets a {@link Attribute#hardDeleteOnNull()} Attribute and maps to a
+     *     number or a Boolean, or if an initial Attribute's hard-delete setting differs from the
+     *     definition registered for the Flow
+     * @throws IllegalStateException if an initial value targets a hard-delete Attribute and the
+     *     Server does not support protocol version 3 or later, or the Server protocol cannot be
+     *     negotiated
      * @throws FlowAlreadyStartedException if the Flow ID conflicts with an existing execution
      * @throws DexServiceException if Dex otherwise rejects or cannot complete the request
      */
@@ -211,9 +221,16 @@ public final class Client implements AutoCloseable {
             throw new FlowDefinitionException(
                     "Flow instance is not registered: " + flow.getFlowType());
         }
+        requireRegisteredHardDeleteSettings(registered, startOptions);
         final FlowTimeoutPolicy timeoutPolicy = resolveTimeoutPolicy(
                 registered, startOptions.getTimeout(), startOptions.getTimeoutPolicy());
         final FlowStartOptions.Builder flowStartOptions = mapStartOptions(startOptions).toBuilder();
+        for (AttributeWrite initialAttribute : flowStartOptions.getAttributesList()) {
+            if (initialAttribute.getIsHardDeleteOnNull()) {
+                negotiateServerProtocol();
+                serverProtocol.requireHardDeleteAttributeSupport(initialAttribute.getKey());
+            }
+        }
         final io.superdurable.gen.FlowTimeoutHandlerOptions timeoutHandlerOptions =
                 mappings.mapFlowTimeoutHandlerOptions(
                         registered,
@@ -257,6 +274,43 @@ public final class Client implements AutoCloseable {
             request.setFlowTimeoutPolicy(mapFlowTimeoutPolicy(timeoutPolicy));
         }
         return call(() -> service.startFlow(request.build())).getRunId();
+    }
+
+    private static void requireRegisteredHardDeleteSettings(
+            final Registry.RegisteredFlow flow,
+            final StartFlowOptions startOptions) {
+        for (StartFlowOptions.AttributeInitialization initialization : startOptions.getAttributes()) {
+            final PersistenceDefinition definition = initialization.getDefinition();
+            final PersistenceDefinition registered = flow.getPersistence().get(definition.getName());
+            if (registered != null
+                    && registered.isHardDeleteOnNull() != definition.isHardDeleteOnNull()) {
+                throw new IllegalArgumentException(
+                        "initial Attribute " + definition.getName()
+                                + " hardDeleteOnNull setting differs from Flow " + flow.getName()
+                                + " registration");
+            }
+        }
+    }
+
+    private synchronized void negotiateServerProtocol() {
+        if (serverProtocol.isNegotiated()) {
+            return;
+        }
+        final String sdkVersion = ServerProtocolCompatibility.sdkVersion();
+        final ServerInfo serverInfo;
+        try {
+            serverInfo = service
+                    .withDeadlineAfter(SERVER_INFO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .getServerInfo(Empty.getDefaultInstance());
+        } catch (StatusRuntimeException failure) {
+            if (failure.getStatus().getCode() == io.grpc.Status.Code.UNAUTHENTICATED) {
+                throw GrpcExceptionTranslator.translate(
+                        failure, FlowTargetRequirement.NONE, null);
+            }
+            throw ServerProtocolCompatibility.requestFailure(sdkVersion, failure);
+        }
+        serverProtocol.recordNegotiatedVersion(
+                ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion));
     }
 
     static FlowTimeoutPolicy resolveTimeoutPolicy(
@@ -961,7 +1015,9 @@ public final class Client implements AutoCloseable {
      * @param options the Request ID override and request/handler timeout controls
      * @param <T> the Attribute value type
      * @return the current Attribute value that satisfied the match
-     * @throws IllegalArgumentException if the budget, match operand, or operator is invalid
+     * @throws IllegalArgumentException if the budget, match operand, or operator is invalid, or if
+     *     the definition uses {@link Attribute#hardDeleteOnNull()} or
+     *     {@link AttributeMap#hardDeleteOnNull()}
      * @throws RequestTimeoutException if a positive request timeout expires first
      * @throws FlowNotActiveOrNotFoundException if the target Flow has no active execution
      * @throws DexServiceException if Dex otherwise cannot complete the wait
@@ -985,7 +1041,9 @@ public final class Client implements AutoCloseable {
      * @param options the Request ID override and request/handler timeout controls
      * @param <T> the Attribute value type
      * @return the current AttributeMap value that satisfied the match
-     * @throws IllegalArgumentException if the budget, match operand, or operator is invalid
+     * @throws IllegalArgumentException if the budget, match operand, or operator is invalid, or if
+     *     the definition uses {@link Attribute#hardDeleteOnNull()} or
+     *     {@link AttributeMap#hardDeleteOnNull()}
      * @throws RequestTimeoutException if a positive request timeout expires first
      * @throws FlowNotActiveOrNotFoundException if the target Flow has no active execution
      * @throws DexServiceException if Dex otherwise cannot complete the wait
@@ -1008,6 +1066,11 @@ public final class Client implements AutoCloseable {
             final AttributeMatch<T> match,
             final WaitForAttributeOptions options) {
         Objects.requireNonNull(match, "match");
+        if (attribute.isHardDeleteOnNull()) {
+            throw new IllegalArgumentException(
+                    "waitForAttributeMatch does not support hard-delete Attribute "
+                            + attribute.getName());
+        }
         final Value encoded = values.encode(match.getOperand());
         validateAttributeMatch(match.getOperator(), encoded);
         final String key = instance == null
@@ -1293,6 +1356,7 @@ public final class Client implements AutoCloseable {
                     .setKey(key)
                     .setValue(values.encode(initialization.getValue()));
             applyAttributeSync(write, definition);
+            HardDeleteAttributes.applyHardDeleteOnNull(write, definition);
             mapped.addAttributes(write);
         }
         final FlowConfig config = options.getConfigOverride();

@@ -116,8 +116,8 @@ final class WorkerServiceIntegrationTest {
                             final StreamObserver<ServerInfo> observer) {
                         observer.onNext(ServerInfo.newBuilder()
                                 .setServerVersion("future")
-                                .setMinimumSupportedProtocolVersion(2)
-                                .setCurrentProtocolVersion(2)
+                                .setMinimumSupportedProtocolVersion(4)
+                                .setCurrentProtocolVersion(4)
                                 .build());
                         observer.onCompleted();
                     }
@@ -519,7 +519,8 @@ final class WorkerServiceIntegrationTest {
         final WorkerDispatcher dispatcher = new WorkerDispatcher(
                 registry,
                 new ValueMapper(new ObjectMapper()),
-                null);
+                null,
+                new NegotiatedServerProtocol());
         final StepOptions stepOptions = StepOptions.newBuilder()
                 .addWaitForLoadAttributeMap(attributes)
                 .addWaitForLoadAttributeMapInstance(attributes, "tenant-a")

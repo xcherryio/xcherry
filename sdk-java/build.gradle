@@ -173,6 +173,7 @@ tasks.register('localIntegrationTest', Test) {
         includeTestsMatching 'io.superdurable.dex.ClientExceptionIntegrationTest'
         includeTestsMatching 'io.superdurable.dex.PullWorkerTest'
         includeTestsMatching 'io.superdurable.dex.CredentialTest'
+        includeTestsMatching 'io.superdurable.dex.HardDeleteAttributeMappingTest'
     }
     useJUnitPlatform()
 }

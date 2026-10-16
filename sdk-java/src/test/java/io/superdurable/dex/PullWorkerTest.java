@@ -386,7 +386,8 @@ final class PullWorkerTest {
             final ValueMapper mapper = new ValueMapper(new com.fasterxml.jackson.databind.ObjectMapper());
             final WorkerDispatcher dispatcher = new WorkerDispatcher(registry, mapper,
                     new ValueHydrator(FlowServiceGrpc.newBlockingStub(channel),
-                            new EmptyBlobCache()));
+                            new EmptyBlobCache()),
+                    new NegotiatedServerProtocol());
             final io.superdurable.gen.InvokeWaitForMethodResponse response =
                     dispatcher.invokeWaitFor(InvokeWaitForMethodRequest.newBuilder()
                             .setFlowType("ParentFlow")
