@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
@@ -31,6 +32,7 @@ from dex import (
     Worker,
     WorkerOptions,
 )
+from dex._credential_transport import AsyncCredentialRunner
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
@@ -156,7 +158,11 @@ class FailAfterStartupCredential:
 
 
 class AsyncCredential:
+    def __init__(self) -> None:
+        self.called_threads: list[int] = []
+
     async def token(self) -> str:
+        self.called_threads.append(threading.get_ident())
         await asyncio.sleep(0)
         return "async-token"
 
@@ -173,6 +179,58 @@ class BlockedSyncCredential:
 
     def token(self) -> str:
         self.release.wait(2)
+        return "late-token"
+
+
+class TimeoutCredential:
+    def token(self) -> str:
+        raise TimeoutError("token provider timed out")
+
+
+class RuntimeErrorCredential:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def token(self) -> str:
+        self.calls += 1
+        raise RuntimeError("no running event loop")
+
+
+class LoopBoundCredential:
+    def __init__(self) -> None:
+        self.called_threads: list[int] = []
+        self.foreign_loop = asyncio.new_event_loop()
+
+    def token(self) -> asyncio.Future[str]:
+        self.called_threads.append(threading.get_ident())
+        future: asyncio.Future[str] = self.foreign_loop.create_future()
+        future.set_result("loop-token")
+        return future
+
+
+class CoroutineReturningCredential:
+    def __init__(self) -> None:
+        self.called_threads: list[int] = []
+
+    def token(self) -> Awaitable[str]:
+        self.called_threads.append(threading.get_ident())
+        return asyncio.sleep(0, result="coroutine-token")
+
+
+class SignaledBlockingCredential:
+    def __init__(self, fast_calls: int = 0) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+        self._remaining_fast_calls = fast_calls
+
+    def token(self) -> str | Awaitable[str]:
+        with self._lock:
+            if self._remaining_fast_calls:
+                self._remaining_fast_calls -= 1
+                return "startup-token"
+        self.started.set()
+        self.release.wait(10)
         return "late-token"
 
 
@@ -224,6 +282,7 @@ async def _check_async_client_bearer_and_local_failure(
 ) -> None:
     address, service = service_endpoint
     cache = cast(BlobCache, object())
+    async_credential = AsyncCredential()
     async with AsyncClient(
         Registry([]), cache, ClientOptions(server_address=address)
     ) as client:
@@ -237,7 +296,7 @@ async def _check_async_client_bearer_and_local_failure(
     async with AsyncClient(
         Registry([]),
         cache,
-        ClientOptions(server_address=address, credential=AsyncCredential()),
+        ClientOptions(server_address=address, credential=async_credential),
     ) as client:
         assert await client.health_check()
     async with AsyncClient(
@@ -252,6 +311,7 @@ async def _check_async_client_bearer_and_local_failure(
         ("HealthCheck", "Bearer async"),
         ("HealthCheck", "Bearer async-token"),
     ]
+    assert async_credential.called_threads == [threading.get_ident()]
 
 
 def test_async_credential_deadline_stays_local(
@@ -278,6 +338,174 @@ async def _check_async_credential_deadline_stays_local(
                 if isinstance(credential, BlockedSyncCredential):
                     credential.release.set()
     assert service.headers == []
+
+
+def test_async_client_preserves_credential_timeout(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_async_client_preserves_credential_timeout(service_endpoint))
+
+
+async def _check_async_client_preserves_credential_timeout(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    async with AsyncClient(
+        Registry([]),
+        cast(BlobCache, object()),
+        ClientOptions(server_address=address, credential=TimeoutCredential()),
+    ) as client:
+        with pytest.raises(TimeoutError, match="token provider timed out"):
+            await client.health_check()
+        with pytest.raises(TimeoutError, match="token provider timed out"):
+            await client._service.HealthCheck(empty_pb2.Empty(), timeout=1)
+    assert service.headers == []
+
+
+def test_async_client_preserves_runtime_error_once(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_async_client_preserves_runtime_error_once(service_endpoint))
+
+
+async def _check_async_client_preserves_runtime_error_once(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    credential = RuntimeErrorCredential()
+    async with AsyncClient(
+        Registry([]),
+        cast(BlobCache, object()),
+        ClientOptions(server_address=address, credential=credential),
+    ) as client:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            await client.health_check()
+    assert credential.calls == 1
+    assert service.headers == []
+
+
+def test_closing_credential_runner_fails_pending_lookup() -> None:
+    credential = SignaledBlockingCredential()
+    try:
+        asyncio.run(_check_closing_credential_runner_fails_pending_lookup(credential))
+    finally:
+        credential.release.set()
+
+
+async def _check_closing_credential_runner_fails_pending_lookup(
+    credential: SignaledBlockingCredential,
+) -> None:
+    runner = AsyncCredentialRunner(credential)
+    lookup = asyncio.create_task(runner.token())
+    assert await asyncio.to_thread(credential.started.wait, 2)
+    runner.close()
+    with pytest.raises(RuntimeError, match="credential runner is closed"):
+        await asyncio.wait_for(lookup, timeout=0.2)
+
+
+def test_loop_bound_future_requires_async_token(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_loop_bound_future_requires_async_token(service_endpoint))
+
+
+async def _check_loop_bound_future_requires_async_token(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    credential = LoopBoundCredential()
+    try:
+        async with AsyncClient(
+            Registry([]),
+            cast(BlobCache, object()),
+            ClientOptions(server_address=address, credential=credential),
+        ) as client:
+            with pytest.raises(TypeError, match="async def token"):
+                await client.health_check()
+        assert credential.called_threads != [threading.get_ident()]
+        assert len(credential.called_threads) == 1
+        assert service.headers == []
+    finally:
+        credential.foreign_loop.close()
+
+
+def test_sync_function_returning_coroutine_runs_once(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    asyncio.run(_check_sync_function_returning_coroutine_runs_once(service_endpoint))
+
+
+async def _check_sync_function_returning_coroutine_runs_once(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    credential = CoroutineReturningCredential()
+    async with AsyncClient(
+        Registry([]),
+        cast(BlobCache, object()),
+        ClientOptions(server_address=address, credential=credential),
+    ) as client:
+        assert await client.health_check()
+    assert len(credential.called_threads) == 1
+    assert credential.called_threads[0] != threading.get_ident()
+    assert service.headers == [("HealthCheck", "Bearer coroutine-token")]
+
+
+def test_slow_sync_credential_does_not_block_other_executors(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    credential = SignaledBlockingCredential()
+    started_at = time.monotonic()
+    try:
+        asyncio.run(
+            _check_slow_sync_credential_does_not_block_other_executors(
+                service_endpoint, credential
+            )
+        )
+        assert time.monotonic() - started_at < 2
+    finally:
+        credential.release.set()
+
+
+async def _check_slow_sync_credential_does_not_block_other_executors(
+    service_endpoint: tuple[str, RecordingService],
+    credential: SignaledBlockingCredential,
+) -> None:
+    address, service = service_endpoint
+    cache = cast(BlobCache, object())
+    async with AsyncClient(
+        Registry([]),
+        cache,
+        ClientOptions(server_address=address, credential=credential),
+    ) as slow_client:
+        assert slow_client._credential_runner is not None
+        assert slow_client._credential_runner._threads == []
+        slow_calls = [
+            asyncio.ensure_future(
+                slow_client._service.HealthCheck(empty_pb2.Empty(), timeout=0.3)
+            )
+            for _ in range(6)
+        ]
+        assert await asyncio.wait_for(
+            asyncio.to_thread(credential.started.wait, 2), timeout=2.5
+        )
+        assert len(slow_client._credential_runner._threads) == 4
+        assert (
+            await asyncio.wait_for(asyncio.to_thread(lambda: "ready"), 0.2) == "ready"
+        )
+        async with AsyncClient(
+            Registry([]),
+            cache,
+            ClientOptions(server_address=address, credential=MutableCredential("fast")),
+        ) as fast_client:
+            assert await asyncio.wait_for(fast_client.health_check(), 0.2)
+        failures = await asyncio.gather(*slow_calls, return_exceptions=True)
+        assert all(
+            isinstance(failure, grpc.aio.AioRpcError)
+            and failure.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+            for failure in failures
+        )
+    assert service.headers == [("HealthCheck", "Bearer fast")]
 
 
 def test_file_credential_rotation_and_empty_file(
@@ -411,10 +639,81 @@ def test_sync_pull_worker_stream_uses_credential(
     assert ("PollWorkerTask", "Bearer sync-worker") in service.headers
 
 
+def test_sync_pull_stop_cancels_pending_credential(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    address, service = service_endpoint
+    credential = SignaledBlockingCredential(fast_calls=2)
+    worker = Worker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(
+            server_address=address,
+            pull=PullWorkerOptions(app_worker_id="sync-stop-credential-worker"),
+            credential=credential,
+        ),
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        started = executor.submit(worker.start)
+        try:
+            assert credential.started.wait(3)
+            stopped_at = time.monotonic()
+            worker.stop()
+            assert time.monotonic() - stopped_at < 1
+            started.result(timeout=2)
+        finally:
+            credential.release.set()
+            worker.close()
+    assert all(method != "PollWorkerTask" for method, _ in service.headers)
+
+
 def test_async_worker_pull_reconnect_rotates_token(
     service_endpoint: tuple[str, RecordingService],
 ) -> None:
     asyncio.run(_check_async_worker_pull_reconnect_rotates_token(service_endpoint))
+
+
+def test_async_pull_stop_cancels_pending_credential(
+    service_endpoint: tuple[str, RecordingService],
+) -> None:
+    credential = SignaledBlockingCredential(fast_calls=2)
+    started_at = time.monotonic()
+    try:
+        asyncio.run(
+            _check_async_pull_stop_cancels_pending_credential(
+                service_endpoint, credential
+            )
+        )
+        assert time.monotonic() - started_at < 2
+    finally:
+        credential.release.set()
+
+
+async def _check_async_pull_stop_cancels_pending_credential(
+    service_endpoint: tuple[str, RecordingService],
+    credential: SignaledBlockingCredential,
+) -> None:
+    address, service = service_endpoint
+    worker = AsyncWorker(
+        Registry([]),
+        cast(BlobCache, object()),
+        WorkerOptions(
+            server_address=address,
+            pull=PullWorkerOptions(app_worker_id="async-stop-credential-worker"),
+            credential=credential,
+        ),
+    )
+    started = asyncio.create_task(worker.start())
+    try:
+        assert await asyncio.to_thread(credential.started.wait, 3)
+        stopped_at = time.monotonic()
+        await worker.stop()
+        assert time.monotonic() - stopped_at < 1
+        await started
+    finally:
+        credential.release.set()
+        await worker.close()
+    assert all(method != "PollWorkerTask" for method, _ in service.headers)
 
 
 def test_async_worker_pull_default_has_no_authorization(

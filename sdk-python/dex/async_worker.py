@@ -14,7 +14,7 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
-from dex._credential_transport import async_channel
+from dex._credential_transport import AsyncCredentialRunner, async_channel
 from dex._async_value_hydrator import AsyncValueHydrator
 from dex._async_worker_dispatcher import AsyncWorkerDispatcher
 from dex._async_worker_service import AsyncWorkerService
@@ -78,8 +78,13 @@ class AsyncWorker:
             else None
         )
         self._state = "created"
+        self._credential_runner = (
+            AsyncCredentialRunner(self.options.credential)
+            if self.options.credential is not None
+            else None
+        )
         self._flow_channel = async_channel(
-            self.options.server_address, self.options.credential
+            self.options.server_address, self._credential_runner
         )
         self._flow_service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
             self._flow_channel
@@ -102,7 +107,7 @@ class AsyncWorker:
                 self.options.server_address,
                 None,
                 app_worker_id,
-                self.options.credential,
+                self._credential_runner,
             )
         else:
             self._server = grpc.aio.server()
@@ -174,12 +179,12 @@ class AsyncWorker:
             )
         except grpc.RpcError as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise server_info_request_error(self._sdk_version, failure) from failure
         except Exception as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot get Dex server info") from failure
         try:
@@ -189,7 +194,7 @@ class AsyncWorker:
             )
         except RuntimeError:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise
         try:
@@ -201,12 +206,12 @@ class AsyncWorker:
             )
         except grpc.RpcError as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot synchronize Attribute indexes") from failure
         except Exception as failure:
             self._state = "stopped"
-            await self._flow_channel.close(None)
+            await self._close_failed_start_channel()
             self._stopped.set()
             raise RuntimeError("cannot synchronize Attribute indexes") from failure
         if self._pull is None:
@@ -214,7 +219,7 @@ class AsyncWorker:
             self._bound_port = self._server.add_insecure_port(self.options.bind_address)
             if self._bound_port == 0:
                 self._state = "stopped"
-                await self._flow_channel.close(None)
+                await self._close_failed_start_channel()
                 self._stopped.set()
                 raise RuntimeError(
                     f"cannot bind Python AsyncWorker to {self.options.bind_address}"
@@ -249,7 +254,11 @@ class AsyncWorker:
         else:
             assert self._server is not None
             await self._server.stop(grace=5)
-        await self._flow_channel.close(None)
+        try:
+            await self._flow_channel.close(None)
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
         if self._state != "closed":
             self._state = "stopped"
         self._stopped.set()
@@ -260,8 +269,19 @@ class AsyncWorker:
         Pull streams finish their bounded EOF wait before the channel closes.
         Repeated calls are safe; a closed Worker cannot be started again.
         """
-        await self.stop()
-        self._state = "closed"
+        try:
+            await self.stop()
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
+            self._state = "closed"
+
+    async def _close_failed_start_channel(self) -> None:
+        try:
+            await self._flow_channel.close(None)
+        finally:
+            if self._credential_runner is not None:
+                self._credential_runner.close()
 
     @staticmethod
     def _target_address(bind_address: str, bound_port: int) -> str:

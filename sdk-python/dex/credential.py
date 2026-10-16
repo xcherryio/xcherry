@@ -23,11 +23,19 @@ class Credential(Protocol):
 
     token may be called concurrently. AsyncClient and AsyncWorker accept an
     awaitable token; synchronous callers require a string. Synchronous tokens
-    run on the calling thread for sync APIs and in an executor for async APIs.
+    run on the calling thread for sync APIs and in an SDK-owned, four-thread
+    executor for async APIs. Each Client or Worker creates its executor lazily
+    and closes it without waiting for a blocked token call.
+    A blocked token keeps one executor thread busy until it returns. An unclosed
+    Client or Worker may retain up to four idle credential threads.
+    Declare token with async def to invoke it on the event loop. A synchronous
+    token method may return a coroutine, which is awaited on the event loop.
+    A loop-bound Future from another loop raises TypeError.
     Async calls bound token lookup by the RPC deadline when one is set. Pull
     stream opens use a 30-second lookup budget. Sync calls do not bound token
     lookup separately, so synchronous implementations must return promptly.
-    A raised exception fails the call before it contacts Dex. The token travels
+    Client calls raise a token exception unchanged, before contacting Dex.
+    Worker startup may wrap it with startup context. The token travels
     over Dex's plaintext gRPC connection; protect the network path.
 
     Example:
