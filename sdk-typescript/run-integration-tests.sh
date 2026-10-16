@@ -11,12 +11,21 @@
 set -euo pipefail
 
 test_script="test:integration"
+pull_only=false
 if [[ "${1:-}" == "--coverage" ]]; then
   test_script="test:integration:coverage"
   shift
 fi
+if [[ "${1:-}" == "--pull" ]]; then
+  pull_only=true
+  shift
+fi
 if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--coverage]" >&2
+  echo "usage: $0 [--coverage] [--pull]" >&2
+  exit 2
+fi
+if $pull_only && [[ "$test_script" == "test:integration:coverage" ]]; then
+  echo "--coverage and --pull cannot be combined" >&2
   exit 2
 fi
 
@@ -99,4 +108,10 @@ if ! $dex_ready; then
 fi
 
 cd "$script_dir"
-DEX_SERVER_ADDRESS="$dex_address" npm run "$test_script"
+if $pull_only; then
+  npm run build:native
+  npm run build
+  DEX_SERVER_ADDRESS="$dex_address" node --test dist/test/integ/pull-worker.integration.test.js
+else
+  DEX_SERVER_ADDRESS="$dex_address" npm run "$test_script"
+fi

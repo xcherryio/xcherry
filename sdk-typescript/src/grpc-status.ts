@@ -43,6 +43,25 @@ interface AnyDetail {
 }
 
 export function workerServiceError(failure: unknown): GrpcServiceError {
+  const response = workerErrorResponse(failure);
+  const worker = WorkerErrorResponse.encode(response).finish();
+  const metadata = new Metadata();
+  metadata.set(
+    statusDetailsKey,
+    Buffer.from(
+      encodeStatus(response.grpcStatus, response.detail, [
+        { typeUrl: "type.googleapis.com/dex.WorkerErrorResponse", value: worker },
+      ]),
+    ),
+  );
+  return Object.assign(new Error(response.detail), {
+    code: response.grpcStatus,
+    details: response.detail,
+    metadata,
+  });
+}
+
+export function workerErrorResponse(failure: unknown, grpcStatus: status = status.UNKNOWN): WorkerErrorResponse {
   const retryAfterError = failure instanceof RetryAfterError ? failure : undefined;
   const cause =
     retryAfterError?.cause instanceof Error
@@ -55,7 +74,7 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
     maxWorkerErrorDetailBytes,
     errorDetailTruncationMarker,
   );
-  const worker = WorkerErrorResponse.encode({
+  return WorkerErrorResponse.create({
     detail,
     errorType: truncateWorkerFailureField(
       cause.name,
@@ -68,21 +87,7 @@ export function workerServiceError(failure: unknown): GrpcServiceError {
       stackTraceTruncationMarker,
     ),
     retryAfterSeconds: retryAfterError?.afterSeconds ?? 0,
-    grpcStatus: status.UNKNOWN,
-  }).finish();
-  const metadata = new Metadata();
-  metadata.set(
-    statusDetailsKey,
-    Buffer.from(
-      encodeStatus(status.UNKNOWN, detail, [
-        { typeUrl: "type.googleapis.com/dex.WorkerErrorResponse", value: worker },
-      ]),
-    ),
-  );
-  return Object.assign(new Error(detail), {
-    code: status.UNKNOWN,
-    details: detail,
-    metadata,
+    grpcStatus,
   });
 }
 
