@@ -11,11 +11,12 @@
 package io.superdurable.dex;
 
 /**
- * Identifies the worker endpoint to which Dex routes Flow invocations.
+ * Identifies the Worker endpoint or pull queue to which Dex routes Flow invocations.
  *
  * <p>Use the same target in {@link WorkerOptions} and in the client-side Flow configuration. A
  * headless target is resolved by Dex as a headless service address; a non-headless target is used
- * as a directly reachable worker address.
+ * as a directly reachable worker address. Use {@link #pull()} for a Worker that polls Dex;
+ * a pull target has no address or headless service.
  *
  * <pre>{@code
  * WorkerTarget target = new WorkerTarget("orders-worker:8803", false);
@@ -27,6 +28,7 @@ package io.superdurable.dex;
 public final class WorkerTarget {
     private final String address;
     private final boolean headless;
+    private final boolean pull;
 
     /**
      * Creates a worker routing target.
@@ -41,6 +43,30 @@ public final class WorkerTarget {
         }
         this.address = address;
         this.headless = headless;
+        this.pull = false;
+    }
+
+    private WorkerTarget() {
+        this.address = "";
+        this.headless = false;
+        this.pull = true;
+    }
+
+    /**
+     * Selects a Worker that polls Dex for tasks.
+     *
+     * <p>Use this target in Client defaults or a Flow configuration when the Worker uses
+     * {@link PullWorkerOptions}. Pull routing has no address or headless service.
+     *
+     * <pre>{@code
+     * WorkerTarget target = WorkerTarget.pull();
+     * ClientOptions options = new ClientOptions("dex:8801", target);
+     * }</pre>
+     *
+     * @return a pull routing target
+     */
+    public static WorkerTarget pull() {
+        return new WorkerTarget();
     }
 
     String getAddress() {
@@ -49,5 +75,9 @@ public final class WorkerTarget {
 
     boolean isHeadless() {
         return headless;
+    }
+
+    boolean isPull() {
+        return pull;
     }
 }

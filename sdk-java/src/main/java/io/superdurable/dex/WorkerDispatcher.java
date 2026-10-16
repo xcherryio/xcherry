@@ -977,7 +977,8 @@ final class WorkerDispatcher {
         if (config.getWorkerTarget() != null) {
             mapped.setWorkerTarget(io.superdurable.gen.WorkerTarget.newBuilder()
                     .setAddress(config.getWorkerTarget().getAddress())
-                    .setIsHeadlessAddress(config.getWorkerTarget().isHeadless()));
+                    .setIsHeadlessAddress(config.getWorkerTarget().isHeadless())
+                    .setIsPullMode(config.getWorkerTarget().isPull()));
         }
         if (config.getAttributeStoreNames() != null) {
             mapped.setAttributeStoreNames(io.superdurable.gen.AttributeStoreNames.newBuilder()

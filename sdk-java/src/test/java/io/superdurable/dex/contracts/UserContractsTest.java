@@ -39,6 +39,7 @@ import io.superdurable.dex.StepDecision;
 import io.superdurable.dex.Stream;
 import io.superdurable.dex.Wait;
 import io.superdurable.dex.WorkerOptions;
+import io.superdurable.dex.WorkerTarget;
 import io.superdurable.dex.exceptions.FlowDefinitionException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -139,6 +140,14 @@ public class UserContractsTest {
         Assertions.assertNotNull(workerOptions);
         Assertions.assertNotNull(new ClientOptions());
         Assertions.assertNotNull(WorkerOptions.newBuilder().build());
+        Assertions.assertNotNull(WorkerOptions.newBuilder()
+                .pull(io.superdurable.dex.PullWorkerOptions.newBuilder()
+                        .maxConcurrentTasks(2)
+                        .idleStreamsPerQueue(1)
+                        .stopDrainTimeout(java.time.Duration.ofSeconds(30))
+                        .build())
+                .build());
+        Assertions.assertNotNull(WorkerTarget.pull());
     }
 
     @Test

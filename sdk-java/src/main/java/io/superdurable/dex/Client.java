@@ -1328,7 +1328,8 @@ public final class Client implements AutoCloseable {
         if (target != null) {
             mapped.setWorkerTarget(io.superdurable.gen.WorkerTarget.newBuilder()
                     .setAddress(target.getAddress())
-                    .setIsHeadlessAddress(target.isHeadless()));
+                    .setIsHeadlessAddress(target.isHeadless())
+                    .setIsPullMode(target.isPull()));
         }
         return mapped.build();
     }

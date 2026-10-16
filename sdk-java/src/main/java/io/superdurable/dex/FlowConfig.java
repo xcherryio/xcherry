@@ -144,7 +144,9 @@ public final class FlowConfig {
         }
 
         /**
-         * Routes this Flow to a specific worker target.
+         * Routes this Flow to a specific Worker target.
+         *
+         * <p>Use {@link WorkerTarget#pull()} when registered Workers poll the Flow type queue.
          *
          * @param value the worker target, or {@code null} for default routing
          * @return this builder

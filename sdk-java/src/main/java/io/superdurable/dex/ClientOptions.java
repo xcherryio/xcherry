@@ -21,7 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *
  * <p>The client connects to the Dex server over plaintext gRPC. Its default server address is
  * {@code localhost:8801}. A worker target is copied into start-time Flow configuration unless a
- * request supplies a more specific target. The default Jackson mapper discovers installed modules;
+ * request supplies a more specific target. Use {@link WorkerTarget#pull()} when the application
+ * Worker polls Dex instead of accepting inbound calls. The default Jackson mapper discovers installed modules;
  * pass a configured mapper when application values require custom serialization.
  *
  * <pre>{@code

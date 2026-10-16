@@ -317,10 +317,53 @@ WorkerOptions options = WorkerOptions.newBuilder()
         .build();
 ```
 
-`bindAddress` is the Java WorkerService listener. `serverAddress` is used only
-to hydrate blob-backed values through Dex FlowService. `workerTarget` is the
+`bindAddress` is the Java WorkerService listener. `serverAddress` connects to
+Dex for startup synchronization and blob hydration; pull Workers also poll
+tasks through it. `workerTarget` is the
 address advertised in Flow configuration; when omitted, Worker derives it from
 the bind address and exposes it through `worker.getWorkerTarget()`.
+
+### Pull mode
+
+Set `pull` to have a Worker open outbound task streams to the Dex server. It does
+not bind a listener. Advertise `worker.getWorkerTarget()` through `ClientOptions`,
+`StartFlowOptions.configOverride(...)`, or a SubFlow's
+`SubFlowOptions.configOverride(...)`. Pull mode cannot be combined with a bind
+address or a listening Worker target.
+
+```java
+Worker worker = new Worker(registry, blobCache, WorkerOptions.newBuilder()
+        .serverAddress("dex:8801")
+        .pull(PullWorkerOptions.newBuilder()
+                .maxConcurrentTasks(8)
+                .idleStreamsPerQueue(1)
+                .build())
+        .build());
+Client client = new Client(registry, blobCache,
+        new ClientOptions("dex:8801", worker.getWorkerTarget()));
+new Thread(worker::start).start();
+```
+
+Pull mode polls the Worker's sticky queue and each registered Flow type queue.
+It keeps one idle stream per queue by default. Across `F` registered Flow types,
+the stream count is bounded by `(1+F)*(idleStreamsPerQueue+maxConcurrentTasks)`.
+Each stream runs one task at a time. The Worker rejects a task with no capacity
+so Dex can assign it elsewhere. The default task capacity is the available CPU
+count. A zero option value selects its default.
+
+The default app Worker ID uses `DEX_WORKER_INSTANCE`, `POD_NAME`, `HOSTNAME`, or
+the local hostname, plus eight random base32 characters. If the identity cannot
+be read, it uses `worker`. A new Worker gets a new ID. An explicit `appWorkerID`
+must have 1–63 ASCII letters, digits, periods, underscores, or hyphens and must
+not equal a registered Flow type. A Flow type used for pull routing must be
+unique within the Dex server.
+
+`stop()` first drains active tasks for up to `stopDrainTimeout`, which defaults
+to 30 seconds. It then cancels remaining handlers and waits for them to return;
+a handler that ignores cancellation can delay Stop. A server without pull
+support produces one explicit error log and retries polling after a minute.
+Reconnects and transient transport errors are retried automatically. Heartbeats
+and Step Stream writes use the same task stream as the final result.
 
 Serialized object values use wire encoding `json` for JSON and `raw` for raw bytes.
 Internal Blob references are opaque. Hydration sends the owning Flow ID with
