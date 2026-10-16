@@ -86,6 +86,9 @@ public final class PullWorkerOptions {
         /**
          * Sets the maximum number of concurrent Step and RPC tasks across all queues.
          *
+         * <p>This also sizes the Worker's handler pool. Assigned tasks above this capacity
+         * are rejected so Dex can assign them elsewhere.
+         *
          * @param value a nonnegative count; zero uses the available CPU count
          * @return this builder
          * @throws IllegalArgumentException if value is negative

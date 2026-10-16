@@ -136,6 +136,13 @@ public final class WorkerOptions {
          * <p>Do not set a bind address or listening Worker target with pull options. Advertise
          * {@link WorkerTarget#pull()} to a Client or Flow configuration.
          *
+         * <pre>{@code
+         * WorkerOptions options = WorkerOptions.newBuilder()
+         *         .serverAddress("dex:8801")
+         *         .pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build())
+         *         .build();
+         * }</pre>
+         *
          * @param value the nonnull pull settings
          * @return this builder
          * @throws IllegalArgumentException if value is null

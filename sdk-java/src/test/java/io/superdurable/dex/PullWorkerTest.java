@@ -13,7 +13,8 @@ package io.superdurable.dex;
 import com.google.protobuf.Empty;
 import com.google.protobuf.Timestamp;
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -34,8 +35,6 @@ import io.superdurable.gen.WorkerTaskServiceGrpc;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -43,7 +42,9 @@ import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -89,22 +90,24 @@ final class PullWorkerTest {
         final String workerID = PullWorker.generateAppWorkerID("My.Host_Name");
         assertTrue(workerID.matches("my-host-name-[a-z2-7]{8}"));
         assertNotEquals(workerID, PullWorker.generateAppWorkerID("My.Host_Name"));
-        String expectedIdentity = null;
-        for (String environmentName : new String[] {"DEX_WORKER_INSTANCE", "POD_NAME", "HOSTNAME"}) {
-            final String candidate = System.getenv(environmentName);
-            if (candidate != null && !candidate.trim().isEmpty()) {
-                expectedIdentity = candidate;
-                break;
-            }
-        }
-        if (expectedIdentity == null) {
-            try {
-                expectedIdentity = InetAddress.getLocalHost().getHostName();
-            } catch (UnknownHostException unavailable) {
-                expectedIdentity = "worker";
-            }
-        }
-        assertEquals(expectedIdentity, PullWorker.defaultWorkerIdentity());
+        final java.util.Map<String, String> environment =
+                new java.util.HashMap<String, String>();
+        final AtomicInteger hostnameCalls = new AtomicInteger();
+        assertEquals("host-one", PullWorker.defaultWorkerIdentity(environment, () -> {
+            hostnameCalls.incrementAndGet();
+            return "host-one";
+        }));
+        assertEquals(1, hostnameCalls.get());
+        environment.put("HOSTNAME", "env-host");
+        environment.put("POD_NAME", "pod-host");
+        environment.put("DEX_WORKER_INSTANCE", "instance-host");
+        assertEquals("instance-host", PullWorker.defaultWorkerIdentity(environment, () -> {
+            hostnameCalls.incrementAndGet();
+            return "host-two";
+        }));
+        assertEquals(1, hostnameCalls.get());
+        assertEquals("worker", PullWorker.defaultWorkerIdentity(
+                new java.util.HashMap<String, String>(), () -> ""));
         assertTrue(PullWorker.generateAppWorkerID("###").startsWith("worker-"));
     }
 
@@ -213,9 +216,9 @@ final class PullWorkerTest {
     @Test
     void stopDrainsLargeResultWhenCloseFollowsCompletion() throws Exception {
         final TestFlow flow = new TestFlow();
-        final PollServer pollServer = new PollServer();
-        try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
-            final PollStream sticky = pollServer.awaitQueue("pull-java-unit");
+        final PollServer pollServer = new PollServer(true);
+        try (RunningWorker running = new RunningWorker(
+                pollServer, flow, 1, Duration.ofSeconds(8))) {
             final PollStream stream = pollServer.awaitQueue("PullTestFlow");
             stream.assign(executeTask("drain", "large"));
             assertTrue(flow.entered.await(5, TimeUnit.SECONDS));
@@ -229,7 +232,7 @@ final class PullWorkerTest {
             }, "dex-java-pull-unit-stop");
             stopping.start();
             assertTrue(stopping.isAlive());
-            assertTrue(sticky.closed.await(5, TimeUnit.SECONDS));
+            pollServer.releasePendingReadsAfter(Duration.ofSeconds(3));
             flow.release.countDown();
             final PollWorkerTaskRequest result = stream.awaitFrame();
             assertTrue(result.getTaskFrame().getExecute().hasResult());
@@ -238,6 +241,27 @@ final class PullWorkerTest {
             stopping.join(10_000L);
             assertFalse(stopping.isAlive());
             assertEquals(null, stopFailure.get());
+            assertEquals(1, flow.executeCalls.get());
+        }
+    }
+
+    @Test
+    void busyReconnectPreservesLargeResultWithSlowReader() throws Exception {
+        final TestFlow flow = new TestFlow();
+        final PollServer pollServer = new PollServer(true);
+        try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
+            final PollStream stream = pollServer.awaitQueue("PullTestFlow");
+            stream.assign(executeTask("reconnect-slow", "large"));
+            assertTrue(flow.entered.await(5, TimeUnit.SECONDS));
+            stream.respond(PollWorkerTaskResponse.newBuilder()
+                    .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+            assertNotNull(pollServer.awaitQueue("PullTestFlow"));
+            pollServer.releasePendingReadsAfter(Duration.ofSeconds(3));
+            flow.release.countDown();
+            final PollWorkerTaskRequest result = stream.awaitFrame();
+            assertTrue(result.getTaskFrame().getExecute().hasResult());
+            assertTrue(result.getSerializedSize() > 3_000_000);
+            assertTrue(stream.closed.await(8, TimeUnit.SECONDS));
             assertEquals(1, flow.executeCalls.get());
         }
     }
@@ -491,20 +515,47 @@ final class PullWorkerTest {
     private static final class PollServer extends WorkerTaskServiceGrpc.WorkerTaskServiceImplBase {
         private final BlockingQueue<PollStream> registrations = new LinkedBlockingQueue<PollStream>();
         private final CountDownLatch registrationAttempts = new CountDownLatch(2);
+        private final AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         private final Status rejection;
+        private final boolean isReaderPaused;
+        private final java.util.List<PollStream> allStreams =
+                new java.util.concurrent.CopyOnWriteArrayList<PollStream>();
+        private final ScheduledExecutorService readScheduler =
+                Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    final Thread thread = new Thread(runnable, "dex-java-pull-test-reader");
+                    thread.setDaemon(true);
+                    return thread;
+                });
 
         private PollServer() {
-            this(null);
+            this(null, false);
         }
 
         private PollServer(final Status rejection) {
+            this(rejection, false);
+        }
+
+        private PollServer(final boolean isReaderPaused) {
+            this(null, isReaderPaused);
+        }
+
+        private PollServer(final Status rejection, final boolean isReaderPaused) {
             this.rejection = rejection;
+            this.isReaderPaused = isReaderPaused;
         }
 
         @Override
         public StreamObserver<PollWorkerTaskRequest> pollWorkerTask(
                 final StreamObserver<PollWorkerTaskResponse> responses) {
             final PollStream stream = new PollStream(responses);
+            final ServerCallStreamObserver<PollWorkerTaskResponse> readControl =
+                    (ServerCallStreamObserver<PollWorkerTaskResponse>) responses;
+            stream.readControl = readControl;
+            allStreams.add(stream);
+            if (isReaderPaused) {
+                readControl.disableAutoRequest();
+                readControl.request(1);
+            }
             return new StreamObserver<PollWorkerTaskRequest>() {
                 @Override
                 public void onNext(final PollWorkerTaskRequest request) {
@@ -538,10 +589,13 @@ final class PullWorkerTest {
         }
 
         private PollStream awaitQueue(final String queue) throws InterruptedException {
-            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
             final java.util.List<PollStream> deferred = new java.util.ArrayList<PollStream>();
             try {
                 while (System.nanoTime() < deadline) {
+                    if (workerFailure.get() != null) {
+                        throw new AssertionError("Worker failed before registration", workerFailure.get());
+                    }
                     final PollStream stream = registrations.poll(1, TimeUnit.SECONDS);
                     if (stream != null && queue.equals(stream.queue)) {
                         return stream;
@@ -555,6 +609,20 @@ final class PullWorkerTest {
                 registrations.addAll(deferred);
             }
         }
+
+        private void shutdown() {
+            readScheduler.shutdownNow();
+        }
+
+        private void releasePendingReadsAfter(final Duration delay) {
+            for (PollStream stream : allStreams) {
+                readScheduler.schedule(() -> {
+                    if (stream.closed.getCount() > 0) {
+                        stream.readControl.request(1);
+                    }
+                }, delay.toMillis(), TimeUnit.MILLISECONDS);
+            }
+        }
     }
 
     private static final class PollStream {
@@ -562,6 +630,7 @@ final class PullWorkerTest {
         private final BlockingQueue<PollWorkerTaskRequest> frames =
                 new LinkedBlockingQueue<PollWorkerTaskRequest>();
         private final CountDownLatch closed = new CountDownLatch(1);
+        private ServerCallStreamObserver<PollWorkerTaskResponse> readControl;
         private String queue;
 
         private PollStream(final StreamObserver<PollWorkerTaskResponse> responses) {
@@ -577,7 +646,7 @@ final class PullWorkerTest {
         }
 
         private PollWorkerTaskRequest awaitFrame() throws InterruptedException {
-            final PollWorkerTaskRequest frame = frames.poll(10, TimeUnit.SECONDS);
+            final PollWorkerTaskRequest frame = frames.poll(15, TimeUnit.SECONDS);
             assertNotNull(frame);
             return frame;
         }
@@ -585,6 +654,7 @@ final class PullWorkerTest {
 
     private static final class RunningWorker implements AutoCloseable {
         private final Server server;
+        private final PollServer pollServer;
         private final Worker worker;
         private final Thread workerThread;
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
@@ -597,7 +667,8 @@ final class PullWorkerTest {
         private RunningWorker(final PollServer pollServer, final TestFlow flow, final int capacity,
                 final Duration stopTimeout)
                 throws IOException {
-            server = ServerBuilder.forPort(0)
+            this.pollServer = pollServer;
+            server = NettyServerBuilder.forPort(0).flowControlWindow(64 * 1024)
                     .addService(new FlowServiceGrpc.FlowServiceImplBase() {
                         @Override
                         public void getServerInfo(
@@ -634,6 +705,7 @@ final class PullWorkerTest {
                     worker.start();
                 } catch (Throwable raised) {
                     failure.set(raised);
+                    pollServer.workerFailure.set(raised);
                 }
             }, "dex-java-pull-unit-worker");
             workerThread.start();
@@ -650,6 +722,7 @@ final class PullWorkerTest {
         public void close() throws Exception {
             stop();
             server.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
+            pollServer.shutdown();
         }
     }
 

@@ -36,6 +36,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -45,10 +46,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.function.Supplier;
 
 final class PullWorker {
     private static final Logger LOGGER = Logger.getLogger(PullWorker.class.getName());
-    private static final long CLOSE_TIMEOUT_MILLIS = 2000L;
     private static final char[] BASE32 = "abcdefghijklmnopqrstuvwxyz234567".toCharArray();
     private final WorkerTaskServiceGrpc.WorkerTaskServiceStub taskService;
     private final JavaWorkerService workerService;
@@ -65,6 +66,7 @@ final class PullWorker {
     private int busyTasks;
     private boolean isStopping;
     private boolean hasLoggedUnsupported;
+    private long stopDeadlineNanos;
 
     PullWorker(
             final Registry registry,
@@ -107,17 +109,26 @@ final class PullWorker {
     }
 
     static String defaultWorkerIdentity() {
+        return defaultWorkerIdentity(System.getenv(), () -> {
+            try {
+                return InetAddress.getLocalHost().getHostName();
+            } catch (UnknownHostException unavailable) {
+                return "worker";
+            }
+        });
+    }
+
+    static String defaultWorkerIdentity(
+            final Map<String, String> environment,
+            final Supplier<String> hostname) {
         for (String environmentName : new String[] {"DEX_WORKER_INSTANCE", "POD_NAME", "HOSTNAME"}) {
-            final String candidate = System.getenv(environmentName);
+            final String candidate = environment.get(environmentName);
             if (candidate != null && !candidate.trim().isEmpty()) {
                 return candidate;
             }
         }
-        try {
-            return InetAddress.getLocalHost().getHostName();
-        } catch (UnknownHostException unavailable) {
-            return "worker";
-        }
+        final String resolved = hostname.get();
+        return resolved == null || resolved.trim().isEmpty() ? "worker" : resolved;
     }
 
     static String generateAppWorkerID(final String identity) {
@@ -170,10 +181,13 @@ final class PullWorker {
     }
 
     void stop() {
-        final long deadline = System.nanoTime() + options.getStopDrainTimeout().toNanos();
         boolean interrupted = false;
         synchronized (this) {
-            isStopping = true;
+            if (!isStopping) {
+                isStopping = true;
+                stopDeadlineNanos = System.nanoTime() + options.getStopDrainTimeout().toNanos();
+            }
+            final long deadline = stopDeadlineNanos;
             notifyAll();
             for (PullStream stream : new ArrayList<PullStream>(streams)) {
                 stream.isDraining = true;
@@ -347,8 +361,14 @@ final class PullWorker {
                 if (delay <= 0L) {
                     cancelTask(Status.Code.DEADLINE_EXCEEDED);
                 } else {
-                    deadlineTimer = scheduler.schedule(
-                            () -> cancelTask(Status.Code.DEADLINE_EXCEEDED),
+                    final String deadlineTaskID = taskID;
+                    deadlineTimer = scheduler.schedule(() -> {
+                        synchronized (PullWorker.this) {
+                            if (deadlineTaskID.equals(taskID)) {
+                                cancelTask(Status.Code.DEADLINE_EXCEEDED);
+                            }
+                        }
+                    },
                             delay, TimeUnit.MILLISECONDS);
                 }
             }
@@ -504,10 +524,16 @@ final class PullWorker {
         }
 
         private void halfClose() {
-            if (isHalfClosed || isClosed) {
-                if (isClosed && !isBusy && isStopping) {
+            if (isClosed) {
+                if (!isBusy && isStopping) {
                     streams.remove(this);
                     PullWorker.this.notifyAll();
+                }
+                return;
+            }
+            if (isHalfClosed) {
+                if (isStopping) {
+                    scheduleCloseFallback();
                 }
                 return;
             }
@@ -518,6 +544,16 @@ final class PullWorker {
                 close(failure);
                 return;
             }
+            scheduleCloseFallback();
+        }
+
+        private void scheduleCloseFallback() {
+            if (closeTimer != null) {
+                closeTimer.cancel(false);
+            }
+            final long waitNanos = isStopping
+                    ? Math.max(1L, stopDeadlineNanos - System.nanoTime())
+                    : options.getStopDrainTimeout().toNanos();
             closeTimer = scheduler.schedule(() -> {
                 synchronized (PullWorker.this) {
                     if (!isClosed) {
@@ -533,7 +569,7 @@ final class PullWorker {
                         }
                     }
                 }
-            }, CLOSE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            }, waitNanos, TimeUnit.NANOSECONDS);
         }
 
         @Override
@@ -585,9 +621,11 @@ final class PullWorker {
             } else if (failure != null && code != Status.Code.CANCELLED) {
                 LOGGER.log(Level.WARNING, "Worker task stream disconnected for queue " + queue, failure);
             }
-            final long delay = retryDelay(isPermanent ? 60_000L : backoffMillis);
             if (isDraining) {
                 backoffMillis = 100L;
+            }
+            final long delay = retryDelay(isPermanent ? 60_000L : backoffMillis);
+            if (isDraining) {
                 isDraining = false;
             } else if (!isPermanent) {
                 backoffMillis = Math.min(backoffMillis * 2, 5000L);
