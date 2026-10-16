@@ -1,12 +1,18 @@
 # TypeScript handbook
 
-The SDK API reference uses the [released v1.4.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
+The SDK API reference uses the [released v1.10.1 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
 
-Read this page first for TypeScript application work, then open only the topic reference needed. The [baseline package](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/package.json) uses `@superdurable/dex@1.2.1` on Node.js 22 or 24. Always inspect the application's lockfile and installed declarations before using a precise API.
+Read this page first for TypeScript application work, then open only the topic reference needed. The [baseline package](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/package.json) uses `@superdurable/dex@1.10.0` on Node.js 22 or 24. Always inspect the application's lockfile and installed declarations before using a precise API.
 
 ## Project shape
 
 Keep Flow/Step definitions separate from HTTP handlers, construct all Flow instances in one registry module, and create one `Registry`, `BlobCache`, `Worker`, and `Client` per process. Pass the Client into adapters or a controlled holder when async Steps start or interact with other Flows. Values cross the boundary through `Codec<T>`.
+
+## Pull Workers and Dex credentials
+
+Construct a Worker with `{ pull: { maxConcurrentTasks: 8 } }` and no `bindAddress` or listening `workerTarget`. Advertise `worker.workerTarget` or `{ pull: true }` through `ClientOptions.workerTarget` or a StartFlow or SubFlow FlowConfig override. Pull options also include `idleStreamsPerQueue`, `appWorkerID`, and `stopDrainTimeoutMs`; defaults are one idle stream per queue, a generated process ID, and 30,000 milliseconds. Change an explicit app Worker ID after restart. `worker.close()` drains active handlers within that timeout. Follow the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retries, heartbeats, and stream capacity. [Released TypeScript options](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/sdk-typescript/src/options.ts) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/production/pull-workers.ts)
+
+Set `credential` separately in ClientOptions and WorkerOptions for an authenticated Dex Server. `FileCredential` reads a rotating file, while a custom `Credential.token()` can return a string or Promise for each call or pull stream opening. A thrown or rejected token fails the call locally. Keep the token out of Flow state and protect the plaintext connection. [Released TypeScript credentials](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/sdk-typescript/src/credential.ts)
 
 ## Connector runtime support
 
@@ -42,7 +48,7 @@ for the Go-only analyzer contract.
 
 ## Minimal Flow
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/primitives/flow/example-flow.ts)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/flow/example-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/flow/example-flow.ts -->
 ```typescript
 export class ExampleFlow implements Flow<number> {
@@ -64,7 +70,7 @@ export class ExampleFlow implements Flow<number> {
 
 Each Step supplies a stable `getStepType()` and an input codec when a non-default wire form is required. A Flow returns all registered Step instances once. The starting Step input must match `Flow<I>`.
 
-[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/primitives/flow/example-flow.ts)
+[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/flow/example-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/flow/example-flow.ts -->
 ```typescript
 class ExampleStep implements Step<number> {
@@ -89,7 +95,7 @@ class ExampleStep implements Step<number> {
 
 ## Registry, Worker, and Client
 
-[Pinned process bootstrap](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/main.ts)
+[Pinned process bootstrap](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/main.ts)
 <!-- dex-source: examples/typescript/src/main.ts -->
 ```typescript
 const registry = createExampleRegistry();

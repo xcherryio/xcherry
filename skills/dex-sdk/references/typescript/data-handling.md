@@ -14,7 +14,7 @@ Stable Flow, Step, Attribute, Channel, Stream, RPC, and codec type names are par
 
 Use Attributes for authoritative current state, AttributeMaps for independently loaded records, Channels for durable FIFO commands, ChannelMaps for per-key queues, and Streams for best-effort progress. Register each definition in one Flow schema.
 
-[Pinned typed state source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/primitives/attribute/attribute-flow.ts)
+[Pinned typed state source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/attribute/attribute-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/attribute/attribute-flow.ts -->
 ```typescript
 const status = new Attribute("primitive-attribute-status", stringCodec, {
@@ -30,7 +30,7 @@ const progress = new AttributeMap("primitive-attribute-progress", stringCodec, {
 
 Map instance keys must be stable, non-empty, and slash-free. Load only the instances/pending messages a handler reads. The effective map view includes mutations staged in the current handler, but RPC pending-message snapshots do not refresh after later staged writes.
 
-For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one token-selected instance per page. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside one fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/patterns/sequentially-chunked-attribute-map/chunked-subscriber-flow.ts) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/patterns/hash-partitioned-attribute-map/customer-directory-flow.ts).
+For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one token-selected instance per page. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside one fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/patterns/sequentially-chunked-attribute-map/chunked-subscriber-flow.ts) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/patterns/hash-partitioned-attribute-map/customer-directory-flow.ts).
 
 ## Commit boundary
 

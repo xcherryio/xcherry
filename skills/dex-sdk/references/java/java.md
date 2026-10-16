@@ -1,14 +1,20 @@
 # Java handbook
 
-The SDK API reference uses the [released v1.4.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
+The SDK API reference uses the [released v1.10.1 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
 
-Use this page first for Java application work. Then load the topic page that matches the task. The [baseline build](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/java/build.gradle) uses `io.superdurable:dex-sdk:1.2.1`, Spring Boot, and JDK 17 or newer. The application's Gradle or Maven lockfile remains authoritative.
+Use this page first for Java application work. Then load the topic page that matches the task. The [baseline build](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/build.gradle) uses `io.superdurable:dex-sdk:1.10.0`, Spring Boot, and JDK 17 or newer. The application's Gradle or Maven lockfile remains authoritative.
 
 ## Project shape
 
 Keep Flow and Step types in application packages, expose them as Spring beans, build one `Registry` from every Flow bean, and share one disk `BlobCache` between the `Worker` and `Client`. Inject business dependencies through constructors. Parameterized Step inputs are not supported directly; use a concrete holder class or an array.
 
 The official example layout separates `products/`, `patterns/`, `primitives/`, and `shared/`. A smaller service normally needs `flows/`, `steps/`, `model/`, and a bootstrap/configuration class.
+
+## Pull Workers and Dex credentials
+
+Use `WorkerOptions.newBuilder().pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build()).build()` for outbound polling. Leave the bind address and listening Worker target unset. Advertise `worker.getWorkerTarget()` or `WorkerTarget.pull()` through `ClientOptions.Builder.workerTarget(...)` or a StartFlow or SubFlow FlowConfig override. `PullWorkerOptions.Builder` also offers `idleStreamsPerQueue`, `appWorkerID`, and `stopDrainTimeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. A supplied app Worker ID must change after restart. Read the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retry consumption, heartbeats, capacity, and Stop. [Released Java options](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/sdk-java/src/main/java/io/superdurable/dex/PullWorkerOptions.java) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java)
+
+Set `credential(...)` separately on ClientOptions and WorkerOptions when public API authentication is enabled. `FileCredential` reads a rotating token file; a custom `Credential.token()` supplies the current bearer token for each call and pull stream opening. A credential error prevents the call from reaching Dex. Protect the plaintext connection. [Released Java credential API](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/sdk-java/src/main/java/io/superdurable/dex/FileCredential.java)
 
 ## Connector runtime support
 
@@ -44,7 +50,7 @@ Go-only analyzer contract.
 
 ## Minimal Flow
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java -->
 ```java
 @Component
@@ -68,7 +74,7 @@ public class ExampleFlow implements Flow<Integer> {
 
 A Flow returns its complete Step registry once. The first Step input type must match `Flow<I>`. All persisted definitions belong in `getPersistenceSchema()`.
 
-[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
+[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java -->
 ```java
 final class ExampleStep implements Step<Integer> {
@@ -92,7 +98,7 @@ final class ExampleStep implements Step<Integer> {
 
 ## Registry, Worker, and Client
 
-[Pinned bootstrap source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
+[Pinned bootstrap source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java -->
 ```java
 @Bean

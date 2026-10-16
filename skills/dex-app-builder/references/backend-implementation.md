@@ -87,6 +87,8 @@ Do not add projection-only locks. The Server atomically adds newly matched Actio
 
 Keep external effects in `Execute`. `WaitFor` only declares durable conditions and must not query or mutate providers or Dex state.
 
+For deployment, choose the listening or [pull Worker](../../dex-sdk/references/core/pull-workers.md) target before wiring the Client. Pull mode needs `WorkerOptions.Pull` and an advertised pull WorkerTarget, not a bind address. Set the Client's default target or a StartFlow/SubFlow override consistently. Use separate Client and Worker bearer credentials when Dex authentication is enabled. A pull Step without an available Worker consumes a retry, so budget startup and dispatch waits with the Step retry policy. Long-running handlers that must observe cancellation record heartbeats within their HeartbeatTimeout.
+
 For connectors:
 
 1. fetch the canonical published catalog at

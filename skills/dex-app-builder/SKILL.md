@@ -83,6 +83,9 @@ configuration. A missing module is resolved at its exact released version.
   development configures connections in Dex Web, and a Go application reads
   them through the Connector SDK's `sdkgo/projectconfig`, whose configuration a
   hosting platform or operator provides (Dex hosts none).
+- For Dex Server authentication and Worker deployment, follow the SDK
+  [operations](../dex-sdk/references/core/operations.md#public-api-authentication)
+  and [pull Worker](../dex-sdk/references/core/pull-workers.md) references.
 - Browser permission selection grants no authority. Enforce actor permissions
   at the trusted server boundary; use stable granular Action permissions.
 - Do not mutate another repository or publish/deploy without authorization.

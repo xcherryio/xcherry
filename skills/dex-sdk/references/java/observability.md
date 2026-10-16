@@ -10,7 +10,9 @@ Record business milestones with `context.recordEvent(name, value, ValueClass.cla
 
 Long-running handlers must call `recordHeartbeat` before the configured heartbeat timeout. Store a compact checkpoint that lets a later attempt resume safely. A heartbeat is liveness plus progress, not an exactly-once commit.
 
-[Pinned Java heartbeat source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/java/src/main/java/io/superdurable/dex/primitives/stepheartbeat/StepHeartbeatFlow.java)
+Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
+
+[Pinned Java heartbeat source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/java/src/main/java/io/superdurable/dex/primitives/stepheartbeat/StepHeartbeatFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/stepheartbeat/StepHeartbeatFlow.java -->
 ```java
 final int completedBatches = context.hasLastHeartbeatValue()

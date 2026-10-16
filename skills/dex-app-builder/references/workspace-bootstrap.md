@@ -30,7 +30,7 @@ Create a Go application that depends only on open-source Dex:
 1. Install `dexcli` with the supported package for the platform (on macOS,
    `brew install superdurable/tap/dexcli`) and run `dexcli version`.
 2. Create the Go module and add the Dex Go SDK at an exact released version,
-   for example `go get github.com/superdurable/dex/sdk-go@v1.5.0`. Select the
+   for example `go get github.com/superdurable/dex/sdk-go@v1.10.1`. Select the
    newest stable SDK release that pairs with the installed `dexcli` and the
    target Dex Server; do not copy versions from a neighboring project or
    resolve a branch, pseudo-version, or commit.
@@ -74,3 +74,9 @@ highest common protocol and exits non-zero for a nonoverlapping interval.
 `DEX_BASELINE`, `DEX_SERVER_BASELINE`, and `DEX_CLI_BASELINE` in this skill
 repository record the releases this guidance was checked against. They do not
 authorize upgrading an existing application's pinned dependencies.
+
+## Worker and access topology
+
+Choose a listening Worker when Dex Server can reach its advertised WorkerService address. Choose a [pull Worker](../../dex-sdk/references/core/pull-workers.md) when the application can only open outbound connections. For pull mode, set Go `WorkerOptions.Pull`, advertise the Worker's pull target through Client defaults or StartFlow/SubFlow overrides, size streams for the registered Flow types, and keep its app Worker ID unique per process restart. Plan Step retries for unavailable Workers and record heartbeats in long-running handlers that must observe cancellation.
+
+If Dex Server enables [public API authentication](../../dex-sdk/references/core/operations.md#public-api-authentication), provide separate bearer credentials to the Go Client and Worker and a credential file to `dexcli`; set `web.flowServiceCredentialFile` for Dex Web. Protect the Web port separately because its FlowService credential does not authenticate Web users. Multi-tenant configuration has been removed since Server v1.10.0, so migrate the removed keys before upgrading; single-tenant Flow data remains. Use the [released migration mapping](../../dex-sdk/references/core/operations.md#removed-multi-tenant-configuration).

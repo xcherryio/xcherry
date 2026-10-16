@@ -8,13 +8,13 @@ Ordinary Attributes and Channel size metadata load automatically; large Attribut
 
 Declare Attribute or map-instance locks when RPC/Step mutations conflict. Lock the smallest stable key. Keep remote I/O outside transaction/lock windows. Treat `RPCLockConflictError` as contention.
 
-`RPCOptions` fixes registration-time timeout, locks, transactionality, and loads. `RPCInvokeOptions` is additive and accepts only `LockAttributeMapInstances`, `LoadAttributeMapInstances`, and `LoadChannelMapInstances`. Call `Client.InvokeRPCWithOptions` when request data chooses an exact instance. Use `dex.LockAttributeMap(definition, instance)` for the lock and `definition.Load(instance)` for the load; include both for read-modify-write. The Client unions, sorts, and deduplicates these selections with registration options and validates the Flow definition and instance name before network I/O. The pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/go/patterns/hash-partitioned-attribute-map/controller.go) shows write and read calls.
+`RPCOptions` fixes registration-time timeout, locks, transactionality, and loads. `RPCInvokeOptions` is additive and accepts only `LockAttributeMapInstances`, `LoadAttributeMapInstances`, and `LoadChannelMapInstances`. Call `Client.InvokeRPCWithOptions` when request data chooses an exact instance. Use `dex.LockAttributeMap(definition, instance)` for the lock and `definition.Load(instance)` for the load; include both for read-modify-write. The Client unions, sorts, and deduplicates these selections with registration options and validates the Flow definition and instance name before network I/O. The pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/go/patterns/hash-partitioned-attribute-map/controller.go) shows write and read calls.
 
 ## Buffered Stream and heartbeat
 
 `dex.NewBufferedTextStream` batches by interval/bytes. Flush at semantic boundaries and return errors. Stream writes are liveness frames but preserve the explicit heartbeat checkpoint.
 
-[Pinned SDK contract](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/sdk-go/dex/contracts_test.go)
+[Pinned SDK contract](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/sdk-go/dex/contracts_test.go)
 <!-- dex-source: sdk-go/dex/contracts_test.go -->
 ```go
 progress, err := dex.NewBufferedTextStream(
@@ -37,7 +37,7 @@ Set an application-wide default through `StartFlowOptions.ConfigOverride` and `F
 
 A decision/RPC result can cancel selected Step types or siblings. Cancellation is cooperative; external calls need context cancellation and idempotency.
 
-Sync durability waits for persistence acknowledgement. Async improves latency but can replay a recently acknowledged attempt after failure; restrict it to idempotent work and test replay. See [durability runnable](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/go/primitives/durability/workflow.go).
+Sync durability waits for persistence acknowledgement. Async improves latency but can replay a recently acknowledged attempt after failure; restrict it to idempotent work and test replay. See [durability runnable](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/go/primitives/durability/workflow.go).
 
 A timeout handler has its own timeout, retry, durability, locks, and state loads. It follows normal commit rules.
 

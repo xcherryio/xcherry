@@ -8,7 +8,7 @@ Durability resolves from the WaitFor or Execute override, then the FlowConfig de
 
 When most handlers are short and idempotent, set the FlowConfig default to **ASYNC** at Flow start. Let ordinary handlers inherit it. Explicitly override a method to **SYNC** when it is more likely than not to exceed five seconds. LLM calls and other known long-running provider calls usually belong in this category.
 
-Five seconds is a classification heuristic, not a timeout or SLA. Seven seconds is the limit it protects: the current ASYNC local phase permits at most about seven seconds and three attempts, and the heuristic leaves operating margin inside it. Classification does not need to be exact. ShortRunning work is allowed to exceed the estimate and fall back normally. If more than half of real calls fall back, classify the method as long-running because the local optimization is no longer useful.
+Five seconds is a classification heuristic, not a timeout or SLA. Seven seconds is the limit it protects: for listening Workers, the ASYNC local phase permits at most about seven seconds and three attempts; for pull Workers, it permits one attempt. The heuristic leaves operating margin inside that limit. Classification does not need to be exact. ShortRunning work is allowed to exceed the estimate and fall back normally. If more than half of real calls fall back, classify the method as long-running because the local optimization is no longer useful.
 
 Fallback starts a regular execution, but the method's durability remains **ASYNC**. Do not describe fallback as switching durability to SYNC.
 
@@ -32,6 +32,8 @@ For every WaitFor and Execute method, decide the applicable:
 RPC registration options make the same fixed load and lock decisions for every invocation. When an RPC's exact AttributeMap or ChannelMap instance comes from request data, use the language's additive RPC invocation options instead. They cannot add timeout, singleton Attribute locks, whole-map loads, singleton Channel loads, or transactionality. A dynamic AttributeMap read-modify-write must add both the exact instance load and its matching instance lock.
 
 For Execute, also decide the heartbeat timeout. Regular execution defaults to one minute. Keep that default unless a healthy operation can remain silent longer. Then raise it to the longest acceptable healthy silent interval. Use method timeout to cap the whole attempt. Heartbeats and Stream frames show Worker liveness; only heartbeat values provide retry checkpoints.
+
+Server v1.10.1 enforces **HeartbeatTimeout** for pull Steps; Server v1.10.0 does not. Cancellation reaches either kind of Step handler through heartbeats. A long-running handler that must observe cancellation should record heartbeats within its **HeartbeatTimeout** and act on cancellation. For a pull target, the **ASYNC** local phase is one attempt; later attempts see the last heartbeat recorded after that phase. See [Pull Workers](pull-workers.md).
 
 A non-streaming provider call is silent for its whole duration, so the default fails a healthy 90-second LLM generation. Set heartbeat timeout at least equal to the method timeout, or heartbeat or stream progress during the call. In local measurements with Dex CLI v0.13.8, Dex detected a lost Worker connection in about two seconds, so a long heartbeat timeout did not delay crash recovery.
 

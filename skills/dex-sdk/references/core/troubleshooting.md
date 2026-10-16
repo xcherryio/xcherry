@@ -17,7 +17,7 @@ Use `dexcli flow search`, `summary`, `state`, and `history` for narrower JSON. U
 
 ## Failure routing
 
-- **Worker unavailable**: verify process health, bind address, advertised target, name resolution, and the network path from Dex Server.
+- **Worker unavailable**: for a listening Worker, verify process health, bind address, advertised target, name resolution, and the network path from Dex Server. For a pull Worker, inspect its outbound streams, app Worker ID, registered Flow types, Matching availability, and authentication. An unavailable pull Step consumes a Step retry.
 - **Unknown Flow, Step, RPC, or resource**: compare the Worker registry and persistence schema with the execution's stable names and deployed version.
 - **Flow does not advance**: inspect the active Step's WaitFor conditions and pending Channel, Timer, or SubFlow state.
 - **Repeated side effect**: inspect attempts and heartbeat checkpoints; make Execute idempotent or add compensation.

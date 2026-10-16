@@ -25,6 +25,12 @@ Use deadline-based polling or the SDK's long-poll result API. Do not use a fixed
 - Make start acceptance ambiguous, retry with the same identities, and verify correctness without an application-owned start-deduplication table.
 - Interact after terminal completion and assert the not-active or terminal behavior.
 
+### Pull Worker and authentication scenarios
+
+With a real Server, start through a Client pull target and a StartFlow or SubFlow target override. Stop one pull Worker during active work and verify another registered Worker takes the Flow type queue after sticky routing fails. Start with no Worker and assert each unavailable Step dispatch consumes a configured retry, while an RPC caller receives Unavailable. Disconnect after an external effect but before its output reaches Dex and verify idempotent replay. For ASYNC, verify the pull local phase uses one attempt and the next attempt receives the last heartbeat. Let a handler exceed its HeartbeatTimeout and assert the expected retry; record heartbeats within the timeout to observe cancellation. Exercise Stop with an active handler and a half-closed stream, asserting the drain deadline bounds both.
+
+With public authentication enabled, verify Client and Worker calls and pull streams carry credentials, an absent or failed credential is rejected, and a rotated file token takes effect on the next call or reconnect. Use a protected Web port when validating Dex Web; its FlowService credential is not user authentication. See [pull Worker behavior](pull-workers.md) and [public API authentication](operations.md#public-api-authentication).
+
 ### StartFlow ordering and retry identity
 
 Exercise the application's start boundary against a real Dex Server with its production registry and reuse policy. Observe calls without replacing the real start/RPC behavior. For a normal accepted start with no independently required business read, assert StartFlow is the first Dex operation and no read RPC, search, or status lookup occurs solely for duplicate/retry protection. Assert a successful accepted-start response performs no defensive follow-up RPC/status read to verify supplied identity or initial Attributes and launches no dependent Flow from the API handler. Check the DTO against validated input/known initial fields. Only an explicit admission/completion-result contract may add a subsequent wait or result call.

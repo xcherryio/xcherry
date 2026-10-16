@@ -8,7 +8,9 @@ Log `context.flowId`, `runId`, `stepExecutionId`, `attempt`, and handler name as
 
 Async long-running handlers should accept `AsyncContext`, recover a compact checkpoint, call `await context.recordHeartbeat(...)` before the heartbeat timeout, and pass `context.cancellationSignal` to abort-aware APIs.
 
-[Pinned heartbeat source](https://github.com/superdurable/dex/blob/sdk-go/v1.5.0/examples/typescript/src/primitives/heartbeat/heartbeat-flow.ts)
+Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
+
+[Pinned heartbeat source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/typescript/src/primitives/heartbeat/heartbeat-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/heartbeat/heartbeat-flow.ts -->
 ```typescript
 public async execute(context: AsyncContext, batches: number): Promise<StepDecision> {

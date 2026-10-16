@@ -53,7 +53,7 @@ cross-origin credential forwarding disabled.
 The codec converts known Dex binary protobuf payloads to ProtoJSON. Unknown
 message types and other encodings pass through unchanged. The same tooling
 applies to all five SDK languages. See the released
-[CLI codec server usage](https://github.com/superdurable/dex/blob/cli-v1.7.0/cli/README.md#view-temporal-protobuf-payloads).
+[CLI codec server usage](https://github.com/superdurable/dex/blob/cli-v1.10.1/cli/README.md#view-temporal-protobuf-payloads).
 
 ## Indexed Attribute capacity
 
@@ -123,7 +123,35 @@ Decide with the user who writes the configuration, where the storage lives, and 
 
 ## Deploy Dex Server components
 
-The `dex-server` image starts Web, API, and Interpreter in one OS process by default. It serves FlowService gRPC on port 8801 and Dex Web HTTP on port 8802.
+The `dex-server` image starts Web, API, Interpreter, and Matching in one OS process by default. It serves FlowService gRPC on port 8801 and Dex Web HTTP on port 8802.
+
+### Public API authentication
+
+Public FlowService authentication is off by default. Configure `auth.authenticators` to require a bearer credential on public calls and streams. Static token authenticators read SHA-256 hashes from a YAML token file; JWT authenticators verify issuer, audience, signature, and validity against a cached key set. Health checks remain open. Protect the plaintext gRPC network path, and keep token values out of source, logs, Flow state, and rendered definitions. [Released authentication configuration](https://github.com/superdurable/dex/blob/server/v1.10.1/server/config/config_template.yaml)
+
+Clients and Workers have separate credential options in all five SDKs. Supply a rotating file credential where available, or a current-token provider that can be called for every FlowService call and each pull stream opening. With auth enabled, a missing credential is rejected and a failed credential prevents the call; a rotated token is picked up on a later call or stream reconnect. See the language handbook for exact names.
+
+For `dexcli`, `--credential-file` takes precedence over `DEX_CREDENTIAL_FILE`, which takes precedence over `DEX_CREDENTIAL`. The CLI has no raw-token flag. Store a token in a protected file when possible; avoid putting one into shell history or process arguments. [Released CLI options](https://github.com/superdurable/dex/blob/cli-v1.10.1/cli/internal/command/options.go)
+
+When auth is enabled and Dex Web runs, set `web.flowServiceCredentialFile` to a bearer-token file. This authenticates Web's calls to FlowService; it does not authenticate Web users. Anyone who reaches the Web port can act with Web's credential, so protect that port with network controls or an authenticating proxy. This file is distinct from the local Connector development credential store.
+
+Auth requires `internal.listen` and `internal.tokenFile`. The separate listener serves private InternalService and MatchingService calls; Interpreter Workers use the first internal token, and the listener accepts all valid lines for rotation. Use a token of at least 32 characters per line, restrict the listener to Dex replicas, and protect its plaintext network path. A separate Interpreter deployment must target the private listener. With auth off, existing public InternalService targets remain supported unless a private listener is configured.
+
+### Pull Worker server setup
+
+The `matching` role owns pull Worker queues. Keep at least one Matching instance running. API instances accept outbound Worker streams on FlowService and forward them to the queue owner. Preserve bidirectional HTTP/2 streaming and make load-balancer idle timeouts longer than `matching.pingInterval` (20 seconds by default). A single Server process uses local membership. For multiple instances, configure `membership` with reachable seeds and a private `internal.listen` plus `internal.tokenFile` on every process. All instances must share the intended backend namespace and membership cluster; route public traffic only to API instances. [Released routing configuration](https://github.com/superdurable/dex/blob/server/v1.10.1/server/config/config_template.yaml)
+
+A matching-only process (`dex-server start --services matching`) requires both `internal.listen` and `internal.tokenFile`, even when public auth is off. Its MatchingService is never public. [Released bootstrap check](https://github.com/superdurable/dex/blob/server/v1.10.1/server/service/bootstrap/bootstrap.go)
+
+`matching.dispatchWait` defaults to 10 seconds, including up to five seconds of `matching.stickyWait`. `matching.localDispatchWait`, `localStickyWait`, and `localExecutionReserve` use shorter windows when an operation needs time to run. Capacity defaults are `maxConcurrentTasksCap: 256` streams per app Worker ID per matching owner, `maxStreams: 100000` per Matching instance, and `maxQueueLength`, `maxFlowTypes`, and `maxFlowTypeLength` of 256 each. Check the [pull Worker stream bound](pull-workers.md) before raising Worker concurrency or Flow type count.
+
+### Worker wake hook
+
+Configure `worker.wake.url` and optional `worker.wake.budget` (120 seconds by default) when an unavailable Worker can be started on demand. Dex posts a best-effort `kind: wake` notification with the target, and a rate-limited `kind: active` notification after a successful dispatch. For pull routing, the wake target is the Flow type queue; Dex sends it after the sticky wait and keeps the same dispatch attempt open. For listening routing, the budget holds connection retries without consuming new attempts. An internal token is sent when `internal.tokenFile` is configured. Size the dispatch wait and Step retry policy to cover actual startup time. [Released wake settings](https://github.com/superdurable/dex/blob/server/v1.10.1/server/config/auth.go)
+
+### Removed multi-tenant configuration
+
+Multi-tenant mode has been removed since Server v1.10.0. Single-tenant Flow data is preserved, but a configuration containing the removed `tenancy` section fails startup. Move `tenancy.authenticators` to `auth.authenticators`, `tenancy.internal` to `internal`, and `tenancy.wake` to `worker.wake`; drop `subjectPattern` and `claims`, and use only SHA-256 entries in static token files. Also remove `blobStore.tenantCleanupConfirmationDelay` and each `attributeStore.stores.<name>.tenantColumn`: both are rejected at startup. If a destination table still requires a tenant column, migrate that table separately so single-tenant writes satisfy its schema. Inspect the deployed YAML and destination schema before upgrading. [Released migration error](https://github.com/superdurable/dex/blob/server/v1.10.1/server/config/removed_tenancy_config.go)
 
 Before deploying a Worker, run `dexcli version check` against its target Server. Each Server and SDK release declares an inclusive protocol interval. Worker startup selects the highest common protocol before synchronizing Attribute indexes and binding WorkerService. Artifact versions are diagnostic only.
 
@@ -131,16 +159,17 @@ When upgrading from a Server that predates `GetServerInfo`, upgrade the Server b
 
 A breaking Server release raises its minimum protocol. Stop old Workers and their traffic before upgrading the Server, upgrade every SDK in the maintenance window, then restart traffic. Isolated blue-green environments may run disjoint intervals, but they must not communicate. Running Workers do not renegotiate after a Server upgrade.
 
-Use `dex-server start --services <selection>` to scale components independently. The selection must be a nonempty comma-separated combination of `web`, `api`, and `interpreter`:
+Use `dex-server start --services <selection>` to scale components independently. The selection must be a nonempty comma-separated combination of `web`, `api`, `interpreter`, and `matching`:
 
 ```bash
 dex-server start --services web
 dex-server start --services api
 dex-server start --services interpreter
+dex-server start --services matching
 dex-server start --services web,api
 ```
 
-Web-only does not initialize storage, Temporal, Cadence, the index synchronizer, or the Interpreter. Configure its remote API target in YAML:
+Web-only does not initialize storage, Temporal, Cadence, the index synchronizer, the Interpreter, or Matching. Configure its remote API target in YAML:
 
 ```yaml
 web:
@@ -154,7 +183,7 @@ When `web.flowServiceTarget` is empty, Web connects to `localhost:<api.port>`. T
 
 `/healthz` reports Web process liveness, not upstream API readiness. Web starts while FlowService is unavailable; `/api/*` returns the existing mapped gRPC error until the API recovers.
 
-For Interpreter-only deployments, point `interpreter.interpreterActivityConfig.internalServiceTarget` at the API service. Scale Web, API, and Interpreter replicas according to HTTP traffic, FlowService traffic, and execution load respectively.
+For Interpreter-only deployments without `internal.listen`, point `interpreter.interpreterActivityConfig.internalServiceTarget` at the API service. With a private listener, the Interpreter uses its local address by default. Scale Web, API, Interpreter, and Matching replicas according to HTTP traffic, FlowService traffic, execution load, and pull task load respectively.
 
 ```yaml
 interpreter:
