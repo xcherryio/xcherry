@@ -115,7 +115,8 @@ public final class FileCredential implements Credential {
                     && attributes.lastModifiedTime().equals(modifiedAt) && attributes.size() == size) {
                 return;
             }
-            final String token = new String(Files.readAllBytes(path), StandardCharsets.UTF_8).trim();
+            final String token = trimWhitespace(
+                    new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
             if (token.isEmpty()) {
                 throw new IOException("dex: credential file " + path + " is empty");
             }
@@ -127,5 +128,17 @@ public final class FileCredential implements Credential {
             currentToken = null;
             loadError = failure;
         }
+    }
+
+    private static String trimWhitespace(final String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && Character.isWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
     }
 }

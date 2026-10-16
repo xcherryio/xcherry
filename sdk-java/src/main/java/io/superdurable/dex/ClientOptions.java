@@ -179,8 +179,10 @@ public final class ClientOptions {
         /**
          * Sets the token source for every Client FlowService call.
          *
-         * <p>The source can be called concurrently; a failure ends the call before Dex is contacted.
-         * The default {@code null} sends no authorization metadata. See the builder example above.
+         * <p>The source can be called concurrently and must not block. A failure prevents Dex
+         * contact and throws {@link io.superdurable.dex.exceptions.DexServiceException} with gRPC
+         * {@code UNAUTHENTICATED}. The default {@code null} sends no authorization metadata. See
+         * the builder example above.
          *
          * @param value the credential, or {@code null} to send no token
          * @return this builder

@@ -15,6 +15,7 @@ import com.google.protobuf.Empty;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
+import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.superdurable.gen.FlowServiceGrpc;
 import io.superdurable.gen.ServerInfo;
@@ -163,7 +164,8 @@ public final class Worker implements AutoCloseable {
      * Attribute indexes and opening the listener or pull streams. If the waiting thread is interrupted, the worker
      * stops and restores the thread's interruption status before returning.
      *
-     * @throws IllegalStateException if the worker was already started or its address cannot bind
+     * @throws IllegalStateException if the worker was already started, its address cannot bind,
+     *     or authentication fails during startup
      */
     public void start() {
         final Server runningServer;
@@ -181,6 +183,9 @@ public final class Worker implements AutoCloseable {
             } catch (RuntimeException failure) {
                 state = State.STOPPED;
                 shutdownResources();
+                if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
+                    throw authenticationFailure(failure);
+                }
                 throw ServerProtocolCompatibility.requestFailure(sdkVersion, failure);
             }
             try {
@@ -202,6 +207,9 @@ public final class Worker implements AutoCloseable {
             } catch (RuntimeException failure) {
                 state = State.STOPPED;
                 shutdownResources();
+                if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
+                    throw authenticationFailure(failure);
+                }
                 throw new IllegalStateException("cannot synchronize Attribute indexes", failure);
             }
             if (pullWorker == null) {
@@ -270,9 +278,6 @@ public final class Worker implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
-        if (pullWorker != null) {
-            pullWorker.stop();
-        }
         shutdownResources();
         synchronized (this) {
             if (state != State.CLOSED) {
@@ -295,6 +300,9 @@ public final class Worker implements AutoCloseable {
     }
 
     private void shutdownResources() {
+        if (pullWorker != null) {
+            pullWorker.stop();
+        }
         handlers.shutdown();
         try {
             if (!handlers.awaitTermination(30, TimeUnit.SECONDS)) {
@@ -314,6 +322,12 @@ public final class Worker implements AutoCloseable {
             flowChannel.shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static IllegalStateException authenticationFailure(final RuntimeException cause) {
+        final String description = Status.fromThrowable(cause).getDescription();
+        return new IllegalStateException("cannot authenticate Worker with Dex"
+                + (description == null ? "" : ": " + description), cause);
     }
 
     private static ExecutorService newHandlerExecutor(final int concurrency) {

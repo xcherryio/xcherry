@@ -190,8 +190,10 @@ public final class WorkerOptions {
         /**
          * Sets the token source for Worker FlowService calls and pull stream opens.
          *
-         * <p>The source can be called concurrently. A failure ends the call locally; pull streams
-         * retry opening after a backoff. The default {@code null} sends no authorization metadata.
+         * <p>The source can be called concurrently and must not block. A failure ends the call
+         * locally; Worker startup throws {@link IllegalStateException} on authentication failure,
+         * and pull streams retry opening after a backoff. The default {@code null} sends no
+         * authorization metadata.
          *
          * <pre>{@code
          * WorkerOptions options = WorkerOptions.newBuilder()

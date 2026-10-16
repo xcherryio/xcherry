@@ -11,6 +11,7 @@
 package io.superdurable.dex;
 
 import com.google.protobuf.Empty;
+import io.grpc.CallCredentials;
 import io.grpc.Context;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -32,10 +33,12 @@ import io.superdurable.gen.ServerInfo;
 import io.superdurable.gen.SyncAttributeIndexRequest;
 import io.superdurable.gen.SyncAttributeIndexResponse;
 import io.superdurable.gen.WorkerTaskServiceGrpc;
+import io.superdurable.dex.exceptions.DexServiceException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,6 +50,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -92,6 +97,9 @@ final class CredentialTest {
         Files.write(path, "restored".getBytes(StandardCharsets.UTF_8));
         now.addAndGet(1_000_000_000L);
         assertEquals("restored", credential.token());
+        Files.write(path, "\u2003unicode\u2003".getBytes(StandardCharsets.UTF_8));
+        now.addAndGet(1_000_000_000L);
+        assertEquals("unicode", credential.token());
         assertThrows(IOException.class, () -> new FileCredential(tempDirectory.resolve("missing")));
         Files.write(path, " \n".getBytes(StandardCharsets.UTF_8));
         assertThrows(IOException.class, () -> new FileCredential(path));
@@ -117,7 +125,10 @@ final class CredentialTest {
                 Files.write(path, " \n".getBytes(StandardCharsets.UTF_8));
                 now.addAndGet(1_000_000_000L);
                 final long requestCount = fakeServer.searchRequests.get();
-                assertThrows(RuntimeException.class, () -> client.searchFlows("", 1));
+                final DexServiceException emptyFile = assertThrows(
+                        DexServiceException.class, () -> client.searchFlows("", 1));
+                assertEquals(Status.Code.UNAUTHENTICATED, emptyFile.getCode());
+                assertTrue(emptyFile.getDetail().contains("is empty"));
                 assertEquals(requestCount, fakeServer.searchRequests.get());
             }
             try (Client client = new Client(registry, new EmptyBlobCache(),
@@ -131,9 +142,99 @@ final class CredentialTest {
                                 throw new IOException("token unavailable");
                             }).build())) {
                 final long requestCount = fakeServer.searchRequests.get();
-                assertThrows(RuntimeException.class, () -> client.searchFlows("", 1));
+                final DexServiceException unavailable = assertThrows(
+                        DexServiceException.class, () -> client.searchFlows("", 1));
+                assertEquals(Status.Code.UNAUTHENTICATED, unavailable.getCode());
+                assertTrue(unavailable.getDetail().contains("token unavailable"));
                 assertEquals(requestCount, fakeServer.searchRequests.get());
             }
+            for (String invalidToken : new String[] {"non-ascii-\u00e9", "line\r\nbreak"}) {
+                try (Client client = new Client(registry, new EmptyBlobCache(),
+                        ClientOptions.newBuilder().serverAddress(fakeServer.address())
+                                .credential(() -> invalidToken).build())) {
+                    final long requestCount = fakeServer.searchRequests.get();
+                    final DexServiceException invalid = assertThrows(
+                            DexServiceException.class, () -> client.searchFlows("", 1));
+                    assertEquals(Status.Code.UNAUTHENTICATED, invalid.getCode());
+                    assertEquals(requestCount, fakeServer.searchRequests.get());
+                }
+            }
+        }
+    }
+
+    @Test
+    void workerStartupCredentialFailureReportsAuthenticationAndReleasesResources()
+            throws Exception {
+        try (FakeServer fakeServer = new FakeServer()) {
+            final Worker worker = new Worker(
+                    new Registry(Collections.<Flow<?>>emptyList()), new EmptyBlobCache(),
+                    WorkerOptions.newBuilder().serverAddress(fakeServer.address())
+                            .credential(() -> {
+                                throw new IOException("token source unavailable");
+                            })
+                            .pull(PullWorkerOptions.newBuilder().appWorkerID("failed-auth-worker").build())
+                            .build());
+            final IllegalStateException failure = assertThrows(
+                    IllegalStateException.class, worker::start);
+            assertTrue(failure.getMessage().contains("cannot authenticate Worker with Dex"));
+            assertTrue(failure.getMessage().contains("token source unavailable"));
+            assertEquals(Status.Code.UNAUTHENTICATED,
+                    Status.fromThrowable(failure.getCause()).getCode());
+            assertTrue(assertThrows(IllegalStateException.class, worker::start)
+                    .getMessage().contains("STOPPED"));
+            assertTrue(((ManagedChannel) privateField(worker, "flowChannel")).isTerminated());
+            assertTrue(((ExecutorService) privateField(worker, "handlers")).isTerminated());
+            assertTrue(((ScheduledExecutorService) privateField(worker, "bufferedStreamScheduler"))
+                    .isShutdown());
+            assertTrue(((ScheduledExecutorService) privateField(
+                    privateField(worker, "pullWorker"), "scheduler")).isShutdown());
+            assertTrue(fakeServer.headers.isEmpty());
+            worker.close();
+        }
+    }
+
+    @Test
+    void rejectedCredentialExecutorFailsWithUnavailable() {
+        final AtomicReference<Status> failure = new AtomicReference<Status>();
+        new GrpcCredential(() -> "token").applyRequestMetadata(null, runnable -> {
+            throw new RejectedExecutionException("executor stopped");
+        }, new CallCredentials.MetadataApplier() {
+            @Override
+            public void apply(final Metadata metadata) {
+                throw new AssertionError("metadata unexpectedly applied");
+            }
+
+            @Override
+            public void fail(final Status status) {
+                failure.set(status);
+            }
+        });
+        assertEquals(Status.Code.UNAVAILABLE, failure.get().getCode());
+        assertTrue(failure.get().getDescription().contains("executor stopped"));
+    }
+
+    @Test
+    void interruptedCredentialRestoresInterruptStatus() {
+        final AtomicReference<Status> failure = new AtomicReference<Status>();
+        try {
+            new GrpcCredential(() -> {
+                throw new InterruptedException("lookup interrupted");
+            }).applyRequestMetadata(null, Runnable::run,
+                    new CallCredentials.MetadataApplier() {
+                        @Override
+                        public void apply(final Metadata metadata) {
+                            throw new AssertionError("metadata unexpectedly applied");
+                        }
+
+                        @Override
+                        public void fail(final Status status) {
+                            failure.set(status);
+                        }
+                    });
+            assertEquals(Status.Code.UNAUTHENTICATED, failure.get().getCode());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
         }
     }
 
@@ -386,6 +487,13 @@ final class CredentialTest {
             server.shutdownNow();
             assertTrue(server.awaitTermination(5, TimeUnit.SECONDS));
         }
+    }
+
+    private static Object privateField(final Object target, final String name)
+            throws ReflectiveOperationException {
+        final Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
     }
 
     private static final class EmptyBlobCache implements BlobCache {

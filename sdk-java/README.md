@@ -388,9 +388,12 @@ WorkerOptions workerOptions = WorkerOptions.newBuilder()
 `FileCredential` reads and trims the file at construction. It checks its
 modification time and size at most once per second and rereads changed content.
 An unreadable or empty file fails calls instead of sending a stale token.
-Custom `Credential` implementations must support concurrent calls and return
-promptly; an exception fails the call before it reaches Dex. A blocked token
-lookup cannot hold a call beyond its gRPC deadline or cancellation. Bearer
+Custom `Credential` implementations must support concurrent calls and must not
+block. An exception fails the call before it reaches Dex. A configured gRPC
+deadline or cancellation ends a call even if token lookup blocks, but the lookup
+continues to occupy a channel executor thread until it returns. Client calls
+report credential failures as `DexServiceException` with `UNAUTHENTICATED`;
+Worker startup reports an authentication error. Bearer
 tokens travel over the same plaintext connection as other Dex calls, so protect
 the network path.
 
