@@ -8,6 +8,8 @@
 
 """Attach bearer metadata to outbound gRPC calls."""
 
+# mypy: disable-error-code=type-arg
+
 from __future__ import annotations
 
 import asyncio
@@ -62,7 +64,10 @@ async def _resolve_async_token(credential: Credential) -> str:
 def credential_deadline_error() -> grpc.aio.AioRpcError:
     return grpc.aio.AioRpcError(
         grpc.StatusCode.DEADLINE_EXCEEDED,
-        details="credential lookup exceeded RPC deadline",
+        None,
+        None,
+        "credential lookup exceeded RPC deadline",
+        None,
     )
 
 
@@ -127,7 +132,8 @@ def sync_channel(server_address: str, credential: Credential | None) -> grpc.Cha
 def async_channel(
     server_address: str, credential: Credential | None
 ) -> grpc.aio.Channel:
-    interceptors: tuple[grpc.aio.ClientInterceptor, ...] = (
-        (_AsyncCredentialInterceptor(credential),) if credential is not None else ()
+    if credential is None:
+        return grpc.aio.insecure_channel(server_address)
+    return grpc.aio.insecure_channel(
+        server_address, interceptors=[_AsyncCredentialInterceptor(credential)]
     )
-    return grpc.aio.insecure_channel(server_address, interceptors=interceptors)
