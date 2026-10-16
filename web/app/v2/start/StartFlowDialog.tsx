@@ -32,6 +32,7 @@ export function StartFlowDialog({
   definition,
   definitionRevision,
   flowType,
+  isDefaultPull,
   onClose,
   onDefinitionChanged,
   onStarted,
@@ -39,11 +40,13 @@ export function StartFlowDialog({
   definition: FlowV2StartDefinition;
   definitionRevision: string;
   flowType: string;
+  isDefaultPull: boolean;
   onClose: () => void;
   onDefinitionChanged: (error: unknown) => boolean;
   onStarted: (flowID: string) => void;
 }) {
   const [flowID, setFlowID] = useState('');
+  const [workerTargetMode, setWorkerTargetMode] = useState<'address' | 'pull'>(isDefaultPull ? 'pull' : 'address');
   const [workerAddress, setWorkerAddress] = useState('');
   const [draft, setDraft] = useState(() => createStartInputDraft(definition.input));
   const [errors, setErrors] = useState<StartInputError[]>([]);
@@ -97,7 +100,9 @@ export function StartFlowDialog({
     event.preventDefault();
     const nextErrors: StartInputError[] = [];
     if (flowID.trim() === '') nextErrors.push({ path: 'flowId', message: 'Flow ID is required.' });
-    if (workerAddress.trim() === '') nextErrors.push({ path: 'workerTargetAddress', message: 'Worker address is required.' });
+    if (workerTargetMode === 'address' && workerAddress.trim() === '') {
+      nextErrors.push({ path: 'workerTargetAddress', message: 'Worker address is required.' });
+    }
     const input = serializeStartInput(definition.input, draft);
     nextErrors.push(...input.errors);
     setErrors(nextErrors);
@@ -113,7 +118,7 @@ export function StartFlowDialog({
     try {
       const trimmedWorkerAddress = workerAddress.trim();
       const hasCurrentHealthyCheck = workerHealth === 'healthy' && workerHealthAddress === trimmedWorkerAddress;
-      if (!bypassWorkerHealthCheck && !hasCurrentHealthyCheck) {
+      if (workerTargetMode === 'address' && !bypassWorkerHealthCheck && !hasCurrentHealthyCheck) {
         const isHealthy = await checkWorkerHealth(trimmedWorkerAddress);
         if (!isHealthy) {
           focusPath(dialogRef.current, 'bypassWorkerHealthCheck');
@@ -123,8 +128,9 @@ export function StartFlowDialog({
       const requestPrefix = JSON.stringify({
         flowType,
         flowId: flowID.trim(),
-        workerTargetAddress: trimmedWorkerAddress,
-        bypassWorkerHealthCheck,
+        ...(workerTargetMode === 'pull'
+          ? { workerTargetPull: true }
+          : { workerTargetAddress: trimmedWorkerAddress, bypassWorkerHealthCheck }),
       });
       const body = `${requestPrefix.slice(0, -1)},"input":${input.json}}`;
       const headers = {
@@ -141,7 +147,7 @@ export function StartFlowDialog({
         onClose();
         return;
       }
-      if (error instanceof DexAPIError && error.code === 'WORKER_UNHEALTHY') {
+      if (workerTargetMode === 'address' && error instanceof DexAPIError && error.code === 'WORKER_UNHEALTHY') {
         setWorkerHealth('unhealthy');
         setWorkerHealthAddress(workerAddress.trim());
         setWorkerHealthWarning(error.message);
@@ -183,7 +189,40 @@ export function StartFlowDialog({
             />
             <FieldError errors={errors} path="flowId" />
           </label>
-          <label className="sfd-field">
+          <fieldset className="sfd-target-mode" disabled={submitting}>
+            <legend>Worker target</legend>
+            <label>
+              <input
+                checked={workerTargetMode === 'address'}
+                name="worker-target-mode"
+                type="radio"
+                onChange={() => {
+                  workerHealthSequence.current += 1;
+                  setWorkerHealth('idle');
+                  setWorkerHealthWarning('');
+                  setBypassWorkerHealthCheck(false);
+                  setWorkerTargetMode('address');
+                }}
+              />
+              Worker address
+            </label>
+            <label>
+              <input
+                checked={workerTargetMode === 'pull'}
+                name="worker-target-mode"
+                type="radio"
+                onChange={() => {
+                  workerHealthSequence.current += 1;
+                  setWorkerHealth('idle');
+                  setWorkerHealthWarning('');
+                  setBypassWorkerHealthCheck(false);
+                  setWorkerTargetMode('pull');
+                }}
+              />
+              Pull Worker
+            </label>
+          </fieldset>
+          {workerTargetMode === 'address' && <label className="sfd-field">
             <span>Worker gRPC address</span>
             <span className="sfd-worker-control">
               <input
@@ -214,13 +253,13 @@ export function StartFlowDialog({
               </button>
             </span>
             <FieldError errors={errors} path="workerTargetAddress" />
-          </label>
-          {workerHealth === 'healthy' && (
+          </label>}
+          {workerTargetMode === 'address' && workerHealth === 'healthy' && (
             <div className="sfd-worker-health" data-status="healthy" role="status">
               Worker port is reachable from Dex Web.
             </div>
           )}
-          {workerHealth === 'unhealthy' && (
+          {workerTargetMode === 'address' && workerHealth === 'unhealthy' && (
             <div className="sfd-worker-health" data-status="unhealthy" role="alert">
               <strong>Worker health check failed</strong>
               <span>{workerHealthWarning}</span>
@@ -253,10 +292,10 @@ export function StartFlowDialog({
           <button disabled={submitting} onClick={onClose} type="button">Cancel</button>
           <button
             className="button primary"
-            disabled={submitting || workerHealth === 'checking' || (workerHealth === 'unhealthy' && !bypassWorkerHealthCheck)}
+            disabled={submitting || (workerTargetMode === 'address' && (workerHealth === 'checking' || (workerHealth === 'unhealthy' && !bypassWorkerHealthCheck)))}
             type="submit"
           >
-            {submitting ? (workerHealth === 'checking' ? 'Checking Worker…' : 'Starting…') : 'Start Flow'}
+            {submitting ? (workerTargetMode === 'address' && workerHealth === 'checking' ? 'Checking Worker…' : 'Starting…') : 'Start Flow'}
           </button>
         </footer>
       </form>

@@ -28,6 +28,14 @@ reads it. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/READ
 and [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
 READMEs for startup details.
 
+Dex Web v2 can start a Flow through a pull Worker. In **Start Flow**, select
+**Pull Worker** instead of entering a Worker address. The start request can also
+send **workerTargetPull: true**. For deployments that use pull Workers by default,
+set **web.startFlowWorkerTargetPull: true** so requests without a target use pull
+routing. Dex Web does not check whether a pull Worker is registered before the
+start; availability is determined when Dex dispatches work. See
+[Dex Web](/production/dex-web#start-flow) for the address option and config rules.
+
 <SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
 
 <SdkSnippet lang="python">

@@ -465,8 +465,11 @@ type (
 		FlowServiceCredentialFile string `yaml:"flowServiceCredentialFile"`
 		// FlowRenderingDirectory supplies Flow Definition Graph JSON files. Default empty disables definitions. Immutable after startup.
 		FlowRenderingDirectory string `yaml:"flowRenderingDirectory"`
-		// StartFlowWorkerTargetHeadless applies headless routing to every Flow started from Dex Web. Default false. Immutable after startup.
+		// StartFlowWorkerTargetHeadless applies headless routing to address targets started from Dex Web. Default false. Immutable after startup.
 		IsStartFlowWorkerTargetHeadless bool `yaml:"startFlowWorkerTargetHeadless"`
+		// IsStartFlowWorkerTargetPull selects a pull target when a Dex Web start omits the Worker target. Default false.
+		// Explicit address targets still work; startFlowWorkerTargetHeadless applies to them only. Immutable after startup.
+		IsStartFlowWorkerTargetPull bool `yaml:"startFlowWorkerTargetPull"`
 	}
 
 	WorkerConfig struct {
@@ -847,6 +850,13 @@ func applyWebEnvironment(cfg *Config) error {
 			return fmt.Errorf("DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS must be a boolean: %w", err)
 		}
 		cfg.Web.IsStartFlowWorkerTargetHeadless = parsed
+	}
+	if value, ok := os.LookupEnv("DEX_WEB_START_FLOW_WORKER_TARGET_PULL"); ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("DEX_WEB_START_FLOW_WORKER_TARGET_PULL must be a boolean: %w", err)
+		}
+		cfg.Web.IsStartFlowWorkerTargetPull = parsed
 	}
 	return nil
 }

@@ -159,6 +159,7 @@ func newApplication(cfg *config.Config, services serviceSelection) (*application
 			Port:                            cfg.Web.EffectivePort(),
 			FlowRenderingDirectory:          cfg.Web.FlowRenderingDirectory,
 			IsStartFlowWorkerTargetHeadless: cfg.Web.IsStartFlowWorkerTargetHeadless,
+			IsStartFlowWorkerTargetPull:     cfg.Web.IsStartFlowWorkerTargetPull,
 		}
 		webServer, err := dexweb.NewServer(
 			webConfig,

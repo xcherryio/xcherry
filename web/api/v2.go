@@ -180,6 +180,7 @@ type v2Handler struct {
 	client                          dexpb.FlowServiceClient
 	loadDefinitions                 V2DefinitionLoader
 	isStartFlowWorkerTargetHeadless bool
+	isStartFlowWorkerTargetPull     bool
 	checkStartFlowWorkerHealth      V2WorkerHealthChecker
 }
 
@@ -198,6 +199,7 @@ type V2WorkerHealthChecker func(context.Context, string) error
 // V2HandlerConfig controls server-side v2 behavior.
 type V2HandlerConfig struct {
 	IsStartFlowWorkerTargetHeadless bool
+	IsStartFlowWorkerTargetPull     bool
 	WorkerHealthChecker             V2WorkerHealthChecker
 }
 
@@ -295,6 +297,7 @@ func RegisterDynamicV2Handlers(
 	handler := &v2Handler{
 		client: client, loadDefinitions: loader,
 		isStartFlowWorkerTargetHeadless: config.IsStartFlowWorkerTargetHeadless,
+		isStartFlowWorkerTargetPull:     config.IsStartFlowWorkerTargetPull,
 		checkStartFlowWorkerHealth:      config.WorkerHealthChecker,
 	}
 	if handler.checkStartFlowWorkerHealth == nil {
@@ -327,9 +330,10 @@ func (h *v2Handler) catalog(response http.ResponseWriter, request *http.Request)
 	}
 	setDefinitionETag(response, snapshot.Revision)
 	writeJSON(response, http.StatusOK, map[string]interface{}{
-		"enabled":            len(entries) > 0,
-		"flows":              entries,
-		"definitionRevision": snapshot.Revision,
+		"enabled":                   len(entries) > 0,
+		"flows":                     entries,
+		"definitionRevision":        snapshot.Revision,
+		"startFlowWorkerTargetPull": h.isStartFlowWorkerTargetPull,
 	})
 }
 

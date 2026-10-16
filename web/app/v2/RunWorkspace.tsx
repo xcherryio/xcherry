@@ -256,6 +256,7 @@ export function RunWorkspace() {
           definition={entry.definition.start}
           definitionRevision={catalog.definitionRevision}
           flowType={entry.flowType}
+          isDefaultPull={catalog.startFlowWorkerTargetPull === true}
           onClose={() => setStartOpen(false)}
           onDefinitionChanged={handleDefinitionError}
           onStarted={(startedFlowID) => {

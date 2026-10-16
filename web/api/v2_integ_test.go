@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -701,6 +702,87 @@ func TestV2StartFlowRejectsBrowserRoutingOverrideAndInvalidInput(t *testing.T) {
 	}
 	if len(client.startRequests) != 0 {
 		t.Fatalf("StartFlow requests = %+v", client.startRequests)
+	}
+}
+
+func TestV2StartFlowWorkerTargetSelection(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		workerTarget   string
+		isDefaultPull  bool
+		isHeadless     bool
+		wantStatus     int
+		wantPull       bool
+		wantAddress    string
+		wantHeadless   bool
+		wantHealthCall bool
+		wantError      string
+	}{
+		{name: "address", workerTarget: `"workerTargetAddress":"worker:9000",`, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHealthCall: true},
+		{name: "pull", workerTarget: `"workerTargetPull":true,`, wantStatus: http.StatusOK, wantPull: true},
+		{name: "both", workerTarget: `"workerTargetAddress":"worker:9000","workerTargetPull":true,`, wantStatus: http.StatusBadRequest},
+		{name: "both with empty address", workerTarget: `"workerTargetAddress":"","workerTargetPull":true,`, wantStatus: http.StatusBadRequest},
+		{name: "neither", wantStatus: http.StatusBadRequest, wantError: "workerTargetAddress or workerTargetPull is required"},
+		{name: "explicit false without address", workerTarget: `"workerTargetPull":false,`, wantStatus: http.StatusBadRequest, wantError: "workerTargetAddress or workerTargetPull is required"},
+		{name: "default pull", isDefaultPull: true, wantStatus: http.StatusOK, wantPull: true},
+		{name: "explicit empty address does not use pull default", workerTarget: `"workerTargetAddress":"",`, isDefaultPull: true, wantStatus: http.StatusBadRequest},
+		{name: "explicit false does not use pull default", workerTarget: `"workerTargetPull":false,`, isDefaultPull: true, wantStatus: http.StatusBadRequest, wantError: "workerTargetAddress or workerTargetPull is required"},
+		{name: "explicit pull with pull default", workerTarget: `"workerTargetPull":true,`, isDefaultPull: true, wantStatus: http.StatusOK, wantPull: true},
+		{name: "explicit address overrides pull default", workerTarget: `"workerTargetAddress":"worker:9000",`, isDefaultPull: true, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHealthCall: true},
+		{name: "explicit false with address", workerTarget: `"workerTargetAddress":"worker:9000","workerTargetPull":false,`, isDefaultPull: true, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHealthCall: true},
+		{name: "headless address with pull default", workerTarget: `"workerTargetAddress":"worker:9000",`, isDefaultPull: true, isHeadless: true, wantStatus: http.StatusOK, wantAddress: "worker:9000", wantHeadless: true, wantHealthCall: true},
+		{name: "pull default with headless addresses", isDefaultPull: true, isHeadless: true, wantStatus: http.StatusOK, wantPull: true},
+		{name: "both with pull default", workerTarget: `"workerTargetAddress":"worker:9000","workerTargetPull":true,`, isDefaultPull: true, wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &v2TestClient{}
+			definition := testV2Definition()
+			definition.Start = testV2StartDefinition()
+			healthCalls := 0
+			mux := http.NewServeMux()
+			RegisterDynamicV2Handlers(mux, client, func(context.Context) (V2DefinitionSnapshot, error) {
+				return V2DefinitionSnapshot{Definitions: map[string]V2Definition{"RefundFlow": definition}}, nil
+			}, V2HandlerConfig{
+				IsStartFlowWorkerTargetPull:     testCase.isDefaultPull,
+				IsStartFlowWorkerTargetHeadless: testCase.isHeadless,
+				WorkerHealthChecker: func(context.Context, string) error {
+					healthCalls++
+					return nil
+				},
+			})
+			catalog := performV2JSON(t, mux, http.MethodGet, "/api/v2/catalog", "")
+			if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), fmt.Sprintf(`"startFlowWorkerTargetPull":%t`, testCase.isDefaultPull)) {
+				t.Fatalf("catalog = %d %q", catalog.Code, catalog.Body.String())
+			}
+			body := `{"flowType":"RefundFlow","flowId":"new",` + testCase.workerTarget + `"input":{"count":1,"labels":[]}}`
+			response := performV2JSON(t, mux, http.MethodPost, "/api/v2/start", body)
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d body=%q", response.Code, response.Body.String())
+			}
+			if testCase.wantError != "" && !strings.Contains(response.Body.String(), testCase.wantError) {
+				t.Fatalf("target error = %q", response.Body.String())
+			}
+			expectedHealthCalls := 0
+			if testCase.wantHealthCall {
+				expectedHealthCalls = 1
+			}
+			if healthCalls != expectedHealthCalls {
+				t.Fatalf("Worker health calls = %d", healthCalls)
+			}
+			if testCase.wantStatus != http.StatusOK {
+				if len(client.startRequests) != 0 {
+					t.Fatalf("StartFlow requests = %d", len(client.startRequests))
+				}
+				return
+			}
+			if len(client.startRequests) != 1 {
+				t.Fatalf("StartFlow requests = %d", len(client.startRequests))
+			}
+			target := client.startRequests[0].GetFlowStartOptions().GetFlowConfigOverride().GetWorkerTarget()
+			if target.GetIsPullMode() != testCase.wantPull || target.GetAddress() != testCase.wantAddress || target.GetIsHeadlessAddress() != testCase.wantHeadless {
+				t.Fatalf("Worker target = %+v", target)
+			}
+		})
 	}
 }
 

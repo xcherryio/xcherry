@@ -165,6 +165,7 @@ export interface V2Catalog {
   enabled: boolean;
   flows: V2CatalogEntry[];
   definitionRevision: string;
+  startFlowWorkerTargetPull?: boolean;
 }
 
 export interface V2Flow {
