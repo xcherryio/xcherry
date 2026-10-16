@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.38.0 - 2026-10-15
+
+- Advance the SDK, Server, and CLI baselines to the published Dex 1.10.1 tags and refresh pinned Dex source links. The example manifests at those tags still select SDK 1.10.0; application lockfiles remain authoritative.
+- Add pull Worker guidance for all five SDKs: Worker options and targets, Client defaults and Flow overrides, process-unique app Worker IDs, sticky fallback, unavailable Step retries, at-least-once delivery, one-attempt ASYNC local execution, heartbeat timeout and cancellation, stream capacity, graceful Stop, and the wake hook.
+- Document public API authentication, SDK bearer credentials, CLI credential-file precedence, Dex Web's FlowService credential and separate Web port protection, the private internal listener, Matching and membership settings, and migration from removed multi-tenant configuration while preserving single-tenant data.
+- Update App Builder's Worker and access topology, deployment checks, and Dex Web guidance. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.38.0.
+
 ## 0.37.1 - 2026-10-15
 
 - Replace the plugin logo (`assets/logo.png`) with the Dex mark, the pipe operator |> set as a D. There is no skill content change.

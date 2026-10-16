@@ -52,6 +52,7 @@ CORE_TOPICS = {
     "patterns.md",
     "plugin-version-check.md",
     "primitives.md",
+    "pull-workers.md",
     "step-options.md",
     "testing.md",
     "troubleshooting.md",

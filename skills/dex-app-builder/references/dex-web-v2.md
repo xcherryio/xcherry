@@ -1,12 +1,14 @@
 # Dex Web v2 and FDG 2.0
 
-Reference capability baselines: Dex Server `v1.6.1`, Dex CLI `v1.7.0`, and
+Reference capability baselines: Dex Server `v1.10.1`, Dex CLI `v1.10.1`, and
 the SDK source baseline in [bundle-baselines.md](../../dex-sdk/references/core/bundle-baselines.md).
 These validate the guidance, not an instruction to upgrade an application.
 An application retains its pinned Server, CLI, and Go SDK versions unless the
 user authorizes an upgrade. Both Server and CLI embed Web v2, Start Flow with a
 reachable Worker address, and the permission-based Work Queue. Release-owned
 Connector setup runs only in loopback `dexcli dev`.
+
+With Dex Server auth enabled, set `web.flowServiceCredentialFile` for Web's calls to FlowService. This does not authenticate Web users: protect the Web port with network controls or an authenticating proxy. Keep this bearer-token file separate from the local Connector development credential store. See [public API authentication](../../dex-sdk/references/core/operations.md#public-api-authentication).
 
 Released connector modules may require an older Connector SDK; at connectors
 `main` `980a6f9`, modules require exact releases from `sdkgo/v0.7.0` through

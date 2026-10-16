@@ -65,6 +65,8 @@ Then load only the references required by the task:
 | Failure diagnosis | [Troubleshooting](references/core/troubleshooting.md) and [Error handling](references/core/error-handling.md) | selected language's **error-handling.md** and **gotchas.md** |
 | Production inspection or mutation | [Operations](references/core/operations.md) | selected language's **observability.md** |
 | Server deployment or component topology | [Operations](references/core/operations.md) | language entry for Client and Worker targets |
+| Pull Worker routing, capacity, shutdown, or retry | [Pull Workers](references/core/pull-workers.md) and [Operations](references/core/operations.md) | selected language's entry and **observability.md** |
+| Public API authentication or bearer credentials | [Operations](references/core/operations.md#public-api-authentication) | selected language's entry |
 | Connector selection, local credentials, or named connections | [Operations](references/core/operations.md) | language entry for runtime support |
 | Large state, maps, or projections | [Data handling](references/core/data-handling.md) | selected language's **data-handling.md** |
 | Open-Flow compatibility or upgrade | [Versioning](references/core/versioning.md) | selected language's **versioning.md** |
