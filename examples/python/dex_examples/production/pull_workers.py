@@ -86,3 +86,11 @@ async def start_pull_greeting(
         ),
     )
     return flow, worker, client, worker_task
+
+
+async def stop_pull_greeting(
+    worker: AsyncWorker, client: AsyncClient, worker_task: asyncio.Task[None]
+) -> None:
+    await client.close()
+    await worker.close()
+    await worker_task

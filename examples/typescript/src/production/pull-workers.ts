@@ -86,3 +86,8 @@ export async function startPullGreeting(
   });
   return { flow, worker, client };
 }
+
+export async function stopPullGreeting(worker: Worker, client: Client): Promise<void> {
+  await client.close();
+  await worker.close();
+}

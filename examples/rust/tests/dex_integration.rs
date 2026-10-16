@@ -28,7 +28,7 @@ use dex_examples_rust::primitives::channel::flow::{
 };
 use dex_examples_rust::primitives::stream::flow::{PROGRESS, StreamFlow};
 use dex_examples_rust::production::pull_workers::{
-    GET_GREETING, GreetingFlow, start_pull_greeting,
+    GET_GREETING, GreetingFlow, start_pull_greeting, stop_pull_greeting,
 };
 use dex_examples_rust::products::deal_dsl::{
     ConditionMessage, DEAL_CURRENT_STATE, DealDSLFlow, SEND_DEAL_CONDITION_MESSAGE,
@@ -200,12 +200,9 @@ fn pull_worker_serves_greeting_flow() {
             .expect("read Rust pull Greeting RPC"),
         output
     );
-    worker.stop();
-    worker_thread
-        .join()
+    stop_pull_greeting(worker, client, worker_thread)
         .expect("join Rust pull greeting Worker")
         .expect("stop Rust pull greeting Worker");
-    drop(client);
     cache.close().expect("close Rust pull greeting cache");
 }
 

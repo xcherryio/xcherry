@@ -18,15 +18,15 @@ SDK 会从 Worker 提供拉取模式的 **WorkerTarget**。将它设为 Client �
 也可以直接使用拉取模式 **WorkerTarget**。
 
 所有五种 SDK 都提供 pull 选项和目标。以下示例使用拉取模式 Worker 处理一个
-Greeting Flow。Step 写入问候语，**getGreeting** RPC 读取问候语。完整示例和启动细节见
+Greeting Flow。Step 写入问候语，问候语 RPC 读取它。启动细节见
 [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker)、
 [Python](https://github.com/superdurable/dex/blob/main/sdk-python/README.md#pull-mode)、
 [Java](https://github.com/superdurable/dex/blob/main/sdk-java/README.md#pull-mode)、
 [TypeScript](https://github.com/superdurable/dex/blob/main/sdk-typescript/README.md#pull-mode) 和
 [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
-SDK README。
+SDK 的 README。
 
-<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
+<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
 
 <SdkSnippet lang="python">
 
@@ -54,6 +54,14 @@ async def start_pull_greeting(
         ),
     )
     return flow, worker, client, worker_task
+
+
+async def stop_pull_greeting(
+    worker: AsyncWorker, client: AsyncClient, worker_task: asyncio.Task[None]
+) -> None:
+    await client.close()
+    await worker.close()
+    await worker_task
 ```
 
 </SdkSnippet>
@@ -84,6 +92,18 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
 	return flow, worker, client, workerResult, nil
+}
+
+func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Client, workerResult <-chan error) error {
+	clientCloseErr := client.Close()
+	workerStopErr := worker.Stop(ctx)
+	var workerRunErr error
+	select {
+	case workerRunErr = <-workerResult:
+	case <-ctx.Done():
+		workerRunErr = ctx.Err()
+	}
+	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -125,7 +145,14 @@ public final class PullGreetingExample {
 
     public record RunningPullGreeting(
             GreetingFlow flow, Worker worker, Client client, Thread workerThread,
-            CompletableFuture<Void> workerResult) {
+            CompletableFuture<Void> workerResult) implements AutoCloseable {
+        @Override
+        public void close() throws InterruptedException {
+            client.close();
+            worker.close();
+            workerThread.join();
+            workerResult.join();
+        }
     }
 }
 ```
@@ -151,6 +178,11 @@ export async function startPullGreeting(
     workerTarget: worker.workerTarget,
   });
   return { flow, worker, client };
+}
+
+export async function stopPullGreeting(worker: Worker, client: Client): Promise<void> {
+  await client.close();
+  await worker.close();
 }
 ```
 
@@ -181,6 +213,17 @@ pub fn start_pull_greeting(
     let running_worker = Arc::clone(&worker);
     let worker_thread = thread::spawn(move || running_worker.start());
     Ok((worker, client, worker_thread))
+}
+
+pub fn stop_pull_greeting(
+    worker: Arc<Worker>,
+    client: Client,
+    worker_thread: JoinHandle<SdkResult<()>>,
+) -> thread::Result<SdkResult<()>> {
+    worker.stop();
+    let worker_result = worker_thread.join();
+    drop(client);
+    worker_result
 }
 ```
 
@@ -219,11 +262,11 @@ Dex 在 matching dispatch 等待时间内寻找可用 Worker。如果没有 Work
 | --- | --- | --- | --- | --- |
 | Go | **MaxConcurrentTasks** | **IdleStreamsPerQueue** | **StopDrainTimeout** | **Stop** |
 | Python | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
-| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
 | Java | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeout** | **stop** |
+| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
 | Rust | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
 
-Rust 表中的名称是 builder method。下方公式使用 TypeScript 的两个容量参数名称；
+表中 Java 和 Rust 的选项名称是 builder method。下方公式使用 TypeScript 的两个容量参数名称；
 同一上限适用于所有 SDK。
 
 一个注册了 **F** 个 Flow 类型的 Worker 最多可能持有

@@ -1,6 +1,6 @@
 # Dex Go examples
 
-These examples target `github.com/superdurable/dex/sdk-go v0.10.1`.
+These examples target `github.com/superdurable/dex/sdk-go v1.10.1`.
 
 `dex.None` marks a nil-only Step, RPC, or Channel payload. Calls pass `nil`.
 
@@ -14,6 +14,7 @@ Client.
 products/            # real-world business scenarios
 patterns/            # design patterns
 primitives/          # one minimal example per Dex primitive
+production/          # production Worker configurations
 registry/            # shared Flow registry
 server/              # HTTP helpers
 shared/              # mock services

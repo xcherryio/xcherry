@@ -20,15 +20,15 @@ the same **FlowConfig** override. Use a pull **WorkerTarget** without a local
 Worker when the Client runs in a separate process.
 
 All five SDKs provide pull options and targets. This example serves a Greeting
-Flow through a pull Worker. Its Step stores a greeting, and the **getGreeting**
-RPC reads it. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker),
+Flow through a pull Worker. Its Step stores a greeting, and the greeting RPC
+reads it. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker),
 [Python](https://github.com/superdurable/dex/blob/main/sdk-python/README.md#pull-mode),
 [Java](https://github.com/superdurable/dex/blob/main/sdk-java/README.md#pull-mode),
 [TypeScript](https://github.com/superdurable/dex/blob/main/sdk-typescript/README.md#pull-mode),
 and [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
 READMEs for startup details.
 
-<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
+<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
 
 <SdkSnippet lang="python">
 
@@ -56,6 +56,14 @@ async def start_pull_greeting(
         ),
     )
     return flow, worker, client, worker_task
+
+
+async def stop_pull_greeting(
+    worker: AsyncWorker, client: AsyncClient, worker_task: asyncio.Task[None]
+) -> None:
+    await client.close()
+    await worker.close()
+    await worker_task
 ```
 
 </SdkSnippet>
@@ -86,6 +94,18 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
 	return flow, worker, client, workerResult, nil
+}
+
+func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Client, workerResult <-chan error) error {
+	clientCloseErr := client.Close()
+	workerStopErr := worker.Stop(ctx)
+	var workerRunErr error
+	select {
+	case workerRunErr = <-workerResult:
+	case <-ctx.Done():
+		workerRunErr = ctx.Err()
+	}
+	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -127,7 +147,14 @@ public final class PullGreetingExample {
 
     public record RunningPullGreeting(
             GreetingFlow flow, Worker worker, Client client, Thread workerThread,
-            CompletableFuture<Void> workerResult) {
+            CompletableFuture<Void> workerResult) implements AutoCloseable {
+        @Override
+        public void close() throws InterruptedException {
+            client.close();
+            worker.close();
+            workerThread.join();
+            workerResult.join();
+        }
     }
 }
 ```
@@ -153,6 +180,11 @@ export async function startPullGreeting(
     workerTarget: worker.workerTarget,
   });
   return { flow, worker, client };
+}
+
+export async function stopPullGreeting(worker: Worker, client: Client): Promise<void> {
+  await client.close();
+  await worker.close();
 }
 ```
 
@@ -183,6 +215,17 @@ pub fn start_pull_greeting(
     let running_worker = Arc::clone(&worker);
     let worker_thread = thread::spawn(move || running_worker.start());
     Ok((worker, client, worker_thread))
+}
+
+pub fn stop_pull_greeting(
+    worker: Arc<Worker>,
+    client: Client,
+    worker_thread: JoinHandle<SdkResult<()>>,
+) -> thread::Result<SdkResult<()>> {
+    worker.stop();
+    let worker_result = worker_thread.join();
+    drop(client);
+    worker_result
 }
 ```
 
@@ -226,11 +269,11 @@ idle streams and declines an extra assignment so Dex can try another Worker.
 | --- | --- | --- | --- | --- |
 | Go | **MaxConcurrentTasks** | **IdleStreamsPerQueue** | **StopDrainTimeout** | **Stop** |
 | Python | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
-| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
 | Java | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeout** | **stop** |
+| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
 | Rust | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
 
-The Rust entries are builder methods. The formula below uses the TypeScript
+The Java and Rust option names are builder methods. The formula below uses the TypeScript
 spellings for the two capacity values; the same bound applies to every SDK.
 
 For one Worker with **F** registered Flow types, plan for up to

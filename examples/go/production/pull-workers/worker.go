@@ -21,6 +21,9 @@
 package pullworkers
 
 import (
+	"context"
+	"errors"
+
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/dex"
 )
@@ -48,6 +51,18 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
 	return flow, worker, client, workerResult, nil
+}
+
+func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Client, workerResult <-chan error) error {
+	clientCloseErr := client.Close()
+	workerStopErr := worker.Stop(ctx)
+	var workerRunErr error
+	select {
+	case workerRunErr = <-workerResult:
+	case <-ctx.Done():
+		workerRunErr = ctx.Err()
+	}
+	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
