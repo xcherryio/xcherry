@@ -40,6 +40,9 @@ starts its own `dexcli dev` environment. Both modes run in CI with coverage.
   `mixed_sync_async_flow.ts` exercise both styles on one Worker.
 - Persistence integration covers singleton Attribute equality waits; local
   contracts cover Condition IDs and buffered map introspection.
+- Hard-delete Attribute integration covers initial values, Step reads and
+  overwrites, RPC writes and deletions, inline `GetAttributes` values, and
+  absence after deletion.
 - Step streaming covers repeated and cross-Stream writes, duplicate source
   metadata, heartbeat detail recovery and clearing, local-activity fallback, and
   buffered text timer/final-result ordering.

@@ -60,6 +60,11 @@ import {
   IndexType,
   type AttributeLock,
 } from "./persistence.js";
+import {
+  isHardDeleteOnNullDefinition,
+  requireHardDeleteAttributeWriteSupport,
+  requireHardDeleteOnNullValueKind,
+} from "./attribute-hard-delete.js";
 import { mapAttributeStoreNames, mapAttributeStoreSync } from "./attribute-store-sync.js";
 import {
   ActiveStepSearchMode,
@@ -95,6 +100,7 @@ export class WorkerDispatcher {
   public constructor(
     private readonly registry: Registry,
     private readonly hydrator: ValueHydrator,
+    private readonly negotiatedServerProtocolVersion: () => number,
   ) {}
 
   public async invokeWaitFor(
@@ -143,6 +149,11 @@ export class WorkerDispatcher {
       } catch (failure) {
         throw invalidStepResult(flow.name, step.name, "waitFor", failure);
       }
+      this.requireHardDeleteAttributeWriteSupport([
+        ...response.upsertAttributes,
+        ...(response.waitingCondition?.subFlowConditions ?? [])
+          .flatMap((condition) => condition.options?.attributes ?? []),
+      ]);
       const finalizationFailure = context.finalizeStepOutputs();
       if (finalizationFailure !== undefined) {
         throw finalizationFailure;
@@ -199,6 +210,7 @@ export class WorkerDispatcher {
       } catch (failure) {
         throw invalidStepResult(flow.name, step.name, "execute", failure);
       }
+      this.requireHardDeleteAttributeWriteSupport(response.upsertAttributes);
       const finalizationFailure = context.finalizeStepOutputs();
       if (finalizationFailure !== undefined) {
         throw finalizationFailure;
@@ -247,6 +259,7 @@ export class WorkerDispatcher {
           publishToChannel: [...context.getPublications()],
           deleteFromChannel: [...context.getChannelDeletions()],
         });
+        this.requireHardDeleteAttributeWriteSupport(response.upsertAttributes);
         const finalizationFailure = context.finalizeStepOutputs();
         if (finalizationFailure !== undefined) {
           throw finalizationFailure;
@@ -284,9 +297,10 @@ export class WorkerDispatcher {
       request.loadedChannelMapInstances,
     );
     const returned = await invokeRPC(flow, rpc, context, request.input);
+    let response: InvokeWorkerRPCResponse;
     try {
       const result = rpcResult(rpc, returned);
-      return InvokeWorkerRPCResponse.create({
+      response = InvokeWorkerRPCResponse.create({
         output:
           result === undefined
             ? encodeUnknown(undefined)
@@ -300,6 +314,12 @@ export class WorkerDispatcher {
     } catch (failure) {
       throw invalidStepResult(flow.name, undefined, "rpc", failure);
     }
+    this.requireHardDeleteAttributeWriteSupport(response.upsertAttributes);
+    return response;
+  }
+
+  private requireHardDeleteAttributeWriteSupport(writes: readonly AttributeWrite[]): void {
+    requireHardDeleteAttributeWriteSupport(this.negotiatedServerProtocolVersion(), writes);
   }
 
   private async hydrateWaitFor(
@@ -827,9 +847,14 @@ function mapSubFlowOptions(
     }
     return {
       key,
-      value: encodeValue(initial.attribute.codec, initial.value),
+      value: requireHardDeleteOnNullValueKind(
+        initial.attribute,
+        key,
+        encodeValue(initial.attribute.codec, initial.value),
+      ),
       indexConfig: mapIndex(initial.attribute.index),
       syncConfig: mapAttributeStoreSync(initial.attribute),
+      isHardDeleteOnNull: isHardDeleteOnNullDefinition(initial.attribute),
     };
   });
   const reusePolicy =

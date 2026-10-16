@@ -120,8 +120,8 @@ test("Worker rejects incompatible Server before sync and binding", async () => {
       calls.push("GetServerInfo");
       callback(null, {
         serverVersion: "future",
-        minimumSupportedProtocolVersion: 2,
-        currentProtocolVersion: 2,
+        minimumSupportedProtocolVersion: 4,
+        currentProtocolVersion: 4,
       });
     },
     syncAttributeIndexes(_call, callback: sendUnaryData<SyncAttributeIndexResponse>) {

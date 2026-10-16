@@ -287,6 +287,42 @@ failures do not roll back Flow Attributes. Omitting `attributeStoreNames`
 preserves current targets; `attributeStoreNames: []` disables future
 synchronization while retaining protocol presence.
 
+Use `hardDeleteOnNull()` for short-lived secrets, such as API keys, that Dex
+must be able to delete permanently:
+
+```typescript
+const apiKey = new Attribute("api-key", stringCodec).hardDeleteOnNull();
+const vendorTokens = new AttributeMap("vendor-tokens", jsonCodec<VendorToken>())
+  .hardDeleteOnNull();
+```
+
+Dex stores these values only in the Dex blob store, never in Flow history.
+Deleting the Attribute or setting it to `null` or `undefined` permanently
+deletes the stored value, and a deleted value reads as absent. Handlers receive
+values inline, and the SDK never stores them in the local blob cache.
+
+- Only string and object values are supported, including JSON values and byte
+  arrays. Built-in numeric and Boolean codecs fail at definition time. Custom
+  codecs that encode a number or Boolean fail when the value is written.
+- A hard-delete definition cannot have an index or use
+  `syncToAttributeStore()`. `Client.waitForAttributeMatch` rejects it before
+  contacting Dex. Use the registered definition for initial Attributes.
+- Writes require a Server with an enabled blob store and Server protocol
+  version 3 or later. The Client checks the protocol once before its first
+  hard-delete write. The Worker fails a handler result that writes a
+  hard-delete Attribute to an older Server.
+- Each Flow keeps one stored copy per Attribute key and overwrites it in
+  place. A Step or RPC attempt writes or deletes that copy before Dex commits
+  its result. Retries, other Steps and RPCs, and Client reads can observe a
+  write or deletion from an attempt that later failed. Concurrent writers to the
+  same key may leave a value other than the last committed write.
+- A failed `startFlow` or SubFlow start for an already-running Flow ID still
+  overwrites the running Flow's value; a null initial value deletes it.
+  Executions that reuse a Flow ID share the stored value.
+- `timeTravel` does not restore a deleted value. Values remain until deleted
+  or until the Flow is removed by retention and blob cleanup. Blob store
+  backups or bucket versioning can retain copies.
+
 ### Waiting and map inspection
 
 `Wait.until`, `Wait.allOf`, and `Wait.anyOf` use unnamed Conditions by default.
@@ -614,9 +650,11 @@ require 2FA and disallow token-based publication.
 ## Server protocol compatibility
 
 Worker startup calls `GetServerInfo`, negotiates the highest common protocol,
-synchronizes Attribute indexes, and then binds WorkerService. The initial
-TypeScript SDK interval is `[1,1]`. Missing information, invalid or disjoint
-intervals, and RPC failures stop startup before binding.
+synchronizes Attribute indexes, and then binds WorkerService. The TypeScript
+SDK interval is `[1,3]`. Missing information, invalid or disjoint intervals,
+and RPC failures stop startup before binding. The Client negotiates lazily, once,
+before its first hard-delete Attribute write. Hard-delete Attribute writes
+require negotiated protocol version 3 or later.
 
 The build generates the diagnostic SDK version from `package.json`, so the
 runtime value follows the version stamped by the release workflow. The artifact

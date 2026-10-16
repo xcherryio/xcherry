@@ -107,6 +107,7 @@ export class Worker {
     const dispatcher = new WorkerDispatcher(
       registry,
       new ValueHydrator(this.flowService, blobCache),
+      () => this.negotiatedProtocolVersion,
     );
     try {
       this.pullWorker = options.pull === undefined
