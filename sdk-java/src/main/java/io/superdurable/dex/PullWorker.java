@@ -610,6 +610,11 @@ final class PullWorker {
                 PullWorker.this.notifyAll();
                 return;
             }
+            if (isDraining && hasIdleReplacement()) {
+                streams.remove(this);
+                PullWorker.this.notifyAll();
+                return;
+            }
             final Status.Code code = failure == null ? Status.Code.OK
                     : Status.fromThrowable(failure).getCode();
             final boolean isPermanent = code == Status.Code.UNAUTHENTICATED
@@ -642,6 +647,17 @@ final class PullWorker {
                 }
             }, delay, TimeUnit.MILLISECONDS);
             PullWorker.this.notifyAll();
+        }
+
+        private boolean hasIdleReplacement() {
+            int idleReplacements = 0;
+            for (PullStream stream : streams) {
+                if (stream != this && stream.queue.equals(queue)
+                        && !stream.isBusy && !stream.isDraining) {
+                    idleReplacements++;
+                }
+            }
+            return idleReplacements >= options.getIdleStreamsPerQueue();
         }
     }
 }
