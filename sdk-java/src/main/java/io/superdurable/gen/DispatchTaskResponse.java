@@ -7,7 +7,7 @@ package io.superdurable.gen;
 
 /**
  * <pre>
- * Relays Worker output, then ends with a result, Worker error, or dispatch error.
+ * Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
  * </pre>
  *
  * Protobuf type {@code dex.DispatchTaskResponse}
@@ -669,7 +669,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * Relays Worker output, then ends with a result, Worker error, or dispatch error.
+   * Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
    * </pre>
    *
    * Protobuf type {@code dex.DispatchTaskResponse}

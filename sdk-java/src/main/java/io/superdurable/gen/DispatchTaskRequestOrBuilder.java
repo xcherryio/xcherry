@@ -216,5 +216,15 @@ public interface DispatchTaskRequestOrBuilder extends
    */
   io.superdurable.gen.InvokeWorkerRPCRequestOrBuilder getRpcOrBuilder();
 
+  /**
+   * <pre>
+   * Allows matching to send assignment state frames to capable callers.
+   * </pre>
+   *
+   * <code>bool supports_assignment_state = 11;</code>
+   * @return The supportsAssignmentState.
+   */
+  boolean getSupportsAssignmentState();
+
   io.superdurable.gen.DispatchTaskRequest.RequestCase getRequestCase();
 }

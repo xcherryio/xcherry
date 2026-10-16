@@ -335,7 +335,7 @@ func registerPullWorker(t *testing.T, connection *grpc.ClientConn, queue string)
 }
 
 func pullDispatchRequest(queue string) *dexpb.DispatchTaskRequest {
-	return &dexpb.DispatchTaskRequest{Queue: queue, FlowId: uuid.NewString(), DispatchWait: durationpb.New(5 * time.Second), Deadline: timestamppb.New(time.Now().Add(10 * time.Second)), Request: &dexpb.DispatchTaskRequest_Rpc{Rpc: &dexpb.InvokeWorkerRPCRequest{}}}
+	return &dexpb.DispatchTaskRequest{Queue: queue, FlowId: uuid.NewString(), DispatchWait: durationpb.New(5 * time.Second), Deadline: timestamppb.New(time.Now().Add(10 * time.Second)), Request: &dexpb.DispatchTaskRequest_Rpc{Rpc: &dexpb.InvokeWorkerRPCRequest{}}, SupportsAssignmentState: true}
 }
 
 func dispatchPullTask(t *testing.T, client dexpb.MatchingServiceClient, worker dexpb.WorkerTaskService_PollWorkerTaskClient, queue string) {

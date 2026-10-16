@@ -62,7 +62,9 @@ func ReceiveFirstFrame(
 	go receiveNextFrame(stream, frames)
 	var wakeTimer *time.Timer
 	var wakeChannel <-chan time.Time
+	var wakeDeadline time.Time
 	if wake != nil {
+		wakeDeadline = time.Now().Add(stickyWait)
 		wakeTimer = time.NewTimer(stickyWait)
 		wakeChannel = wakeTimer.C
 		defer wakeTimer.Stop()
@@ -75,6 +77,7 @@ func ReceiveFirstFrame(
 		defer heartbeatTicker.Stop()
 	}
 	isAssigned := false
+	hasWoken := false
 	for {
 		select {
 		case received := <-frames:
@@ -83,17 +86,32 @@ func ReceiveFirstFrame(
 			}
 			if received.frame.GetAssigned() != nil {
 				isAssigned = true
+				if wakeTimer != nil {
+					wakeTimer.Stop()
+					wakeChannel = nil
+				}
 				go receiveNextFrame(stream, frames)
 				continue
 			}
 			if received.frame.GetUnassigned() != nil {
 				isAssigned = false
+				if wakeTimer != nil && !hasWoken {
+					remaining := time.Until(wakeDeadline)
+					if remaining <= 0 {
+						wake()
+						hasWoken = true
+					} else {
+						wakeTimer.Reset(remaining)
+						wakeChannel = wakeTimer.C
+					}
+				}
 				go receiveNextFrame(stream, frames)
 				continue
 			}
 			return received.frame, received.err
 		case <-wakeChannel:
 			wake()
+			hasWoken = true
 			wakeChannel = nil
 		case <-heartbeatChannel:
 			if !isAssigned {

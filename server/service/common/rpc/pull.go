@@ -72,13 +72,14 @@ func invokePullWorkerRPC(
 		queue = flowType
 	}
 	dispatchRequest := &dexpb.DispatchTaskRequest{
-		Queue:         queue,
-		FallbackQueue: flowType,
-		FlowId:        flowID,
-		StickyWait:    durationpb.New(stickyWait),
-		DispatchWait:  durationpb.New(dispatchWait),
-		Deadline:      timestamppb.New(deadline),
-		Request:       &dexpb.DispatchTaskRequest_Rpc{Rpc: request},
+		Queue:                   queue,
+		FallbackQueue:           flowType,
+		FlowId:                  flowID,
+		StickyWait:              durationpb.New(stickyWait),
+		DispatchWait:            durationpb.New(dispatchWait),
+		Deadline:                timestamppb.New(deadline),
+		Request:                 &dexpb.DispatchTaskRequest_Rpc{Rpc: request},
+		SupportsAssignmentState: true,
 	}
 	stream, err := dispatcher.Dispatch(ctx, dispatchRequest)
 	if err != nil {

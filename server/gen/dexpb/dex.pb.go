@@ -2318,9 +2318,11 @@ type DispatchTaskRequest struct {
 	//	*DispatchTaskRequest_WaitFor
 	//	*DispatchTaskRequest_Execute
 	//	*DispatchTaskRequest_Rpc
-	Request       isDispatchTaskRequest_Request `protobuf_oneof:"request"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Request isDispatchTaskRequest_Request `protobuf_oneof:"request"`
+	// Allows matching to send assignment state frames to capable callers.
+	SupportsAssignmentState bool `protobuf:"varint,11,opt,name=supports_assignment_state,json=supportsAssignmentState,proto3" json:"supports_assignment_state,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *DispatchTaskRequest) Reset() {
@@ -2436,6 +2438,13 @@ func (x *DispatchTaskRequest) GetRpc() *InvokeWorkerRPCRequest {
 	return nil
 }
 
+func (x *DispatchTaskRequest) GetSupportsAssignmentState() bool {
+	if x != nil {
+		return x.SupportsAssignmentState
+	}
+	return false
+}
+
 type isDispatchTaskRequest_Request interface {
 	isDispatchTaskRequest_Request()
 }
@@ -2458,7 +2467,7 @@ func (*DispatchTaskRequest_Execute) isDispatchTaskRequest_Request() {}
 
 func (*DispatchTaskRequest_Rpc) isDispatchTaskRequest_Request() {}
 
-// Relays Worker output, then ends with a result, Worker error, or dispatch error.
+// Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
 type DispatchTaskResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Output:
@@ -14548,7 +14557,7 @@ const file_dex_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"1\n" +
 	"\x17PollWorkerTaskReconnect\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x14\n" +
-	"\x12PollWorkerTaskPing\"\xef\x03\n" +
+	"\x12PollWorkerTaskPing\"\xab\x04\n" +
 	"\x13DispatchTaskRequest\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12%\n" +
 	"\x0efallback_queue\x18\x02 \x01(\tR\rfallbackQueue\x12\x17\n" +
@@ -14561,7 +14570,8 @@ const file_dex_proto_rawDesc = "" +
 	"\bwait_for\x18\b \x01(\v2\x1f.dex.InvokeWaitForMethodRequestH\x00R\awaitFor\x12;\n" +
 	"\aexecute\x18\t \x01(\v2\x1f.dex.InvokeExecuteMethodRequestH\x00R\aexecute\x12/\n" +
 	"\x03rpc\x18\n" +
-	" \x01(\v2\x1b.dex.InvokeWorkerRPCRequestH\x00R\x03rpcB\t\n" +
+	" \x01(\v2\x1b.dex.InvokeWorkerRPCRequestH\x00R\x03rpc\x12:\n" +
+	"\x19supports_assignment_state\x18\v \x01(\bR\x17supportsAssignmentStateB\t\n" +
 	"\arequest\"\xf1\x03\n" +
 	"\x14DispatchTaskResponse\x12;\n" +
 	"\bwait_for\x18\x01 \x01(\v2\x1e.dex.InvokeWaitForMethodOutputH\x00R\awaitFor\x12:\n" +

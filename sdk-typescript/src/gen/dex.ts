@@ -416,9 +416,11 @@ export interface DispatchTaskRequest {
     | { $case: "execute"; value: InvokeExecuteMethodRequest }
     | { $case: "rpc"; value: InvokeWorkerRPCRequest }
     | undefined;
+  /** Allows matching to send assignment state frames to capable callers. */
+  supportsAssignmentState: boolean;
 }
 
-/** Relays Worker output, then ends with a result, Worker error, or dispatch error. */
+/** Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error. */
 export interface DispatchTaskResponse {
   output:
     | { $case: "waitFor"; value: InvokeWaitForMethodOutput }
@@ -2732,6 +2734,7 @@ function createBaseDispatchTaskRequest(): DispatchTaskRequest {
     deadline: undefined,
     taskId: "",
     request: undefined,
+    supportsAssignmentState: false,
   };
 }
 
@@ -2768,6 +2771,9 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
       case "rpc":
         InvokeWorkerRPCRequest.encode(message.request.value, writer.uint32(82).fork()).join();
         break;
+    }
+    if (message.supportsAssignmentState !== false) {
+      writer.uint32(88).bool(message.supportsAssignmentState);
     }
     return writer;
   },
@@ -2859,6 +2865,14 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
           message.request = { $case: "rpc", value: InvokeWorkerRPCRequest.decode(reader, reader.uint32()) };
           continue;
         }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.supportsAssignmentState = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2904,6 +2918,7 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
         break;
       }
     }
+    message.supportsAssignmentState = object.supportsAssignmentState ?? false;
     return message;
   },
 };

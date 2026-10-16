@@ -268,9 +268,11 @@ message DispatchTaskRequest {
     InvokeExecuteMethodRequest execute = 9;
     InvokeWorkerRPCRequest rpc = 10;
   }
+  // Allows matching to send assignment state frames to capable callers.
+  bool supports_assignment_state = 11;
 }
 
-// Relays Worker output, then ends with a result, Worker error, or dispatch error.
+// Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
 message DispatchTaskResponse {
   oneof output {
     InvokeWaitForMethodOutput wait_for = 1;

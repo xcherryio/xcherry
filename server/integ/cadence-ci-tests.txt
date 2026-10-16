@@ -43,3 +43,4 @@ TestStepLineageCadence
 TestParallelFlowCadence
 TestLockingWorkflowCadence
 TestSearchRunsCadence
+TestPullWorkerHeartbeatTimeoutCadence
