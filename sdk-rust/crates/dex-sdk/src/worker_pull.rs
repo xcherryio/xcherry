@@ -1143,6 +1143,7 @@ mod tests {
         let dispatcher = WorkerDispatcher::new(
             Registry::new(),
             ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
         );
         let worker =
             PullWorker::new(&PullWorkerOptions::new(), &dispatcher, channel).expect("pull Worker");
@@ -1256,6 +1257,7 @@ mod tests {
         let dispatcher = WorkerDispatcher::new(
             Registry::new(),
             ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
         );
         let shared = Arc::new(PullShared {
             state: Mutex::new(PullState {
@@ -1546,6 +1548,7 @@ mod tests {
         let dispatcher = WorkerDispatcher::new(
             registry,
             ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
         );
         let worker = PullWorker::new(
             &PullWorkerOptions::new().app_worker_id("worker-drain"),
@@ -1655,6 +1658,7 @@ mod tests {
         let dispatcher = WorkerDispatcher::new(
             registry,
             ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
         );
         let worker = PullWorker::new(
             &PullWorkerOptions::new()
@@ -1754,6 +1758,7 @@ mod tests {
         let dispatcher = WorkerDispatcher::new(
             registry,
             ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
         );
         let worker = PullWorker::new(
             &PullWorkerOptions::new().app_worker_id("worker-cancel"),

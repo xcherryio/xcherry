@@ -33,6 +33,10 @@ mod conditional_complete_test;
 mod conditional_complete_workflow;
 #[path = "integ/flow_service_client.rs"]
 mod flow_service_client;
+#[path = "integ/hard_delete_attribute_test.rs"]
+mod hard_delete_attribute_test;
+#[path = "integ/hard_delete_attribute_workflow.rs"]
+mod hard_delete_attribute_workflow;
 #[path = "integ/heartbeat_recovery_test.rs"]
 mod heartbeat_recovery_test;
 #[path = "integ/heartbeat_recovery_workflow.rs"]

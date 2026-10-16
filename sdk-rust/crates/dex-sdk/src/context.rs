@@ -17,8 +17,13 @@ use dex_protocol::dex::{
     Value as ProtoValue, value,
 };
 
+use crate::attribute::{
+    AttributeWriteSettings, require_registered_hard_delete_setting,
+    validate_hard_delete_attribute_write,
+};
 use crate::persistence::PersistenceKind;
 use crate::registry::{RegisteredFlow, decode_instance, physical_name, validate_map_instance};
+use crate::server_protocol::NegotiatedServerProtocolVersion;
 use crate::value_mapper;
 use crate::worker_output::StepOutputEmitter;
 use crate::{
@@ -45,6 +50,7 @@ pub(crate) struct ContextInput {
     pub(crate) loaded_attribute_map_instances: Vec<String>,
     pub(crate) loaded_channel_names: Vec<String>,
     pub(crate) loaded_channel_map_instances: Vec<String>,
+    pub(crate) negotiated_protocol_version: NegotiatedServerProtocolVersion,
 }
 
 pub(crate) struct InvocationOutputs {
@@ -115,6 +121,7 @@ pub struct Context {
     runtime: Option<tokio::runtime::Handle>,
     step_output_finalizers: Vec<Arc<dyn StepOutputFinalizer>>,
     step_outputs_finalized: bool,
+    negotiated_protocol_version: NegotiatedServerProtocolVersion,
 }
 
 pub(crate) trait StepOutputFinalizer: Send + Sync {
@@ -163,6 +170,7 @@ impl Context {
             runtime: tokio::runtime::Handle::try_current().ok(),
             step_output_finalizers: Vec::new(),
             step_outputs_finalized: false,
+            negotiated_protocol_version: input.negotiated_protocol_version,
         })
     }
 
@@ -434,8 +442,7 @@ impl Context {
             PersistenceKind::Attribute,
             None,
             value_mapper::encode_handler(&value)?,
-            attribute.index().map(|index| index.proto_config(false)),
-            attribute.sync_config(),
+            attribute.write_settings(),
         )
     }
 
@@ -451,8 +458,7 @@ impl Context {
             PersistenceKind::AttributeMap,
             Some(instance),
             value_mapper::encode_handler(&value)?,
-            attribute.index().map(|index| index.proto_config(true)),
-            attribute.sync_config(),
+            attribute.write_settings(),
         )
     }
 
@@ -463,8 +469,7 @@ impl Context {
             PersistenceKind::Attribute,
             None,
             value_mapper::deletion(),
-            attribute.index().map(|index| index.proto_config(false)),
-            attribute.sync_config(),
+            attribute.write_settings(),
         )
     }
 
@@ -479,8 +484,7 @@ impl Context {
             PersistenceKind::AttributeMap,
             Some(instance),
             value_mapper::deletion(),
-            attribute.index().map(|index| index.proto_config(true)),
-            attribute.sync_config(),
+            attribute.write_settings(),
         )
     }
 
@@ -811,19 +815,29 @@ impl Context {
         kind: PersistenceKind,
         instance: Option<&str>,
         value: ProtoValue,
-        index_config: Option<dex_protocol::dex::IndexConfig>,
-        sync_config: Option<dex_protocol::dex::AttributeSyncConfig>,
+        write_settings: AttributeWriteSettings,
     ) -> HandlerResult<()> {
         let key = self.registered_name(name, kind, instance)?;
-        self.attribute_writes.insert(
-            key.clone(),
-            AttributeWrite {
-                key,
-                value: Some(value),
-                index_config,
-                sync_config,
-            },
-        );
+        let is_registered_hard_delete_on_null = self
+            .flow
+            .persistence
+            .get(name)
+            .is_some_and(|definition| definition.is_hard_delete_on_null);
+        require_registered_hard_delete_setting(
+            name,
+            is_registered_hard_delete_on_null,
+            write_settings.is_hard_delete_on_null,
+        )
+        .map_err(|error| HandlerError::new("dex_sdk::HandlerError", error))?;
+        let write = write_settings.attribute_write(key.clone(), value);
+        validate_hard_delete_attribute_write(&write)
+            .map_err(|error| HandlerError::new("dex_sdk::HandlerError", error))?;
+        if write.is_hard_delete_on_null {
+            self.negotiated_protocol_version
+                .require_hard_delete_attribute_support(&key)
+                .map_err(|error| HandlerError::new("dex_sdk::HandlerError", error))?;
+        }
+        self.attribute_writes.insert(key, write);
         Ok(())
     }
 
@@ -1133,8 +1147,9 @@ fn require_name(value: &str, kind: &str) -> HandlerResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{Context, ContextInput, InvocationCancellation, InvocationMethod};
+    use crate::server_protocol::NegotiatedServerProtocolVersion;
     use crate::{
-        AttributeMap, Channel, ChannelMap, Flow, PersistenceSchema, Registry,
+        Attribute, AttributeMap, Channel, ChannelMap, Flow, PersistenceSchema, Registry,
         registry::physical_name, value_mapper,
     };
     use dex_protocol::dex::{
@@ -1194,6 +1209,7 @@ mod tests {
                 loaded_attribute_map_instances: vec!["items/".to_string()],
                 loaded_channel_names: Vec::new(),
                 loaded_channel_map_instances: Vec::new(),
+                negotiated_protocol_version: NegotiatedServerProtocolVersion::default(),
             },
             None,
             InvocationCancellation::new(),
@@ -1323,6 +1339,7 @@ mod tests {
                 loaded_attribute_map_instances: vec![attribute_name],
                 loaded_channel_names: vec!["selected-commands".to_string()],
                 loaded_channel_map_instances: vec![channel_map_name],
+                negotiated_protocol_version: NegotiatedServerProtocolVersion::default(),
             },
             None,
             InvocationCancellation::new(),
@@ -1349,5 +1366,119 @@ mod tests {
         assert!(by_tenant.pending_messages(&context, "other").is_err());
         assert!(queued.publish(&mut context, "later".to_string()).is_ok());
         assert_eq!(1, queued.pending_messages(&context).unwrap().len());
+    }
+
+    struct HardDeleteFlow;
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct NumericNewtype(u64);
+
+    static API_KEY: std::sync::LazyLock<Attribute<String>> =
+        std::sync::LazyLock::new(|| Attribute::new("api-key").hard_delete_on_null());
+    static NUMERIC_SECRET: std::sync::LazyLock<Attribute<NumericNewtype>> =
+        std::sync::LazyLock::new(|| Attribute::new("numeric-secret").hard_delete_on_null());
+    static TENANT_KEYS: std::sync::LazyLock<AttributeMap<String>> =
+        std::sync::LazyLock::new(|| AttributeMap::new("tenant-keys").hard_delete_on_null());
+    static PLAIN_API_KEY: std::sync::LazyLock<Attribute<String>> =
+        std::sync::LazyLock::new(|| Attribute::new("api-key"));
+
+    impl Flow for HardDeleteFlow {
+        type StartInput = ();
+
+        fn persistence(&self) -> PersistenceSchema {
+            PersistenceSchema::new()
+                .attribute(&API_KEY)
+                .attribute(&NUMERIC_SECRET)
+                .attribute_map(&TENANT_KEYS)
+        }
+    }
+
+    fn hard_delete_context(negotiated_protocol_version: u32) -> Context {
+        let registry = Registry::new()
+            .register(HardDeleteFlow)
+            .expect("register hard-delete Flow");
+        let registered = registry
+            .flow("HardDeleteFlow")
+            .expect("lookup hard-delete Flow")
+            .clone();
+        let negotiated = NegotiatedServerProtocolVersion::default();
+        negotiated.store(negotiated_protocol_version);
+        Context::new(
+            ContextInput {
+                method: InvocationMethod::Rpc,
+                flow: registered,
+                metadata: ProtoContext::default(),
+                attributes: Vec::new(),
+                locals: Vec::new(),
+                condition_results: None,
+                channel_infos: HashMap::new(),
+                loaded_channel_messages: HashMap::new(),
+                loaded_attribute_map_instances: vec!["tenant-keys/".to_string()],
+                loaded_channel_names: Vec::new(),
+                loaded_channel_map_instances: Vec::new(),
+                negotiated_protocol_version: negotiated,
+            },
+            None,
+            InvocationCancellation::new(),
+        )
+        .expect("create hard-delete Context")
+    }
+
+    #[test]
+    fn hard_delete_writes_set_the_flag_and_validate_values_and_protocol() {
+        let mut context = hard_delete_context(3);
+        API_KEY.set(&mut context, "key-1".to_string()).unwrap();
+        TENANT_KEYS
+            .set(&mut context, "tenant-a", "key-a".to_string())
+            .unwrap();
+        TENANT_KEYS.delete(&mut context, "tenant-b").unwrap();
+        let error = NUMERIC_SECRET
+            .set(&mut context, NumericNewtype(7))
+            .expect_err("numeric value");
+        assert!(
+            error
+                .to_string()
+                .contains("numeric and Boolean values are rejected")
+        );
+        NUMERIC_SECRET.delete(&mut context).unwrap();
+        let error = PLAIN_API_KEY
+            .set(&mut context, "leak".to_string())
+            .expect_err("mismatched definition");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its registered definition")
+        );
+        assert_eq!(Some("key-1".to_string()), API_KEY.get(&context).unwrap());
+
+        let mut writes = context.take_outputs().attributes;
+        writes.sort_by(|left, right| left.key.cmp(&right.key));
+        let keys = writes
+            .iter()
+            .map(|write| write.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![
+                "api-key",
+                "numeric-secret",
+                "tenant-keys/tenant-a",
+                "tenant-keys/tenant-b"
+            ],
+            keys
+        );
+        assert!(writes.iter().all(|write| write.is_hard_delete_on_null
+            && write.index_config.is_none()
+            && write.sync_config.is_none()));
+
+        for version in [0, 1, 2] {
+            let mut context = hard_delete_context(version);
+            let error = API_KEY
+                .set(&mut context, "key-1".to_string())
+                .expect_err("old Server");
+            assert!(error.to_string().contains("protocol version 3 or later"));
+            let error = API_KEY.delete(&mut context).expect_err("old Server");
+            assert!(error.to_string().contains("protocol version 3 or later"));
+            assert!(context.take_outputs().attributes.is_empty());
+        }
     }
 }

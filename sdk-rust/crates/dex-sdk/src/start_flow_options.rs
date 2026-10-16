@@ -10,11 +10,19 @@ use std::time::Duration;
 
 use std::sync::Arc;
 
-use dex_protocol::dex::{AttributeSyncConfig, IndexConfig};
+use dex_protocol::dex::AttributeWrite;
 
+use crate::attribute::{
+    AttributeWriteSettings, require_registered_hard_delete_setting,
+    validate_hard_delete_attribute_write,
+};
+use crate::client::invalid;
+use crate::persistence::PersistenceDefinition;
 use crate::registry::physical_name;
 use crate::step::{ErasedValue, TypedValue};
-use crate::{Attribute, AttributeMap, FlowConfig, FlowTimeoutHandlerOptions, RetryPolicy, Value};
+use crate::{
+    Attribute, AttributeMap, FlowConfig, FlowTimeoutHandlerOptions, RetryPolicy, SdkResult, Value,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Controls whether [`crate::Client::start_flow_with_options`] may reuse a Flow ID.
@@ -79,18 +87,18 @@ pub struct StartFlowOptions {
 #[derive(Clone)]
 pub(crate) struct InitialAttribute {
     pub(crate) key: String,
+    pub(crate) attribute_name: String,
     pub(crate) value: Arc<dyn ErasedValue>,
-    pub(crate) index_config: Option<IndexConfig>,
-    pub(crate) sync_config: Option<AttributeSyncConfig>,
+    pub(crate) write_settings: AttributeWriteSettings,
 }
 
 impl InitialAttribute {
     pub(crate) fn for_attribute<T: Value>(attribute: &Attribute<T>, value: T) -> Self {
         Self {
             key: attribute.name().to_string(),
+            attribute_name: attribute.name().to_string(),
             value: Arc::new(TypedValue(value)),
-            index_config: attribute.index().map(|index| index.proto_config(false)),
-            sync_config: attribute.sync_config(),
+            write_settings: attribute.write_settings(),
         }
     }
 
@@ -101,10 +109,33 @@ impl InitialAttribute {
     ) -> Self {
         Self {
             key: physical_name(attribute.name(), instance),
+            attribute_name: attribute.name().to_string(),
             value: Arc::new(TypedValue(value)),
-            index_config: attribute.index().map(|index| index.proto_config(true)),
-            sync_config: attribute.sync_config(),
+            write_settings: attribute.write_settings(),
         }
+    }
+
+    /// Returns the encoded write after checking it against the registered `definition`.
+    ///
+    /// Returns [`crate::SdkError::InvalidArgument`] for a hard-delete mismatch or an invalid
+    /// hard-delete combination or value. Returns [`crate::SdkError::ValueMapping`] when the value
+    /// cannot be encoded.
+    pub(crate) fn encode_attribute_write(
+        &self,
+        definition: &PersistenceDefinition,
+    ) -> SdkResult<AttributeWrite> {
+        require_registered_hard_delete_setting(
+            &self.attribute_name,
+            definition.is_hard_delete_on_null,
+            self.write_settings.is_hard_delete_on_null,
+        )
+        .map_err(invalid)?;
+        let write = self
+            .write_settings
+            .clone()
+            .attribute_write(self.key.clone(), self.value.encode()?);
+        validate_hard_delete_attribute_write(&write).map_err(invalid)?;
+        Ok(write)
     }
 }
 
@@ -215,7 +246,8 @@ impl Default for StartFlowOptions {
 #[cfg(test)]
 mod tests {
     use super::StartFlowOptions;
-    use crate::{Attribute, AttributeMap};
+    use crate::persistence::{PersistenceDefinition, PersistenceKind};
+    use crate::{Attribute, AttributeMap, SdkError};
 
     #[test]
     fn initial_attributes_retain_sync_configuration() {
@@ -227,9 +259,10 @@ mod tests {
             .initial_attribute(&synced, "synced".to_string())
             .initial_attribute_map(&synced_map, "tenant-1", "mapped".to_string());
 
-        assert!(options.attributes[0].sync_config.is_none());
+        assert!(options.attributes[0].write_settings.sync_config.is_none());
         assert_eq!(
             options.attributes[1]
+                .write_settings
                 .sync_config
                 .as_ref()
                 .map(|config| config.enabled),
@@ -237,10 +270,72 @@ mod tests {
         );
         assert_eq!(
             options.attributes[2]
+                .write_settings
                 .sync_config
                 .as_ref()
                 .map(|config| config.enabled),
             Some(true)
         );
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct NumericNewtype(u64);
+
+    #[test]
+    fn initial_hard_delete_attributes_set_the_flag_and_validate_values() {
+        let secret = Attribute::<String>::new("secret").hard_delete_on_null();
+        let secrets = AttributeMap::<Option<String>>::new("secrets").hard_delete_on_null();
+        let numeric = Attribute::<NumericNewtype>::new("numeric").hard_delete_on_null();
+        let plain_secret = Attribute::<String>::new("secret");
+        let options = StartFlowOptions::new()
+            .initial_attribute(&secret, "key-1".to_string())
+            .initial_attribute_map(&secrets, "tenant-1", None)
+            .initial_attribute(&numeric, NumericNewtype(7))
+            .initial_attribute(&plain_secret, "leak".to_string());
+        let secret_definition = PersistenceDefinition {
+            is_hard_delete_on_null: true,
+            ..PersistenceDefinition::new("secret", PersistenceKind::Attribute)
+        };
+        let secrets_definition = PersistenceDefinition {
+            is_hard_delete_on_null: true,
+            ..PersistenceDefinition::new("secrets", PersistenceKind::AttributeMap)
+        };
+        let numeric_definition = PersistenceDefinition {
+            is_hard_delete_on_null: true,
+            ..PersistenceDefinition::new("numeric", PersistenceKind::Attribute)
+        };
+
+        let write = options.attributes[0]
+            .encode_attribute_write(&secret_definition)
+            .expect("string write");
+        assert!(write.is_hard_delete_on_null);
+        assert!(write.index_config.is_none() && write.sync_config.is_none());
+        let deletion = options.attributes[1]
+            .encode_attribute_write(&secrets_definition)
+            .expect("null write");
+        assert!(deletion.is_hard_delete_on_null);
+        assert_eq!(deletion.key, "secrets/tenant-1");
+        for (result, expected) in [
+            (
+                options.attributes[2].encode_attribute_write(&numeric_definition),
+                "numeric and Boolean values are rejected",
+            ),
+            (
+                options.attributes[3].encode_attribute_write(&secret_definition),
+                "does not match its registered definition",
+            ),
+            (
+                options.attributes[0].encode_attribute_write(&PersistenceDefinition::new(
+                    "secret",
+                    PersistenceKind::Attribute,
+                )),
+                "does not match its registered definition",
+            ),
+        ] {
+            let Err(SdkError::InvalidArgument { message }) = result else {
+                panic!("expected InvalidArgument");
+            };
+            assert!(message.contains(expected), "{message}");
+        }
     }
 }

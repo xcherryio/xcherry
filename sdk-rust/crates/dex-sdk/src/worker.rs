@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::credential::{CredentialChannel, CredentialInterceptor};
 use dex_protocol::dex::WorkerErrorResponse;
@@ -27,7 +27,9 @@ use tokio::sync::watch;
 use tonic::transport::{Endpoint, Server};
 use tonic::{Code, Request, Response, Status};
 
-use crate::server_protocol::{negotiate_server_protocol, server_info_request_error};
+use crate::server_protocol::{
+    NegotiatedServerProtocolVersion, negotiate_server_protocol, server_info_request_error,
+};
 use crate::value_hydrator::ValueHydrator;
 use crate::worker_dispatcher::WorkerDispatcher;
 use crate::worker_output::WorkerResponseStream;
@@ -79,7 +81,7 @@ pub struct Worker {
     worker_target: WorkerTarget,
     shutdown: watch::Sender<bool>,
     state: AtomicU8,
-    negotiated_protocol_version: AtomicU32,
+    negotiated_protocol_version: NegotiatedServerProtocolVersion,
 }
 
 impl Worker {
@@ -176,7 +178,9 @@ impl Worker {
         };
         let attribute_indexes = registry.attribute_indexes().clone();
         let hydrator = ValueHydrator::new(flow_service.clone(), blob_cache);
-        let dispatcher = WorkerDispatcher::new(registry, hydrator);
+        let negotiated_protocol_version = NegotiatedServerProtocolVersion::default();
+        let dispatcher =
+            WorkerDispatcher::new(registry, hydrator, negotiated_protocol_version.clone());
         let pull = options
             .pull_value()
             .zip(pull_channel)
@@ -194,7 +198,7 @@ impl Worker {
             worker_target,
             shutdown,
             state: AtomicU8::new(CREATED),
-            negotiated_protocol_version: AtomicU32::new(0),
+            negotiated_protocol_version,
         })
     }
 
@@ -248,7 +252,7 @@ impl Worker {
                 service_error(error)
             })?;
         self.negotiated_protocol_version
-            .store(negotiated_protocol_version, Ordering::Release);
+            .store(negotiated_protocol_version);
         let sync_result = self.runtime.block_on(async {
             tokio::time::timeout(
                 self.attribute_index_sync_timeout,
