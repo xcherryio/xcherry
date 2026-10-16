@@ -269,6 +269,8 @@ class Worker:
         synchronous handler must check ``Context.is_cancellation_requested`` to
         respond promptly to forced shutdown. Call ``stop`` from a thread other
         than the pull Worker's ``start`` thread.
+        Half-closed pull streams wait for server EOF until the remaining drain
+        deadline before the channel closes.
 
         Raises:
             RuntimeError: If called on the pull Worker's ``start`` thread.
@@ -297,6 +299,7 @@ class Worker:
     def close(self) -> None:
         """Stop the Worker and permanently mark it closed.
 
+        Pull streams finish their bounded EOF wait before the channel closes.
         ``close`` is idempotent; a closed Worker cannot be started again.
         """
         self.stop()

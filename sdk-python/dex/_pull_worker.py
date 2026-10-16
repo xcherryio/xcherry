@@ -99,6 +99,7 @@ class PullWorkerRuntime:
         self._wake: asyncio.Event | None = None
         self._stopping: asyncio.Event | None = None
         self._stop_completed: asyncio.Event | None = None
+        self._stop_drain_deadline: float | None = None
         self._streams: set[PullStream] = set()
         self._busy_tasks = 0
         self._unsupported_logged = False
@@ -176,6 +177,9 @@ class PullWorkerRuntime:
             return
         if self._stop_completed is None:
             self._stop_completed = asyncio.Event()
+        self._stop_drain_deadline = (
+            asyncio.get_running_loop().time() + self.stop_drain_timeout
+        )
         self._stopping.set()
         try:
             for stream in tuple(self._streams):
@@ -185,20 +189,29 @@ class PullWorkerRuntime:
                 stream.handler_task for stream in self._streams if stream.handler_task
             ]
             if active:
-                _, pending = await asyncio.wait(active, timeout=self.stop_drain_timeout)
+                _, pending = await asyncio.wait(
+                    active, timeout=self._remaining_stop_drain_time()
+                )
                 if pending:
                     for stream in tuple(self._streams):
                         stream.cancel_handler()
                     await asyncio.gather(*pending, return_exceptions=True)
             stream_tasks = [stream.run_task for stream in tuple(self._streams)]
             if stream_tasks:
-                await asyncio.wait(stream_tasks, timeout=2.5)
+                await asyncio.wait(
+                    stream_tasks, timeout=self._remaining_stop_drain_time()
+                )
                 for stream in tuple(self._streams):
-                    if not stream.run_task.done():
+                    if not stream.run_task.done() and not stream.is_half_closing:
                         stream.close()
                 await asyncio.gather(*stream_tasks, return_exceptions=True)
         finally:
             self._stop_completed.set()
+
+    def _remaining_stop_drain_time(self) -> float:
+        if self._stop_drain_deadline is None:
+            raise RuntimeError("pull Worker Stop drain has not started")
+        return max(0, self._stop_drain_deadline - asyncio.get_running_loop().time())
 
     def stop_threadsafe(self) -> None:
         if self.is_loop_thread():
@@ -226,6 +239,7 @@ class PullStream:
         self.task_id = ""
         self.is_busy = False
         self.is_draining = False
+        self.is_half_closing = False
         self._active = threading.Event()
         self._call: Any = None
         self._send_lock = asyncio.Lock()
@@ -323,6 +337,7 @@ class PullStream:
                                 and frame.WhichOneof("frame") == "task"
                             ):
                                 await self._reject_task(frame.task)
+                        self.is_half_closing = True
                         await self._call.done_writing()
                         await self._await_stream_eof(reader)
                         reader = None
@@ -359,6 +374,7 @@ class PullStream:
                         self._immediate_reconnect = True
                         return was_registered
         finally:
+            self.is_half_closing = False
             self.cancel_handler()
             if self.handler_task is not None:
                 await self._finish_handler()
@@ -370,21 +386,53 @@ class PullStream:
         return was_registered
 
     async def _await_stream_eof(self, reader: asyncio.Task[Any] | None) -> None:
-        deadline = asyncio.get_running_loop().time() + 2
+        loop = asyncio.get_running_loop()
+        reconnect_deadline = loop.time() + self.runtime.stop_drain_timeout
+        stopping = self.runtime._stopping
+        if stopping is None:
+            raise RuntimeError("pull Worker Stop event is unavailable")
+        stop_wait: asyncio.Task[bool] | None = None
         try:
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
+                deadline = self.runtime._stop_drain_deadline or reconnect_deadline
+                remaining = deadline - loop.time()
                 if remaining <= 0:
-                    raise asyncio.TimeoutError
-                if reader is not None:
-                    frame = await asyncio.wait_for(reader, timeout=remaining)
-                    reader = None
-                else:
-                    frame = await asyncio.wait_for(self._call.read(), timeout=remaining)
+                    _LOGGER.warning("Worker task stream did not close after draining")
+                    return
+                if reader is None:
+                    reader = asyncio.create_task(self._call.read())
+                waiting: set[asyncio.Task[Any]] = {reader}
+                if self.runtime._stop_drain_deadline is None:
+                    if stop_wait is None:
+                        stop_wait = asyncio.create_task(stopping.wait())
+                    waiting.add(stop_wait)
+                completed, _ = await asyncio.wait(
+                    waiting, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not completed:
+                    _LOGGER.warning("Worker task stream did not close after draining")
+                    return
+                if stop_wait in completed:
+                    await stop_wait
+                    stop_wait = None
+                    continue
+                frame = await reader
+                reader = None
                 if frame is _GRPC_AIO_EOF:
                     return
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Worker task stream did not close after draining")
+        finally:
+            if stop_wait is not None:
+                stop_wait.cancel()
+                try:
+                    await stop_wait
+                except asyncio.CancelledError:
+                    pass
+            if reader is not None:
+                reader.cancel()
+                try:
+                    await reader
+                except asyncio.CancelledError:
+                    pass
 
     async def _start_task(self, task: pb.PollWorkerTask) -> None:
         if self.is_busy or self.is_draining or not self.runtime.accept_task():
@@ -537,7 +585,7 @@ class PullStream:
 
     def drain(self) -> None:
         self.is_draining = True
-        if not self.is_busy:
+        if not self.is_busy and not self.is_half_closing:
             self.close()
 
     def close(self) -> None:

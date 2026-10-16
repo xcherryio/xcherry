@@ -238,6 +238,8 @@ class AsyncWorker:
         Calls before ``start`` and repeated calls after shutdown are safe. Pull
         mode drains for ``PullWorkerOptions.stop_drain_timeout`` (30 seconds by
         default), then cancels active tasks and waits for handlers to return.
+        Half-closed pull streams wait for server EOF until the remaining drain
+        deadline before the channel closes.
         """
         if self._state in ("stopped", "closed"):
             return
@@ -255,6 +257,7 @@ class AsyncWorker:
     async def close(self) -> None:
         """Stop the AsyncWorker and permanently mark it closed.
 
+        Pull streams finish their bounded EOF wait before the channel closes.
         Repeated calls are safe; a closed Worker cannot be started again.
         """
         await self.stop()

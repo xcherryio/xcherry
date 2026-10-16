@@ -85,13 +85,17 @@ Client defaults or Flow overrides when the Worker target is not directly in
 scope.
 
 Pull streams reconnect after failures. A server-directed reconnect waits for
-an active task to finish; an idle stream reconnects immediately. An older
-server without pull support produces one explicit error log and is retried
-after one minute. `start()` reports startup synchronization errors, while
-later stream errors are logged and retried. `stop()` drains for at most
+an active task to finish, then waits up to `stop_drain_timeout` for the server
+to close the stream after the final frame. An idle stream reconnects
+immediately. An older server without pull support produces one explicit error
+log and is retried after one minute. `start()` reports startup
+synchronization errors, while later stream errors are logged and retried.
+`stop()` drains for at most
 `stop_drain_timeout`, which defaults to 30 seconds. Afterward it requests
 cancellation and waits for handlers to return. Synchronous handlers should
-check `Context.is_cancellation_requested()` during long operations.
+check `Context.is_cancellation_requested()` during long operations. Streams
+that sent a final frame wait for server EOF until the remaining Stop drain
+deadline before the channel closes.
 
 ## Flow state I/O
 

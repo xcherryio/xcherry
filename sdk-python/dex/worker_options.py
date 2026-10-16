@@ -73,6 +73,9 @@ class PullWorkerOptions:
         stop_drain_timeout: Grace period for active tasks on stop. Zero uses 30
             seconds. After it expires, handlers are canceled and stop waits for
             them to return. Negative values are invalid.
+            Busy Reconnect waits this long for server EOF after
+            the final frame. During Stop, half-closed streams use the remaining
+            drain deadline.
 
     Raises:
         ValueError: If a numeric option is negative or app_worker_id is invalid.

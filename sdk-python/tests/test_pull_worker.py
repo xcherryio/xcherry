@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, cast
@@ -34,6 +35,7 @@ from dex import (
 from dex._pull_worker import PullStream, PullWorkerRuntime, generate_app_worker_id
 from dex._worker_dispatcher import WorkerDispatcher
 from dex.dexpb import dex_pb2 as pb
+from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
 
 
@@ -156,6 +158,133 @@ class BlockingDispatcher:
             self.canceled.set()
             raise
         return pb.InvokeWorkerRPCResponse()
+
+
+class LargeResultDispatcher(BlockingDispatcher):
+    async def invoke_rpc(
+        self, request: pb.InvokeWorkerRPCRequest, is_active: object
+    ) -> pb.InvokeWorkerRPCResponse:
+        self.started.set()
+        await self.gate.wait()
+        return pb.InvokeWorkerRPCResponse(output=pb.Value(string_value="x" * 3_000_000))
+
+
+class DelayedReadService(dex_pb2_grpc.WorkerTaskServiceServicer):
+    def __init__(self, is_reconnecting: bool) -> None:
+        self.is_reconnecting = is_reconnecting
+        self.ready = threading.Event()
+        self.read_allowed = threading.Event()
+        self.finished = threading.Event()
+        self.final_frame: pb.PollWorkerTaskFrame | None = None
+        self.read_error: grpc.RpcError | None = None
+        self._assigned = False
+        self._lock = threading.Lock()
+
+    def PollWorkerTask(  # noqa: N802
+        self,
+        request_iterator: Iterator[pb.PollWorkerTaskRequest],
+        context: grpc.ServicerContext,
+    ) -> Iterator[pb.PollWorkerTaskResponse]:
+        registration = next(request_iterator)
+        assert registration.WhichOneof("frame") == "register"
+        yield pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())
+        with self._lock:
+            is_task_stream = not self._assigned
+            self._assigned = True
+        if not is_task_stream:
+            for _ in request_iterator:
+                pass
+            return
+        yield pb.PollWorkerTaskResponse(
+            task=pb.PollWorkerTask(
+                task_id="delayed-result", rpc=pb.InvokeWorkerRPCRequest()
+            )
+        )
+        if self.is_reconnecting:
+            yield pb.PollWorkerTaskResponse(
+                reconnect=pb.PollWorkerTaskReconnect(reason="move")
+            )
+        yield pb.PollWorkerTaskResponse(ping=pb.PollWorkerTaskPing())
+        pong = next(request_iterator)
+        assert pong.WhichOneof("frame") == "pong"
+        self.ready.set()
+        assert self.read_allowed.wait(timeout=10)
+        try:
+            for request in request_iterator:
+                if request.WhichOneof("frame") == "task_frame":
+                    self.final_frame = request.task_frame
+        except grpc.RpcError as failure:
+            self.read_error = failure
+        finally:
+            self.finished.set()
+
+
+@pytest.mark.parametrize("shutdown", ["stop", "reconnect", "reconnect_then_stop"])
+def test_large_final_result_survives_delayed_grpc_read(shutdown: str) -> None:
+    asyncio.run(_large_final_result_survives_delayed_grpc_read(shutdown))
+
+
+async def _large_final_result_survives_delayed_grpc_read(shutdown: str) -> None:
+    service = DelayedReadService(is_reconnecting=shutdown != "stop")
+    executor = ThreadPoolExecutor(max_workers=4)
+    server = grpc.server(
+        executor,
+        options=(
+            ("grpc.http2.initial_window_size", 65_536),
+            ("grpc.http2.initial_connection_window_size", 65_536),
+        ),
+    )
+    dex_pb2_grpc.add_WorkerTaskServiceServicer_to_server(  # type: ignore[no-untyped-call]
+        service, server
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    dispatcher = LargeResultDispatcher()
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        dispatcher,
+        PullWorkerOptions(
+            app_worker_id="delayed-result-worker",
+            stop_drain_timeout=timedelta(
+                seconds=4 if shutdown == "reconnect_then_stop" else 5
+            ),
+        ),
+        f"127.0.0.1:{port}",
+        None,
+    )
+    running = asyncio.create_task(runtime.run())
+    stopping: asyncio.Task[None] | None = None
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(service.ready.wait), timeout=5)
+        await asyncio.wait_for(dispatcher.started.wait(), timeout=5)
+        if shutdown == "stop":
+            stopping = asyncio.create_task(runtime.stop())
+            assert runtime._stopping is not None
+            await asyncio.wait_for(runtime._stopping.wait(), timeout=5)
+        dispatcher.gate.set()
+        if shutdown == "reconnect_then_stop":
+            await asyncio.sleep(2)
+            stopping = asyncio.create_task(runtime.stop())
+        await asyncio.sleep(2.5 if shutdown == "reconnect_then_stop" else 3.1)
+        service.read_allowed.set()
+        assert await asyncio.wait_for(
+            asyncio.to_thread(service.finished.wait), timeout=6
+        )
+        assert service.read_error is None
+        assert service.final_frame is not None
+        assert service.final_frame.task_id == "delayed-result"
+        assert len(service.final_frame.rpc.output.string_value) == 3_000_000
+        if stopping is None:
+            stopping = asyncio.create_task(runtime.stop())
+        await asyncio.wait_for(stopping, timeout=6)
+        await asyncio.wait_for(running, timeout=6)
+    finally:
+        service.read_allowed.set()
+        dispatcher.gate.set()
+        await asyncio.wait_for(runtime.stop(), timeout=6)
+        await asyncio.wait_for(running, timeout=6)
+        assert server.stop(grace=0).wait(timeout=3)
+        executor.shutdown(wait=True)
 
 
 def test_capacity_reject_and_cancel() -> None:
@@ -301,15 +430,12 @@ async def _stop_forces_async_handler_after_drain_timeout() -> None:
     await asyncio.wait_for(dispatcher.started.wait(), timeout=1)
     stopping = asyncio.create_task(runtime.stop())
     await asyncio.wait_for(call.half_closed.wait(), timeout=1)
-    assert not call.is_closed
-    assert not stopping.done()
-    call.release_eof()
     await asyncio.wait_for(stopping, timeout=1)
     assert dispatcher.canceled.is_set()
+    assert call.is_closed
     assert call.operations.index("write:task_frame") < call.operations.index(
         "done_writing"
     )
-    assert call.operations.index("read:EOF") < call.operations.index("cancel")
     errors = [
         request.task_frame.worker_error
         for request in call.requests
