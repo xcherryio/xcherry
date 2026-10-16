@@ -453,7 +453,7 @@ fn pull_worker_test_end_to_end() {
         Err(mpsc::TryRecvError::Empty)
     ));
 
-    let push = DexDevTestEnvironment::start(Registry::new().register(BasicWorkflow::new()));
+    let push = DexDevTestEnvironment::start_push(Registry::new().register(BasicWorkflow::new()));
     let push_id = flow_id("rust-push-alongside-pull");
     push.client
         .start_flow(&BasicWorkflow::new(), &push_id, 0)

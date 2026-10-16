@@ -11,17 +11,17 @@
 set -euo pipefail
 
 coverage=false
-pull_only=false
 if [[ "${1:-}" == "--coverage" ]]; then
   coverage=true
   shift
 fi
-if [[ "${1:-}" == "--pull" ]]; then
-  pull_only=true
-  shift
-fi
 if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--coverage] [--pull]" >&2
+  echo "usage: $0 [--coverage] (DEX_INTEG_WORKER_MODE=push|pull)" >&2
+  exit 2
+fi
+export DEX_INTEG_WORKER_MODE="${DEX_INTEG_WORKER_MODE-push}"
+if [[ "$DEX_INTEG_WORKER_MODE" != "push" && "$DEX_INTEG_WORKER_MODE" != "pull" ]]; then
+  echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
   exit 2
 fi
 
@@ -101,15 +101,10 @@ if $coverage; then
   cargo llvm-cov report -p dex-sdk --lcov --output-path coverage/lcov.info
   cargo llvm-cov report -p dex-sdk --html --output-dir coverage
 else
-  if $pull_only; then
-    DEX_SERVER_ADDRESS="$dex_address" cargo test --locked -p dex-sdk \
-      --test integ pull_worker_test -- --ignored --test-threads=1
-  else
-    DEX_SERVER_ADDRESS="$dex_address" cargo test -p dex-sdk \
-      --test integ \
-      --test cross_sdk \
-      -- \
-      --ignored \
-      --test-threads=1
-  fi
+  DEX_SERVER_ADDRESS="$dex_address" cargo test --locked -p dex-sdk \
+    --test integ \
+    --test cross_sdk \
+    -- \
+    --ignored \
+    --test-threads=1
 fi
