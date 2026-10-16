@@ -365,6 +365,35 @@ support produces one explicit error log and retries polling after a minute.
 Reconnects and transient transport errors are retried automatically. Heartbeats
 and Step Stream writes use the same task stream as the final result.
 
+### Authentication
+
+Set a `Credential` on Client and Worker options when Dex has authentication
+enabled. The SDK asks for a current token before every FlowService call. A pull
+Worker also asks when each WorkerTaskService stream opens, including reconnects.
+The default `null` credential sends no authorization metadata.
+
+```java
+Credential credential = new FileCredential("/var/run/secrets/dex/token");
+ClientOptions clientOptions = ClientOptions.newBuilder()
+        .serverAddress("dex:8801")
+        .credential(credential)
+        .build();
+WorkerOptions workerOptions = WorkerOptions.newBuilder()
+        .serverAddress("dex:8801")
+        .pull(PullWorkerOptions.newBuilder().build())
+        .credential(credential)
+        .build();
+```
+
+`FileCredential` reads and trims the file at construction. It checks its
+modification time and size at most once per second and rereads changed content.
+An unreadable or empty file fails calls instead of sending a stale token.
+Custom `Credential` implementations must support concurrent calls and return
+promptly; an exception fails the call before it reaches Dex. A blocked token
+lookup cannot hold a call beyond its gRPC deadline or cancellation. Bearer
+tokens travel over the same plaintext connection as other Dex calls, so protect
+the network path.
+
 Serialized object values use wire encoding `json` for JSON and `raw` for raw bytes.
 Internal Blob references are opaque. Hydration sends the owning Flow ID with
 each reference, and the local cache is isolated by `(flowId, blobRef)`.

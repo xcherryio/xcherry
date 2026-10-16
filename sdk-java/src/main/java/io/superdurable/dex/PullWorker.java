@@ -75,11 +75,15 @@ final class PullWorker {
             final ExecutorService handlers,
             final ManagedChannel channel,
             final PullWorkerOptions options,
+            final Credential credential,
             final String sdkVersion) {
         this.workerService = workerService;
         this.dispatcher = dispatcher;
         this.handlers = handlers;
-        this.taskService = WorkerTaskServiceGrpc.newStub(channel);
+        final WorkerTaskServiceGrpc.WorkerTaskServiceStub serviceStub =
+                WorkerTaskServiceGrpc.newStub(channel);
+        this.taskService = credential == null ? serviceStub
+                : serviceStub.withCallCredentials(new GrpcCredential(credential));
         this.options = options;
         this.sdkVersion = sdkVersion;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {

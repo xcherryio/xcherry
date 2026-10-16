@@ -26,6 +26,7 @@ import io.superdurable.dex.ChannelMap;
 import io.superdurable.dex.Client;
 import io.superdurable.dex.ClientOptions;
 import io.superdurable.dex.Context;
+import io.superdurable.dex.Credential;
 import io.superdurable.dex.Flow;
 import io.superdurable.dex.PersistenceSchema;
 import io.superdurable.dex.RPC;
@@ -139,6 +140,12 @@ public class UserContractsTest {
         Assertions.assertNotNull(clientOptions);
         Assertions.assertNotNull(workerOptions);
         Assertions.assertNotNull(new ClientOptions());
+        final Credential credential = () -> "example-token";
+        Assertions.assertNotNull(ClientOptions.newBuilder()
+                .serverAddress("localhost:8801")
+                .credential(credential)
+                .build());
+        Assertions.assertNotNull(WorkerOptions.newBuilder().credential(credential).build());
         Assertions.assertNotNull(WorkerOptions.newBuilder().build());
         Assertions.assertNotNull(WorkerOptions.newBuilder()
                 .pull(io.superdurable.dex.PullWorkerOptions.newBuilder()

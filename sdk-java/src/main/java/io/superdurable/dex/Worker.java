@@ -115,7 +115,10 @@ public final class Worker implements AutoCloseable {
             return thread;
         });
         this.flowChannel = createOutboundChannel(options.getServerAddress());
-        this.flowService = FlowServiceGrpc.newBlockingStub(flowChannel);
+        final FlowServiceGrpc.FlowServiceBlockingStub serviceStub =
+                FlowServiceGrpc.newBlockingStub(flowChannel);
+        this.flowService = options.getCredential() == null ? serviceStub
+                : serviceStub.withCallCredentials(new GrpcCredential(options.getCredential()));
         this.sdkVersion = ServerProtocolCompatibility.sdkVersion();
         final ValueMapper values = new ValueMapper(options.getObjectMapper());
         final WorkerDispatcher dispatcher = new WorkerDispatcher(
@@ -130,7 +133,7 @@ public final class Worker implements AutoCloseable {
         try {
             this.pullWorker = options.getPull() == null ? null : new PullWorker(
                     registry, workerService, dispatcher, handlers, flowChannel,
-                    options.getPull(), sdkVersion);
+                    options.getPull(), options.getCredential(), sdkVersion);
         } catch (RuntimeException failure) {
             shutdownResources();
             throw failure;
