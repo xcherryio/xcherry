@@ -74,11 +74,15 @@ class StepHeartbeatStep implements Step<HeartbeatScenario> {
     this.flow.localInvocations.set(context.flowId, invocation);
     await context.recordHeartbeat(`local-${invocation}`, stringCodec);
     this.flow.progress.write(context, `local-stream-${invocation}`);
+    if (process.env.DEX_INTEG_WORKER_MODE === "pull" && invocation > 2) {
+      if (context.getLastHeartbeatValue(stringCodec) !== `local-${invocation - 1}`) {
+        throw new Error("regular retry did not restore its previous heartbeat");
+      }
+    } else if (context.hasLastHeartbeatValue()) {
+      throw new Error("local heartbeat leaked into retry");
+    }
     if (invocation < 4) {
       throw new Error(`local attempt ${invocation}`);
-    }
-    if (context.hasLastHeartbeatValue()) {
-      throw new Error("local heartbeat leaked into regular fallback");
     }
     return gracefulComplete("local");
   }

@@ -40,16 +40,15 @@ test("regular retries restore heartbeat presence and preserve details across Str
   });
 });
 
-test("async local attempts write Streams without restoring heartbeat into fallback", async () => {
+test("async local attempts write Streams and restore only regular heartbeats", async () => {
   const flow = new StepHeartbeatFlow();
   flow.scenario = "local";
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("typescript-heartbeat-local");
     await client.startFlow(flow, id, "local" satisfies HeartbeatScenario);
-    assert.equal(
-      await client.waitForFlow(id, 30_000).then((result) => result.singleOutput(stringCodec)),
-      "local",
-    );
+    const result = await client.waitForFlow(id, 30_000);
+    assert.equal(result.status, "completed", result.errorMessage ?? "Flow did not complete");
+    assert.equal(result.singleOutput(stringCodec), "local");
     let resumeToken = "";
     let source = "";
     for (let invocation = 1; invocation <= 4; invocation += 1) {
