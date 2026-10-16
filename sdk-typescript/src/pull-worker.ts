@@ -397,7 +397,17 @@ export class PullWorker {
     poll.resolveHalfClose?.();
     poll.resolveHalfClose = undefined;
     poll.halfClosePromise = undefined;
-    if (!this.isStopping) this.scheduleReconnect(poll);
+    poll.stream = undefined;
+    if (!this.isStopping) {
+      const idleStreamCount = [...this.streams].filter((candidate) =>
+        candidate !== poll && candidate.queue === poll.queue && candidate.task === undefined && !candidate.isDraining
+      ).length;
+      if (poll.isReconnectRequested && idleStreamCount >= this.idleStreamsPerQueue) {
+        this.streams.delete(poll);
+      } else {
+        this.scheduleReconnect(poll);
+      }
+    }
   }
 
   private scheduleReconnect(poll: PollStream): void {

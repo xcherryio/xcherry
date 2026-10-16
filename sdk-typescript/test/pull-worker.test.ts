@@ -160,11 +160,43 @@ test("Reconnect backs off idle streams and drains a busy stream", async () => {
     await replacement.frame("pong");
     finishTask();
     await replacement.frame("taskFrame");
-    const reconnected = await harness.nextStream();
-    assert.equal((await reconnected.frame("register")).frame?.$case, "register");
+    await replacement.ended;
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    assert.equal(harness.openedStreamCount, 3);
     spare.call.write(rpcTask("after-reconnect"));
     const continued = await spare.frame("taskFrame");
     assert.equal(continued.frame?.$case, "taskFrame");
+  } finally {
+    finishTask();
+    await worker.close();
+    await harness.close();
+  }
+});
+
+test("busy Reconnect retains only the replacement idle stream", async () => {
+  const harness = await startHarness();
+  let finishTask!: () => void;
+  const gate = new Promise<void>((resolve) => { finishTask = resolve; });
+  const worker = harness.worker(async () => {
+    await gate;
+    return InvokeWorkerRPCResponse.create({});
+  });
+  try {
+    worker.start();
+    const first = await harness.nextStream();
+    first.call.write({ frame: { $case: "registered", value: {} } });
+    first.call.write(rpcTask("busy-reconnect"));
+    await until(() => harness.invocationCount === 1);
+    const replacement = await harness.nextStream();
+    replacement.call.write({ frame: { $case: "registered", value: {} } });
+    first.call.write({ frame: { $case: "reconnect", value: { reason: "move" } } });
+    first.call.write({ frame: { $case: "ping", value: {} } });
+    await first.frame("pong");
+    finishTask();
+    await first.frame("taskFrame");
+    await first.ended;
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    assert.equal(harness.openedStreamCount, 2);
   } finally {
     finishTask();
     await worker.close();
@@ -306,7 +338,7 @@ for (const shutdown of ["Stop drain", "busy Reconnect", "busy Reconnect then Sto
       return InvokeWorkerRPCResponse.create({ output: Value.create({
         kind: { $case: "stringValue", value: payload },
       }) });
-    }, { stopDrainTimeoutMs: 10_000 });
+    }, { stopDrainTimeoutMs: shutdown === "busy Reconnect then Stop" ? 4_000 : 10_000 });
     try {
       worker.start();
       const capturedStream = await harness.nextStream();
@@ -328,7 +360,7 @@ for (const shutdown of ["Stop drain", "busy Reconnect", "busy Reconnect then Sto
         resolve();
       }, 6_100));
       const stopDuringReconnect = shutdown === "busy Reconnect then Stop"
-        ? new Promise<void>((resolve) => setTimeout(resolve, 1_000)).then(() => worker.close())
+        ? new Promise<void>((resolve) => setTimeout(resolve, 3_000)).then(() => worker.close())
         : undefined;
       await delayedRead;
       const result = await capturedStream.frame("taskFrame", 1, 10_000);
@@ -401,6 +433,7 @@ interface CapturedStream {
   readonly call: TaskStream;
   readonly frames: PollWorkerTaskRequest[];
   readonly openedAt: number;
+  readonly ended: Promise<void>;
   frame(kind: NonNullable<PollWorkerTaskRequest["frame"]>["$case"], occurrence?: number, timeoutMs?: number): Promise<PollWorkerTaskRequest>;
 }
 
@@ -412,11 +445,13 @@ async function startHarness() {
   server.addService(WorkerTaskServiceService, {
     pollWorkerTask(call: TaskStream) {
       const frames: PollWorkerTaskRequest[] = [];
+      let resolveEnd!: () => void;
+      const ended = new Promise<void>((resolve) => { resolveEnd = resolve; });
       call.on("data", (frame: PollWorkerTaskRequest) => frames.push(frame));
-      call.on("end", () => call.end());
+      call.on("end", () => { resolveEnd(); call.end(); });
       call.on("error", () => {});
       streams.push({
-        call, frames, openedAt: Date.now(),
+        call, frames, openedAt: Date.now(), ended,
         async frame(kind, occurrence = 1, timeoutMs = 5_000) {
           await until(() => frames.filter((candidate) => candidate.frame?.$case === kind).length >= occurrence, timeoutMs);
           return frames.filter((candidate) => candidate.frame?.$case === kind)[occurrence - 1]!;
@@ -432,6 +467,7 @@ async function startHarness() {
   });
   return {
     get invocationCount() { return invocationCount; },
+    get openedStreamCount() { return streams.length; },
     worker(invokeRPC: (request: InvokeWorkerRPCRequest, signal: AbortSignal) => Promise<InvokeWorkerRPCResponse>, options: { maxConcurrentTasks?: number; stopDrainTimeoutMs?: number } = {}) {
       const dispatcher = { invokeRPC: async (request: InvokeWorkerRPCRequest, signal: AbortSignal) => {
         invocationCount++;

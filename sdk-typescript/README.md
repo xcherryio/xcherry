@@ -214,8 +214,8 @@ protocol and index synchronization failures; later poll failures are retried.
 `Worker.close()` drains for at most `stopDrainTimeoutMs`, which defaults to
 30 seconds. It then cancels active handlers and waits for them to return. Streams
 that sent a final frame wait for the server to close them until the remaining
-drain deadline before the channel closes. A handler that ignores cancellation
-can delay shutdown.
+drain deadline before the channel closes. Idle streams also wait for the
+remaining drain deadline. A handler that ignores cancellation can delay shutdown.
 
 `StepOptions.waitForMethodTimeoutMs` and `executeMethodTimeoutMs` bound the two
 handler calls. Timer and channel conditions determine how long a Step waits.
