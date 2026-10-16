@@ -266,6 +266,8 @@ client.skip_timer("order-123", StepExecutionId::of(&charge_order), TimerId::by_c
 
 **UpdateFlowConfig** 修改 **FlowConfig**。
 
+**WorkerTarget** 也可以将后续调用路由到[拉取模式 Worker](/production/pull-workers)。
+
 <SdkTabs examples={{python: 'examples/python/dex_examples/primitives/flow/controller.py', go: 'examples/go/primitives/flow/controller.go', java: 'examples/java/src/main/java/io/superdurable/dex/primitives/flow/FlowController.java', typescript: 'examples/typescript/src/primitives/flow/controller.ts', rust: 'examples/rust/src/primitives/flow/controller.rs'}}>
 <SdkSnippet lang="python">
 

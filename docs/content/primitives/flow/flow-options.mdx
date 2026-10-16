@@ -483,7 +483,7 @@ At start, Dex applies the supplied fields over the Dex Server defaults. Omitted 
 | **ContinueAsNewThreshold** | Continue as new after this many tracked events. Zero turns it off.                                                              |
 | **ContinueAsNewPageSizeBytes** | Limit each page of state carried into continue-as-new. Zero uses 1 MiB.|
 | **StepDurability** | Default durability for methods without a Step override. Dex resolves a method override first, then this value, then **SYNC**. |
-| **WorkerTarget** | WorkerService endpoint for Step and RPC invocation                                                                              |
+| **WorkerTarget** | Listening Worker address or [pull Worker](/production/pull-workers) routing for Step and RPC invocation. |
 | **AttributeStoreNames** | Dex Server Attribute Stores for Attributes that opt in to attribute sync                                                        |
 
 ### Update FlowConfig with a Client {#update-flow-config-with-a-client}

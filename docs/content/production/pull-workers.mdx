@@ -1,0 +1,117 @@
+---
+title: Pull Workers
+---
+
+# Pull Workers
+
+A pull Worker opens outbound task streams to Dex Server instead of listening for
+incoming calls. Choose pull mode when Workers cannot expose an inbound port, run
+behind NAT or firewalls, or need simpler network rules. Pull mode also offers
+sticky routing when a Worker keeps useful state in memory between calls.
+
+## Enable pull mode
+
+Set the Worker's pull option and its Dex Server address. Do not set a bind
+address or advertise a listening address for the same Worker. The SDK exposes a
+pull **WorkerTarget** from the Worker. Set that target as the Client's default,
+or select it for one Flow with **StartFlowOptions** and
+**FlowConfig.WorkerTarget**. A SubFlow can select it with **SubFlowOptions** and
+the same **FlowConfig** override. Use a pull **WorkerTarget** without a local
+Worker when the Client runs in a separate process.
+
+In Go, the Worker option is **WorkerOptions.Pull** and the target has
+**WorkerTarget.Pull** set to true. The Python, TypeScript, and Rust SDKs provide
+equivalent pull options and targets. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker),
+[Python](https://github.com/superdurable/dex/blob/main/sdk-python/README.md#pull-mode),
+[TypeScript](https://github.com/superdurable/dex/blob/main/sdk-typescript/README.md#pull-mode),
+and [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
+READMEs for exact names and startup behavior. The Java SDK does not support
+pull mode yet.
+
+<!-- Pull Worker SdkTabs example. -->
+
+## Routing and availability
+
+Each pull Worker polls its own app Worker ID queue and every Flow type it
+registers. Dex first tries the app Worker ID that served the Flow previously.
+After the sticky wait, it tries the Flow type queue so another Worker can take
+the call. Sticky routing is best effort; keep durable state in Dex rather than
+depending on one Worker's memory. Flow type names must be unique within a Dex
+Server. An app Worker ID must identify one Worker process and change when that
+process restarts. The SDK generates one unless you set it explicitly.
+
+Dex waits for an available Worker within the matching dispatch budget. If none
+is available, a Step receives a retryable unavailable error that consumes a
+Step retry. An RPC caller receives an **Unavailable** error directly. The default regular dispatch wait is 10 seconds,
+including up to 5 seconds for the sticky queue. Shorter waits apply to calls
+that need to preserve time for execution. See [Server operation](/production/server-operations#pull-worker-routing)
+for the wait settings.
+
+Delivery is at least once. A call can be assigned again when its Worker
+disconnects before Dex receives any output. Make external side effects
+idempotent, for example by using the Flow ID and Step execution ID as an
+idempotency key.
+
+## Capacity and shutdown
+
+The concurrent task limit caps active calls. The idle stream count keeps
+streams ready on each queue. Defaults are the CPU count and one idle stream per
+queue. Each stream handles one call at a time. At capacity, a Worker keeps its
+idle streams and declines an extra assignment so Dex can try another Worker.
+
+| SDK | Concurrent tasks | Idle streams per queue | Stop drain timeout | Shutdown |
+| --- | --- | --- | --- | --- |
+| Go | **MaxConcurrentTasks** | **IdleStreamsPerQueue** | **StopDrainTimeout** | **Stop** |
+| Python | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
+| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
+| Rust | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
+
+The Rust entries are builder methods. The formula below uses the TypeScript
+spellings for the two capacity values; the same bound applies to every SDK.
+
+For one Worker with **F** registered Flow types, plan for up to
+**(1 + F) × (idleStreamsPerQueue + maxConcurrentTasks)** streams. The extra
+queue is the Worker's app Worker ID queue. Keep this bound within
+**matching.maxConcurrentTasksCap**, which defaults to 256 streams per app Worker
+ID on each matching owner. **matching.maxStreams** defaults to 100,000
+registered streams per Matching instance. **matching.maxQueueLength**,
+**matching.maxFlowTypes**, and **matching.maxFlowTypeLength** also limit
+registration. Their defaults are 256 each.
+
+Stop the Worker gracefully during deployment. The shutdown method stops taking
+new calls and waits for active handlers for the configured drain timeout, 30
+seconds by default. After the deadline, it requests cancellation and waits for handlers
+to return. Long-running handlers should respond to cancellation. A Worker also
+finishes an active call before a server-directed reconnect.
+
+## Scale to zero
+
+Configure the [Worker wake hook](/production/server-operations#worker-wake-hook)
+when Workers may scale to zero. If a pull Worker is unavailable, Dex sends a
+best-effort wake notification for the Flow type queue after the sticky wait and
+continues the same dispatch attempt. After successful dispatch, Dex sends an
+active notification. Size the dispatch wait and Step retries for Worker startup
+time; the wake notification does not guarantee that a Worker starts in time.
+
+## Server and network setup
+
+The **matching** role owns pull Worker queues. Keep at least one Matching
+instance running. Workers connect to an API instance on the public FlowService
+port; the API forwards their streams to the queue owner. Preserve bidirectional
+HTTP/2 streaming and set the load balancer idle timeout above
+**matching.pingInterval**, which defaults to 20 seconds. Busy streams do not
+receive idle Pings, so handlers should send task heartbeats often enough to
+keep their connections active.
+
+For one Server process, Dex uses a local membership ring. For multiple Server
+instances, configure **membership** and a private **internal.listen** on each
+process. Use the same backend namespace and membership seeds across instances.
+**internal.tokenFile** is required for the private listener. Allow only Dex replicas
+to reach it. The [Server operation](/production/server-operations#pull-worker-routing)
+page shows the matching limits, wait settings, and multi-node configuration.
+
+Only the Go SDK can send the required bearer credential today. Configure
+**WorkerOptions.Credential** for its Worker streams and **ClientOptions.Credential**
+for Client calls. Python, TypeScript, and Rust pull Workers, the CLI, and Dex
+Web cannot connect while public **auth** is enabled. See the
+[authentication settings](/production/server-operations#authentication).

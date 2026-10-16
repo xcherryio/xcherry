@@ -85,7 +85,10 @@ starts before its API upstream is available, so **/healthz** reports only Web
 process health. Web API requests return an upstream error until FlowService is
 available.
 
-## Pull Worker routing
+## Pull Worker routing {#pull-worker-routing}
+
+For Worker setup, routing behavior, and capacity planning, see
+[Pull Workers](/production/pull-workers).
 
 The **matching** role owns pull Worker queues. API instances accept **PollWorkerTask**
 streams and forward each stream to its queue owner. Interpreter and API instances
@@ -182,7 +185,7 @@ a trusted network path.
 
 **web.startFlowWorkerTargetHeadless** controls Worker routing for every Flow started from Dex Web. It defaults to false and is immutable after startup. The environment override is **DEX_WEB_START_FLOW_WORKER_TARGET_HEADLESS**. Enable it only when operators enter Kubernetes headless Service addresses.
 
-## Authentication
+## Authentication {#authentication}
 
 Public API authentication is off by default. Configure **auth.authenticators**
 to require a bearer credential on every public unary call and stream. Health
@@ -229,6 +232,8 @@ With **auth** off and no separate internal listener, both services use the publi
 Currently only the Go SDK can connect when **auth** is enabled. Dex Web, the
 CLI, and the Java, Python, TypeScript, and Rust SDKs cannot supply the required
 credential yet.
+
+## Worker wake hook {#worker-wake-hook}
 
 Configure the optional Worker wake hook under **worker.wake**:
 

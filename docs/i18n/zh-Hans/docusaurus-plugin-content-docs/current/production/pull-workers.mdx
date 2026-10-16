@@ -1,0 +1,101 @@
+---
+title: 拉取模式 Worker
+sidebar_label: Pull Workers
+---
+
+# 拉取模式 Worker
+
+拉取模式 Worker 主动向 Dex Server 建立任务 stream，不监听入站调用。Worker 无法开放入站端口、
+位于 NAT 或防火墙后，或需要简化网络规则时，可选用拉取模式。如果 Worker 在内存中保存了
+后续调用会用到的状态，也可以利用黏性路由。
+
+## 启用拉取模式
+
+设置 Worker 的 pull 选项和 Dex Server 地址。不要同时设置 bind address 或发布监听地址。
+SDK 会从 Worker 提供拉取模式的 **WorkerTarget**。将它设为 Client 默认目标，或通过
+**StartFlowOptions** 和 **FlowConfig.WorkerTarget** 为单个 Flow 选择它。SubFlow 可通过
+**SubFlowOptions** 和相同的 **FlowConfig** override 选择它。Client 在单独的进程中运行时，
+也可以直接使用拉取模式 **WorkerTarget**。
+
+在 Go 中，Worker 选项是 **WorkerOptions.Pull**，目标的 **WorkerTarget.Pull** 为 true。
+Python、TypeScript 和 Rust SDK 提供对应的 pull 选项和目标。准确名称和启动方式请参阅
+[Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker)、
+[Python](https://github.com/superdurable/dex/blob/main/sdk-python/README.md#pull-mode)、
+[TypeScript](https://github.com/superdurable/dex/blob/main/sdk-typescript/README.md#pull-mode) 和
+[Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
+SDK README。Java SDK 尚不支持拉取模式。
+
+<!-- 拉取模式 Worker 的 SdkTabs 示例。 -->
+
+## 路由和可用性
+
+每个拉取模式 Worker 都轮询自己的 app Worker ID 队列，以及注册的每个 Flow 类型队列。
+Dex 首先尝试此前服务该 Flow 的 app Worker ID。黏性等待结束后，Dex 改用 Flow 类型队列，
+让其他 Worker 接手。黏性路由是尽力而为；持久状态应保存在 Dex 中，不应依赖某个
+Worker 的内存。同一个 Dex Server 内的 Flow 类型名称必须唯一。app Worker ID 必须
+唯一标识一个 Worker 进程，并在该进程重启后变化。未显式设置时，SDK 会生成 ID。
+
+Dex 在 matching dispatch 等待时间内寻找可用 Worker。如果没有 Worker，Step 会收到
+可重试的 unavailable 错误，并消耗一次 Step 重试。RPC 调用方则直接收到
+**Unavailable** 错误。普通 dispatch
+默认等待 10 秒，其中黏性队列最多等待 5 秒。需要保留执行时间的调用使用更短的等待。
+等待设置见[服务器运维](/production/server-operations#pull-worker-routing)。
+
+任务至少投递一次。如果 Worker 在 Dex 收到任何输出前断开连接，同一个调用可能再次分配。
+外部副作用应具备幂等性，例如使用 Flow ID 和 Step execution ID 作为幂等键。
+
+## 容量和关闭
+
+并发任务上限限制同时运行的调用数。每队列的空闲 stream 数量使 stream 随时可用。
+默认值分别为 CPU 核心数和每队列一个空闲 stream。每条 stream 一次只处理
+一个调用。达到容量上限时，Worker 仍保留空闲 stream，并拒绝额外分配，让 Dex 尝试
+其他 Worker。
+
+| SDK | 并发任务数 | 每队列空闲 stream 数 | 停止时的排空期限 | 关闭方法 |
+| --- | --- | --- | --- | --- |
+| Go | **MaxConcurrentTasks** | **IdleStreamsPerQueue** | **StopDrainTimeout** | **Stop** |
+| Python | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
+| TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
+| Rust | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
+
+Rust 表中的名称是 builder method。下方公式使用 TypeScript 的两个容量参数名称；
+同一上限适用于所有 SDK。
+
+一个注册了 **F** 个 Flow 类型的 Worker 最多可能持有
+**(1 + F) × (idleStreamsPerQueue + maxConcurrentTasks)** 条 stream。额外的队列是该
+Worker 的 app Worker ID 队列。该上限不应超过 **matching.maxConcurrentTasksCap**；
+默认每个 matching owner 上每个 app Worker ID 最多 256 条 stream。
+**matching.maxStreams** 默认限制每个 Matching 实例最多注册 100,000 条 stream。
+**matching.maxQueueLength**、**matching.maxFlowTypes** 和
+**matching.maxFlowTypeLength** 也限制注册内容，默认值均为 256。
+
+部署期间应正常停止 Worker。关闭方法会停止接收新调用，并在配置的排空期限内等待正在运行的
+handler，默认期限为 30 秒。超过期限后，它请求取消，并等待 handler
+返回。长时间运行的 handler 应响应取消。Server 要求重新连接时，Worker 也会先完成
+正在运行的调用。
+
+## 缩容到零
+
+Worker 可能缩容到零时，配置 [Worker 唤醒 hook](/production/server-operations#worker-wake-hook)。
+拉取模式 Worker 不可用时，Dex 会在黏性等待结束后为 Flow 类型队列发送尽力而为的唤醒通知，
+并继续同一次 dispatch 尝试。成功分配后，Dex 会发送 active 通知。应按 Worker 启动时间
+设置 dispatch 等待和 Step 重试；唤醒通知不保证 Worker 及时启动。
+
+## Server 和网络配置
+
+**matching** 角色管理拉取模式 Worker 队列。至少保持一个 Matching 实例运行。Worker
+通过公开的 FlowService 端口连接 API 实例；API 会将 stream 转发给队列 owner。负载均衡器
+应支持双向 HTTP/2 streaming，idle timeout 要长于 **matching.pingInterval**，默认
+为 20 秒。忙碌的 stream 不会收到空闲 Ping，因此 handler 应足够频繁地发送任务心跳，
+以保持连接活跃。
+
+单个 Server 进程使用本地 membership ring。多个 Server 实例需要在每个进程配置
+**membership** 和私有的 **internal.listen**。所有实例应使用相同的 backend namespace
+和 membership seeds。私有 listener 必须配置 **internal.tokenFile**，只允许 Dex 副本访问。
+[服务器运维](/production/server-operations#pull-worker-routing)列出了 matching 限制、
+等待设置和多节点配置。
+
+目前只有 Go SDK 能发送所需的 bearer credential。使用 **WorkerOptions.Credential**
+为其 Worker stream 配置凭据，使用 **ClientOptions.Credential** 为 Client 调用配置凭据。
+启用公开 **auth** 后，Python、TypeScript 和 Rust 拉取模式 Worker、CLI 和 Dex Web
+都无法连接。参阅[身份认证设置](/production/server-operations#authentication)。

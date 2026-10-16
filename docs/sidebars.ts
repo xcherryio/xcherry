@@ -153,6 +153,7 @@ const sidebars: SidebarsConfig = {
       link: {type: 'doc', id: 'production/index'},
       items: [
         'production/application-operations',
+        'production/pull-workers',
         'production/dex-web',
         'production/local-connector-setup',
         'production/server-operations',

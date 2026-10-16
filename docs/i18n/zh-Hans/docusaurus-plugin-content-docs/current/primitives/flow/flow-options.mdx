@@ -483,7 +483,7 @@ Worker replacement → retry the same downstream start identity → no duplicate
 | **ContinueAsNewThreshold** | 追踪到这个事件数后 continue as new。零会关闭它。 |
 | **ContinueAsNewPageSizeBytes** | 限制 continue-as-new 带入的每一页 state。零使用 1 MiB。 |
 | **StepDurability** | 没有 Step override 的 method 使用的默认 durability。Dex 依次使用 method override、这里的值，最后使用 **SYNC**。 |
-| **WorkerTarget** | 用于 Step 和 RPC invocation 的 WorkerService endpoint。 |
+| **WorkerTarget** | 用于 Step 和 RPC 调用的监听式 Worker 地址或[拉取模式 Worker](/production/pull-workers) 路由。 |
 | **AttributeStoreNames** | Dex Server Attribute Store 名称，供 opt-in attribute sync 的 Attribute 使用。 |
 
 ### 用 Client 更新 FlowConfig {#update-flow-config-with-a-client}

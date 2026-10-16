@@ -21,8 +21,10 @@ Check these items in order:
    address. Put them in the incident record before changing anything.
 2. Check the Worker logs for handler exceptions, registration failures, and
    startup configuration. Include the Flow ID or Run ID in log searches.
-3. Check the network route from Dex Server to the Worker: service discovery,
-   address, TLS, authentication, and any load-balancer health checks.
+3. Check the network route between Dex Server and the Worker: service discovery,
+   address, TLS, authentication, and any load-balancer health checks. For a
+   [pull Worker](/production/pull-workers), check its outbound streams and
+   Matching availability.
 4. Confirm that the deployed Worker registered the Flow, Step, and RPC names
    used by the open Flow. A deployment can be healthy while an old Step type is
    missing from that Worker version.
