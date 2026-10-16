@@ -1006,6 +1006,12 @@ func (i *Interpreter) processStepExecution(
 				&i.sharedConfig.Interpreter.InterpreterActivityConfig,
 			)
 			if err := starter.StartAll(ctx); err != nil {
+				if globalVersioner.UsesTypedSubFlowStartFailures() {
+					err = provider.NewFlowError(
+						dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE,
+						fmt.Sprintf("SubFlow start rejected: %v", err),
+					)
+				}
 				return nil, service.StepExecutionStatusInternalError, err
 			}
 		}

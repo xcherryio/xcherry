@@ -833,6 +833,9 @@ func testPullSubFlowRejectsInvalidTarget(t *testing.T, backend service.BackendTy
 	result, err := flowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
+	require.Equal(t, dexpb.FlowErrorType_FLOW_ERROR_TYPE_INVALID_USER_FLOW_CODE, result.GetErrorType())
+	require.Contains(t, result.GetErrorMessage(), "SubFlow start rejected")
+	require.Contains(t, result.GetErrorMessage(), "pull worker_target cannot specify address")
 }
 
 func TestPullParallelLastWriteTemporal(t *testing.T) {
