@@ -235,8 +235,8 @@ path and encrypt traffic. An Interpreter deployed separately must set
 **interpreter.interpreterActivityConfig.internalServiceTarget** to this listener.
 With **auth** off and no separate internal listener, both services use the public API listener.
 
-The Go SDK, Dex Web, and **dexcli** can supply credentials when **auth** is
-enabled. Java, Python, TypeScript, and Rust SDKs cannot supply them yet.
+All five SDKs, Dex Web, and **dexcli** can supply bearer credentials when
+**auth** is enabled.
 
 Dex Web has no end-user authentication. Anyone who reaches the Web port can act
 with Web's FlowService credential. Protect the Web port with network controls

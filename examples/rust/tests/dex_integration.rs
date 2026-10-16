@@ -27,6 +27,9 @@ use dex_examples_rust::primitives::channel::flow::{
     QueuedMessageReference,
 };
 use dex_examples_rust::primitives::stream::flow::{PROGRESS, StreamFlow};
+use dex_examples_rust::production::pull_workers::{
+    GET_GREETING, GreetingFlow, start_pull_greeting,
+};
 use dex_examples_rust::products::deal_dsl::{
     ConditionMessage, DEAL_CURRENT_STATE, DealDSLFlow, SEND_DEAL_CONDITION_MESSAGE,
     example_deal_start,
@@ -164,6 +167,46 @@ impl Drop for DexEnvironment {
         }
         self.cache.close().expect("close Rust examples cache");
     }
+}
+
+#[test]
+#[ignore = "requires dexcli dev"]
+fn pull_worker_serves_greeting_flow() {
+    let cache_directory = tempfile::tempdir().expect("create Rust pull greeting cache directory");
+    let cache = Arc::new(
+        BlobCache::open(
+            BlobCacheConfig::new(cache_directory.path(), 64 * 1024 * 1024, 10_000)
+                .expect("valid Rust pull greeting cache config"),
+        )
+        .expect("open Rust pull greeting cache"),
+    );
+    let server_address =
+        std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
+    let (worker, client, worker_thread) = start_pull_greeting(Arc::clone(&cache), &server_address)
+        .expect("start Rust pull greeting Worker");
+    let flow_id = unique_flow_id("pull-greeting");
+    client
+        .start_flow(&GreetingFlow::default(), &flow_id, "Dex".to_string())
+        .expect("start Rust pull Greeting Flow");
+    let output: String = client
+        .wait_for_flow_with_timeout(&flow_id, Duration::from_secs(45))
+        .expect("complete Rust pull Greeting Flow")
+        .single_output()
+        .expect("decode Rust pull Greeting output");
+    assert_eq!(output, "Hello, Dex!");
+    assert_eq!(
+        client
+            .invoke_rpc_without_input(&flow_id, GET_GREETING)
+            .expect("read Rust pull Greeting RPC"),
+        output
+    );
+    worker.stop();
+    worker_thread
+        .join()
+        .expect("join Rust pull greeting Worker")
+        .expect("stop Rust pull greeting Worker");
+    drop(client);
+    cache.close().expect("close Rust pull greeting cache");
 }
 
 #[test]
