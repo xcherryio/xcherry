@@ -17,7 +17,8 @@ import redirects from './redirects.json';
 const config: Config = {
   title: 'Super Durable Docs',
   tagline: 'Durable Execution for backend engineering',
-  favicon: 'img/brand/dex-mark.svg',
+  // The query makes browsers that cached the Branch D icon at this path fetch the new mark; bump it when the mark changes.
+  favicon: 'img/brand/dex-mark.svg?v=pipe-d',
 
   future: {
     v4: true,
