@@ -9,6 +9,8 @@
 from dataclasses import dataclass
 from datetime import timedelta
 
+from dex.credential import Credential
+
 
 class _ImplicitBindAddress(str):
     pass
@@ -126,6 +128,10 @@ class WorkerOptions:
         pull: Outbound polling options. ``None`` keeps the listening WorkerService
             mode. Pull mode uses ``server_address`` and cannot advertise an
             address or configure a custom bind address.
+        credential: Supplies the current bearer token for FlowService calls and
+            each pull stream open. ``None`` sends no authorization metadata.
+            Token errors fail calls before Dex is contacted. Protect the plaintext
+            network path. A rotated token is used on the next call or reconnect.
     """
 
     bind_address: str = _DEFAULT_BIND_ADDRESS
@@ -133,6 +139,7 @@ class WorkerOptions:
     server_address: str = "localhost:8801"
     attribute_index_sync_timeout: timedelta = timedelta(minutes=2)
     pull: PullWorkerOptions | None = None
+    credential: Credential | None = None
 
     def __post_init__(self) -> None:
         if self.attribute_index_sync_timeout <= timedelta(0):

@@ -1,6 +1,30 @@
 
 # Dex SDK for Python
 
+## Authentication
+
+When Dex authentication is enabled, pass a bearer credential to each Client and
+Worker that connects to the server. FileCredential reads the token at construction,
+checks its mtime and size at most once per second, and reloads it after rotation.
+Whitespace around the token is removed. An unreadable or empty file fails calls
+until it is restored; the SDK does not send an old token.
+
+```python
+from dex import Client, ClientOptions, FileCredential, Worker, WorkerOptions
+
+credential = FileCredential("/var/run/secrets/dex/token")
+client = Client(registry, cache, ClientOptions(credential=credential))
+worker = Worker(registry, cache, WorkerOptions(credential=credential))
+```
+
+The same option works with AsyncClient and AsyncWorker. Worker credentials cover
+startup synchronization, blob hydration, and pull WorkerTaskService streams. A
+pull stream reads the token when it opens and again on every reconnect. For a
+custom credential, implement Credential.token() to return the current token;
+the method may be called concurrently, and an exception fails the call before
+it contacts Dex. By default, no authorization metadata is sent. Dex uses
+plaintext gRPC, so protect the network path that carries the token.
+
 ## Pull mode
 
 Set `WorkerOptions.pull` to run a `Worker` or `AsyncWorker` with outbound task

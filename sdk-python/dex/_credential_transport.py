@@ -1,0 +1,90 @@
+# Copyright (c) 2026 Super Durable, Inc.
+#
+# Licensed under the Sustainable Use License 1.0.
+# You may not use this file except in compliance with the License.
+# See the LICENSE file in the repository root.
+#
+# SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+"""Attach bearer metadata to outbound gRPC calls."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any, NamedTuple
+
+import grpc
+
+from dex.credential import Credential
+
+
+class _SyncCallDetails(NamedTuple):
+    method: str
+    timeout: float | None
+    metadata: Any
+    credentials: grpc.CallCredentials | None
+    wait_for_ready: bool | None
+    compression: grpc.Compression | None
+
+
+def credential_metadata(credential: Credential | None, metadata: Any = None) -> Any:
+    if credential is None:
+        return metadata
+    return tuple(metadata or ()) + (("authorization", "Bearer " + credential.token()),)
+
+
+class _SyncCredentialInterceptor(grpc.UnaryUnaryClientInterceptor):
+    def __init__(self, credential: Credential) -> None:
+        self._credential = credential
+
+    def intercept_unary_unary(
+        self,
+        continuation: Callable[..., Any],
+        client_call_details: grpc.ClientCallDetails,
+        request: Any,
+    ) -> Any:
+        details = _SyncCallDetails(
+            client_call_details.method,
+            client_call_details.timeout,
+            credential_metadata(self._credential, client_call_details.metadata),
+            client_call_details.credentials,
+            client_call_details.wait_for_ready,
+            client_call_details.compression,
+        )
+        return continuation(details, request)
+
+
+class _AsyncCredentialInterceptor(grpc.aio.UnaryUnaryClientInterceptor):
+    def __init__(self, credential: Credential) -> None:
+        self._credential = credential
+
+    async def intercept_unary_unary(
+        self,
+        continuation: Callable[..., Any],
+        client_call_details: grpc.aio.ClientCallDetails,
+        request: Any,
+    ) -> Any:
+        details = grpc.aio.ClientCallDetails(
+            client_call_details.method,
+            client_call_details.timeout,
+            credential_metadata(self._credential, client_call_details.metadata),
+            client_call_details.credentials,
+            client_call_details.wait_for_ready,
+        )
+        return await continuation(details, request)
+
+
+def sync_channel(server_address: str, credential: Credential | None) -> grpc.Channel:
+    channel = grpc.insecure_channel(server_address)
+    if credential is None:
+        return channel
+    return grpc.intercept_channel(channel, _SyncCredentialInterceptor(credential))
+
+
+def async_channel(
+    server_address: str, credential: Credential | None
+) -> grpc.aio.Channel:
+    interceptors: tuple[grpc.aio.ClientInterceptor, ...] = (
+        (_AsyncCredentialInterceptor(credential),) if credential is not None else ()
+    )
+    return grpc.aio.insecure_channel(server_address, interceptors=interceptors)

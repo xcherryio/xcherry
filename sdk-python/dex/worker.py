@@ -19,6 +19,7 @@ from types import TracebackType
 import grpc
 from google.protobuf import empty_pb2
 
+from dex._credential_transport import sync_channel
 from dex._pull_worker import PullWorkerRuntime, resolve_app_worker_id
 from dex._server_protocol import (
     negotiate_server_protocol,
@@ -69,7 +70,8 @@ class Worker:
         Args:
             registry: A Registry created for synchronous handlers.
             blob_cache: An open cache shared for value hydration.
-            options: Networking and startup options; ``None`` uses defaults.
+            options: Networking, startup, and bearer credential options;
+                ``None`` uses defaults and sends no authorization metadata.
 
         Raises:
             ValueError: If a target, bind address, or pull Worker ID is invalid.
@@ -84,7 +86,9 @@ class Worker:
         )
         self._lock = threading.Lock()
         self._state = "created"
-        self._flow_channel = grpc.insecure_channel(self.options.server_address)
+        self._flow_channel = sync_channel(
+            self.options.server_address, self.options.credential
+        )
         self._flow_service = dex_pb2_grpc.FlowServiceStub(  # type: ignore[no-untyped-call]
             self._flow_channel
         )
@@ -115,6 +119,7 @@ class Worker:
                 self.options.server_address,
                 self._executor,
                 app_worker_id,
+                self.options.credential,
             )
         else:
             self._server = grpc.server(

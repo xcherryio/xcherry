@@ -24,6 +24,7 @@ from dex.blob_cache import BlobCache, BlobCacheConfig, open_blob_cache
 from dex.channel import Channel, ChannelMap, ChannelMapLoad, ChannelMessage
 from dex.client import Client
 from dex.client_options import ClientOptions
+from dex.credential import Credential, FileCredential
 from dex.codec import (
     BOOL,
     BYTES,
@@ -143,6 +144,7 @@ __all__ = [
     "ChannelMessagesNotLoadedError",
     "Client",
     "ClientOptions",
+    "Credential",
     "Codec",
     "CodecRegistry",
     "ConditionCombination",
@@ -150,6 +152,7 @@ __all__ = [
     "DexServiceError",
     "ErrorSubStatus",
     "Flow",
+    "FileCredential",
     "FlowAlreadyStartedError",
     "FlowConfig",
     "FlowDefinitionError",
