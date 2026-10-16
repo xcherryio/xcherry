@@ -18,7 +18,7 @@ At shutdown, stop the Worker, join its thread, and close BlobCache. A panic in t
 
 Heartbeat long-running Execute work at bounded intervals. On retry, resume from the last heartbeat value. Check cancellation during the same loop.
 
-Pull Workers enforce the Step HeartbeatTimeout. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
+Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
 
 [Runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/rust/src/primitives/heartbeat/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/heartbeat/flow.rs -->

@@ -33,7 +33,7 @@ RPC registration options make the same fixed load and lock decisions for every i
 
 For Execute, also decide the heartbeat timeout. Regular execution defaults to one minute. Keep that default unless a healthy operation can remain silent longer. Then raise it to the longest acceptable healthy silent interval. Use method timeout to cap the whole attempt. Heartbeats and Stream frames show Worker liveness; only heartbeat values provide retry checkpoints.
 
-Pull Workers enforce **HeartbeatTimeout** for Steps. Cancellation reaches either kind of Step handler through heartbeats. A long-running handler that must observe cancellation should record heartbeats within its **HeartbeatTimeout** and act on cancellation. For a pull target, the **ASYNC** local phase is one attempt; later attempts see the last heartbeat recorded after that phase. See [Pull Workers](pull-workers.md).
+Server v1.10.1 enforces **HeartbeatTimeout** for pull Steps; Server v1.10.0 does not. Cancellation reaches either kind of Step handler through heartbeats. A long-running handler that must observe cancellation should record heartbeats within its **HeartbeatTimeout** and act on cancellation. For a pull target, the **ASYNC** local phase is one attempt; later attempts see the last heartbeat recorded after that phase. See [Pull Workers](pull-workers.md).
 
 A non-streaming provider call is silent for its whole duration, so the default fails a healthy 90-second LLM generation. Set heartbeat timeout at least equal to the method timeout, or heartbeat or stream progress during the call. In local measurements with Dex CLI v0.13.8, Dex detected a lost Worker connection in about two seconds, so a long heartbeat timeout did not delay crash recovery.
 

@@ -4,7 +4,7 @@ Log Flow/run IDs, Step type/execution ID, attempt, and operation as structured f
 
 Heartbeat is liveness/checkpoint data for one Execute attempt. It is not business state. Async handlers await heartbeat; synchronous generator handlers yield the heartbeat output. Resume only from a present, correctly typed prior value.
 
-Pull Workers enforce the Step HeartbeatTimeout. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
+Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
 
 [Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/python/dex_examples/primitives/heartbeat/heartbeat_flow.py)
 <!-- dex-source: examples/python/dex_examples/primitives/heartbeat/heartbeat_flow.py -->

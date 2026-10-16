@@ -6,7 +6,7 @@ Log Flow ID, run ID, Step type/execution ID, attempt, and operation. Keep high-c
 
 Heartbeat is liveness/checkpoint data for one long attempt, not business state. Resume only when a previous value exists, and return heartbeat errors.
 
-Pull Workers enforce the Step HeartbeatTimeout. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
+Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
 
 [Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.10.1/examples/go/primitives/heartbeat/workflow.go)
 <!-- dex-source: examples/go/primitives/heartbeat/workflow.go -->
