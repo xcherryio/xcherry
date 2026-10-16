@@ -207,12 +207,15 @@ uniquely and change after each restart. It must contain 1-63 ASCII letters,
 digits, dots, underscores, or hyphens, and cannot equal a registered Flow type.
 
 The Worker reconnects after transport failures. A server-directed reconnect
-waits for the current task to finish. An older server without pull support
+waits for the current task to finish and gives the final frame up to
+`stopDrainTimeoutMs` to reach the server. An older server without pull support
 produces one explicit error log and is retried after one minute. Startup reports
 protocol and index synchronization failures; later poll failures are retried.
 `Worker.close()` drains for at most `stopDrainTimeoutMs`, which defaults to
-30 seconds. It then cancels active handlers and waits for them to return. A
-handler that ignores cancellation can delay shutdown.
+30 seconds. It then cancels active handlers and waits for them to return. Streams
+that sent a final frame wait for the server to close them until the remaining
+drain deadline before the channel closes. A handler that ignores cancellation
+can delay shutdown.
 
 `StepOptions.waitForMethodTimeoutMs` and `executeMethodTimeoutMs` bound the two
 handler calls. Timer and channel conditions determine how long a Step waits.

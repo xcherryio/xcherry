@@ -294,6 +294,65 @@ for (const shouldReconnect of [false, true]) {
   });
 }
 
+for (const shutdown of ["Stop drain", "busy Reconnect", "busy Reconnect then Stop"] as const) {
+  test(`large final result survives a delayed gRPC read during ${shutdown}`, async () => {
+    const harness = await startHarness();
+    let stream: CapturedStream | undefined;
+    let finishTask!: () => void;
+    const taskGate = new Promise<void>((resolve) => { finishTask = resolve; });
+    const payload = "x".repeat(3_000_000);
+    const worker = harness.worker(async () => {
+      await taskGate;
+      return InvokeWorkerRPCResponse.create({ output: Value.create({
+        kind: { $case: "stringValue", value: payload },
+      }) });
+    }, { stopDrainTimeoutMs: 10_000 });
+    try {
+      worker.start();
+      const capturedStream = await harness.nextStream();
+      stream = capturedStream;
+      capturedStream.call.write({ frame: { $case: "registered", value: {} } });
+      capturedStream.call.write(rpcTask("delayed-result"));
+      await until(() => harness.invocationCount === 1);
+      if (shutdown !== "Stop drain") {
+        capturedStream.call.write({ frame: { $case: "reconnect", value: { reason: "move" } } });
+        capturedStream.call.write({ frame: { $case: "ping", value: {} } });
+        await capturedStream.frame("pong");
+      }
+      capturedStream.call.pause();
+      finishTask();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const closing = shutdown === "Stop drain" ? worker.close() : undefined;
+      const delayedRead = new Promise<void>((resolve) => setTimeout(() => {
+        capturedStream.call.resume();
+        resolve();
+      }, 6_100));
+      const stopDuringReconnect = shutdown === "busy Reconnect then Stop"
+        ? new Promise<void>((resolve) => setTimeout(resolve, 1_000)).then(() => worker.close())
+        : undefined;
+      await delayedRead;
+      const result = await capturedStream.frame("taskFrame", 1, 10_000);
+      assert.equal(result.frame?.$case, "taskFrame");
+      if (result.frame?.$case === "taskFrame") {
+        assert.equal(result.frame.value.output?.$case, "rpc");
+        if (result.frame.value.output?.$case === "rpc") {
+          assert.equal(result.frame.value.output.value.output?.kind?.$case, "stringValue");
+          if (result.frame.value.output.value.output?.kind?.$case === "stringValue") {
+            assert.equal(result.frame.value.output.value.output.kind.value.length, payload.length);
+          }
+        }
+      }
+      await closing;
+      await stopDuringReconnect;
+    } finally {
+      stream?.call.resume();
+      finishTask();
+      await worker.close();
+      await harness.close();
+    }
+  });
+}
+
 test("Worker error frame preserves push status, type, stack, and retry delay", () => {
   const failure = Object.assign(new Error("failed"), { code: status.INVALID_ARGUMENT });
   const pull = workerErrorResponse(failure);
@@ -342,7 +401,7 @@ interface CapturedStream {
   readonly call: TaskStream;
   readonly frames: PollWorkerTaskRequest[];
   readonly openedAt: number;
-  frame(kind: NonNullable<PollWorkerTaskRequest["frame"]>["$case"], occurrence?: number): Promise<PollWorkerTaskRequest>;
+  frame(kind: NonNullable<PollWorkerTaskRequest["frame"]>["$case"], occurrence?: number, timeoutMs?: number): Promise<PollWorkerTaskRequest>;
 }
 
 async function startHarness() {
@@ -358,8 +417,8 @@ async function startHarness() {
       call.on("error", () => {});
       streams.push({
         call, frames, openedAt: Date.now(),
-        async frame(kind, occurrence = 1) {
-          await until(() => frames.filter((candidate) => candidate.frame?.$case === kind).length >= occurrence);
+        async frame(kind, occurrence = 1, timeoutMs = 5_000) {
+          await until(() => frames.filter((candidate) => candidate.frame?.$case === kind).length >= occurrence, timeoutMs);
           return frames.filter((candidate) => candidate.frame?.$case === kind)[occurrence - 1]!;
         },
       });
@@ -401,8 +460,8 @@ function rpcTask(taskId: string, deadline?: Date): PollWorkerTaskResponse {
   } } };
 }
 
-async function until(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function until(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error("timed out waiting for poll stream event");
     await new Promise((resolve) => setTimeout(resolve, 5));
