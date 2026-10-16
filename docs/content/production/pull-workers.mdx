@@ -19,16 +19,176 @@ or select it for one Flow with **StartFlowOptions** and
 the same **FlowConfig** override. Use a pull **WorkerTarget** without a local
 Worker when the Client runs in a separate process.
 
-In Go, the Worker option is **WorkerOptions.Pull** and the target has
-**WorkerTarget.Pull** set to true. The Python, TypeScript, and Rust SDKs provide
-equivalent pull options and targets. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker),
+All five SDKs provide pull options and targets. This example serves a Greeting
+Flow through a pull Worker. Its Step stores a greeting, and the **getGreeting**
+RPC reads it. See the [Go](https://github.com/superdurable/dex/blob/main/sdk-go/README.md#running-a-worker),
 [Python](https://github.com/superdurable/dex/blob/main/sdk-python/README.md#pull-mode),
+[Java](https://github.com/superdurable/dex/blob/main/sdk-java/README.md#pull-mode),
 [TypeScript](https://github.com/superdurable/dex/blob/main/sdk-typescript/README.md#pull-mode),
 and [Rust](https://github.com/superdurable/dex/blob/main/sdk-rust/README.md#pull-mode)
-READMEs for exact names and startup behavior. The Java SDK does not support
-pull mode yet.
+READMEs for startup details.
 
-<!-- Pull Worker SdkTabs example. -->
+<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
+
+<SdkSnippet lang="python">
+
+```python
+async def start_pull_greeting(
+    cache: BlobCache, server_address: str
+) -> tuple[GreetingFlow, AsyncWorker, AsyncClient, asyncio.Task[None]]:
+    flow = GreetingFlow()
+    registry = Registry((flow,), allow_async_handlers=True)
+    worker = AsyncWorker(
+        registry,
+        cache,
+        WorkerOptions(
+            server_address=server_address,
+            pull=PullWorkerOptions(max_concurrent_tasks=8),
+        ),
+    )
+    worker_task = asyncio.create_task(worker.start())
+    client = AsyncClient(
+        registry,
+        cache,
+        ClientOptions(
+            server_address=server_address,
+            worker_target=worker.worker_target,
+        ),
+    )
+    return flow, worker, client, worker_task
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="go">
+
+```go
+func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingFlow, *dex.Worker, *dex.Client, <-chan error, error) {
+	flow := &GreetingFlow{}
+	registry, err := dex.NewRegistry([]dex.Flow{flow})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
+		FlowServiceAddress: serverAddress,
+		Pull:               &dex.PullWorkerOptions{MaxConcurrentTasks: 8},
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	client, err := dex.NewClient(registry, cache, dex.ClientOptions{
+		FlowServiceAddress: serverAddress,
+		WorkerTarget:       worker.WorkerTarget(),
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	workerResult := make(chan error, 1)
+	go reportWorkerResult(worker, workerResult)
+	return flow, worker, client, workerResult, nil
+}
+
+func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
+	workerResult <- worker.Start()
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="java">
+
+```java
+public final class PullGreetingExample {
+    private PullGreetingExample() {
+    }
+
+    public static RunningPullGreeting start(
+            final BlobCache cache, final String serverAddress) {
+        final GreetingFlow flow = new GreetingFlow();
+        final Registry registry = new Registry(List.<Flow<?>>of(flow));
+        final Worker worker = new Worker(registry, cache, WorkerOptions.newBuilder()
+                .serverAddress(serverAddress)
+                .pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build())
+                .build());
+        final Client client = new Client(registry, cache,
+                new ClientOptions(serverAddress, worker.getWorkerTarget()));
+        final CompletableFuture<Void> workerResult = new CompletableFuture<>();
+        final Thread workerThread = new Thread(() -> {
+            try {
+                worker.start();
+                workerResult.complete(null);
+            } catch (final Throwable failure) {
+                workerResult.completeExceptionally(failure);
+            }
+        }, "pull-greeting-worker");
+        workerThread.start();
+        return new RunningPullGreeting(flow, worker, client, workerThread, workerResult);
+    }
+
+    public record RunningPullGreeting(
+            GreetingFlow flow, Worker worker, Client client, Thread workerThread,
+            CompletableFuture<Void> workerResult) {
+    }
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="typescript">
+
+```typescript
+export async function startPullGreeting(
+  cache: BlobCache,
+  serverAddress: string,
+): Promise<{ flow: GreetingFlow; worker: Worker; client: Client }> {
+  const flow = new GreetingFlow();
+  const registry = new Registry([flow]);
+  const worker = new Worker(registry, cache, {
+    serverAddress,
+    pull: { maxConcurrentTasks: 8 },
+  });
+  await worker.start();
+  const client = new Client(registry, cache, {
+    serverAddress,
+    workerTarget: worker.workerTarget,
+  });
+  return { flow, worker, client };
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="rust">
+
+```rust
+pub fn start_pull_greeting(
+    cache: Arc<BlobCache>,
+    server_address: &str,
+) -> SdkResult<(Arc<Worker>, Client, JoinHandle<SdkResult<()>>)> {
+    let registry = Registry::new().register(GreetingFlow::default())?;
+    let worker = Arc::new(Worker::try_new(
+        registry.clone(),
+        Arc::clone(&cache),
+        WorkerOptions::new()
+            .server_address(server_address)
+            .pull(PullWorkerOptions::new().max_concurrent_tasks(8)),
+    )?);
+    let client = Client::try_new(
+        registry,
+        cache,
+        ClientOptions::new()
+            .server_address(server_address)
+            .worker_target(worker.worker_target().clone()),
+    )?;
+    let running_worker = Arc::clone(&worker);
+    let worker_thread = thread::spawn(move || running_worker.start());
+    Ok((worker, client, worker_thread))
+}
+```
+
+</SdkSnippet>
+
+</SdkTabs>
 
 ## Routing and availability
 
@@ -67,6 +227,7 @@ idle streams and declines an extra assignment so Dex can try another Worker.
 | Go | **MaxConcurrentTasks** | **IdleStreamsPerQueue** | **StopDrainTimeout** | **Stop** |
 | Python | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
 | TypeScript | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeoutMs** | **close** |
+| Java | **maxConcurrentTasks** | **idleStreamsPerQueue** | **stopDrainTimeout** | **stop** |
 | Rust | **max_concurrent_tasks** | **idle_streams_per_queue** | **stop_drain_timeout** | **stop** |
 
 The Rust entries are builder methods. The formula below uses the TypeScript
@@ -113,8 +274,6 @@ process. Use the same backend namespace and membership seeds across instances.
 to reach it. The [Server operation](/production/server-operations#pull-worker-routing)
 page shows the matching limits, wait settings, and multi-node configuration.
 
-The Go SDK, **dexcli**, and Dex Web can send the required bearer credential.
-Configure **WorkerOptions.Credential** for Go Worker streams and
-**ClientOptions.Credential** for Go Client calls. Python, TypeScript, and Rust
-pull Workers cannot connect while public **auth** is enabled. See the
+All five SDKs, **dexcli**, and Dex Web can send the required bearer credential.
+Workers and Clients have separate credential options. See the
 [authentication settings](/production/server-operations#authentication).

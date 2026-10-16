@@ -241,9 +241,9 @@ dependencies = [
 
 [[package]]
 name = "dex-blob-cache"
-version = "1.2.1"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e08135554e76d414ab8e91e7b522955f24b4e5631ae16e3642a365df412dbd0"
+checksum = "472d34b57100390ff09f42755296c1ccb1064fd7444f9c78384f7c1b84670182"
 dependencies = [
  "crc32c",
  "sha2",
@@ -268,9 +268,9 @@ dependencies = [
 
 [[package]]
 name = "dex-protocol"
-version = "1.2.1"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9eddec35a2792190e3d9681c65bb6ef01215fb8d440dd9f4e5622d660007ff13"
+checksum = "0993c77b18900ea6011ff9c69ace92b15bc93e298b6d9da1251a206ff14056a7"
 dependencies = [
  "prost",
  "prost-types",
@@ -282,12 +282,13 @@ dependencies = [
 
 [[package]]
 name = "dex-sdk"
-version = "1.2.1"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d6226fbfaaeca8676b4160f89bf698e3fe338172460ea2490365419a4352861"
+checksum = "d71638d9f774a71b6ab88b43214d5bc0cdf540e31e9568228cc7576f75fa735e"
 dependencies = [
  "dex-blob-cache",
  "dex-protocol",
+ "gethostname",
  "prost",
  "prost-types",
  "serde",
@@ -473,6 +474,16 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "gethostname"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
+dependencies = [
+ "rustix",
+ "windows-link",
 ]
 
 [[package]]
