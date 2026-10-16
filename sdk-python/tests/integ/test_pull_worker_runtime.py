@@ -299,7 +299,9 @@ def test_subflow_can_override_push_parent_with_pull_child() -> None:
     parent = PullSubFlowParent(push_child)
     pull_worker = PullWorkerHarness(pull_child, server_address, pull_worker_id)
     try:
-        with DexDevTestEnvironment(parent, push_child, worker_mode="push") as environment:
+        with DexDevTestEnvironment(
+            parent, push_child, worker_mode="push"
+        ) as environment:
             flow_id = unique_id("python-pull-subflow-parent")
             environment.client.start_flow(parent, flow_id, "child-completed")
             result = environment.client.wait_for_flow(flow_id, timedelta(seconds=30))
