@@ -526,12 +526,14 @@ Run the SDK integration suite against a fresh local `dexcli dev` stack:
 
 ```bash
 ./run-integration-tests.sh
+DEX_INTEG_WORKER_MODE=pull ./run-integration-tests.sh
 ```
 
 The script creates its own Dex environment, ports, and BlobCache directory,
-then removes the temporary state. Each Worker synchronizes its registered
-Indexed Attributes before listening; failure or the default two-minute
-deadline aborts startup.
+then removes the temporary state. `DEX_INTEG_WORKER_MODE` defaults to `push`.
+In pull mode, the shared Worker polls Dex and the shared Client targets its
+pull queues. Each Worker synchronizes its registered Indexed Attributes before
+serving; failure or the default two-minute deadline aborts startup.
 
 ### Measure integration coverage
 
@@ -549,8 +551,8 @@ data. Test sources and dependencies are excluded from the report by
 
 The LCOV report is written to `coverage/lcov.info`, and the browser report
 starts at `coverage/html/index.html`. CI uploads the LCOV report with the
-`sdk-rust-integration` flag and retains the full report as the
-`sdk-rust-integration-coverage` Actions artifact.
+mode-specific `sdk-rust-integration-push` or `sdk-rust-integration-pull` flag
+and retains each report as a mode-specific Actions artifact.
 
 ## Releases
 

@@ -17,7 +17,7 @@ integration-test:
 	./run-integration-tests.sh
 
 pull-integration-test:
-	./run-integration-tests.sh --pull
+	DEX_INTEG_WORKER_MODE=pull ./run-integration-tests.sh
 
 unit-test:
 	cargo test --locked -p dex-sdk --lib --test compile_contracts --test error_contracts

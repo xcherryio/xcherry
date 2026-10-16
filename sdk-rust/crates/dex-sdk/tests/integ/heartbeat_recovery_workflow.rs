@@ -17,6 +17,8 @@ use dex_sdk::{
     StepDurability, StepList, StepOptions, Stream,
 };
 
+use crate::support::is_pull_mode;
+
 pub(crate) static HEARTBEAT_PROGRESS: LazyLock<Stream<String>> =
     LazyLock::new(|| Stream::new("rust-heartbeat-progress", 1 << 20));
 
@@ -94,17 +96,18 @@ impl Step for AsyncHeartbeatStep {
     type Input = ();
 
     fn execute(&self, context: &mut Context, _input: ()) -> HandlerResult<StepDecision> {
+        let expected_heartbeat = if is_pull_mode() && context.attempt() > 2 {
+            Some(Some(format!("local-{}", context.attempt() - 1)))
+        } else {
+            None
+        };
         if context.attempt() <= 3 {
-            if context.last_heartbeat_value::<String>()?.is_some() {
-                return Err(retry_error("local heartbeat leaked into retry"));
-            }
+            require_last_heartbeat(context, expected_heartbeat)?;
             context.record_heartbeat_value(format!("local-{}", context.attempt()))?;
             HEARTBEAT_PROGRESS.write(context, format!("local-{}", context.attempt()))?;
             return Err(retry_error("exercise local retry"));
         }
-        if context.last_heartbeat_value::<String>()?.is_some() {
-            return Err(retry_error("local heartbeat leaked into regular fallback"));
-        }
+        require_last_heartbeat(context, expected_heartbeat)?;
         Ok(StepDecision::graceful_complete("heartbeat-ok".to_string()))
     }
 
