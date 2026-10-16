@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -58,6 +59,7 @@ final class PullWorker {
     private final ScheduledExecutorService scheduler;
     private final PullWorkerOptions options;
     private final List<String> flowTypes;
+    private final Map<String, Registry.RegisteredFlow> registeredFlows;
     private final List<String> queues;
     private final List<PullStream> streams = new ArrayList<PullStream>();
     private final String appWorkerID;
@@ -92,9 +94,13 @@ final class PullWorker {
             return thread;
         });
         final List<String> registered = new ArrayList<String>();
+        final Map<String, Registry.RegisteredFlow> definitions =
+                new HashMap<String, Registry.RegisteredFlow>();
         for (Flow<?> flow : registry.getFlows()) {
             registered.add(flow.getFlowType());
+            definitions.put(flow.getFlowType(), registry.getFlow(flow.getFlowType()));
         }
+        this.registeredFlows = Collections.unmodifiableMap(definitions);
         Collections.sort(registered);
         this.flowTypes = Collections.unmodifiableList(registered);
         this.appWorkerID = options.getAppWorkerID().isEmpty()
@@ -106,6 +112,36 @@ final class PullWorker {
         this.queues = new ArrayList<String>();
         queues.add(appWorkerID);
         queues.addAll(registered);
+    }
+
+    private PollWorkerTaskRejectReason unknownTaskReason(final PollWorkerTask task) {
+        switch (task.getRequestCase()) {
+            case WAIT_FOR:
+                final Registry.RegisteredFlow waitFlow =
+                        registeredFlows.get(task.getWaitFor().getFlowType());
+                return waitFlow != null && waitFlow.getSteps().containsKey(task.getWaitFor().getStepType())
+                        ? PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+                        : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+            case EXECUTE:
+                final Registry.RegisteredFlow executeFlow =
+                        registeredFlows.get(task.getExecute().getFlowType());
+                if ("sys:timeout_handler".equals(task.getExecute().getStepType())) {
+                    return executeFlow != null && executeFlow.hasTimeoutHandler()
+                            ? PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+                            : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+                }
+                return executeFlow != null && executeFlow.getSteps().containsKey(task.getExecute().getStepType())
+                        ? PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+                        : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+            case RPC:
+                final Registry.RegisteredFlow rpcFlow =
+                        registeredFlows.get(task.getRpc().getFlowType());
+                return rpcFlow != null && rpcFlow.getRpcs().containsKey(task.getRpc().getRpcName())
+                        ? PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+                        : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC;
+            default:
+                return PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED;
+        }
     }
 
     String getAppWorkerID() {
@@ -348,9 +384,14 @@ final class PullWorker {
         }
 
         private void startTask(final PollWorkerTask task) {
+            final PollWorkerTaskRejectReason unknownReason = unknownTaskReason(task);
+            if (unknownReason != PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED) {
+                reject(task.getTaskId(), unknownReason);
+                return;
+            }
             if (isBusy || isDraining || isStopping
                     || busyTasks >= options.getMaxConcurrentTasks()) {
-                reject(task.getTaskId());
+                reject(task.getTaskId(), PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
                 return;
             }
             isBusy = true;
@@ -380,18 +421,17 @@ final class PullWorker {
                 handlers.execute(() -> runTask(task));
             } catch (RejectedExecutionException rejected) {
                 finishTask();
-                reject(task.getTaskId());
+                reject(task.getTaskId(), PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
                 return;
             }
             reconcile();
         }
 
-        private void reject(final String rejectedTaskID) {
+        private void reject(final String rejectedTaskID, final PollWorkerTaskRejectReason reason) {
             send(PollWorkerTaskRequest.newBuilder()
                     .setReject(PollWorkerTaskReject.newBuilder()
                             .setTaskId(rejectedTaskID)
-                            .setReason(PollWorkerTaskRejectReason
-                                    .POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY)
+                            .setReason(reason)
                             .build())
                     .build());
         }

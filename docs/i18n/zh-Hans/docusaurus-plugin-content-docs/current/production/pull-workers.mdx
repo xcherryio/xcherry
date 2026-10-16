@@ -252,6 +252,14 @@ Dex 在 matching dispatch 等待时间内寻找可用 Worker。如果没有 Work
 默认等待 10 秒，其中黏性队列最多等待 5 秒。需要保留执行时间的调用使用更短的等待。
 等待设置见[服务器运维](/production/server-operations#pull-worker-routing)。
 
+如果拉取模式 Worker 注册了该 Flow 类型，却没有请求的 Step 类型或 RPC 名称，
+它会在运行 handler 前拒绝任务。Dex 会立即改用 Flow 类型队列，并在本次分配中
+排除该 Worker，即使 Flow 原本黏附于它。重新分配不会消耗 Step attempt。
+如果在 dispatch 等待时间内没有可处理任务的 Worker，Step 会按其失败和重试策略
+收到注明 Step 或 RPC 名称的错误；RPC 调用方会直接收到该错误。普通 Step 的默认
+等待时间为 10 秒，本地 Step 为 3 秒。不发送此拒绝而返回 Worker 错误的旧版 SDK
+保持原有行为。推送模式 Worker 仍返回原有的未注册名称错误。
+
 任务至少投递一次。如果 Worker 在 Dex 收到任何输出前断开连接，同一个调用可能再次分配。
 外部副作用应具备幂等性，例如使用 Flow ID 和 Step execution ID 作为幂等键。
 

@@ -17,7 +17,7 @@ import {
 } from "@grpc/grpc-js";
 
 import { credentialInterceptors, type Credential } from "./credential.js";
-import { registeredFlow, type Registry } from "./flow.js";
+import { registeredFlow, type RegisteredFlow, type Registry } from "./flow.js";
 import {
   InvokeExecuteMethodOutput,
   InvokeWaitForMethodOutput,
@@ -65,6 +65,7 @@ export class PullWorker {
   private readonly client: InstanceType<typeof WorkerTaskServiceClient>;
   private readonly queues: readonly string[];
   private readonly flowTypes: readonly string[];
+  private readonly registeredFlows: ReadonlyMap<string, RegisteredFlow>;
   private readonly maxConcurrentTasks: number;
   private readonly idleStreamsPerQueue: number;
   private readonly stopDrainTimeoutMs: number;
@@ -89,7 +90,11 @@ export class PullWorker {
     if (!Number.isFinite(this.stopDrainTimeoutMs) || this.stopDrainTimeoutMs < 0) {
       throw new RangeError("stopDrainTimeoutMs must not be negative");
     }
-    this.flowTypes = registry.flows.map((flow) => registeredFlow(registry, flow).name).sort();
+    this.registeredFlows = new Map(registry.flows.map((flow) => {
+      const definition = registeredFlow(registry, flow);
+      return [definition.name, definition] as const;
+    }));
+    this.flowTypes = [...this.registeredFlows.keys()].sort();
     this.appWorkerID = options.appWorkerID || generateAppWorkerID();
     if (!/^[A-Za-z0-9._-]{1,63}$/.test(this.appWorkerID)) {
       throw new TypeError("appWorkerID must contain 1-63 ASCII letters, digits, dots, underscores, or hyphens");
@@ -251,16 +256,13 @@ export class PullWorker {
   }
 
   private startTask(poll: PollStream, task: PollWorkerTask): void {
+    const unknownReason = this.unknownTaskReason(task);
+    if (unknownReason !== undefined) {
+      this.rejectTask(poll, task.taskId, unknownReason);
+      return;
+    }
     if (poll.task !== undefined || poll.isDraining || this.isStopping || this.busyTaskCount >= this.maxConcurrentTasks) {
-      try {
-        this.send(poll, { frame: { $case: "reject", value: {
-          taskId: task.taskId,
-          reason: PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
-        } } });
-      } catch (failure) {
-        console.error("reject Worker task", failure);
-        this.disconnect(poll);
-      }
+      this.rejectTask(poll, task.taskId, PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
       return;
     }
     const controller = new AbortController();
@@ -273,6 +275,39 @@ export class PullWorker {
     this.activeTasks.add(completion);
     this.busyTaskCount++;
     this.reconcile();
+  }
+
+  private unknownTaskReason(task: PollWorkerTask): PollWorkerTaskRejectReason | undefined {
+    switch (task.request?.$case) {
+      case "waitFor":
+      case "execute": {
+        const request = task.request.value;
+        const flow = this.registeredFlows.get(request.flowType);
+        if (task.request.$case === "execute" && request.stepType === "sys:timeout_handler") {
+          return flow?.hasTimeoutHandler === true
+            ? undefined : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+        }
+        return flow?.steps.some((step) => step.name === request.stepType) === true
+          ? undefined : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP;
+      }
+      case "rpc": {
+        const request = task.request.value;
+        const flow = this.registeredFlows.get(request.flowType);
+        return flow?.rpcs.some((rpc) => rpc.name === request.rpcName) === true
+          ? undefined : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  private rejectTask(poll: PollStream, taskId: string, reason: PollWorkerTaskRejectReason): void {
+    try {
+      this.send(poll, { frame: { $case: "reject", value: { taskId, reason } } });
+    } catch (failure) {
+      console.error("reject Worker task", failure);
+      this.disconnect(poll);
+    }
   }
 
   private async executeTask(poll: PollStream, task: PollWorkerTask, signal: AbortSignal): Promise<void> {

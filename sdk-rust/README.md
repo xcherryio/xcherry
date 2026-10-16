@@ -342,6 +342,12 @@ The Worker polls its sticky queue and every registered Flow type queue. Flow
 type names must be unique within a Dex server. The task limit defaults to the
 CPU count, and each queue keeps one idle stream by default. A stream runs one
 task at a time. At capacity, the Worker rejects an assignment for reassignment.
+An unregistered Step or RPC is rejected by name. Dex retries that task on
+another pull Worker without consuming a Step attempt, including when the Flow
+was sticky to the rejecting Worker. If no capable Worker accepts it within the
+server's dispatch wait (10 seconds by default, or 3 seconds in local mode), the
+Step fails with the unknown name. Older SDKs continue to return their ordinary
+handler error.
 The generated app Worker ID uses the first nonempty `DEX_WORKER_INSTANCE`,
 `POD_NAME`, or `HOSTNAME` value, or the system hostname (falling back to
 `worker`), plus eight random base32 characters. An override must identify one

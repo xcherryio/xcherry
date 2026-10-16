@@ -145,6 +145,71 @@ public final class PullWorkerEndToEndTest {
         }
     }
 
+    @Test
+    void reassignsUnregisteredRpcFromStickyWorker() throws Exception {
+        final String address = System.getProperty("dex.test.serverAddress", "127.0.0.1:8801");
+        final BlockingQueue<String> observations = new LinkedBlockingQueue<String>();
+        final CountDownLatch firstRelease = new CountDownLatch(1);
+        final AtomicInteger firstExecuteCalls = new AtomicInteger();
+        final AtomicInteger secondExecuteCalls = new AtomicInteger();
+        final OldPullFlow oldFlow = new OldPullFlow(observations, firstRelease,
+                firstExecuteCalls, secondExecuteCalls);
+        final PullFlow newFlow = new PullFlow("new", observations, new CountDownLatch(0),
+                new CountDownLatch(0), firstExecuteCalls, secondExecuteCalls);
+        try (PullRuntime oldWorker = new PullRuntime(cacheDirectory.resolve("old"), address,
+                "java-pull-old-" + UUID.randomUUID(), oldFlow);
+                BlobCache clientCache = BlobCache.open(new BlobCacheConfig(
+                        cacheDirectory.resolve("client-unknown").toString(), 64L << 20));
+                Client client = new Client(new Registry(Arrays.<Flow<?>>asList(newFlow)),
+                        clientCache, new ClientOptions(address, oldWorker.worker.getWorkerTarget()))) {
+            final String flowID = "java-pull-unknown-" + UUID.randomUUID();
+            client.startFlow(newFlow, flowID, "complete");
+            assertEquals("old:wait-1", observations.poll(30, TimeUnit.SECONDS));
+            assertEquals("old:execute-1", observations.poll(30, TimeUnit.SECONDS));
+            try (PullRuntime newWorker = new PullRuntime(cacheDirectory.resolve("new"), address,
+                    "java-pull-new-" + UUID.randomUUID(), newFlow)) {
+                assertEquals("new", client.invokeRPC(
+                        client.newRpcStub(PullFlow.class, flowID)::getWorker));
+                client.stopFlow(flowID);
+                assertEquals(1, firstExecuteCalls.get());
+                assertEquals(0, secondExecuteCalls.get());
+            } finally {
+                firstRelease.countDown();
+            }
+        }
+    }
+
+    @Test
+    void reassignsUnregisteredStartingStep() throws Exception {
+        final String address = System.getProperty("dex.test.serverAddress", "127.0.0.1:8801");
+        final BlockingQueue<String> observations = new LinkedBlockingQueue<String>();
+        final CountDownLatch released = new CountDownLatch(0);
+        final AtomicInteger firstExecuteCalls = new AtomicInteger();
+        final AtomicInteger secondExecuteCalls = new AtomicInteger();
+        final OldPullFlow oldFlow = new OldPullFlow(observations, released,
+                firstExecuteCalls, secondExecuteCalls);
+        final NewStartPullFlow newFlow = new NewStartPullFlow(observations,
+                firstExecuteCalls, secondExecuteCalls);
+        try (PullRuntime oldWorker = new PullRuntime(cacheDirectory.resolve("old-step"), address,
+                "java-pull-old-step-" + UUID.randomUUID(), oldFlow);
+                BlobCache clientCache = BlobCache.open(new BlobCacheConfig(
+                        cacheDirectory.resolve("client-step").toString(), 64L << 20));
+                Client client = new Client(new Registry(Arrays.<Flow<?>>asList(newFlow)),
+                        clientCache, new ClientOptions(address, oldWorker.worker.getWorkerTarget()))) {
+            final String flowID = "java-pull-unknown-step-" + UUID.randomUUID();
+            client.startFlow(newFlow, flowID, "complete");
+            try (PullRuntime newWorker = new PullRuntime(cacheDirectory.resolve("new-step"),
+                    address, "java-pull-new-step-" + UUID.randomUUID(), newFlow)) {
+                assertEquals("complete", client.waitForFlow(flowID, Duration.ofSeconds(30))
+                        .getSingleOutput(String.class));
+                assertEquals("new:wait-2", observations.poll(30, TimeUnit.SECONDS));
+                assertEquals("new:execute-2", observations.poll(30, TimeUnit.SECONDS));
+                assertEquals(0, firstExecuteCalls.get());
+                assertEquals(1, secondExecuteCalls.get());
+            }
+        }
+    }
+
     public static class PullFlow implements Flow<String> {
         private final String workerID;
         private final BlockingQueue<String> observations;
@@ -178,6 +243,52 @@ public final class PullWorkerEndToEndTest {
         public RPCResult<String> getWorker(final Context context) {
             observations.add(workerID + ":rpc");
             return RPCResult.of(workerID);
+        }
+    }
+
+    private static final class OldPullFlow extends PullFlow {
+        OldPullFlow(final BlockingQueue<String> observations, final CountDownLatch firstRelease,
+                final AtomicInteger firstExecuteCalls, final AtomicInteger secondExecuteCalls) {
+            super("old", observations, firstRelease, new CountDownLatch(0),
+                    firstExecuteCalls, secondExecuteCalls);
+        }
+
+        @Override
+        public String getFlowType() {
+            return "PullFlow";
+        }
+
+        @Override
+        public StepList<String> getSteps() {
+            return StepList.startStep(new FirstStep(this));
+        }
+
+        @Override
+        public RPCResult<String> getWorker(final Context context) {
+            return RPCResult.of("old");
+        }
+    }
+
+    private static class NewStartPullFlow extends PullFlow {
+        NewStartPullFlow(final BlockingQueue<String> observations,
+                final AtomicInteger firstExecuteCalls, final AtomicInteger secondExecuteCalls) {
+            super("new", observations, new CountDownLatch(0), new CountDownLatch(0),
+                    firstExecuteCalls, secondExecuteCalls);
+        }
+
+        @Override
+        public String getFlowType() {
+            return "PullFlow";
+        }
+
+        @Override
+        public StepList<String> getSteps() {
+            return StepList.startStep(new SecondStep(this));
+        }
+
+        @Override
+        public RPCResult<String> getWorker(final Context context) {
+            return RPCResult.of("new");
         }
     }
 

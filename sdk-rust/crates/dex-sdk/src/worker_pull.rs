@@ -398,8 +398,12 @@ impl PullStream {
                             }
                             match response.frame {
                                 Some(ResponseFrame::Task(task)) => {
-                                    if active.is_some() || is_draining || !self.shared.try_accept(self.stream_id) {
-                                        let reject = PollWorkerTaskReject { task_id: task.task_id, reason: PollWorkerTaskRejectReason::NoCapacity as i32 };
+                                    let rejection = self.dispatcher.unknown_task_reason(&task).or_else(|| {
+                                        (active.is_some() || is_draining || !self.shared.try_accept(self.stream_id))
+                                            .then_some(PollWorkerTaskRejectReason::NoCapacity)
+                                    });
+                                    if let Some(reason) = rejection {
+                                        let reject = PollWorkerTaskReject { task_id: task.task_id, reason: reason as i32 };
                                         if let Err(status) = send_control_frame(sender.as_ref().expect("open Worker stream"), RequestFrame::Reject(reject)).await {
                                             self.cancel_and_wait(&mut active).await;
                                             return (was_registered, false, Err(status));
