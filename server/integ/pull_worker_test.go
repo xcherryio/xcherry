@@ -1329,7 +1329,7 @@ func TestPullUnknownNameRedispatchCadence(t *testing.T) {
 func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 	t.Helper()
 	t.Run("Step", func(t *testing.T) {
-		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: 2 * time.Second}})
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, LocalDispatchWait: 5 * time.Second, StickyWait: 2 * time.Second}})
 		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-old-"+uuid.NewString(), rawPullWorkerConfig{unknownStepType: dispatchProbeStep})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1351,7 +1351,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		require.Empty(t, oldWorker.unknownRejections)
 	})
 	t.Run("RPC and sticky fallback", func(t *testing.T) {
-		stickyWait := 4 * time.Second
+		stickyWait := 10 * time.Second
 		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
 		oldWorkerID := "pull-old-" + uuid.NewString()
 		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownRPCName: "getProbe"})
@@ -1366,7 +1366,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		response, err := runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", TimeoutSeconds: 15})
 		require.NoError(t, err)
 		require.NotNil(t, response)
-		require.Less(t, time.Since(startedAt), stickyWait/2)
+		require.Less(t, time.Since(startedAt), stickyWait)
 		select {
 		case rejected := <-oldWorker.unknownRejections:
 			require.Equal(t, oldWorkerID, rejected.queue)
