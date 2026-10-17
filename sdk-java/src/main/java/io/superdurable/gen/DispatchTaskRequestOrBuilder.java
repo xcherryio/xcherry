@@ -277,5 +277,15 @@ public interface DispatchTaskRequestOrBuilder extends
    */
   boolean getStopAfterUnknownName();
 
+  /**
+   * <pre>
+   * Ends an internal sticky queue search when no Worker streams remain connected.
+   * </pre>
+   *
+   * <code>bool stop_when_queue_has_no_streams = 14;</code>
+   * @return The stopWhenQueueHasNoStreams.
+   */
+  boolean getStopWhenQueueHasNoStreams();
+
   io.superdurable.gen.DispatchTaskRequest.RequestCase getRequestCase();
 }

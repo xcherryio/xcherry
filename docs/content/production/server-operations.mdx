@@ -124,6 +124,11 @@ matching:
   pingInterval: 20s
 ~~~
 
+**matching.stickyWait** bounds a regular sticky search only while the sticky
+queue has connected streams. When no stream for the previous app Worker ID is
+connected, Dex immediately tries the Flow type queue. **matching.localStickyWait**
+uses the same rule for local attempts.
+
 **membership.listen** binds the replica-only ring listener. Its default is
 **0.0.0.0:6833**. **broadcastAddress** defaults to the first private IPv4
 address and is advertised with the bound port. **seeds.dnsName** resolves a

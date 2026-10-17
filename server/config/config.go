@@ -251,11 +251,11 @@ type (
 	MatchingConfig struct {
 		// DispatchWait bounds a regular attempt's Worker search. Default 10s. Must be positive when set.
 		DispatchWait time.Duration `yaml:"dispatchWait"`
-		// StickyWait bounds searching the sticky queue before fallback. Default 5s. When set, must not exceed DispatchWait.
+		// StickyWait bounds searching a sticky queue while it has connected streams before fallback. Default 5s. When set, must not exceed DispatchWait.
 		StickyWait time.Duration `yaml:"stickyWait"`
 		// LocalDispatchWait bounds a local attempt's Worker search. Default 3s. Must be positive when set.
 		LocalDispatchWait time.Duration `yaml:"localDispatchWait"`
-		// LocalStickyWait bounds a local attempt's sticky queue search. Default 2s. When set, must not exceed LocalDispatchWait.
+		// LocalStickyWait bounds a local attempt's sticky queue search while it has connected streams. Default 2s. When set, must not exceed LocalDispatchWait.
 		LocalStickyWait time.Duration `yaml:"localStickyWait"`
 		// LocalExecutionReserve preserves time for local task execution. Default 4s. Must be positive when set.
 		LocalExecutionReserve time.Duration `yaml:"localExecutionReserve"`

@@ -581,6 +581,21 @@ private static final long serialVersionUID = 0L;
     return stopAfterUnknownName_;
   }
 
+  public static final int STOP_WHEN_QUEUE_HAS_NO_STREAMS_FIELD_NUMBER = 14;
+  private boolean stopWhenQueueHasNoStreams_ = false;
+  /**
+   * <pre>
+   * Ends an internal sticky queue search when no Worker streams remain connected.
+   * </pre>
+   *
+   * <code>bool stop_when_queue_has_no_streams = 14;</code>
+   * @return The stopWhenQueueHasNoStreams.
+   */
+  @java.lang.Override
+  public boolean getStopWhenQueueHasNoStreams() {
+    return stopWhenQueueHasNoStreams_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -633,6 +648,9 @@ private static final long serialVersionUID = 0L;
     }
     if (stopAfterUnknownName_ != false) {
       output.writeBool(13, stopAfterUnknownName_);
+    }
+    if (stopWhenQueueHasNoStreams_ != false) {
+      output.writeBool(14, stopWhenQueueHasNoStreams_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -690,6 +708,10 @@ private static final long serialVersionUID = 0L;
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(13, stopAfterUnknownName_);
     }
+    if (stopWhenQueueHasNoStreams_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(14, stopWhenQueueHasNoStreams_);
+    }
     return size;
   }
   @java.lang.Override
@@ -743,6 +765,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getExcludedAppWorkerIdsList())) return false;
     if (getStopAfterUnknownName()
         != other.getStopAfterUnknownName()) return false;
+    if (getStopWhenQueueHasNoStreams()
+        != other.getStopWhenQueueHasNoStreams()) return false;
     if (!getRequestCase().equals(other.getRequestCase())) return false;
     switch (requestCase_) {
       case 8:
@@ -801,6 +825,9 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + STOP_AFTER_UNKNOWN_NAME_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getStopAfterUnknownName());
+    hash = (37 * hash) + STOP_WHEN_QUEUE_HAS_NO_STREAMS_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getStopWhenQueueHasNoStreams());
     switch (requestCase_) {
       case 8:
         hash = (37 * hash) + WAIT_FOR_FIELD_NUMBER;
@@ -992,6 +1019,7 @@ private static final long serialVersionUID = 0L;
       excludedAppWorkerIds_ =
           com.google.protobuf.LazyStringArrayList.emptyList();
       stopAfterUnknownName_ = false;
+      stopWhenQueueHasNoStreams_ = false;
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -1069,6 +1097,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00001000) != 0)) {
         result.stopAfterUnknownName_ = stopAfterUnknownName_;
       }
+      if (((from_bitField0_ & 0x00002000) != 0)) {
+        result.stopWhenQueueHasNoStreams_ = stopWhenQueueHasNoStreams_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1145,6 +1176,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getStopAfterUnknownName() != false) {
         setStopAfterUnknownName(other.getStopAfterUnknownName());
+      }
+      if (other.getStopWhenQueueHasNoStreams() != false) {
+        setStopWhenQueueHasNoStreams(other.getStopWhenQueueHasNoStreams());
       }
       switch (other.getRequestCase()) {
         case WAIT_FOR: {
@@ -1266,6 +1300,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00001000;
               break;
             } // case 104
+            case 112: {
+              stopWhenQueueHasNoStreams_ = input.readBool();
+              bitField0_ |= 0x00002000;
+              break;
+            } // case 112
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2794,6 +2833,50 @@ private static final long serialVersionUID = 0L;
     public Builder clearStopAfterUnknownName() {
       bitField0_ = (bitField0_ & ~0x00001000);
       stopAfterUnknownName_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean stopWhenQueueHasNoStreams_ ;
+    /**
+     * <pre>
+     * Ends an internal sticky queue search when no Worker streams remain connected.
+     * </pre>
+     *
+     * <code>bool stop_when_queue_has_no_streams = 14;</code>
+     * @return The stopWhenQueueHasNoStreams.
+     */
+    @java.lang.Override
+    public boolean getStopWhenQueueHasNoStreams() {
+      return stopWhenQueueHasNoStreams_;
+    }
+    /**
+     * <pre>
+     * Ends an internal sticky queue search when no Worker streams remain connected.
+     * </pre>
+     *
+     * <code>bool stop_when_queue_has_no_streams = 14;</code>
+     * @param value The stopWhenQueueHasNoStreams to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStopWhenQueueHasNoStreams(boolean value) {
+
+      stopWhenQueueHasNoStreams_ = value;
+      bitField0_ |= 0x00002000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Ends an internal sticky queue search when no Worker streams remain connected.
+     * </pre>
+     *
+     * <code>bool stop_when_queue_has_no_streams = 14;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearStopWhenQueueHasNoStreams() {
+      bitField0_ = (bitField0_ & ~0x00002000);
+      stopWhenQueueHasNoStreams_ = false;
       onChanged();
       return this;
     }

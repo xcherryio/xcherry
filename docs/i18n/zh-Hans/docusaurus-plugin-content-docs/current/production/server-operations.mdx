@@ -110,6 +110,10 @@ matching:
   pingInterval: 20s
 ~~~
 
+**matching.stickyWait** 仅在黏性队列有已连接 stream 时限制常规黏性搜索。此前 app
+Worker ID 没有已连接 stream 时，Dex 会立即尝试 Flow 类型队列。
+**matching.localStickyWait** 对本地尝试使用相同规则。
+
 **membership.listen** 绑定仅供副本访问的 ring listener，默认值为 **0.0.0.0:6833**。
 **broadcastAddress** 默认取第一个私有 IPv4 地址，并与绑定端口一起对外发布。
 **seeds.dnsName** 解析 headless service；也可以使用 **seeds.static** 指定 peer

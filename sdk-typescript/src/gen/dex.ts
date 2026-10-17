@@ -427,6 +427,8 @@ export interface DispatchTaskRequest {
   excludedAppWorkerIds: string[];
   /** Ends an internal sticky queue search immediately after an unknown-name rejection. */
   stopAfterUnknownName: boolean;
+  /** Ends an internal sticky queue search when no Worker streams remain connected. */
+  stopWhenQueueHasNoStreams: boolean;
 }
 
 /** Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error. */
@@ -2760,6 +2762,7 @@ function createBaseDispatchTaskRequest(): DispatchTaskRequest {
     supportsAssignmentState: false,
     excludedAppWorkerIds: [],
     stopAfterUnknownName: false,
+    stopWhenQueueHasNoStreams: false,
   };
 }
 
@@ -2805,6 +2808,9 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
     }
     if (message.stopAfterUnknownName !== false) {
       writer.uint32(104).bool(message.stopAfterUnknownName);
+    }
+    if (message.stopWhenQueueHasNoStreams !== false) {
+      writer.uint32(112).bool(message.stopWhenQueueHasNoStreams);
     }
     return writer;
   },
@@ -2920,6 +2926,14 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
           message.stopAfterUnknownName = reader.bool();
           continue;
         }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.stopWhenQueueHasNoStreams = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2968,6 +2982,7 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
     message.supportsAssignmentState = object.supportsAssignmentState ?? false;
     message.excludedAppWorkerIds = object.excludedAppWorkerIds?.map((e) => e) || [];
     message.stopAfterUnknownName = object.stopAfterUnknownName ?? false;
+    message.stopWhenQueueHasNoStreams = object.stopWhenQueueHasNoStreams ?? false;
     return message;
   },
 };

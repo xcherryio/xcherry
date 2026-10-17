@@ -245,8 +245,10 @@ pub fn stop_pull_greeting(
 
 Each pull Worker polls its own app Worker ID queue and every Flow type it
 registers. Dex first tries the app Worker ID that served the Flow previously.
-After the sticky wait, it tries the Flow type queue so another Worker can take
-the call. Sticky routing is best effort; keep durable state in Dex rather than
+When no stream for that ID remains connected, such as after a Worker restart or
+deployment, Dex immediately tries the Flow type queue. Otherwise, it tries the
+Flow type queue after the sticky wait so another Worker can take the call. Sticky
+routing is best effort; keep durable state in Dex rather than
 depending on one Worker's memory. Flow type names must be unique within a Dex
 Server. An app Worker ID must identify one Worker process and change when that
 process restarts. The SDK generates one unless you set it explicitly.
@@ -254,7 +256,7 @@ process restarts. The SDK generates one unless you set it explicitly.
 Dex waits for an available Worker within the matching dispatch budget. If none
 is available, a Step receives a retryable unavailable error that consumes a
 Step retry. An RPC caller receives an **Unavailable** error directly. The default regular dispatch wait is 10 seconds,
-including up to 5 seconds for the sticky queue. Shorter waits apply to calls
+including up to 5 seconds for a sticky queue with connected streams. Shorter waits apply to calls
 that need to preserve time for execution. See [Server operation](/production/server-operations#pull-worker-routing)
 for the wait settings.
 
