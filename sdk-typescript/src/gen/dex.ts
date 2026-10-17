@@ -47,6 +47,7 @@ export enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0,
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1,
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2,
+  /** DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME - A matched Worker does not register the requested Step type or RPC name. */
   DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3,
   UNRECOGNIZED = -1,
 }
@@ -357,6 +358,8 @@ export interface PollWorkerTaskResponse {
 
 /** Confirms that Dex accepted the queue registration. */
 export interface PollWorkerTaskRegistered {
+  /** Allows this queue-owner stream to reject an assigned unknown Step type or RPC name. */
+  supportsUnknownNameRejection: boolean;
 }
 
 /** Assigns one task to this stream until its final result, error, or rejection. */
@@ -429,6 +432,8 @@ export interface DispatchTaskRequest {
   stopAfterUnknownName: boolean;
   /** Ends an internal sticky queue search when no Worker streams remain connected. */
   stopWhenQueueHasNoStreams: boolean;
+  /** Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name. */
+  supportsUnknownNameError: boolean;
 }
 
 /** Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error. */
@@ -2477,11 +2482,14 @@ export const PollWorkerTaskResponse: MessageFns<PollWorkerTaskResponse> = {
 };
 
 function createBasePollWorkerTaskRegistered(): PollWorkerTaskRegistered {
-  return {};
+  return { supportsUnknownNameRejection: false };
 }
 
 export const PollWorkerTaskRegistered: MessageFns<PollWorkerTaskRegistered> = {
-  encode(_: PollWorkerTaskRegistered, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: PollWorkerTaskRegistered, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.supportsUnknownNameRejection !== false) {
+      writer.uint32(8).bool(message.supportsUnknownNameRejection);
+    }
     return writer;
   },
 
@@ -2492,6 +2500,14 @@ export const PollWorkerTaskRegistered: MessageFns<PollWorkerTaskRegistered> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.supportsUnknownNameRejection = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2504,8 +2520,9 @@ export const PollWorkerTaskRegistered: MessageFns<PollWorkerTaskRegistered> = {
   create<I extends Exact<DeepPartial<PollWorkerTaskRegistered>, I>>(base?: I): PollWorkerTaskRegistered {
     return PollWorkerTaskRegistered.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskRegistered>, I>>(_: I): PollWorkerTaskRegistered {
+  fromPartial<I extends Exact<DeepPartial<PollWorkerTaskRegistered>, I>>(object: I): PollWorkerTaskRegistered {
     const message = createBasePollWorkerTaskRegistered();
+    message.supportsUnknownNameRejection = object.supportsUnknownNameRejection ?? false;
     return message;
   },
 };
@@ -2763,6 +2780,7 @@ function createBaseDispatchTaskRequest(): DispatchTaskRequest {
     excludedAppWorkerIds: [],
     stopAfterUnknownName: false,
     stopWhenQueueHasNoStreams: false,
+    supportsUnknownNameError: false,
   };
 }
 
@@ -2811,6 +2829,9 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
     }
     if (message.stopWhenQueueHasNoStreams !== false) {
       writer.uint32(112).bool(message.stopWhenQueueHasNoStreams);
+    }
+    if (message.supportsUnknownNameError !== false) {
+      writer.uint32(120).bool(message.supportsUnknownNameError);
     }
     return writer;
   },
@@ -2934,6 +2955,14 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
           message.stopWhenQueueHasNoStreams = reader.bool();
           continue;
         }
+        case 15: {
+          if (tag !== 120) {
+            break;
+          }
+
+          message.supportsUnknownNameError = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2983,6 +3012,7 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
     message.excludedAppWorkerIds = object.excludedAppWorkerIds?.map((e) => e) || [];
     message.stopAfterUnknownName = object.stopAfterUnknownName ?? false;
     message.stopWhenQueueHasNoStreams = object.stopWhenQueueHasNoStreams ?? false;
+    message.supportsUnknownNameError = object.supportsUnknownNameError ?? false;
     return message;
   },
 };

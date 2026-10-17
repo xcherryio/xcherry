@@ -52,19 +52,20 @@ type pullWorker struct {
 }
 
 type pullStream struct {
-	worker       *pullWorker
-	queue        string
-	ctx          context.Context
-	cancel       context.CancelFunc
-	mu           sync.Mutex
-	sendMu       sync.Mutex
-	stream       dexpb.WorkerTaskService_PollWorkerTaskClient
-	isSendClosed bool
-	taskID       string
-	taskCancel   context.CancelFunc
-	taskFinished chan struct{}
-	isBusy       bool
-	isDraining   bool
+	worker                       *pullWorker
+	queue                        string
+	ctx                          context.Context
+	cancel                       context.CancelFunc
+	mu                           sync.Mutex
+	sendMu                       sync.Mutex
+	stream                       dexpb.WorkerTaskService_PollWorkerTaskClient
+	isSendClosed                 bool
+	taskID                       string
+	taskCancel                   context.CancelFunc
+	taskFinished                 chan struct{}
+	isBusy                       bool
+	isDraining                   bool
+	supportsUnknownNameRejection bool
 }
 
 func newPullWorker(registry *Registry, service *workerService, conn *grpc.ClientConn, options PullWorkerOptions, sdkVersion string) (*pullWorker, error) {
@@ -300,6 +301,9 @@ func isPermanentPullStreamError(err error) bool {
 }
 
 func (stream *pullStream) poll() (bool, error) {
+	stream.mu.Lock()
+	stream.supportsUnknownNameRejection = false
+	stream.mu.Unlock()
 	pollCtx, cancel := context.WithCancel(stream.ctx)
 	clientStream, err := stream.worker.client.PollWorkerTask(pollCtx)
 	if err != nil {
@@ -339,6 +343,9 @@ func (stream *pullStream) poll() (bool, error) {
 				if response.GetRegistered() == nil {
 					return false, fmt.Errorf("dex: Worker task stream did not register")
 				}
+				stream.mu.Lock()
+				stream.supportsUnknownNameRejection = response.GetRegistered().GetSupportsUnknownNameRejection()
+				stream.mu.Unlock()
 				wasRegistered = true
 				stream.worker.signal()
 				continue
@@ -397,7 +404,14 @@ func receivePullFrames(ctx context.Context, stream dexpb.WorkerTaskService_PollW
 }
 
 func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
-	if reason := stream.worker.unknownTaskReason(task); reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
+	stream.mu.Lock()
+	supportsUnknownNameRejection := stream.supportsUnknownNameRejection
+	stream.mu.Unlock()
+	reason := dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+	if supportsUnknownNameRejection {
+		reason = stream.worker.unknownTaskReason(task)
+	}
+	if reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
 		stream.rejectTask(task.GetTaskId(), reason)
 		return
 	}
@@ -429,6 +443,7 @@ func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
 
 func (worker *pullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.PollWorkerTaskRejectReason {
 	var flowType, stepType, rpcName string
+	isRPC := false
 	switch request := task.Request.(type) {
 	case *dexpb.PollWorkerTask_WaitFor:
 		flowType, stepType = request.WaitFor.GetFlowType(), request.WaitFor.GetStepType()
@@ -436,17 +451,18 @@ func (worker *pullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.Po
 		flowType, stepType = request.Execute.GetFlowType(), request.Execute.GetStepType()
 	case *dexpb.PollWorkerTask_Rpc:
 		flowType, rpcName = request.Rpc.GetFlowType(), request.Rpc.GetRpcName()
+		isRPC = true
 	default:
 		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
 	}
 	flow, found := worker.service.registry.lookupFlow(flowType)
-	if stepType == timeoutHandlerStepType {
+	if !isRPC && stepType == timeoutHandlerStepType {
 		if found && flow.timeoutHandler != nil {
 			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
 		}
 		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
 	}
-	if rpcName != "" {
+	if isRPC {
 		if !found {
 			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC
 		}

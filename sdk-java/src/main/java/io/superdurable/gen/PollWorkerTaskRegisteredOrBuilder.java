@@ -9,4 +9,14 @@ package io.superdurable.gen;
 public interface PollWorkerTaskRegisteredOrBuilder extends
     // @@protoc_insertion_point(interface_extends:dex.PollWorkerTaskRegistered)
     com.google.protobuf.MessageOrBuilder {
+
+  /**
+   * <pre>
+   * Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+   * </pre>
+   *
+   * <code>bool supports_unknown_name_rejection = 1;</code>
+   * @return The supportsUnknownNameRejection.
+   */
+  boolean getSupportsUnknownNameRejection();
 }

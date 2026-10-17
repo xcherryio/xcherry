@@ -287,5 +287,15 @@ public interface DispatchTaskRequestOrBuilder extends
    */
   boolean getStopWhenQueueHasNoStreams();
 
+  /**
+   * <pre>
+   * Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+   * </pre>
+   *
+   * <code>bool supports_unknown_name_error = 15;</code>
+   * @return The supportsUnknownNameError.
+   */
+  boolean getSupportsUnknownNameError();
+
   io.superdurable.gen.DispatchTaskRequest.RequestCase getRequestCase();
 }

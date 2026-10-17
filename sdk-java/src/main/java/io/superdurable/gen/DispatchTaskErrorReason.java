@@ -28,6 +28,10 @@ public enum DispatchTaskErrorReason
    */
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED(2),
   /**
+   * <pre>
+   * A matched Worker does not register the requested Step type or RPC name.
+   * </pre>
+   *
    * <code>DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;</code>
    */
   DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME(3),
@@ -56,6 +60,10 @@ public enum DispatchTaskErrorReason
    */
   public static final int DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED_VALUE = 2;
   /**
+   * <pre>
+   * A matched Worker does not register the requested Step type or RPC name.
+   * </pre>
+   *
    * <code>DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;</code>
    */
   public static final int DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME_VALUE = 3;

@@ -72,14 +72,15 @@ func invokePullWorkerRPC(
 		queue = flowType
 	}
 	dispatchRequest := &dexpb.DispatchTaskRequest{
-		Queue:                   queue,
-		FallbackQueue:           flowType,
-		FlowId:                  flowID,
-		StickyWait:              durationpb.New(stickyWait),
-		DispatchWait:            durationpb.New(dispatchWait),
-		Deadline:                timestamppb.New(deadline),
-		Request:                 &dexpb.DispatchTaskRequest_Rpc{Rpc: request},
-		SupportsAssignmentState: true,
+		Queue:                    queue,
+		FallbackQueue:            flowType,
+		FlowId:                   flowID,
+		StickyWait:               durationpb.New(stickyWait),
+		DispatchWait:             durationpb.New(dispatchWait),
+		Deadline:                 timestamppb.New(deadline),
+		Request:                  &dexpb.DispatchTaskRequest_Rpc{Rpc: request},
+		SupportsAssignmentState:  true,
+		SupportsUnknownNameError: true,
 	}
 	stream, err := dispatcher.Dispatch(ctx, dispatchRequest)
 	if err != nil {
@@ -117,6 +118,9 @@ func invokePullWorkerRPC(
 		}
 		if dispatchError.GetReason() == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED {
 			return nil, "", status.Errorf(codes.Unavailable, "Worker disconnected during pull dispatch: %s", dispatchError.GetDetail())
+		}
+		if dispatchError.GetReason() == dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME {
+			return nil, "", status.Error(codes.FailedPrecondition, dispatchError.GetDetail())
 		}
 	}
 	return nil, "", &pulldispatch.ServerError{Err: status.Error(codes.Internal, "unexpected pull Worker RPC response")}
