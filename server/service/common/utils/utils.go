@@ -25,7 +25,7 @@ const (
 	defaultMaxApiTimeoutSeconds = 60
 )
 
-// shallowCopyMessage copies every populated top-level field, sharing nested values with message.
+// ShallowCopyMessage copies every populated top-level field, sharing nested values with message.
 func ShallowCopyMessage[T proto.Message](message T) T {
 	source := message.ProtoReflect()
 	copied := source.New()
