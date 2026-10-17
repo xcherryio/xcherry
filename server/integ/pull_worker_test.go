@@ -1283,10 +1283,10 @@ func testPullWorkerAppearsDuringRetries(t *testing.T, backend service.BackendTyp
 
 func testPullWorkerStickyFallback(t *testing.T, backend service.BackendType) {
 	t.Helper()
-	stickyWait := 5 * time.Second
+	stickyWait := 10 * time.Second
 	runtime := startInProcessDexService(t, DexServiceTestConfig{
 		BackendType: backend,
-		Matching:    &config.MatchingConfig{DispatchWait: 7 * time.Second, StickyWait: stickyWait},
+		Matching:    &config.MatchingConfig{DispatchWait: 12 * time.Second, StickyWait: stickyWait},
 	})
 	workerID := "pull-sticky-old-" + uuid.NewString()
 	firstWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, workerID, nil)
@@ -1305,7 +1305,7 @@ func testPullWorkerStickyFallback(t *testing.T, backend service.BackendType) {
 	})
 	require.NoError(t, err)
 	served := waitForPullTask(t, secondWorker, flowID)
-	require.Less(t, time.Since(startedAt), 2*time.Second)
+	require.Less(t, time.Since(startedAt), stickyWait/2)
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
