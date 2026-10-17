@@ -160,7 +160,7 @@ func waitWorkerBusy(t *testing.T, engine *Engine, queueName, workerID string) {
 }
 
 func dispatchRequest(queue, fallback string, sticky, total time.Duration) *dexpb.DispatchTaskRequest {
-	return &dexpb.DispatchTaskRequest{Queue: queue, FallbackQueue: fallback, FlowId: "flow-1", TaskId: "task-1", StickyWait: durationpb.New(sticky), DispatchWait: durationpb.New(total), Deadline: timestamppb.New(time.Now().Add(5 * time.Second)), Request: &dexpb.DispatchTaskRequest_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodRequest{}}, SupportsAssignmentState: true}
+	return &dexpb.DispatchTaskRequest{Queue: queue, FallbackQueue: fallback, FlowId: "flow-1", TaskId: "task-1", StickyWait: durationpb.New(sticky), DispatchWait: durationpb.New(total), Deadline: timestamppb.New(time.Now().Add(5 * time.Second)), Request: &dexpb.DispatchTaskRequest_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodRequest{}}, SupportsAssignmentState: true, SupportsUnknownNameError: true}
 }
 
 func receiveDispatch(t *testing.T, stream dexpb.MatchingService_DispatchTaskClient) []*dexpb.DispatchTaskResponse {
