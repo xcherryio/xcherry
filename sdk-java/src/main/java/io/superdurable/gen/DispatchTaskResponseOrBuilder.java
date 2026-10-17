@@ -159,5 +159,25 @@ public interface DispatchTaskResponseOrBuilder extends
   com.google.protobuf.ByteString
       getServedByAppWorkerIdBytes();
 
+  /**
+   * <pre>
+   * Identifies a Worker that rejected the task's Step type or RPC name.
+   * </pre>
+   *
+   * <code>string rejected_by_app_worker_id = 9;</code>
+   * @return The rejectedByAppWorkerId.
+   */
+  java.lang.String getRejectedByAppWorkerId();
+  /**
+   * <pre>
+   * Identifies a Worker that rejected the task's Step type or RPC name.
+   * </pre>
+   *
+   * <code>string rejected_by_app_worker_id = 9;</code>
+   * @return The bytes for rejectedByAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getRejectedByAppWorkerIdBytes();
+
   io.superdurable.gen.DispatchTaskResponse.OutputCase getOutputCase();
 }

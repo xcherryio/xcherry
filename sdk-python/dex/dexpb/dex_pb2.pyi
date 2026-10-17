@@ -17,12 +17,15 @@ class PollWorkerTaskRejectReason(int, metaclass=_enum_type_wrapper.EnumTypeWrapp
     __slots__ = ()
     POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED: _ClassVar[PollWorkerTaskRejectReason]
     POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY: _ClassVar[PollWorkerTaskRejectReason]
+    POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP: _ClassVar[PollWorkerTaskRejectReason]
+    POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC: _ClassVar[PollWorkerTaskRejectReason]
 
 class DispatchTaskErrorReason(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     DISPATCH_TASK_ERROR_REASON_UNSPECIFIED: _ClassVar[DispatchTaskErrorReason]
     DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE: _ClassVar[DispatchTaskErrorReason]
     DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED: _ClassVar[DispatchTaskErrorReason]
+    DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME: _ClassVar[DispatchTaskErrorReason]
 
 class IndexType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -204,9 +207,12 @@ class SubFlowCompletionDeliveryStatus(int, metaclass=_enum_type_wrapper.EnumType
     SUB_FLOW_COMPLETION_DELIVERY_STATUS_PARENT_CLOSED_OR_NOT_FOUND: _ClassVar[SubFlowCompletionDeliveryStatus]
 POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED: PollWorkerTaskRejectReason
 POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY: PollWorkerTaskRejectReason
+POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP: PollWorkerTaskRejectReason
+POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC: PollWorkerTaskRejectReason
 DISPATCH_TASK_ERROR_REASON_UNSPECIFIED: DispatchTaskErrorReason
 DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE: DispatchTaskErrorReason
 DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED: DispatchTaskErrorReason
+DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME: DispatchTaskErrorReason
 INDEX_TYPE_UNSPECIFIED: IndexType
 INDEX_TYPE_KEYWORD: IndexType
 INDEX_TYPE_TEXT: IndexType
@@ -429,7 +435,7 @@ class PollWorkerTaskPing(_message.Message):
     def __init__(self) -> None: ...
 
 class DispatchTaskRequest(_message.Message):
-    __slots__ = ("queue", "fallback_queue", "flow_id", "sticky_wait", "dispatch_wait", "deadline", "task_id", "wait_for", "execute", "rpc", "supports_assignment_state")
+    __slots__ = ("queue", "fallback_queue", "flow_id", "sticky_wait", "dispatch_wait", "deadline", "task_id", "wait_for", "execute", "rpc", "supports_assignment_state", "excluded_app_worker_ids", "stop_after_unknown_name")
     QUEUE_FIELD_NUMBER: _ClassVar[int]
     FALLBACK_QUEUE_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
@@ -441,6 +447,8 @@ class DispatchTaskRequest(_message.Message):
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     RPC_FIELD_NUMBER: _ClassVar[int]
     SUPPORTS_ASSIGNMENT_STATE_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDED_APP_WORKER_IDS_FIELD_NUMBER: _ClassVar[int]
+    STOP_AFTER_UNKNOWN_NAME_FIELD_NUMBER: _ClassVar[int]
     queue: str
     fallback_queue: str
     flow_id: str
@@ -452,10 +460,12 @@ class DispatchTaskRequest(_message.Message):
     execute: InvokeExecuteMethodRequest
     rpc: InvokeWorkerRPCRequest
     supports_assignment_state: bool
-    def __init__(self, queue: _Optional[str] = ..., fallback_queue: _Optional[str] = ..., flow_id: _Optional[str] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., task_id: _Optional[str] = ..., wait_for: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCRequest, _Mapping]] = ..., supports_assignment_state: _Optional[bool] = ...) -> None: ...
+    excluded_app_worker_ids: _containers.RepeatedScalarFieldContainer[str]
+    stop_after_unknown_name: bool
+    def __init__(self, queue: _Optional[str] = ..., fallback_queue: _Optional[str] = ..., flow_id: _Optional[str] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., task_id: _Optional[str] = ..., wait_for: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodRequest, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCRequest, _Mapping]] = ..., supports_assignment_state: _Optional[bool] = ..., excluded_app_worker_ids: _Optional[_Iterable[str]] = ..., stop_after_unknown_name: _Optional[bool] = ...) -> None: ...
 
 class DispatchTaskResponse(_message.Message):
-    __slots__ = ("wait_for", "execute", "rpc", "worker_error", "dispatch_error", "assigned", "unassigned", "served_by_app_worker_id")
+    __slots__ = ("wait_for", "execute", "rpc", "worker_error", "dispatch_error", "assigned", "unassigned", "served_by_app_worker_id", "rejected_by_app_worker_id")
     WAIT_FOR_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     RPC_FIELD_NUMBER: _ClassVar[int]
@@ -464,6 +474,7 @@ class DispatchTaskResponse(_message.Message):
     ASSIGNED_FIELD_NUMBER: _ClassVar[int]
     UNASSIGNED_FIELD_NUMBER: _ClassVar[int]
     SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    REJECTED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     wait_for: InvokeWaitForMethodOutput
     execute: InvokeExecuteMethodOutput
     rpc: InvokeWorkerRPCResponse
@@ -472,7 +483,8 @@ class DispatchTaskResponse(_message.Message):
     assigned: _empty_pb2.Empty
     unassigned: _empty_pb2.Empty
     served_by_app_worker_id: str
-    def __init__(self, wait_for: _Optional[_Union[InvokeWaitForMethodOutput, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodOutput, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCResponse, _Mapping]] = ..., worker_error: _Optional[_Union[WorkerErrorResponse, _Mapping]] = ..., dispatch_error: _Optional[_Union[DispatchTaskError, _Mapping]] = ..., assigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., unassigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
+    rejected_by_app_worker_id: str
+    def __init__(self, wait_for: _Optional[_Union[InvokeWaitForMethodOutput, _Mapping]] = ..., execute: _Optional[_Union[InvokeExecuteMethodOutput, _Mapping]] = ..., rpc: _Optional[_Union[InvokeWorkerRPCResponse, _Mapping]] = ..., worker_error: _Optional[_Union[WorkerErrorResponse, _Mapping]] = ..., dispatch_error: _Optional[_Union[DispatchTaskError, _Mapping]] = ..., assigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., unassigned: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ..., rejected_by_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class DispatchTaskError(_message.Message):
     __slots__ = ("reason", "detail")

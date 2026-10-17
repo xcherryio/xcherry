@@ -955,6 +955,43 @@ func TestMatchingCrossEngineStickyFallbackIntegration(t *testing.T) {
 	}
 }
 
+func TestMatchingCrossEngineUnknownStepExcludesWorkerIntegration(t *testing.T) {
+	entryMembers := newTestMembership()
+	entry := startTestServer(t, config.MatchingConfig{}, entryMembers)
+	sticky := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	fallback := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	entryMembers.mu.Lock()
+	entryMembers.owners["sticky"] = membership.HostInfo{RPCAddress: sticky.listener.Addr().String()}
+	entryMembers.owners["fallback"] = membership.HostInfo{RPCAddress: fallback.listener.Addr().String()}
+	entryMembers.mu.Unlock()
+	stickyWorker := registerWorkerForFlowTypes(t, sticky, "sticky", "sticky", []string{"fallback"})
+	registerWorkerForFlowTypes(t, fallback, "fallback", "sticky", []string{"fallback"})
+	newWorker := registerWorkerForFlowTypes(t, fallback, "fallback", "worker-new", []string{"fallback"})
+	request := dispatchRequest("sticky", "fallback", 4*time.Second, 5*time.Second)
+	request.GetWaitFor().FlowType = "fallback"
+	request.GetWaitFor().StepType = "MissingStep"
+	startedAt := time.Now()
+	dispatch, err := dexpb.NewMatchingServiceClient(entry.connection).DispatchTask(testStreamContext(t), request)
+	require.NoError(t, err)
+	assignment, err := stickyWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, stickyWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{
+		TaskId: assignment.GetTask().GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP,
+	}}}))
+	reassigned, err := newWorker.Recv()
+	require.NoError(t, err)
+	require.Equal(t, assignment.GetTask().GetTaskId(), reassigned.GetTask().GetTaskId())
+	require.Less(t, time.Since(startedAt), 2*time.Second)
+	require.NoError(t, newWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{
+		TaskId: reassigned.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodOutput{
+			Output: &dexpb.InvokeWaitForMethodOutput_Result{Result: &dexpb.InvokeWaitForMethodResponse{}},
+		}},
+	}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-new", frames[0].GetServedByAppWorkerId())
+}
+
 func TestMatchingLegacyForwarderOmitsAssignmentStateIntegration(t *testing.T) {
 	entryMembers := newTestMembership()
 	entry := startTestServer(t, config.MatchingConfig{}, entryMembers)

@@ -226,5 +226,56 @@ public interface DispatchTaskRequestOrBuilder extends
    */
   boolean getSupportsAssignmentState();
 
+  /**
+   * <pre>
+   * Worker processes already found unable to serve this task.
+   * </pre>
+   *
+   * <code>repeated string excluded_app_worker_ids = 12;</code>
+   * @return A list containing the excludedAppWorkerIds.
+   */
+  java.util.List<java.lang.String>
+      getExcludedAppWorkerIdsList();
+  /**
+   * <pre>
+   * Worker processes already found unable to serve this task.
+   * </pre>
+   *
+   * <code>repeated string excluded_app_worker_ids = 12;</code>
+   * @return The count of excludedAppWorkerIds.
+   */
+  int getExcludedAppWorkerIdsCount();
+  /**
+   * <pre>
+   * Worker processes already found unable to serve this task.
+   * </pre>
+   *
+   * <code>repeated string excluded_app_worker_ids = 12;</code>
+   * @param index The index of the element to return.
+   * @return The excludedAppWorkerIds at the given index.
+   */
+  java.lang.String getExcludedAppWorkerIds(int index);
+  /**
+   * <pre>
+   * Worker processes already found unable to serve this task.
+   * </pre>
+   *
+   * <code>repeated string excluded_app_worker_ids = 12;</code>
+   * @param index The index of the value to return.
+   * @return The bytes of the excludedAppWorkerIds at the given index.
+   */
+  com.google.protobuf.ByteString
+      getExcludedAppWorkerIdsBytes(int index);
+
+  /**
+   * <pre>
+   * Ends an internal sticky queue search immediately after an unknown-name rejection.
+   * </pre>
+   *
+   * <code>bool stop_after_unknown_name = 13;</code>
+   * @return The stopAfterUnknownName.
+   */
+  boolean getStopAfterUnknownName();
+
   io.superdurable.gen.DispatchTaskRequest.RequestCase getRequestCase();
 }

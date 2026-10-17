@@ -66,7 +66,7 @@ public interface PollWorkerTaskRequestOrBuilder extends
 
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -75,7 +75,7 @@ public interface PollWorkerTaskRequestOrBuilder extends
   boolean hasReject();
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>
@@ -84,7 +84,7 @@ public interface PollWorkerTaskRequestOrBuilder extends
   io.superdurable.gen.PollWorkerTaskReject getReject();
   /**
    * <pre>
-   * Declines an assigned task when the Worker has no capacity.
+   * Declines an assigned task before output when the Worker lacks capacity or the named handler.
    * </pre>
    *
    * <code>.dex.PollWorkerTaskReject reject = 3;</code>

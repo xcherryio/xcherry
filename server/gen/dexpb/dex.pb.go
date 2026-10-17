@@ -41,6 +41,10 @@ const (
 	PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED PollWorkerTaskRejectReason = 0
 	// All Worker execution slots are occupied.
 	PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY PollWorkerTaskRejectReason = 1
+	// The Flow has no registration for the requested Step type.
+	PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP PollWorkerTaskRejectReason = 2
+	// The Flow has no registration for the requested RPC name.
+	PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC PollWorkerTaskRejectReason = 3
 )
 
 // Enum value maps for PollWorkerTaskRejectReason.
@@ -48,10 +52,14 @@ var (
 	PollWorkerTaskRejectReason_name = map[int32]string{
 		0: "POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED",
 		1: "POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY",
+		2: "POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP",
+		3: "POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC",
 	}
 	PollWorkerTaskRejectReason_value = map[string]int32{
-		"POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED": 0,
-		"POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY": 1,
+		"POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED":  0,
+		"POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY":  1,
+		"POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP": 2,
+		"POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC":  3,
 	}
 )
 
@@ -82,13 +90,14 @@ func (PollWorkerTaskRejectReason) EnumDescriptor() ([]byte, []int) {
 	return file_dex_proto_rawDescGZIP(), []int{0}
 }
 
-// Distinguishes absence of a Worker from loss of an assigned Worker.
+// Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
 type DispatchTaskErrorReason int32
 
 const (
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNSPECIFIED         DispatchTaskErrorReason = 0
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE DispatchTaskErrorReason = 1
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED DispatchTaskErrorReason = 2
+	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME        DispatchTaskErrorReason = 3
 )
 
 // Enum value maps for DispatchTaskErrorReason.
@@ -97,11 +106,13 @@ var (
 		0: "DISPATCH_TASK_ERROR_REASON_UNSPECIFIED",
 		1: "DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE",
 		2: "DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED",
+		3: "DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME",
 	}
 	DispatchTaskErrorReason_value = map[string]int32{
 		"DISPATCH_TASK_ERROR_REASON_UNSPECIFIED":         0,
 		"DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE": 1,
 		"DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED": 2,
+		"DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME":        3,
 	}
 )
 
@@ -1555,7 +1566,7 @@ type PollWorkerTaskRequest_TaskFrame struct {
 }
 
 type PollWorkerTaskRequest_Reject struct {
-	// Declines an assigned task when the Worker has no capacity.
+	// Declines an assigned task before output when the Worker lacks capacity or the named handler.
 	Reject *PollWorkerTaskReject `protobuf:"bytes,3,opt,name=reject,proto3,oneof"`
 }
 
@@ -2321,8 +2332,12 @@ type DispatchTaskRequest struct {
 	Request isDispatchTaskRequest_Request `protobuf_oneof:"request"`
 	// Allows matching to send assignment state frames to capable callers.
 	SupportsAssignmentState bool `protobuf:"varint,11,opt,name=supports_assignment_state,json=supportsAssignmentState,proto3" json:"supports_assignment_state,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Worker processes already found unable to serve this task.
+	ExcludedAppWorkerIds []string `protobuf:"bytes,12,rep,name=excluded_app_worker_ids,json=excludedAppWorkerIds,proto3" json:"excluded_app_worker_ids,omitempty"`
+	// Ends an internal sticky queue search immediately after an unknown-name rejection.
+	StopAfterUnknownName bool `protobuf:"varint,13,opt,name=stop_after_unknown_name,json=stopAfterUnknownName,proto3" json:"stop_after_unknown_name,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *DispatchTaskRequest) Reset() {
@@ -2445,6 +2460,20 @@ func (x *DispatchTaskRequest) GetSupportsAssignmentState() bool {
 	return false
 }
 
+func (x *DispatchTaskRequest) GetExcludedAppWorkerIds() []string {
+	if x != nil {
+		return x.ExcludedAppWorkerIds
+	}
+	return nil
+}
+
+func (x *DispatchTaskRequest) GetStopAfterUnknownName() bool {
+	if x != nil {
+		return x.StopAfterUnknownName
+	}
+	return false
+}
+
 type isDispatchTaskRequest_Request interface {
 	isDispatchTaskRequest_Request()
 }
@@ -2482,8 +2511,10 @@ type DispatchTaskResponse struct {
 	Output isDispatchTaskResponse_Output `protobuf_oneof:"output"`
 	// Identifies the Worker that produced the final result or Worker error.
 	ServedByAppWorkerId string `protobuf:"bytes,6,opt,name=served_by_app_worker_id,json=servedByAppWorkerId,proto3" json:"served_by_app_worker_id,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Identifies a Worker that rejected the task's Step type or RPC name.
+	RejectedByAppWorkerId string `protobuf:"bytes,9,opt,name=rejected_by_app_worker_id,json=rejectedByAppWorkerId,proto3" json:"rejected_by_app_worker_id,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *DispatchTaskResponse) Reset() {
@@ -2589,6 +2620,13 @@ func (x *DispatchTaskResponse) GetUnassigned() *emptypb.Empty {
 func (x *DispatchTaskResponse) GetServedByAppWorkerId() string {
 	if x != nil {
 		return x.ServedByAppWorkerId
+	}
+	return ""
+}
+
+func (x *DispatchTaskResponse) GetRejectedByAppWorkerId() string {
+	if x != nil {
+		return x.RejectedByAppWorkerId
 	}
 	return ""
 }
@@ -14579,7 +14617,7 @@ const file_dex_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"1\n" +
 	"\x17PollWorkerTaskReconnect\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x14\n" +
-	"\x12PollWorkerTaskPing\"\xab\x04\n" +
+	"\x12PollWorkerTaskPing\"\x99\x05\n" +
 	"\x13DispatchTaskRequest\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12%\n" +
 	"\x0efallback_queue\x18\x02 \x01(\tR\rfallbackQueue\x12\x17\n" +
@@ -14593,8 +14631,10 @@ const file_dex_proto_rawDesc = "" +
 	"\aexecute\x18\t \x01(\v2\x1f.dex.InvokeExecuteMethodRequestH\x00R\aexecute\x12/\n" +
 	"\x03rpc\x18\n" +
 	" \x01(\v2\x1b.dex.InvokeWorkerRPCRequestH\x00R\x03rpc\x12:\n" +
-	"\x19supports_assignment_state\x18\v \x01(\bR\x17supportsAssignmentStateB\t\n" +
-	"\arequest\"\xf1\x03\n" +
+	"\x19supports_assignment_state\x18\v \x01(\bR\x17supportsAssignmentState\x125\n" +
+	"\x17excluded_app_worker_ids\x18\f \x03(\tR\x14excludedAppWorkerIds\x125\n" +
+	"\x17stop_after_unknown_name\x18\r \x01(\bR\x14stopAfterUnknownNameB\t\n" +
+	"\arequest\"\xab\x04\n" +
 	"\x14DispatchTaskResponse\x12;\n" +
 	"\bwait_for\x18\x01 \x01(\v2\x1e.dex.InvokeWaitForMethodOutputH\x00R\awaitFor\x12:\n" +
 	"\aexecute\x18\x02 \x01(\v2\x1e.dex.InvokeExecuteMethodOutputH\x00R\aexecute\x120\n" +
@@ -14605,7 +14645,8 @@ const file_dex_proto_rawDesc = "" +
 	"\n" +
 	"unassigned\x18\b \x01(\v2\x16.google.protobuf.EmptyH\x00R\n" +
 	"unassigned\x124\n" +
-	"\x17served_by_app_worker_id\x18\x06 \x01(\tR\x13servedByAppWorkerIdB\b\n" +
+	"\x17served_by_app_worker_id\x18\x06 \x01(\tR\x13servedByAppWorkerId\x128\n" +
+	"\x19rejected_by_app_worker_id\x18\t \x01(\tR\x15rejectedByAppWorkerIdB\b\n" +
 	"\x06output\"a\n" +
 	"\x11DispatchTaskError\x124\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1c.dex.DispatchTaskErrorReasonR\x06reason\x12\x16\n" +
@@ -15647,14 +15688,17 @@ const file_dex_proto_rawDesc = "" +
 	"\x15InvokeRpcUpdateResult\x122\n" +
 	"\bresponse\x18\x01 \x01(\v2\x16.dex.InvokeRPCResponseR\bresponse\"0\n" +
 	"\x14StepExecutionNumbers\x12\x18\n" +
-	"\anumbers\x18\x01 \x03(\x05R\anumbers*|\n" +
+	"\anumbers\x18\x01 \x03(\x05R\anumbers*\xdd\x01\n" +
 	"\x1aPollWorkerTaskRejectReason\x12.\n" +
 	"*POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED\x10\x00\x12.\n" +
-	"*POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY\x10\x01*\xad\x01\n" +
+	"*POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY\x10\x01\x12/\n" +
+	"+POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP\x10\x02\x12.\n" +
+	"*POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC\x10\x03*\xda\x01\n" +
 	"\x17DispatchTaskErrorReason\x12*\n" +
 	"&DISPATCH_TASK_ERROR_REASON_UNSPECIFIED\x10\x00\x122\n" +
 	".DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE\x10\x01\x122\n" +
-	".DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED\x10\x02*\xcb\x01\n" +
+	".DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED\x10\x02\x12+\n" +
+	"'DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME\x10\x03*\xcb\x01\n" +
 	"\tIndexType\x12\x1a\n" +
 	"\x16INDEX_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12INDEX_TYPE_KEYWORD\x10\x01\x12\x13\n" +

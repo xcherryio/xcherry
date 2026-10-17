@@ -127,6 +127,8 @@ func pullFrameError(frame *dexpb.DispatchTaskResponse, queue string, fallbackQue
 			return status.Errorf(codes.Unavailable, "no Worker available for queue %s: %s", queue, dispatchError.GetDetail())
 		case dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED:
 			return status.Errorf(codes.Unavailable, "Worker disconnected during pull dispatch: %s", dispatchError.GetDetail())
+		case dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME:
+			return status.Error(codes.NotFound, dispatchError.GetDetail())
 		}
 		return &matchingDispatchError{err: status.Errorf(codes.Internal, "unknown dispatch failure for queue %s", queue)}
 	}

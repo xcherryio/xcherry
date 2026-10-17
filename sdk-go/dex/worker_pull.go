@@ -397,14 +397,16 @@ func receivePullFrames(ctx context.Context, stream dexpb.WorkerTaskService_PollW
 }
 
 func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
+	if reason := stream.worker.unknownTaskReason(task); reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
+		stream.rejectTask(task.GetTaskId(), reason)
+		return
+	}
 	stream.worker.mu.Lock()
 	stream.mu.Lock()
 	if stream.isBusy || stream.isDraining || stream.worker.isStopping || stream.worker.busyTasks >= stream.worker.maxConcurrentTasks {
 		stream.mu.Unlock()
 		stream.worker.mu.Unlock()
-		if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: task.GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY}}}); err != nil {
-			stream.worker.service.logger.Error("reject Worker task", "error", err)
-		}
+		stream.rejectTask(task.GetTaskId(), dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY)
 		return
 	}
 	taskCtx := stream.ctx
@@ -423,6 +425,49 @@ func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
 	stream.worker.mu.Unlock()
 	stream.worker.signal()
 	go stream.executeTask(taskCtx, task)
+}
+
+func (worker *pullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.PollWorkerTaskRejectReason {
+	var flowType, stepType, rpcName string
+	switch request := task.Request.(type) {
+	case *dexpb.PollWorkerTask_WaitFor:
+		flowType, stepType = request.WaitFor.GetFlowType(), request.WaitFor.GetStepType()
+	case *dexpb.PollWorkerTask_Execute:
+		flowType, stepType = request.Execute.GetFlowType(), request.Execute.GetStepType()
+	case *dexpb.PollWorkerTask_Rpc:
+		flowType, rpcName = request.Rpc.GetFlowType(), request.Rpc.GetRpcName()
+	default:
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+	}
+	flow, found := worker.service.registry.lookupFlow(flowType)
+	if stepType == timeoutHandlerStepType {
+		if found && flow.timeoutHandler != nil {
+			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+		}
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+	}
+	if rpcName != "" {
+		if !found {
+			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC
+		}
+		if _, found = flow.lookupRPC(rpcName); !found {
+			return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC
+		}
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+	}
+	if !found {
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+	}
+	if _, found = flow.lookupStep(stepType); !found {
+		return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+	}
+	return dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
+}
+
+func (stream *pullStream) rejectTask(taskID string, reason dexpb.PollWorkerTaskRejectReason) {
+	if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: taskID, Reason: reason}}}); err != nil {
+		stream.worker.service.logger.Error("reject Worker task", "error", err)
+	}
 }
 
 func (stream *pullStream) executeTask(ctx context.Context, task *dexpb.PollWorkerTask) {

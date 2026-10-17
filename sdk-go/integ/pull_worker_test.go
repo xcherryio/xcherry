@@ -30,6 +30,7 @@ type pullSDKFlow struct {
 	observations   chan<- pullSDKObservation
 	firstStepGate  <-chan struct{}
 	secondStepGate <-chan struct{}
+	omitWorkerRPC  bool
 }
 
 func (flow pullSDKFlow) GetSteps() []dex.StepDef {
@@ -40,6 +41,9 @@ func (flow pullSDKFlow) GetSteps() []dex.StepDef {
 }
 
 func (flow pullSDKFlow) GetRPCs() []dex.RPCDef {
+	if flow.omitWorkerRPC {
+		return nil
+	}
 	return []dex.RPCDef{dex.DefineRPC(flow.GetWorker, nil)}
 }
 
@@ -162,6 +166,37 @@ func TestPullSDKWorkerEndToEnd(t *testing.T) {
 	var output string
 	require.NoError(t, result.DecodeSingleOutput(&output))
 	require.Equal(t, "completed", output)
+}
+
+func TestPullSDKUnknownRPCRedispatchEndToEnd(t *testing.T) {
+	observations := make(chan pullSDKObservation, 16)
+	firstStepGate := make(chan struct{})
+	secondStepGate := make(chan struct{})
+	oldWorkerID := "pull-go-old-" + uuid.NewString()
+	newWorkerID := "pull-go-new-" + uuid.NewString()
+	oldFlow := pullSDKFlow{workerID: oldWorkerID, observations: observations, firstStepGate: firstStepGate, secondStepGate: secondStepGate, omitWorkerRPC: true}
+	newFlow := pullSDKFlow{workerID: newWorkerID, observations: observations, firstStepGate: firstStepGate, secondStepGate: secondStepGate}
+	startPullSDKWorker(t, []dex.Flow{oldFlow}, oldWorkerID)
+	clientRegistry, err := dex.NewRegistry([]dex.Flow{newFlow})
+	require.NoError(t, err)
+	client, err := dex.NewClient(clientRegistry, newPullSDKCache(t), dex.ClientOptions{FlowServiceAddress: flowServiceAddress(), WorkerTarget: &dex.WorkerTarget{Pull: true}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	flowID := newFlowID(t, "pull-go-unknown-rpc")
+	_, err = client.StartFlow(integrationContext(t), newFlow, flowID, "completed", dex.StartFlowOptions{})
+	require.NoError(t, err)
+	require.Equal(t, pullSDKObservation{workerID: oldWorkerID, method: "WaitFor"}, awaitPullSDKObservation(t, observations))
+	require.Equal(t, pullSDKObservation{workerID: oldWorkerID, method: "Execute"}, awaitPullSDKObservation(t, observations))
+	startPullSDKWorker(t, []dex.Flow{newFlow}, newWorkerID)
+	var rpcWorkerID string
+	require.NoError(t, client.InvokeRPC(integrationContext(t), flowID, newFlow.GetWorker, nil, &rpcWorkerID))
+	require.Equal(t, newWorkerID, rpcWorkerID)
+	require.Equal(t, pullSDKObservation{workerID: newWorkerID, method: "RPC"}, awaitPullSDKObservation(t, observations))
+	close(firstStepGate)
+	close(secondStepGate)
+	result, err := client.WaitForFlow(integrationContext(t), flowID, dex.WaitForFlowOptions{NeedsResults: true})
+	require.NoError(t, err)
+	require.Equal(t, dex.FlowCompleted, result.Status)
 }
 
 func runPullSDKProbe(t *testing.T, client *dex.Client) string {

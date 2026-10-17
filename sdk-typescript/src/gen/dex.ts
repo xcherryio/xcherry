@@ -35,14 +35,19 @@ export enum PollWorkerTaskRejectReason {
   POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED = 0,
   /** POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY - All Worker execution slots are occupied. */
   POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY = 1,
+  /** POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP - The Flow has no registration for the requested Step type. */
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP = 2,
+  /** POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC - The Flow has no registration for the requested RPC name. */
+  POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC = 3,
   UNRECOGNIZED = -1,
 }
 
-/** Distinguishes absence of a Worker from loss of an assigned Worker. */
+/** Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration. */
 export enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0,
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1,
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2,
+  DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3,
   UNRECOGNIZED = -1,
 }
 
@@ -275,7 +280,7 @@ export interface PollWorkerTaskRequest {
     /** Reports task progress or its final result. */
     { $case: "taskFrame"; value: PollWorkerTaskFrame }
     | //
-    /** Declines an assigned task when the Worker has no capacity. */
+    /** Declines an assigned task before output when the Worker lacks capacity or the named handler. */
     { $case: "reject"; value: PollWorkerTaskReject }
     | //
     /** Acknowledges a server liveness check. */
@@ -418,6 +423,10 @@ export interface DispatchTaskRequest {
     | undefined;
   /** Allows matching to send assignment state frames to capable callers. */
   supportsAssignmentState: boolean;
+  /** Worker processes already found unable to serve this task. */
+  excludedAppWorkerIds: string[];
+  /** Ends an internal sticky queue search immediately after an unknown-name rejection. */
+  stopAfterUnknownName: boolean;
 }
 
 /** Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error. */
@@ -437,6 +446,8 @@ export interface DispatchTaskResponse {
     | undefined;
   /** Identifies the Worker that produced the final result or Worker error. */
   servedByAppWorkerId: string;
+  /** Identifies a Worker that rejected the task's Step type or RPC name. */
+  rejectedByAppWorkerId: string;
 }
 
 /** Reports a failure before Dex receives a Worker result. */
@@ -2747,6 +2758,8 @@ function createBaseDispatchTaskRequest(): DispatchTaskRequest {
     taskId: "",
     request: undefined,
     supportsAssignmentState: false,
+    excludedAppWorkerIds: [],
+    stopAfterUnknownName: false,
   };
 }
 
@@ -2786,6 +2799,12 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
     }
     if (message.supportsAssignmentState !== false) {
       writer.uint32(88).bool(message.supportsAssignmentState);
+    }
+    for (const v of message.excludedAppWorkerIds) {
+      writer.uint32(98).string(v!);
+    }
+    if (message.stopAfterUnknownName !== false) {
+      writer.uint32(104).bool(message.stopAfterUnknownName);
     }
     return writer;
   },
@@ -2885,6 +2904,22 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
           message.supportsAssignmentState = reader.bool();
           continue;
         }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.excludedAppWorkerIds.push(reader.string());
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.stopAfterUnknownName = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2931,12 +2966,14 @@ export const DispatchTaskRequest: MessageFns<DispatchTaskRequest> = {
       }
     }
     message.supportsAssignmentState = object.supportsAssignmentState ?? false;
+    message.excludedAppWorkerIds = object.excludedAppWorkerIds?.map((e) => e) || [];
+    message.stopAfterUnknownName = object.stopAfterUnknownName ?? false;
     return message;
   },
 };
 
 function createBaseDispatchTaskResponse(): DispatchTaskResponse {
-  return { output: undefined, servedByAppWorkerId: "" };
+  return { output: undefined, servedByAppWorkerId: "", rejectedByAppWorkerId: "" };
 }
 
 export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
@@ -2966,6 +3003,9 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
     }
     if (message.servedByAppWorkerId !== "") {
       writer.uint32(50).string(message.servedByAppWorkerId);
+    }
+    if (message.rejectedByAppWorkerId !== "") {
+      writer.uint32(74).string(message.rejectedByAppWorkerId);
     }
     return writer;
   },
@@ -3041,6 +3081,14 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
           message.servedByAppWorkerId = reader.string();
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.rejectedByAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3100,6 +3148,7 @@ export const DispatchTaskResponse: MessageFns<DispatchTaskResponse> = {
       }
     }
     message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
+    message.rejectedByAppWorkerId = object.rejectedByAppWorkerId ?? "";
     return message;
   },
 };
