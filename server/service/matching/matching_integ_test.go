@@ -102,13 +102,19 @@ func newTestMembership() *testMembership {
 
 func registerWorker(t *testing.T, server *testServer, queue, workerID string) dexpb.WorkerTaskService_PollWorkerTaskClient {
 	t.Helper()
+	stream, _ := registerWorkerWithResponse(t, server, queue, workerID)
+	return stream
+}
+
+func registerWorkerWithResponse(t *testing.T, server *testServer, queue, workerID string) (dexpb.WorkerTaskService_PollWorkerTaskClient, *dexpb.PollWorkerTaskResponse) {
+	t.Helper()
 	stream, err := dexpb.NewWorkerTaskServiceClient(server.connection).PollWorkerTask(testStreamContext(t))
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: &dexpb.PollWorkerTaskRegister{Queue: queue, AppWorkerId: workerID, FlowTypes: []string{"flow"}}}}))
 	registered, err := stream.Recv()
 	require.NoError(t, err)
 	require.NotNil(t, registered.GetRegistered())
-	return stream
+	return stream, registered
 }
 
 func testStreamContext(t *testing.T) context.Context {
@@ -500,6 +506,19 @@ func TestMatchingForwardAndProxyIntegration(t *testing.T) {
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
 	require.Equal(t, "worker-forwarded", frames[0].ServedByAppWorkerId)
+}
+
+func TestMatchingRegisteredAdvertisesUnknownNameRejectionIntegration(t *testing.T) {
+	direct := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	_, registered := registerWorkerWithResponse(t, direct, "flow", "worker-direct")
+	require.True(t, registered.GetRegistered().GetSupportsUnknownNameRejection())
+
+	owner := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	proxyMembership := newTestMembership()
+	proxyMembership.owners["flow"] = membership.HostInfo{RPCAddress: owner.listener.Addr().String()}
+	proxy := startTestServer(t, config.MatchingConfig{}, proxyMembership)
+	_, registered = registerWorkerWithResponse(t, proxy, "flow", "worker-proxy")
+	require.True(t, registered.GetRegistered().GetSupportsUnknownNameRejection())
 }
 
 func TestMatchingRegistrationLimitsIntegration(t *testing.T) {
@@ -1111,6 +1130,62 @@ func TestMatchingLegacyForwarderOmitsAssignmentStateIntegration(t *testing.T) {
 	first, err := dispatch.Recv()
 	require.NoError(t, err)
 	require.NotNil(t, first.GetRpc())
+}
+
+func TestMatchingLegacyForwarderOmitsUnknownNameErrorIntegration(t *testing.T) {
+	entryMembership := newTestMembership()
+	entry := startTestServer(t, config.MatchingConfig{}, entryMembership)
+	owner := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	entryMembership.mu.Lock()
+	entryMembership.owners["sticky"] = membership.HostInfo{RPCAddress: owner.listener.Addr().String()}
+	entryMembership.mu.Unlock()
+	stickyWorker := registerWorkerForFlowTypes(t, owner, "sticky", "sticky", []string{"fallback"})
+	fallbackWorker := registerWorkerForFlowTypes(t, entry, "fallback", "worker-fallback", []string{"fallback"})
+	request := dispatchRequest("sticky", "fallback", 500*time.Millisecond, time.Second)
+	request.GetWaitFor().FlowType = "fallback"
+	request.GetWaitFor().StepType = "MissingStep"
+	request.SupportsUnknownNameError = false
+	dispatch, err := dexpb.NewMatchingServiceClient(entry.connection).DispatchTask(testStreamContext(t), request)
+	require.NoError(t, err)
+	assignment, err := stickyWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, stickyWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{
+		TaskId: assignment.GetTask().GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP,
+	}}}))
+	fallbackAssignment, err := fallbackWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, fallbackWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{
+		TaskId: fallbackAssignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodOutput{
+			Output: &dexpb.InvokeWaitForMethodOutput_Result{Result: &dexpb.InvokeWaitForMethodResponse{}},
+		}},
+	}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-fallback", frames[0].GetServedByAppWorkerId())
+}
+
+func TestMatchingCapacityRejectKeepsUnknownNameUnavailableIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	unknownWorker := registerWorker(t, server, "flow", "worker-unknown")
+	busyWorker := registerWorker(t, server, "flow", "worker-busy")
+	request := dispatchRequest("flow", "", 0, 300*time.Millisecond)
+	request.GetWaitFor().FlowType = "flow"
+	request.GetWaitFor().StepType = "MissingStep"
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
+	require.NoError(t, err)
+	unknownAssignment, err := unknownWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, unknownWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{
+		TaskId: unknownAssignment.GetTask().GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP,
+	}}}))
+	busyAssignment, err := busyWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, busyWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{
+		TaskId: busyAssignment.GetTask().GetTaskId(), Reason: dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
+	}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, frames[0].GetDispatchError().GetReason())
 }
 
 func TestMatchingRemoteStickyDisconnectAfterWaitFallsBackIntegration(t *testing.T) {
