@@ -154,8 +154,8 @@ test("unknown task rejection follows the Registered capability for each stream",
     const legacy = await harness.nextStream();
     legacy.call.write(registered(false));
     legacy.call.write(unknownStepTask("legacy-step"));
-    legacy.call.write(unknownRPCTask("legacy-rpc"));
     const legacyStep = await legacy.frame("taskFrame");
+    legacy.call.write(unknownRPCTask("legacy-rpc"));
     const legacyRPC = await legacy.frame("taskFrame", 2);
     for (const frame of [legacyStep, legacyRPC]) {
       assert.equal(frame.frame?.$case, "taskFrame");
