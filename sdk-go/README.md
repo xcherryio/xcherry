@@ -663,8 +663,10 @@ also rejects a pull task when its Flow registration lacks the requested
 Step type or RPC name. Dex retries that task with another Worker without using
 another Step attempt. The rejecting Worker is excluded from that dispatch.
 If no capable Worker accepts before the dispatch wait ends, the Step follows
-its failure policy with an error naming the missing Step or RPC. Push mode keeps
-its existing missing-name error behavior.
+its failure and retry policy; an RPC caller receives the named error. This
+reassignment requires a Dex Server that supports it. Against older Servers, the
+Worker returns the not-registered error as before. Push mode keeps its existing
+missing-name error behavior.
 
 The generated Worker ID uses the first nonempty value from `DEX_WORKER_INSTANCE`, `POD_NAME`,
 `HOSTNAME`, or the system hostname, plus a random suffix. An `AppWorkerID`

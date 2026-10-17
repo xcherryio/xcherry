@@ -56,13 +56,17 @@ class PullSecondStep(Step[str]):
         worker_id: str,
         observations: queue.Queue[tuple[str, str]],
         gate: threading.Event,
+        starting_step_attempts: queue.Queue[int] | None = None,
     ) -> None:
         self.worker_id = worker_id
         self.observations = observations
         self.gate = gate
+        self.starting_step_attempts = starting_step_attempts
 
     def wait_for(self, context: Context, input: str) -> Wait:
         self.observations.put((self.worker_id, "second_wait_for"))
+        if self.starting_step_attempts is not None:
+            self.starting_step_attempts.put(context.attempt)
         return Wait.skip_immediately()
 
     def execute(self, context: Context, input: str) -> StepDecision:
@@ -126,6 +130,19 @@ class OldPullFlow(PullFlow):
 
 
 class NewStartPullFlow(PullFlow):
+    def __init__(
+        self,
+        worker_id: str,
+        observations: queue.Queue[tuple[str, str]],
+        first_gate: threading.Event,
+        second_gate: threading.Event,
+    ) -> None:
+        super().__init__(worker_id, observations, first_gate, second_gate)
+        self.starting_step_attempts: queue.Queue[int] = queue.Queue()
+        self.second = PullSecondStep(
+            worker_id, observations, second_gate, self.starting_step_attempts
+        )
+
     def get_flow_type(self) -> str:
         return "PullFlow"
 
@@ -332,6 +349,7 @@ def test_pull_worker_reassigns_unregistered_start_step() -> None:
         )
         assert observations.get(timeout=20) == ("new", "second_wait_for")
         assert observations.get(timeout=20) == ("new", "second_execute")
+        assert new_flow.starting_step_attempts.get(timeout=20) == 1
     finally:
         client.close()
         old_worker.close()

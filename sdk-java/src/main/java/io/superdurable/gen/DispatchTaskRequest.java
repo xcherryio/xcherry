@@ -596,6 +596,21 @@ private static final long serialVersionUID = 0L;
     return stopWhenQueueHasNoStreams_;
   }
 
+  public static final int SUPPORTS_UNKNOWN_NAME_ERROR_FIELD_NUMBER = 15;
+  private boolean supportsUnknownNameError_ = false;
+  /**
+   * <pre>
+   * Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+   * </pre>
+   *
+   * <code>bool supports_unknown_name_error = 15;</code>
+   * @return The supportsUnknownNameError.
+   */
+  @java.lang.Override
+  public boolean getSupportsUnknownNameError() {
+    return supportsUnknownNameError_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -651,6 +666,9 @@ private static final long serialVersionUID = 0L;
     }
     if (stopWhenQueueHasNoStreams_ != false) {
       output.writeBool(14, stopWhenQueueHasNoStreams_);
+    }
+    if (supportsUnknownNameError_ != false) {
+      output.writeBool(15, supportsUnknownNameError_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -712,6 +730,10 @@ private static final long serialVersionUID = 0L;
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(14, stopWhenQueueHasNoStreams_);
     }
+    if (supportsUnknownNameError_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(15, supportsUnknownNameError_);
+    }
     return size;
   }
   @java.lang.Override
@@ -767,6 +789,8 @@ private static final long serialVersionUID = 0L;
         != other.getStopAfterUnknownName()) return false;
     if (getStopWhenQueueHasNoStreams()
         != other.getStopWhenQueueHasNoStreams()) return false;
+    if (getSupportsUnknownNameError()
+        != other.getSupportsUnknownNameError()) return false;
     if (!getRequestCase().equals(other.getRequestCase())) return false;
     switch (requestCase_) {
       case 8:
@@ -828,6 +852,9 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + STOP_WHEN_QUEUE_HAS_NO_STREAMS_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getStopWhenQueueHasNoStreams());
+    hash = (37 * hash) + SUPPORTS_UNKNOWN_NAME_ERROR_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getSupportsUnknownNameError());
     switch (requestCase_) {
       case 8:
         hash = (37 * hash) + WAIT_FOR_FIELD_NUMBER;
@@ -1020,6 +1047,7 @@ private static final long serialVersionUID = 0L;
           com.google.protobuf.LazyStringArrayList.emptyList();
       stopAfterUnknownName_ = false;
       stopWhenQueueHasNoStreams_ = false;
+      supportsUnknownNameError_ = false;
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -1100,6 +1128,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00002000) != 0)) {
         result.stopWhenQueueHasNoStreams_ = stopWhenQueueHasNoStreams_;
       }
+      if (((from_bitField0_ & 0x00004000) != 0)) {
+        result.supportsUnknownNameError_ = supportsUnknownNameError_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1179,6 +1210,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getStopWhenQueueHasNoStreams() != false) {
         setStopWhenQueueHasNoStreams(other.getStopWhenQueueHasNoStreams());
+      }
+      if (other.getSupportsUnknownNameError() != false) {
+        setSupportsUnknownNameError(other.getSupportsUnknownNameError());
       }
       switch (other.getRequestCase()) {
         case WAIT_FOR: {
@@ -1305,6 +1339,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00002000;
               break;
             } // case 112
+            case 120: {
+              supportsUnknownNameError_ = input.readBool();
+              bitField0_ |= 0x00004000;
+              break;
+            } // case 120
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2877,6 +2916,50 @@ private static final long serialVersionUID = 0L;
     public Builder clearStopWhenQueueHasNoStreams() {
       bitField0_ = (bitField0_ & ~0x00002000);
       stopWhenQueueHasNoStreams_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean supportsUnknownNameError_ ;
+    /**
+     * <pre>
+     * Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_error = 15;</code>
+     * @return The supportsUnknownNameError.
+     */
+    @java.lang.Override
+    public boolean getSupportsUnknownNameError() {
+      return supportsUnknownNameError_;
+    }
+    /**
+     * <pre>
+     * Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_error = 15;</code>
+     * @param value The supportsUnknownNameError to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSupportsUnknownNameError(boolean value) {
+
+      supportsUnknownNameError_ = value;
+      bitField0_ |= 0x00004000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_error = 15;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSupportsUnknownNameError() {
+      bitField0_ = (bitField0_ & ~0x00004000);
+      supportsUnknownNameError_ = false;
       onChanged();
       return this;
     }

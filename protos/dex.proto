@@ -218,7 +218,10 @@ message PollWorkerTaskResponse {
 }
 
 // Confirms that Dex accepted the queue registration.
-message PollWorkerTaskRegistered {}
+message PollWorkerTaskRegistered {
+  // Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+  bool supports_unknown_name_rejection = 1;
+}
 
 // Assigns one task to this stream until its final result, error, or rejection.
 message PollWorkerTask {
@@ -280,6 +283,8 @@ message DispatchTaskRequest {
   bool stop_after_unknown_name = 13;
   // Ends an internal sticky queue search when no Worker streams remain connected.
   bool stop_when_queue_has_no_streams = 14;
+  // Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+  bool supports_unknown_name_error = 15;
 }
 
 // Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
@@ -312,6 +317,7 @@ enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0;
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1;
   DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED = 2;
+  // A matched Worker does not register the requested Step type or RPC name.
   DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME = 3;
 }
 

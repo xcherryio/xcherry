@@ -97,7 +97,8 @@ const (
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNSPECIFIED         DispatchTaskErrorReason = 0
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE DispatchTaskErrorReason = 1
 	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_WORKER_DISCONNECTED DispatchTaskErrorReason = 2
-	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME        DispatchTaskErrorReason = 3
+	// A matched Worker does not register the requested Step type or RPC name.
+	DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME DispatchTaskErrorReason = 3
 )
 
 // Enum value maps for DispatchTaskErrorReason.
@@ -2023,9 +2024,11 @@ func (*PollWorkerTaskResponse_Ping) isPollWorkerTaskResponse_Frame() {}
 
 // Confirms that Dex accepted the queue registration.
 type PollWorkerTaskRegistered struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+	SupportsUnknownNameRejection bool `protobuf:"varint,1,opt,name=supports_unknown_name_rejection,json=supportsUnknownNameRejection,proto3" json:"supports_unknown_name_rejection,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *PollWorkerTaskRegistered) Reset() {
@@ -2056,6 +2059,13 @@ func (x *PollWorkerTaskRegistered) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PollWorkerTaskRegistered.ProtoReflect.Descriptor instead.
 func (*PollWorkerTaskRegistered) Descriptor() ([]byte, []int) {
 	return file_dex_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PollWorkerTaskRegistered) GetSupportsUnknownNameRejection() bool {
+	if x != nil {
+		return x.SupportsUnknownNameRejection
+	}
+	return false
 }
 
 // Assigns one task to this stream until its final result, error, or rejection.
@@ -2338,8 +2348,10 @@ type DispatchTaskRequest struct {
 	StopAfterUnknownName bool `protobuf:"varint,13,opt,name=stop_after_unknown_name,json=stopAfterUnknownName,proto3" json:"stop_after_unknown_name,omitempty"`
 	// Ends an internal sticky queue search when no Worker streams remain connected.
 	StopWhenQueueHasNoStreams bool `protobuf:"varint,14,opt,name=stop_when_queue_has_no_streams,json=stopWhenQueueHasNoStreams,proto3" json:"stop_when_queue_has_no_streams,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Allows matching to return UNKNOWN_NAME after a Worker rejects an unknown Step type or RPC name.
+	SupportsUnknownNameError bool `protobuf:"varint,15,opt,name=supports_unknown_name_error,json=supportsUnknownNameError,proto3" json:"supports_unknown_name_error,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *DispatchTaskRequest) Reset() {
@@ -2479,6 +2491,13 @@ func (x *DispatchTaskRequest) GetStopAfterUnknownName() bool {
 func (x *DispatchTaskRequest) GetStopWhenQueueHasNoStreams() bool {
 	if x != nil {
 		return x.StopWhenQueueHasNoStreams
+	}
+	return false
+}
+
+func (x *DispatchTaskRequest) GetSupportsUnknownNameError() bool {
+	if x != nil {
+		return x.SupportsUnknownNameError
 	}
 	return false
 }
@@ -14613,8 +14632,9 @@ const file_dex_proto_rawDesc = "" +
 	"cancelTask\x12<\n" +
 	"\treconnect\x18\x04 \x01(\v2\x1c.dex.PollWorkerTaskReconnectH\x00R\treconnect\x12-\n" +
 	"\x04ping\x18\x05 \x01(\v2\x17.dex.PollWorkerTaskPingH\x00R\x04pingB\a\n" +
-	"\x05frame\"\x1a\n" +
-	"\x18PollWorkerTaskRegistered\"\x98\x02\n" +
+	"\x05frame\"a\n" +
+	"\x18PollWorkerTaskRegistered\x12E\n" +
+	"\x1fsupports_unknown_name_rejection\x18\x01 \x01(\bR\x1csupportsUnknownNameRejection\"\x98\x02\n" +
 	"\x0ePollWorkerTask\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x126\n" +
 	"\bdeadline\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12<\n" +
@@ -14626,7 +14646,7 @@ const file_dex_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"1\n" +
 	"\x17PollWorkerTaskReconnect\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x14\n" +
-	"\x12PollWorkerTaskPing\"\xdc\x05\n" +
+	"\x12PollWorkerTaskPing\"\x9b\x06\n" +
 	"\x13DispatchTaskRequest\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12%\n" +
 	"\x0efallback_queue\x18\x02 \x01(\tR\rfallbackQueue\x12\x17\n" +
@@ -14643,7 +14663,8 @@ const file_dex_proto_rawDesc = "" +
 	"\x19supports_assignment_state\x18\v \x01(\bR\x17supportsAssignmentState\x125\n" +
 	"\x17excluded_app_worker_ids\x18\f \x03(\tR\x14excludedAppWorkerIds\x125\n" +
 	"\x17stop_after_unknown_name\x18\r \x01(\bR\x14stopAfterUnknownName\x12A\n" +
-	"\x1estop_when_queue_has_no_streams\x18\x0e \x01(\bR\x19stopWhenQueueHasNoStreamsB\t\n" +
+	"\x1estop_when_queue_has_no_streams\x18\x0e \x01(\bR\x19stopWhenQueueHasNoStreams\x12=\n" +
+	"\x1bsupports_unknown_name_error\x18\x0f \x01(\bR\x18supportsUnknownNameErrorB\t\n" +
 	"\arequest\"\xab\x04\n" +
 	"\x14DispatchTaskResponse\x12;\n" +
 	"\bwait_for\x18\x01 \x01(\v2\x1e.dex.InvokeWaitForMethodOutputH\x00R\awaitFor\x12:\n" +

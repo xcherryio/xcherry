@@ -380,6 +380,7 @@ impl PullStream {
             Err(status) => return (false, false, Err(status)),
         };
         let mut was_registered = false;
+        let mut supports_unknown_name_rejection = false;
         let mut is_draining = false;
         let mut active: Option<ActiveTask> = None;
         loop {
@@ -390,7 +391,7 @@ impl PullStream {
                         Ok(Some(response)) => {
                             if !was_registered {
                                 match response.frame {
-                                    Some(ResponseFrame::Registered(_)) => { was_registered = true; self.shared.notify.notify_one(); }
+                                    Some(ResponseFrame::Registered(registered)) => { supports_unknown_name_rejection = registered.supports_unknown_name_rejection; was_registered = true; self.shared.notify.notify_one(); }
                                     Some(ResponseFrame::Reconnect(_)) => return (false, true, Ok(())),
                                     _ => return (false, false, Err(Status::internal("Worker task stream did not register"))),
                                 }
@@ -398,7 +399,7 @@ impl PullStream {
                             }
                             match response.frame {
                                 Some(ResponseFrame::Task(task)) => {
-                                    let rejection = self.dispatcher.unknown_task_reason(&task).or_else(|| {
+                                    let rejection = supports_unknown_name_rejection.then(|| self.dispatcher.unknown_task_reason(&task)).flatten().or_else(|| {
                                         (active.is_some() || is_draining || !self.shared.try_accept(self.stream_id))
                                             .then_some(PollWorkerTaskRejectReason::NoCapacity)
                                     });
@@ -818,11 +819,12 @@ mod tests {
         WorkerTaskService, WorkerTaskServiceServer,
     };
     use dex_protocol::dex::{
-        Context as ProtoContext, InvokeWorkerRpcRequest, PollWorkerTaskCancelTask,
-        PollWorkerTaskPing, PollWorkerTaskReconnect, PollWorkerTaskRegistered,
-        PollWorkerTaskResponse,
+        Context as ProtoContext, InvokeWaitForMethodRequest, InvokeWorkerRpcRequest,
+        PollWorkerTaskCancelTask, PollWorkerTaskPing, PollWorkerTaskReconnect,
+        PollWorkerTaskRegistered, PollWorkerTaskResponse,
     };
     use prost::Message;
+    use std::collections::VecDeque;
     use std::sync::Condvar;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::net::TcpListener;
@@ -1074,7 +1076,9 @@ mod tests {
             let pongs = Arc::clone(&self.pongs);
             tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
-                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection: false,
+                    })),
                 };
                 if sender.send(Ok(registered)).await.is_err() {
                     return;
@@ -1207,7 +1211,9 @@ mod tests {
             let rejected = self.rejected.clone();
             tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
-                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection: false,
+                    })),
                 };
                 if sender.send(Ok(registered)).await.is_err() {
                     return;
@@ -1311,6 +1317,233 @@ mod tests {
             .expect("server result");
     }
 
+    #[derive(Clone)]
+    struct UnknownTaskService {
+        capabilities: Arc<Mutex<VecDeque<bool>>>,
+        received: mpsc::Sender<PollWorkerTaskRequest>,
+    }
+
+    #[tonic::async_trait]
+    impl WorkerTaskService for UnknownTaskService {
+        type PollWorkerTaskStream = ReceiverStream<Result<PollWorkerTaskResponse, Status>>;
+
+        async fn poll_worker_task(
+            &self,
+            request: Request<tonic::Streaming<PollWorkerTaskRequest>>,
+        ) -> Result<Response<Self::PollWorkerTaskStream>, Status> {
+            let mut incoming = request.into_inner();
+            let register = incoming
+                .message()
+                .await?
+                .ok_or_else(|| Status::invalid_argument("missing Register"))?;
+            if !matches!(register.frame, Some(RequestFrame::Register(_))) {
+                return Err(Status::invalid_argument("Register must be first"));
+            }
+            let supports_unknown_name_rejection = self
+                .capabilities
+                .lock()
+                .expect("capabilities lock")
+                .pop_front()
+                .ok_or_else(|| Status::internal("unexpected registration"))?;
+            let (sender, receiver) = mpsc::channel(4);
+            sender
+                .send(Ok(PollWorkerTaskResponse {
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection,
+                    })),
+                }))
+                .await
+                .map_err(|_| Status::internal("registration response closed"))?;
+            send_unknown_task(&sender, "unknown-step", true).await?;
+            let received = self.received.clone();
+            tokio::spawn(async move {
+                let mut completed_tasks = 0;
+                while let Ok(Some(frame)) = incoming.message().await {
+                    if matches!(
+                        frame.frame,
+                        Some(RequestFrame::TaskFrame(_)) | Some(RequestFrame::Reject(_))
+                    ) {
+                        if received.send(frame).await.is_err() {
+                            return;
+                        }
+                        completed_tasks += 1;
+                        if completed_tasks == 1 {
+                            if send_unknown_task(&sender, "unknown-rpc", false)
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        } else if sender
+                            .send(Ok(PollWorkerTaskResponse {
+                                frame: Some(ResponseFrame::Ping(PollWorkerTaskPing {})),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    } else if matches!(frame.frame, Some(RequestFrame::Pong(_))) {
+                        let _ = received.send(frame).await;
+                        return;
+                    }
+                }
+            });
+            Ok(Response::new(ReceiverStream::new(receiver)))
+        }
+    }
+
+    async fn send_unknown_task(
+        sender: &mpsc::Sender<Result<PollWorkerTaskResponse, Status>>,
+        task_id: &str,
+        is_step: bool,
+    ) -> Result<(), Status> {
+        let value = crate::value_mapper::encode(&"unknown".to_string())
+            .map_err(|error| Status::internal(error.to_string()))?;
+        let context = Some(ProtoContext {
+            flow_id: "flow-1".to_string(),
+            ..Default::default()
+        });
+        let request = if is_step {
+            TaskRequest::WaitFor(InvokeWaitForMethodRequest {
+                context,
+                flow_type: "TestFlow".to_string(),
+                step_type: "MissingStep".to_string(),
+                step_input: Some(value),
+                ..Default::default()
+            })
+        } else {
+            TaskRequest::Rpc(InvokeWorkerRpcRequest {
+                context,
+                flow_type: "TestFlow".to_string(),
+                rpc_name: "MissingRPC".to_string(),
+                input: Some(value),
+                ..Default::default()
+            })
+        };
+        sender
+            .send(Ok(PollWorkerTaskResponse {
+                frame: Some(ResponseFrame::Task(PollWorkerTask {
+                    task_id: task_id.to_string(),
+                    deadline: None,
+                    request: Some(request),
+                })),
+            }))
+            .await
+            .map_err(|_| Status::internal("task response closed"))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unknown_task_rejection_follows_registered_capability_on_reconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake task service");
+        let address = listener.local_addr().expect("fake service address");
+        let (received, mut frames) = mpsc::channel(9);
+        let (server_stop, mut server_shutdown) = watch::channel(false);
+        let server = tokio::spawn(
+            Server::builder()
+                .add_service(WorkerTaskServiceServer::new(UnknownTaskService {
+                    capabilities: Arc::new(Mutex::new(VecDeque::from([false, true, false]))),
+                    received,
+                }))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                    while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok() {}
+                }),
+        );
+        let channel = CredentialChannel::new(
+            Endpoint::from_shared(format!("http://{address}"))
+                .expect("endpoint")
+                .connect_lazy(),
+            CredentialInterceptor::new(None),
+        );
+        let (cache, _directory) = test_cache();
+        let dispatcher = WorkerDispatcher::new(
+            Registry::new(),
+            ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
+        );
+        let shared = Arc::new(PullShared {
+            state: Mutex::new(PullState {
+                streams: HashMap::from([(
+                    1,
+                    StreamSlot {
+                        queue: "worker".to_string(),
+                        is_busy: false,
+                    },
+                )]),
+                busy_tasks: 0,
+                next_stream_id: 2,
+                is_stopping: false,
+                logged_unsupported: false,
+            }),
+            notify: Notify::new(),
+            max_concurrent_tasks: 1,
+        });
+        let (_stop, stop_receiver) = watch::channel(StopSignal {
+            phase: 0,
+            deadline: None,
+        });
+        let mut stream = PullStream {
+            client: WorkerTaskServiceClient::new(channel),
+            dispatcher,
+            app_worker_id: "worker".to_string(),
+            flow_types: Vec::new(),
+            queue: "worker".to_string(),
+            stream_id: 1,
+            shared,
+            stop: stop_receiver,
+            stop_drain_timeout: Duration::from_secs(30),
+        };
+        for _ in 0..3 {
+            let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
+                .await
+                .expect("poll returned");
+            assert!(was_registered);
+            result.expect("poll result");
+        }
+        let mut received = Vec::new();
+        for _ in 0..9 {
+            received.push(
+                timeout(Duration::from_secs(5), frames.recv())
+                    .await
+                    .expect("Worker frame timeout")
+                    .expect("Worker frame channel"),
+            );
+        }
+        assert_legacy_unknown_frames(&received[0..3]);
+        assert_unknown_rejections(&received[3..6]);
+        assert_legacy_unknown_frames(&received[6..9]);
+        server_stop.send_replace(true);
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("fake server stopped")
+            .expect("join server")
+            .expect("server result");
+    }
+
+    fn assert_legacy_unknown_frames(frames: &[PollWorkerTaskRequest]) {
+        for frame in &frames[0..2] {
+            let Some(RequestFrame::TaskFrame(task)) = frame.frame.as_ref() else {
+                panic!("expected legacy Worker error frame");
+            };
+            assert!(matches!(task.output, Some(Output::WorkerError(_))));
+        }
+        assert!(matches!(frames[2].frame, Some(RequestFrame::Pong(_))));
+    }
+
+    fn assert_unknown_rejections(frames: &[PollWorkerTaskRequest]) {
+        let Some(RequestFrame::Reject(step)) = frames[0].frame.as_ref() else {
+            panic!("expected unknown Step rejection");
+        };
+        assert_eq!(PollWorkerTaskRejectReason::UnknownStep as i32, step.reason);
+        let Some(RequestFrame::Reject(rpc)) = frames[1].frame.as_ref() else {
+            panic!("expected unknown RPC rejection");
+        };
+        assert_eq!(PollWorkerTaskRejectReason::UnknownRpc as i32, rpc.reason);
+        assert!(matches!(frames[2].frame, Some(RequestFrame::Pong(_))));
+    }
+
     const GET_DRAIN_RESULT: Rpc<(), String> = Rpc::new("get_drain_result");
 
     struct DrainFlow {
@@ -1381,7 +1614,9 @@ mod tests {
             };
             let (sender, receiver) = mpsc::channel(4);
             let registered = PollWorkerTaskResponse {
-                frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                    supports_unknown_name_rejection: false,
+                })),
             };
             sender
                 .send(Ok(registered))

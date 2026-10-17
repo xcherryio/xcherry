@@ -39,6 +39,9 @@ from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
 
 
+_UNKNOWN_TASK_REASON = PullWorkerRuntime.unknown_task_reason
+
+
 @pytest.fixture(autouse=True)
 def accept_mock_worker_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -823,6 +826,140 @@ async def _busy_reconnect_drains_before_closing_stream() -> None:
         "register",
         "task_frame",
     ]
+
+
+class UnknownTaskCall(QueueCall):
+    def __init__(self, supports_unknown_name_rejection: bool) -> None:
+        super().__init__(
+            [
+                pb.PollWorkerTaskResponse(
+                    registered=pb.PollWorkerTaskRegistered(
+                        supports_unknown_name_rejection=supports_unknown_name_rejection
+                    )
+                ),
+                pb.PollWorkerTaskResponse(
+                    task=pb.PollWorkerTask(
+                        task_id="unknown-step",
+                        wait_for=pb.InvokeWaitForMethodRequest(
+                            flow_type="TestFlow", step_type="MissingStep"
+                        ),
+                    )
+                ),
+            ]
+        )
+        self._completed_tasks = 0
+
+    async def write(self, request: pb.PollWorkerTaskRequest) -> None:
+        await super().write(request)
+        kind = request.WhichOneof("frame")
+        if kind in ("task_frame", "reject"):
+            self._completed_tasks += 1
+            if self._completed_tasks == 1:
+                self.frames.put_nowait(
+                    pb.PollWorkerTaskResponse(
+                        task=pb.PollWorkerTask(
+                            task_id="unknown-rpc",
+                            rpc=pb.InvokeWorkerRPCRequest(
+                                flow_type="TestFlow", rpc_name="MissingRPC"
+                            ),
+                        )
+                    )
+                )
+            else:
+                self.frames.put_nowait(
+                    pb.PollWorkerTaskResponse(ping=pb.PollWorkerTaskPing())
+                )
+        elif kind == "pong":
+            self.frames.put_nowait(getattr(grpc.aio, "EOF"))
+
+
+class UnknownTaskDispatcher:
+    async def invoke_wait_for(
+        self, request: pb.InvokeWaitForMethodRequest, is_active: Callable[[], bool]
+    ) -> Any:
+        if is_active():
+            raise LookupError(f"Step {request.step_type} is not registered")
+        raise RuntimeError("Worker task became inactive")
+        yield None
+
+    async def invoke_rpc(
+        self, request: pb.InvokeWorkerRPCRequest, is_active: Callable[[], bool]
+    ) -> pb.InvokeWorkerRPCResponse:
+        if is_active():
+            raise LookupError(f"RPC {request.rpc_name} is not registered")
+        raise RuntimeError("Worker task became inactive")
+
+
+def test_unknown_task_rejection_follows_registered_capability_on_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(PullWorkerRuntime, "unknown_task_reason", _UNKNOWN_TASK_REASON)
+    asyncio.run(_unknown_task_rejection_follows_registered_capability_on_reconnect())
+
+
+async def _unknown_task_rejection_follows_registered_capability_on_reconnect() -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        UnknownTaskDispatcher(),
+        PullWorkerOptions(app_worker_id="unknown-name-worker"),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+
+    legacy_call = UnknownTaskCall(False)
+    stream = PullStream(
+        runtime, FakeStub(cast(FakeCall, legacy_call)), "unknown-name-worker"
+    )
+    assert await asyncio.wait_for(stream._poll(), timeout=1)
+    legacy_frames = [
+        request
+        for request in legacy_call.requests
+        if request.WhichOneof("frame") == "task_frame"
+    ]
+    assert [frame.task_frame.task_id for frame in legacy_frames] == [
+        "unknown-step",
+        "unknown-rpc",
+    ]
+    assert all(
+        "not registered" in frame.task_frame.worker_error.detail
+        for frame in legacy_frames
+    )
+    assert not any(
+        request.WhichOneof("frame") == "reject" for request in legacy_call.requests
+    )
+    assert any(
+        request.WhichOneof("frame") == "pong" for request in legacy_call.requests
+    )
+
+    capable_call = UnknownTaskCall(True)
+    stream.stub = FakeStub(cast(FakeCall, capable_call))
+    assert await asyncio.wait_for(stream._poll(), timeout=1)
+    rejections = [
+        request.reject
+        for request in capable_call.requests
+        if request.WhichOneof("frame") == "reject"
+    ]
+    assert [(reject.task_id, reject.reason) for reject in rejections] == [
+        ("unknown-step", pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP),
+        ("unknown-rpc", pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC),
+    ]
+
+    reconnected_call = UnknownTaskCall(False)
+    stream.stub = FakeStub(cast(FakeCall, reconnected_call))
+    assert await asyncio.wait_for(stream._poll(), timeout=1)
+    reconnected_frames = [
+        request
+        for request in reconnected_call.requests
+        if request.WhichOneof("frame") == "task_frame"
+    ]
+    assert [frame.task_frame.task_id for frame in reconnected_frames] == [
+        "unknown-step",
+        "unknown-rpc",
+    ]
+    assert not any(
+        request.WhichOneof("frame") == "reject" for request in reconnected_call.requests
+    )
 
 
 class CancelCall(QueueCall):

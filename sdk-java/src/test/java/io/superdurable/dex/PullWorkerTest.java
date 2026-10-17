@@ -188,6 +188,35 @@ final class PullWorkerTest {
     }
 
     @Test
+    void unknownTaskRejectionFollowsRegisteredCapabilityOnReconnect() throws Exception {
+        final TestFlow flow = new TestFlow();
+        final PollServer pollServer = new PollServer(Boolean.FALSE, Boolean.TRUE, Boolean.FALSE);
+        try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
+            final PollStream legacy = pollServer.awaitQueue("PullTestFlow");
+            assertLegacyUnknownTask(legacy, unknownStepTask("legacy-step"));
+            assertLegacyUnknownTask(legacy, unknownRPCTask("legacy-rpc"));
+            legacy.respond(PollWorkerTaskResponse.newBuilder()
+                    .setPing(io.superdurable.gen.PollWorkerTaskPing.getDefaultInstance()).build());
+            assertTrue(legacy.awaitFrame().hasPong());
+
+            legacy.respond(PollWorkerTaskResponse.newBuilder()
+                    .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+            final PollStream capable = pollServer.awaitQueue("PullTestFlow");
+            assertUnknownTaskRejected(capable, unknownStepTask("capable-step"),
+                    io.superdurable.gen.PollWorkerTaskRejectReason
+                            .POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP);
+            assertUnknownTaskRejected(capable, unknownRPCTask("capable-rpc"),
+                    io.superdurable.gen.PollWorkerTaskRejectReason
+                            .POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC);
+
+            capable.respond(PollWorkerTaskResponse.newBuilder()
+                    .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+            final PollStream reconnected = pollServer.awaitQueue("PullTestFlow");
+            assertLegacyUnknownTask(reconnected, unknownStepTask("reconnected-step"));
+        }
+    }
+
+    @Test
     void streamsHeartbeatAndWriteBeforeFinalResult() throws Exception {
         final PollServer pollServer = new PollServer();
         try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1)) {
@@ -468,6 +497,46 @@ final class PullWorkerTest {
                 .build();
     }
 
+    private static PollWorkerTask unknownStepTask(final String taskID) {
+        final ValueMapper mapper = new ValueMapper(new com.fasterxml.jackson.databind.ObjectMapper());
+        return PollWorkerTask.newBuilder().setTaskId(taskID)
+                .setWaitFor(InvokeWaitForMethodRequest.newBuilder()
+                        .setFlowType("PullTestFlow").setStepType("MissingStep")
+                        .setContext(io.superdurable.gen.Context.newBuilder().setFlowId("test-flow"))
+                        .setStepInput(mapper.encode("unknown")))
+                .build();
+    }
+
+    private static PollWorkerTask unknownRPCTask(final String taskID) {
+        final ValueMapper mapper = new ValueMapper(new com.fasterxml.jackson.databind.ObjectMapper());
+        return PollWorkerTask.newBuilder().setTaskId(taskID)
+                .setRpc(io.superdurable.gen.InvokeWorkerRPCRequest.newBuilder()
+                        .setFlowType("PullTestFlow").setRpcName("MissingRPC")
+                        .setContext(io.superdurable.gen.Context.newBuilder().setFlowId("test-flow"))
+                        .setInput(mapper.encode("unknown")))
+                .build();
+    }
+
+    private static void assertLegacyUnknownTask(final PollStream stream, final PollWorkerTask task)
+            throws InterruptedException {
+        stream.assign(task);
+        final PollWorkerTaskRequest frame = stream.awaitFrame();
+        assertFalse(frame.hasReject());
+        assertEquals(task.getTaskId(), frame.getTaskFrame().getTaskId());
+        assertTrue(frame.getTaskFrame().getWorkerError().getDetail().contains("not registered"),
+                frame.getTaskFrame().getWorkerError().getDetail());
+    }
+
+    private static void assertUnknownTaskRejected(final PollStream stream, final PollWorkerTask task,
+            final io.superdurable.gen.PollWorkerTaskRejectReason reason)
+            throws InterruptedException {
+        stream.assign(task);
+        final PollWorkerTaskRequest frame = stream.awaitFrame();
+        assertTrue(frame.hasReject());
+        assertEquals(task.getTaskId(), frame.getReject().getTaskId());
+        assertEquals(reason, frame.getReject().getReason());
+    }
+
     private static String repeat(final String value, final int count) {
         final StringBuilder result = new StringBuilder();
         for (int index = 0; index < count; index++) {
@@ -569,6 +638,8 @@ final class PullWorkerTest {
         private final Status rejection;
         private final boolean isReaderPaused;
         private final Duration closeResponseDelay;
+        private final java.util.List<Boolean> unknownNameRejectionCapabilities;
+        private final AtomicInteger registrationCount = new AtomicInteger();
         private final java.util.List<PollStream> allStreams =
                 new java.util.concurrent.CopyOnWriteArrayList<PollStream>();
         private final ScheduledExecutorService readScheduler =
@@ -579,26 +650,41 @@ final class PullWorkerTest {
                 });
 
         private PollServer() {
-            this(null, false, Duration.ZERO);
+            this(null, false, Duration.ZERO, Collections.<Boolean>emptyList());
         }
 
         private PollServer(final Status rejection) {
-            this(rejection, false, Duration.ZERO);
+            this(rejection, false, Duration.ZERO, Collections.<Boolean>emptyList());
         }
 
         private PollServer(final boolean isReaderPaused) {
-            this(null, isReaderPaused, Duration.ZERO);
+            this(null, isReaderPaused, Duration.ZERO, Collections.<Boolean>emptyList());
         }
 
         private PollServer(final Duration closeResponseDelay) {
-            this(null, false, closeResponseDelay);
+            this(null, false, closeResponseDelay, Collections.<Boolean>emptyList());
+        }
+
+        private PollServer(final Boolean firstCapability, final Boolean... remainingCapabilities) {
+            this(null, false, Duration.ZERO,
+                    unknownNameRejectionCapabilities(firstCapability, remainingCapabilities));
         }
 
         private PollServer(final Status rejection, final boolean isReaderPaused,
-                final Duration closeResponseDelay) {
+                final Duration closeResponseDelay,
+                final java.util.List<Boolean> unknownNameRejectionCapabilities) {
             this.rejection = rejection;
             this.isReaderPaused = isReaderPaused;
             this.closeResponseDelay = closeResponseDelay;
+            this.unknownNameRejectionCapabilities = unknownNameRejectionCapabilities;
+        }
+
+        private static java.util.List<Boolean> unknownNameRejectionCapabilities(
+                final Boolean firstCapability, final Boolean... remainingCapabilities) {
+            final java.util.List<Boolean> capabilities = new java.util.ArrayList<Boolean>();
+            capabilities.add(firstCapability);
+            capabilities.addAll(Arrays.asList(remainingCapabilities));
+            return capabilities;
         }
 
         @Override
@@ -623,9 +709,19 @@ final class PullWorkerTest {
                             return;
                         }
                         stream.queue = request.getRegister().getQueue();
+                        final boolean supportsUnknownNameRejection;
+                        if ("PullTestFlow".equals(stream.queue)) {
+                            final int registrationIndex = registrationCount.getAndIncrement();
+                            supportsUnknownNameRejection = registrationIndex
+                                    < unknownNameRejectionCapabilities.size()
+                                    && unknownNameRejectionCapabilities.get(registrationIndex);
+                        } else {
+                            supportsUnknownNameRejection = false;
+                        }
                         stream.respond(PollWorkerTaskResponse.newBuilder()
                                 .setRegistered(io.superdurable.gen.PollWorkerTaskRegistered
-                                        .getDefaultInstance()).build());
+                                        .newBuilder().setSupportsUnknownNameRejection(
+                                                supportsUnknownNameRejection)).build());
                         registrations.add(stream);
                     } else {
                         stream.frames.add(request);

@@ -52,6 +52,21 @@ private static final long serialVersionUID = 0L;
             io.superdurable.gen.PollWorkerTaskRegistered.class, io.superdurable.gen.PollWorkerTaskRegistered.Builder.class);
   }
 
+  public static final int SUPPORTS_UNKNOWN_NAME_REJECTION_FIELD_NUMBER = 1;
+  private boolean supportsUnknownNameRejection_ = false;
+  /**
+   * <pre>
+   * Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+   * </pre>
+   *
+   * <code>bool supports_unknown_name_rejection = 1;</code>
+   * @return The supportsUnknownNameRejection.
+   */
+  @java.lang.Override
+  public boolean getSupportsUnknownNameRejection() {
+    return supportsUnknownNameRejection_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -66,7 +81,18 @@ private static final long serialVersionUID = 0L;
   @java.lang.Override
   public void writeTo(com.google.protobuf.CodedOutputStream output)
                       throws java.io.IOException {
+    if (supportsUnknownNameRejection_ != false) {
+      output.writeBool(1, supportsUnknownNameRejection_);
+    }
     getUnknownFields().writeTo(output);
+  }
+  private int computeSerializedSize_0() {
+    int size = 0;
+    if (supportsUnknownNameRejection_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(1, supportsUnknownNameRejection_);
+    }
+    return size;
   }
   @java.lang.Override
   public int getSerializedSize() {
@@ -74,6 +100,7 @@ private static final long serialVersionUID = 0L;
     if (size != -1) return size;
 
     size = 0;
+    size += computeSerializedSize_0();
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
     return size;
@@ -89,6 +116,8 @@ private static final long serialVersionUID = 0L;
     }
     io.superdurable.gen.PollWorkerTaskRegistered other = (io.superdurable.gen.PollWorkerTaskRegistered) obj;
 
+    if (getSupportsUnknownNameRejection()
+        != other.getSupportsUnknownNameRejection()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -100,6 +129,9 @@ private static final long serialVersionUID = 0L;
     }
     int hash = 41;
     hash = (19 * hash) + getDescriptor().hashCode();
+    hash = (37 * hash) + SUPPORTS_UNKNOWN_NAME_REJECTION_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getSupportsUnknownNameRejection());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -234,6 +266,8 @@ private static final long serialVersionUID = 0L;
     @java.lang.Override
     public Builder clear() {
       super.clear();
+      bitField0_ = 0;
+      supportsUnknownNameRejection_ = false;
       return this;
     }
 
@@ -260,8 +294,16 @@ private static final long serialVersionUID = 0L;
     @java.lang.Override
     public io.superdurable.gen.PollWorkerTaskRegistered buildPartial() {
       io.superdurable.gen.PollWorkerTaskRegistered result = new io.superdurable.gen.PollWorkerTaskRegistered(this);
+      if (bitField0_ != 0) { buildPartial0(result); }
       onBuilt();
       return result;
+    }
+
+    private void buildPartial0(io.superdurable.gen.PollWorkerTaskRegistered result) {
+      int from_bitField0_ = bitField0_;
+      if (((from_bitField0_ & 0x00000001) != 0)) {
+        result.supportsUnknownNameRejection_ = supportsUnknownNameRejection_;
+      }
     }
 
     @java.lang.Override
@@ -276,6 +318,9 @@ private static final long serialVersionUID = 0L;
 
     public Builder mergeFrom(io.superdurable.gen.PollWorkerTaskRegistered other) {
       if (other == io.superdurable.gen.PollWorkerTaskRegistered.getDefaultInstance()) return this;
+      if (other.getSupportsUnknownNameRejection() != false) {
+        setSupportsUnknownNameRejection(other.getSupportsUnknownNameRejection());
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -302,6 +347,11 @@ private static final long serialVersionUID = 0L;
             case 0:
               done = true;
               break;
+            case 8: {
+              supportsUnknownNameRejection_ = input.readBool();
+              bitField0_ |= 0x00000001;
+              break;
+            } // case 8
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -315,6 +365,51 @@ private static final long serialVersionUID = 0L;
       } finally {
         onChanged();
       } // finally
+      return this;
+    }
+    private int bitField0_;
+
+    private boolean supportsUnknownNameRejection_ ;
+    /**
+     * <pre>
+     * Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_rejection = 1;</code>
+     * @return The supportsUnknownNameRejection.
+     */
+    @java.lang.Override
+    public boolean getSupportsUnknownNameRejection() {
+      return supportsUnknownNameRejection_;
+    }
+    /**
+     * <pre>
+     * Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_rejection = 1;</code>
+     * @param value The supportsUnknownNameRejection to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSupportsUnknownNameRejection(boolean value) {
+
+      supportsUnknownNameRejection_ = value;
+      bitField0_ |= 0x00000001;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Allows this queue-owner stream to reject an assigned unknown Step type or RPC name.
+     * </pre>
+     *
+     * <code>bool supports_unknown_name_rejection = 1;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSupportsUnknownNameRejection() {
+      bitField0_ = (bitField0_ & ~0x00000001);
+      supportsUnknownNameRejection_ = false;
+      onChanged();
       return this;
     }
 

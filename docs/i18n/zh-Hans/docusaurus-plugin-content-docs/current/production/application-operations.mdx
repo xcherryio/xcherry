@@ -143,6 +143,10 @@ payload 或 output 契约，请引入新的 Step type 或 RPC name，而不是�
 重命名它。将新定义与旧定义一起部署，只将新版本 Flow 路由到新定义，并通过重试和
 任何已批准的 Time Travel 恢复保留旧 implementation。
 
+在滚动部署期间，缺少所请求 Step 或 RPC 的拉取模式 Worker 可以将调用交给另一个
+能够处理的 Worker，而不会消耗一次 Step attempt。这需要支持拉取未知名称重新分配的
+Dex Server 版本。旧版 Server 保持之前的未注册 Worker 错误行为。
+
 移除旧定义前，搜索旧 Flow type，并确认没有正在运行、等待、重试或可恢复的终止 Flow
 需要它。将搜索结果保存在变更记录中。确切查询取决于 visibility store 的字段；可以从
 如下的有界 Flow-type 查询开始：

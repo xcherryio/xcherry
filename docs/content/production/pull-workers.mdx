@@ -266,10 +266,10 @@ Flow type queue and excludes that Worker from this dispatch, even if the Flow
 was sticky to it. This reassignment does not consume a Step attempt. If no
 capable Worker accepts within the dispatch wait, the Step follows its failure
 and retry policy with an error that names the Step or RPC. An RPC caller gets
-the named error directly. The default wait is 10 seconds for a regular Step
-and 3 seconds for a local Step. Older SDKs that return a Worker error instead
-of a rejection keep their existing behavior. Push Workers still return their
-ordinary missing-name error.
+the named error directly after waiting up to the regular dispatch wait of 10
+seconds. This reassignment requires a Dex Server release that supports it.
+Against older Servers, the Worker returns the not-registered error as before.
+Push Workers still return their ordinary missing-name error.
 
 Delivery is at least once. A call can be assigned again when its Worker
 disconnects before Dex receives any output. Make external side effects

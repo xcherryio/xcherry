@@ -125,6 +125,11 @@ const (
 	dispatchAttemptTerminal
 )
 
+// maxExcludedAppWorkerIDs bounds untrusted dispatch exclusions.
+const maxExcludedAppWorkerIDs = 256
+
+const maxAppWorkerIDLength = 128
+
 type pollResult struct {
 	frame *dexpb.PollWorkerTaskRequest
 	err   error
@@ -353,7 +358,7 @@ func (e *Engine) servePoll(transport pollTransport) error {
 		<-worker.requestReconnect("queue ownership changed")
 		return nil
 	}
-	if err := worker.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{}}}); err != nil {
+	if err := worker.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{SupportsUnknownNameRejection: true}}}); err != nil {
 		return err
 	}
 	worker.makeIdle()
@@ -777,7 +782,8 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 			stickyEnd = dispatchEnd
 		}
 	}
-	isMatched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, dispatchEnd, excludedWorkerIDs, stream.Send)
+	hasUnavailableWorker := false
+	isMatched, err := e.dispatchQueue(ctx, request, request.Queue, stickyEnd, dispatchEnd, excludedWorkerIDs, &hasUnavailableWorker, stream.Send)
 	if err != nil {
 		return err
 	}
@@ -785,7 +791,7 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 		return nil
 	}
 	if request.FallbackQueue != "" && request.FallbackQueue != request.Queue && time.Now().Before(dispatchEnd) {
-		isMatched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, dispatchEnd, excludedWorkerIDs, stream.Send)
+		isMatched, err = e.dispatchQueue(ctx, request, request.FallbackQueue, dispatchEnd, dispatchEnd, excludedWorkerIDs, &hasUnavailableWorker, stream.Send)
 		if err != nil {
 			return err
 		}
@@ -793,7 +799,7 @@ func (e *Engine) DispatchTask(request *dexpb.DispatchTaskRequest, stream dexpb.M
 			return nil
 		}
 	}
-	return stream.Send(unmatchedDispatchError(request, excludedWorkerIDs))
+	return stream.Send(unmatchedDispatchError(request, excludedWorkerIDs, hasUnavailableWorker))
 }
 
 func (e *Engine) forwardDispatch(ctx context.Context, request *dexpb.DispatchTaskRequest, address string, send func(*dexpb.DispatchTaskResponse) error) error {
@@ -822,7 +828,7 @@ func (e *Engine) forwardDispatch(ctx context.Context, request *dexpb.DispatchTas
 	}
 }
 
-func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskRequest, queueName string, waitEnd time.Time, dispatchEnd time.Time, excludedWorkerIDs map[string]struct{}, send func(*dexpb.DispatchTaskResponse) error) (bool, error) {
+func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskRequest, queueName string, waitEnd time.Time, dispatchEnd time.Time, excludedWorkerIDs map[string]struct{}, hasUnavailableWorker *bool, send func(*dexpb.DispatchTaskResponse) error) (bool, error) {
 	if !time.Now().Before(waitEnd) {
 		return false, nil
 	}
@@ -838,8 +844,9 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			Queue: queueName, FlowId: request.FlowId, DispatchWait: durationUntil(waitEnd),
 			Deadline: request.Deadline, TaskId: request.TaskId, Request: request.Request,
 			SupportsAssignmentState:   request.GetSupportsAssignmentState(),
-			StopAfterUnknownName:      queueName != request.FallbackQueue && request.FallbackQueue != "",
+			StopAfterUnknownName:      request.GetSupportsUnknownNameError() && queueName != request.FallbackQueue && request.FallbackQueue != "",
 			StopWhenQueueHasNoStreams: queueName != request.FallbackQueue && request.FallbackQueue != "",
+			SupportsUnknownNameError:  request.GetSupportsUnknownNameError(),
 		}
 		for workerID := range excludedWorkerIDs {
 			remoteRequest.ExcludedAppWorkerIds = append(remoteRequest.ExcludedAppWorkerIds, workerID)
@@ -901,16 +908,18 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 		}
 		switch outcome {
 		case dispatchAttemptRetryCapacity:
+			*hasUnavailableWorker = true
 			excludeCapacityReject(worker, excludedUntil, capacityBackoffs)
 		case dispatchAttemptRetryDisconnected:
+			*hasUnavailableWorker = true
 			excludedUntil[worker] = time.Time{}
 		case dispatchAttemptRetryUnknownName:
 			excludedWorkerIDs[worker.registration.AppWorkerId] = struct{}{}
-			if queueName != request.FallbackQueue && request.FallbackQueue != "" {
+			if request.GetSupportsUnknownNameError() && queueName != request.FallbackQueue && request.FallbackQueue != "" {
 				return false, nil
 			}
 			if request.GetStopAfterUnknownName() {
-				response := unmatchedDispatchError(request, excludedWorkerIDs)
+				response := unmatchedDispatchError(request, excludedWorkerIDs, *hasUnavailableWorker)
 				response.RejectedByAppWorkerId = worker.registration.AppWorkerId
 				return true, send(response)
 			}
@@ -1104,18 +1113,18 @@ func durationUntil(deadline time.Time) *durationpb.Duration {
 	return durationpb.New(time.Until(deadline))
 }
 
-func unmatchedDispatchError(request *dexpb.DispatchTaskRequest, excludedWorkerIDs map[string]struct{}) *dexpb.DispatchTaskResponse {
-	if len(excludedWorkerIDs) == 0 {
+func unmatchedDispatchError(request *dexpb.DispatchTaskRequest, excludedWorkerIDs map[string]struct{}, hasUnavailableWorker bool) *dexpb.DispatchTaskResponse {
+	if hasUnavailableWorker || !request.GetSupportsUnknownNameError() || len(excludedWorkerIDs) == 0 {
 		return dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE, "no Worker accepted the task")
 	}
 	var detail string
 	switch task := request.Request.(type) {
 	case *dexpb.DispatchTaskRequest_WaitFor:
-		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow %q", task.WaitFor.GetStepType(), task.WaitFor.GetFlowType())
+		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow type %q", task.WaitFor.GetStepType(), task.WaitFor.GetFlowType())
 	case *dexpb.DispatchTaskRequest_Execute:
-		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow %q", task.Execute.GetStepType(), task.Execute.GetFlowType())
+		detail = fmt.Sprintf("no pull Worker registered Step %q for Flow type %q", task.Execute.GetStepType(), task.Execute.GetFlowType())
 	case *dexpb.DispatchTaskRequest_Rpc:
-		detail = fmt.Sprintf("no pull Worker registered RPC %q for Flow %q", task.Rpc.GetRpcName(), task.Rpc.GetFlowType())
+		detail = fmt.Sprintf("no pull Worker registered RPC %q for Flow type %q", task.Rpc.GetRpcName(), task.Rpc.GetFlowType())
 	}
 	return dispatchError(dexpb.DispatchTaskErrorReason_DISPATCH_TASK_ERROR_REASON_UNKNOWN_NAME, detail)
 }
@@ -1175,8 +1184,8 @@ func validateRegistration(registration *dexpb.PollWorkerTaskRegister, cfg *confi
 		return errors.New("first frame must register a Worker")
 	}
 	workerID := registration.AppWorkerId
-	if len(workerID) < 1 || len(workerID) > 128 {
-		return errors.New("app_worker_id must have 1 to 128 characters")
+	if len(workerID) < 1 || len(workerID) > maxAppWorkerIDLength {
+		return fmt.Errorf("app_worker_id must have 1 to %d characters", maxAppWorkerIDLength)
 	}
 	for _, character := range workerID {
 		if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.') {
@@ -1211,6 +1220,14 @@ func validateDispatch(request *dexpb.DispatchTaskRequest, cfg *config.MatchingCo
 	}
 	if len(request.Queue) > cfg.MaxQueueLength || len(request.FallbackQueue) > cfg.MaxQueueLength {
 		return errors.New("queue exceeds the length limit")
+	}
+	if len(request.ExcludedAppWorkerIds) > maxExcludedAppWorkerIDs {
+		return fmt.Errorf("excluded_app_worker_ids exceeds the limit of %d", maxExcludedAppWorkerIDs)
+	}
+	for _, workerID := range request.ExcludedAppWorkerIds {
+		if len(workerID) == 0 || len(workerID) > maxAppWorkerIDLength {
+			return fmt.Errorf("excluded_app_worker_ids entries must have 1 to %d characters", maxAppWorkerIDLength)
+		}
 	}
 	switch task := request.Request.(type) {
 	case *dexpb.DispatchTaskRequest_WaitFor:

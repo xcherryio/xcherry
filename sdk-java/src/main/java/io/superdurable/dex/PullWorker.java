@@ -317,6 +317,7 @@ final class PullWorker {
         private boolean isHalfClosed;
         private boolean isClosed;
         private boolean isRegistered;
+        private boolean supportsUnknownNameRejection;
 
         private PullStream(final String queue) {
             this.queue = queue;
@@ -326,6 +327,7 @@ final class PullWorker {
             isClosed = false;
             isHalfClosed = false;
             isRegistered = false;
+            supportsUnknownNameRejection = false;
             closeFailure = null;
             try {
                 requests = taskService.pollWorkerTask(this);
@@ -355,6 +357,7 @@ final class PullWorker {
                         halfClose();
                     } else if (response.hasRegistered()) {
                         isRegistered = true;
+                        supportsUnknownNameRejection = response.getRegistered().getSupportsUnknownNameRejection();
                         backoffMillis = 100L;
                     } else {
                         requests.onError(Status.INTERNAL
@@ -384,7 +387,9 @@ final class PullWorker {
         }
 
         private void startTask(final PollWorkerTask task) {
-            final PollWorkerTaskRejectReason unknownReason = unknownTaskReason(task);
+            final PollWorkerTaskRejectReason unknownReason = supportsUnknownNameRejection
+                    ? unknownTaskReason(task)
+                    : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED;
             if (unknownReason != PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED) {
                 reject(task.getTaskId(), unknownReason);
                 return;

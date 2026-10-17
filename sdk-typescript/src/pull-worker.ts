@@ -52,6 +52,7 @@ interface PollStream {
   halfClosePromise: Promise<void> | undefined;
   resolveHalfClose: (() => void) | undefined;
   isRegistered: boolean;
+  supportsUnknownNameRejection: boolean;
   isDisconnected: boolean;
   isHalfClosed: boolean;
   isDraining: boolean;
@@ -163,7 +164,7 @@ export class PullWorker {
         const poll: PollStream = {
           queue, stream: undefined, task: undefined, retryTimer: undefined,
           halfCloseTimer: undefined, halfClosePromise: undefined, resolveHalfClose: undefined,
-          isRegistered: false, isDisconnected: false, isHalfClosed: false, isDraining: false,
+          isRegistered: false, supportsUnknownNameRejection: false, isDisconnected: false, isHalfClosed: false, isDraining: false,
           isReconnectRequested: false,
           backoffMs: 100, failure: undefined,
         };
@@ -177,6 +178,7 @@ export class PullWorker {
   private openStream(poll: PollStream): void {
     if (this.isStopping) return;
     poll.isRegistered = false;
+    poll.supportsUnknownNameRejection = false;
     poll.isDisconnected = false;
     poll.isHalfClosed = false;
     poll.failure = undefined;
@@ -218,6 +220,7 @@ export class PullWorker {
         this.halfCloseStream(poll);
       } else if (frame?.$case === "registered") {
         poll.isRegistered = true;
+        poll.supportsUnknownNameRejection = frame.value.supportsUnknownNameRejection;
         poll.backoffMs = 100;
       } else {
         console.error("Worker task stream did not register");
@@ -256,7 +259,7 @@ export class PullWorker {
   }
 
   private startTask(poll: PollStream, task: PollWorkerTask): void {
-    const unknownReason = this.unknownTaskReason(task);
+    const unknownReason = poll.supportsUnknownNameRejection ? this.unknownTaskReason(task) : undefined;
     if (unknownReason !== undefined) {
       this.rejectTask(poll, task.taskId, unknownReason);
       return;

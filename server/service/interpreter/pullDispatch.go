@@ -151,13 +151,14 @@ func pullTaskRequest(
 		deadline = time.Now().Add(2 * time.Hour)
 	}
 	return &dexpb.DispatchTaskRequest{
-		Queue:                   queue,
-		FallbackQueue:           flowType,
-		FlowId:                  flowID,
-		DispatchWait:            durationpb.New(dispatchWait),
-		StickyWait:              durationpb.New(stickyWait),
-		Deadline:                timestamppb.New(deadline),
-		SupportsAssignmentState: true,
+		Queue:                    queue,
+		FallbackQueue:            flowType,
+		FlowId:                   flowID,
+		DispatchWait:             durationpb.New(dispatchWait),
+		StickyWait:               durationpb.New(stickyWait),
+		Deadline:                 timestamppb.New(deadline),
+		SupportsAssignmentState:  true,
+		SupportsUnknownNameError: true,
 	}
 }
 
