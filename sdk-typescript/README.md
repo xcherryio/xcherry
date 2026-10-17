@@ -200,6 +200,13 @@ queue even when all slots are busy, so it can hold up to
 `(1 + F) * (idleStreamsPerQueue + maxConcurrentTasks)` streams, where `F` is the
 number of registered Flow types. Size both options for the server's stream cap.
 
+The Worker rejects an unregistered Step or RPC by name. Dex retries that task
+on another pull Worker without consuming a Step attempt, including when the
+Flow was sticky to the rejecting Worker. If no capable Worker accepts it within
+the server's dispatch wait (10 seconds by default, or 3 seconds in local mode),
+the Step fails with the unknown name. Older SDKs continue to return their
+ordinary handler error.
+
 The default `appWorkerID` uses the first nonempty value from
 `DEX_WORKER_INSTANCE`, `POD_NAME`, `HOSTNAME`, or the system hostname, followed by
 eight random base32 characters. An override must identify one Worker process

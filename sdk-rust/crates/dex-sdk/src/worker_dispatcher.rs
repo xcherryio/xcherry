@@ -12,19 +12,20 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
+use dex_protocol::dex::poll_worker_task::Request as PullTaskRequest;
 use dex_protocol::dex::{
     AttributeWrite, ChannelCondition, ChannelMessage, CloseDecision, CloseDecisionType,
     ConditionCombination as ProtoCombination, ExecuteMethodFailurePolicy,
     FlowTimeoutHandlerOptions as ProtoFlowTimeoutHandlerOptions, InvokeExecuteMethodOutput,
     InvokeExecuteMethodRequest, InvokeExecuteMethodResponse, InvokeWaitForMethodOutput,
     InvokeWaitForMethodRequest, InvokeWaitForMethodResponse, InvokeWorkerRpcRequest,
-    InvokeWorkerRpcResponse, Kv, RetryPolicy as ProtoRetryPolicy,
-    StepDecision as ProtoStepDecision, StepDurability as ProtoStepDurability,
-    StepMovement as ProtoStepMovement, StepOptions as ProtoStepOptions,
-    SubFlowCondition as ProtoSubFlowCondition, SubFlowOptions as ProtoSubFlowOptions,
-    SubFlowReusePolicy as ProtoSubFlowReusePolicy, TimerCondition, WaitForMethodFailurePolicy,
-    WaitingCondition, WaitingConditionType, invoke_execute_method_output,
-    invoke_wait_for_method_output,
+    InvokeWorkerRpcResponse, Kv, PollWorkerTask, PollWorkerTaskRejectReason,
+    RetryPolicy as ProtoRetryPolicy, StepDecision as ProtoStepDecision,
+    StepDurability as ProtoStepDurability, StepMovement as ProtoStepMovement,
+    StepOptions as ProtoStepOptions, SubFlowCondition as ProtoSubFlowCondition,
+    SubFlowOptions as ProtoSubFlowOptions, SubFlowReusePolicy as ProtoSubFlowReusePolicy,
+    TimerCondition, WaitForMethodFailurePolicy, WaitingCondition, WaitingConditionType,
+    invoke_execute_method_output, invoke_wait_for_method_output,
 };
 use tokio::sync::mpsc;
 
@@ -70,6 +71,44 @@ impl WorkerDispatcher {
 
     pub(crate) fn flow_types(&self) -> Vec<String> {
         self.registry.flow_types()
+    }
+
+    pub(crate) fn unknown_task_reason(
+        &self,
+        task: &PollWorkerTask,
+    ) -> Option<PollWorkerTaskRejectReason> {
+        match task.request.as_ref()? {
+            PullTaskRequest::WaitFor(request) => {
+                let is_registered = self
+                    .registry
+                    .flow(&request.flow_type)
+                    .ok()
+                    .is_some_and(|flow| flow.steps.contains_key(request.step_type.as_str()));
+                (!is_registered).then_some(PollWorkerTaskRejectReason::UnknownStep)
+            }
+            PullTaskRequest::Execute(request) => {
+                let is_registered =
+                    self.registry
+                        .flow(&request.flow_type)
+                        .ok()
+                        .is_some_and(|flow| {
+                            if request.step_type == TIMEOUT_HANDLER_STEP_TYPE {
+                                flow.handler.has_timeout_handler()
+                            } else {
+                                flow.steps.contains_key(request.step_type.as_str())
+                            }
+                        });
+                (!is_registered).then_some(PollWorkerTaskRejectReason::UnknownStep)
+            }
+            PullTaskRequest::Rpc(request) => {
+                let is_registered = self
+                    .registry
+                    .flow(&request.flow_type)
+                    .ok()
+                    .is_some_and(|flow| flow.rpcs.contains_key(request.rpc_name.as_str()));
+                (!is_registered).then_some(PollWorkerTaskRejectReason::UnknownRpc)
+            }
+        }
     }
 
     pub(crate) fn invoke_wait_for(

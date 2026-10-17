@@ -266,7 +266,7 @@ test("pull WaitFor sends heartbeat and stream write before its final result", as
     stream.call.write({ frame: { $case: "registered", value: {} } });
     stream.call.write({ frame: { $case: "task", value: {
       taskId: "wait-for", deadline: undefined,
-      request: { $case: "waitFor", value: InvokeWaitForMethodRequest.create({}) },
+      request: { $case: "waitFor", value: InvokeWaitForMethodRequest.create({ flowType: "TestFlow", stepType: "TestStep" }) },
     } } });
     await stream.frame("taskFrame", 3);
     const outputs = stream.frames.filter((candidate) => candidate.frame?.$case === "taskFrame")
@@ -473,10 +473,18 @@ async function startHarness() {
         invocationCount++;
         return invokeRPC(request, signal);
       } } as WorkerDispatcher;
-      return new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, options);
+      const worker = new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, options);
+      Reflect.set(worker, "registeredFlows", new Map([["TestFlow", {
+        steps: [{ name: "TestStep" }], rpcs: [{ name: "getWorker" }],
+      }]]));
+      return worker;
     },
     workerWithDispatcher(dispatcher: WorkerDispatcher) {
-      return new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, {});
+      const worker = new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, {});
+      Reflect.set(worker, "registeredFlows", new Map([["TestFlow", {
+        steps: [{ name: "TestStep" }], rpcs: [{ name: "getWorker" }],
+      }]]));
+      return worker;
     },
     async nextStream(): Promise<CapturedStream> {
       await until(() => streams.length > consumed);
@@ -492,7 +500,7 @@ function rpcTask(taskId: string, deadline?: Date): PollWorkerTaskResponse {
   return { frame: { $case: "task", value: {
     taskId,
     deadline,
-    request: { $case: "rpc", value: InvokeWorkerRPCRequest.create({}) },
+    request: { $case: "rpc", value: InvokeWorkerRPCRequest.create({ flowType: "TestFlow", rpcName: "getWorker" }) },
   } } };
 }
 

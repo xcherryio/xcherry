@@ -107,6 +107,34 @@ impl Flow for PullFlow {
     }
 }
 
+struct OldPullFlow(PullFlow);
+
+impl Flow for OldPullFlow {
+    type StartInput = String;
+
+    fn flow_type(&self) -> &'static str {
+        "PullFlow"
+    }
+
+    fn steps(&self) -> StepList<'_, Self::StartInput> {
+        StepList::start(&self.0.first)
+    }
+}
+
+struct NewStartPullFlow(PullFlow);
+
+impl Flow for NewStartPullFlow {
+    type StartInput = String;
+
+    fn flow_type(&self) -> &'static str {
+        "PullFlow"
+    }
+
+    fn steps(&self) -> StepList<'_, Self::StartInput> {
+        StepList::start(&self.0.second)
+    }
+}
+
 #[derive(Clone)]
 struct PullFirstStep {
     worker_id: String,
@@ -469,6 +497,158 @@ fn pull_worker_test_end_to_end() {
     drop(worker_b);
     drop(client);
     drop(push);
+    cache.close().expect("close pull cache");
+}
+
+#[test]
+#[ignore = "requires dexcli dev"]
+fn pull_worker_test_reassigns_unregistered_rpc() {
+    let server_address =
+        std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
+    let cache_directory = tempfile::tempdir().expect("create pull cache directory");
+    let cache = Arc::new(
+        BlobCache::open(
+            BlobCacheConfig::new(cache_directory.path(), 64 * 1024 * 1024, 10_000)
+                .expect("cache config"),
+        )
+        .expect("open cache"),
+    );
+    let (observed, observations) = mpsc::channel();
+    let first_gate = Arc::new(Gate::new());
+    let second_gate = Arc::new(Gate::new());
+    second_gate.release();
+    let old_flow = OldPullFlow(PullFlow::new(
+        "old",
+        observed.clone(),
+        Arc::clone(&first_gate),
+        Arc::clone(&second_gate),
+    ));
+    let new_flow = PullFlow::new(
+        "new",
+        observed,
+        Arc::clone(&first_gate),
+        Arc::clone(&second_gate),
+    );
+    let old_worker_id = format!("pull-rust-old-{}", uuid::Uuid::new_v4());
+    let new_worker_id = format!("pull-rust-new-{}", uuid::Uuid::new_v4());
+    let old_worker = PullTestWorker::start(
+        Registry::new()
+            .register(old_flow)
+            .expect("register old Flow"),
+        Arc::clone(&cache),
+        &server_address,
+        &old_worker_id,
+    );
+    let client = Client::new(
+        Registry::new()
+            .register(new_flow.clone())
+            .expect("register client Flow"),
+        Arc::clone(&cache),
+        ClientOptions::new()
+            .server_address(&server_address)
+            .worker_target(old_worker.worker.worker_target().clone()),
+    );
+    client.health_check().expect("Dex health check");
+    let id = flow_id("rust-pull-unknown");
+    client
+        .start_flow(&new_flow, &id, "complete".to_string())
+        .expect("start pull Flow");
+    await_observation(&observations, "old", "WaitFor");
+    await_observation(&observations, "old", "Execute");
+    let new_worker = PullTestWorker::start(
+        Registry::new()
+            .register(new_flow)
+            .expect("register new Flow"),
+        Arc::clone(&cache),
+        &server_address,
+        &new_worker_id,
+    );
+    assert_eq!(
+        "new",
+        client
+            .invoke_rpc_without_input(&id, GET_WORKER)
+            .expect("reassign pull RPC")
+    );
+    await_observation(&observations, "new", "RPC");
+    client
+        .stop_flow(&id, StopFlowOptions::cancel())
+        .expect("stop pull Flow");
+    first_gate.release();
+    drop(new_worker);
+    drop(old_worker);
+    drop(client);
+    cache.close().expect("close pull cache");
+}
+
+#[test]
+#[ignore = "requires dexcli dev"]
+fn pull_worker_test_reassigns_unregistered_start_step() {
+    let server_address =
+        std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
+    let cache_directory = tempfile::tempdir().expect("create pull cache directory");
+    let cache = Arc::new(
+        BlobCache::open(
+            BlobCacheConfig::new(cache_directory.path(), 64 * 1024 * 1024, 10_000)
+                .expect("cache config"),
+        )
+        .expect("open cache"),
+    );
+    let (observed, observations) = mpsc::channel();
+    let first_gate = Arc::new(Gate::new());
+    let second_gate = Arc::new(Gate::new());
+    second_gate.release();
+    let old_flow = OldPullFlow(PullFlow::new(
+        "old",
+        observed.clone(),
+        Arc::clone(&first_gate),
+        Arc::clone(&second_gate),
+    ));
+    let new_flow = NewStartPullFlow(PullFlow::new("new", observed, first_gate, second_gate));
+    let old_worker_id = format!("pull-rust-old-step-{}", uuid::Uuid::new_v4());
+    let new_worker_id = format!("pull-rust-new-step-{}", uuid::Uuid::new_v4());
+    let old_worker = PullTestWorker::start(
+        Registry::new()
+            .register(old_flow)
+            .expect("register old Flow"),
+        Arc::clone(&cache),
+        &server_address,
+        &old_worker_id,
+    );
+    let client = Client::new(
+        Registry::new()
+            .register(NewStartPullFlow(new_flow.0.clone()))
+            .expect("register client Flow"),
+        Arc::clone(&cache),
+        ClientOptions::new()
+            .server_address(&server_address)
+            .worker_target(old_worker.worker.worker_target().clone()),
+    );
+    client.health_check().expect("Dex health check");
+    let id = flow_id("rust-pull-unknown-step");
+    client
+        .start_flow(&new_flow, &id, "complete".to_string())
+        .expect("start pull Flow");
+    let new_worker = PullTestWorker::start(
+        Registry::new()
+            .register(new_flow)
+            .expect("register new Flow"),
+        Arc::clone(&cache),
+        &server_address,
+        &new_worker_id,
+    );
+    assert_eq!(
+        "complete",
+        client
+            .wait_for_flow_with_timeout(&id, Duration::from_secs(30))
+            .expect("complete pull Flow")
+            .single_output::<String>()
+            .expect("pull result")
+    );
+    await_observation(&observations, "new", "SecondWaitFor");
+    await_observation(&observations, "new", "SecondExecute");
+    drop(new_worker);
+    drop(old_worker);
+    drop(client);
     cache.close().expect("close pull cache");
 }
 

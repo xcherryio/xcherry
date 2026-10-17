@@ -114,6 +114,25 @@ class PullFlow(Flow[str]):
         return RPCResult(self.worker_id)
 
 
+class OldPullFlow(PullFlow):
+    def get_flow_type(self) -> str:
+        return "PullFlow"
+
+    def get_steps(self) -> StepList[str]:
+        return StepList.start_step(self.first)
+
+    def get_worker(self, context: Context) -> RPCResult[str]:
+        return RPCResult(self.worker_id)
+
+
+class NewStartPullFlow(PullFlow):
+    def get_flow_type(self) -> str:
+        return "PullFlow"
+
+    def get_steps(self) -> StepList[str]:
+        return StepList.start_step(self.second)
+
+
 class PullSubFlowStep(Step[str]):
     def __init__(self, child: PullFlow) -> None:
         self.child = child
@@ -248,6 +267,76 @@ def test_pull_worker_sticky_rpc_stop_drain_and_push() -> None:
         worker_a.close()
         if worker_b is not None:
             worker_b.close()
+
+
+def test_pull_worker_reassigns_unregistered_rpc() -> None:
+    server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
+    observations: queue.Queue[tuple[str, str]] = queue.Queue()
+    first_gate = threading.Event()
+    old_flow = OldPullFlow("old", observations, first_gate, threading.Event())
+    new_flow = PullFlow("new", observations, threading.Event(), threading.Event())
+    new_flow.second.gate.set()
+    old_worker = PullWorkerHarness(
+        old_flow, server_address, unique_id("python-pull-old")
+    )
+    new_worker: PullWorkerHarness | None = None
+    client = Client(
+        Registry([new_flow]),
+        old_worker.cache,
+        ClientOptions(server_address, old_worker.worker.worker_target),
+    )
+    try:
+        flow_id = unique_id("python-pull-unknown")
+        client.start_flow(new_flow, flow_id, "complete")
+        assert observations.get(timeout=20) == ("old", "first_wait_for")
+        assert observations.get(timeout=20) == ("old", "first_execute")
+        new_worker = PullWorkerHarness(
+            new_flow, server_address, unique_id("python-pull-new")
+        )
+        assert client.invoke_rpc(new_flow.get_worker, flow_id) == "new"
+        client.stop_flow(flow_id)
+    finally:
+        first_gate.set()
+        client.close()
+        old_worker.close()
+        if new_worker is not None:
+            new_worker.close()
+
+
+def test_pull_worker_reassigns_unregistered_start_step() -> None:
+    server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
+    observations: queue.Queue[tuple[str, str]] = queue.Queue()
+    first_gate = threading.Event()
+    second_gate = threading.Event()
+    second_gate.set()
+    old_flow = OldPullFlow("old", observations, first_gate, second_gate)
+    new_flow = NewStartPullFlow("new", observations, first_gate, second_gate)
+    old_worker = PullWorkerHarness(
+        old_flow, server_address, unique_id("python-step-old")
+    )
+    new_worker: PullWorkerHarness | None = None
+    client = Client(
+        Registry([new_flow]),
+        old_worker.cache,
+        ClientOptions(server_address, old_worker.worker.worker_target),
+    )
+    try:
+        flow_id = unique_id("python-pull-unknown-step")
+        client.start_flow(new_flow, flow_id, "complete")
+        new_worker = PullWorkerHarness(
+            new_flow, server_address, unique_id("python-step-new")
+        )
+        assert (
+            client.wait_for_flow(flow_id, timedelta(seconds=30)).single_output(str)
+            == "complete"
+        )
+        assert observations.get(timeout=20) == ("new", "second_wait_for")
+        assert observations.get(timeout=20) == ("new", "second_execute")
+    finally:
+        client.close()
+        old_worker.close()
+        if new_worker is not None:
+            new_worker.close()
 
 
 def test_async_pull_worker_handles_flow() -> None:

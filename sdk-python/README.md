@@ -84,6 +84,13 @@ max_concurrent_tasks)` streams because busy streams are replaced with idle
 streams and retained after tasks finish. Size these options for the server's
 per-Worker stream cap (256 by default).
 
+The Worker rejects an unregistered Step or RPC by name. Dex retries that task
+on another pull Worker without consuming a Step attempt, including when the
+Flow was sticky to the rejecting Worker. If no capable Worker accepts it within
+the server's dispatch wait (10 seconds by default, or 3 seconds in local mode),
+the Step fails with the unknown name. Older SDKs continue to return their
+ordinary handler error.
+
 The generated `app_worker_id` uses the first nonempty `DEX_WORKER_INSTANCE`,
 `POD_NAME`, `HOSTNAME`, or system hostname, plus eight random base32 characters.
 An override must uniquely identify one Worker process and change after restart.

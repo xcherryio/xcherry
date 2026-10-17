@@ -82,6 +82,7 @@ class PullWorkerRuntime:
         app_worker_id: str | None = None,
         credential_runner: AsyncCredentialRunner | None = None,
     ) -> None:
+        self._registry = registry
         self.app_worker_id = app_worker_id or resolve_app_worker_id(registry, options)
         self.flow_types = sorted(registry._registered_flows)
         self.queues = (self.app_worker_id, *self.flow_types)
@@ -102,6 +103,26 @@ class PullWorkerRuntime:
         self._streams: set[PullStream] = set()
         self._busy_tasks = 0
         self._unsupported_logged = False
+
+    def unknown_task_reason(
+        self, task: pb.PollWorkerTask
+    ) -> pb.PollWorkerTaskRejectReason | None:
+        kind = task.WhichOneof("request")
+        if kind == "rpc":
+            flow = self._registry._registered_flows.get(task.rpc.flow_type)
+            if flow is None or task.rpc.rpc_name not in flow.rpcs:
+                return pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC
+        elif kind in ("wait_for", "execute"):
+            request = task.wait_for if kind == "wait_for" else task.execute
+            flow = self._registry._registered_flows.get(request.flow_type)
+            if flow is None:
+                return pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+            if kind == "execute" and request.step_type == "sys:timeout_handler":
+                if not flow.has_timeout_handler:
+                    return pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+            elif request.step_type not in flow.steps:
+                return pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP
+        return None
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -443,6 +464,10 @@ class PullStream:
                     pass
 
     async def _start_task(self, task: pb.PollWorkerTask) -> None:
+        unknown_reason = self.runtime.unknown_task_reason(task)
+        if unknown_reason is not None:
+            await self._reject_task(task, unknown_reason)
+            return
         if self.is_busy or self.is_draining or not self.runtime.accept_task():
             await self._reject_task(task)
             return
@@ -458,12 +483,16 @@ class PullStream:
             )
         self.runtime.signal()
 
-    async def _reject_task(self, task: pb.PollWorkerTask) -> None:
+    async def _reject_task(
+        self,
+        task: pb.PollWorkerTask,
+        reason: pb.PollWorkerTaskRejectReason = pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
+    ) -> None:
         await self._send(
             pb.PollWorkerTaskRequest(
                 reject=pb.PollWorkerTaskReject(
                     task_id=task.task_id,
-                    reason=pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY,
+                    reason=reason,
                 )
             )
         )

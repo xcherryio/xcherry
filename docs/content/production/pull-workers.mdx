@@ -258,6 +258,17 @@ including up to 5 seconds for the sticky queue. Shorter waits apply to calls
 that need to preserve time for execution. See [Server operation](/production/server-operations#pull-worker-routing)
 for the wait settings.
 
+When a pull Worker has the Flow type but lacks the requested Step type or RPC
+name, it declines the task before running a handler. Dex immediately tries the
+Flow type queue and excludes that Worker from this dispatch, even if the Flow
+was sticky to it. This reassignment does not consume a Step attempt. If no
+capable Worker accepts within the dispatch wait, the Step follows its failure
+and retry policy with an error that names the Step or RPC. An RPC caller gets
+the named error directly. The default wait is 10 seconds for a regular Step
+and 3 seconds for a local Step. Older SDKs that return a Worker error instead
+of a rejection keep their existing behavior. Push Workers still return their
+ordinary missing-name error.
+
 Delivery is at least once. A call can be assigned again when its Worker
 disconnects before Dex receives any output. Make external side effects
 idempotent, for example by using the Flow ID and Step execution ID as an

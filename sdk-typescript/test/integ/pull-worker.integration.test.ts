@@ -110,6 +110,28 @@ class PullFlow implements Flow<string> {
   }
 }
 
+class OldPullFlow implements Flow<string> {
+  private readonly first: FirstPullStep;
+
+  public constructor(observations: Observation[], firstGate: Promise<void>) {
+    this.first = new FirstPullStep("old", observations, firstGate);
+  }
+
+  public getFlowType(): string { return "PullFlow"; }
+  public getSteps() { return StepList.startStep(this.first); }
+}
+
+class NewStartPullFlow implements Flow<string> {
+  private readonly second: SecondPullStep;
+
+  public constructor(observations: Observation[]) {
+    this.second = new SecondPullStep("new", observations, Promise.resolve());
+  }
+
+  public getFlowType(): string { return "PullFlow"; }
+  public getSteps() { return StepList.startStep(this.second); }
+}
+
 class ProbeStep implements Step<string> {
   public readonly inputCodec = stringCodec;
   public constructor(private readonly workerID: string) {}
@@ -242,6 +264,77 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
     await workerA.close();
     await workerB.close();
     await pushWorker.close();
+    cache.close();
+    rmSync(cacheDirectory, { recursive: true, force: true });
+  }
+});
+
+test("pull Worker reassigns an unregistered RPC from a sticky Worker", async () => {
+  const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
+  const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-unknown-pull-cache-"));
+  const cache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1_024 * 1_024 });
+  const observations: Observation[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const oldFlow = new OldPullFlow(observations, firstGate);
+  const newFlow = new PullFlow("new", observations, Promise.resolve(), Promise.resolve());
+  const oldWorker = new Worker(new Registry([oldFlow]), cache, {
+    serverAddress, pull: { appWorkerID: `typescript-old-${flowId("worker")}` },
+  });
+  const newWorker = new Worker(new Registry([newFlow]), cache, {
+    serverAddress, pull: { appWorkerID: `typescript-new-${flowId("worker")}` },
+  });
+  const client = new Client(new Registry([newFlow]), cache, {
+    serverAddress, workerTarget: oldWorker.workerTarget,
+  });
+  try {
+    await oldWorker.start();
+    const id = flowId("pull-unknown-typescript");
+    await client.startFlow(newFlow, id, "complete");
+    await until(() => observations.some((entry) => entry.workerID === "old" && entry.method === "Execute"));
+    await newWorker.start();
+    assert.equal(await client.invokeRPC(newFlow.getWorker, id), "new");
+    await client.stopFlow(id);
+  } finally {
+    releaseFirst();
+    await client.close();
+    await oldWorker.close();
+    await newWorker.close();
+    cache.close();
+    rmSync(cacheDirectory, { recursive: true, force: true });
+  }
+});
+
+test("pull Worker reassigns an unregistered starting Step", async () => {
+  const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
+  const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-unknown-step-cache-"));
+  const cache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1_024 * 1_024 });
+  const observations: Observation[] = [];
+  const oldFlow = new OldPullFlow(observations, Promise.resolve());
+  const newFlow = new NewStartPullFlow(observations);
+  const oldWorker = new Worker(new Registry([oldFlow]), cache, {
+    serverAddress, pull: { appWorkerID: `typescript-old-step-${flowId("worker")}` },
+  });
+  const newWorker = new Worker(new Registry([newFlow]), cache, {
+    serverAddress, pull: { appWorkerID: `typescript-new-step-${flowId("worker")}` },
+  });
+  const client = new Client(new Registry([newFlow]), cache, {
+    serverAddress, workerTarget: oldWorker.workerTarget,
+  });
+  try {
+    await oldWorker.start();
+    const id = flowId("pull-unknown-step-typescript");
+    await client.startFlow(newFlow, id, "complete");
+    await newWorker.start();
+    assert.equal(await client.waitForFlow(id, 30_000).then((result) => result.singleOutput(stringCodec)), "complete");
+    assert.deepEqual(observations, [
+      { workerID: "new", method: "SecondWaitFor" },
+      { workerID: "new", method: "SecondExecute" },
+    ]);
+  } finally {
+    await client.close();
+    await oldWorker.close();
+    await newWorker.close();
     cache.close();
     rmSync(cacheDirectory, { recursive: true, force: true });
   }
