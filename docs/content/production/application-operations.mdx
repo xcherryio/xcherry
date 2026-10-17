@@ -166,6 +166,11 @@ open Flow can still call it. Deploy the new definition alongside the old one,
 route only new-version Flows to it, and keep the old implementation available
 through retries and any approved Time Travel recovery.
 
+During a rolling deployment, a pull Worker that lacks a requested Step or RPC
+can hand the call to another capable Worker without consuming a Step attempt.
+This requires a Dex Server release that supports pull unknown-name reassignment.
+Older Servers keep the previous not-registered Worker error behavior.
+
 Before removing the old definition, search for the legacy Flow type and confirm
 that no running, waiting, retrying, or recoverable terminal Flow needs it. Keep
 the search result with the change record. The exact query depends on your

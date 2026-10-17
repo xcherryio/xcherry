@@ -380,6 +380,7 @@ impl PullStream {
             Err(status) => return (false, false, Err(status)),
         };
         let mut was_registered = false;
+        let mut supports_unknown_name_rejection = false;
         let mut is_draining = false;
         let mut active: Option<ActiveTask> = None;
         loop {
@@ -390,7 +391,7 @@ impl PullStream {
                         Ok(Some(response)) => {
                             if !was_registered {
                                 match response.frame {
-                                    Some(ResponseFrame::Registered(_)) => { was_registered = true; self.shared.notify.notify_one(); }
+                                    Some(ResponseFrame::Registered(registered)) => { supports_unknown_name_rejection = registered.supports_unknown_name_rejection; was_registered = true; self.shared.notify.notify_one(); }
                                     Some(ResponseFrame::Reconnect(_)) => return (false, true, Ok(())),
                                     _ => return (false, false, Err(Status::internal("Worker task stream did not register"))),
                                 }
@@ -398,7 +399,7 @@ impl PullStream {
                             }
                             match response.frame {
                                 Some(ResponseFrame::Task(task)) => {
-                                    let rejection = self.dispatcher.unknown_task_reason(&task).or_else(|| {
+                                    let rejection = supports_unknown_name_rejection.then(|| self.dispatcher.unknown_task_reason(&task)).flatten().or_else(|| {
                                         (active.is_some() || is_draining || !self.shared.try_accept(self.stream_id))
                                             .then_some(PollWorkerTaskRejectReason::NoCapacity)
                                     });
@@ -1074,7 +1075,9 @@ mod tests {
             let pongs = Arc::clone(&self.pongs);
             tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
-                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection: false,
+                    })),
                 };
                 if sender.send(Ok(registered)).await.is_err() {
                     return;
@@ -1207,7 +1210,9 @@ mod tests {
             let rejected = self.rejected.clone();
             tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
-                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection: false,
+                    })),
                 };
                 if sender.send(Ok(registered)).await.is_err() {
                     return;
@@ -1381,7 +1386,9 @@ mod tests {
             };
             let (sender, receiver) = mpsc::channel(4);
             let registered = PollWorkerTaskResponse {
-                frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {})),
+                frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                    supports_unknown_name_rejection: false,
+                })),
             };
             sender
                 .send(Ok(registered))

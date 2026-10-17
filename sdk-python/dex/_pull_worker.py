@@ -270,6 +270,7 @@ class PullStream:
         self._send_lock = asyncio.Lock()
         self._is_reconnecting = False
         self._deadline_handle: asyncio.TimerHandle | None = None
+        self._supports_unknown_name_rejection = False
 
     def on_done(self, completed: asyncio.Task[None]) -> None:
         self.runtime._stream_done(self, completed)
@@ -322,6 +323,7 @@ class PullStream:
     async def _poll(self) -> bool:
         if self.runtime.is_stopping:
             return False
+        self._supports_unknown_name_rejection = False
         if self.runtime._credential_runner is None:
             self._call = self.stub.PollWorkerTask()
         else:
@@ -385,6 +387,7 @@ class PullStream:
                         return False
                     if kind != "registered":
                         raise RuntimeError("Worker task stream did not register")
+                    self._supports_unknown_name_rejection = frame.registered.supports_unknown_name_rejection
                     was_registered = True
                     continue
                 if kind == "task":
@@ -464,7 +467,11 @@ class PullStream:
                     pass
 
     async def _start_task(self, task: pb.PollWorkerTask) -> None:
-        unknown_reason = self.runtime.unknown_task_reason(task)
+        unknown_reason = (
+            self.runtime.unknown_task_reason(task)
+            if self._supports_unknown_name_rejection
+            else None
+        )
         if unknown_reason is not None:
             await self._reject_task(task, unknown_reason)
             return

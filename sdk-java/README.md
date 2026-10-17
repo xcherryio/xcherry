@@ -355,9 +355,10 @@ count. A zero option value selects its default.
 The Worker rejects an unregistered Step or RPC by name. Dex retries that task
 on another pull Worker without consuming a Step attempt, including when the
 Flow was sticky to the rejecting Worker. If no capable Worker accepts it within
-the server's dispatch wait (10 seconds by default, or 3 seconds in local mode),
-the Step fails with the unknown name. Older SDKs continue to return their
-ordinary handler error.
+the server's dispatch wait (10 seconds by default, or the local Step attempt),
+the Step follows its failure and retry policy; an RPC caller receives the named
+error. This reassignment requires a Dex Server that supports it. Against older
+Servers, the Worker returns the not-registered error as before.
 
 The default app Worker ID uses `DEX_WORKER_INSTANCE`, `POD_NAME`, `HOSTNAME`, or
 the local hostname, plus eight random base32 characters. If the identity cannot
