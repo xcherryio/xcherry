@@ -49,8 +49,8 @@ Verify on the long-lived `dexcli dev` stack started during implementation:
    a connector at v0.21.0 or later needs `sdkgo` v0.28.0 or later to read it
    (report an older pin as a blocker; see [Connector architecture](connector-architecture.md#local-development-configuration));
 4. start Runs through the real entry point: a Connector Trigger, the
-   application API, Dex Web **Start Flow** (which asks for the reachable Worker
-   address in local mode), or `dexcli flow start`;
+   application API, Dex Web **Start Flow** (which can select a reachable Worker
+   address or a Pull Worker in local mode), or `dexcli flow start`;
 5. exercise Work Queue discovery with **Working as**, each Action and editable
    field, waits, Timers, retries and terminal outcomes;
 6. diagnose with Dex Web and the bounded read-only `dexcli flow summary`,
@@ -80,8 +80,8 @@ schema version, or a source read failure returns a 503 and fails `/readyz`, and
 two valid definitions for one Flow type make the source invalid. After
 publishing, confirm that `/readyz` reports the expected definition count and
 `GET /api/v2/catalog` lists every Flow type. See the [Dex Web
-definition directory](https://github.com/superdurable/dex/blob/server/v1.11.0/web/README.md#run-through-dexcli)
-and [Dex Server image](https://github.com/superdurable/dex/blob/server/v1.11.0/web/README.md#run-through-the-dex-server-image)
+definition directory](https://github.com/superdurable/dex/blob/server/v1.12.0/web/README.md#run-through-dexcli)
+and [Dex Server image](https://github.com/superdurable/dex/blob/server/v1.12.0/web/README.md#run-through-the-dex-server-image)
 contracts.
 
 ## Deployment, only when requested

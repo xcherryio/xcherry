@@ -1,8 +1,8 @@
 # Python handbook
 
-The SDK API reference uses the [released v1.11.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
+The SDK API reference uses the [released v1.12.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
 
-Use this page first for Python. The [baseline project](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/pyproject.toml) selects `dex-python-sdk==1.10.1`; check `pyproject.toml`/lockfile and installed metadata before relying on baseline syntax.
+Use this page first for Python. The [baseline project](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/pyproject.toml) selects `dex-python-sdk==1.11.0`; check `pyproject.toml`/lockfile and installed metadata before relying on baseline syntax.
 
 ## Runtime choice
 
@@ -23,9 +23,9 @@ Defaults use Dex `localhost:8801`, Worker `127.0.0.1:8803`, and HTTP `127.0.0.1:
 
 ## Pull Workers and Dex credentials
 
-Pass `WorkerOptions(pull=PullWorkerOptions(max_concurrent_tasks=8))` to `Worker` or `AsyncWorker` for outbound polling, with no bind address or listening target. Advertise `worker.worker_target` or `WorkerTarget(pull=True)` through `ClientOptions.worker_target` or a StartFlow or SubFlow FlowConfig override. `PullWorkerOptions` also has `idle_streams_per_queue`, `app_worker_id`, and `stop_drain_timeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. Change an explicitly assigned app Worker ID after restart. The synchronous and async Workers share the [pull Worker guarantees](../core/pull-workers.md), including Step retries, heartbeats, stream capacity, and Stop. [Released Python options](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/dex/worker_options.py) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/production/pull_workers.py)
+Pass `WorkerOptions(pull=PullWorkerOptions(max_concurrent_tasks=8))` to `Worker` or `AsyncWorker` for outbound polling, with no bind address or listening target. Advertise `worker.worker_target` or `WorkerTarget(pull=True)` through `ClientOptions.worker_target` or a StartFlow or SubFlow FlowConfig override. `PullWorkerOptions` also has `idle_streams_per_queue`, `app_worker_id`, and `stop_drain_timeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. Change an explicitly assigned app Worker ID after restart. With Server and Python SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. The synchronous and async Workers share the [pull Worker guarantees](../core/pull-workers.md), including Step retries, heartbeats, stream capacity, and Stop. [Released Python options](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/dex/worker_options.py) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/production/pull_workers.py)
 
-Set `credential` separately in ClientOptions and WorkerOptions when Dex authentication is enabled. `FileCredential(path)` reads a rotating bearer token. A custom `Credential.token()` may return an awaitable for async callers; synchronous callers require a string. Since SDK v1.11.0, an `async def` token runs on the event loop. A synchronous token called from the async API runs once in a lazy, SDK-owned, four-thread executor; closing the Client or Worker does not wait for a blocked call, so make lookups return promptly. A token error fails the call before it reaches Dex. Client calls raise the credential's exception unchanged, while Worker startup may wrap it. Pull streams read the token when opened or reconnected, and stopping a Worker cancels a pending lookup. Protect the plaintext connection. [Released Python credentials](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/dex/credential.py)
+Set `credential` separately in ClientOptions and WorkerOptions when Dex authentication is enabled. `FileCredential(path)` reads a rotating bearer token. A custom `Credential.token()` may return an awaitable for async callers; synchronous callers require a string. Since SDK v1.11.0, an `async def` token runs on the event loop. A synchronous token called from the async API runs once in a lazy, SDK-owned, four-thread executor; closing the Client or Worker does not wait for a blocked call, so make lookups return promptly. A token error fails the call before it reaches Dex. Client calls raise the credential's exception unchanged, while Worker startup may wrap it. Pull streams read the token when opened or reconnected, and stopping a Worker cancels a pending lookup. Protect the plaintext connection. [Released Python credentials](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/dex/credential.py)
 
 ## Connector runtime support
 
@@ -64,7 +64,7 @@ decorators for the Go-only analyzer contract.
 
 ## Minimal Flow
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/primitives/flow/example_flow.py)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/primitives/flow/example_flow.py)
 <!-- dex-source: examples/python/dex_examples/primitives/flow/example_flow.py -->
 ```python
 status = Attribute("status", str)
@@ -87,7 +87,7 @@ Instantiate Steps once per Flow object and return those same instances in `StepL
 
 A synchronous Step directly returns a decision:
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/primitives/flow/example_flow.py)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/primitives/flow/example_flow.py)
 <!-- dex-source: examples/python/dex_examples/primitives/flow/example_flow.py -->
 ```python
 class Finish(Step[int]):
@@ -98,7 +98,7 @@ class Finish(Step[int]):
 
 ## Registry, Worker, Client
 
-The async [application composition](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/app.py) shows Flow construction, Registry, BlobCache, AsyncClient, and AsyncWorker. The [sync example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/sync-python/sync_examples/app.py) shows the synchronous counterpart. Inject services in constructors; use a provider for a Client needed after circular bootstrap.
+The async [application composition](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/app.py) shows Flow construction, Registry, BlobCache, AsyncClient, and AsyncWorker. The [sync example](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/sync-python/sync_examples/app.py) shows the synchronous counterpart. Inject services in constructors; use a provider for a Client needed after circular bootstrap.
 
 ## Route by task
 

@@ -1,6 +1,6 @@
 # Dex Web v2 and FDG 2.0
 
-Reference capability baselines: Dex Server `v1.11.0`, Dex CLI `v1.11.0`, and
+Reference capability baselines: Dex Server `v1.12.0`, Dex CLI `v1.12.0`, and
 the SDK source baseline in [bundle-baselines.md](../../dex-sdk/references/core/bundle-baselines.md).
 These validate the guidance, not an instruction to upgrade an application.
 An application retains its pinned Server, CLI, and Go SDK versions unless the
@@ -54,13 +54,14 @@ A deployed Dex Web sits behind a trusted application boundary that authenticates
 ## Start Flow
 
 The v2 Run workspace shows **Start Flow** when the selected definition has a
-supported typed Start schema. The operator enters a Flow ID, a reachable
-plaintext Worker gRPC address, and the typed input. Dex Web checks the Worker
-`host:port` with a TCP connection when the address loses focus and again before
-starting, and an unreachable port blocks the start until the operator selects
-**Bypass worker health check**. The browser cannot supply Step options or
-headless routing; `web.startFlowWorkerTargetHeadless` sets the routing for every
-Flow started from that Dex Web.
+supported typed Start schema. The operator enters a Flow ID, a Worker target,
+and the typed input. Choose **Worker address** for a reachable plaintext Worker
+gRPC address, or **Pull Worker** for a Worker connected to Dex Server. Dex Web
+checks an address target with a TCP connection when it loses focus and again
+before starting; an unreachable port blocks the start until the operator selects
+**Bypass worker health check**. A pull target has no address to check. The
+browser cannot supply Step options or choose headless routing;
+`web.startFlowWorkerTargetHeadless` applies to address targets.
 
 Dex Web validates input and derives `skipWaitFor` from the validated Start
 phase: `execute` skips WaitFor, while `wait_for+execute` retains it. Missing,
@@ -74,9 +75,18 @@ rejects a second submission of the same Flow ID. That rejection is not a
 recovery path. After an uncertain start response, read the Flow ID with the
 bounded read-only `dexcli flow summary` before submitting again, and treat a
 different Flow ID as a different business operation. Definition revision,
-Worker address, and typed input errors must fail with their actual coded
-errors. Connector Trigger applications still use the real Trigger for their
-Trigger acceptance path.
+Worker target, and typed input errors must fail with their actual coded errors.
+Connector Trigger applications still use the real Trigger for their Trigger
+acceptance path.
+
+**POST /api/v2/start** accepts **workerTargetAddress** or
+**workerTargetPull: true**, but not both. If neither is provided,
+**web.startFlowWorkerTargetPull** selects a pull target when true; its default is
+false, and an explicit address still works. **workerTargetPull: false** requires
+an address even when the pull default is enabled. The environment equivalent is
+**DEX_WEB_START_FLOW_WORKER_TARGET_PULL**. Dex Web does not check that a pull
+Worker is currently registered before starting because registration can change
+before dispatch.
 
 Observed with Dex CLI v0.13.8 and Go SDK v0.12.1:
 

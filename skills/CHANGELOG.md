@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.0 - 2026-10-17
+
+- Advance the SDK, Server, and CLI baselines to the published Dex 1.12.0 tags and refresh every pinned Dex source link. The example dependency manifests at those tags select SDK 1.11.0; application lockfiles remain authoritative.
+- Document pull Worker routing in the core and all five language references: immediate Flow type fallback when the prior app Worker ID has no connected streams; capability-gated rejection of an unregistered Step type or RPC name before application code; the 10-second regular and RPC wait, 3-second local Step wait, named Step failure, named RPC FailedPrecondition, and rolling-deployment compatibility rule. Add corresponding production and real-Server integration scenarios.
+- Preserve SubFlow start rejection detail from WaitFor in error handling, and update App Builder guidance for pull Worker deployments and Dex Web v2 Start Flow targets, including the pull target default and request fields. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.40.0.
+
 ## 0.39.0 - 2026-10-16
 
 - Advance the SDK, Server, and CLI baselines to the published Dex 1.11.0 tags and refresh pinned Dex source links, including the Go pull Worker example's new `production/pull-workers` path. The example manifests at those tags select SDK 1.10.1; application lockfiles remain authoritative.

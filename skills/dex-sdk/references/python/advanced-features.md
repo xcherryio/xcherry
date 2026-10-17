@@ -6,13 +6,13 @@ Ordinary Attributes and Channel sizes load automatically. AttributeMap entries a
 
 Declare Attribute/map-instance locks for conflicting handlers. Lock narrowly; keep network I/O outside transaction windows. Treat `RpcLockConflictError` as contention.
 
-Decorator `RPCOptions` fixes timeout, locks, transactionality, and loads at registration. Frozen `RPCInvokeOptions` adds only `lock_attribute_map_instances`, `load_attribute_map_instances`, and `load_channel_map_instances` for one call. Pass it through the keyword-only `options` argument on both `Client.invoke_rpc` and `AsyncClient.invoke_rpc`. A read-modify-write includes the same `attribute_map.lock(instance)` and `attribute_map.load(instance)` selection. The Client unions, sorts, and deduplicates both layers and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/patterns/hash-partitioned-attribute-map/controller.py).
+Decorator `RPCOptions` fixes timeout, locks, transactionality, and loads at registration. Frozen `RPCInvokeOptions` adds only `lock_attribute_map_instances`, `load_attribute_map_instances`, and `load_channel_map_instances` for one call. Pass it through the keyword-only `options` argument on both `Client.invoke_rpc` and `AsyncClient.invoke_rpc`. A read-modify-write includes the same `attribute_map.lock(instance)` and `attribute_map.load(instance)` selection. The Client unions, sorts, and deduplicates both layers and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/patterns/hash-partitioned-attribute-map/controller.py).
 
 ## Sync generator versus async coroutine
 
 A synchronous streaming Execute yields all `StepOutput` values and returns the decision. An async Execute returns a decision and awaits heartbeat. Buffered Stream `write` is synchronous in async code.
 
-[Pinned SDK contract](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/tests/typecheck_contracts.py)
+[Pinned SDK contract](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/tests/typecheck_contracts.py)
 <!-- dex-source: sdk-python/tests/typecheck_contracts.py -->
 ```python
 class StreamingStep(Step[Input]):
@@ -33,7 +33,7 @@ class StreamingStep(Step[Input]):
 
 Set heartbeat timeout for long work. Decode a prior checkpoint only when present, resume from externally committed progress, and keep emitting. Cancellation is cooperative; check `context.is_cancellation_requested()` in bounded loops and cancel external awaits safely.
 
-Sync durability waits for persistence acknowledgement. Async can replay recently acknowledged attempts; use only for idempotent work and test replay. See [durability runnable](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/primitives/durability/durability_flow.py).
+Sync durability waits for persistence acknowledgement. Async can replay recently acknowledged attempts; use only for idempotent work and test replay. See [durability runnable](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/primitives/durability/durability_flow.py).
 
 Set a short-operation Flow default with `StartFlowOptions(config_override=FlowConfig(step_durability=StepDurability.ASYNC))`. Leave ordinary methods at `StepDurability.DEFAULT`. Override known long methods with `StepOptions(wait_for_durability=StepDurability.SYNC)` or `execute_durability=StepDurability.SYNC`; the two phases are independent.
 
