@@ -56,16 +56,21 @@ func InvokeWorkerRpc(
 		panic("InvokeWorkerRpc requires non-nil config sections")
 	}
 	workerInput := req.GetInput()
+	attributes := rpcPrep.GetAttributes()
+	loadedChannelMessages := rpcPrep.GetLoadedChannelMessages()
 	if !blobStoreCfg.EffectiveLazyLoading() {
-		if err := blobstore.HydrateKVs(ctx, req.GetFlowId(), rpcPrep.GetAttributes(), blobStore); err != nil {
+		var err error
+		attributes, err = blobstore.HydrateKVsCopy(ctx, req.GetFlowId(), attributes, blobStore)
+		if err != nil {
 			return nil, "", err
 		}
-		if err := blobstore.HydrateChannelValues(
+		loadedChannelMessages, err = blobstore.HydrateChannelValuesCopy(
 			ctx,
 			req.GetFlowId(),
-			rpcPrep.GetLoadedChannelMessages(),
+			loadedChannelMessages,
 			blobStore,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, "", err
 		}
 		if workerInput != nil {
@@ -93,7 +98,7 @@ func InvokeWorkerRpc(
 	defer cancel()
 
 	// Hydrate into new KVs so rpcPrep keeps hard-delete references only.
-	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetFlowId(), rpcPrep.GetAttributes(), blobStore)
+	attributes, err := blobstore.HydrateHardDeleteKVs(ctx, req.GetFlowId(), attributes, blobStore)
 	if err != nil {
 		return nil, "", err
 	}
@@ -114,7 +119,7 @@ func InvokeWorkerRpc(
 		Input:                       workerInput,
 		Attributes:                  attributes,
 		ChannelInfos:                channelInfos,
-		LoadedChannelMessages:       rpcPrep.GetLoadedChannelMessages(),
+		LoadedChannelMessages:       loadedChannelMessages,
 		LoadedAttributeMapInstances: rpcPrep.GetLoadedAttributeMapInstances(),
 		LoadedChannelNames:          rpcPrep.GetLoadedChannelNames(),
 		LoadedChannelMapInstances:   rpcPrep.GetLoadedChannelMapInstances(),

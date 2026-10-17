@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/common/utils"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -242,6 +243,30 @@ func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore B
 	return nil
 }
 
+// HydrateKVsCopy returns KVs with blob-backed Values hydrated without changing kvs.
+func HydrateKVsCopy(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore BlobStore) ([]*dexpb.KV, error) {
+	var hydratedKVs []*dexpb.KV
+	for index, kv := range kvs {
+		if kv == nil || isHardDeleteKV(kv) || !hasBlobValue(kv.GetValue()) {
+			continue
+		}
+		if hydratedKVs == nil {
+			hydratedKVs = append([]*dexpb.KV(nil), kvs...)
+		}
+		value, err := HydrateValueCopy(ctx, flowID, kv.GetValue(), blobStore)
+		if err != nil {
+			return nil, err
+		}
+		hydratedKV := utils.ShallowCopyMessage(kv)
+		hydratedKV.Value = value
+		hydratedKVs[index] = hydratedKV
+	}
+	if hydratedKVs == nil {
+		return kvs, nil
+	}
+	return hydratedKVs, nil
+}
+
 // HydrateHardDeleteKVs returns kvs with every hard-delete Attribute replaced by a new hydrated KV.
 // It never mutates kvs or their Values, so callers can keep the input free of payloads.
 // A deleted hard-delete object omits its Attribute. Other KVs keep their original pointers.
@@ -314,6 +339,53 @@ func HydrateChannelValues(
 	return nil
 }
 
+// HydrateChannelValuesCopy returns Channel Values with blob-backed messages hydrated without changing channels.
+func HydrateChannelValuesCopy(
+	ctx context.Context,
+	flowID string,
+	channels map[string]*dexpb.ChannelValues,
+	blobStore BlobStore,
+) (map[string]*dexpb.ChannelValues, error) {
+	var hydratedChannels map[string]*dexpb.ChannelValues
+	for channelName, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		var hydratedMessages []*dexpb.ChannelMessage
+		for index, message := range channel.GetMessages() {
+			if message == nil || !hasBlobValue(message.GetValue()) {
+				continue
+			}
+			if hydratedMessages == nil {
+				hydratedMessages = append([]*dexpb.ChannelMessage(nil), channel.GetMessages()...)
+			}
+			value, err := HydrateValueCopy(ctx, flowID, message.GetValue(), blobStore)
+			if err != nil {
+				return nil, err
+			}
+			hydratedMessage := utils.ShallowCopyMessage(message)
+			hydratedMessage.Value = value
+			hydratedMessages[index] = hydratedMessage
+		}
+		if hydratedMessages == nil {
+			continue
+		}
+		if hydratedChannels == nil {
+			hydratedChannels = make(map[string]*dexpb.ChannelValues, len(channels))
+			for name, values := range channels {
+				hydratedChannels[name] = values
+			}
+		}
+		hydratedChannel := utils.ShallowCopyMessage(channel)
+		hydratedChannel.Messages = hydratedMessages
+		hydratedChannels[channelName] = hydratedChannel
+	}
+	if hydratedChannels == nil {
+		return channels, nil
+	}
+	return hydratedChannels, nil
+}
+
 func HydrateConditionResults(
 	ctx context.Context,
 	flowID string,
@@ -326,6 +398,53 @@ func HydrateConditionResults(
 		}
 	}
 	return nil
+}
+
+// HydrateConditionResultsCopy returns Condition results with blob-backed Values hydrated without changing results.
+func HydrateConditionResultsCopy(
+	ctx context.Context,
+	flowID string,
+	results *dexpb.ConditionResults,
+	blobStore BlobStore,
+) (*dexpb.ConditionResults, error) {
+	if results == nil {
+		return nil, nil
+	}
+	var hydratedResults []*dexpb.ChannelResult
+	for index, result := range results.GetChannelResults() {
+		if result == nil {
+			continue
+		}
+		var hydratedValues []*dexpb.Value
+		for valueIndex, value := range result.GetValues() {
+			if !hasBlobValue(value) {
+				continue
+			}
+			if hydratedValues == nil {
+				hydratedValues = append([]*dexpb.Value(nil), result.GetValues()...)
+			}
+			hydratedValue, err := HydrateValueCopy(ctx, flowID, value, blobStore)
+			if err != nil {
+				return nil, err
+			}
+			hydratedValues[valueIndex] = hydratedValue
+		}
+		if hydratedValues == nil {
+			continue
+		}
+		if hydratedResults == nil {
+			hydratedResults = append([]*dexpb.ChannelResult(nil), results.GetChannelResults()...)
+		}
+		hydratedResult := utils.ShallowCopyMessage(result)
+		hydratedResult.Values = hydratedValues
+		hydratedResults[index] = hydratedResult
+	}
+	if hydratedResults == nil {
+		return results, nil
+	}
+	hydratedConditionResults := utils.ShallowCopyMessage(results)
+	hydratedConditionResults.ChannelResults = hydratedResults
+	return hydratedConditionResults, nil
 }
 
 // HydrateValue hydrates a Flow-owned Value in place.
@@ -362,6 +481,27 @@ func HydrateValue(ctx context.Context, flowID string, value *dexpb.Value, blobSt
 		return nil
 	default:
 		return nil
+	}
+}
+
+// HydrateValueCopy returns a hydrated Value without changing value.
+func HydrateValueCopy(ctx context.Context, flowID string, value *dexpb.Value, blobStore BlobStore) (*dexpb.Value, error) {
+	if value == nil || !hasBlobValue(value) {
+		return value, nil
+	}
+	hydrated := utils.ShallowCopyMessage(value)
+	if err := HydrateValue(ctx, flowID, hydrated, blobStore); err != nil {
+		return nil, err
+	}
+	return hydrated, nil
+}
+
+func hasBlobValue(value *dexpb.Value) bool {
+	switch value.GetKind().(type) {
+	case *dexpb.Value_InternalBlobIdForStringValue, *dexpb.Value_InternalBlobIdForObjValue:
+		return true
+	default:
+		return false
 	}
 }
 

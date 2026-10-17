@@ -16,12 +16,25 @@ import (
 	"time"
 
 	"github.com/superdurable/dex/gen/dexpb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	defaultMaxApiTimeoutSeconds = 60
 )
+
+// ShallowCopyMessage copies every populated top-level field, sharing nested values with message.
+func ShallowCopyMessage[T proto.Message](message T) T {
+	source := message.ProtoReflect()
+	copied := source.New()
+	source.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		copied.Set(field, value)
+		return true
+	})
+	return copied.Interface().(T)
+}
 
 func IsNullValue(value *dexpb.Value) bool {
 	if value == nil {
