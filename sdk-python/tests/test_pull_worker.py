@@ -41,7 +41,9 @@ from dex.flow import Registry
 
 @pytest.fixture(autouse=True)
 def accept_mock_worker_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(PullWorkerRuntime, "unknown_task_reason", lambda self, task: None)
+    monkeypatch.setattr(
+        PullWorkerRuntime, "unknown_task_reason", lambda self, task: None
+    )
 
 
 def test_pull_options_and_targets_validate_conflicts() -> None:

@@ -276,7 +276,9 @@ def test_pull_worker_reassigns_unregistered_rpc() -> None:
     old_flow = OldPullFlow("old", observations, first_gate, threading.Event())
     new_flow = PullFlow("new", observations, threading.Event(), threading.Event())
     new_flow.second.gate.set()
-    old_worker = PullWorkerHarness(old_flow, server_address, unique_id("python-pull-old"))
+    old_worker = PullWorkerHarness(
+        old_flow, server_address, unique_id("python-pull-old")
+    )
     new_worker: PullWorkerHarness | None = None
     client = Client(
         Registry([new_flow]),
@@ -288,7 +290,9 @@ def test_pull_worker_reassigns_unregistered_rpc() -> None:
         client.start_flow(new_flow, flow_id, "complete")
         assert observations.get(timeout=20) == ("old", "first_wait_for")
         assert observations.get(timeout=20) == ("old", "first_execute")
-        new_worker = PullWorkerHarness(new_flow, server_address, unique_id("python-pull-new"))
+        new_worker = PullWorkerHarness(
+            new_flow, server_address, unique_id("python-pull-new")
+        )
         assert client.invoke_rpc(new_flow.get_worker, flow_id) == "new"
         client.stop_flow(flow_id)
     finally:
@@ -307,7 +311,9 @@ def test_pull_worker_reassigns_unregistered_start_step() -> None:
     second_gate.set()
     old_flow = OldPullFlow("old", observations, first_gate, second_gate)
     new_flow = NewStartPullFlow("new", observations, first_gate, second_gate)
-    old_worker = PullWorkerHarness(old_flow, server_address, unique_id("python-step-old"))
+    old_worker = PullWorkerHarness(
+        old_flow, server_address, unique_id("python-step-old")
+    )
     new_worker: PullWorkerHarness | None = None
     client = Client(
         Registry([new_flow]),
@@ -317,7 +323,9 @@ def test_pull_worker_reassigns_unregistered_start_step() -> None:
     try:
         flow_id = unique_id("python-pull-unknown-step")
         client.start_flow(new_flow, flow_id, "complete")
-        new_worker = PullWorkerHarness(new_flow, server_address, unique_id("python-step-new"))
+        new_worker = PullWorkerHarness(
+            new_flow, server_address, unique_id("python-step-new")
+        )
         assert (
             client.wait_for_flow(flow_id, timedelta(seconds=30)).single_output(str)
             == "complete"
