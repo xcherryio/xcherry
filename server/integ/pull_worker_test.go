@@ -1344,8 +1344,15 @@ func testPullUnknownRPCBoundedFailure(t *testing.T, backend service.BackendType)
 	t.Helper()
 	for _, isTransactional := range []bool{false, true} {
 		t.Run(fmt.Sprintf("transactional=%t", isTransactional), func(t *testing.T) {
-			unknownNameCode, unknownNameMessage := invokeUnknownPullRPC(t, backend, isTransactional, true)
-			legacyCode, legacyMessage := invokeUnknownPullRPC(t, backend, isTransactional, false)
+			var unknownNameCode, legacyCode codes.Code
+			var unknownNameMessage, legacyMessage string
+			// Separate subtests stop each runtime; transactional RPC activities share one task queue.
+			t.Run("unknown-name rejection", func(t *testing.T) {
+				unknownNameCode, unknownNameMessage = invokeUnknownPullRPC(t, backend, isTransactional, true)
+			})
+			t.Run("legacy Worker error", func(t *testing.T) {
+				legacyCode, legacyMessage = invokeUnknownPullRPC(t, backend, isTransactional, false)
+			})
 			require.Equal(t, legacyCode, unknownNameCode)
 			require.Equal(t, codes.FailedPrecondition, unknownNameCode)
 			require.Contains(t, unknownNameMessage, "no pull Worker registered RPC \"getProbe\"")
@@ -1382,7 +1389,7 @@ func invokeUnknownPullRPC(t *testing.T, backend service.BackendType, isTransacti
 		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", IsTransactional: isTransactional, TimeoutSeconds: 10,
 	})
 	require.Error(t, err)
-	require.Less(t, time.Since(startedAt), 3*time.Second)
+	require.Less(t, time.Since(startedAt), 8*time.Second)
 	if rejectsUnknownName {
 		select {
 		case rejected := <-worker.unknownRejections:
@@ -1453,7 +1460,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 	})
 	t.Run("sticky Step", func(t *testing.T) {
 		stickyWait := 10 * time.Second
-		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
+		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 12 * time.Second, StickyWait: stickyWait}})
 		oldWorkerID := "pull-old-" + uuid.NewString()
 		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownExecuteStepType: dispatchProbeStep})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

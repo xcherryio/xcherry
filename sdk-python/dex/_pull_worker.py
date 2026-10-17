@@ -387,7 +387,9 @@ class PullStream:
                         return False
                     if kind != "registered":
                         raise RuntimeError("Worker task stream did not register")
-                    self._supports_unknown_name_rejection = frame.registered.supports_unknown_name_rejection
+                    self._supports_unknown_name_rejection = (
+                        frame.registered.supports_unknown_name_rejection
+                    )
                     was_registered = True
                     continue
                 if kind == "task":
