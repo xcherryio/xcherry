@@ -10,11 +10,11 @@ Attributes hold current state; AttributeMaps partition it; Channels hold queued 
 
 Map instance names are non-empty and contain no `/`. Select exact instances for entity handlers. `AttributeMapNotLoadedError` means the snapshot omitted the entry, not that it does not exist.
 
-For append-only history, bound a `current` list, archive each full chunk under its zero-padded first sequence, and load one page-token instance instead of the whole map. For keyed records, keep a dictionary keyed by the full canonical value inside one stable hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/patterns/sequentially-chunked-attribute-map/chunked_subscriber_flow.py) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/patterns/hash-partitioned-attribute-map/customer_directory_flow.py).
+For append-only history, bound a `current` list, archive each full chunk under its zero-padded first sequence, and load one page-token instance instead of the whole map. For keyed records, keep a dictionary keyed by the full canonical value inside one stable hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/patterns/sequentially-chunked-attribute-map/chunked_subscriber_flow.py) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/patterns/hash-partitioned-attribute-map/customer_directory_flow.py).
 
 Use Stream for incremental output and Attribute for authoritative latest state. Persist read tokens. Buffered text adds a flush boundary; async writer `write` is synchronous while `context.heartbeat` is awaited. A sync buffered writer produces outputs that must be yielded.
 
-Share one BlobCache with Client and Worker for large payloads. Capacity/path are deployment concerns. BlobCache is payload locality, not general durable filesystem state. See pinned [async composition](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/python/dex_examples/app.py) and [SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/README.md).
+Share one BlobCache with Client and Worker for large payloads. Capacity/path are deployment concerns. BlobCache is payload locality, not general durable filesystem state. See pinned [async composition](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/python/dex_examples/app.py) and [SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/README.md).
 
 The Server keeps payloads through 100 bytes inline by default. Treat internal blob references as opaque: hydration and cache lookup use the owning Flow ID with the reference, and Dex rewrites blob-backed values that cross into another Flow. String and Object references share a compact Base36-date shape such as `p1|c/ab3de7kp2x`; their Value arms distinguish them. Object Blobs store the complete EncodedObject with `json`, `raw`, or a custom encoding, so references have no encoding suffix. The Server's `objectIdLength` defaults to 10, accepts any positive length, and treats zero as the default; readers accept any nonempty lowercase Base36 object ID.
 
@@ -26,7 +26,7 @@ Python `None` uses the Value null arm and decodes back to `None`. In an Attribut
 
 Set `hard_delete_on_null=True` on `Attribute` or `AttributeMap` for a short-lived secret, such as an API key. Register the definition in `PersistenceSchema` as usual. Read the Core [hard-delete Attribute](../core/data-handling.md#hard-delete-attributes-for-short-lived-secrets) requirements and limitations first; it needs Python SDK v1.11.0 and Server v1.11.0.
 
-[Pinned SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/README.md)
+[Pinned SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/README.md)
 <!-- dex-source: sdk-python/README.md -->
 ```python
 api_key = dex.Attribute("api-key", str, hard_delete_on_null=True)
@@ -35,7 +35,7 @@ provider_tokens = dex.AttributeMap("provider-token", str, hard_delete_on_null=Tr
 
 Delete the secret as soon as the Flow no longer needs it. `delete`, or `set` with `None`, permanently deletes it. An AttributeMap deletes one instance:
 
-[Pinned SDK integration test](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/tests/integ/hard_delete_attribute_flow.py)
+[Pinned SDK integration test](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/tests/integ/hard_delete_attribute_flow.py)
 <!-- dex-source: sdk-python/tests/integ/hard_delete_attribute_flow.py -->
 ```python
     def execute(self, context: Context, input: None) -> StepDecision:
@@ -50,7 +50,7 @@ Delete the secret as soon as the Flow no longer needs it. `delete`, or `set` wit
 - Defining one with an `int`, `bool`, or `float` value type raises `TypeError`. Combining it with `index` or `sync_to_attribute_store` raises `ValueError`. A numeric or Boolean value raises when it is written.
 - `wait_for_attribute_match` rejects it before contacting Dex.
 - Workers still start against an older Server. A Step, RPC, or timeout handler result that writes one, or a `wait_for` result whose SubFlow start initializes one, then fails that attempt with `RuntimeError`. A Client checks the Server protocol once, before its first `start_flow` that initializes one, and raises instead of sending it.
-- Writes and deletes can become visible before the attempt commits. Keep handlers safe to repeat. Do not read-modify-write the value. See the [released API documentation](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/dex/attribute.py) for every limitation.
+- Writes and deletes can become visible before the attempt commits. Keep handlers safe to repeat. Do not read-modify-write the value. See the [released API documentation](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/dex/attribute.py) for every limitation.
 
 ## Attribute Store projection
 

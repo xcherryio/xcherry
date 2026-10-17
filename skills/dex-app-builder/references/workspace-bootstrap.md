@@ -30,7 +30,7 @@ Create a Go application that depends only on open-source Dex:
 1. Install `dexcli` with the supported package for the platform (on macOS,
    `brew install superdurable/tap/dexcli`) and run `dexcli version`.
 2. Create the Go module and add the Dex Go SDK at an exact released version,
-   for example `go get github.com/superdurable/dex/sdk-go@v1.11.0`. Select the
+   for example `go get github.com/superdurable/dex/sdk-go@v1.12.0`. Select the
    newest stable SDK release that pairs with the installed `dexcli` and the
    target Dex Server; do not copy versions from a neighboring project or
    resolve a branch, pseudo-version, or commit.

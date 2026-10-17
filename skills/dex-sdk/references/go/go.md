@@ -1,12 +1,12 @@
 # Go handbook
 
-The SDK API reference uses the [released Go SDK v1.11.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
+The SDK API reference uses the [released Go SDK v1.12.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
 
 Use this page first for a Go application. It describes the application boundary and points to focused pages; always check the version selected by `go.mod` and `go.sum`.
 
 ## Version and source authority
 
-The [baseline module](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/go.mod) uses `github.com/superdurable/dex/sdk-go v1.10.1`. Before editing an existing project, run `go list -m github.com/superdurable/dex/sdk-go` and inspect that SDK version. If it differs from the baseline, installed source wins. Identify the inspected module-cache path, vendored path, or immutable tag/commit before presenting exact syntax. If no version-matched source is available, give only the version-independent Flow model and request that source; do not adapt baseline snippets speculatively. Pinned sources show known-good shapes, not a promise that every version has the same surface.
+The [baseline module](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/go.mod) uses `github.com/superdurable/dex/sdk-go v1.11.0`. Before editing an existing project, run `go list -m github.com/superdurable/dex/sdk-go` and inspect that SDK version. If it differs from the baseline, installed source wins. Identify the inspected module-cache path, vendored path, or immutable tag/commit before presenting exact syntax. If no version-matched source is available, give only the version-independent Flow model and request that source; do not adapt baseline snippets speculatively. Pinned sources show known-good shapes, not a promise that every version has the same surface.
 
 ## Project shape and local run
 
@@ -23,9 +23,9 @@ Defaults use Dex at `localhost:8801`, a Worker listener at `127.0.0.1:8803`, and
 
 ## Pull Workers and Dex credentials
 
-Set `WorkerOptions.Pull` to `&dex.PullWorkerOptions{...}` for outbound polling; leave `BindAddress` and the listening `WorkerTarget` unset. `worker.WorkerTarget()` returns the pull target for `ClientOptions.WorkerTarget`. A Client can also use `&dex.WorkerTarget{Pull: true}` as its default, or a StartFlow or SubFlow `FlowConfig.WorkerTarget` override. `PullWorkerOptions` exposes `MaxConcurrentTasks` (CPU count by default), `IdleStreamsPerQueue` (one), `AppWorkerID` (generated), and `StopDrainTimeout` (30 seconds). Set a fresh `AppWorkerID` after restart if overriding it. Follow the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retries, heartbeats, stream sizing, and shutdown. [Released Go API](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-go/dex/worker.go) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/production/pull-workers/worker.go)
+Set `WorkerOptions.Pull` to `&dex.PullWorkerOptions{...}` for outbound polling; leave `BindAddress` and the listening `WorkerTarget` unset. `worker.WorkerTarget()` returns the pull target for `ClientOptions.WorkerTarget`. A Client can also use `&dex.WorkerTarget{Pull: true}` as its default, or a StartFlow or SubFlow `FlowConfig.WorkerTarget` override. `PullWorkerOptions` exposes `MaxConcurrentTasks` (CPU count by default), `IdleStreamsPerQueue` (one), `AppWorkerID` (generated), and `StopDrainTimeout` (30 seconds). Set a fresh `AppWorkerID` after restart if overriding it. With Server and Go SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. Follow the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retries, heartbeats, stream sizing, and shutdown. [Released Go API](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-go/dex/worker.go) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/production/pull-workers/worker.go)
 
-For an authenticated Dex Server, set `ClientOptions.Credential` and `WorkerOptions.Credential` separately. `dex.FileCredential(path)` reads a rotating bearer-token file and fails calls if the file becomes empty or unreadable. A custom `dex.Credential` returns the current token before each FlowService call; pull streams obtain it when they open or reconnect. Keep tokens out of Flow state and protect the plaintext connection. [Released Go credential API](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-go/dex/credential.go)
+For an authenticated Dex Server, set `ClientOptions.Credential` and `WorkerOptions.Credential` separately. `dex.FileCredential(path)` reads a rotating bearer-token file and fails calls if the file becomes empty or unreadable. A custom `dex.Credential` returns the current token before each FlowService call; pull streams obtain it when they open or reconnect. Keep tokens out of Flow state and protect the plaintext connection. [Released Go credential API](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-go/dex/credential.go)
 
 ## Connector configuration
 
@@ -79,7 +79,7 @@ for Java, Python, TypeScript, or Rust Flow definitions.
 
 Declare schema at package scope, embed defaults, register Step types, and return a decision from every Execute method. Keep SDK-derived Flow and Step type names; do not implement `GetFlowType` or `GetStepType` except for the [required production-rename case](versioning.md#default-flow-and-step-type-names).
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/primitives/flow/workflow.go)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/primitives/flow/workflow.go)
 <!-- dex-source: examples/go/primitives/flow/workflow.go -->
 ```go
 var (
@@ -107,7 +107,7 @@ Use `dex.None` for nil-only input/output and concrete structs for durable payloa
 
 A no-wait Step embeds the input-typed default and returns a durable decision:
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/primitives/flow/workflow.go)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/primitives/flow/workflow.go)
 <!-- dex-source: examples/go/primitives/flow/workflow.go -->
 ```go
 type Finish struct {
@@ -124,7 +124,7 @@ func (Finish) Execute(ctx dex.Context, input int) (*dex.StepDecision, error) {
 
 ## Registry, Worker, and Client
 
-Construct every Flow once, then pass the same definitions into the Registry used by Worker and Client. See the [registry](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/registry/registry.go) and [bootstrap](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/go/cmd/server/dex/dex.go). Controllers start with `client.StartFlow(ctx, flow, flowID, input, options)` and retain the run ID for diagnostics.
+Construct every Flow once, then pass the same definitions into the Registry used by Worker and Client. See the [registry](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/registry/registry.go) and [bootstrap](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/go/cmd/server/dex/dex.go). Controllers start with `client.StartFlow(ctx, flow, flowID, input, options)` and retain the run ID for diagnostics.
 
 ## Route by task
 

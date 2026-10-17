@@ -62,9 +62,9 @@ Use a controlled gate on a subsequent business Step or projection writer to prov
 
 The following links explain the existing semantics at the bundle's immutable baselines. Preserve installed project versions and inspect version-matched source before writing exact API calls. This reference introduces no new API.
 
-- [Server RPC routing](https://github.com/superdurable/dex/blob/server/v1.11.0/server/service/api/service.go)
-- [Attribute writes](https://github.com/superdurable/dex/blob/server/v1.11.0/server/service/interpreter/persistence.go)
-- [Attribute Store scheduling](https://github.com/superdurable/dex/blob/server/v1.11.0/server/service/interpreter/attributeSynchronizer.go)
-- [Go Client](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-go/dex/client.go), [Python Client](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/dex/client.py), [Python AsyncClient](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-python/dex/async_client.py), [Java Client](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-java/src/main/java/io/superdurable/dex/Client.java), [TypeScript Client](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-typescript/src/client.ts), [Rust Client](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/sdk-rust/crates/dex-sdk/src/client.rs)
-- [CLI operations and success fields](https://github.com/superdurable/dex/blob/cli-v1.11.0/cli/internal/command/flow_client_operations.go)
-- [Web action RPC routing](https://github.com/superdurable/dex/blob/server/v1.11.0/web/api/v2.go)
+- [Server RPC routing](https://github.com/superdurable/dex/blob/server/v1.12.0/server/service/api/service.go)
+- [Attribute writes](https://github.com/superdurable/dex/blob/server/v1.12.0/server/service/interpreter/persistence.go)
+- [Attribute Store scheduling](https://github.com/superdurable/dex/blob/server/v1.12.0/server/service/interpreter/attributeSynchronizer.go)
+- [Go Client](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-go/dex/client.go), [Python Client](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/dex/client.py), [Python AsyncClient](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-python/dex/async_client.py), [Java Client](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-java/src/main/java/io/superdurable/dex/Client.java), [TypeScript Client](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-typescript/src/client.ts), [Rust Client](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-rust/crates/dex-sdk/src/client.rs)
+- [CLI operations and success fields](https://github.com/superdurable/dex/blob/cli-v1.12.0/cli/internal/command/flow_client_operations.go)
+- [Web action RPC routing](https://github.com/superdurable/dex/blob/server/v1.12.0/web/api/v2.go)

@@ -8,11 +8,11 @@ Step, WaitFor, RPC, and timeout handlers may return Promises. Awaiting Client wo
 
 Use Step/RPC load options for AttributeMap instances, Channels, and ChannelMaps. Reading outside the selected scope throws. Use `isTransactional: true` when a failed Channel deletion must roll back other staged RPC mutations. Locks provide isolation only among cooperating handlers.
 
-Registration `RPCOptions` fixes timeout, locks, transactionality, and loads. `RPCInvokeOptions` adds only `lockAttributeMapInstances`, `loadAttributeMapInstances`, and `loadChannelMapInstances` for one call. Use `Client.invokeRPCWithOptions` instead of overloading the positional `runId` call shape. A dynamic read-modify-write supplies both `attributeMap.lock(instance)` and `attributeMap.load(instance)` for the same bucket. The Client unions, sorts, and deduplicates invocation selections with registration settings and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/typescript/src/patterns/hash-partitioned-attribute-map/controller.ts).
+Registration `RPCOptions` fixes timeout, locks, transactionality, and loads. `RPCInvokeOptions` adds only `lockAttributeMapInstances`, `loadAttributeMapInstances`, and `loadChannelMapInstances` for one call. Use `Client.invokeRPCWithOptions` instead of overloading the positional `runId` call shape. A dynamic read-modify-write supplies both `attributeMap.lock(instance)` and `attributeMap.load(instance)` for the same bucket. The Client unions, sorts, and deduplicates invocation selections with registration settings and validates the registered Flow definition and slash-free nonempty instance before network I/O. See the pinned [hash-partitioned controller](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/typescript/src/patterns/hash-partitioned-attribute-map/controller.ts).
 
 ## Buffered Streams
 
-[Pinned buffered Stream source](https://github.com/superdurable/dex/blob/sdk-go/v1.11.0/examples/typescript/src/primitives/stream/stream-flow.ts)
+[Pinned buffered Stream source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/typescript/src/primitives/stream/stream-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/stream/stream-flow.ts -->
 ```typescript
 public async execute(context: Context, input: string): Promise<StepDecision> {

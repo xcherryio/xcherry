@@ -26,6 +26,8 @@ Prefer additive evolution:
 
 Do not rename or remove a durable resource merely because application source no longer references it. Search for open executions and recorded paths first.
 
+For a pull Worker rollout that adds Step types or RPC names, start the new Workers before stopping the old ones. With Server and pull Worker SDK v1.12.0 or later, Dex excludes an old Worker that does not register the requested name and reassigns it without consuming the Step attempt. This does not make changed implementation logic compatible: old Workers still execute every name they register, so preserve the old semantics for open Flows.
+
 ## Incompatible changes
 
 When compatibility cannot be preserved, choose one explicit strategy: let old executions finish on an old Worker pool, keep versioned handlers in one registry, migrate at a safe application boundary, or terminate/recover selected executions with user authorization. Do not add an unreviewed fallback that silently interprets old data as the new type.
