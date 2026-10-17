@@ -137,6 +137,28 @@ func waitWorkerIdle(t *testing.T, engine *Engine, queueName, workerID string) {
 	}, time.Second, time.Millisecond)
 }
 
+func waitWorkerBusy(t *testing.T, engine *Engine, queueName, workerID string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		value, exists := engine.queues.Load(queueName)
+		if !exists {
+			return false
+		}
+		queue := value.(*queueState)
+		queue.mu.Lock()
+		defer queue.mu.Unlock()
+		if len(queue.idle) != 0 {
+			return false
+		}
+		for worker := range queue.streams {
+			if worker.registration.AppWorkerId == workerID {
+				return true
+			}
+		}
+		return false
+	}, time.Second, time.Millisecond)
+}
+
 func dispatchRequest(queue, fallback string, sticky, total time.Duration) *dexpb.DispatchTaskRequest {
 	return &dexpb.DispatchTaskRequest{Queue: queue, FallbackQueue: fallback, FlowId: "flow-1", TaskId: "task-1", StickyWait: durationpb.New(sticky), DispatchWait: durationpb.New(total), Deadline: timestamppb.New(time.Now().Add(5 * time.Second)), Request: &dexpb.DispatchTaskRequest_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodRequest{}}, SupportsAssignmentState: true}
 }
@@ -250,12 +272,10 @@ func TestMatchingFallbackAndUnavailableIntegration(t *testing.T) {
 	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
 	worker := registerWorker(t, server, "flow", "worker-2")
 	request := dispatchRequest("stale-worker", "flow", 40*time.Millisecond, 250*time.Millisecond)
-	started := time.Now()
 	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), request)
 	require.NoError(t, err)
 	assigned, err := worker.Recv()
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, time.Since(started), 35*time.Millisecond)
 	require.NoError(t, worker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assigned.GetTask().TaskId, Output: &dexpb.PollWorkerTaskFrame_WorkerError{WorkerError: &dexpb.WorkerErrorResponse{}}}}}))
 	frames := receiveDispatch(t, dispatch)
 	require.Len(t, frames, 1)
@@ -953,6 +973,85 @@ func TestMatchingCrossEngineStickyFallbackIntegration(t *testing.T) {
 			require.Equal(t, "worker-fallback", frames[0].ServedByAppWorkerId)
 		})
 	}
+}
+
+func TestMatchingStickyEmptyQueueFallsBackImmediatelyIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	fallbackWorker := registerWorkerForFlowTypes(t, server, "fallback", "worker-fallback", []string{"fallback"})
+	startedAt := time.Now()
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("sticky", "fallback", 5*time.Second, 6*time.Second))
+	require.NoError(t, err)
+	assignment, err := fallbackWorker.Recv()
+	require.NoError(t, err)
+	require.Less(t, time.Since(startedAt), time.Second)
+	require.NoError(t, fallbackWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-fallback", frames[0].GetServedByAppWorkerId())
+}
+
+func TestMatchingStickyBusyQueueWaitsForStreamIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	stickyWorker := registerWorkerForFlowTypes(t, server, "worker-sticky", "worker-sticky", []string{"fallback"})
+	registerWorkerForFlowTypes(t, server, "fallback", "worker-fallback", []string{"fallback"})
+	_, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("worker-sticky", "", 0, 6*time.Second))
+	require.NoError(t, err)
+	blockerAssignment, err := stickyWorker.Recv()
+	require.NoError(t, err)
+	waitWorkerBusy(t, server.engine, "worker-sticky", "worker-sticky")
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("worker-sticky", "fallback", 5*time.Second, 6*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, stickyWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: blockerAssignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	assignment, err := stickyWorker.Recv()
+	require.NoError(t, err)
+	require.NoError(t, stickyWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-sticky", frames[0].GetServedByAppWorkerId())
+}
+
+func TestMatchingStickyDisconnectFallsBackImmediatelyIntegration(t *testing.T) {
+	server := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	stickyWorker := registerWorkerForFlowTypes(t, server, "worker-sticky", "worker-sticky", []string{"fallback"})
+	fallbackWorker := registerWorkerForFlowTypes(t, server, "fallback", "worker-fallback", []string{"fallback"})
+	_, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("worker-sticky", "", 0, 6*time.Second))
+	require.NoError(t, err)
+	_, err = stickyWorker.Recv()
+	require.NoError(t, err)
+	waitWorkerBusy(t, server.engine, "worker-sticky", "worker-sticky")
+	dispatch, err := dexpb.NewMatchingServiceClient(server.connection).DispatchTask(testStreamContext(t), dispatchRequest("worker-sticky", "fallback", 5*time.Second, 6*time.Second))
+	require.NoError(t, err)
+	startedAt := time.Now()
+	require.NoError(t, stickyWorker.CloseSend())
+	assignment, err := fallbackWorker.Recv()
+	require.NoError(t, err)
+	require.Less(t, time.Since(startedAt), time.Second)
+	require.NoError(t, fallbackWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-fallback", frames[0].GetServedByAppWorkerId())
+}
+
+func TestMatchingRemoteStickyEmptyQueueFallsBackImmediatelyIntegration(t *testing.T) {
+	entryMembers := newTestMembership()
+	entry := startTestServer(t, config.MatchingConfig{}, entryMembers)
+	sticky := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	fallback := startTestServer(t, config.MatchingConfig{}, newTestMembership())
+	entryMembers.mu.Lock()
+	entryMembers.owners["worker-sticky"] = membership.HostInfo{RPCAddress: sticky.listener.Addr().String()}
+	entryMembers.owners["fallback"] = membership.HostInfo{RPCAddress: fallback.listener.Addr().String()}
+	entryMembers.mu.Unlock()
+	fallbackWorker := registerWorkerForFlowTypes(t, fallback, "fallback", "worker-fallback", []string{"fallback"})
+	startedAt := time.Now()
+	dispatch, err := dexpb.NewMatchingServiceClient(entry.connection).DispatchTask(testStreamContext(t), dispatchRequest("worker-sticky", "fallback", 5*time.Second, 6*time.Second))
+	require.NoError(t, err)
+	assignment, err := fallbackWorker.Recv()
+	require.NoError(t, err)
+	require.Less(t, time.Since(startedAt), time.Second)
+	require.NoError(t, fallbackWorker.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_TaskFrame{TaskFrame: &dexpb.PollWorkerTaskFrame{TaskId: assignment.GetTask().GetTaskId(), Output: &dexpb.PollWorkerTaskFrame_Rpc{Rpc: &dexpb.InvokeWorkerRPCResponse{}}}}}))
+	frames := receiveDispatch(t, dispatch)
+	require.Len(t, frames, 1)
+	require.Equal(t, "worker-fallback", frames[0].GetServedByAppWorkerId())
 }
 
 func TestMatchingCrossEngineUnknownStepExcludesWorkerIntegration(t *testing.T) {

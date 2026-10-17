@@ -278,6 +278,8 @@ message DispatchTaskRequest {
   repeated string excluded_app_worker_ids = 12;
   // Ends an internal sticky queue search immediately after an unknown-name rejection.
   bool stop_after_unknown_name = 13;
+  // Ends an internal sticky queue search when no Worker streams remain connected.
+  bool stop_when_queue_has_no_streams = 14;
 }
 
 // Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.

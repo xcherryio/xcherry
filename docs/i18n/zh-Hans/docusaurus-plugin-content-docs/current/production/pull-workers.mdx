@@ -241,15 +241,16 @@ pub fn stop_pull_greeting(
 ## 路由和可用性
 
 每个拉取模式 Worker 都轮询自己的 app Worker ID 队列，以及注册的每个 Flow 类型队列。
-Dex 首先尝试此前服务该 Flow 的 app Worker ID。黏性等待结束后，Dex 改用 Flow 类型队列，
-让其他 Worker 接手。黏性路由是尽力而为；持久状态应保存在 Dex 中，不应依赖某个
+Dex 首先尝试此前服务该 Flow 的 app Worker ID。该 ID 没有任何已连接的 stream 时，例如
+Worker 重启或部署后，Dex 会立即改用 Flow 类型队列。否则，Dex 在黏性等待结束后改用
+Flow 类型队列，让其他 Worker 接手。黏性路由是尽力而为；持久状态应保存在 Dex 中，不应依赖某个
 Worker 的内存。同一个 Dex Server 内的 Flow 类型名称必须唯一。app Worker ID 必须
 唯一标识一个 Worker 进程，并在该进程重启后变化。未显式设置时，SDK 会生成 ID。
 
 Dex 在 matching dispatch 等待时间内寻找可用 Worker。如果没有 Worker，Step 会收到
 可重试的 unavailable 错误，并消耗一次 Step 重试。RPC 调用方则直接收到
 **Unavailable** 错误。普通 dispatch
-默认等待 10 秒，其中黏性队列最多等待 5 秒。需要保留执行时间的调用使用更短的等待。
+默认等待 10 秒，其中有已连接 stream 的黏性队列最多等待 5 秒。需要保留执行时间的调用使用更短的等待。
 等待设置见[服务器运维](/production/server-operations#pull-worker-routing)。
 
 如果拉取模式 Worker 注册了该 Flow 类型，却没有请求的 Step 类型或 RPC 名称，

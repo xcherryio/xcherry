@@ -2336,8 +2336,10 @@ type DispatchTaskRequest struct {
 	ExcludedAppWorkerIds []string `protobuf:"bytes,12,rep,name=excluded_app_worker_ids,json=excludedAppWorkerIds,proto3" json:"excluded_app_worker_ids,omitempty"`
 	// Ends an internal sticky queue search immediately after an unknown-name rejection.
 	StopAfterUnknownName bool `protobuf:"varint,13,opt,name=stop_after_unknown_name,json=stopAfterUnknownName,proto3" json:"stop_after_unknown_name,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Ends an internal sticky queue search when no Worker streams remain connected.
+	StopWhenQueueHasNoStreams bool `protobuf:"varint,14,opt,name=stop_when_queue_has_no_streams,json=stopWhenQueueHasNoStreams,proto3" json:"stop_when_queue_has_no_streams,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *DispatchTaskRequest) Reset() {
@@ -2470,6 +2472,13 @@ func (x *DispatchTaskRequest) GetExcludedAppWorkerIds() []string {
 func (x *DispatchTaskRequest) GetStopAfterUnknownName() bool {
 	if x != nil {
 		return x.StopAfterUnknownName
+	}
+	return false
+}
+
+func (x *DispatchTaskRequest) GetStopWhenQueueHasNoStreams() bool {
+	if x != nil {
+		return x.StopWhenQueueHasNoStreams
 	}
 	return false
 }
@@ -14617,7 +14626,7 @@ const file_dex_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"1\n" +
 	"\x17PollWorkerTaskReconnect\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x14\n" +
-	"\x12PollWorkerTaskPing\"\x99\x05\n" +
+	"\x12PollWorkerTaskPing\"\xdc\x05\n" +
 	"\x13DispatchTaskRequest\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12%\n" +
 	"\x0efallback_queue\x18\x02 \x01(\tR\rfallbackQueue\x12\x17\n" +
@@ -14633,7 +14642,8 @@ const file_dex_proto_rawDesc = "" +
 	" \x01(\v2\x1b.dex.InvokeWorkerRPCRequestH\x00R\x03rpc\x12:\n" +
 	"\x19supports_assignment_state\x18\v \x01(\bR\x17supportsAssignmentState\x125\n" +
 	"\x17excluded_app_worker_ids\x18\f \x03(\tR\x14excludedAppWorkerIds\x125\n" +
-	"\x17stop_after_unknown_name\x18\r \x01(\bR\x14stopAfterUnknownNameB\t\n" +
+	"\x17stop_after_unknown_name\x18\r \x01(\bR\x14stopAfterUnknownName\x12A\n" +
+	"\x1estop_when_queue_has_no_streams\x18\x0e \x01(\bR\x19stopWhenQueueHasNoStreamsB\t\n" +
 	"\arequest\"\xab\x04\n" +
 	"\x14DispatchTaskResponse\x12;\n" +
 	"\bwait_for\x18\x01 \x01(\v2\x1e.dex.InvokeWaitForMethodOutputH\x00R\awaitFor\x12:\n" +

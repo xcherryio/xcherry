@@ -1095,7 +1095,7 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       "RequestH\000B\t\n\007request\"+\n\030PollWorkerTaskCa" +
       "ncelTask\022\017\n\007task_id\030\001 \001(\t\")\n\027PollWorkerT" +
       "askReconnect\022\016\n\006reason\030\001 \001(\t\"\024\n\022PollWork" +
-      "erTaskPing\"\363\003\n\023DispatchTaskRequest\022\r\n\005qu" +
+      "erTaskPing\"\233\004\n\023DispatchTaskRequest\022\r\n\005qu" +
       "eue\030\001 \001(\t\022\026\n\016fallback_queue\030\002 \001(\t\022\017\n\007flo" +
       "w_id\030\003 \001(\t\022.\n\013sticky_wait\030\004 \001(\0132\031.google" +
       ".protobuf.Duration\0220\n\rdispatch_wait\030\005 \001(" +
@@ -1107,7 +1107,8 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       "rpc\030\n \001(\0132\033.dex.InvokeWorkerRPCRequestH\000" +
       "\022!\n\031supports_assignment_state\030\013 \001(\010\022\037\n\027e" +
       "xcluded_app_worker_ids\030\014 \003(\t\022\037\n\027stop_aft" +
-      "er_unknown_name\030\r \001(\010B\t\n\007request\"\266\003\n\024Dis" +
+      "er_unknown_name\030\r \001(\010\022&\n\036stop_when_queue" +
+      "_has_no_streams\030\016 \001(\010B\t\n\007request\"\266\003\n\024Dis" +
       "patchTaskResponse\0222\n\010wait_for\030\001 \001(\0132\036.de" +
       "x.InvokeWaitForMethodOutputH\000\0221\n\007execute" +
       "\030\002 \001(\0132\036.dex.InvokeExecuteMethodOutputH\000" +
@@ -1453,8 +1454,8 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       "teEvent\022-\n\010messages\030\001 \003(\0132\033.dex.ChannelM" +
       "essageDeletion\"]\n\032WaitForHistoryEventReq" +
       "uest\022\017\n\007flow_id\030\001 \001(\t\022\016\n\006run_id\030\002 \001(\t\022\036\n" +
-      "\026next_internal_event_id\030\003 \001(\003\"\201\001\n\033WaitFo" +
-      "rHistoryEventResponse\022\027\n\017event_available",
+      "\026next_internal_event_id\030\003 \001(\003\"\201\001\n\033WaitFo",
+      "rHistoryEventResponse\022\027\n\017event_available" +
       "\030\001 \001(\010\022#\n\033available_internal_event_id\030\002 " +
       "\001(\003\022$\n\013flow_status\030\003 \001(\0162\017.dex.FlowStatu" +
       "s\"\251\003\n\030ActiveStepExecutionState\022\031\n\021step_e" +
@@ -1853,8 +1854,8 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
       "\022\036\n\026flow_started_timestamp\030\003 \001(\003\022\021\n\tflow" +
       "_type\030\004 \001(\t\022(\n\rworker_target\030\005 \001(\0132\021.dex" +
       ".WorkerTarget\022E\n\rchannel_infos\030\006 \003(\0132..d" +
-      "ex.PrepareRpcQueryResponse.ChannelInfosE" +
-      "ntry\022X\n\027loaded_channel_messages\030\007 \003(\01327.",
+      "ex.PrepareRpcQueryResponse.ChannelInfosE",
+      "ntry\022X\n\027loaded_channel_messages\030\007 \003(\01327." +
       "dex.PrepareRpcQueryResponse.LoadedChanne" +
       "lMessagesEntry\022&\n\036loaded_attribute_map_i" +
       "nstances\030\010 \003(\t\022\034\n\024loaded_channel_names\030\t" +
@@ -2166,7 +2167,7 @@ public final class DexProto extends com.google.protobuf.GeneratedFile {
     internal_static_dex_DispatchTaskRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_dex_DispatchTaskRequest_descriptor,
-        new java.lang.String[] { "Queue", "FallbackQueue", "FlowId", "StickyWait", "DispatchWait", "Deadline", "TaskId", "WaitFor", "Execute", "Rpc", "SupportsAssignmentState", "ExcludedAppWorkerIds", "StopAfterUnknownName", "Request", });
+        new java.lang.String[] { "Queue", "FallbackQueue", "FlowId", "StickyWait", "DispatchWait", "Deadline", "TaskId", "WaitFor", "Execute", "Rpc", "SupportsAssignmentState", "ExcludedAppWorkerIds", "StopAfterUnknownName", "StopWhenQueueHasNoStreams", "Request", });
     internal_static_dex_DispatchTaskResponse_descriptor =
       getDescriptor().getMessageType(13);
     internal_static_dex_DispatchTaskResponse_fieldAccessorTable = new

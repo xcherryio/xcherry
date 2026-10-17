@@ -697,7 +697,7 @@ func (w *workerStream) disconnect() {
 	})
 }
 
-func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time, excludedWorkerIDs map[string]struct{}) (*workerStream, <-chan struct{}) {
+func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time, excludedWorkerIDs map[string]struct{}) (*workerStream, <-chan struct{}, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	preferredElement := q.affinity[flowID]
@@ -722,12 +722,12 @@ func (q *queueState) take(flowID string, excluded map[*workerStream]time.Time, e
 		}
 	}
 	if selected < 0 {
-		return nil, q.changed
+		return nil, q.changed, len(q.streams) > 0
 	}
 	worker := q.idle[selected]
 	q.idle = append(q.idle[:selected], q.idle[selected+1:]...)
 	q.rememberLocked(flowID, worker.registration.AppWorkerId)
-	return worker, q.changed
+	return worker, q.changed, true
 }
 
 func (q *queueState) rememberLocked(flowID, workerID string) {
@@ -837,8 +837,9 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 		remoteRequest := &dexpb.DispatchTaskRequest{
 			Queue: queueName, FlowId: request.FlowId, DispatchWait: durationUntil(waitEnd),
 			Deadline: request.Deadline, TaskId: request.TaskId, Request: request.Request,
-			SupportsAssignmentState: request.GetSupportsAssignmentState(),
-			StopAfterUnknownName:    queueName != request.FallbackQueue && request.FallbackQueue != "",
+			SupportsAssignmentState:   request.GetSupportsAssignmentState(),
+			StopAfterUnknownName:      queueName != request.FallbackQueue && request.FallbackQueue != "",
+			StopWhenQueueHasNoStreams: queueName != request.FallbackQueue && request.FallbackQueue != "",
 		}
 		for workerID := range excludedWorkerIDs {
 			remoteRequest.ExcludedAppWorkerIds = append(remoteRequest.ExcludedAppWorkerIds, workerID)
@@ -849,6 +850,7 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 	}
 	queue := e.getQueue(queueName)
 	defer e.releaseQueue(queueName, queue)
+	shouldStopWhenQueueHasNoStreams := request.GetStopWhenQueueHasNoStreams() || queueName != request.FallbackQueue && request.FallbackQueue != ""
 	excludedUntil := make(map[*workerStream]time.Time)
 	capacityBackoffs := make(map[*workerStream]time.Duration)
 	deadlineTimer := time.NewTimer(time.Until(request.Deadline.AsTime()))
@@ -866,8 +868,11 @@ func (e *Engine) dispatchQueue(ctx context.Context, request *dexpb.DispatchTaskR
 			return false, nil
 		}
 		nextRetry := clearExpiredExclusions(excludedUntil)
-		worker, changed := queue.take(request.FlowId, excludedUntil, excludedWorkerIDs)
+		worker, changed, hasStreams := queue.take(request.FlowId, excludedUntil, excludedWorkerIDs)
 		if worker == nil {
+			if shouldStopWhenQueueHasNoStreams && !hasStreams {
+				return false, nil
+			}
 			wakeAt := waitEnd
 			if !nextRetry.IsZero() && nextRetry.Before(wakeAt) {
 				wakeAt = nextRetry
