@@ -37,6 +37,7 @@ import (
 	"github.com/superdurable/dex/service/common/retry"
 	"github.com/superdurable/dex/service/common/rpc"
 	"github.com/superdurable/dex/service/common/streamstore"
+	"github.com/superdurable/dex/service/common/utils"
 	"github.com/superdurable/dex/service/common/workerclient"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/interpreter/interfaces"
@@ -46,7 +47,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Activities struct {
@@ -111,7 +111,7 @@ func (a *Activities) SyncAttributeBatch(
 	if err != nil {
 		return err
 	}
-	attributeStoreInput := shallowCopyMessage(input)
+	attributeStoreInput := utils.ShallowCopyMessage(input)
 	attributeStoreInput.Items = items
 	return a.attributeStore.WriteBatch(ctx, attributeStoreInput)
 }
@@ -136,11 +136,9 @@ func (a *Activities) hydrateAttributeSyncItems(
 		if hydratedItems == nil {
 			hydratedItems = append([]*dexpb.AttributeSyncItem(nil), items...)
 		}
-		hydratedItems[index] = &dexpb.AttributeSyncItem{
-			ConfigName: item.GetConfigName(),
-			Key:        item.GetKey(),
-			Value:      value,
-		}
+		hydratedItem := utils.ShallowCopyMessage(item)
+		hydratedItem.Value = value
+		hydratedItems[index] = hydratedItem
 	}
 	if hydratedItems == nil {
 		return items, nil
@@ -811,7 +809,7 @@ func (a *Activities) waitForMethodRequestForWorker(
 	if err != nil {
 		return nil, err
 	}
-	workerReq := shallowCopyMessage(req)
+	workerReq := utils.ShallowCopyMessage(req)
 	workerReq.Attributes = attributes
 	return workerReq, nil
 }
@@ -829,20 +827,9 @@ func (a *Activities) executeMethodRequestForWorker(
 	if err != nil {
 		return nil, err
 	}
-	workerReq := shallowCopyMessage(req)
+	workerReq := utils.ShallowCopyMessage(req)
 	workerReq.Attributes = attributes
 	return workerReq, nil
-}
-
-// shallowCopyMessage copies every populated top-level field, sharing nested values with message.
-func shallowCopyMessage[T proto.Message](message T) T {
-	source := message.ProtoReflect()
-	copied := source.New()
-	source.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		copied.Set(field, value)
-		return true
-	})
-	return copied.Interface().(T)
 }
 
 func workerContextForAttempt(workerContext *dexpb.Context) *dexpb.Context {

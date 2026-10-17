@@ -74,12 +74,6 @@ func TestLocalBlobStoreIntegration(t *testing.T) {
 	require.Equal(t, "value", hydratedChannels["channel"].GetMessages()[0].GetValue().GetStringValue())
 	require.Equal(t, formatBlobID(storeID, objectPath), channels["channel"].GetMessages()[0].GetValue().GetInternalBlobIdForStringValue())
 
-	writes := []*dexpb.AttributeWrite{{Key: "attribute", Value: blobValue}}
-	hydratedWrites, err := HydrateAttributeWritesCopy(ctx, valueFlowID, writes, store)
-	require.NoError(t, err)
-	require.Equal(t, "value", hydratedWrites[0].GetValue().GetStringValue())
-	require.Equal(t, formatBlobID(storeID, objectPath), writes[0].GetValue().GetInternalBlobIdForStringValue())
-
 	runStarted := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
 	flowID := "flow/with$difficult characters"
 	runID := "run/with$difficult characters"

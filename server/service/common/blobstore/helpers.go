@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/superdurable/dex/gen/dexpb"
+	"github.com/superdurable/dex/service/common/utils"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -228,39 +229,6 @@ func HydrateAttributeWrites(
 	return nil
 }
 
-// HydrateAttributeWritesCopy returns writes with blob-backed Values hydrated without changing writes.
-func HydrateAttributeWritesCopy(
-	ctx context.Context,
-	flowID string,
-	writes []*dexpb.AttributeWrite,
-	blobStore BlobStore,
-) ([]*dexpb.AttributeWrite, error) {
-	var hydratedWrites []*dexpb.AttributeWrite
-	for index, write := range writes {
-		if write == nil || !hasBlobValue(write.GetValue()) {
-			continue
-		}
-		if hydratedWrites == nil {
-			hydratedWrites = append([]*dexpb.AttributeWrite(nil), writes...)
-		}
-		value, err := HydrateValueCopy(ctx, flowID, write.GetValue(), blobStore)
-		if err != nil {
-			return nil, err
-		}
-		hydratedWrites[index] = &dexpb.AttributeWrite{
-			Key:                write.GetKey(),
-			Value:              value,
-			IndexConfig:        write.GetIndexConfig(),
-			SyncConfig:         write.GetSyncConfig(),
-			IsHardDeleteOnNull: write.GetIsHardDeleteOnNull(),
-		}
-	}
-	if hydratedWrites == nil {
-		return writes, nil
-	}
-	return hydratedWrites, nil
-}
-
 // HydrateKVs hydrates Value arms on KV pairs.
 // It skips hard-delete Attributes, which only HydrateHardDeleteKVs hydrates into new KVs.
 func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore BlobStore) error {
@@ -289,7 +257,9 @@ func HydrateKVsCopy(ctx context.Context, flowID string, kvs []*dexpb.KV, blobSto
 		if err != nil {
 			return nil, err
 		}
-		hydratedKVs[index] = &dexpb.KV{Key: kv.GetKey(), Value: value}
+		hydratedKV := utils.ShallowCopyMessage(kv)
+		hydratedKV.Value = value
+		hydratedKVs[index] = hydratedKV
 	}
 	if hydratedKVs == nil {
 		return kvs, nil
@@ -393,11 +363,9 @@ func HydrateChannelValuesCopy(
 			if err != nil {
 				return nil, err
 			}
-			hydratedMessages[index] = &dexpb.ChannelMessage{
-				ChannelName: message.GetChannelName(),
-				Value:       value,
-				MessageId:   message.GetMessageId(),
-			}
+			hydratedMessage := utils.ShallowCopyMessage(message)
+			hydratedMessage.Value = value
+			hydratedMessages[index] = hydratedMessage
 		}
 		if hydratedMessages == nil {
 			continue
@@ -408,7 +376,9 @@ func HydrateChannelValuesCopy(
 				hydratedChannels[name] = values
 			}
 		}
-		hydratedChannels[channelName] = &dexpb.ChannelValues{Messages: hydratedMessages}
+		hydratedChannel := utils.ShallowCopyMessage(channel)
+		hydratedChannel.Messages = hydratedMessages
+		hydratedChannels[channelName] = hydratedChannel
 	}
 	if hydratedChannels == nil {
 		return channels, nil
@@ -465,22 +435,16 @@ func HydrateConditionResultsCopy(
 		if hydratedResults == nil {
 			hydratedResults = append([]*dexpb.ChannelResult(nil), results.GetChannelResults()...)
 		}
-		hydratedResults[index] = &dexpb.ChannelResult{
-			ConditionId:     result.GetConditionId(),
-			ConditionStatus: result.GetConditionStatus(),
-			ChannelName:     result.GetChannelName(),
-			Values:          hydratedValues,
-		}
+		hydratedResult := utils.ShallowCopyMessage(result)
+		hydratedResult.Values = hydratedValues
+		hydratedResults[index] = hydratedResult
 	}
 	if hydratedResults == nil {
 		return results, nil
 	}
-	return &dexpb.ConditionResults{
-		ChannelResults: hydratedResults,
-		TimerResults:   results.GetTimerResults(),
-		WaitForFailed:  results.GetWaitForFailed(),
-		SubFlowResults: results.GetSubFlowResults(),
-	}, nil
+	hydratedConditionResults := utils.ShallowCopyMessage(results)
+	hydratedConditionResults.ChannelResults = hydratedResults
+	return hydratedConditionResults, nil
 }
 
 // HydrateValue hydrates a Flow-owned Value in place.
@@ -525,7 +489,7 @@ func HydrateValueCopy(ctx context.Context, flowID string, value *dexpb.Value, bl
 	if value == nil || !hasBlobValue(value) {
 		return value, nil
 	}
-	hydrated := &dexpb.Value{Kind: value.GetKind()}
+	hydrated := utils.ShallowCopyMessage(value)
 	if err := HydrateValue(ctx, flowID, hydrated, blobStore); err != nil {
 		return nil, err
 	}
