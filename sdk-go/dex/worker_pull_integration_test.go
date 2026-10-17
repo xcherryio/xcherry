@@ -261,6 +261,40 @@ func TestWorkerPullTaskFramesAndReconnect(t *testing.T) {
 	require.NoError(t, <-started)
 }
 
+func TestWorkerPullLegacyRegistrationReturnsUnknownTaskErrors(t *testing.T) {
+	address, server := startPullTestServer(t)
+	worker, err := newWorkerForTest(t, []Flow{workerFlow}, WorkerOptions{FlowServiceAddress: address, Pull: &PullWorkerOptions{MaxConcurrentTasks: 1, AppWorkerID: "legacy-registration-worker"}})
+	require.NoError(t, err)
+	started := make(chan error, 1)
+	go func() { started <- worker.Start() }()
+	flowType := GetFinalFlowType(workerFlow)
+	var queueStream *pullTestStream
+	for queueStream == nil {
+		candidate := awaitPullRegistration(t, server)
+		if candidate.registration.Queue == flowType {
+			queueStream = candidate
+		}
+	}
+	for _, task := range []*dexpb.PollWorkerTask{
+		{TaskId: "unknown-step", Request: &dexpb.PollWorkerTask_WaitFor{WaitFor: &dexpb.InvokeWaitForMethodRequest{Context: workerStepContext(), FlowType: flowType, StepType: "MissingStep", StepInput: mustEncodeWorkerTestValue(t, workerTestInput{})}}},
+		{TaskId: "unknown-rpc", Request: &dexpb.PollWorkerTask_Rpc{Rpc: &dexpb.InvokeWorkerRPCRequest{Context: workerRPCContext(), FlowType: flowType, RpcName: "MissingRPC", Input: mustEncodeWorkerTestValue(t, workerTestInput{})}}},
+	} {
+		require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Task{Task: task}}))
+		frame := awaitPullFrame(t, queueStream)
+		require.Nil(t, frame.GetReject())
+		require.Equal(t, task.GetTaskId(), frame.GetTaskFrame().GetTaskId())
+		require.Equal(t, int32(codes.NotFound), frame.GetTaskFrame().GetWorkerError().GetGrpcStatus())
+		require.Contains(t, frame.GetTaskFrame().GetWorkerError().GetDetail(), "not registered")
+		awaitPullTaskCompletion(t, worker)
+	}
+	require.NoError(t, queueStream.send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Ping{Ping: &dexpb.PollWorkerTaskPing{}}}))
+	require.NotNil(t, awaitPullFrame(t, queueStream).GetPong())
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, worker.Stop(stopCtx))
+	require.NoError(t, <-started)
+}
+
 func TestWorkerPullGeneratedIdentityAndTargetValidation(t *testing.T) {
 	t.Setenv("DEX_WORKER_INSTANCE", "Pod.Name_42")
 	appWorkerID, err := generateAppWorkerID()
