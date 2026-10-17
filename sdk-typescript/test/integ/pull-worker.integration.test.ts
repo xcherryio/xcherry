@@ -71,12 +71,14 @@ class SecondPullStep implements Step<string> {
     private readonly workerID: string,
     private readonly observations: Observation[],
     private readonly secondGate: Promise<void>,
+    private readonly startingStepAttempts?: number[],
   ) {}
 
   public getStepType(): string { return "SecondPullStep"; }
 
-  public waitFor(): Wait {
+  public waitFor(context: Context): Wait {
     this.observations.push({ workerID: this.workerID, method: "SecondWaitFor" });
+    this.startingStepAttempts?.push(context.attempt);
     return Wait.skipImmediately();
   }
 
@@ -122,10 +124,11 @@ class OldPullFlow implements Flow<string> {
 }
 
 class NewStartPullFlow implements Flow<string> {
+  public readonly startingStepAttempts: number[] = [];
   private readonly second: SecondPullStep;
 
   public constructor(observations: Observation[]) {
-    this.second = new SecondPullStep("new", observations, Promise.resolve());
+    this.second = new SecondPullStep("new", observations, Promise.resolve(), this.startingStepAttempts);
   }
 
   public getFlowType(): string { return "PullFlow"; }
@@ -331,6 +334,7 @@ test("pull Worker reassigns an unregistered starting Step", async () => {
       { workerID: "new", method: "SecondWaitFor" },
       { workerID: "new", method: "SecondExecute" },
     ]);
+    assert.deepEqual(newFlow.startingStepAttempts, [1]);
   } finally {
     await client.close();
     await oldWorker.close();

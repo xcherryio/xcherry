@@ -135,6 +135,76 @@ test("poll streams register first, reject at capacity, answer Ping, and reuse af
   }
 });
 
+test("unknown task rejection follows the Registered capability for each stream", async () => {
+  const harness = await startHarness();
+  const dispatcher = {
+    async invokeWaitFor(): Promise<InvokeWaitForMethodResponse> {
+      throw new Error("Step MissingStep is not registered");
+    },
+    async invokeExecute(): Promise<never> {
+      throw new Error("Step MissingStep is not registered");
+    },
+    async invokeRPC(): Promise<InvokeWorkerRPCResponse> {
+      throw new Error("RPC MissingRPC is not registered");
+    },
+  } as unknown as WorkerDispatcher;
+  const worker = harness.workerWithDispatcher(dispatcher);
+  try {
+    worker.start();
+    const legacy = await harness.nextStream();
+    legacy.call.write(registered(false));
+    legacy.call.write(unknownStepTask("legacy-step"));
+    legacy.call.write(unknownRPCTask("legacy-rpc"));
+    const legacyStep = await legacy.frame("taskFrame");
+    const legacyRPC = await legacy.frame("taskFrame", 2);
+    for (const frame of [legacyStep, legacyRPC]) {
+      assert.equal(frame.frame?.$case, "taskFrame");
+      if (frame.frame?.$case === "taskFrame") {
+        assert.equal(frame.frame.value.output?.$case, "workerError");
+        if (frame.frame.value.output?.$case === "workerError") {
+          assert.match(frame.frame.value.output.value.detail, /not registered/);
+        }
+      }
+    }
+    assert.equal(legacy.frames.some((frame) => frame.frame?.$case === "reject"), false);
+    legacy.call.write({ frame: { $case: "ping", value: {} } });
+    await legacy.frame("pong");
+
+    legacy.call.write({ frame: { $case: "reconnect", value: { reason: "test" } } });
+    const capable = await harness.nextStream();
+    capable.call.write(registered(true));
+    capable.call.write(unknownStepTask("capable-step"));
+    capable.call.write(unknownRPCTask("capable-rpc"));
+    const stepRejection = await capable.frame("reject");
+    const rpcRejection = await capable.frame("reject", 2);
+    assert.equal(stepRejection.frame?.$case, "reject");
+    assert.equal(rpcRejection.frame?.$case, "reject");
+    if (stepRejection.frame?.$case === "reject") {
+      assert.equal(stepRejection.frame.value.reason, PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP);
+    }
+    if (rpcRejection.frame?.$case === "reject") {
+      assert.equal(rpcRejection.frame.value.reason, PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC);
+    }
+
+    capable.call.write({ frame: { $case: "reconnect", value: { reason: "test" } } });
+    const reconnected = await harness.nextStream();
+    reconnected.call.write(registered(false));
+    reconnected.call.write(unknownStepTask("reconnected-step"));
+    const reconnectedError = await reconnected.frame("taskFrame");
+    assert.equal(reconnectedError.frame?.$case, "taskFrame");
+    if (reconnectedError.frame?.$case === "taskFrame") {
+      assert.equal(reconnectedError.frame.value.output?.$case, "workerError");
+      if (reconnectedError.frame.value.output?.$case === "workerError") {
+        assert.match(reconnectedError.frame.value.output.value.detail, /not registered/);
+      }
+    }
+    assert.equal(reconnected.frames.some((frame) => frame.frame?.$case === "reject"), false);
+  } finally {
+    await worker.close();
+    await harness.close();
+  }
+});
+
 test("Reconnect backs off idle streams and drains a busy stream", async () => {
   const harness = await startHarness();
   let finishTask!: () => void;
@@ -501,6 +571,26 @@ function rpcTask(taskId: string, deadline?: Date): PollWorkerTaskResponse {
     taskId,
     deadline,
     request: { $case: "rpc", value: InvokeWorkerRPCRequest.create({ flowType: "TestFlow", rpcName: "getWorker" }) },
+  } } };
+}
+
+function registered(supportsUnknownNameRejection: boolean): PollWorkerTaskResponse {
+  return { frame: { $case: "registered", value: { supportsUnknownNameRejection } } };
+}
+
+function unknownStepTask(taskId: string): PollWorkerTaskResponse {
+  return { frame: { $case: "task", value: {
+    taskId,
+    deadline: undefined,
+    request: { $case: "waitFor", value: InvokeWaitForMethodRequest.create({ flowType: "TestFlow", stepType: "MissingStep" }) },
+  } } };
+}
+
+function unknownRPCTask(taskId: string): PollWorkerTaskResponse {
+  return { frame: { $case: "task", value: {
+    taskId,
+    deadline: undefined,
+    request: { $case: "rpc", value: InvokeWorkerRPCRequest.create({ flowType: "TestFlow", rpcName: "MissingRPC" }) },
   } } };
 }
 

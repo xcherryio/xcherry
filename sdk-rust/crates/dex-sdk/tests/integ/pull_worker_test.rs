@@ -121,7 +121,22 @@ impl Flow for OldPullFlow {
     }
 }
 
-struct NewStartPullFlow(PullFlow);
+struct NewStartPullFlow {
+    flow: PullFlow,
+    second: StartingPullSecondStep,
+}
+
+impl NewStartPullFlow {
+    fn new(flow: PullFlow, starting_step_attempts: mpsc::Sender<u32>) -> Self {
+        Self {
+            second: StartingPullSecondStep {
+                step: flow.second.clone(),
+                starting_step_attempts,
+            },
+            flow,
+        }
+    }
+}
 
 impl Flow for NewStartPullFlow {
     type StartInput = String;
@@ -131,7 +146,7 @@ impl Flow for NewStartPullFlow {
     }
 
     fn steps(&self) -> StepList<'_, Self::StartInput> {
-        StepList::start(&self.0.second)
+        StepList::start(&self.second)
     }
 }
 
@@ -169,6 +184,26 @@ struct PullSecondStep {
     worker_id: String,
     observations: mpsc::Sender<(String, &'static str)>,
     gate: Arc<Gate>,
+}
+
+struct StartingPullSecondStep {
+    step: PullSecondStep,
+    starting_step_attempts: mpsc::Sender<u32>,
+}
+
+impl Step for StartingPullSecondStep {
+    type Input = String;
+
+    fn wait_for(&self, context: &mut Context, input: String) -> HandlerResult<Wait> {
+        self.starting_step_attempts
+            .send(context.attempt())
+            .expect("starting Step attempt receiver");
+        self.step.wait_for(context, input)
+    }
+
+    fn execute(&self, context: &mut Context, input: String) -> HandlerResult<StepDecision> {
+        self.step.execute(context, input)
+    }
 }
 
 impl Step for PullSecondStep {
@@ -603,7 +638,11 @@ fn pull_worker_test_reassigns_unregistered_start_step() {
         Arc::clone(&first_gate),
         Arc::clone(&second_gate),
     ));
-    let new_flow = NewStartPullFlow(PullFlow::new("new", observed, first_gate, second_gate));
+    let (starting_step_attempts, starting_step_attempt_receiver) = mpsc::channel();
+    let new_flow = NewStartPullFlow::new(
+        PullFlow::new("new", observed, first_gate, second_gate),
+        starting_step_attempts.clone(),
+    );
     let old_worker_id = format!("pull-rust-old-step-{}", uuid::Uuid::new_v4());
     let new_worker_id = format!("pull-rust-new-step-{}", uuid::Uuid::new_v4());
     let old_worker = PullTestWorker::start(
@@ -616,7 +655,10 @@ fn pull_worker_test_reassigns_unregistered_start_step() {
     );
     let client = Client::new(
         Registry::new()
-            .register(NewStartPullFlow(new_flow.0.clone()))
+            .register(NewStartPullFlow::new(
+                new_flow.flow.clone(),
+                starting_step_attempts,
+            ))
             .expect("register client Flow"),
         Arc::clone(&cache),
         ClientOptions::new()
@@ -646,6 +688,12 @@ fn pull_worker_test_reassigns_unregistered_start_step() {
     );
     await_observation(&observations, "new", "SecondWaitFor");
     await_observation(&observations, "new", "SecondExecute");
+    assert_eq!(
+        1,
+        starting_step_attempt_receiver
+            .recv_timeout(Duration::from_secs(20))
+            .expect("starting Step attempt")
+    );
     drop(new_worker);
     drop(old_worker);
     drop(client);

@@ -204,6 +204,7 @@ public final class PullWorkerEndToEndTest {
                         .getSingleOutput(String.class));
                 assertEquals("new:wait-2", observations.poll(30, TimeUnit.SECONDS));
                 assertEquals("new:execute-2", observations.poll(30, TimeUnit.SECONDS));
+                assertEquals(1, newFlow.startingStepAttempt.get());
                 assertEquals(0, firstExecuteCalls.get());
                 assertEquals(1, secondExecuteCalls.get());
             }
@@ -270,6 +271,8 @@ public final class PullWorkerEndToEndTest {
     }
 
     private static class NewStartPullFlow extends PullFlow {
+        private final AtomicInteger startingStepAttempt = new AtomicInteger();
+
         NewStartPullFlow(final BlockingQueue<String> observations,
                 final AtomicInteger firstExecuteCalls, final AtomicInteger secondExecuteCalls) {
             super("new", observations, new CountDownLatch(0), new CountDownLatch(0),
@@ -283,7 +286,7 @@ public final class PullWorkerEndToEndTest {
 
         @Override
         public StepList<String> getSteps() {
-            return StepList.startStep(new SecondStep(this));
+            return StepList.startStep(new StartingSecondStep(this, startingStepAttempt));
         }
 
         @Override
@@ -319,7 +322,7 @@ public final class PullWorkerEndToEndTest {
         }
     }
 
-    private static final class SecondStep implements Step<String> {
+    private static class SecondStep implements Step<String> {
         private final PullFlow flow;
 
         private SecondStep(final PullFlow flow) {
@@ -343,6 +346,21 @@ public final class PullWorkerEndToEndTest {
             flow.observations.add(flow.workerID + ":execute-2");
             await(flow.secondRelease);
             return StepDecision.gracefulComplete(input);
+        }
+    }
+
+    private static final class StartingSecondStep extends SecondStep {
+        private final AtomicInteger startingStepAttempt;
+
+        private StartingSecondStep(final PullFlow flow, final AtomicInteger startingStepAttempt) {
+            super(flow);
+            this.startingStepAttempt = startingStepAttempt;
+        }
+
+        @Override
+        public Wait waitFor(final Context context, final String input) {
+            startingStepAttempt.set(context.getAttempt());
+            return super.waitFor(context, input);
         }
     }
 
