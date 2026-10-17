@@ -107,15 +107,45 @@ func (a *Activities) SyncAttributeBatch(
 	ctx context.Context,
 	input *dexpb.SyncAttributeBatchActivityInput,
 ) error {
-	for _, item := range input.GetItems() {
+	items, err := a.hydrateAttributeSyncItems(ctx, input.GetFlowId(), input.GetItems())
+	if err != nil {
+		return err
+	}
+	attributeStoreInput := shallowCopyMessage(input)
+	attributeStoreInput.Items = items
+	return a.attributeStore.WriteBatch(ctx, attributeStoreInput)
+}
+
+func (a *Activities) hydrateAttributeSyncItems(
+	ctx context.Context,
+	flowID string,
+	items []*dexpb.AttributeSyncItem,
+) ([]*dexpb.AttributeSyncItem, error) {
+	var hydratedItems []*dexpb.AttributeSyncItem
+	for index, item := range items {
 		if item == nil {
 			continue
 		}
-		if err := blobstore.HydrateValue(ctx, input.GetFlowId(), item.GetValue(), a.blobStore); err != nil {
-			return fmt.Errorf("hydrate Attribute Store item: %w", err)
+		value, err := blobstore.HydrateValueCopy(ctx, flowID, item.GetValue(), a.blobStore)
+		if err != nil {
+			return nil, fmt.Errorf("hydrate Attribute Store item: %w", err)
+		}
+		if value == item.GetValue() {
+			continue
+		}
+		if hydratedItems == nil {
+			hydratedItems = append([]*dexpb.AttributeSyncItem(nil), items...)
+		}
+		hydratedItems[index] = &dexpb.AttributeSyncItem{
+			ConfigName: item.GetConfigName(),
+			Key:        item.GetKey(),
+			Value:      value,
 		}
 	}
-	return a.attributeStore.WriteBatch(ctx, input)
+	if hydratedItems == nil {
+		return items, nil
+	}
+	return hydratedItems, nil
 }
 
 // IWaitForM invokes a Worker's WaitFor method through the selected transport.
@@ -149,15 +179,17 @@ func (a *Activities) IWaitForM(
 
 	lazyLoading := a.cfg.BlobStore.EffectiveLazyLoading()
 	if !lazyLoading {
-		if err := a.hydrateWorkerRequestValues(ctx, req.GetStepInput(), req.GetAttributes()); err != nil {
+		if err := a.hydrateWorkerRequestValues(ctx, req); err != nil {
 			a.logLocalActivityWarn(logger, activityInfo, "IWaitForM", req.GetContext().GetStepExecutionId(), req, err)
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		if err := blobstore.HydrateChannelValues(
+		loadedChannelMessages, err := blobstore.HydrateChannelValuesCopy(
 			ctx, req.GetContext().GetFlowId(), req.GetLoadedChannelMessages(), a.blobStore,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
+		req.LoadedChannelMessages = loadedChannelMessages
 	}
 	workerReq, err := a.waitForMethodRequestForWorker(ctx, req)
 	if err != nil {
@@ -364,23 +396,29 @@ func (a *Activities) IExecuteM(
 	lazyLoading := a.cfg.BlobStore.EffectiveLazyLoading()
 	originalStepInputBlob := stepInputBlobRef(req.GetStepInput())
 	if !lazyLoading {
-		if err := a.hydrateWorkerRequestValues(ctx, req.GetStepInput(), req.GetAttributes()); err != nil {
+		if err := a.hydrateWorkerRequestValues(ctx, req); err != nil {
 			a.logLocalActivityWarn(logger, activityInfo, "IExecuteM", req.GetContext().GetStepExecutionId(), req, err)
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		if err := blobstore.HydrateKVs(ctx, req.GetContext().GetFlowId(), req.GetStepExeLocals(), a.blobStore); err != nil {
+		stepExeLocals, err := blobstore.HydrateKVsCopy(ctx, req.GetContext().GetFlowId(), req.GetStepExeLocals(), a.blobStore)
+		if err != nil {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		if err := blobstore.HydrateConditionResults(
+		req.StepExeLocals = stepExeLocals
+		conditionResults, err := blobstore.HydrateConditionResultsCopy(
 			ctx, req.GetContext().GetFlowId(), req.GetConditionResults(), a.blobStore,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		if err := blobstore.HydrateChannelValues(
+		req.ConditionResults = conditionResults
+		loadedChannelMessages, err := blobstore.HydrateChannelValuesCopy(
 			ctx, req.GetContext().GetFlowId(), req.GetLoadedChannelMessages(), a.blobStore,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
+		req.LoadedChannelMessages = loadedChannelMessages
 	}
 	workerReq, err := a.executeMethodRequestForWorker(ctx, req)
 	if err != nil {
@@ -1279,15 +1317,32 @@ func (c *blobCleanup) delete(workflowPath string) error {
 	return nil
 }
 
-func (a *Activities) hydrateWorkerRequestValues(
-	ctx context.Context, stepInput *dexpb.Value, attributes []*dexpb.KV,
-) error {
+func (a *Activities) hydrateWorkerRequestValues(ctx context.Context, req interface {
+	GetContext() *dexpb.Context
+	GetStepInput() *dexpb.Value
+	GetAttributes() []*dexpb.KV
+}) error {
 	activityInfo := a.activityProvider.GetActivityInfo(ctx)
 	flowID := activityInfo.WorkflowExecution.ID
-	if err := blobstore.HydrateValue(ctx, flowID, stepInput, a.blobStore); err != nil {
+	stepInput, err := blobstore.HydrateValueCopy(ctx, flowID, req.GetStepInput(), a.blobStore)
+	if err != nil {
 		return err
 	}
-	return blobstore.HydrateKVs(ctx, flowID, attributes, a.blobStore)
+	attributes, err := blobstore.HydrateKVsCopy(ctx, flowID, req.GetAttributes(), a.blobStore)
+	if err != nil {
+		return err
+	}
+	switch typedReq := req.(type) {
+	case *dexpb.InvokeWaitForMethodRequest:
+		typedReq.StepInput = stepInput
+		typedReq.Attributes = attributes
+	case *dexpb.InvokeExecuteMethodRequest:
+		typedReq.StepInput = stepInput
+		typedReq.Attributes = attributes
+	default:
+		panic("unsupported worker method request")
+	}
+	return nil
 }
 
 func (a *Activities) offloadWorkerAttributeWrites(

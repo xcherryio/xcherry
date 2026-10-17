@@ -273,6 +273,10 @@ func doTestRpcExternalStorage(
 	})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, resp.GetFlowStatus())
+	if !lazyLoading {
+		historyText := flowHistoryText(t, ctx, runtime, flowId)
+		require.NotContains(t, historyText, rpcStorage.InitialLargeDataContent)
+	}
 	if !useLocking && !useSynchronousUpdate {
 		objectsAfterRPC, err := runtime.BlobStore.CountWorkflowObjectsForTesting(ctx, flowId)
 		require.NoError(t, err)

@@ -228,6 +228,39 @@ func HydrateAttributeWrites(
 	return nil
 }
 
+// HydrateAttributeWritesCopy returns writes with blob-backed Values hydrated without changing writes.
+func HydrateAttributeWritesCopy(
+	ctx context.Context,
+	flowID string,
+	writes []*dexpb.AttributeWrite,
+	blobStore BlobStore,
+) ([]*dexpb.AttributeWrite, error) {
+	var hydratedWrites []*dexpb.AttributeWrite
+	for index, write := range writes {
+		if write == nil || !hasBlobValue(write.GetValue()) {
+			continue
+		}
+		if hydratedWrites == nil {
+			hydratedWrites = append([]*dexpb.AttributeWrite(nil), writes...)
+		}
+		value, err := HydrateValueCopy(ctx, flowID, write.GetValue(), blobStore)
+		if err != nil {
+			return nil, err
+		}
+		hydratedWrites[index] = &dexpb.AttributeWrite{
+			Key:                write.GetKey(),
+			Value:              value,
+			IndexConfig:        write.GetIndexConfig(),
+			SyncConfig:         write.GetSyncConfig(),
+			IsHardDeleteOnNull: write.GetIsHardDeleteOnNull(),
+		}
+	}
+	if hydratedWrites == nil {
+		return writes, nil
+	}
+	return hydratedWrites, nil
+}
+
 // HydrateKVs hydrates Value arms on KV pairs.
 // It skips hard-delete Attributes, which only HydrateHardDeleteKVs hydrates into new KVs.
 func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore BlobStore) error {
@@ -240,6 +273,28 @@ func HydrateKVs(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore B
 		}
 	}
 	return nil
+}
+
+// HydrateKVsCopy returns KVs with blob-backed Values hydrated without changing kvs.
+func HydrateKVsCopy(ctx context.Context, flowID string, kvs []*dexpb.KV, blobStore BlobStore) ([]*dexpb.KV, error) {
+	var hydratedKVs []*dexpb.KV
+	for index, kv := range kvs {
+		if kv == nil || isHardDeleteKV(kv) || !hasBlobValue(kv.GetValue()) {
+			continue
+		}
+		if hydratedKVs == nil {
+			hydratedKVs = append([]*dexpb.KV(nil), kvs...)
+		}
+		value, err := HydrateValueCopy(ctx, flowID, kv.GetValue(), blobStore)
+		if err != nil {
+			return nil, err
+		}
+		hydratedKVs[index] = &dexpb.KV{Key: kv.GetKey(), Value: value}
+	}
+	if hydratedKVs == nil {
+		return kvs, nil
+	}
+	return hydratedKVs, nil
 }
 
 // HydrateHardDeleteKVs returns kvs with every hard-delete Attribute replaced by a new hydrated KV.
@@ -314,6 +369,53 @@ func HydrateChannelValues(
 	return nil
 }
 
+// HydrateChannelValuesCopy returns Channel Values with blob-backed messages hydrated without changing channels.
+func HydrateChannelValuesCopy(
+	ctx context.Context,
+	flowID string,
+	channels map[string]*dexpb.ChannelValues,
+	blobStore BlobStore,
+) (map[string]*dexpb.ChannelValues, error) {
+	var hydratedChannels map[string]*dexpb.ChannelValues
+	for channelName, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		var hydratedMessages []*dexpb.ChannelMessage
+		for index, message := range channel.GetMessages() {
+			if message == nil || !hasBlobValue(message.GetValue()) {
+				continue
+			}
+			if hydratedMessages == nil {
+				hydratedMessages = append([]*dexpb.ChannelMessage(nil), channel.GetMessages()...)
+			}
+			value, err := HydrateValueCopy(ctx, flowID, message.GetValue(), blobStore)
+			if err != nil {
+				return nil, err
+			}
+			hydratedMessages[index] = &dexpb.ChannelMessage{
+				ChannelName: message.GetChannelName(),
+				Value:       value,
+				MessageId:   message.GetMessageId(),
+			}
+		}
+		if hydratedMessages == nil {
+			continue
+		}
+		if hydratedChannels == nil {
+			hydratedChannels = make(map[string]*dexpb.ChannelValues, len(channels))
+			for name, values := range channels {
+				hydratedChannels[name] = values
+			}
+		}
+		hydratedChannels[channelName] = &dexpb.ChannelValues{Messages: hydratedMessages}
+	}
+	if hydratedChannels == nil {
+		return channels, nil
+	}
+	return hydratedChannels, nil
+}
+
 func HydrateConditionResults(
 	ctx context.Context,
 	flowID string,
@@ -326,6 +428,59 @@ func HydrateConditionResults(
 		}
 	}
 	return nil
+}
+
+// HydrateConditionResultsCopy returns Condition results with blob-backed Values hydrated without changing results.
+func HydrateConditionResultsCopy(
+	ctx context.Context,
+	flowID string,
+	results *dexpb.ConditionResults,
+	blobStore BlobStore,
+) (*dexpb.ConditionResults, error) {
+	if results == nil {
+		return nil, nil
+	}
+	var hydratedResults []*dexpb.ChannelResult
+	for index, result := range results.GetChannelResults() {
+		if result == nil {
+			continue
+		}
+		var hydratedValues []*dexpb.Value
+		for valueIndex, value := range result.GetValues() {
+			if !hasBlobValue(value) {
+				continue
+			}
+			if hydratedValues == nil {
+				hydratedValues = append([]*dexpb.Value(nil), result.GetValues()...)
+			}
+			hydratedValue, err := HydrateValueCopy(ctx, flowID, value, blobStore)
+			if err != nil {
+				return nil, err
+			}
+			hydratedValues[valueIndex] = hydratedValue
+		}
+		if hydratedValues == nil {
+			continue
+		}
+		if hydratedResults == nil {
+			hydratedResults = append([]*dexpb.ChannelResult(nil), results.GetChannelResults()...)
+		}
+		hydratedResults[index] = &dexpb.ChannelResult{
+			ConditionId:     result.GetConditionId(),
+			ConditionStatus: result.GetConditionStatus(),
+			ChannelName:     result.GetChannelName(),
+			Values:          hydratedValues,
+		}
+	}
+	if hydratedResults == nil {
+		return results, nil
+	}
+	return &dexpb.ConditionResults{
+		ChannelResults: hydratedResults,
+		TimerResults:   results.GetTimerResults(),
+		WaitForFailed:  results.GetWaitForFailed(),
+		SubFlowResults: results.GetSubFlowResults(),
+	}, nil
 }
 
 // HydrateValue hydrates a Flow-owned Value in place.
@@ -362,6 +517,27 @@ func HydrateValue(ctx context.Context, flowID string, value *dexpb.Value, blobSt
 		return nil
 	default:
 		return nil
+	}
+}
+
+// HydrateValueCopy returns a hydrated Value without changing value.
+func HydrateValueCopy(ctx context.Context, flowID string, value *dexpb.Value, blobStore BlobStore) (*dexpb.Value, error) {
+	if value == nil || !hasBlobValue(value) {
+		return value, nil
+	}
+	hydrated := &dexpb.Value{Kind: value.GetKind()}
+	if err := HydrateValue(ctx, flowID, hydrated, blobStore); err != nil {
+		return nil, err
+	}
+	return hydrated, nil
+}
+
+func hasBlobValue(value *dexpb.Value) bool {
+	switch value.GetKind().(type) {
+	case *dexpb.Value_InternalBlobIdForStringValue, *dexpb.Value_InternalBlobIdForObjValue:
+		return true
+	default:
+		return false
 	}
 }
 

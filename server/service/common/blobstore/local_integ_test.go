@@ -52,6 +52,33 @@ func TestLocalBlobStoreIntegration(t *testing.T) {
 	loaded, err := store.ReadObject(ctx, storeID, valueFlowID, objectPath)
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), loaded)
+	blobValue := &dexpb.Value{Kind: &dexpb.Value_InternalBlobIdForStringValue{
+		InternalBlobIdForStringValue: formatBlobID(storeID, objectPath),
+	}}
+	hydratedValue, err := HydrateValueCopy(ctx, valueFlowID, blobValue, store)
+	require.NoError(t, err)
+	require.Equal(t, "value", hydratedValue.GetStringValue())
+	require.Equal(t, formatBlobID(storeID, objectPath), blobValue.GetInternalBlobIdForStringValue())
+
+	kvs := []*dexpb.KV{{Key: "attribute", Value: blobValue}}
+	hydratedKVs, err := HydrateKVsCopy(ctx, valueFlowID, kvs, store)
+	require.NoError(t, err)
+	require.Equal(t, "value", hydratedKVs[0].GetValue().GetStringValue())
+	require.Equal(t, formatBlobID(storeID, objectPath), kvs[0].GetValue().GetInternalBlobIdForStringValue())
+
+	channels := map[string]*dexpb.ChannelValues{"channel": {Messages: []*dexpb.ChannelMessage{{
+		ChannelName: "channel", MessageId: "message", Value: blobValue,
+	}}}}
+	hydratedChannels, err := HydrateChannelValuesCopy(ctx, valueFlowID, channels, store)
+	require.NoError(t, err)
+	require.Equal(t, "value", hydratedChannels["channel"].GetMessages()[0].GetValue().GetStringValue())
+	require.Equal(t, formatBlobID(storeID, objectPath), channels["channel"].GetMessages()[0].GetValue().GetInternalBlobIdForStringValue())
+
+	writes := []*dexpb.AttributeWrite{{Key: "attribute", Value: blobValue}}
+	hydratedWrites, err := HydrateAttributeWritesCopy(ctx, valueFlowID, writes, store)
+	require.NoError(t, err)
+	require.Equal(t, "value", hydratedWrites[0].GetValue().GetStringValue())
+	require.Equal(t, formatBlobID(storeID, objectPath), writes[0].GetValue().GetInternalBlobIdForStringValue())
 
 	runStarted := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
 	flowID := "flow/with$difficult characters"
