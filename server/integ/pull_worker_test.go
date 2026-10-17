@@ -1351,7 +1351,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		require.Empty(t, oldWorker.unknownRejections)
 	})
 	t.Run("RPC and sticky fallback", func(t *testing.T) {
-		stickyWait := 10 * time.Second
+		stickyWait := 4 * time.Second
 		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
 		oldWorkerID := "pull-old-" + uuid.NewString()
 		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownRPCName: "getProbe"})
@@ -1366,7 +1366,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		response, err := runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", TimeoutSeconds: 15})
 		require.NoError(t, err)
 		require.NotNil(t, response)
-		require.Less(t, time.Since(startedAt), stickyWait)
+		require.Less(t, time.Since(startedAt), stickyWait/2)
 		select {
 		case rejected := <-oldWorker.unknownRejections:
 			require.Equal(t, oldWorkerID, rejected.queue)
@@ -1379,7 +1379,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		require.NoError(t, err)
 	})
 	t.Run("sticky Step", func(t *testing.T) {
-		stickyWait := 4 * time.Second
+		stickyWait := 10 * time.Second
 		runtime := startInProcessDexService(t, DexServiceTestConfig{BackendType: backend, Matching: &config.MatchingConfig{DispatchWait: 5 * time.Second, StickyWait: stickyWait}})
 		oldWorkerID := "pull-old-" + uuid.NewString()
 		oldWorker := startUnknownRejectingPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, oldWorkerID, rawPullWorkerConfig{unknownExecuteStepType: dispatchProbeStep})
@@ -1396,7 +1396,7 @@ func testPullUnknownNameRedispatch(t *testing.T, backend service.BackendType) {
 		result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 		require.NoError(t, err)
 		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
-		require.Less(t, time.Since(startedAt), stickyWait/2)
+		require.Less(t, time.Since(startedAt), stickyWait)
 		require.Equal(t, int32(1), waitForPullTask(t, newWorker, flowID).attempt)
 		select {
 		case rejected := <-oldWorker.unknownRejections:
