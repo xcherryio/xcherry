@@ -72,3 +72,7 @@ system.writeVisibilityStoreName:
 worker.enableScheduler:
 - value: true
   constraints: {}
+frontend.domainvisibilityrps:
+- value: 1
+  constraints:
+    domainName: dex-engine-resource-exhausted

@@ -295,6 +295,10 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 	var store blobstore.BlobStore
 	switch testConfig.BackendType {
 	case service.BackendTypeTemporal:
+		temporalNamespace := testConfig.TemporalNamespace
+		if temporalNamespace == "" {
+			temporalNamespace = testNamespace
+		}
 		dataConverter := dexconverter.NewTemporalDataConverter()
 		if testConfig.MemoEncryption {
 			dataConverter = encryptionDataConverter
@@ -303,10 +307,10 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		if metricsHandler == nil {
 			metricsHandler = client.MetricsNopHandler
 		}
-		temporalClient := createTemporalClient(t, dataConverter, metricsHandler)
+		temporalClient := createTemporalClientForNamespace(t, temporalNamespace, dataConverter, metricsHandler)
 		store, err = blobstore.NewBlobStore(
 			s3Client,
-			testNamespace,
+			temporalNamespace,
 			&cfg.BlobStore,
 			logger,
 			client.MetricsNopHandler,
@@ -314,7 +318,7 @@ func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *in
 		require.NoError(t, err)
 		unifiedClient = temporalapi.NewTemporalClient(
 			temporalClient,
-			testNamespace,
+			temporalNamespace,
 			dataConverter,
 			testConfig.MemoEncryption,
 			cfg.Api.QueryWorkflowFailedRetryPolicy,
@@ -617,10 +621,19 @@ func createTemporalClient(
 	dataConverter converter.DataConverter,
 	metricsHandler client.MetricsHandler,
 ) client.Client {
+	return createTemporalClientForNamespace(t, testNamespace, dataConverter, metricsHandler)
+}
+
+func createTemporalClientForNamespace(
+	t *testing.T,
+	namespace string,
+	dataConverter converter.DataConverter,
+	metricsHandler client.MetricsHandler,
+) client.Client {
 	t.Helper()
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:       *temporalHostPort,
-		Namespace:      testNamespace,
+		Namespace:      namespace,
 		DataConverter:  dataConverter,
 		MetricsHandler: metricsHandler,
 	})

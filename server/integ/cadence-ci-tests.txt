@@ -43,6 +43,7 @@ TestStepLineageCadence
 TestParallelFlowCadence
 TestLockingWorkflowCadence
 TestSearchRunsCadence
+TestSearchFlowsResourceExhaustedCadence
 TestPullWorkerHeartbeatTimeoutCadence
 TestHardDeleteAttributesCadence
 TestHardDeleteAttributeResetCadence

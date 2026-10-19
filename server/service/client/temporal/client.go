@@ -367,11 +367,12 @@ func (t *temporalClient) ListWorkflow(
 	ctx context.Context, request *uclient.ListWorkflowExecutionsRequest,
 ) (*uclient.ListWorkflowExecutionsResponse, error) {
 	listReq := &workflowservice.ListWorkflowExecutionsRequest{
+		Namespace:     t.namespace,
 		PageSize:      request.PageSize,
 		Query:         request.Query,
 		NextPageToken: request.NextPageToken,
 	}
-	resp, err := t.tClient.ListWorkflow(ctx, listReq)
+	resp, err := t.tClient.WorkflowService().ListWorkflowExecutions(ctx, listReq)
 	if err != nil {
 		return nil, err
 	}
