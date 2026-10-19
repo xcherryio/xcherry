@@ -328,12 +328,11 @@ func (t *cadenceClient) ListWorkflow(
 ) (*uclient.ListWorkflowExecutionsResponse, error) {
 	query := mapToCadenceVisibilityQuery(request.Query)
 	listReq := &shared.ListWorkflowExecutionsRequest{
-		Domain:        &t.domain,
 		PageSize:      &request.PageSize,
 		Query:         &query,
 		NextPageToken: request.NextPageToken,
 	}
-	resp, err := t.serviceClient.ListWorkflowExecutions(ctx, listReq)
+	resp, err := t.cClient.ListWorkflow(ctx, listReq)
 	if err != nil {
 		return nil, err
 	}

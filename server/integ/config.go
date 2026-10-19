@@ -27,7 +27,6 @@ var testNamespace = "default"
 type DexServiceTestConfig struct {
 	BackendType                            service.BackendType
 	CadenceDomain                          string
-	TemporalNamespace                      string
 	MemoEncryption                         bool
 	DefaultHeaders                         map[string]string
 	S3TestThreshold                        int

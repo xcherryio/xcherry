@@ -9,7 +9,3 @@ system.forceSearchAttributesCacheRefreshOnRead:
     constraints: {}
 frontend.enableUpdateWorkflowExecution:
   - value: true
-frontend.namespaceRPS.visibility:
-  - value: 1
-    constraints:
-      namespace: dex-engine-resource-exhausted
