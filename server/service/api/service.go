@@ -45,6 +45,8 @@ import (
 	"github.com/superdurable/dex/service/indexsync"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
 	"github.com/superdurable/dex/service/wake"
+	"go.temporal.io/api/serviceerror"
+	"go.uber.org/cadence/.gen/go/shared"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -1980,6 +1982,17 @@ func (s *serviceImpl) handleHistoryReadError(ctx context.Context, flowID string,
 }
 
 func (s *serviceImpl) handleError(err error) error {
+	if engineStatus := serviceerror.ToStatus(err); engineStatus.Code() == codes.ResourceExhausted {
+		return engineStatus.Err()
+	}
+	var cadenceLimitExceededError *shared.LimitExceededError
+	if errors.As(err, &cadenceLimitExceededError) {
+		return status.Error(codes.ResourceExhausted, cadenceLimitExceededError.GetMessage())
+	}
+	var cadenceServiceBusyError *shared.ServiceBusyError
+	if errors.As(err, &cadenceServiceBusyError) {
+		return status.Error(codes.ResourceExhausted, cadenceServiceBusyError.GetMessage())
+	}
 	if errors.Is(err, uclient.ErrQueryRequestTimeout) {
 		return serviceerrors.DeadlineExceededRequest(err.Error()).ToGRPCError()
 	}
