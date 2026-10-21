@@ -30,6 +30,7 @@ import (
 	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -1946,10 +1947,9 @@ func TestWorkerConcurrentInvocationsAreIsolated(t *testing.T) {
 func TestWorkerStopDrainsAndForceCancels(t *testing.T) {
 	t.Run("graceful drain", func(t *testing.T) {
 		flow := &workerBlockingFlow{entered: make(chan struct{}), release: make(chan struct{})}
-		worker, client, startResult, closeConn := startBlockingWorker(t, flow)
-		defer closeConn()
-		rpcResult := invokeBlockingRPC(client)
-		<-flow.entered
+		worker, client, startResult := startBlockingWorker(t, flow)
+		rpcResult := invokeBlockingRPC(t, client)
+		requireBlockingRPCEntered(t, flow.entered, rpcResult)
 		stopResult := make(chan error, 1)
 		go func() { stopResult <- worker.Stop(context.Background()) }()
 		close(flow.release)
@@ -1960,10 +1960,9 @@ func TestWorkerStopDrainsAndForceCancels(t *testing.T) {
 
 	t.Run("force cancel", func(t *testing.T) {
 		flow := &workerBlockingFlow{entered: make(chan struct{}), release: make(chan struct{})}
-		worker, client, startResult, closeConn := startBlockingWorker(t, flow)
-		defer closeConn()
-		rpcResult := invokeBlockingRPC(client)
-		<-flow.entered
+		worker, client, startResult := startBlockingWorker(t, flow)
+		rpcResult := invokeBlockingRPC(t, client)
+		requireBlockingRPCEntered(t, flow.entered, rpcResult)
 		stopCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		require.ErrorIs(t, worker.Stop(stopCtx), context.Canceled)
@@ -2062,12 +2061,21 @@ func startWorkerFlowService(
 	return listener.Addr().String()
 }
 
+type workerBlockingTestResources struct {
+	test       *testing.T
+	worker     *Worker
+	connection *grpc.ClientConn
+}
+
 func startBlockingWorker(
 	t *testing.T,
 	flow Flow,
-) (*Worker, dexpb.WorkerServiceClient, <-chan error, func()) {
+) (*Worker, dexpb.WorkerServiceClient, <-chan error) {
 	address := unusedWorkerAddress(t)
-	worker, err := newWorkerForTest(t, []Flow{flow}, WorkerOptions{BindAddress: address})
+	worker, err := newWorkerForTest(t, []Flow{flow}, WorkerOptions{
+		BindAddress:               address,
+		AttributeIndexSyncTimeout: 5 * time.Second,
+	})
 	require.NoError(t, err)
 	startResult := make(chan error, 1)
 	go func() { startResult <- worker.Start() }()
@@ -2076,14 +2084,55 @@ func startBlockingWorker(
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
-	return worker, dexpb.NewWorkerServiceClient(conn), startResult, func() {
-		require.NoError(t, conn.Close())
+	resources := &workerBlockingTestResources{test: t, worker: worker, connection: conn}
+	t.Cleanup(resources.close)
+	conn.Connect()
+	readinessTimeout := time.NewTimer(5 * time.Second)
+	defer readinessTimeout.Stop()
+	readinessPoll := time.NewTicker(10 * time.Millisecond)
+	defer readinessPoll.Stop()
+	for conn.GetState() != connectivity.Ready {
+		select {
+		case err := <-startResult:
+			t.Fatalf("Worker.Start returned before serving blocking RPCs: %v", err)
+		case <-readinessTimeout.C:
+			t.Fatal("timed out waiting for blocking Worker gRPC readiness")
+		case <-readinessPoll.C:
+		}
+	}
+	return worker, dexpb.NewWorkerServiceClient(conn), startResult
+}
+
+func (resources *workerBlockingTestResources) close() {
+	require.NoError(resources.test, resources.connection.Close())
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	stopErr := resources.worker.Stop(stopCtx)
+	if stopErr != nil && !errors.Is(stopErr, context.Canceled) {
+		require.NoError(resources.test, stopErr)
+	}
+}
+
+func requireBlockingRPCEntered(t *testing.T, entered <-chan struct{}, rpcResult <-chan error) {
+	t.Helper()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	select {
+	case <-entered:
+	case err := <-rpcResult:
+		t.Fatalf("blocking RPC returned before its handler entered: %v", err)
+	case <-timeout.C:
+		t.Fatal("timed out waiting for blocking RPC handler to enter")
 	}
 }
 
 func invokeBlockingRPC(
+	t *testing.T,
 	client dexpb.WorkerServiceClient,
 ) <-chan error {
+	t.Helper()
+	rpcCtx, cancelRPC := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancelRPC)
 	result := make(chan error, 1)
 	input, err := encodeValue(struct{}{})
 	if err != nil {
@@ -2092,7 +2141,7 @@ func invokeBlockingRPC(
 	}
 	go func() {
 		_, err := client.InvokeWorkerRPC(
-			context.Background(),
+			rpcCtx,
 			&dexpb.InvokeWorkerRPCRequest{
 				Context:  workerRPCContext(),
 				FlowType: "workerBlockingFlow",
