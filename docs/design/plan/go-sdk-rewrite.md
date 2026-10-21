@@ -616,6 +616,25 @@ listener. `Worker.WorkerTarget()` returns `{Pull: true}`. A Client or per-Flow
 maps pull mode to `WorkerTarget.is_pull_mode`, keeps one task per stream, and
 polls the sticky Worker ID queue plus each registered Flow type queue. A Flow
 type must be unique within one Dex server for pull routing.
+Go SDK 1.13.0 adds `Worker.WaitPullRegistered(context.Context) error` for
+startup gating and `Worker.PullRegistrationState() PullRegistrationState` for
+probes. Concurrent waiters use notifications. Every queue must register once
+before startup readiness latches. Startup failures retain their error chain;
+permanent rejections return `*PullRegistrationError{Queue, Err}`. Cancellation
+and stopping before readiness return errors. After initial readiness, the wait
+always succeeds. Snapshot `IsReady` changes to false only when a queue has no
+registered stream and a permanent error. Successful registration clears that
+queue's error. Transient disconnects and ownership changes preserve readiness.
+Snapshot `Queues` entries expose `Queue`, `HasRegisteredStream`, and
+`LastPermanentError`; non-pull Workers return the zero snapshot. Shutdown alone
+preserves the latched snapshot, so applications withdraw stopping Workers.
+`StopOnPermanentStreamRejection` defaults to false. Enabling it drains every
+queue on the first permanent rejection at any time, bounds the drain with
+`StopDrainTimeout`, cancels streams, waits for handlers, and returns the rejection
+from `Start`. Handlers must respond to cancellation. `Stop` remains safe and
+should be called before exit. The production pull Worker example gates startup
+and exposes an HTTP readiness handler. The other SDKs will follow.
+
 `FileCredential` rereads its file when the file changes, so a rotated token,
 such as a projected service account token, takes effect without a restart.
 

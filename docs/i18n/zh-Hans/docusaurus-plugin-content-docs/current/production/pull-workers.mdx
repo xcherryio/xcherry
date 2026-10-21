@@ -94,10 +94,15 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 		WorkerTarget:       worker.WorkerTarget(),
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, errors.Join(err, worker.Stop(context.Background()))
 	}
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
+	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := worker.WaitPullRegistered(startupCtx); err != nil {
+		return nil, nil, nil, nil, errors.Join(err, StopPullGreeting(context.Background(), worker, client, workerResult))
+	}
 	return flow, worker, client, workerResult, nil
 }
 
@@ -111,6 +116,16 @@ func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Clien
 		workerRunErr = ctx.Err()
 	}
 	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
+}
+
+func PullGreetingReadiness(worker *dex.Worker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !worker.PullRegistrationState().IsReady {
+			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -237,6 +252,35 @@ pub fn stop_pull_greeting(
 </SdkSnippet>
 
 </SdkTabs>
+
+## 就绪检查 {#readiness}
+
+从 Go SDK 1.13.0 开始，**WaitPullRegistered** 会等待所有 Flow type 队列和
+app Worker ID 队列收到注册确认后再允许启动流程继续。其他 SDK 将陆续支持。
+在独立 goroutine 中调用 **Start**，然后设置启动截止时间并等待注册完成。
+滚动部署时，先等待新 Worker 就绪，再停止旧 Worker。注册成功不代表处理器
+仍有空闲容量。
+
+**WaitPullRegistered** 支持并发调用，也可以在 **Start** 之前调用。
+如果就绪前发生永久拒绝，它会返回包含队列名称和底层 gRPC 错误的
+**PullRegistrationError**。**Start** 的启动错误也会传递给等待方。
+取消等待会返回 context 错误；就绪前停止 Worker 会返回错误。
+所有队列都注册成功过一次后，后续等待始终成功。
+
+就绪探针应读取 **PullRegistrationState().IsReady**。示例中的
+**PullGreetingReadiness** HTTP handler 可用于 **/readyz**。
+**Queues** 提供每个队列的 **HasRegisteredStream** 和
+**LastPermanentError**。首次就绪后，重连、所有权迁移、临时断连和退避
+都保持 **IsReady** 为 true。只有某个队列既没有已注册的 stream，
+又存在永久错误时，它才变为 false。重新注册成功会清除该队列的永久错误；
+其他队列均正常时，就绪状态恢复。单独调用 **Stop** 不会清除就绪状态；
+关闭时应另行将 Worker 从服务中移除。
+
+**StopOnPermanentStreamRejection** 默认为 false，保留自动重试行为。
+设为 true 后，首次永久拒绝会让 **Start** 返回 **PullRegistrationError**，
+即使 Worker 已经就绪。**Start** 排空其他队列时，这些队列仍可能持有 stream。
+排空时间由 **StopDrainTimeout** 限制，超时后请求取消并等待处理器返回。
+处理器必须响应取消。退出前始终调用 **Stop**；**Start** 返回后仍可安全调用。
 
 ## 路由和可用性
 

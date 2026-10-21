@@ -97,10 +97,15 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 		WorkerTarget:       worker.WorkerTarget(),
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, errors.Join(err, worker.Stop(context.Background()))
 	}
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
+	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := worker.WaitPullRegistered(startupCtx); err != nil {
+		return nil, nil, nil, nil, errors.Join(err, StopPullGreeting(context.Background(), worker, client, workerResult))
+	}
 	return flow, worker, client, workerResult, nil
 }
 
@@ -114,6 +119,16 @@ func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Clien
 		workerRunErr = ctx.Err()
 	}
 	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
+}
+
+func PullGreetingReadiness(worker *dex.Worker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !worker.PullRegistrationState().IsReady {
+			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -240,6 +255,40 @@ pub fn stop_pull_greeting(
 </SdkSnippet>
 
 </SdkTabs>
+
+## Readiness
+
+Starting with Go SDK 1.13.0, **WaitPullRegistered** gates startup until every
+Flow type queue and the app Worker ID queue has received a registration
+acknowledgement. The other SDKs will follow. Start the Worker in a goroutine,
+then wait with a startup deadline before activating it or stopping the old
+Worker during a rolling deployment. Registration does not guarantee spare
+handler capacity.
+
+**WaitPullRegistered** is safe to call concurrently, including before
+**Start**. It returns a **PullRegistrationError** with the queue name and
+underlying gRPC error on a permanent rejection before readiness. Startup errors
+from **Start** also reach the waiter. Cancellation returns the context error;
+stopping before readiness returns an error. Once all queues have registered,
+this wait keeps returning successfully.
+
+Use **PullRegistrationState().IsReady** for readiness probes. The
+**PullGreetingReadiness** HTTP handler in the example can serve **/readyz**.
+**Queues** reports each queue's **HasRegisteredStream** and
+**LastPermanentError**. After initial registration, reconnects, ownership moves,
+transient disconnects, and backoff keep **IsReady** true. It becomes false only
+when a queue has no registered stream and a permanent error. Successful
+registration clears that queue's error and restores readiness when no other
+queue is failing. Stop alone does not clear readiness; remove the Worker from
+service during shutdown separately.
+
+**StopOnPermanentStreamRejection** defaults to false, preserving retries.
+Set it to true to make **Start** return a **PullRegistrationError** for the first
+permanent rejection, even after readiness. Other queues may still hold streams
+while **Start** drains them. Draining uses **StopDrainTimeout**, then requests
+cancellation and waits for handlers to return. Handlers must respond to
+cancellation. Always call **Stop** before exiting; it remains safe after
+**Start** returns.
 
 ## Routing and availability
 
