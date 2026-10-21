@@ -267,7 +267,9 @@ handler capacity.
 
 **WaitPullRegistered** is safe to call concurrently, including before
 **Start**. It returns a **PullRegistrationError** with the queue name and
-underlying gRPC error on a permanent rejection before readiness. Startup errors
+underlying gRPC error on a permanent rejection before readiness when the queue
+has no other registered stream. A rejected surplus stream is recorded and retried
+while another registered stream holds that queue. Startup errors
 from **Start** also reach the waiter. Cancellation returns the context error;
 stopping before readiness returns an error. Once all queues have registered,
 this wait keeps returning successfully.
@@ -284,7 +286,9 @@ service during shutdown separately.
 
 **StopOnPermanentStreamRejection** defaults to false, preserving retries.
 Set it to true to make **Start** return a **PullRegistrationError** for the first
-permanent rejection, even after readiness. Other queues may still hold streams
+permanent rejection that leaves its queue without a registered stream, even
+after readiness. Rejections while another stream holds the same queue do not stop
+the Worker. Other queues may still hold streams
 while **Start** drains them. Draining uses **StopDrainTimeout**, then requests
 cancellation and waits for handlers to return. Handlers must respond to
 cancellation. Always call **Stop** before exiting; it remains safe after

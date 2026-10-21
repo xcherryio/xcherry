@@ -232,31 +232,76 @@ func TestWorkerPullStopOnPermanentStreamRejection(t *testing.T) {
 	}
 }
 
-func TestWorkerPullRegistrationStateWithRemainingStream(t *testing.T) {
-	worker, server, result := startRegistrationTestWorker(t, PullWorkerOptions{IdleStreamsPerQueue: 2}, &workerSyncFlowService{})
-	go func() { result <- worker.Start() }()
-	streamsByQueue := make(map[string][]*registrationTestStream)
-	for range 4 {
-		stream := awaitRegistrationTestStream(t, server, 5*time.Second)
-		streamsByQueue[stream.queue] = append(streamsByQueue[stream.queue], stream)
-		stream.register()
+func TestWorkerPullRegistrationRejectionWithRemainingStream(t *testing.T) {
+	for _, shouldStop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default retries", true: "stop enabled"}[shouldStop], func(t *testing.T) {
+			worker, server, result := startRegistrationTestWorker(t, PullWorkerOptions{
+				IdleStreamsPerQueue: 2, StopOnPermanentStreamRejection: shouldStop,
+			}, &workerSyncFlowService{})
+			go func() { result <- worker.Start() }()
+			streamsByQueue := make(map[string][]*registrationTestStream)
+			for range 4 {
+				stream := awaitRegistrationTestStream(t, server, 5*time.Second)
+				streamsByQueue[stream.queue] = append(streamsByQueue[stream.queue], stream)
+			}
+			stickyStreams := streamsByQueue[worker.pull.appWorkerID]
+			stickyStreams[0].register()
+			require.Eventually(t, func() bool {
+				return worker.PullRegistrationState().Queues[0].HasRegisteredStream
+			}, 5*time.Second, time.Millisecond)
+			stickyStreams[1].reject(status.Error(codes.ResourceExhausted, "surplus stream rejected"))
+			require.Eventually(t, func() bool {
+				return worker.PullRegistrationState().Queues[0].LastPermanentError != nil
+			}, 5*time.Second, time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			waitResult := make(chan error, 1)
+			go func() { waitResult <- worker.WaitPullRegistered(ctx) }()
+			worker.pull.mu.Lock()
+			initialRegistrationError := worker.pull.initialRegistrationError
+			worker.pull.mu.Unlock()
+			require.Nil(t, initialRegistrationError)
+			for _, stream := range streamsByQueue[GetFinalFlowType(workerFlow)] {
+				stream.register()
+			}
+			require.NoError(t, <-waitResult)
+			require.True(t, worker.PullRegistrationState().IsReady)
+			require.True(t, worker.PullRegistrationState().Queues[0].HasRegisteredStream)
+			require.Equal(t, codes.ResourceExhausted, status.Code(worker.PullRegistrationState().Queues[0].LastPermanentError))
+			select {
+			case err := <-result:
+				t.Fatalf("surplus stream rejection stopped a registered queue: %v", err)
+			default:
+			}
+			stickyStreams[0].reject(status.Error(codes.Unavailable, "last stream disconnected"))
+			require.Eventually(t, func() bool { return !worker.PullRegistrationState().IsReady }, 5*time.Second, time.Millisecond)
+			replacement := awaitRegistrationTestStream(t, server, 5*time.Second)
+			require.Equal(t, worker.pull.appWorkerID, replacement.queue)
+			replacement.reject(status.Error(codes.ResourceExhausted, "queue has no registered stream"))
+			if shouldStop {
+				select {
+				case err := <-result:
+					var rejection *PullRegistrationError
+					require.ErrorAs(t, err, &rejection)
+					require.Equal(t, replacement.queue, rejection.Queue)
+					require.Equal(t, codes.ResourceExhausted, status.Code(rejection.Err))
+				case <-ctx.Done():
+					t.Fatal("Start did not return when the queue was permanently rejected without a remaining stream")
+				}
+				require.False(t, worker.PullRegistrationState().IsReady)
+				require.NoError(t, worker.Stop(ctx))
+			} else {
+				require.Eventually(t, func() bool {
+					return status.Convert(worker.PullRegistrationState().Queues[0].LastPermanentError).Message() == "queue has no registered stream"
+				}, 5*time.Second, time.Millisecond)
+				select {
+				case err := <-result:
+					t.Fatalf("default retry behavior stopped Start: %v", err)
+				default:
+				}
+			}
+		})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, worker.WaitPullRegistered(ctx))
-	streams := streamsByQueue[worker.pull.appWorkerID]
-	streams[0].reject(status.Error(codes.InvalidArgument, "one stream rejected"))
-	require.Eventually(t, func() bool {
-		return worker.PullRegistrationState().Queues[0].LastPermanentError != nil
-	}, 5*time.Second, time.Millisecond)
-	require.True(t, worker.PullRegistrationState().IsReady)
-	require.True(t, worker.PullRegistrationState().Queues[0].HasRegisteredStream)
-	streams[1].reject(status.Error(codes.Unavailable, "last stream disconnected"))
-	require.Eventually(t, func() bool { return !worker.PullRegistrationState().IsReady }, 5*time.Second, time.Millisecond)
-	replacement := awaitRegistrationTestStream(t, server, 5*time.Second)
-	replacement.register()
-	require.Eventually(t, func() bool { return worker.PullRegistrationState().IsReady }, 5*time.Second, time.Millisecond)
-	require.Nil(t, worker.PullRegistrationState().Queues[0].LastPermanentError)
 }
 
 func TestWorkerPullPermanentRejectionDrainsActiveHandler(t *testing.T) {
@@ -266,11 +311,14 @@ func TestWorkerPullPermanentRejectionDrainsActiveHandler(t *testing.T) {
 	}, &workerSyncFlowService{}, flow)
 	go func() { result <- worker.Start() }()
 	var taskStream *registrationTestStream
+	var controlStream *registrationTestStream
 	for range 2 {
 		stream := awaitRegistrationTestStream(t, server, 5*time.Second)
 		stream.register()
 		if stream.queue == GetFinalFlowType(flow) {
 			taskStream = stream
+		} else {
+			controlStream = stream
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -283,8 +331,7 @@ func TestWorkerPullPermanentRejectionDrainsActiveHandler(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("handler did not start")
 	}
-	replacement := awaitRegistrationTestStream(t, server, 5*time.Second)
-	replacement.reject(status.Error(codes.ResourceExhausted, "stream cap"))
+	controlStream.reject(status.Error(codes.ResourceExhausted, "stream cap"))
 	select {
 	case err := <-result:
 		var rejection *PullRegistrationError

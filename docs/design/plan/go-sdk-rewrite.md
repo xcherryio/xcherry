@@ -620,7 +620,9 @@ Go SDK 1.13.0 adds `Worker.WaitPullRegistered(context.Context) error` for
 startup gating and `Worker.PullRegistrationState() PullRegistrationState` for
 probes. Concurrent waiters use notifications. Every queue must register once
 before startup readiness latches. Startup failures retain their error chain;
-permanent rejections return `*PullRegistrationError{Queue, Err}`. Cancellation
+permanent rejections return `*PullRegistrationError{Queue, Err}` only when the
+rejected queue has no other registered stream. Surplus stream rejections are
+recorded and retried without failing startup or stopping the Worker. Cancellation
 and stopping before readiness return errors. After initial readiness, the wait
 always succeeds. Snapshot `IsReady` changes to false only when a queue has no
 registered stream and a permanent error. Successful registration clears that
@@ -629,7 +631,8 @@ Snapshot `Queues` entries expose `Queue`, `HasRegisteredStream`, and
 `LastPermanentError`; non-pull Workers return the zero snapshot. Shutdown alone
 preserves the latched snapshot, so applications withdraw stopping Workers.
 `StopOnPermanentStreamRejection` defaults to false. Enabling it drains every
-queue on the first permanent rejection at any time, bounds the drain with
+queue on the first permanent rejection that leaves its queue without a registered
+stream at any time, bounds the drain with
 `StopDrainTimeout`, cancels streams, waits for handlers, and returns the rejection
 from `Start`. Handlers must respond to cancellation. `Stop` remains safe and
 should be called before exit. The production pull Worker example gates startup

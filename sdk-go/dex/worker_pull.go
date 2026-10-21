@@ -357,10 +357,10 @@ func (worker *pullWorker) recordStreamResult(stream *pullStream, err error) {
 	if isPermanentPullStreamError(err) {
 		registration.lastPermanentError = err
 		rejection := &PullRegistrationError{Queue: stream.queue, Err: err}
-		if !worker.hasRegisteredAllQueues && worker.initialRegistrationError == nil {
+		if registration.registeredStreams == 0 && !worker.hasRegisteredAllQueues && worker.initialRegistrationError == nil {
 			worker.initialRegistrationError = rejection
 		}
-		if worker.stopOnPermanentStreamRejection && worker.permanentStreamError == nil {
+		if registration.registeredStreams == 0 && worker.stopOnPermanentStreamRejection && worker.permanentStreamError == nil {
 			worker.permanentStreamError = rejection
 			close(worker.permanentStreamRejected)
 		}

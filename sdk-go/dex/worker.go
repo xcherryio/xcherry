@@ -84,7 +84,8 @@ type WorkerOptions struct {
 //	if err != nil { return err }
 //	defer worker.Stop(context.Background())
 type PullWorkerOptions struct {
-	// StopOnPermanentStreamRejection makes Start return the first permanent stream rejection. Default: false retries indefinitely.
+	// StopOnPermanentStreamRejection makes Start return a permanent rejection when its queue has no registered stream. Default: false retries indefinitely.
+	// A rejection while another stream holds the same queue is recorded and retried without stopping.
 	// This applies before and after initial registration. Start begins draining all queues and bounds
 	// the drain with StopDrainTimeout, then cancels streams and waits for handlers to return.
 	// Handlers must respond to cancellation. Other queues may still hold streams while draining.
@@ -102,9 +103,9 @@ type PullWorkerOptions struct {
 	StopDrainTimeout time.Duration
 }
 
-// PullRegistrationError identifies a permanent rejection of a pull queue stream.
+// PullRegistrationError identifies a permanent rejection that leaves a pull queue without a registered stream.
 //
-// WaitPullRegistered returns this error for a rejection before startup readiness.
+// WaitPullRegistered returns this error for such a rejection before startup readiness.
 // Start also returns it when StopOnPermanentStreamRejection is enabled. Use
 // errors.As to inspect Queue and status.Code on Err to inspect the gRPC status:
 //
@@ -496,7 +497,9 @@ func (worker *Worker) Start() (startErr error) {
 // A successful wait establishes registration, not available handler capacity.
 //
 // Before initial readiness, it returns the first *PullRegistrationError immediately
-// on a permanent rejection, or Start's error if startup fails. Wrapped startup
+// on a permanent rejection when that queue has no other registered stream, or
+// Start's error if startup fails. Surplus stream rejections are recorded for
+// diagnostics and retried while another stream holds the queue. Wrapped startup
 // errors retain errors.Is and errors.As behavior. Stop before readiness and
 // non-pull mode return errors. A nil ctx returns an argument error. Otherwise ctx
 // bounds only this wait; cancellation returns ctx.Err without stopping the Worker.
