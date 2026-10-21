@@ -23,8 +23,6 @@ package pullworkers
 import (
 	"context"
 	"errors"
-	"net/http"
-	"time"
 
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/dex"
@@ -48,15 +46,10 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 		WorkerTarget:       worker.WorkerTarget(),
 	})
 	if err != nil {
-		return nil, nil, nil, nil, errors.Join(err, worker.Stop(context.Background()))
+		return nil, nil, nil, nil, err
 	}
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
-	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := worker.WaitPullRegistered(startupCtx); err != nil {
-		return nil, nil, nil, nil, errors.Join(err, StopPullGreeting(context.Background(), worker, client, workerResult))
-	}
 	return flow, worker, client, workerResult, nil
 }
 
@@ -70,16 +63,6 @@ func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Clien
 		workerRunErr = ctx.Err()
 	}
 	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
-}
-
-func PullGreetingReadiness(worker *dex.Worker) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !worker.PullRegistrationState().IsReady {
-			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
