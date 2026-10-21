@@ -655,6 +655,33 @@ if err := worker.Start(); err != nil {
 }
 ```
 
+From Go SDK 1.13.0, call `WaitPullRegistered(ctx)` after launching `Start`
+on a goroutine to gate startup and rolling deployments on registration of every
+queue. Concurrent calls before or after `Start` are safe. The context bounds the
+wait, and startup failures retain their error chain. A permanent rejection before
+readiness returns `*PullRegistrationError` with `Queue` and the underlying gRPC
+status in `Err`. This error requires that the rejected queue has no other
+registered stream; surplus stream rejections are recorded and retried. Stop before readiness and non-pull mode return errors. Once all
+queues have registered, this wait always returns nil.
+
+Use `PullRegistrationState().IsReady` in readiness probes. `Queues` includes each
+queue's name, `HasRegisteredStream`, and `LastPermanentError`. After initial
+readiness, ownership moves, transient disconnects, and backoff preserve readiness.
+Only a queue with no registered stream and a permanent error makes it false;
+successful re-registration clears the error. Stop alone preserves the latched
+state, so remove a stopping Worker from service separately. Non-pull Workers
+return the zero snapshot. See the [runnable startup and HTTP readiness
+example](../examples/go/production/pull-workers/worker.go).
+
+`PullWorkerOptions.StopOnPermanentStreamRejection` defaults to false and preserves
+retries. When enabled, the first permanent stream rejection that leaves its queue
+with no registered stream, before or after readiness, makes `Start` drain all
+queues within `StopDrainTimeout`, request
+cancellation after the timeout, and wait for handlers before returning a
+`*PullRegistrationError`. Other queues can still hold streams while draining.
+Handlers must respond to cancellation. Always call `Stop` before exiting; it is
+safe after `Start` returns. Other SDKs will follow with readiness APIs.
+
 Pull mode polls the Worker's sticky queue and every registered Flow type queue.
 Flow type names must be unique within a Dex server. `MaxConcurrentTasks` defaults
 to the CPU count, and `IdleStreamsPerQueue` defaults to one. When capacity is

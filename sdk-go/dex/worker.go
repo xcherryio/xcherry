@@ -84,6 +84,13 @@ type WorkerOptions struct {
 //	if err != nil { return err }
 //	defer worker.Stop(context.Background())
 type PullWorkerOptions struct {
+	// StopOnPermanentStreamRejection makes Start return a permanent rejection when its queue has no registered stream. Default: false retries indefinitely.
+	// A rejection while another stream holds the same queue is recorded and retried without stopping.
+	// This applies before and after initial registration. Start begins draining all queues and bounds
+	// the drain with StopDrainTimeout, then cancels streams and waits for handlers to return.
+	// Handlers must respond to cancellation. Other queues may still hold streams while draining.
+	// Always call Stop before exiting; it remains safe after Start returns.
+	StopOnPermanentStreamRejection bool
 	// MaxConcurrentTasks bounds simultaneous handlers. Zero uses runtime.NumCPU().
 	MaxConcurrentTasks int
 	// IdleStreamsPerQueue sets waiting streams for each Flow type and the sticky queue. Zero uses one.
@@ -94,6 +101,69 @@ type PullWorkerOptions struct {
 	AppWorkerID string
 	// StopDrainTimeout bounds Stop after it begins draining. Zero uses 30 seconds; negative values are invalid.
 	StopDrainTimeout time.Duration
+}
+
+// PullRegistrationError identifies a permanent rejection that leaves a pull queue without a registered stream.
+//
+// WaitPullRegistered returns this error for such a rejection before startup readiness.
+// Start also returns it when StopOnPermanentStreamRejection is enabled. Use
+// errors.As to inspect Queue and status.Code on Err to inspect the gRPC status:
+//
+//	var rejection *dex.PullRegistrationError
+//	if errors.As(err, &rejection) {
+//		log.Printf("queue %s rejected: %s", rejection.Queue, status.Code(rejection.Err))
+//	}
+//
+// SDK-produced values always have a nonempty Queue and non-nil Err. Treat returned
+// errors as immutable; they can be shared by concurrent readiness callers.
+type PullRegistrationError struct {
+	// Queue names the rejected Flow type queue or app Worker ID queue.
+	Queue string
+	// Err is the non-nil gRPC status error returned by the rejected stream.
+	Err error
+}
+
+// Error returns the queue name and underlying rejection for diagnostics.
+// It does not change the error; concurrent calls are safe on immutable values.
+func (rejection *PullRegistrationError) Error() string {
+	return fmt.Sprintf("dex: pull queue %q registration rejected: %v", rejection.Queue, rejection.Err)
+}
+
+// Unwrap returns Err so errors.Is, errors.As, and gRPC status inspection retain the rejection.
+// SDK-produced errors return a non-nil error. See PullRegistrationError for usage.
+func (rejection *PullRegistrationError) Unwrap() error { return rejection.Err }
+
+// PullRegistrationState is an independent snapshot for a pull Worker's readiness probe.
+//
+// Obtain it with Worker.PullRegistrationState, including concurrently with Start,
+// Stop, or WaitPullRegistered. Its zero value describes a non-pull Worker: IsReady
+// is false and Queues is nil. Modifying Queues does not reconfigure the Worker.
+// Treat errors inside entries as immutable. See WaitPullRegistered for a complete
+// startup and HTTP readiness probe example.
+type PullRegistrationState struct {
+	// IsReady becomes true after every queue has registered at least once.
+	// Afterwards it is false only if a queue has no registered stream and a permanent error.
+	// Transient failures and ownership moves preserve readiness. Successful registration clears that queue's error.
+	IsReady bool
+	// Queues contains the app Worker ID queue followed by Flow type queues in sorted order.
+	// A pull Worker returns a fresh non-nil slice; a non-pull Worker returns nil.
+	Queues []PullQueueRegistrationState
+}
+
+// PullQueueRegistrationState describes one queue in a PullRegistrationState snapshot.
+//
+// Inspect these entries to diagnose a failing readiness probe. A queue may have
+// both a registered stream and LastPermanentError when another stream was rejected.
+// The snapshot owns its values; errors are shared immutable errors. See
+// WaitPullRegistered for the startup and readiness probe example.
+type PullQueueRegistrationState struct {
+	// Queue is the Flow type name or app Worker ID identifying this queue.
+	Queue string
+	// HasRegisteredStream reports whether at least one acknowledged stream is currently held.
+	HasRegisteredStream bool
+	// LastPermanentError is the last permanent gRPC status error, or nil if none remains.
+	// A successful registration clears it. Transient failures do not overwrite it.
+	LastPermanentError error
 }
 
 // Worker hosts registered Flows through a listening service or outbound pull streams.
@@ -341,13 +411,16 @@ func validatePlaintextTarget(address string, requireHostPort bool) error {
 // serving, or invalid lifecycle state failures. Call Start on a dedicated goroutine
 // when the application must continue doing other work.
 // Poll stream failures are retried while the Worker runs; registration failures
-// are logged with a longer retry delay.
-func (worker *Worker) Start() error {
+// are logged with a longer retry delay unless PullWorkerOptions.StopOnPermanentStreamRejection is enabled.
+func (worker *Worker) Start() (startErr error) {
 	worker.lifecycleMu.Lock()
 	if worker.state != workerCreated {
 		state := worker.state
 		worker.lifecycleMu.Unlock()
 		return fmt.Errorf("dex: Worker cannot start from state %s", state)
+	}
+	if worker.pull != nil {
+		defer func() { worker.pull.finishRegistration(startErr) }()
 	}
 	serverInfoCtx, cancelServerInfo := context.WithTimeout(
 		context.Background(),
@@ -383,12 +456,12 @@ func (worker *Worker) Start() error {
 	if worker.pull != nil {
 		worker.state = workerRunning
 		worker.lifecycleMu.Unlock()
-		worker.pull.run()
+		startErr = worker.pull.run()
 		worker.lifecycleMu.Lock()
 		worker.state = workerStopped
 		worker.lifecycleMu.Unlock()
 		worker.finish()
-		return nil
+		return startErr
 	}
 	listener, err := net.Listen("tcp", worker.bindAddress)
 	if err != nil {
@@ -414,6 +487,73 @@ func (worker *Worker) Start() error {
 	return nil
 }
 
+// WaitPullRegistered waits until every pull queue has received a Registered acknowledgement at least once.
+//
+// Use it to gate application startup and to start replacement Workers before
+// stopping old Workers during a rolling deployment. Call Start in another
+// goroutine. WaitPullRegistered is safe before or after Start and from multiple
+// goroutines. Once all queues have registered, every later call returns nil,
+// including after Stop; use PullRegistrationState for subsequent readiness probes.
+// A successful wait establishes registration, not available handler capacity.
+//
+// Before initial readiness, it returns the first *PullRegistrationError immediately
+// on a permanent rejection when that queue has no other registered stream, or
+// Start's error if startup fails. Surplus stream rejections are recorded for
+// diagnostics and retried while another stream holds the queue. Wrapped startup
+// errors retain errors.Is and errors.As behavior. Stop before readiness and
+// non-pull mode return errors. A nil ctx returns an argument error. Otherwise ctx
+// bounds only this wait; cancellation returns ctx.Err without stopping the Worker.
+// A completed registration or recorded failure takes precedence over cancellation.
+//
+//	func servePullWorker(ctx context.Context, worker *dex.Worker, mux *http.ServeMux) error {
+//		result := make(chan error, 1)
+//		go func() { result <- worker.Start() }()
+//		startupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+//		registrationErr := worker.WaitPullRegistered(startupCtx)
+//		cancel()
+//		if registrationErr != nil {
+//			return errors.Join(registrationErr, worker.Stop(context.Background()), <-result)
+//		}
+//		mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+//			if !worker.PullRegistrationState().IsReady {
+//				http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+//				return
+//			}
+//			w.WriteHeader(http.StatusOK)
+//		})
+//		select {
+//		case err := <-result:
+//			return errors.Join(err, worker.Stop(context.Background()))
+//		case <-ctx.Done():
+//			return errors.Join(worker.Stop(context.Background()), <-result)
+//		}
+//	}
+func (worker *Worker) WaitPullRegistered(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("dex: WaitPullRegistered context must not be nil")
+	}
+	if worker.pull == nil {
+		return fmt.Errorf("dex: WaitPullRegistered requires a pull Worker")
+	}
+	return worker.pull.waitRegistered(ctx)
+}
+
+// PullRegistrationState returns an independent snapshot of all pull queue registrations.
+//
+// Use IsReady for a readiness probe and Queues for diagnostics. It is safe to call
+// concurrently before, during, or after Start and Stop. The snapshot does not flap
+// for reconnects or transient errors after initial registration; only a permanent
+// rejection on a queue with no registered stream makes it unready. Re-registration
+// clears that queue's error. Stop alone does not clear latched readiness, so remove
+// a stopping Worker from service separately. Non-pull Workers return the zero value.
+// See WaitPullRegistered for a complete HTTP probe and startup gating example.
+func (worker *Worker) PullRegistrationState() PullRegistrationState {
+	if worker.pull == nil {
+		return PullRegistrationState{}
+	}
+	return worker.pull.registrationState()
+}
+
 // Stop drains handlers until ctx expires, then force-stops the Worker.
 //
 // Stop accepts calls before Start and repeated calls after shutdown. A nil context is
@@ -430,6 +570,9 @@ func (worker *Worker) Stop(ctx context.Context) error {
 	worker.lifecycleMu.Lock()
 	switch worker.state {
 	case workerCreated:
+		if worker.pull != nil {
+			worker.pull.finishRegistration(nil)
+		}
 		worker.state = workerStopped
 		worker.lifecycleMu.Unlock()
 		worker.grpcServer.Stop()

@@ -227,7 +227,21 @@ func compileBufferedTextStream(context dex.Context) error {
 
 var _ = compileBufferedTextStream
 
+var (
+	_ func(*dex.Worker, context.Context) error    = (*dex.Worker).WaitPullRegistered
+	_ func(*dex.Worker) dex.PullRegistrationState = (*dex.Worker).PullRegistrationState
+	_ error                                       = (*dex.PullRegistrationError)(nil)
+	_ interface{ Unwrap() error }                 = (*dex.PullRegistrationError)(nil)
+)
+
 func TestPublicContractsCompile(t *testing.T) {
+	registrationState := dex.PullRegistrationState{
+		IsReady: true,
+		Queues:  []dex.PullQueueRegistrationState{{Queue: "OrderFlow", HasRegisteredStream: true, LastPermanentError: nil}},
+	}
+	if !registrationState.IsReady || !registrationState.Queues[0].HasRegisteredStream {
+		t.Fatal("unexpected pull registration snapshot")
+	}
 	if dex.WorkQueuePermissionsIndexKey != "DexWorkQueuePermissions" {
 		t.Fatal("unexpected Work Queue permissions index key")
 	}
@@ -328,9 +342,10 @@ func TestPublicContractsCompile(t *testing.T) {
 	}
 	pullTarget := dex.WorkerTarget{Pull: true}
 	pullOptions := dex.PullWorkerOptions{
-		MaxConcurrentTasks:  2,
-		IdleStreamsPerQueue: 1,
-		AppWorkerID:         "contract-pull-12345678",
+		MaxConcurrentTasks:             2,
+		IdleStreamsPerQueue:            1,
+		AppWorkerID:                    "contract-pull-12345678",
+		StopOnPermanentStreamRejection: true,
 	}
 	pullWorker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{Pull: &pullOptions})
 	if err != nil {

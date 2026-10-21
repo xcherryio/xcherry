@@ -10,6 +10,7 @@ package integ
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/dex"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type pullSDKObservation struct {
@@ -112,6 +115,42 @@ type pullSDKProbeStep struct {
 
 func (step pullSDKProbeStep) Execute(dex.Context, string) (*dex.StepDecision, error) {
 	return dex.GracefulComplete(step.workerID), nil
+}
+
+type pullSDKInvalidRegistrationFlow struct {
+	pullSDKProbeFlow
+}
+
+func (pullSDKInvalidRegistrationFlow) GetFlowType() string {
+	return strings.Repeat("invalid-registration-", 20)
+}
+
+func TestPullSDKRegistrationReadiness(t *testing.T) {
+	worker := startPullSDKWorker(t, []dex.Flow{pullSDKProbeFlow{}}, "pull-ready-"+uuid.NewString())
+	require.NoError(t, worker.WaitPullRegistered(integrationContext(t)))
+	require.True(t, worker.PullRegistrationState().IsReady)
+	require.Len(t, worker.PullRegistrationState().Queues, 2)
+}
+
+func TestPullSDKRegistrationRejection(t *testing.T) {
+	registry, err := dex.NewRegistry([]dex.Flow{pullSDKInvalidRegistrationFlow{}})
+	require.NoError(t, err)
+	worker, err := dex.NewWorker(registry, newPullSDKCache(t), dex.WorkerOptions{
+		FlowServiceAddress: flowServiceAddress(),
+		Pull:               &dex.PullWorkerOptions{AppWorkerID: "pull-invalid-" + uuid.NewString()},
+	})
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() { result <- worker.Start() }()
+	t.Cleanup(func() {
+		require.NoError(t, worker.Stop(context.Background()))
+		require.NoError(t, <-result)
+	})
+	var rejection *dex.PullRegistrationError
+	require.ErrorAs(t, worker.WaitPullRegistered(integrationContext(t)), &rejection)
+	require.Equal(t, codes.InvalidArgument, status.Code(rejection.Err))
+	require.NotEmpty(t, rejection.Queue)
+	require.False(t, worker.PullRegistrationState().IsReady)
 }
 
 func TestPullSDKWorkerEndToEnd(t *testing.T) {

@@ -30,36 +30,53 @@ import (
 )
 
 type pullWorker struct {
-	service             *workerService
-	client              dexpb.WorkerTaskServiceClient
-	appWorkerID         string
-	flowTypes           []string
-	queues              []string
-	maxConcurrentTasks  int
-	idleStreamsPerQueue int
-	stopDrainTimeout    time.Duration
-	sdkVersion          string
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	mu                  sync.Mutex
-	streams             map[*pullStream]struct{}
-	streamWG            sync.WaitGroup
-	unsupportedOnce     sync.Once
-	busyTasks           int
-	isStopping          bool
-	wake                chan struct{}
-	done                chan struct{}
+	service                        *workerService
+	client                         dexpb.WorkerTaskServiceClient
+	appWorkerID                    string
+	flowTypes                      []string
+	queues                         []string
+	maxConcurrentTasks             int
+	idleStreamsPerQueue            int
+	stopDrainTimeout               time.Duration
+	stopOnPermanentStreamRejection bool
+	sdkVersion                     string
+	ctx                            context.Context
+	cancel                         context.CancelFunc
+	mu                             sync.Mutex
+	streams                        map[*pullStream]struct{}
+	streamWG                       sync.WaitGroup
+	unsupportedOnce                sync.Once
+	busyTasks                      int
+	isStopping                     bool
+	wake                           chan struct{}
+	done                           chan struct{}
+	registrationChanged            chan struct{}
+	queueRegistrations             map[string]*pullQueueRegistration
+	hasRegisteredAllQueues         bool
+	initialRegistrationError       error
+	startError                     error
+	hasStartReturned               bool
+	permanentStreamError           *PullRegistrationError
+	permanentStreamRejected        chan struct{}
+}
+
+type pullQueueRegistration struct {
+	registeredStreams  int
+	hasRegistered      bool
+	lastPermanentError error
 }
 
 type pullStream struct {
-	worker                       *pullWorker
-	queue                        string
-	ctx                          context.Context
-	cancel                       context.CancelFunc
-	mu                           sync.Mutex
-	sendMu                       sync.Mutex
-	stream                       dexpb.WorkerTaskService_PollWorkerTaskClient
-	isSendClosed                 bool
+	worker       *pullWorker
+	queue        string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	sendMu       sync.Mutex
+	stream       dexpb.WorkerTaskService_PollWorkerTaskClient
+	isSendClosed bool
+	// Registration state is guarded by worker.mu, independently of stream.mu and sendMu.
+	isRegistered                 bool
 	taskID                       string
 	taskCancel                   context.CancelFunc
 	taskFinished                 chan struct{}
@@ -112,10 +129,17 @@ func newPullWorker(registry *Registry, service *workerService, conn *grpc.Client
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	queues := append([]string{appWorkerID}, flowTypes...)
+	queueRegistrations := make(map[string]*pullQueueRegistration, len(queues))
+	for _, queue := range queues {
+		queueRegistrations[queue] = &pullQueueRegistration{}
+	}
 	return &pullWorker{
 		service: service, client: dexpb.NewWorkerTaskServiceClient(conn), appWorkerID: appWorkerID,
-		flowTypes: flowTypes, queues: append([]string{appWorkerID}, flowTypes...),
-		maxConcurrentTasks: maxConcurrentTasks, idleStreamsPerQueue: idleStreamsPerQueue, stopDrainTimeout: stopDrainTimeout, sdkVersion: sdkVersion,
+		flowTypes: flowTypes, queues: queues,
+		queueRegistrations: queueRegistrations, registrationChanged: make(chan struct{}), permanentStreamRejected: make(chan struct{}),
+		stopOnPermanentStreamRejection: options.StopOnPermanentStreamRejection,
+		maxConcurrentTasks:             maxConcurrentTasks, idleStreamsPerQueue: idleStreamsPerQueue, stopDrainTimeout: stopDrainTimeout, sdkVersion: sdkVersion,
 		ctx: ctx, cancel: cancel, streams: make(map[*pullStream]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}, nil
 }
@@ -170,7 +194,7 @@ func validateAppWorkerID(appWorkerID string) error {
 	return nil
 }
 
-func (worker *pullWorker) run() {
+func (worker *pullWorker) run() error {
 	defer func() {
 		worker.streamWG.Wait()
 		close(worker.done)
@@ -179,7 +203,22 @@ func (worker *pullWorker) run() {
 	for {
 		select {
 		case <-worker.ctx.Done():
-			return
+			worker.mu.Lock()
+			err := worker.permanentStreamError
+			worker.mu.Unlock()
+			if err != nil && worker.stopOnPermanentStreamRejection {
+				return err
+			}
+			return nil
+		case <-worker.permanentStreamRejected:
+			worker.stop()
+			drainTimer := time.AfterFunc(worker.stopDrainTimeout, worker.cancel)
+			<-worker.ctx.Done()
+			drainTimer.Stop()
+			worker.mu.Lock()
+			err := worker.permanentStreamError
+			worker.mu.Unlock()
+			return err
 		case <-worker.wake:
 			worker.reconcile()
 		}
@@ -189,6 +228,7 @@ func (worker *pullWorker) run() {
 func (worker *pullWorker) stop() {
 	worker.mu.Lock()
 	worker.isStopping = true
+	worker.notifyRegistrationChanged()
 	for stream := range worker.streams {
 		stream.mu.Lock()
 		stream.isDraining = true
@@ -238,12 +278,117 @@ func (worker *pullWorker) reconcile() {
 	}
 }
 
+func (worker *pullWorker) waitRegistered(ctx context.Context) error {
+	for {
+		worker.mu.Lock()
+		if worker.hasRegisteredAllQueues {
+			worker.mu.Unlock()
+			return nil
+		}
+		err := worker.initialRegistrationError
+		if err == nil && worker.hasStartReturned {
+			err = worker.startError
+			if err == nil {
+				err = fmt.Errorf("dex: pull Worker stopped before registration")
+			}
+		}
+		if err == nil && worker.isStopping {
+			err = fmt.Errorf("dex: pull Worker stopped before registration")
+		}
+		changed := worker.registrationChanged
+		worker.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (worker *pullWorker) registrationState() PullRegistrationState {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	state := PullRegistrationState{IsReady: worker.hasRegisteredAllQueues, Queues: make([]PullQueueRegistrationState, 0, len(worker.queues))}
+	for _, queue := range worker.queues {
+		registration := worker.queueRegistrations[queue]
+		hasRegisteredStream := registration.registeredStreams > 0
+		state.Queues = append(state.Queues, PullQueueRegistrationState{
+			Queue: queue, HasRegisteredStream: hasRegisteredStream, LastPermanentError: registration.lastPermanentError,
+		})
+		if !hasRegisteredStream && registration.lastPermanentError != nil {
+			state.IsReady = false
+		}
+	}
+	return state
+}
+
+func (worker *pullWorker) recordRegisteredStream(stream *pullStream) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	registration := worker.queueRegistrations[stream.queue]
+	stream.isRegistered = true
+	registration.registeredStreams++
+	registration.hasRegistered = true
+	registration.lastPermanentError = nil
+	if !worker.hasRegisteredAllQueues {
+		hasRegisteredAllQueues := true
+		for _, queue := range worker.queues {
+			if !worker.queueRegistrations[queue].hasRegistered {
+				hasRegisteredAllQueues = false
+				break
+			}
+		}
+		worker.hasRegisteredAllQueues = hasRegisteredAllQueues
+	}
+	worker.notifyRegistrationChanged()
+}
+
+func (worker *pullWorker) recordStreamResult(stream *pullStream, err error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	registration := worker.queueRegistrations[stream.queue]
+	if stream.isRegistered {
+		stream.isRegistered = false
+		registration.registeredStreams--
+	}
+	if isPermanentPullStreamError(err) {
+		registration.lastPermanentError = err
+		rejection := &PullRegistrationError{Queue: stream.queue, Err: err}
+		if registration.registeredStreams == 0 && !worker.hasRegisteredAllQueues && worker.initialRegistrationError == nil {
+			worker.initialRegistrationError = rejection
+		}
+		if registration.registeredStreams == 0 && worker.stopOnPermanentStreamRejection && worker.permanentStreamError == nil {
+			worker.permanentStreamError = rejection
+			close(worker.permanentStreamRejected)
+		}
+	}
+	worker.notifyRegistrationChanged()
+}
+
+func (worker *pullWorker) finishRegistration(err error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	worker.startError = err
+	worker.hasStartReturned = true
+	worker.notifyRegistrationChanged()
+}
+
+func (worker *pullWorker) notifyRegistrationChanged() {
+	close(worker.registrationChanged)
+	worker.registrationChanged = make(chan struct{})
+}
+
 func (stream *pullStream) run() {
 	defer stream.worker.streamWG.Done()
 	defer stream.remove()
 	backoff := 100 * time.Millisecond
 	for stream.ctx.Err() == nil {
 		wasRegistered, err := stream.poll()
+		stream.worker.recordStreamResult(stream, err)
+		stream.waitForTaskFinished()
 		if wasRegistered {
 			backoff = 100 * time.Millisecond
 		}
@@ -347,6 +492,7 @@ func (stream *pullStream) poll() (bool, error) {
 				stream.supportsUnknownNameRejection = response.GetRegistered().GetSupportsUnknownNameRejection()
 				stream.mu.Unlock()
 				wasRegistered = true
+				stream.worker.recordRegisteredStream(stream)
 				stream.worker.signal()
 				continue
 			}
@@ -362,7 +508,6 @@ func (stream *pullStream) poll() (bool, error) {
 			case *dexpb.PollWorkerTaskResponse_Ping:
 				if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Pong{Pong: &dexpb.PollWorkerTaskPong{}}}); err != nil {
 					stream.cancelTaskContext()
-					stream.waitForTaskFinished()
 					return wasRegistered, err
 				}
 			case *dexpb.PollWorkerTaskResponse_Reconnect:
@@ -377,11 +522,9 @@ func (stream *pullStream) poll() (bool, error) {
 			stream.completeTask()
 		case err := <-receiveErrors:
 			stream.cancelTaskContext()
-			stream.waitForTaskFinished()
 			return wasRegistered, err
 		case <-pollCtx.Done():
 			stream.cancelTaskContext()
-			stream.waitForTaskFinished()
 			return wasRegistered, pollCtx.Err()
 		}
 	}

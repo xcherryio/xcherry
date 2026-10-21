@@ -241,6 +241,44 @@ pub fn stop_pull_greeting(
 
 </SdkTabs>
 
+## Readiness
+
+Starting with Go SDK 1.13.0, **WaitPullRegistered** gates startup until every
+Flow type queue and the app Worker ID queue has received a registration
+acknowledgement. The other SDKs will follow. Start the Worker in a goroutine,
+then wait with a startup deadline before activating it or stopping the old
+Worker during a rolling deployment. Registration does not guarantee spare
+handler capacity.
+
+**WaitPullRegistered** is safe to call concurrently, including before
+**Start**. It returns a **PullRegistrationError** with the queue name and
+underlying gRPC error on a permanent rejection before readiness when the queue
+has no other registered stream. A rejected surplus stream is recorded and retried
+while another registered stream holds that queue. Startup errors
+from **Start** also reach the waiter. Cancellation returns the context error;
+stopping before readiness returns an error. Once all queues have registered,
+this wait keeps returning successfully.
+
+Use **PullRegistrationState().IsReady** for readiness probes, such as a
+**/readyz** handler that returns 503 while it is false.
+**Queues** reports each queue's **HasRegisteredStream** and
+**LastPermanentError**. After initial registration, reconnects, ownership moves,
+transient disconnects, and backoff keep **IsReady** true. It becomes false only
+when a queue has no registered stream and a permanent error. Successful
+registration clears that queue's error and restores readiness when no other
+queue is failing. Stop alone does not clear readiness; remove the Worker from
+service during shutdown separately.
+
+**StopOnPermanentStreamRejection** defaults to false, preserving retries.
+Set it to true to make **Start** return a **PullRegistrationError** for the first
+permanent rejection that leaves its queue without a registered stream, even
+after readiness. Rejections while another stream holds the same queue do not stop
+the Worker. Other queues may still hold streams
+while **Start** drains them. Draining uses **StopDrainTimeout**, then requests
+cancellation and waits for handlers to return. Handlers must respond to
+cancellation. Always call **Stop** before exiting; it remains safe after
+**Start** returns.
+
 ## Routing and availability
 
 Each pull Worker polls its own app Worker ID queue and every Flow type it

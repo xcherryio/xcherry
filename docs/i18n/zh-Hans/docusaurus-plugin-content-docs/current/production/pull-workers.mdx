@@ -238,6 +238,37 @@ pub fn stop_pull_greeting(
 
 </SdkTabs>
 
+## 就绪检查 {#readiness}
+
+从 Go SDK 1.13.0 开始，**WaitPullRegistered** 会等待所有 Flow type 队列和
+app Worker ID 队列收到注册确认后再允许启动流程继续。其他 SDK 将陆续支持。
+在独立 goroutine 中调用 **Start**，然后设置启动截止时间并等待注册完成。
+滚动部署时，先等待新 Worker 就绪，再停止旧 Worker。注册成功不代表处理器
+仍有空闲容量。
+
+**WaitPullRegistered** 支持并发调用，也可以在 **Start** 之前调用。
+如果就绪前发生永久拒绝，且该队列没有其他已注册的 stream，它会返回包含
+队列名称和底层 gRPC 错误的 **PullRegistrationError**。只要同一队列仍有其他
+已注册的 stream，多余 stream 的拒绝就只会被记录并重试。**Start** 的启动错误也会传递给等待方。
+取消等待会返回 context 错误；就绪前停止 Worker 会返回错误。
+所有队列都注册成功过一次后，后续等待始终成功。
+
+就绪探针应读取 **PullRegistrationState().IsReady**，例如在它为 false 时
+让 **/readyz** 返回 503。
+**Queues** 提供每个队列的 **HasRegisteredStream** 和
+**LastPermanentError**。首次就绪后，重连、所有权迁移、临时断连和退避
+都保持 **IsReady** 为 true。只有某个队列既没有已注册的 stream，
+又存在永久错误时，它才变为 false。重新注册成功会清除该队列的永久错误；
+其他队列均正常时，就绪状态恢复。单独调用 **Stop** 不会清除就绪状态；
+关闭时应另行将 Worker 从服务中移除。
+
+**StopOnPermanentStreamRejection** 默认为 false，保留自动重试行为。
+设为 true 后，首次导致其队列没有任何已注册 stream 的永久拒绝会让
+**Start** 返回 **PullRegistrationError**，即使 Worker 已经就绪。
+同一队列仍有其他已注册 stream 时，拒绝不会停止 Worker。**Start** 排空其他队列时，这些队列仍可能持有 stream。
+排空时间由 **StopDrainTimeout** 限制，超时后请求取消并等待处理器返回。
+处理器必须响应取消。退出前始终调用 **Stop**；**Start** 返回后仍可安全调用。
+
 ## 路由和可用性
 
 每个拉取模式 Worker 都轮询自己的 app Worker ID 队列，以及注册的每个 Flow 类型队列。
