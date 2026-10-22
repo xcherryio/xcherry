@@ -57,11 +57,12 @@ func (r *fakeHostResolver) callCount() int {
 type testWorkerHandler struct {
 	dexpb.UnimplementedWorkerServiceServer
 
-	mu              sync.Mutex
-	calls           int
-	failuresLeft    int
-	failureStatus   codes.Code
-	permanentStatus codes.Code
+	mu               sync.Mutex
+	calls            int
+	failuresLeft     int
+	failureStatus    codes.Code
+	permanentStatus  codes.Code
+	applicationError error
 }
 
 type testStreamingWorkerHandler struct {
@@ -71,6 +72,16 @@ type testStreamingWorkerHandler struct {
 	calls               int
 	failuresBeforeFrame int
 	failAfterFrame      bool
+	applicationError    error
+}
+
+// testWorkerApplicationError returns the status an SDK Worker sends for a handler error.
+func testWorkerApplicationError(t *testing.T) error {
+	t.Helper()
+	applicationStatus, err := status.New(codes.Unknown, "synthetic application failure").
+		WithDetails(&dexpb.WorkerErrorResponse{Detail: "synthetic application failure"})
+	require.NoError(t, err)
+	return applicationStatus.Err()
 }
 
 func (h *testStreamingWorkerHandler) InvokeExecuteMethod(
@@ -79,6 +90,10 @@ func (h *testStreamingWorkerHandler) InvokeExecuteMethod(
 ) error {
 	h.mu.Lock()
 	h.calls++
+	if h.applicationError != nil {
+		h.mu.Unlock()
+		return h.applicationError
+	}
 	if h.failuresBeforeFrame > 0 {
 		h.failuresBeforeFrame--
 		h.mu.Unlock()
@@ -116,6 +131,9 @@ func (h *testWorkerHandler) InvokeWorkerRPC(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls++
+	if h.applicationError != nil {
+		return nil, h.applicationError
+	}
 	if h.failuresLeft > 0 {
 		h.failuresLeft--
 		failureStatus := h.failureStatus
@@ -334,6 +352,54 @@ func TestWorkerClientPoolStreamingDoesNotFailOverAfterFirstFrame(t *testing.T) {
 	require.NotNil(t, output.GetHeartbeat())
 	_, err = stream.Recv()
 	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.Equal(t, 1, handler.callCount())
+}
+
+func TestWorkerClientPoolStreamingDoesNotFailOverWorkerApplicationError(t *testing.T) {
+	handler := &testStreamingWorkerHandler{applicationError: testWorkerApplicationError(t)}
+	server := newTestWorkerServer(t, "127.0.0.1:0", handler)
+	cfg := testPoolConfig()
+	cfg.Worker.WorkerServiceRequestMaxAttempts = 3
+	pool, err := newWorkerClientPool(
+		cfg,
+		&fakeHostResolver{addresses: []string{"127.0.0.1"}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	client, callCtx, release, err := pool.Acquire(context.Background(), &dexpb.WorkerTarget{
+		Address:           net.JoinHostPort("workers.test", server.port()),
+		IsHeadlessAddress: true,
+	}, "flow-one")
+	require.NoError(t, err)
+	defer release()
+	stream, err := client.InvokeExecuteMethod(callCtx, &dexpb.InvokeExecuteMethodRequest{})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	require.Equal(t, codes.Unknown, status.Code(err))
+	require.True(t, isWorkerApplicationError(err))
+	require.Equal(t, 1, handler.callCount())
+}
+
+func TestWorkerClientPoolDoesNotFailOverWorkerApplicationError(t *testing.T) {
+	handler := &testWorkerHandler{applicationError: testWorkerApplicationError(t)}
+	server := newTestWorkerServer(t, "127.0.0.1:0", handler)
+	cfg := testPoolConfig()
+	cfg.Worker.WorkerServiceRequestMaxAttempts = 3
+	pool, err := newWorkerClientPool(
+		cfg,
+		&fakeHostResolver{addresses: []string{"127.0.0.1"}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	client, callCtx, release, err := pool.Acquire(context.Background(), &dexpb.WorkerTarget{
+		Address:           net.JoinHostPort("workers.test", server.port()),
+		IsHeadlessAddress: true,
+	}, "flow-one")
+	require.NoError(t, err)
+	defer release()
+	_, err = client.InvokeWorkerRPC(callCtx, &dexpb.InvokeWorkerRPCRequest{})
+	require.Equal(t, codes.Unknown, status.Code(err))
 	require.Equal(t, 1, handler.callCount())
 }
 

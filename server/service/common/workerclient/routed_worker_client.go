@@ -281,11 +281,21 @@ func (c *routedWorkerClient) release() {
 }
 
 func (p *WorkerClientPool) isFailoverWorkerServiceError(ctx context.Context, err error) bool {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || isWorkerApplicationError(err) {
 		return false
 	}
 	_, ok := p.failoverStatusCodes[status.Code(err)]
 	return ok
+}
+
+// isWorkerApplicationError reports a handler failure the Worker returned, which another endpoint would repeat.
+func isWorkerApplicationError(err error) bool {
+	for _, detail := range status.Convert(err).Details() {
+		if _, ok := detail.(*dexpb.WorkerErrorResponse); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *resolvedWorkerAddressState) set(address string) {

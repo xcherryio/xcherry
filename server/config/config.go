@@ -489,6 +489,8 @@ type (
 		// WorkerServiceRequestMaxAttempts includes the first headless transport attempt. Non-positive defaults to 3. Activity retries are independent.
 		WorkerServiceRequestMaxAttempts int `yaml:"workerServiceRequestMaxAttempts"`
 		// HeadlessFailoverStatusCodes trigger endpoint failover. Empty defaults to Unavailable (14), DeadlineExceeded (4), and Unknown (2).
+		// Errors returned by a Worker handler, which carry WorkerErrorResponse details, never fail over whatever their code, because
+		// another endpoint would repeat them; they fail the Step or RPC attempt and follow its retry policy.
 		// See https://grpc.io/docs/guides/status-codes/. Immutable after startup.
 		HeadlessFailoverStatusCodes []int `yaml:"headlessFailoverStatusCodes"`
 	}
