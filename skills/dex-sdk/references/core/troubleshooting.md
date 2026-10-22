@@ -7,7 +7,7 @@ Application failure policy belongs in pre-implementation design. Read [error han
 ## Diagnostic order
 
 1. Check application and Worker logs for registration, handler, connectivity, codec, and blob errors.
-2. Inspect the Flow in Dex Web.
+2. Inspect the Flow in Dex Web. With Server v1.15.0, compare the target, Flow type queue, captured dispatch sticky app Worker ID, serving app Worker ID, queue source, and dispatch failure reason; see [routing diagnostics](operations.md#dex-web-pull-routing-diagnostics).
 3. Run `dexcli flow inspect <flow-id> --all-history` for a bounded history view.
 4. Compare the active Step, Conditions, Attributes, pending Channels, Timers, and recent semantic events with the intended graph.
 5. Reproduce the path with the smallest real Dex Server integration test.
@@ -18,6 +18,7 @@ Use `dexcli flow search`, `summary`, `state`, and `history` for narrower JSON. U
 ## Failure routing
 
 - **Worker unavailable**: for a listening Worker, verify process health, bind address, advertised target, name resolution, and the network path from Dex Server. For a pull Worker, inspect its outbound streams, app Worker ID, registered Flow types, Matching availability, and authentication. An unavailable pull Step consumes a Step retry.
+- **Registered pull Workers decline Steps**: compare busy handlers with **M − R**, reserve-decline counters, and RPC load. A reserve decline consumes no attempt, but **NO_WORKER_AVAILABLE** after the dispatch wait does. Size concurrency using the [reserve contract](pull-workers.md#reserved-rpc-capacity).
 - **Unknown Flow, Step, RPC, or resource**: compare the Worker registry and persistence schema with the execution's stable names and deployed version.
 - **Flow does not advance**: inspect the active Step's WaitFor conditions and pending Channel, Timer, or SubFlow state.
 - **Repeated side effect**: inspect attempts and heartbeat checkpoints; make Execute idempotent or add compensation.

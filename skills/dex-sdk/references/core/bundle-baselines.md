@@ -5,20 +5,20 @@ reference sources packaged with this Dex Skills release. Project dependencies
 and lockfiles remain authoritative for application code.
 
 ```text
-DEX_BASELINE=sdk-go/v1.14.1
-DEX_SERVER_BASELINE=server/v1.13.0
-DEX_CLI_BASELINE=cli-v1.14.0
-DEX_JAVA_BASELINE=sdk-java/v1.14.1
-DEX_PYTHON_BASELINE=sdk-python/v1.14.1
-DEX_TYPESCRIPT_BASELINE=sdk-typescript/v1.14.1
-DEX_RUST_BASELINE=sdk-rust/v1.14.1
+DEX_BASELINE=sdk-go/v1.15.0
+DEX_SERVER_BASELINE=server/v1.15.0
+DEX_CLI_BASELINE=cli-v1.15.0
+DEX_JAVA_BASELINE=sdk-java/v1.15.0
+DEX_PYTHON_BASELINE=sdk-python/v1.15.0
+DEX_TYPESCRIPT_BASELINE=sdk-typescript/v1.15.0
+DEX_RUST_BASELINE=sdk-rust/v1.15.0
 ```
 
 These values mirror the release metadata at the Dex Skills repository root.
 The package validator rejects any drift between the two copies.
 
-All five SDK baselines use their published v1.14.1 tags. The Server baseline
-remains server/v1.13.0 and the CLI baseline remains cli-v1.14.0.
+All five SDK baselines use their published v1.15.0 tags. The Server baseline
+is server/v1.15.0 and the CLI baseline is cli-v1.15.0.
 Each SDK and its language examples use that language's exact tag. **DEX_BASELINE**
 is the Go SDK pin, not a shared version for every language.
 The Go example dependency manifest selects SDK v1.13.0; the other language

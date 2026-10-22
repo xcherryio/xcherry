@@ -80,8 +80,8 @@ schema version, or a source read failure returns a 503 and fails `/readyz`, and
 two valid definitions for one Flow type make the source invalid. After
 publishing, confirm that `/readyz` reports the expected definition count and
 `GET /api/v2/catalog` lists every Flow type. See the [Dex Web
-definition directory](https://github.com/superdurable/dex/blob/server/v1.13.0/web/README.md#run-through-dexcli)
-and [Dex Server image](https://github.com/superdurable/dex/blob/server/v1.13.0/web/README.md#run-through-the-dex-server-image)
+definition directory](https://github.com/superdurable/dex/blob/server/v1.15.0/web/README.md#run-through-dexcli)
+and [Dex Server image](https://github.com/superdurable/dex/blob/server/v1.15.0/web/README.md#run-through-the-dex-server-image)
 contracts.
 
 ## Deployment, only when requested

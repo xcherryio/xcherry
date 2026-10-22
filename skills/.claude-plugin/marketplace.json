@@ -11,7 +11,7 @@
       "name": "superdurable-dex",
       "source": "./",
       "description": "App Builder-led Dex development in a repository-backed coding workspace.",
-      "version": "0.44.1",
+      "version": "0.45.0",
       "skills": [
         "./dex-app-builder",
         "./dex-sdk",

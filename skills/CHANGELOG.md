@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.45.0 - 2026-10-22
+
+- Advance all five SDK, Server, and CLI baselines to their published Dex 1.15.0 tags and refresh pinned source links. Synchronize the three plugin manifests and marketplace metadata at version 0.45.0.
+- Document reserved RPC capacity across all five SDKs, the intentional one-fewer-Step-slot default, explicit opt-out, validation, reserve-decline counters, dispatch attempt accounting, and sizing for long-running Steps.
+- Add Dex Web pull routing diagnostics for Flow targets, queues, sticky and serving app Worker IDs, queue sources, and dispatch failures. Document headless Worker handler errors following the application retry policy without endpoint failover.
+
 ## 0.44.1 - 2026-10-22
 
 - Document the xtemporal ParadeDB Dex visibility 2.0 cluster-wide generic Indexed Attribute pool, normal Worker discovery and type verification, pinned registration and execution limits, and query/profile restrictions. Recommend the portable SQLite slot names and distinguish ordinary synchronization from managed-external mode.

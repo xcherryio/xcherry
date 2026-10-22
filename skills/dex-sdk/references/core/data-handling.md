@@ -93,6 +93,8 @@ Configure a target as headless only when its **host:port** resolves to individua
 
 Sticky routing is a performance hint, not a placement guarantee. Dex may select another Worker after a transport failure, endpoint removal, routing-entry eviction, or server restart. The replacement Worker loads each missing blob once and warms its own cache. Never keep Flow correctness state only in Worker memory or its cache.
 
+With Server v1.15.0, a headless Worker handler error is returned without trying another endpoint, regardless of its status code or whether it arrives before the first streamed result. Step handler errors follow the configured Step failure and retry policy; genuine transport failures still use endpoint failover. This prevents hidden repeated handler calls within one Step attempt. Keep effects idempotent because later Step attempts can still repeat them. [Released failover behavior](https://github.com/superdurable/dex/blob/server/v1.15.0/server/service/common/workerclient/routed_worker_client.go)
+
 For API/MCP agents that do not need a code sandbox, this combination is often sufficient:
 
 ```text
