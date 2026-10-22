@@ -172,6 +172,7 @@ tasks.register('localIntegrationTest', Test) {
         includeTestsMatching 'io.superdurable.dex.WorkerServiceIntegrationTest'
         includeTestsMatching 'io.superdurable.dex.ClientExceptionIntegrationTest'
         includeTestsMatching 'io.superdurable.dex.PullWorkerTest'
+        includeTestsMatching 'io.superdurable.dex.integ.StepCancellationWorkflowTest'
         includeTestsMatching 'io.superdurable.dex.CredentialTest'
         includeTestsMatching 'io.superdurable.dex.HardDeleteAttributeMappingTest'
     }
