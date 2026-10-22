@@ -7,7 +7,7 @@ license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "dex-python-sdk==1.11.0",
+    "dex-python-sdk==1.12.0",
     "flask>=3.0,<4",
     "litellm>=1.75,<2",
     "mcp>=2.1,<3",

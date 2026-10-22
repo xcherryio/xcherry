@@ -22,6 +22,10 @@ BASELINE_FILES = (
     "DEX_BASELINE",
     "DEX_SERVER_BASELINE",
     "DEX_CLI_BASELINE",
+    "DEX_JAVA_BASELINE",
+    "DEX_PYTHON_BASELINE",
+    "DEX_TYPESCRIPT_BASELINE",
+    "DEX_RUST_BASELINE",
 )
 VERSION_CHECK_SCRIPT = ROOT / "hooks" / "version-check.mjs"
 HOOK_CONFIGS = {
@@ -170,7 +174,12 @@ def check_reachable_links(skill: Path, references: list[Path]) -> None:
 
 
 def reference_baseline(source_path: str, sdk_baseline: str) -> str:
-    prefix = Path(source_path).parts[0]
+    parts = Path(source_path).parts
+    prefix = parts[0]
+    if prefix == "examples" and len(parts) > 1:
+        prefix = f"sdk-{parts[1]}"
+    if prefix in {"sdk-java", "sdk-python", "sdk-typescript", "sdk-rust"}:
+        return (ROOT / f"DEX_{prefix[4:].upper()}_BASELINE").read_text().strip()
     if prefix in {"server", "web", "protos"}:
         return (ROOT / "DEX_SERVER_BASELINE").read_text().strip()
     if prefix == "cli":
@@ -691,6 +700,10 @@ def check_standalone_bundle(version: str) -> None:
     baselines = BUNDLE_BASELINES.read_text()
     for baseline_name in BASELINE_FILES:
         expected = (ROOT / baseline_name).read_text().strip()
+        if baseline_name in {"DEX_JAVA_BASELINE", "DEX_PYTHON_BASELINE", "DEX_TYPESCRIPT_BASELINE", "DEX_RUST_BASELINE"}:
+            language = baseline_name.removeprefix("DEX_").removesuffix("_BASELINE").lower()
+            if re.fullmatch(rf"sdk-{language}/v\d+\.\d+\.\d+", expected) is None:
+                fail(f"{baseline_name} must pin its SDK's published release tag")
         if f"{baseline_name}={expected}" not in baselines:
             fail(f"bundle baselines must mirror {baseline_name}={expected}")
 

@@ -1,6 +1,6 @@
 # Dex Web v2 and FDG 2.0
 
-Reference capability baselines: Dex Server `v1.12.0`, Dex CLI `v1.12.0`, and
+Reference capability baselines: Dex Server `v1.13.0`, Dex CLI `v1.13.0`, and
 the SDK source baseline in [bundle-baselines.md](../../dex-sdk/references/core/bundle-baselines.md).
 These validate the guidance, not an instruction to upgrade an application.
 An application retains its pinned Server, CLI, and Go SDK versions unless the

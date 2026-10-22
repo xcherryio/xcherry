@@ -94,10 +94,15 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 		WorkerTarget:       worker.WorkerTarget(),
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, errors.Join(err, worker.Stop(context.Background()))
 	}
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
+	startupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := worker.WaitPullRegistered(startupContext); err != nil {
+		return nil, nil, nil, nil, errors.Join(err, StopPullGreeting(context.Background(), worker, client, workerResult))
+	}
 	return flow, worker, client, workerResult, nil
 }
 
@@ -111,6 +116,16 @@ func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Clien
 		workerRunErr = ctx.Err()
 	}
 	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
+}
+
+func PullGreetingReadiness(worker *dex.Worker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !worker.PullRegistrationState().IsReady {
+			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -253,8 +268,10 @@ app Worker ID 队列收到注册确认后再允许启动流程继续。其他 SD
 取消等待会返回 context 错误；就绪前停止 Worker 会返回错误。
 所有队列都注册成功过一次后，后续等待始终成功。
 
-就绪探针应读取 **PullRegistrationState().IsReady**，例如在它为 false 时
-让 **/readyz** 返回 503。
+可运行的 [Go 示例](https://github.com/superdurable/dex/blob/main/examples/go/production/pull-workers/worker.go)
+使用 **WaitPullRegistered** 和 30 秒期限等待启动就绪。它的
+**PullGreetingReadiness** HTTP 处理器读取 **PullRegistrationState().IsReady**，
+为 false 时返回 503，就绪时返回 200。将它挂载到就绪探针端点。
 **Queues** 提供每个队列的 **HasRegisteredStream** 和
 **LastPermanentError**。首次就绪后，重连、所有权迁移、临时断连和退避
 都保持 **IsReady** 为 true。只有某个队列既没有已注册的 stream，
