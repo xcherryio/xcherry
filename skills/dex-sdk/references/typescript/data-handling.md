@@ -14,7 +14,7 @@ Stable Flow, Step, Attribute, Channel, Stream, RPC, and codec type names are par
 
 Use Attributes for authoritative current state, AttributeMaps for independently loaded records, Channels for durable FIFO commands, ChannelMaps for per-key queues, and Streams for best-effort progress. Register each definition in one Flow schema.
 
-[Pinned typed state source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/typescript/src/primitives/attribute/attribute-flow.ts)
+[Pinned typed state source](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/examples/typescript/src/primitives/attribute/attribute-flow.ts)
 <!-- dex-source: examples/typescript/src/primitives/attribute/attribute-flow.ts -->
 ```typescript
 const status = new Attribute("primitive-attribute-status", stringCodec, {
@@ -34,7 +34,7 @@ const progress = new AttributeMap("primitive-attribute-progress", stringCodec, {
 
 Map instance keys must be stable, non-empty, and slash-free. Load only the instances/pending messages a handler reads. The effective map view includes mutations staged in the current handler, but RPC pending-message snapshots do not refresh after later staged writes.
 
-For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one token-selected instance per page. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside one fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/typescript/src/patterns/sequentially-chunked-attribute-map/chunked-subscriber-flow.ts) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/typescript/src/patterns/hash-partitioned-attribute-map/customer-directory-flow.ts).
+For append-only history, keep at most 100 records in `current`, archive a full chunk under its zero-padded first sequence, and load one token-selected instance per page. For stable-key lookup, keep a dictionary keyed by the complete canonical value inside one fixed hash bucket. The official email pattern trims ASCII whitespace, lowercases ASCII letters, rejects empty or non-ASCII values, computes wrapping FNV-1a 32-bit, and selects `hash % 1000`. See [sequential chunking](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/examples/typescript/src/patterns/sequentially-chunked-attribute-map/chunked-subscriber-flow.ts) and [hash partitioning](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/examples/typescript/src/patterns/hash-partitioned-attribute-map/customer-directory-flow.ts).
 
 ## Commit boundary
 
@@ -60,7 +60,7 @@ Attribute Store is an asynchronous latest-state projection. Select Store names i
 
 Call `hardDeleteOnNull()` on an `Attribute` or `AttributeMap` for a short-lived secret, such as an API key. It returns a new definition and leaves the original unchanged. Register the returned definition in `PersistenceSchema`. Read the Core [hard-delete Attribute](../core/data-handling.md#hard-delete-attributes-for-short-lived-secrets) requirements and limitations first; it needs TypeScript SDK v1.11.0 and Server v1.11.0.
 
-[Pinned SDK guide](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-typescript/README.md)
+[Pinned SDK guide](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/sdk-typescript/README.md)
 <!-- dex-source: sdk-typescript/README.md -->
 ```typescript
 const apiKey = new Attribute("api-key", stringCodec).hardDeleteOnNull();
@@ -70,7 +70,7 @@ const vendorTokens = new AttributeMap("vendor-tokens", jsonCodec<VendorToken>())
 
 Delete the secret as soon as the Flow no longer needs it. `delete`, or `set` with `null` or `undefined`, permanently deletes it. An AttributeMap deletes one instance:
 
-[Pinned SDK integration test](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-typescript/test/integ/hard_delete_attribute_flow.ts)
+[Pinned SDK integration test](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/sdk-typescript/test/integ/hard_delete_attribute_flow.ts)
 <!-- dex-source: sdk-typescript/test/integ/hard_delete_attribute_flow.ts -->
 ```typescript
     apiKey.delete(context);
@@ -82,4 +82,4 @@ Delete the secret as soon as the Flow no longer needs it. `delete`, or `set` wit
 - `hardDeleteOnNull()` throws `TypeError` for an indexed definition, Attribute Store sync, or a built-in numeric or Boolean codec. A custom codec that encodes a number or Boolean fails when the value is written.
 - `Client.waitForAttributeMatch` rejects it before contacting Dex.
 - The Client checks the Server protocol once, before its first hard-delete write, and `startFlow` throws for a Server below protocol 3. The Worker fails a handler result that writes a hard-delete Attribute to an older Server.
-- Writes and deletes can become visible before the attempt commits. Keep handlers safe to repeat. Do not read-modify-write the value. See the [released API documentation](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-typescript/src/persistence.ts) for every limitation.
+- Writes and deletes can become visible before the attempt commits. Keep handlers safe to repeat. Do not read-modify-write the value. See the [released API documentation](https://github.com/superdurable/dex/blob/sdk-typescript/v1.12.0/sdk-typescript/src/persistence.ts) for every limitation.

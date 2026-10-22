@@ -24,10 +24,17 @@ class ReferenceSourcesTest(unittest.TestCase):
         self.git("config", "user.email", "fixture@example.invalid")
         self.paths = {"sdk": "sdk-go/dex/client.go", "server": "server/service/api/service.go", "cli": "cli/internal/command/flow_client_operations.go"}
         self.baselines = {"sdk": "sdk-go/v1.0.0", "server": "server/v2.0.0", "cli": "cli-v3.0.0"}
+        for language in ("java", "python", "typescript", "rust"):
+            self.paths[f"sdk-{language}"] = f"sdk-{language}/README.md"
+            self.baselines[f"sdk-{language}"] = f"sdk-{language}/v1.0.0"
         for path in self.paths.values():
             source = self.root / path
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text("package fixture\n\nfunc Accepted() {}\n")
+        for language in ("go", "java", "python", "typescript", "rust"):
+            example = self.root / f"examples/{language}/README.md"
+            example.parent.mkdir(parents=True, exist_ok=True)
+            example.write_text("published example\n")
         self.git("add", ".")
         self.git("commit", "--quiet", "-m", "fixture sources")
         for baseline in self.baselines.values():
@@ -61,6 +68,19 @@ class ReferenceSourcesTest(unittest.TestCase):
         for text in [self.link("server", baseline=self.baselines["sdk"]), self.link("sdk", baseline="main"), self.link("cli", path="cli/missing.go")]:
             with self.subTest(text=text), self.assertRaises(SystemExit):
                 self.check(text)
+
+    def test_language_examples_use_their_own_sdk_pin(self):
+        for language in ("go", "java", "python", "typescript", "rust"):
+            family = "sdk" if language == "go" else f"sdk-{language}"
+            with self.subTest(language=language):
+                path = f"examples/{language}/README.md"
+                self.assertEqual(1, self.check(
+                    self.link(family, path=path)
+                    + f"\n<!-- dex-source: {path} -->\n```{language}\npublished example\n```\n"
+                ))
+        for language in ("java", "python", "typescript", "rust"):
+            with self.subTest(language=language), self.assertRaises(SystemExit):
+                self.check(self.link(f"sdk-{language}", baseline=self.baselines["sdk"]))
 
     def test_missing_tag_and_traversal_rejected(self):
         with self.assertRaises(SystemExit):

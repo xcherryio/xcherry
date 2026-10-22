@@ -46,8 +46,12 @@ def source_family(path: str) -> str | None:
     if source.is_absolute() or ".." in source.parts or not source.parts:
         return None
     prefix = source.parts[0]
-    if prefix in {"sdk-go", "sdk-java", "sdk-python", "sdk-rust", "sdk-typescript", "examples"}:
+    if prefix == "examples" and len(source.parts) > 1:
+        prefix = f"sdk-{source.parts[1]}"
+    if prefix in {"sdk-go", "examples"}:
         return "sdk"
+    if prefix in {"sdk-java", "sdk-python", "sdk-rust", "sdk-typescript"}:
+        return prefix
     if prefix in {"server", "web", "protos"}:
         return "server"
     if prefix == "cli":
@@ -122,6 +126,11 @@ def main() -> None:
         "server": ((arguments.server_root or arguments.dex_root).resolve(), (ROOT / "DEX_SERVER_BASELINE").read_text().strip()),
         "cli": ((arguments.cli_root or arguments.dex_root).resolve(), (ROOT / "DEX_CLI_BASELINE").read_text().strip()),
     }
+    for language in ("java", "python", "typescript", "rust"):
+        sources[f"sdk-{language}"] = (
+            (arguments.cli_root or arguments.dex_root).resolve(),
+            (ROOT / f"DEX_{language.upper()}_BASELINE").read_text().strip(),
+        )
     for root, baseline in sources.values():
         validate_checkout(root, baseline)
     total = sum(check_file(markdown, sources) for markdown in sorted(REFERENCES.rglob("*.md")))

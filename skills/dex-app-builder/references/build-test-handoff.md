@@ -114,7 +114,7 @@ Cover:
 - start and typed terminal output;
 - duplicate start/request behavior and [StartFlow-first ordering](../../dex-sdk/references/core/testing.md#startflow-ordering-and-retry-identity), with reconciliation reads confined to relevant error branches;
 - durable wait and Worker replacement;
-- when pull routing is selected, no inbound Worker listener, startup after an unavailable dispatch, sticky fallback to a peer, at-least-once idempotency, Step retry consumption, heartbeat timeout and cancellation, and bounded Stop drain;
+- when pull routing is selected, no inbound Worker listener, startup after an unavailable dispatch, sticky fallback to a peer, at-least-once idempotency, Step retry consumption, heartbeat timeout and cancellation, bounded Stop drain, startup registration gating, non-flapping readiness with lifecycle health, surplus versus last-stream rejection, and opt-in rejection shutdown;
 - when Dex authentication is enabled, Client, Worker, CLI, and Dex Web credentials, token rotation, rejected missing credentials, and protection of the Web port;
 - accepted-start responses without defensive identity/Attribute rereads, and [durable downstream start recovery](../../dex-sdk/references/core/testing.md#downstream-start-recovery) with no dependent API-side second start;
 - Action eligibility, valid action, duplicate/late action, and terminal rejection;
@@ -191,7 +191,7 @@ Ensure:
 - for a deployment, the packaged definitions and the project configuration that
   `projectconfig.LoadFromEnvironment` loads keep credentials out of application
   code and Flow state;
-- for a deployment using pull Workers, Matching remains available, streams fit the configured limits, the app Worker ID changes after restart, and Stop drains within the configured deadline;
+- for a deployment using pull Workers, Matching remains available, streams fit the configured limits, the app Worker ID changes after restart, replacement Workers pass **WaitPullRegistered** before old Workers stop, readiness combines **PullRegistrationState** with lifecycle health, and Stop drains within the configured deadline;
 - for a Dex Server upgrade, removed multi-tenant YAML is migrated to `auth`, `internal`, and `worker.wake` before startup, with single-tenant data preserved;
 - requested acceptance for known token expiry, concurrent calls, credential rotation,
   lost exchange responses and Worker restart records actual results or explicit

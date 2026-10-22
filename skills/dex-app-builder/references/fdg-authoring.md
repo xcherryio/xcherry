@@ -2,8 +2,8 @@
 
 Use this page for Summary, Display, Start input, Actions and analyzer diagnostics
 before searching the CLI implementation. The syntax below is checked against
-[Dex CLI v1.11.0 directives](https://github.com/superdurable/dex/blob/cli-v1.12.0/cli/internal/flowviz/v2_directives.go)
-and its [typed input example](https://github.com/superdurable/dex/blob/cli-v1.12.0/cli/internal/command/testfixtures/visualization-v2-start/workflow.go).
+[Dex CLI v1.11.0 directives](https://github.com/superdurable/dex/blob/cli-v1.13.0/cli/internal/flowviz/v2_directives.go)
+and its [typed input example](https://github.com/superdurable/dex/blob/cli-v1.13.0/cli/internal/command/testfixtures/visualization-v2-start/workflow.go).
 Keep the application's installed SDK and `dexcli` pins. The same definitions
 drive local `dexcli dev` and a deployed Dex Web; the application does not run
 its own Web server for them.

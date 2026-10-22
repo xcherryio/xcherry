@@ -22,7 +22,9 @@ companion skill, or duplicated Core/Go handbooks.
 
 ## Pin source authority
 
-`DEX_BASELINE` pins exact SDK excerpts. Language code fences must be contiguous
+`DEX_BASELINE` pins exact Go SDK excerpts. `DEX_JAVA_BASELINE`,
+`DEX_PYTHON_BASELINE`, `DEX_TYPESCRIPT_BASELINE`, and `DEX_RUST_BASELINE`
+pin each other SDK and its language examples to its own published tag. Language code fences must be contiguous
 excerpts from runnable examples, SDK tests, or SDK READMEs at that release, with
 the existing visible source link and `dex-source` marker.
 
@@ -30,7 +32,9 @@ the existing visible source link and `dex-source` marker.
 `DEX_CLI_BASELINE` pins the released local tooling and embedded Web v2/FDG 2.0
 implementation. The Server release embeds the same Dex Web source for deployed
 environments. Refresh any baseline deliberately and review all affected
-guidance.
+guidance. The CLI checkout must include all published SDK tags (use a full
+fetch, as Skills CI does); source validation reads the non-Go SDK tags there
+even when the Go checkout is shallow.
 
 ## Open-source product boundary
 
