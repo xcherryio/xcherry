@@ -77,6 +77,11 @@ class PullWorkerOptions:
             the final frame. During Stop, half-closed streams use the remaining
             drain deadline.
 
+        stop_on_permanent_stream_rejection: Whether the first permanent rejection
+            leaving a queue without a registered stream drains the Worker and
+            raises PullRegistrationError from start. Defaults to False, which
+            retries indefinitely. Applies before and after initial readiness.
+
     Raises:
         ValueError: If a numeric option is negative or app_worker_id is invalid.
 
@@ -91,6 +96,7 @@ class PullWorkerOptions:
     idle_streams_per_queue: int = 0
     app_worker_id: str = ""
     stop_drain_timeout: timedelta = timedelta(0)
+    stop_on_permanent_stream_rejection: bool = False
 
     def __post_init__(self) -> None:
         if self.max_concurrent_tasks < 0:

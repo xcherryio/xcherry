@@ -106,13 +106,38 @@ an active task to finish, then waits up to `stop_drain_timeout` for the server
 to close the stream after the final frame. An idle stream reconnects
 immediately. An older server without pull support produces one explicit error
 log and is retried after one minute. `start()` reports startup
-synchronization errors, while later stream errors are logged and retried.
+synchronization errors, while later stream errors are logged and retried by default.
 `stop()` drains for at most
 `stop_drain_timeout`, which defaults to 30 seconds. Afterward it requests
 cancellation and waits for handlers to return. Synchronous handlers should
 check `Context.is_cancellation_requested()` during long operations. Streams
 that sent a final frame wait for server EOF until the remaining Stop drain
 deadline before the channel closes.
+
+Call `worker.wait_pull_registered(timeout=30)` after starting a synchronous
+Worker on another thread. For AsyncWorker, start it in another task and use
+`await worker.wait_pull_registered(timeout=30)`. The timeout is in seconds;
+`None` waits indefinitely. Each waits for every Flow type queue and the app
+Worker ID queue to register at least once. Timeout raises `TimeoutError`;
+async cancellation cancels only that wait. Startup failures reach waiters.
+A permanent rejection before readiness raises `PullRegistrationError`, whose
+`queue` and `error` identify the rejected queue and original transport error.
+Listening mode and stop before readiness raise `RuntimeError`.
+
+Use `worker.pull_registration_state()` for subsequent readiness probes. Its
+immutable `queues` expose `queue`, `has_registered_stream`, and
+`last_permanent_error`. After initial registration, `is_ready` stays true across
+transient failures, reconnects, and stop. It becomes false only when a queue
+has a permanent error and no registered stream. Re-registration clears the
+error. The startup wait keeps succeeding after initial registration, including
+after stop. Multiple callers may wait independently before or after start.
+
+`PullWorkerOptions(stop_on_permanent_stream_rejection=True)` makes the first
+permanent rejection leaving a queue without a registered stream drain within
+`stop_drain_timeout`, then raise `PullRegistrationError` from `start()`. This
+applies before and after readiness. Another registered stream for that queue
+prevents shutdown. The default is False and retries indefinitely. Always call
+`stop()` or `close()` afterward; both remain safe after `start()` returns.
 
 ## Flow state I/O
 

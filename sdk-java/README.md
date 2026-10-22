@@ -374,6 +374,28 @@ support produces one explicit error log and retries polling after a minute.
 Reconnects and transient transport errors are retried automatically. Heartbeats
 and Step Stream writes use the same task stream as the final result.
 
+Call `waitPullRegistered(Duration)` after starting the Worker on another thread
+and before activating it. It waits for every Flow type queue and the app Worker
+ID queue to register at least once. A timeout throws `TimeoutException`;
+interruption cancels only the wait. Startup errors and a permanent rejection
+before readiness reach the waiter. `PullRegistrationError.getQueue()` identifies
+the queue and `getCause()` preserves the transport error. A listening Worker or
+stop before readiness throws `IllegalStateException`.
+
+Use `getPullRegistrationState()` for later readiness probes. Its immutable queue
+entries expose `getQueue()`, `hasRegisteredStream()`, and `getLastPermanentError()`.
+`isReady()` stays true across transient failures, reconnects, and stop after
+initial registration. It becomes false only when a queue has a permanent error
+and no registered stream. Re-registration clears the error. The startup wait
+continues succeeding after initial registration, including after stop.
+
+`stopOnPermanentStreamRejection(true)` is opt-in. The first permanent rejection
+leaving a queue without a registered stream drains within `stopDrainTimeout`
+and makes `start()` throw `PullRegistrationError`, before or after readiness.
+Other registered streams for that queue prevent shutdown. The default remains
+false and retries indefinitely. Always call `stop()` or `close()` afterward;
+both remain safe after `start()` returns.
+
 ### Authentication
 
 Set a `Credential` on Client and Worker options when Dex has authentication

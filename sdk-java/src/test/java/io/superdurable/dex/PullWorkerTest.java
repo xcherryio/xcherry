@@ -62,6 +62,193 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PullWorkerTest {
     @Test
+    void waitsForTheLastQueueAndSupportsTimeoutInterruptionAndEarlyStop() throws Exception {
+        final PollServer pollServer = new PollServer(null, false, Duration.ZERO,
+                Collections.<Boolean>emptyList(), true);
+        try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1)) {
+            final PollStream pending = pollServer.awaitQueue("PullTestFlow");
+            assertThrows(java.util.concurrent.TimeoutException.class,
+                    () -> running.worker.waitPullRegistered(Duration.ofMillis(20)));
+            assertFalse(running.worker.getPullRegistrationState().isReady());
+            final AtomicReference<Throwable> waitingFailure = new AtomicReference<Throwable>();
+            final Thread waiting = new Thread(() -> {
+                try {
+                    running.worker.waitPullRegistered(Duration.ofSeconds(5));
+                } catch (Throwable failure) {
+                    waitingFailure.set(failure);
+                }
+            });
+            waiting.start();
+            waiting.interrupt();
+            waiting.join(5000L);
+            assertTrue(waitingFailure.get() instanceof InterruptedException);
+            pending.respond(PollWorkerTaskResponse.newBuilder().setRegistered(
+                    io.superdurable.gen.PollWorkerTaskRegistered.getDefaultInstance()).build());
+            running.worker.waitPullRegistered(Duration.ofSeconds(5));
+            assertTrue(running.worker.getPullRegistrationState().isReady());
+        }
+        try (Worker worker = new Worker(new Registry(Collections.<Flow<?>>emptyList()), new EmptyBlobCache(),
+                WorkerOptions.newBuilder().pull(PullWorkerOptions.newBuilder().build()).build())) {
+            worker.stop();
+            assertThrows(IllegalStateException.class, () -> worker.waitPullRegistered(Duration.ofSeconds(1)));
+        }
+    }
+
+    @Test
+    void waitsForEveryQueueAndKeepsReadinessAfterStop() throws Exception {
+        final PollServer pollServer = new PollServer();
+        try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1)) {
+            running.worker.waitPullRegistered(Duration.ofSeconds(5));
+            final PullRegistrationState snapshot = running.worker.getPullRegistrationState();
+            assertTrue(snapshot.isReady());
+            assertEquals(2, snapshot.getQueues().size());
+            assertTrue(snapshot.getQueues().get(0).hasRegisteredStream());
+            running.stop();
+            running.worker.waitPullRegistered(Duration.ZERO);
+            assertTrue(running.worker.getPullRegistrationState().isReady());
+            assertFalse(running.worker.getPullRegistrationState().getQueues().get(0).hasRegisteredStream());
+            assertTrue(snapshot.getQueues().get(0).hasRegisteredStream());
+            assertThrows(UnsupportedOperationException.class, () -> snapshot.getQueues().clear());
+        }
+    }
+
+    @Test
+    void reportsEveryPermanentStatusBeforeReadinessWithoutStoppingByDefault() throws Exception {
+        for (Status rejection : Arrays.asList(Status.INVALID_ARGUMENT, Status.RESOURCE_EXHAUSTED,
+                Status.UNIMPLEMENTED, Status.PERMISSION_DENIED, Status.UNAUTHENTICATED)) {
+            try (RunningWorker running = new RunningWorker(new PollServer(rejection), new TestFlow(), 1)) {
+                final PullRegistrationError failure = assertThrows(PullRegistrationError.class,
+                        () -> running.worker.waitPullRegistered(Duration.ofSeconds(5)));
+                assertFalse(failure.getQueue().isEmpty());
+                assertEquals(rejection.getCode(), Status.fromThrowable(failure.getCause()).getCode());
+                assertFalse(running.worker.getPullRegistrationState().isReady());
+                assertTrue(running.workerThread.isAlive());
+            }
+        }
+    }
+
+    @Test
+    void readinessDoesNotFlapOnTransientDisconnectAndRegistrationClearsPermanentError() throws Exception {
+        final PollServer pollServer = new PollServer();
+        try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1)) {
+            running.worker.waitPullRegistered(Duration.ofSeconds(5));
+            final PollStream first = pollServer.awaitQueue("PullTestFlow");
+            first.responses.onError(Status.UNAVAILABLE.asRuntimeException());
+            awaitRegistrationState(running, "PullTestFlow", false, false);
+            assertTrue(running.worker.getPullRegistrationState().isReady());
+            final PollStream replacement = pollServer.awaitQueue("PullTestFlow");
+            running.worker.waitPullRegistered(Duration.ZERO);
+            replacement.responses.onError(Status.INVALID_ARGUMENT.asRuntimeException());
+            awaitRegistrationState(running, "PullTestFlow", false, true);
+            assertFalse(running.worker.getPullRegistrationState().isReady());
+            running.worker.waitPullRegistered(Duration.ZERO);
+            final PullWorker pull = running.pullWorker();
+            final Field streamsField = PullWorker.class.getDeclaredField("streams");
+            streamsField.setAccessible(true);
+            synchronized (pull) {
+                for (Object stream : (java.util.List<?>) streamsField.get(pull)) {
+                    final Field queueField = stream.getClass().getDeclaredField("queue");
+                    queueField.setAccessible(true);
+                    if ("PullTestFlow".equals(queueField.get(stream))) {
+                        final java.lang.reflect.Method open = stream.getClass().getDeclaredMethod("open");
+                        open.setAccessible(true);
+                        open.invoke(stream);
+                    }
+                }
+            }
+            awaitRegistrationState(running, "PullTestFlow", true, false);
+            assertTrue(running.worker.getPullRegistrationState().isReady());
+        }
+    }
+
+    @Test
+    void permanentRejectionOptionStopsBeforeAndAfterReadiness() throws Exception {
+        for (boolean hasRegistered : new boolean[] {false, true}) {
+            final PollServer pollServer = hasRegistered ? new PollServer() : new PollServer(Status.INVALID_ARGUMENT);
+            try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1,
+                    Duration.ofMillis(100), true, 1)) {
+                if (hasRegistered) {
+                    running.worker.waitPullRegistered(Duration.ofSeconds(5));
+                    pollServer.awaitQueue("PullTestFlow").responses.onError(Status.PERMISSION_DENIED.asRuntimeException());
+                } else {
+                    assertThrows(PullRegistrationError.class,
+                            () -> running.worker.waitPullRegistered(Duration.ofSeconds(5)));
+                }
+                running.workerThread.join(5000L);
+                assertFalse(running.workerThread.isAlive());
+                assertTrue(running.failure.get() instanceof PullRegistrationError);
+                running.worker.stop();
+            }
+        }
+    }
+
+    @Test
+    void rejectedSurplusStreamDoesNotStopOrClearReadiness() throws Exception {
+        final PollServer pollServer = new PollServer();
+        try (RunningWorker running = new RunningWorker(pollServer, new TestFlow(), 1,
+                Duration.ofMillis(100), true, 2)) {
+            running.worker.waitPullRegistered(Duration.ofSeconds(5));
+            final PollStream first = pollServer.awaitQueue("PullTestFlow");
+            final PollStream second = pollServer.awaitQueue("PullTestFlow");
+            second.respond(PollWorkerTaskResponse.newBuilder()
+                    .setPing(io.superdurable.gen.PollWorkerTaskPing.getDefaultInstance()).build());
+            assertTrue(second.awaitFrame().hasPong());
+            first.responses.onError(Status.PERMISSION_DENIED.asRuntimeException());
+            awaitRegistrationState(running, "PullTestFlow", true, true);
+            assertTrue(running.worker.getPullRegistrationState().isReady());
+            assertTrue(running.workerThread.isAlive());
+            second.responses.onError(Status.PERMISSION_DENIED.asRuntimeException());
+            running.workerThread.join(5000L);
+            assertFalse(running.workerThread.isAlive());
+            assertTrue(running.failure.get() instanceof PullRegistrationError);
+        }
+    }
+
+    @Test
+    void startupFailureReachesRegistrationWaiters() throws Exception {
+        try (Worker worker = new Worker(new Registry(Collections.<Flow<?>>emptyList()), new EmptyBlobCache(),
+                WorkerOptions.newBuilder().serverAddress("127.0.0.1:1")
+                        .attributeIndexSyncTimeout(Duration.ofMillis(100))
+                        .pull(PullWorkerOptions.newBuilder().build()).build())) {
+            final java.util.concurrent.CompletableFuture<Throwable> waiting =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        try {
+                            worker.waitPullRegistered(Duration.ofSeconds(5));
+                            return null;
+                        } catch (Throwable failure) {
+                            return failure;
+                        }
+                    });
+            final IllegalStateException failure = assertThrows(IllegalStateException.class, worker::start);
+            assertTrue(waiting.get(5, TimeUnit.SECONDS) == failure);
+        }
+        try (Worker worker = new Worker(new Registry(Collections.<Flow<?>>emptyList()), new EmptyBlobCache())) {
+            assertFalse(worker.getPullRegistrationState().isReady());
+            assertTrue(worker.getPullRegistrationState().getQueues().isEmpty());
+            assertThrows(IllegalStateException.class, () -> worker.waitPullRegistered(Duration.ZERO));
+        }
+    }
+
+    private static void awaitRegistrationState(final RunningWorker running, final String queue,
+            final boolean hasRegisteredStream, final boolean hasPermanentError) throws Exception {
+        final PullWorker pull = running.pullWorker();
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        synchronized (pull) {
+            while (System.nanoTime() < deadline) {
+                for (PullQueueRegistrationState registration : running.worker.getPullRegistrationState().getQueues()) {
+                    if (queue.equals(registration.getQueue())
+                            && registration.hasRegisteredStream() == hasRegisteredStream
+                            && (registration.getLastPermanentError() != null) == hasPermanentError) {
+                        return;
+                    }
+                }
+                pull.wait(10L);
+            }
+        }
+        throw new AssertionError("registration state did not converge for " + queue);
+    }
+
+    @Test
     void validatesOptionsAndGeneratesHostnameBasedIdentity() {
         assertThrows(IllegalArgumentException.class,
                 () -> PullWorkerOptions.newBuilder().maxConcurrentTasks(-1));
@@ -636,6 +823,7 @@ final class PullWorkerTest {
         private final CountDownLatch registrationAttempts = new CountDownLatch(2);
         private final AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         private final Status rejection;
+        private final boolean shouldDelayFlowRegistration;
         private final boolean isReaderPaused;
         private final Duration closeResponseDelay;
         private final java.util.List<Boolean> unknownNameRejectionCapabilities;
@@ -673,7 +861,15 @@ final class PullWorkerTest {
         private PollServer(final Status rejection, final boolean isReaderPaused,
                 final Duration closeResponseDelay,
                 final java.util.List<Boolean> unknownNameRejectionCapabilities) {
+            this(rejection, isReaderPaused, closeResponseDelay, unknownNameRejectionCapabilities, false);
+        }
+
+        private PollServer(final Status rejection, final boolean isReaderPaused,
+                final Duration closeResponseDelay,
+                final java.util.List<Boolean> unknownNameRejectionCapabilities,
+                final boolean shouldDelayFlowRegistration) {
             this.rejection = rejection;
+            this.shouldDelayFlowRegistration = shouldDelayFlowRegistration;
             this.isReaderPaused = isReaderPaused;
             this.closeResponseDelay = closeResponseDelay;
             this.unknownNameRejectionCapabilities = unknownNameRejectionCapabilities;
@@ -718,10 +914,12 @@ final class PullWorkerTest {
                         } else {
                             supportsUnknownNameRejection = false;
                         }
-                        stream.respond(PollWorkerTaskResponse.newBuilder()
+                        if (!shouldDelayFlowRegistration || !"PullTestFlow".equals(stream.queue)) {
+                            stream.respond(PollWorkerTaskResponse.newBuilder()
                                 .setRegistered(io.superdurable.gen.PollWorkerTaskRegistered
                                         .newBuilder().setSupportsUnknownNameRejection(
                                                 supportsUnknownNameRejection)).build());
+                        }
                         registrations.add(stream);
                     } else {
                         stream.frames.add(request);
@@ -842,6 +1040,7 @@ final class PullWorkerTest {
         private final Worker worker;
         private final Thread workerThread;
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
+        private final boolean shouldStopOnRejection;
 
         private int awaitStableStreamCount() throws Exception {
             final PullWorker pullWorker = pullWorker();
@@ -905,7 +1104,14 @@ final class PullWorkerTest {
         private RunningWorker(final PollServer pollServer, final TestFlow flow, final int capacity,
                 final Duration stopTimeout)
                 throws IOException {
+            this(pollServer, flow, capacity, stopTimeout, false, 1);
+        }
+
+        private RunningWorker(final PollServer pollServer, final TestFlow flow, final int capacity,
+                final Duration stopTimeout, final boolean shouldStopOnRejection, final int idleStreams)
+                throws IOException {
             this.pollServer = pollServer;
+            this.shouldStopOnRejection = shouldStopOnRejection;
             server = NettyServerBuilder.forPort(0).flowControlWindow(64 * 1024)
                     .addService(new FlowServiceGrpc.FlowServiceImplBase() {
                         @Override
@@ -932,6 +1138,8 @@ final class PullWorkerTest {
                             .pull(PullWorkerOptions.newBuilder()
                                     .appWorkerID("pull-java-unit")
                                     .maxConcurrentTasks(capacity)
+                                    .idleStreamsPerQueue(idleStreams)
+                                    .stopOnPermanentStreamRejection(shouldStopOnRejection)
                                     .stopDrainTimeout(stopTimeout).build())
                             .grpcErrorStatusMapping(GrpcErrorStatusMapping.newBuilder()
                                     .map(IllegalArgumentException.class, Status.Code.INVALID_ARGUMENT)
@@ -953,7 +1161,11 @@ final class PullWorkerTest {
             worker.close();
             workerThread.join(10_000L);
             assertFalse(workerThread.isAlive());
-            assertEquals(null, failure.get());
+            if (shouldStopOnRejection && failure.get() != null) {
+                assertTrue(failure.get() instanceof PullRegistrationError);
+            } else {
+                assertEquals(null, failure.get());
+            }
         }
 
         @Override

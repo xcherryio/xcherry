@@ -113,6 +113,11 @@ from dex.timer import Timer
 from dex.wait import Wait
 from dex.wait_options import WaitForAttributeOptions, WaitForStepCompletionOptions
 from dex.worker import Worker
+from dex.pull_registration import (
+    PullRegistrationError,
+    PullRegistrationState,
+    PullQueueRegistrationState,
+)
 from dex.worker_options import PullWorkerOptions, WorkerOptions, WorkerTarget
 
 __all__ = [
@@ -214,6 +219,9 @@ __all__ = [
     "WorkerOptions",
     "WorkerTarget",
     "PullWorkerOptions",
+    "PullRegistrationError",
+    "PullRegistrationState",
+    "PullQueueRegistrationState",
     "WaitForAttributeOptions",
     "WaitForStepCompletionOptions",
     "dead_end",

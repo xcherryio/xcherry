@@ -32,8 +32,10 @@ public final class PullWorkerOptions {
     private final int idleStreamsPerQueue;
     private final String appWorkerID;
     private final Duration stopDrainTimeout;
+    private final boolean stopOnPermanentStreamRejection;
 
     private PullWorkerOptions(final Builder builder) {
+        this.stopOnPermanentStreamRejection = builder.stopOnPermanentStreamRejection;
         this.maxConcurrentTasks = builder.maxConcurrentTasks == 0
                 ? Runtime.getRuntime().availableProcessors() : builder.maxConcurrentTasks;
         this.idleStreamsPerQueue = builder.idleStreamsPerQueue == 0
@@ -64,6 +66,10 @@ public final class PullWorkerOptions {
         return appWorkerID;
     }
 
+    boolean isStopOnPermanentStreamRejection() {
+        return stopOnPermanentStreamRejection;
+    }
+
     Duration getStopDrainTimeout() {
         return stopDrainTimeout;
     }
@@ -79,6 +85,7 @@ public final class PullWorkerOptions {
         private int idleStreamsPerQueue;
         private String appWorkerID = "";
         private Duration stopDrainTimeout = Duration.ZERO;
+        private boolean stopOnPermanentStreamRejection;
 
         private Builder() {
         }
@@ -148,6 +155,22 @@ public final class PullWorkerOptions {
                 throw new IllegalArgumentException("stopDrainTimeout must not be negative");
             }
             this.stopDrainTimeout = value;
+            return this;
+        }
+
+        /**
+         * Stops the Worker on a permanent rejection leaving a queue without a registered stream.
+         *
+         * <p>Defaults to false, which retries indefinitely. When enabled, the first such rejection
+         * before or after readiness drains within stopDrainTimeout, then makes Worker.start throw
+         * PullRegistrationError. Other registered streams for that queue prevent this shutdown.
+         * See the enclosing type for a complete options example.
+         *
+         * @param value whether to stop on an uncovered permanent stream rejection
+         * @return this builder
+         */
+        public Builder stopOnPermanentStreamRejection(final boolean value) {
+            this.stopOnPermanentStreamRejection = value;
             return this;
         }
 
