@@ -97,6 +97,8 @@ export interface StreamMessage {
 }
 
 export interface ActiveStepExecution {
+  waitForPullRouting?: Record<string, unknown>;
+  executePullRouting?: Record<string, unknown>;
   stepExecutionId: string;
   fromStepExecutionId: string;
   stepType: string;
@@ -110,6 +112,7 @@ export interface ActiveStepExecution {
 }
 
 export interface FlowState {
+  stickyAppWorkerId?: string;
   flowConfig: Record<string, unknown>;
   attributes: KeyValue[];
   activeStepExecutions: ActiveStepExecution[];

@@ -147,4 +147,16 @@ public interface ExecuteRpcSignalRequestOrBuilder extends
    * <code>.dex.ActionPermissionMappings action_permission_mappings = 10;</code>
    */
   io.superdurable.gen.ActionPermissionMappingsOrBuilder getActionPermissionMappingsOrBuilder();
+
+  /**
+   * <code>string served_by_app_worker_id = 11;</code>
+   * @return The servedByAppWorkerId.
+   */
+  java.lang.String getServedByAppWorkerId();
+  /**
+   * <code>string served_by_app_worker_id = 11;</code>
+   * @return The bytes for servedByAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getServedByAppWorkerIdBytes();
 }

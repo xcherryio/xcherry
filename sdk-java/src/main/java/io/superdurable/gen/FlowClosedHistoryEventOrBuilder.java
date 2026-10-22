@@ -79,4 +79,16 @@ public interface FlowClosedHistoryEventOrBuilder extends
    */
   com.google.protobuf.ByteString
       getContinuedToRunIdBytes();
+
+  /**
+   * <code>string sticky_app_worker_id = 6;</code>
+   * @return The stickyAppWorkerId.
+   */
+  java.lang.String getStickyAppWorkerId();
+  /**
+   * <code>string sticky_app_worker_id = 6;</code>
+   * @return The bytes for stickyAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getStickyAppWorkerIdBytes();
 }

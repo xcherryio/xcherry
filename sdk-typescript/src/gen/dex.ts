@@ -155,6 +155,13 @@ export enum PendingStepMethodPhase {
   UNRECOGNIZED = -1,
 }
 
+export enum PullRoutingSource {
+  PULL_ROUTING_SOURCE_UNSPECIFIED = 0,
+  PULL_ROUTING_SOURCE_STICKY_QUEUE = 1,
+  PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE = 2,
+  UNRECOGNIZED = -1,
+}
+
 export enum ActiveStepPhase {
   ACTIVE_STEP_PHASE_UNSPECIFIED = 0,
   ACTIVE_STEP_PHASE_ACTIVE = 1,
@@ -941,6 +948,7 @@ export interface FlowContinuedStart {
   pendingChannelMessages: { [key: string]: ChannelValues };
   attributes: KV[];
   completedSteps: StepCompletionOutput[];
+  stickyAppWorkerId: string;
 }
 
 export interface FlowContinuedStart_PendingChannelMessagesEntry {
@@ -954,6 +962,7 @@ export interface FlowClosedHistoryEvent {
   errorType: FlowErrorType;
   errorMessage: string;
   continuedToRunId: string;
+  stickyAppWorkerId: string;
 }
 
 /** StepMethodPendingEvent describes a regular Step activity unresolved at flow closure. */
@@ -967,6 +976,7 @@ export interface StepMethodFailure {
   backendError: string;
   details: ServiceErrorResponse | undefined;
   attempt: number;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface StepMethodOptions {
@@ -983,6 +993,12 @@ export interface StepMethodEventInput {
   stepExecutionLocals: KV[];
 }
 
+export interface PullRouting {
+  stickyAppWorkerId: string;
+  servedByAppWorkerId: string;
+  source: PullRoutingSource;
+}
+
 export interface StepMethodEventContext {
   stepExecutionId: string;
   fromStepExecutionId: string;
@@ -993,6 +1009,7 @@ export interface StepMethodEventContext {
   duration: Duration | undefined;
   methodOptions: StepMethodOptions | undefined;
   lastFailureInfo: StepMethodFailure | undefined;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface StepWaitForCompletedOutput {
@@ -1055,6 +1072,7 @@ export interface RpcExecutionCompletedEvent {
   publishToChannel: ChannelMessage[];
   isSetAttributeApi: boolean;
   deleteFromChannel: ChannelMessageDeletion[];
+  servedByAppWorkerId: string;
 }
 
 export interface ChannelExternalPublishEvent {
@@ -1088,6 +1106,8 @@ export interface ActiveStepExecutionState {
   stepExecutionLocals: KV[];
   timers: TimerInfo[];
   lastFailureInfo: StepMethodFailure | undefined;
+  waitForPullRouting: PullRouting | undefined;
+  executePullRouting: PullRouting | undefined;
 }
 
 export interface GetFlowStateRequest {
@@ -1102,6 +1122,7 @@ export interface GetFlowStateResponse {
   queuedSteps: StepMovement[];
   pendingChannelMessages: { [key: string]: ChannelValues };
   completedSteps: StepCompletionOutput[];
+  stickyAppWorkerId: string;
 }
 
 export interface GetFlowStateResponse_PendingChannelMessagesEntry {
@@ -1265,6 +1286,7 @@ export interface InternalActivityError {
   serverDetail: string;
   workerGrpcStatus: number;
   workerError: InternalWorkerError | undefined;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface InternalWorkerError {
@@ -1562,6 +1584,7 @@ export interface StepExecutionResumeInfo {
   completedConditions: StepExecutionCompletedConditions | undefined;
   waitingCondition: WaitingConditionState | undefined;
   stepExeLocals: KV[];
+  waitForPullRouting: PullRouting | undefined;
 }
 
 export interface StepExecutionCounterInfo {
@@ -1665,6 +1688,7 @@ export interface InvokeWaitForMethodActivityOutput {
     | undefined;
   /** Identifies the Worker that completed this pull task for sticky routing. */
   servedByAppWorkerId: string;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface InvokeExecuteMethodActivityInput {
@@ -1693,6 +1717,7 @@ export interface InternalLocalStepActivityFailure {
   methodOptions: StepMethodOptions | undefined;
   attempt: number;
   activityError: InternalActivityError | undefined;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface InvokeExecuteMethodActivityOutput {
@@ -1701,6 +1726,7 @@ export interface InvokeExecuteMethodActivityOutput {
     | undefined;
   /** Identifies the Worker that completed this pull task for sticky routing. */
   servedByAppWorkerId: string;
+  pullRouting: PullRouting | undefined;
 }
 
 export interface DumpFlowForContinueAsNewActivityInput {
@@ -1784,6 +1810,7 @@ export interface ExecuteRpcSignalRequest {
   deleteFromChannel: ChannelMessageDeletion[];
   isDeleteChannelMessageApi: boolean;
   actionPermissionMappings: ActionPermissionMappings | undefined;
+  servedByAppWorkerId: string;
 }
 
 export interface SkipTimerSignalRequest {
@@ -8709,6 +8736,7 @@ function createBaseFlowContinuedStart(): FlowContinuedStart {
     pendingChannelMessages: {},
     attributes: [],
     completedSteps: [],
+    stickyAppWorkerId: "",
   };
 }
 
@@ -8732,6 +8760,9 @@ export const FlowContinuedStart: MessageFns<FlowContinuedStart> = {
     }
     for (const v of message.completedSteps) {
       StepCompletionOutput.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.stickyAppWorkerId !== "") {
+      writer.uint32(58).string(message.stickyAppWorkerId);
     }
     return writer;
   },
@@ -8794,6 +8825,14 @@ export const FlowContinuedStart: MessageFns<FlowContinuedStart> = {
           message.completedSteps.push(StepCompletionOutput.decode(reader, reader.uint32()));
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.stickyAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8823,6 +8862,7 @@ export const FlowContinuedStart: MessageFns<FlowContinuedStart> = {
       );
     message.attributes = object.attributes?.map((e) => KV.fromPartial(e)) || [];
     message.completedSteps = object.completedSteps?.map((e) => StepCompletionOutput.fromPartial(e)) || [];
+    message.stickyAppWorkerId = object.stickyAppWorkerId ?? "";
     return message;
   },
 };
@@ -8897,7 +8937,7 @@ export const FlowContinuedStart_PendingChannelMessagesEntry: MessageFns<
 };
 
 function createBaseFlowClosedHistoryEvent(): FlowClosedHistoryEvent {
-  return { flowStatus: 0, results: [], errorType: 0, errorMessage: "", continuedToRunId: "" };
+  return { flowStatus: 0, results: [], errorType: 0, errorMessage: "", continuedToRunId: "", stickyAppWorkerId: "" };
 }
 
 export const FlowClosedHistoryEvent: MessageFns<FlowClosedHistoryEvent> = {
@@ -8916,6 +8956,9 @@ export const FlowClosedHistoryEvent: MessageFns<FlowClosedHistoryEvent> = {
     }
     if (message.continuedToRunId !== "") {
       writer.uint32(42).string(message.continuedToRunId);
+    }
+    if (message.stickyAppWorkerId !== "") {
+      writer.uint32(50).string(message.stickyAppWorkerId);
     }
     return writer;
   },
@@ -8967,6 +9010,14 @@ export const FlowClosedHistoryEvent: MessageFns<FlowClosedHistoryEvent> = {
           message.continuedToRunId = reader.string();
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.stickyAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8986,6 +9037,7 @@ export const FlowClosedHistoryEvent: MessageFns<FlowClosedHistoryEvent> = {
     message.errorType = object.errorType ?? 0;
     message.errorMessage = object.errorMessage ?? "";
     message.continuedToRunId = object.continuedToRunId ?? "";
+    message.stickyAppWorkerId = object.stickyAppWorkerId ?? "";
     return message;
   },
 };
@@ -9065,7 +9117,7 @@ export const StepMethodPendingEvent: MessageFns<StepMethodPendingEvent> = {
 };
 
 function createBaseStepMethodFailure(): StepMethodFailure {
-  return { backendError: "", details: undefined, attempt: 0 };
+  return { backendError: "", details: undefined, attempt: 0, pullRouting: undefined };
 }
 
 export const StepMethodFailure: MessageFns<StepMethodFailure> = {
@@ -9078,6 +9130,9 @@ export const StepMethodFailure: MessageFns<StepMethodFailure> = {
     }
     if (message.attempt !== 0) {
       writer.uint32(24).int32(message.attempt);
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -9113,6 +9168,14 @@ export const StepMethodFailure: MessageFns<StepMethodFailure> = {
           message.attempt = reader.int32();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -9132,6 +9195,9 @@ export const StepMethodFailure: MessageFns<StepMethodFailure> = {
       ? ServiceErrorResponse.fromPartial(object.details)
       : undefined;
     message.attempt = object.attempt ?? 0;
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
+      : undefined;
     return message;
   },
 };
@@ -9312,6 +9378,76 @@ export const StepMethodEventInput: MessageFns<StepMethodEventInput> = {
   },
 };
 
+function createBasePullRouting(): PullRouting {
+  return { stickyAppWorkerId: "", servedByAppWorkerId: "", source: 0 };
+}
+
+export const PullRouting: MessageFns<PullRouting> = {
+  encode(message: PullRouting, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.stickyAppWorkerId !== "") {
+      writer.uint32(10).string(message.stickyAppWorkerId);
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(18).string(message.servedByAppWorkerId);
+    }
+    if (message.source !== 0) {
+      writer.uint32(24).int32(message.source);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PullRouting {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePullRouting();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.stickyAppWorkerId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.source = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  create<I extends Exact<DeepPartial<PullRouting>, I>>(base?: I): PullRouting {
+    return PullRouting.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PullRouting>, I>>(object: I): PullRouting {
+    const message = createBasePullRouting();
+    message.stickyAppWorkerId = object.stickyAppWorkerId ?? "";
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
+    message.source = object.source ?? 0;
+    return message;
+  },
+};
+
 function createBaseStepMethodEventContext(): StepMethodEventContext {
   return {
     stepExecutionId: "",
@@ -9323,6 +9459,7 @@ function createBaseStepMethodEventContext(): StepMethodEventContext {
     duration: undefined,
     methodOptions: undefined,
     lastFailureInfo: undefined,
+    pullRouting: undefined,
   };
 }
 
@@ -9354,6 +9491,9 @@ export const StepMethodEventContext: MessageFns<StepMethodEventContext> = {
     }
     if (message.lastFailureInfo !== undefined) {
       StepMethodFailure.encode(message.lastFailureInfo, writer.uint32(74).fork()).join();
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(82).fork()).join();
     }
     return writer;
   },
@@ -9437,6 +9577,14 @@ export const StepMethodEventContext: MessageFns<StepMethodEventContext> = {
           message.lastFailureInfo = StepMethodFailure.decode(reader, reader.uint32());
           continue;
         }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -9465,6 +9613,9 @@ export const StepMethodEventContext: MessageFns<StepMethodEventContext> = {
       : undefined;
     message.lastFailureInfo = (object.lastFailureInfo !== undefined && object.lastFailureInfo !== null)
       ? StepMethodFailure.fromPartial(object.lastFailureInfo)
+      : undefined;
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
       : undefined;
     return message;
   },
@@ -10063,6 +10214,7 @@ function createBaseRpcExecutionCompletedEvent(): RpcExecutionCompletedEvent {
     publishToChannel: [],
     isSetAttributeApi: false,
     deleteFromChannel: [],
+    servedByAppWorkerId: "",
   };
 }
 
@@ -10094,6 +10246,9 @@ export const RpcExecutionCompletedEvent: MessageFns<RpcExecutionCompletedEvent> 
     }
     for (const v of message.deleteFromChannel) {
       ChannelMessageDeletion.encode(v!, writer.uint32(74).fork()).join();
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(82).string(message.servedByAppWorkerId);
     }
     return writer;
   },
@@ -10177,6 +10332,14 @@ export const RpcExecutionCompletedEvent: MessageFns<RpcExecutionCompletedEvent> 
           message.deleteFromChannel.push(ChannelMessageDeletion.decode(reader, reader.uint32()));
           continue;
         }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10204,6 +10367,7 @@ export const RpcExecutionCompletedEvent: MessageFns<RpcExecutionCompletedEvent> 
     message.publishToChannel = object.publishToChannel?.map((e) => ChannelMessage.fromPartial(e)) || [];
     message.isSetAttributeApi = object.isSetAttributeApi ?? false;
     message.deleteFromChannel = object.deleteFromChannel?.map((e) => ChannelMessageDeletion.fromPartial(e)) || [];
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
     return message;
   },
 };
@@ -10463,6 +10627,8 @@ function createBaseActiveStepExecutionState(): ActiveStepExecutionState {
     stepExecutionLocals: [],
     timers: [],
     lastFailureInfo: undefined,
+    waitForPullRouting: undefined,
+    executePullRouting: undefined,
   };
 }
 
@@ -10497,6 +10663,12 @@ export const ActiveStepExecutionState: MessageFns<ActiveStepExecutionState> = {
     }
     if (message.lastFailureInfo !== undefined) {
       StepMethodFailure.encode(message.lastFailureInfo, writer.uint32(82).fork()).join();
+    }
+    if (message.waitForPullRouting !== undefined) {
+      PullRouting.encode(message.waitForPullRouting, writer.uint32(90).fork()).join();
+    }
+    if (message.executePullRouting !== undefined) {
+      PullRouting.encode(message.executePullRouting, writer.uint32(98).fork()).join();
     }
     return writer;
   },
@@ -10588,6 +10760,22 @@ export const ActiveStepExecutionState: MessageFns<ActiveStepExecutionState> = {
           message.lastFailureInfo = StepMethodFailure.decode(reader, reader.uint32());
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.waitForPullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.executePullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10619,6 +10807,12 @@ export const ActiveStepExecutionState: MessageFns<ActiveStepExecutionState> = {
     message.timers = object.timers?.map((e) => TimerInfo.fromPartial(e)) || [];
     message.lastFailureInfo = (object.lastFailureInfo !== undefined && object.lastFailureInfo !== null)
       ? StepMethodFailure.fromPartial(object.lastFailureInfo)
+      : undefined;
+    message.waitForPullRouting = (object.waitForPullRouting !== undefined && object.waitForPullRouting !== null)
+      ? PullRouting.fromPartial(object.waitForPullRouting)
+      : undefined;
+    message.executePullRouting = (object.executePullRouting !== undefined && object.executePullRouting !== null)
+      ? PullRouting.fromPartial(object.executePullRouting)
       : undefined;
     return message;
   },
@@ -10690,6 +10884,7 @@ function createBaseGetFlowStateResponse(): GetFlowStateResponse {
     queuedSteps: [],
     pendingChannelMessages: {},
     completedSteps: [],
+    stickyAppWorkerId: "",
   };
 }
 
@@ -10713,6 +10908,9 @@ export const GetFlowStateResponse: MessageFns<GetFlowStateResponse> = {
     });
     for (const v of message.completedSteps) {
       StepCompletionOutput.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.stickyAppWorkerId !== "") {
+      writer.uint32(58).string(message.stickyAppWorkerId);
     }
     return writer;
   },
@@ -10775,6 +10973,14 @@ export const GetFlowStateResponse: MessageFns<GetFlowStateResponse> = {
           message.completedSteps.push(StepCompletionOutput.decode(reader, reader.uint32()));
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.stickyAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10807,6 +11013,7 @@ export const GetFlowStateResponse: MessageFns<GetFlowStateResponse> = {
         {},
       );
     message.completedSteps = object.completedSteps?.map((e) => StepCompletionOutput.fromPartial(e)) || [];
+    message.stickyAppWorkerId = object.stickyAppWorkerId ?? "";
     return message;
   },
 };
@@ -12169,7 +12376,7 @@ export const WorkerErrorResponse: MessageFns<WorkerErrorResponse> = {
 };
 
 function createBaseInternalActivityError(): InternalActivityError {
-  return { serverDetail: "", workerGrpcStatus: 0, workerError: undefined };
+  return { serverDetail: "", workerGrpcStatus: 0, workerError: undefined, pullRouting: undefined };
 }
 
 export const InternalActivityError: MessageFns<InternalActivityError> = {
@@ -12182,6 +12389,9 @@ export const InternalActivityError: MessageFns<InternalActivityError> = {
     }
     if (message.workerError !== undefined) {
       InternalWorkerError.encode(message.workerError, writer.uint32(26).fork()).join();
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -12217,6 +12427,14 @@ export const InternalActivityError: MessageFns<InternalActivityError> = {
           message.workerError = InternalWorkerError.decode(reader, reader.uint32());
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -12235,6 +12453,9 @@ export const InternalActivityError: MessageFns<InternalActivityError> = {
     message.workerGrpcStatus = object.workerGrpcStatus ?? 0;
     message.workerError = (object.workerError !== undefined && object.workerError !== null)
       ? InternalWorkerError.fromPartial(object.workerError)
+      : undefined;
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
       : undefined;
     return message;
   },
@@ -15837,6 +16058,7 @@ function createBaseStepExecutionResumeInfo(): StepExecutionResumeInfo {
     completedConditions: undefined,
     waitingCondition: undefined,
     stepExeLocals: [],
+    waitForPullRouting: undefined,
   };
 }
 
@@ -15856,6 +16078,9 @@ export const StepExecutionResumeInfo: MessageFns<StepExecutionResumeInfo> = {
     }
     for (const v of message.stepExeLocals) {
       KV.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.waitForPullRouting !== undefined) {
+      PullRouting.encode(message.waitForPullRouting, writer.uint32(50).fork()).join();
     }
     return writer;
   },
@@ -15907,6 +16132,14 @@ export const StepExecutionResumeInfo: MessageFns<StepExecutionResumeInfo> = {
           message.stepExeLocals.push(KV.decode(reader, reader.uint32()));
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.waitForPullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -15932,6 +16165,9 @@ export const StepExecutionResumeInfo: MessageFns<StepExecutionResumeInfo> = {
       ? WaitingConditionState.fromPartial(object.waitingCondition)
       : undefined;
     message.stepExeLocals = object.stepExeLocals?.map((e) => KV.fromPartial(e)) || [];
+    message.waitForPullRouting = (object.waitForPullRouting !== undefined && object.waitForPullRouting !== null)
+      ? PullRouting.fromPartial(object.waitForPullRouting)
+      : undefined;
     return message;
   },
 };
@@ -17060,7 +17296,7 @@ export const InvokeWaitForMethodActivityInput: MessageFns<InvokeWaitForMethodAct
 };
 
 function createBaseInvokeWaitForMethodActivityOutput(): InvokeWaitForMethodActivityOutput {
-  return { response: undefined, servedByAppWorkerId: "" };
+  return { response: undefined, servedByAppWorkerId: "", pullRouting: undefined };
 }
 
 export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodActivityOutput> = {
@@ -17070,6 +17306,9 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
     }
     if (message.servedByAppWorkerId !== "") {
       writer.uint32(18).string(message.servedByAppWorkerId);
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -17097,6 +17336,14 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
           message.servedByAppWorkerId = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -17119,6 +17366,9 @@ export const InvokeWaitForMethodActivityOutput: MessageFns<InvokeWaitForMethodAc
       ? InvokeWaitForMethodResponse.fromPartial(object.response)
       : undefined;
     message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
+      : undefined;
     return message;
   },
 };
@@ -17300,6 +17550,7 @@ function createBaseInternalLocalStepActivityFailure(): InternalLocalStepActivity
     methodOptions: undefined,
     attempt: 0,
     activityError: undefined,
+    pullRouting: undefined,
   };
 }
 
@@ -17322,6 +17573,9 @@ export const InternalLocalStepActivityFailure: MessageFns<InternalLocalStepActiv
     }
     if (message.activityError !== undefined) {
       InternalActivityError.encode(message.activityError, writer.uint32(42).fork()).join();
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(50).fork()).join();
     }
     return writer;
   },
@@ -17373,6 +17627,14 @@ export const InternalLocalStepActivityFailure: MessageFns<InternalLocalStepActiv
           message.activityError = InternalActivityError.decode(reader, reader.uint32());
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -17406,12 +17668,15 @@ export const InternalLocalStepActivityFailure: MessageFns<InternalLocalStepActiv
     message.activityError = (object.activityError !== undefined && object.activityError !== null)
       ? InternalActivityError.fromPartial(object.activityError)
       : undefined;
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
+      : undefined;
     return message;
   },
 };
 
 function createBaseInvokeExecuteMethodActivityOutput(): InvokeExecuteMethodActivityOutput {
-  return { response: undefined, servedByAppWorkerId: "" };
+  return { response: undefined, servedByAppWorkerId: "", pullRouting: undefined };
 }
 
 export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodActivityOutput> = {
@@ -17421,6 +17686,9 @@ export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodAc
     }
     if (message.servedByAppWorkerId !== "") {
       writer.uint32(18).string(message.servedByAppWorkerId);
+    }
+    if (message.pullRouting !== undefined) {
+      PullRouting.encode(message.pullRouting, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -17448,6 +17716,14 @@ export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodAc
           message.servedByAppWorkerId = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.pullRouting = PullRouting.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -17470,6 +17746,9 @@ export const InvokeExecuteMethodActivityOutput: MessageFns<InvokeExecuteMethodAc
       ? InvokeExecuteMethodResponse.fromPartial(object.response)
       : undefined;
     message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
+    message.pullRouting = (object.pullRouting !== undefined && object.pullRouting !== null)
+      ? PullRouting.fromPartial(object.pullRouting)
+      : undefined;
     return message;
   },
 };
@@ -18272,6 +18551,7 @@ function createBaseExecuteRpcSignalRequest(): ExecuteRpcSignalRequest {
     deleteFromChannel: [],
     isDeleteChannelMessageApi: false,
     actionPermissionMappings: undefined,
+    servedByAppWorkerId: "",
   };
 }
 
@@ -18300,6 +18580,9 @@ export const ExecuteRpcSignalRequest: MessageFns<ExecuteRpcSignalRequest> = {
     }
     if (message.actionPermissionMappings !== undefined) {
       ActionPermissionMappings.encode(message.actionPermissionMappings, writer.uint32(82).fork()).join();
+    }
+    if (message.servedByAppWorkerId !== "") {
+      writer.uint32(90).string(message.servedByAppWorkerId);
     }
     return writer;
   },
@@ -18375,6 +18658,14 @@ export const ExecuteRpcSignalRequest: MessageFns<ExecuteRpcSignalRequest> = {
           message.actionPermissionMappings = ActionPermissionMappings.decode(reader, reader.uint32());
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.servedByAppWorkerId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18402,6 +18693,7 @@ export const ExecuteRpcSignalRequest: MessageFns<ExecuteRpcSignalRequest> = {
       (object.actionPermissionMappings !== undefined && object.actionPermissionMappings !== null)
         ? ActionPermissionMappings.fromPartial(object.actionPermissionMappings)
         : undefined;
+    message.servedByAppWorkerId = object.servedByAppWorkerId ?? "";
     return message;
   },
 };

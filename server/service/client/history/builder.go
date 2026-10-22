@@ -19,6 +19,7 @@ import (
 
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service/common/blobstore"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,6 +28,7 @@ import (
 const rpcSourcePrefix = "__rpc/"
 
 type Builder struct {
+	stickyAppWorkerID    string
 	flowID               string
 	runID                string
 	events               []*dexpb.FlowHistoryEvent
@@ -266,6 +268,7 @@ func (b *Builder) RecordActivityCompleted(
 	startedTime, finalAttempt := scheduled.executionTiming()
 	switch {
 	case scheduled.waitInput != nil && waitOutput != nil:
+		b.recordServingWorker(waitOutput.GetServedByAppWorkerId())
 		request := scheduled.waitInput.GetRequest()
 		response := waitOutput.GetResponse()
 		b.events = append(b.events, newEvent(
@@ -284,11 +287,13 @@ func (b *Builder) RecordActivityCompleted(
 						finalAttempt,
 						scheduled.methodOptions,
 						scheduled.lastFailure,
+						pulldispatch.Routing(scheduled.waitInput.GetWorkerTarget(), scheduled.waitInput.GetDexTaskQueue(), waitOutput.GetServedByAppWorkerId()),
 					),
 				},
 			},
 		))
 	case scheduled.executeInput != nil && executeOutput != nil:
+		b.recordServingWorker(executeOutput.GetServedByAppWorkerId())
 		request := scheduled.executeInput.GetRequest()
 		response := executeOutput.GetResponse()
 		b.events = append(b.events, newEvent(
@@ -307,6 +312,7 @@ func (b *Builder) RecordActivityCompleted(
 						finalAttempt,
 						scheduled.methodOptions,
 						scheduled.lastFailure,
+						pulldispatch.Routing(scheduled.executeInput.GetWorkerTarget(), scheduled.executeInput.GetDexTaskQueue(), executeOutput.GetServedByAppWorkerId()),
 					),
 				},
 			},
@@ -353,6 +359,7 @@ func (b *Builder) RecordActivityFailed(
 						finalAttempt,
 						scheduled.methodOptions,
 						scheduled.lastFailure,
+						failurePullRouting(failure, scheduled.waitInput.GetWorkerTarget(), scheduled.waitInput.GetDexTaskQueue()),
 					),
 				},
 			},
@@ -375,6 +382,7 @@ func (b *Builder) RecordActivityFailed(
 						finalAttempt,
 						scheduled.methodOptions,
 						scheduled.lastFailure,
+						failurePullRouting(failure, scheduled.executeInput.GetWorkerTarget(), scheduled.executeInput.GetDexTaskQueue()),
 					),
 				},
 			},
@@ -396,6 +404,7 @@ func (b *Builder) RecordLocalWaitCompleted(
 	output *dexpb.InvokeWaitForMethodActivityOutput,
 	finalAttempt int32,
 ) {
+	b.recordServingWorker(output.GetServedByAppWorkerId())
 	response := output.GetResponse()
 	b.events = append(b.events, newEvent(
 		eventID,
@@ -406,6 +415,7 @@ func (b *Builder) RecordLocalWaitCompleted(
 				Context: localStepMethodEventContext(
 					response.GetLocalActivityMetadata(),
 					finalAttempt,
+					output.GetPullRouting(),
 				),
 			},
 		},
@@ -418,6 +428,7 @@ func (b *Builder) RecordLocalExecuteCompleted(
 	output *dexpb.InvokeExecuteMethodActivityOutput,
 	finalAttempt int32,
 ) {
+	b.recordServingWorker(output.GetServedByAppWorkerId())
 	response := output.GetResponse()
 	localMetadata := response.GetLocalActivityMetadata()
 	b.events = append(b.events, newEvent(
@@ -429,6 +440,7 @@ func (b *Builder) RecordLocalExecuteCompleted(
 				Context: localStepMethodEventContext(
 					localMetadata,
 					finalAttempt,
+					output.GetPullRouting(),
 				),
 			},
 		},
@@ -471,13 +483,14 @@ func (b *Builder) RecordSignal(
 		eventTime,
 		&dexpb.FlowHistoryEvent_RpcExecutionCompleted{
 			RpcExecutionCompleted: &dexpb.RpcExecutionCompletedEvent{
-				RpcName:           rpcName,
-				StepDecision:      request.GetStepDecision(),
-				UpsertAttributes:  request.GetUpsertAttributes(),
-				RecordEvents:      request.GetRecordEvents(),
-				PublishToChannel:  request.GetPublishToChannel(),
-				IsSetAttributeApi: request.GetIsSetAttributeApi(),
-				DeleteFromChannel: request.GetDeleteFromChannel(),
+				RpcName:             rpcName,
+				ServedByAppWorkerId: request.GetServedByAppWorkerId(),
+				StepDecision:        request.GetStepDecision(),
+				UpsertAttributes:    request.GetUpsertAttributes(),
+				RecordEvents:        request.GetRecordEvents(),
+				PublishToChannel:    request.GetPublishToChannel(),
+				IsSetAttributeApi:   request.GetIsSetAttributeApi(),
+				DeleteFromChannel:   request.GetDeleteFromChannel(),
 			},
 		},
 	))
@@ -488,21 +501,24 @@ func (b *Builder) RecordInvokeRpcUpdate(
 	eventTime time.Time,
 	request *dexpb.InvokeRPCRequest,
 	result *dexpb.InvokeRpcUpdateResult,
-	workerResponse *dexpb.InvokeWorkerRPCResponse,
+	workerOutput *dexpb.InvokeWorkerRPCActivityOutput,
 ) {
+	b.recordServingWorker(workerOutput.GetServedByAppWorkerId())
+	workerResponse := workerOutput.GetResponse()
 	b.events = append(b.events, newEvent(
 		eventID,
 		eventTime,
 		&dexpb.FlowHistoryEvent_RpcExecutionCompleted{
 			RpcExecutionCompleted: &dexpb.RpcExecutionCompletedEvent{
-				RpcName:           request.GetRpcName(),
-				Input:             request.GetInput(),
-				Output:            result.GetResponse().GetOutput(),
-				StepDecision:      workerResponse.GetStepDecision(),
-				UpsertAttributes:  workerResponse.GetUpsertAttributes(),
-				RecordEvents:      workerResponse.GetRecordEvents(),
-				PublishToChannel:  workerResponse.GetPublishToChannel(),
-				DeleteFromChannel: workerResponse.GetDeleteFromChannel(),
+				RpcName:             request.GetRpcName(),
+				ServedByAppWorkerId: workerOutput.GetServedByAppWorkerId(),
+				Input:               request.GetInput(),
+				Output:              result.GetResponse().GetOutput(),
+				StepDecision:        workerResponse.GetStepDecision(),
+				UpsertAttributes:    workerResponse.GetUpsertAttributes(),
+				RecordEvents:        workerResponse.GetRecordEvents(),
+				PublishToChannel:    workerResponse.GetPublishToChannel(),
+				DeleteFromChannel:   workerResponse.GetDeleteFromChannel(),
 			},
 		},
 	))
@@ -527,6 +543,7 @@ func (b *Builder) RecordClose(
 	eventTime time.Time,
 	payload *dexpb.FlowClosedHistoryEvent,
 ) {
+	payload.StickyAppWorkerId = b.stickyAppWorkerID
 	b.events = append(
 		b.events,
 		b.pendingStepMethodEvents(eventTime, shouldIncludeCanceledActivities(payload.GetFlowStatus()))...,
@@ -619,6 +636,7 @@ func (b *Builder) flushLocalFailures() {
 			metadata.GetAttempt(),
 			metadata.GetMethodOptions(),
 			nil,
+			metadata.GetPullRouting(),
 		)
 		switch pending.method {
 		case blobstore.StepEventInputMethodWaitFor:
@@ -688,6 +706,12 @@ func (b *Builder) populateContinuedStart() error {
 	continued.PendingChannelMessages = dump.GetChannelReceived()
 	continued.Attributes = dump.GetAttributes()
 	continued.CompletedSteps = dump.GetStepOutputs()
+	continued.StickyAppWorkerId = dump.GetDexTaskQueue()
+	for _, event := range b.events {
+		if closed := event.GetFlowClosed(); closed != nil && closed.GetStickyAppWorkerId() == "" {
+			closed.StickyAppWorkerId = dump.GetDexTaskQueue()
+		}
+	}
 	return nil
 }
 
@@ -718,6 +742,7 @@ func (s *scheduledActivity) pendingStepMethodEvent(
 			finalAttempt,
 			s.methodOptions,
 			s.lastFailure,
+			pulldispatch.Routing(s.waitInput.GetWorkerTarget(), s.waitInput.GetDexTaskQueue(), ""),
 		)
 		return newEvent(scheduledEventID, eventTime, &dexpb.FlowHistoryEvent_StepWaitForPending{
 			StepWaitForPending: payload,
@@ -734,6 +759,7 @@ func (s *scheduledActivity) pendingStepMethodEvent(
 			finalAttempt,
 			s.methodOptions,
 			s.lastFailure,
+			pulldispatch.Routing(s.executeInput.GetWorkerTarget(), s.executeInput.GetDexTaskQueue(), ""),
 		)
 		return newEvent(scheduledEventID, eventTime, &dexpb.FlowHistoryEvent_StepExecutePending{
 			StepExecutePending: payload,
@@ -857,6 +883,7 @@ func stepMethodEventContext(
 	finalAttempt int32,
 	methodOptions *dexpb.StepMethodOptions,
 	lastFailure *dexpb.StepMethodFailure,
+	pullRouting *dexpb.PullRouting,
 ) *dexpb.StepMethodEventContext {
 	return &dexpb.StepMethodEventContext{
 		StepExecutionId:     context.GetStepExecutionId(),
@@ -868,12 +895,14 @@ func stepMethodEventContext(
 		Duration:            durationpb.New(completedTime.Sub(startedTime)),
 		MethodOptions:       methodOptions,
 		LastFailureInfo:     lastFailure,
+		PullRouting:         pullRouting,
 	}
 }
 
 func localStepMethodEventContext(
 	input *dexpb.LocalActivityMetadata,
 	finalAttempt int32,
+	routing *dexpb.PullRouting,
 ) *dexpb.StepMethodEventContext {
 	if finalAttempt <= 0 {
 		finalAttempt = 1
@@ -883,6 +912,7 @@ func localStepMethodEventContext(
 		FromStepExecutionId: input.GetFromStepExecutionId(),
 		StepType:            stepTypeFromExecutionID(input.GetCurrentStepExecutionId()),
 		Durability:          dexpb.StepDurability_STEP_DURABILITY_ASYNC,
+		PullRouting:         routing,
 		FinalAttempt:        finalAttempt,
 	}
 }
@@ -914,4 +944,17 @@ func rpcNameFromDecision(decision *dexpb.StepDecision) string {
 		}
 	}
 	return ""
+}
+
+func failurePullRouting(failure *dexpb.StepMethodFailure, target *dexpb.WorkerTarget, stickyAppWorkerID string) *dexpb.PullRouting {
+	if failure.GetPullRouting() != nil {
+		return failure.GetPullRouting()
+	}
+	return pulldispatch.Routing(target, stickyAppWorkerID, "")
+}
+
+func (b *Builder) recordServingWorker(workerID string) {
+	if workerID != "" {
+		b.stickyAppWorkerID = workerID
+	}
 }

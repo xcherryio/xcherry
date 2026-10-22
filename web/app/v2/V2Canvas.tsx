@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import { asData } from '@/app/flows/details/StepMethodSections';
+import { flowRoutingData, type FlowRoutingData } from '@/app/flows/details/PullRouting';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { hydrateBlobs } from '@/lib/blobs';
 import { readResponseJSON } from '@/lib/http';
@@ -61,6 +63,7 @@ export function V2Canvas({
   onBand,
   onStepContext,
   onSummary,
+  onRouting,
   onTick,
   deselectKey = 0,
   refocusKey = 0,
@@ -86,6 +89,7 @@ export function V2Canvas({
   /** Every Step of this Flow that waits for a person, with its progress. */
   onActionable?: (steps: ActionableStep[]) => void;
   onSummary?: (summary: FlowSummary | null) => void;
+  onRouting?: (routing: FlowRoutingData | null) => void;
   /** Fired on every run poll, so a host can refresh on the same beat. */
   onTick?: () => void;
 }) {
@@ -126,6 +130,7 @@ export function V2Canvas({
 
   useEffect(() => {
     setCurrentBundle(null);
+    onRouting?.(null);
     setOlderByStep({});
     setPreviousCursorByStep({});
     setPreviousEmpty(false);
@@ -152,6 +157,7 @@ export function V2Canvas({
         setRunError('');
         setLoadedFlowId(flowId);
         onSummary?.(summary);
+        onRouting?.(flowRoutingData(state, events));
         onTick?.();
         if (summary.flowStatusCode === 1 && timer === undefined) {
           timer = window.setInterval(() => { void load(); }, 5000);
@@ -288,13 +294,17 @@ export function V2Canvas({
     const executions = executionsOf(overlay, selectedStep.stepType);
     const latest = executions[executions.length - 1];
     const reason = latest ? reasonLine(latest, Date.now()) : null;
+    const record = bundle?.records.find((candidate) => candidate.execution.stepExecutionId === latest?.stepExecutionId);
     onBand({
+      waitForPullRouting: record?.activeStep?.waitForPullRouting ?? asData(record?.waitEvent?.payload.context).pullRouting,
+      executePullRouting: record?.activeStep?.executePullRouting ?? asData(record?.executeEvent?.payload.context).pullRouting,
+      failure: record?.activeStep?.lastFailureInfo ?? asData(record?.executeEvent?.payload.output).failure ?? asData(record?.waitEvent?.payload.output).failure,
       stepType: selectedStep.stepType,
       reason: reason?.text ?? null,
       tone: reason?.tone ?? null,
       isBlocking: selectedStep.stepType === blockingStepType,
     });
-  }, [blockingStepType, onBand, overlay, selectedStep]);
+  }, [blockingStepType, bundle, onBand, overlay, selectedStep]);
 
   const nowNodeId = useMemo(() => {
     if (!flow || blockingStepType === null) return null;
@@ -552,6 +562,8 @@ export function V2Canvas({
             initialSection={inspectSection}
             waitEvent={hydratedWaitEvent ?? selectedWaitEvent}
             executeEvent={hydratedExecuteEvent ?? selectedExecuteEvent}
+            activeStep={selectedRecord?.activeStep}
+            isPullFlow={flowRoutingData(null, historyEvents).workerTarget.isPullMode === true}
             history={historyEvents}
             parentFlowId={flowId}
             onSection={setInspectSection}

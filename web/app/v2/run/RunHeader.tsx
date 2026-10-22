@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import { FlowRouting, type FlowRoutingData } from '@/app/flows/details/PullRouting';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StopFlowDialog } from '@/app/flows/details/StopFlowDialog';
@@ -24,11 +25,13 @@ export function RunHeader({
   flowType,
   flowId,
   summary,
+  routing,
   onStopped,
 }: {
   flowType: string;
   flowId: string;
   summary: FlowSummary | null;
+  routing?: FlowRoutingData | null;
   onStopped: () => void;
 }) {
   const { timezone } = usePreferences();
@@ -62,6 +65,7 @@ export function RunHeader({
           </div>
         </dl>
       )}
+      {routing && <FlowRouting routing={routing} flowType={flowType} />}
       {summary && isOpen && (
         <button className="rhd-stop" onClick={() => setStopOpen(true)} type="button">
           {RUN_COPY.stop}

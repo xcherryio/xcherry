@@ -209,6 +209,32 @@ private static final long serialVersionUID = 0L;
     return stepExeLocals_.get(index);
   }
 
+  public static final int WAIT_FOR_PULL_ROUTING_FIELD_NUMBER = 6;
+  private io.superdurable.gen.PullRouting waitForPullRouting_;
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   * @return Whether the waitForPullRouting field is set.
+   */
+  @java.lang.Override
+  public boolean hasWaitForPullRouting() {
+    return ((bitField0_ & 0x00000008) != 0);
+  }
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   * @return The waitForPullRouting.
+   */
+  @java.lang.Override
+  public io.superdurable.gen.PullRouting getWaitForPullRouting() {
+    return waitForPullRouting_ == null ? io.superdurable.gen.PullRouting.getDefaultInstance() : waitForPullRouting_;
+  }
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   */
+  @java.lang.Override
+  public io.superdurable.gen.PullRoutingOrBuilder getWaitForPullRoutingOrBuilder() {
+    return waitForPullRouting_ == null ? io.superdurable.gen.PullRouting.getDefaultInstance() : waitForPullRouting_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -238,6 +264,9 @@ private static final long serialVersionUID = 0L;
     for (int i = 0; i < stepExeLocals_.size(); i++) {
       output.writeMessage(5, stepExeLocals_.get(i));
     }
+    if (((bitField0_ & 0x00000008) != 0)) {
+      output.writeMessage(6, getWaitForPullRouting());
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -266,6 +295,10 @@ private static final long serialVersionUID = 0L;
           }
           size += 1 * count;
         }
+    if (((bitField0_ & 0x00000008) != 0)) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(6, getWaitForPullRouting());
+    }
     return size;
   }
   @java.lang.Override
@@ -309,6 +342,11 @@ private static final long serialVersionUID = 0L;
     }
     if (!getStepExeLocalsList()
         .equals(other.getStepExeLocalsList())) return false;
+    if (hasWaitForPullRouting() != other.hasWaitForPullRouting()) return false;
+    if (hasWaitForPullRouting()) {
+      if (!getWaitForPullRouting()
+          .equals(other.getWaitForPullRouting())) return false;
+    }
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -337,6 +375,10 @@ private static final long serialVersionUID = 0L;
     if (getStepExeLocalsCount() > 0) {
       hash = (37 * hash) + STEP_EXE_LOCALS_FIELD_NUMBER;
       hash = (53 * hash) + getStepExeLocalsList().hashCode();
+    }
+    if (hasWaitForPullRouting()) {
+      hash = (37 * hash) + WAIT_FOR_PULL_ROUTING_FIELD_NUMBER;
+      hash = (53 * hash) + getWaitForPullRouting().hashCode();
     }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
@@ -472,6 +514,7 @@ private static final long serialVersionUID = 0L;
         internalGetCompletedConditionsFieldBuilder();
         internalGetWaitingConditionFieldBuilder();
         internalGetStepExeLocalsFieldBuilder();
+        internalGetWaitForPullRoutingFieldBuilder();
       }
     }
     @java.lang.Override
@@ -501,6 +544,11 @@ private static final long serialVersionUID = 0L;
         stepExeLocalsBuilder_.clear();
       }
       bitField0_ = (bitField0_ & ~0x00000010);
+      waitForPullRouting_ = null;
+      if (waitForPullRoutingBuilder_ != null) {
+        waitForPullRoutingBuilder_.dispose();
+        waitForPullRoutingBuilder_ = null;
+      }
       return this;
     }
 
@@ -569,6 +617,12 @@ private static final long serialVersionUID = 0L;
             : waitingConditionBuilder_.build();
         to_bitField0_ |= 0x00000004;
       }
+      if (((from_bitField0_ & 0x00000020) != 0)) {
+        result.waitForPullRouting_ = waitForPullRoutingBuilder_ == null
+            ? waitForPullRouting_
+            : waitForPullRoutingBuilder_.build();
+        to_bitField0_ |= 0x00000008;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -623,6 +677,9 @@ private static final long serialVersionUID = 0L;
             stepExeLocalsBuilder_.addAllMessages(other.stepExeLocals_);
           }
         }
+      }
+      if (other.hasWaitForPullRouting()) {
+        mergeWaitForPullRouting(other.getWaitForPullRouting());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -689,6 +746,13 @@ private static final long serialVersionUID = 0L;
               }
               break;
             } // case 42
+            case 50: {
+              input.readMessage(
+                  internalGetWaitForPullRoutingFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              bitField0_ |= 0x00000020;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1379,6 +1443,127 @@ private static final long serialVersionUID = 0L;
         stepExeLocals_ = null;
       }
       return stepExeLocalsBuilder_;
+    }
+
+    private io.superdurable.gen.PullRouting waitForPullRouting_;
+    private com.google.protobuf.SingleFieldBuilder<
+        io.superdurable.gen.PullRouting, io.superdurable.gen.PullRouting.Builder, io.superdurable.gen.PullRoutingOrBuilder> waitForPullRoutingBuilder_;
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     * @return Whether the waitForPullRouting field is set.
+     */
+    public boolean hasWaitForPullRouting() {
+      return ((bitField0_ & 0x00000020) != 0);
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     * @return The waitForPullRouting.
+     */
+    public io.superdurable.gen.PullRouting getWaitForPullRouting() {
+      if (waitForPullRoutingBuilder_ == null) {
+        return waitForPullRouting_ == null ? io.superdurable.gen.PullRouting.getDefaultInstance() : waitForPullRouting_;
+      } else {
+        return waitForPullRoutingBuilder_.getMessage();
+      }
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public Builder setWaitForPullRouting(io.superdurable.gen.PullRouting value) {
+      if (waitForPullRoutingBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        waitForPullRouting_ = value;
+      } else {
+        waitForPullRoutingBuilder_.setMessage(value);
+      }
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public Builder setWaitForPullRouting(
+        io.superdurable.gen.PullRouting.Builder builderForValue) {
+      if (waitForPullRoutingBuilder_ == null) {
+        waitForPullRouting_ = builderForValue.build();
+      } else {
+        waitForPullRoutingBuilder_.setMessage(builderForValue.build());
+      }
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public Builder mergeWaitForPullRouting(io.superdurable.gen.PullRouting value) {
+      if (waitForPullRoutingBuilder_ == null) {
+        if (((bitField0_ & 0x00000020) != 0) &&
+          waitForPullRouting_ != null &&
+          waitForPullRouting_ != io.superdurable.gen.PullRouting.getDefaultInstance()) {
+          getWaitForPullRoutingBuilder().mergeFrom(value);
+        } else {
+          waitForPullRouting_ = value;
+        }
+      } else {
+        waitForPullRoutingBuilder_.mergeFrom(value);
+      }
+      if (waitForPullRouting_ != null) {
+        bitField0_ |= 0x00000020;
+        onChanged();
+      }
+      return this;
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public Builder clearWaitForPullRouting() {
+      bitField0_ = (bitField0_ & ~0x00000020);
+      waitForPullRouting_ = null;
+      if (waitForPullRoutingBuilder_ != null) {
+        waitForPullRoutingBuilder_.dispose();
+        waitForPullRoutingBuilder_ = null;
+      }
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public io.superdurable.gen.PullRouting.Builder getWaitForPullRoutingBuilder() {
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return internalGetWaitForPullRoutingFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    public io.superdurable.gen.PullRoutingOrBuilder getWaitForPullRoutingOrBuilder() {
+      if (waitForPullRoutingBuilder_ != null) {
+        return waitForPullRoutingBuilder_.getMessageOrBuilder();
+      } else {
+        return waitForPullRouting_ == null ?
+            io.superdurable.gen.PullRouting.getDefaultInstance() : waitForPullRouting_;
+      }
+    }
+    /**
+     * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        io.superdurable.gen.PullRouting, io.superdurable.gen.PullRouting.Builder, io.superdurable.gen.PullRoutingOrBuilder> 
+        internalGetWaitForPullRoutingFieldBuilder() {
+      if (waitForPullRoutingBuilder_ == null) {
+        waitForPullRoutingBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            io.superdurable.gen.PullRouting, io.superdurable.gen.PullRouting.Builder, io.superdurable.gen.PullRoutingOrBuilder>(
+                getWaitForPullRouting(),
+                getParentForChildren(),
+                isClean());
+        waitForPullRouting_ = null;
+      }
+      return waitForPullRoutingBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.StepExecutionResumeInfo)

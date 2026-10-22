@@ -120,6 +120,7 @@ func mapFlowState(response *dexpb.GetFlowStateResponse) (flowState, error) {
 	}
 	return flowState{
 		FlowConfig:             flowConfig,
+		StickyAppWorkerID:      response.GetStickyAppWorkerId(),
 		Attributes:             mapKeyValues(response.GetAttributes()),
 		ActiveStepExecutions:   activeSteps,
 		QueuedSteps:            interfaceSlice(wholeResponse["queuedSteps"]),
@@ -149,7 +150,17 @@ func mapActiveStep(step *dexpb.ActiveStepExecutionState) (activeStepExecution, e
 	if err != nil {
 		return activeStepExecution{}, err
 	}
+	waitForRouting, err := protoMap(step.GetWaitForPullRouting())
+	if err != nil {
+		return activeStepExecution{}, err
+	}
+	executeRouting, err := protoMap(step.GetExecutePullRouting())
+	if err != nil {
+		return activeStepExecution{}, err
+	}
 	return activeStepExecution{
+		WaitForPullRouting:  waitForRouting,
+		ExecutePullRouting:  executeRouting,
 		StepExecutionID:     step.GetStepExecutionId(),
 		FromStepExecutionID: step.GetFromStepExecutionId(),
 		StepType:            step.GetStepType(),

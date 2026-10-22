@@ -13,7 +13,8 @@ import {
   StepMethodOutputSection,
 } from '@/app/flows/details/StepMethodSections'
 import { storedValueJSONReplacer } from '@/lib/blobs'
-import type { FlowHistoryEvent } from '@/lib/types'
+import { PullRouting } from '@/app/flows/details/PullRouting'
+import type { ActiveStepExecution, FlowHistoryEvent } from '@/lib/types'
 import {
   DEF_HEIGHT_DEFAULT,
   DEF_HEIGHT_KEY,
@@ -403,6 +404,8 @@ export function DetailPanel({
   executeEvent = null,
   history = [],
   parentFlowId = '',
+  activeStep,
+  isPullFlow = false,
 }: {
   model: PanelModel
   onClose: () => void
@@ -418,6 +421,8 @@ export function DetailPanel({
   executeEvent?: FlowHistoryEvent | null
   history?: FlowHistoryEvent[]
   parentFlowId?: string
+  isPullFlow?: boolean
+  activeStep?: ActiveStepExecution
 }): JSX.Element {
   const panelRef = useRef<HTMLElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -486,6 +491,10 @@ export function DetailPanel({
       </header>
 
       <div className="ppan-stack" ref={bodyRef}>
+        {activeStep && (isPullFlow || activeStep.waitForPullRouting || activeStep.executePullRouting) && <div className="semantic-event">
+          <PullRouting value={activeStep.waitForPullRouting} label="WaitFor routing" />
+          <PullRouting value={activeStep.executePullRouting} label="Execute routing" />
+        </div>}
         <section
           className="ppan-def"
           data-collapsed={definitionOpen ? undefined : 'true'}

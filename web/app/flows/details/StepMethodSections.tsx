@@ -713,10 +713,12 @@ export function FailureContent({
         ['Attempt', showAttempt ? failure.attempt : undefined],
         ['Error type', backendError],
         ['Detail', serverDetail],
+        ['Dispatch failure', pullDispatchFailureLabel(serverDetail)],
         ['Worker error type', details.originalWorkerErrorType],
         ['Worker error detail', workerDetail],
         ['Worker gRPC status', workerStatus],
       ]} />
+      {Boolean(failure.pullRouting) && <PullRouting value={failure.pullRouting} />}
       {isPresent(details.originalWorkerErrorStackTrace) && (
         <details className="failure-stack" open={stackInitiallyExpanded}>
           <summary>Stack trace</summary>
@@ -981,6 +983,7 @@ export function StepMethodContextSection({
         ['Started', isPresent(context.startedTime) ? formatDate(String(context.startedTime), timezone) : undefined],
         ['Duration', protobufDuration(context.duration)],
       ]} />
+      {(context.pullRouting || asData(asData(history.find((candidate) => candidate.type === 'FlowStartedOrContinued')?.payload.flowConfig).workerTarget).isPullMode === true) && <PullRouting value={context.pullRouting} />}
       <StepMethodOptionsView
         value={context.methodOptions}
         stepOptions={findSourceStepOptions(event, history)}
@@ -1065,4 +1068,25 @@ export function pendingPhaseLabel(value: unknown): string {
   if (value === 1) return 'Scheduled';
   if (value === 2) return 'Started';
   return 'Unspecified';
+}
+
+function pullDispatchFailureLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.includes('no Worker available for queue')) return 'No Worker available';
+  if (value.includes('Worker disconnected during pull dispatch')) return 'Worker disconnected';
+  if (value.includes('no pull Worker registered Step')) return 'Unknown Step type: dispatch timed out';
+  if (value.includes('no pull Worker registered RPC')) return 'Unknown RPC name: dispatch timed out';
+  return undefined;
+}
+
+export function PullRouting({ value, label = 'Pull routing' }: { value: unknown; label?: string }) {
+  const routing = asData(value);
+  return <div className="semantic-subsection">
+    <h5>{label}</h5>
+    <Fields compact values={[
+      ['Serving app Worker ID', routing.servedByAppWorkerId || '—'],
+      ['Queue source', routing.source === 1 ? 'Sticky queue' : routing.source === 2 ? 'Flow type queue' : '—'],
+      ['Dispatch sticky app Worker ID', routing.stickyAppWorkerId || '—'],
+    ]} />
+  </div>;
 }

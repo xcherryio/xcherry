@@ -41,6 +41,9 @@ func (s *pullWaitForStream) Recv() (*dexpb.InvokeWaitForMethodOutput, error) {
 	if err != nil {
 		return nil, err
 	}
+	if frame.GetServedByAppWorkerId() != "" {
+		s.servedByAppWorkerID = frame.GetServedByAppWorkerId()
+	}
 	if output := frame.GetWaitFor(); output != nil {
 		if output.GetResult() != nil {
 			s.servedByAppWorkerID = frame.GetServedByAppWorkerId()
@@ -81,6 +84,9 @@ func (s *pullExecuteStream) Recv() (*dexpb.InvokeExecuteMethodOutput, error) {
 	frame, err := s.receiveFrame()
 	if err != nil {
 		return nil, err
+	}
+	if frame.GetServedByAppWorkerId() != "" {
+		s.servedByAppWorkerID = frame.GetServedByAppWorkerId()
 	}
 	if output := frame.GetExecute(); output != nil {
 		if output.GetResult() != nil {

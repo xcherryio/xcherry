@@ -112,6 +112,12 @@ class PendingStepMethodPhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PENDING_STEP_METHOD_PHASE_SCHEDULED: _ClassVar[PendingStepMethodPhase]
     PENDING_STEP_METHOD_PHASE_STARTED: _ClassVar[PendingStepMethodPhase]
 
+class PullRoutingSource(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PULL_ROUTING_SOURCE_UNSPECIFIED: _ClassVar[PullRoutingSource]
+    PULL_ROUTING_SOURCE_STICKY_QUEUE: _ClassVar[PullRoutingSource]
+    PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE: _ClassVar[PullRoutingSource]
+
 class ActiveStepPhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTIVE_STEP_PHASE_UNSPECIFIED: _ClassVar[ActiveStepPhase]
@@ -265,6 +271,9 @@ FLOW_ERROR_TYPE_INTERNAL: FlowErrorType
 PENDING_STEP_METHOD_PHASE_UNSPECIFIED: PendingStepMethodPhase
 PENDING_STEP_METHOD_PHASE_SCHEDULED: PendingStepMethodPhase
 PENDING_STEP_METHOD_PHASE_STARTED: PendingStepMethodPhase
+PULL_ROUTING_SOURCE_UNSPECIFIED: PullRoutingSource
+PULL_ROUTING_SOURCE_STICKY_QUEUE: PullRoutingSource
+PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE: PullRoutingSource
 ACTIVE_STEP_PHASE_UNSPECIFIED: ActiveStepPhase
 ACTIVE_STEP_PHASE_ACTIVE: ActiveStepPhase
 ACTIVE_STEP_PHASE_WAITING: ActiveStepPhase
@@ -1227,7 +1236,7 @@ class FlowInitialStart(_message.Message):
     def __init__(self, start_step_type: _Optional[str] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., step_options: _Optional[_Union[StepOptions, _Mapping]] = ..., initial_attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ...) -> None: ...
 
 class FlowContinuedStart(_message.Message):
-    __slots__ = ("previous_run_id", "steps_to_start", "steps_to_resume", "pending_channel_messages", "attributes", "completed_steps")
+    __slots__ = ("previous_run_id", "steps_to_start", "steps_to_resume", "pending_channel_messages", "attributes", "completed_steps", "sticky_app_worker_id")
     class PendingChannelMessagesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1241,27 +1250,31 @@ class FlowContinuedStart(_message.Message):
     PENDING_CHANNEL_MESSAGES_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_STEPS_FIELD_NUMBER: _ClassVar[int]
+    STICKY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     previous_run_id: str
     steps_to_start: _containers.RepeatedCompositeFieldContainer[StepMovement]
     steps_to_resume: _containers.RepeatedCompositeFieldContainer[StepExecutionResumeInfo]
     pending_channel_messages: _containers.MessageMap[str, ChannelValues]
     attributes: _containers.RepeatedCompositeFieldContainer[KV]
     completed_steps: _containers.RepeatedCompositeFieldContainer[StepCompletionOutput]
-    def __init__(self, previous_run_id: _Optional[str] = ..., steps_to_start: _Optional[_Iterable[_Union[StepMovement, _Mapping]]] = ..., steps_to_resume: _Optional[_Iterable[_Union[StepExecutionResumeInfo, _Mapping]]] = ..., pending_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., completed_steps: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ...) -> None: ...
+    sticky_app_worker_id: str
+    def __init__(self, previous_run_id: _Optional[str] = ..., steps_to_start: _Optional[_Iterable[_Union[StepMovement, _Mapping]]] = ..., steps_to_resume: _Optional[_Iterable[_Union[StepExecutionResumeInfo, _Mapping]]] = ..., pending_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., completed_steps: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ..., sticky_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class FlowClosedHistoryEvent(_message.Message):
-    __slots__ = ("flow_status", "results", "error_type", "error_message", "continued_to_run_id")
+    __slots__ = ("flow_status", "results", "error_type", "error_message", "continued_to_run_id", "sticky_app_worker_id")
     FLOW_STATUS_FIELD_NUMBER: _ClassVar[int]
     RESULTS_FIELD_NUMBER: _ClassVar[int]
     ERROR_TYPE_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     CONTINUED_TO_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    STICKY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     flow_status: FlowStatus
     results: _containers.RepeatedCompositeFieldContainer[StepCompletionOutput]
     error_type: FlowErrorType
     error_message: str
     continued_to_run_id: str
-    def __init__(self, flow_status: _Optional[_Union[FlowStatus, str]] = ..., results: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ..., error_type: _Optional[_Union[FlowErrorType, str]] = ..., error_message: _Optional[str] = ..., continued_to_run_id: _Optional[str] = ...) -> None: ...
+    sticky_app_worker_id: str
+    def __init__(self, flow_status: _Optional[_Union[FlowStatus, str]] = ..., results: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ..., error_type: _Optional[_Union[FlowErrorType, str]] = ..., error_message: _Optional[str] = ..., continued_to_run_id: _Optional[str] = ..., sticky_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class StepMethodPendingEvent(_message.Message):
     __slots__ = ("input", "context", "phase")
@@ -1274,14 +1287,16 @@ class StepMethodPendingEvent(_message.Message):
     def __init__(self, input: _Optional[_Union[StepMethodEventInput, _Mapping]] = ..., context: _Optional[_Union[StepMethodEventContext, _Mapping]] = ..., phase: _Optional[_Union[PendingStepMethodPhase, str]] = ...) -> None: ...
 
 class StepMethodFailure(_message.Message):
-    __slots__ = ("backend_error", "details", "attempt")
+    __slots__ = ("backend_error", "details", "attempt", "pull_routing")
     BACKEND_ERROR_FIELD_NUMBER: _ClassVar[int]
     DETAILS_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     backend_error: str
     details: ServiceErrorResponse
     attempt: int
-    def __init__(self, backend_error: _Optional[str] = ..., details: _Optional[_Union[ServiceErrorResponse, _Mapping]] = ..., attempt: _Optional[int] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, backend_error: _Optional[str] = ..., details: _Optional[_Union[ServiceErrorResponse, _Mapping]] = ..., attempt: _Optional[int] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class StepMethodOptions(_message.Message):
     __slots__ = ("timeout_seconds", "retry_policy", "heartbeat_timeout_seconds")
@@ -1307,8 +1322,18 @@ class StepMethodEventInput(_message.Message):
     step_execution_locals: _containers.RepeatedCompositeFieldContainer[KV]
     def __init__(self, unavailable: _Optional[bool] = ..., step_input: _Optional[_Union[Value, _Mapping]] = ..., condition_results: _Optional[_Union[ConditionResults, _Mapping]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., step_execution_locals: _Optional[_Iterable[_Union[KV, _Mapping]]] = ...) -> None: ...
 
+class PullRouting(_message.Message):
+    __slots__ = ("sticky_app_worker_id", "served_by_app_worker_id", "source")
+    STICKY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    sticky_app_worker_id: str
+    served_by_app_worker_id: str
+    source: PullRoutingSource
+    def __init__(self, sticky_app_worker_id: _Optional[str] = ..., served_by_app_worker_id: _Optional[str] = ..., source: _Optional[_Union[PullRoutingSource, str]] = ...) -> None: ...
+
 class StepMethodEventContext(_message.Message):
-    __slots__ = ("step_execution_id", "from_step_execution_id", "step_type", "durability", "final_attempt", "started_time", "duration", "method_options", "last_failure_info")
+    __slots__ = ("step_execution_id", "from_step_execution_id", "step_type", "durability", "final_attempt", "started_time", "duration", "method_options", "last_failure_info", "pull_routing")
     STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     FROM_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     STEP_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -1318,6 +1343,7 @@ class StepMethodEventContext(_message.Message):
     DURATION_FIELD_NUMBER: _ClassVar[int]
     METHOD_OPTIONS_FIELD_NUMBER: _ClassVar[int]
     LAST_FAILURE_INFO_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     step_execution_id: str
     from_step_execution_id: str
     step_type: str
@@ -1327,7 +1353,8 @@ class StepMethodEventContext(_message.Message):
     duration: _duration_pb2.Duration
     method_options: StepMethodOptions
     last_failure_info: StepMethodFailure
-    def __init__(self, step_execution_id: _Optional[str] = ..., from_step_execution_id: _Optional[str] = ..., step_type: _Optional[str] = ..., durability: _Optional[_Union[StepDurability, str]] = ..., final_attempt: _Optional[int] = ..., started_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., method_options: _Optional[_Union[StepMethodOptions, _Mapping]] = ..., last_failure_info: _Optional[_Union[StepMethodFailure, _Mapping]] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, step_execution_id: _Optional[str] = ..., from_step_execution_id: _Optional[str] = ..., step_type: _Optional[str] = ..., durability: _Optional[_Union[StepDurability, str]] = ..., final_attempt: _Optional[int] = ..., started_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., method_options: _Optional[_Union[StepMethodOptions, _Mapping]] = ..., last_failure_info: _Optional[_Union[StepMethodFailure, _Mapping]] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class StepWaitForCompletedOutput(_message.Message):
     __slots__ = ("wait_for_condition", "upsert_attributes", "publish_to_channel", "record_events", "upsert_step_execution_locals", "delete_from_channel")
@@ -1408,7 +1435,7 @@ class StepExecuteFailedEvent(_message.Message):
     def __init__(self, input: _Optional[_Union[StepMethodEventInput, _Mapping]] = ..., output: _Optional[_Union[StepMethodFailedOutput, _Mapping]] = ..., context: _Optional[_Union[StepMethodEventContext, _Mapping]] = ...) -> None: ...
 
 class RpcExecutionCompletedEvent(_message.Message):
-    __slots__ = ("rpc_name", "input", "output", "step_decision", "upsert_attributes", "record_events", "publish_to_channel", "is_set_attribute_api", "delete_from_channel")
+    __slots__ = ("rpc_name", "input", "output", "step_decision", "upsert_attributes", "record_events", "publish_to_channel", "is_set_attribute_api", "delete_from_channel", "served_by_app_worker_id")
     RPC_NAME_FIELD_NUMBER: _ClassVar[int]
     INPUT_FIELD_NUMBER: _ClassVar[int]
     OUTPUT_FIELD_NUMBER: _ClassVar[int]
@@ -1418,6 +1445,7 @@ class RpcExecutionCompletedEvent(_message.Message):
     PUBLISH_TO_CHANNEL_FIELD_NUMBER: _ClassVar[int]
     IS_SET_ATTRIBUTE_API_FIELD_NUMBER: _ClassVar[int]
     DELETE_FROM_CHANNEL_FIELD_NUMBER: _ClassVar[int]
+    SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     rpc_name: str
     input: Value
     output: Value
@@ -1427,7 +1455,8 @@ class RpcExecutionCompletedEvent(_message.Message):
     publish_to_channel: _containers.RepeatedCompositeFieldContainer[ChannelMessage]
     is_set_attribute_api: bool
     delete_from_channel: _containers.RepeatedCompositeFieldContainer[ChannelMessageDeletion]
-    def __init__(self, rpc_name: _Optional[str] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., output: _Optional[_Union[Value, _Mapping]] = ..., step_decision: _Optional[_Union[StepDecision, _Mapping]] = ..., upsert_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., record_events: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., publish_to_channel: _Optional[_Iterable[_Union[ChannelMessage, _Mapping]]] = ..., is_set_attribute_api: _Optional[bool] = ..., delete_from_channel: _Optional[_Iterable[_Union[ChannelMessageDeletion, _Mapping]]] = ...) -> None: ...
+    served_by_app_worker_id: str
+    def __init__(self, rpc_name: _Optional[str] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., output: _Optional[_Union[Value, _Mapping]] = ..., step_decision: _Optional[_Union[StepDecision, _Mapping]] = ..., upsert_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., record_events: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., publish_to_channel: _Optional[_Iterable[_Union[ChannelMessage, _Mapping]]] = ..., is_set_attribute_api: _Optional[bool] = ..., delete_from_channel: _Optional[_Iterable[_Union[ChannelMessageDeletion, _Mapping]]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class ChannelExternalPublishEvent(_message.Message):
     __slots__ = ("messages",)
@@ -1462,7 +1491,7 @@ class WaitForHistoryEventResponse(_message.Message):
     def __init__(self, event_available: _Optional[bool] = ..., available_internal_event_id: _Optional[int] = ..., flow_status: _Optional[_Union[FlowStatus, str]] = ...) -> None: ...
 
 class ActiveStepExecutionState(_message.Message):
-    __slots__ = ("step_execution_id", "from_step_execution_id", "step_type", "phase", "movement", "waiting_condition", "completed_conditions", "step_execution_locals", "timers", "last_failure_info")
+    __slots__ = ("step_execution_id", "from_step_execution_id", "step_type", "phase", "movement", "waiting_condition", "completed_conditions", "step_execution_locals", "timers", "last_failure_info", "wait_for_pull_routing", "execute_pull_routing")
     STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     FROM_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     STEP_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -1473,6 +1502,8 @@ class ActiveStepExecutionState(_message.Message):
     STEP_EXECUTION_LOCALS_FIELD_NUMBER: _ClassVar[int]
     TIMERS_FIELD_NUMBER: _ClassVar[int]
     LAST_FAILURE_INFO_FIELD_NUMBER: _ClassVar[int]
+    WAIT_FOR_PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
+    EXECUTE_PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     step_execution_id: str
     from_step_execution_id: str
     step_type: str
@@ -1483,7 +1514,9 @@ class ActiveStepExecutionState(_message.Message):
     step_execution_locals: _containers.RepeatedCompositeFieldContainer[KV]
     timers: _containers.RepeatedCompositeFieldContainer[TimerInfo]
     last_failure_info: StepMethodFailure
-    def __init__(self, step_execution_id: _Optional[str] = ..., from_step_execution_id: _Optional[str] = ..., step_type: _Optional[str] = ..., phase: _Optional[_Union[ActiveStepPhase, str]] = ..., movement: _Optional[_Union[StepMovement, _Mapping]] = ..., waiting_condition: _Optional[_Union[WaitingConditionState, _Mapping]] = ..., completed_conditions: _Optional[_Union[StepExecutionCompletedConditions, _Mapping]] = ..., step_execution_locals: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., timers: _Optional[_Iterable[_Union[TimerInfo, _Mapping]]] = ..., last_failure_info: _Optional[_Union[StepMethodFailure, _Mapping]] = ...) -> None: ...
+    wait_for_pull_routing: PullRouting
+    execute_pull_routing: PullRouting
+    def __init__(self, step_execution_id: _Optional[str] = ..., from_step_execution_id: _Optional[str] = ..., step_type: _Optional[str] = ..., phase: _Optional[_Union[ActiveStepPhase, str]] = ..., movement: _Optional[_Union[StepMovement, _Mapping]] = ..., waiting_condition: _Optional[_Union[WaitingConditionState, _Mapping]] = ..., completed_conditions: _Optional[_Union[StepExecutionCompletedConditions, _Mapping]] = ..., step_execution_locals: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., timers: _Optional[_Iterable[_Union[TimerInfo, _Mapping]]] = ..., last_failure_info: _Optional[_Union[StepMethodFailure, _Mapping]] = ..., wait_for_pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ..., execute_pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class GetFlowStateRequest(_message.Message):
     __slots__ = ("flow_id", "run_id")
@@ -1494,7 +1527,7 @@ class GetFlowStateRequest(_message.Message):
     def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ...) -> None: ...
 
 class GetFlowStateResponse(_message.Message):
-    __slots__ = ("flow_config", "attributes", "active_step_executions", "queued_steps", "pending_channel_messages", "completed_steps")
+    __slots__ = ("flow_config", "attributes", "active_step_executions", "queued_steps", "pending_channel_messages", "completed_steps", "sticky_app_worker_id")
     class PendingChannelMessagesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1508,13 +1541,15 @@ class GetFlowStateResponse(_message.Message):
     QUEUED_STEPS_FIELD_NUMBER: _ClassVar[int]
     PENDING_CHANNEL_MESSAGES_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_STEPS_FIELD_NUMBER: _ClassVar[int]
+    STICKY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     flow_config: FlowConfig
     attributes: _containers.RepeatedCompositeFieldContainer[KV]
     active_step_executions: _containers.RepeatedCompositeFieldContainer[ActiveStepExecutionState]
     queued_steps: _containers.RepeatedCompositeFieldContainer[StepMovement]
     pending_channel_messages: _containers.MessageMap[str, ChannelValues]
     completed_steps: _containers.RepeatedCompositeFieldContainer[StepCompletionOutput]
-    def __init__(self, flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., active_step_executions: _Optional[_Iterable[_Union[ActiveStepExecutionState, _Mapping]]] = ..., queued_steps: _Optional[_Iterable[_Union[StepMovement, _Mapping]]] = ..., pending_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., completed_steps: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ...) -> None: ...
+    sticky_app_worker_id: str
+    def __init__(self, flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., active_step_executions: _Optional[_Iterable[_Union[ActiveStepExecutionState, _Mapping]]] = ..., queued_steps: _Optional[_Iterable[_Union[StepMovement, _Mapping]]] = ..., pending_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., completed_steps: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ..., sticky_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class ResetFlowRequest(_message.Message):
     __slots__ = ("flow_id", "run_id", "reset_type", "reason", "history_event_time", "step_type", "step_execution_id", "skip_writes_reapply", "step_method")
@@ -1699,14 +1734,16 @@ class WorkerErrorResponse(_message.Message):
     def __init__(self, detail: _Optional[str] = ..., error_type: _Optional[str] = ..., stack_trace: _Optional[str] = ..., retry_after_seconds: _Optional[int] = ..., grpc_status: _Optional[int] = ...) -> None: ...
 
 class InternalActivityError(_message.Message):
-    __slots__ = ("server_detail", "worker_grpc_status", "worker_error")
+    __slots__ = ("server_detail", "worker_grpc_status", "worker_error", "pull_routing")
     SERVER_DETAIL_FIELD_NUMBER: _ClassVar[int]
     WORKER_GRPC_STATUS_FIELD_NUMBER: _ClassVar[int]
     WORKER_ERROR_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     server_detail: str
     worker_grpc_status: int
     worker_error: InternalWorkerError
-    def __init__(self, server_detail: _Optional[str] = ..., worker_grpc_status: _Optional[int] = ..., worker_error: _Optional[_Union[InternalWorkerError, _Mapping]] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, server_detail: _Optional[str] = ..., worker_grpc_status: _Optional[int] = ..., worker_error: _Optional[_Union[InternalWorkerError, _Mapping]] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class InternalWorkerError(_message.Message):
     __slots__ = ("detail", "error_type", "stack_trace")
@@ -2165,18 +2202,20 @@ class StepExecutionCompletedConditions(_message.Message):
     def __init__(self, completed_timer_conditions: _Optional[_Mapping[int, InternalTimerStatus]] = ..., completed_sub_flow_results: _Optional[_Mapping[int, FlowResult]] = ...) -> None: ...
 
 class StepExecutionResumeInfo(_message.Message):
-    __slots__ = ("step_execution_id", "step", "completed_conditions", "waiting_condition", "step_exe_locals")
+    __slots__ = ("step_execution_id", "step", "completed_conditions", "waiting_condition", "step_exe_locals", "wait_for_pull_routing")
     STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     STEP_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     WAITING_CONDITION_FIELD_NUMBER: _ClassVar[int]
     STEP_EXE_LOCALS_FIELD_NUMBER: _ClassVar[int]
+    WAIT_FOR_PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     step_execution_id: str
     step: StepMovement
     completed_conditions: StepExecutionCompletedConditions
     waiting_condition: WaitingConditionState
     step_exe_locals: _containers.RepeatedCompositeFieldContainer[KV]
-    def __init__(self, step_execution_id: _Optional[str] = ..., step: _Optional[_Union[StepMovement, _Mapping]] = ..., completed_conditions: _Optional[_Union[StepExecutionCompletedConditions, _Mapping]] = ..., waiting_condition: _Optional[_Union[WaitingConditionState, _Mapping]] = ..., step_exe_locals: _Optional[_Iterable[_Union[KV, _Mapping]]] = ...) -> None: ...
+    wait_for_pull_routing: PullRouting
+    def __init__(self, step_execution_id: _Optional[str] = ..., step: _Optional[_Union[StepMovement, _Mapping]] = ..., completed_conditions: _Optional[_Union[StepExecutionCompletedConditions, _Mapping]] = ..., waiting_condition: _Optional[_Union[WaitingConditionState, _Mapping]] = ..., step_exe_locals: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., wait_for_pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class StepExecutionCounterInfo(_message.Message):
     __slots__ = ("step_type_started_count", "step_type_currently_executing_count", "total_currently_executing_count", "step_active_execution_nums")
@@ -2315,12 +2354,14 @@ class InvokeWaitForMethodActivityInput(_message.Message):
     def __init__(self, worker_target: _Optional[_Union[WorkerTarget, _Mapping]] = ..., request: _Optional[_Union[InvokeWaitForMethodRequest, _Mapping]] = ..., dex_task_queue: _Optional[str] = ..., dispatch_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., sticky_wait: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class InvokeWaitForMethodActivityOutput(_message.Message):
-    __slots__ = ("response", "served_by_app_worker_id")
+    __slots__ = ("response", "served_by_app_worker_id", "pull_routing")
     RESPONSE_FIELD_NUMBER: _ClassVar[int]
     SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     response: InvokeWaitForMethodResponse
     served_by_app_worker_id: str
-    def __init__(self, response: _Optional[_Union[InvokeWaitForMethodResponse, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, response: _Optional[_Union[InvokeWaitForMethodResponse, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class InvokeExecuteMethodActivityInput(_message.Message):
     __slots__ = ("worker_target", "request", "dex_task_queue", "dispatch_wait", "sticky_wait")
@@ -2345,26 +2386,30 @@ class RecoveryErrorInfo(_message.Message):
     def __init__(self, detail: _Optional[str] = ..., error_type: _Optional[str] = ...) -> None: ...
 
 class InternalLocalStepActivityFailure(_message.Message):
-    __slots__ = ("local_activity_metadata", "first_attempt_timestamp", "method_options", "attempt", "activity_error")
+    __slots__ = ("local_activity_metadata", "first_attempt_timestamp", "method_options", "attempt", "activity_error", "pull_routing")
     LOCAL_ACTIVITY_METADATA_FIELD_NUMBER: _ClassVar[int]
     FIRST_ATTEMPT_TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     METHOD_OPTIONS_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     ACTIVITY_ERROR_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     local_activity_metadata: LocalActivityMetadata
     first_attempt_timestamp: int
     method_options: StepMethodOptions
     attempt: int
     activity_error: InternalActivityError
-    def __init__(self, local_activity_metadata: _Optional[_Union[LocalActivityMetadata, _Mapping]] = ..., first_attempt_timestamp: _Optional[int] = ..., method_options: _Optional[_Union[StepMethodOptions, _Mapping]] = ..., attempt: _Optional[int] = ..., activity_error: _Optional[_Union[InternalActivityError, _Mapping]] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, local_activity_metadata: _Optional[_Union[LocalActivityMetadata, _Mapping]] = ..., first_attempt_timestamp: _Optional[int] = ..., method_options: _Optional[_Union[StepMethodOptions, _Mapping]] = ..., attempt: _Optional[int] = ..., activity_error: _Optional[_Union[InternalActivityError, _Mapping]] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class InvokeExecuteMethodActivityOutput(_message.Message):
-    __slots__ = ("response", "served_by_app_worker_id")
+    __slots__ = ("response", "served_by_app_worker_id", "pull_routing")
     RESPONSE_FIELD_NUMBER: _ClassVar[int]
     SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    PULL_ROUTING_FIELD_NUMBER: _ClassVar[int]
     response: InvokeExecuteMethodResponse
     served_by_app_worker_id: str
-    def __init__(self, response: _Optional[_Union[InvokeExecuteMethodResponse, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
+    pull_routing: PullRouting
+    def __init__(self, response: _Optional[_Union[InvokeExecuteMethodResponse, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ..., pull_routing: _Optional[_Union[PullRouting, _Mapping]] = ...) -> None: ...
 
 class DumpFlowForContinueAsNewActivityInput(_message.Message):
     __slots__ = ("request",)
@@ -2469,7 +2514,7 @@ class ReportSubFlowCompletionActivityOutput(_message.Message):
     def __init__(self, status: _Optional[_Union[SubFlowCompletionDeliveryStatus, str]] = ...) -> None: ...
 
 class ExecuteRpcSignalRequest(_message.Message):
-    __slots__ = ("upsert_attributes", "step_decision", "record_events", "publish_to_channel", "is_set_attribute_api", "delete_from_channel", "is_delete_channel_message_api", "action_permission_mappings")
+    __slots__ = ("upsert_attributes", "step_decision", "record_events", "publish_to_channel", "is_set_attribute_api", "delete_from_channel", "is_delete_channel_message_api", "action_permission_mappings", "served_by_app_worker_id")
     UPSERT_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     STEP_DECISION_FIELD_NUMBER: _ClassVar[int]
     RECORD_EVENTS_FIELD_NUMBER: _ClassVar[int]
@@ -2478,6 +2523,7 @@ class ExecuteRpcSignalRequest(_message.Message):
     DELETE_FROM_CHANNEL_FIELD_NUMBER: _ClassVar[int]
     IS_DELETE_CHANNEL_MESSAGE_API_FIELD_NUMBER: _ClassVar[int]
     ACTION_PERMISSION_MAPPINGS_FIELD_NUMBER: _ClassVar[int]
+    SERVED_BY_APP_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     upsert_attributes: _containers.RepeatedCompositeFieldContainer[AttributeWrite]
     step_decision: StepDecision
     record_events: _containers.RepeatedCompositeFieldContainer[KV]
@@ -2486,7 +2532,8 @@ class ExecuteRpcSignalRequest(_message.Message):
     delete_from_channel: _containers.RepeatedCompositeFieldContainer[ChannelMessageDeletion]
     is_delete_channel_message_api: bool
     action_permission_mappings: ActionPermissionMappings
-    def __init__(self, upsert_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., step_decision: _Optional[_Union[StepDecision, _Mapping]] = ..., record_events: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., publish_to_channel: _Optional[_Iterable[_Union[ChannelMessage, _Mapping]]] = ..., is_set_attribute_api: _Optional[bool] = ..., delete_from_channel: _Optional[_Iterable[_Union[ChannelMessageDeletion, _Mapping]]] = ..., is_delete_channel_message_api: _Optional[bool] = ..., action_permission_mappings: _Optional[_Union[ActionPermissionMappings, _Mapping]] = ...) -> None: ...
+    served_by_app_worker_id: str
+    def __init__(self, upsert_attributes: _Optional[_Iterable[_Union[AttributeWrite, _Mapping]]] = ..., step_decision: _Optional[_Union[StepDecision, _Mapping]] = ..., record_events: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., publish_to_channel: _Optional[_Iterable[_Union[ChannelMessage, _Mapping]]] = ..., is_set_attribute_api: _Optional[bool] = ..., delete_from_channel: _Optional[_Iterable[_Union[ChannelMessageDeletion, _Mapping]]] = ..., is_delete_channel_message_api: _Optional[bool] = ..., action_permission_mappings: _Optional[_Union[ActionPermissionMappings, _Mapping]] = ..., served_by_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class SkipTimerSignalRequest(_message.Message):
     __slots__ = ("step_execution_id", "timer_condition_id", "timer_condition_index")

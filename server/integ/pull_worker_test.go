@@ -95,6 +95,15 @@ func (pushRPCErrorWorker) InvokeWorkerRPC(
 	return nil, workerStatus.Err()
 }
 
+type pullRoutingStateProbe struct {
+	test     *testing.T
+	ctx      context.Context
+	client   dexpb.FlowServiceClient
+	flowID   string
+	workerID string
+	source   dexpb.PullRoutingSource
+}
+
 type pullTaskObservation struct {
 	queue   string
 	method  string
@@ -112,6 +121,7 @@ const (
 )
 
 type rawPullWorker struct {
+	shouldStartSecondStep   bool
 	events                  chan pullTaskObservation
 	started                 chan pullTaskObservation
 	canceled                chan string
@@ -138,6 +148,7 @@ type rawPullWorker struct {
 }
 
 type rawPullWorkerConfig struct {
+	shouldStartSecondStep  bool
 	unknownStepType        string
 	unknownExecuteStepType string
 	unknownRPCName         string
@@ -193,7 +204,8 @@ func newRawPullWorkerWithExecuteBehavior(t *testing.T, address string, flowType 
 		configuration = configurations[0]
 	}
 	worker := &rawPullWorker{
-		events: make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
+		shouldStartSecondStep: configuration.shouldStartSecondStep,
+		events:                make(chan pullTaskObservation, 16), started: make(chan pullTaskObservation, 16), canceled: make(chan string, 4),
 		errors: make(chan error, 4), queueCancels: map[string]context.CancelFunc{}, releaseParallel: make(chan struct{}),
 		rejectNextStickyTask: make(chan struct{}, 1), rejectedStickyTasks: make(chan pullTaskObservation, 1),
 		restoredHeartbeats: make(chan string, 2), executeBehavior: executeBehavior,
@@ -322,6 +334,9 @@ func (w *rawPullWorker) serve(queue string, stream dexpb.WorkerTaskService_PollW
 			method = "execute"
 			decision := &dexpb.StepDecision{
 				CloseDecision: common.GracefulCompleteDecision(stringValue(request.Execute.GetContext().GetFlowId())),
+			}
+			if w.shouldStartSecondStep && request.Execute.GetStepType() == dispatchProbeStep {
+				decision = &dexpb.StepDecision{NextSteps: []*dexpb.StepMovement{{StepType: "SecondStep"}}}
 			}
 			if w.spawnParallel {
 				decision.CloseDecision = &dexpb.CloseDecision{
@@ -1166,6 +1181,9 @@ func testPullWorkerQueueSurvivesContinueAsNew(t *testing.T, backend service.Back
 	}
 	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	if backend == service.BackendTypeCadence {
+		requirePullActiveRouting(t, ctx, runtime.FlowClient, flowID, workerID)
+	}
 	_, err = runtime.FlowClient.TriggerContinueAsNew(ctx, &dexpb.TriggerContinueAsNewRequest{
 		FlowId: flowID, RunId: startResponse.GetRunId(),
 	})
@@ -1175,6 +1193,9 @@ func testPullWorkerQueueSurvivesContinueAsNew(t *testing.T, backend service.Back
 		return queryErr == nil && currentRunID != startResponse.GetRunId()
 	}, 10*time.Second, 50*time.Millisecond)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	if backend == service.BackendTypeCadence {
+		requirePullActiveRouting(t, ctx, runtime.FlowClient, flowID, workerID)
+	}
 	_, err = runtime.FlowClient.InvokeRPC(ctx, &dexpb.InvokeRPCRequest{
 		RequestId: newRequestID(), FlowId: flowID, RpcName: "getProbe", TimeoutSeconds: 15,
 	})
@@ -1230,6 +1251,7 @@ func testPullWorkerStickyCapacityRecovery(t *testing.T, backend service.BackendT
 		&dexpb.WorkerTarget{IsPullMode: true}, nil))
 	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, worker, flowID).queue)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	requirePullActiveRouting(t, ctx, runtime.FlowClient, flowID, workerID)
 	worker.rejectNextStickyTask <- struct{}{}
 	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
@@ -1250,6 +1272,7 @@ func testPullWorkerStickyCapacityRecovery(t *testing.T, backend service.BackendT
 	result, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID, WaitTimeSeconds: 25})
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus(), result.GetErrorMessage())
+	requirePullHistoryRouting(t, ctx, runtime.FlowClient, flowID, workerID, workerID, dexpb.PullRoutingSource_PULL_ROUTING_SOURCE_STICKY_QUEUE)
 }
 
 func testPullWorkerAppearsDuringRetries(t *testing.T, backend service.BackendType) {
@@ -1297,8 +1320,10 @@ func testPullWorkerStickyFallback(t *testing.T, backend service.BackendType) {
 		&dexpb.WorkerTarget{IsPullMode: true}, nil))
 	require.Equal(t, dispatchProbeFlowType, waitForPullTask(t, firstWorker, flowID).queue)
 	waitForDexTaskQueue(t, ctx, runtime.UnifiedClient, flowID, workerID)
+	requirePullActiveRouting(t, ctx, runtime.FlowClient, flowID, workerID)
 	firstWorker.stop()
-	secondWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, "pull-sticky-new-"+uuid.NewString(), nil)
+	secondWorkerID := "pull-sticky-new-" + uuid.NewString()
+	secondWorker := startRawPullWorker(t, runtime.PublicAddress, dispatchProbeFlowType, secondWorkerID, nil)
 	startedAt := time.Now()
 	_, err := runtime.FlowClient.PublishToChannel(ctx, &dexpb.PublishToChannelRequest{
 		FlowId: flowID, Messages: []*dexpb.ChannelMessage{{ChannelName: dispatchProbeChannel}},
@@ -1310,6 +1335,7 @@ func testPullWorkerStickyFallback(t *testing.T, backend service.BackendType) {
 	require.NoError(t, err)
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_COMPLETED, result.GetFlowStatus())
 	require.Equal(t, dispatchProbeFlowType, served.queue)
+	requirePullHistoryRouting(t, ctx, runtime.FlowClient, flowID, workerID, secondWorkerID, dexpb.PullRoutingSource_PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE)
 }
 
 func TestPullUnknownNameRedispatchTemporal(t *testing.T) {
@@ -1739,6 +1765,20 @@ func testPullWorkerUnavailable(t *testing.T, backend service.BackendType) {
 	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_FAILED, result.GetFlowStatus())
 	require.True(t, strings.Contains(result.GetErrorMessage(), "no Worker available for queue "+dispatchProbeFlowType), result.GetErrorMessage())
 	require.GreaterOrEqual(t, time.Since(startedAt), time.Second)
+	summary, err := runtime.FlowClient.GetFlowSummary(ctx, &dexpb.GetFlowSummaryRequest{FlowId: flowID})
+	require.NoError(t, err)
+	history, err := runtime.FlowClient.GetHistoryEvents(ctx, &dexpb.GetHistoryEventsRequest{FlowId: flowID, RunId: summary.GetFlowExecutionId().GetRunId(), EstimatePageSize: 100})
+	require.NoError(t, err)
+	var failedMethod *dexpb.StepWaitForFailedEvent
+	for _, event := range history.GetEvents() {
+		if event.GetStepWaitForFailed() != nil {
+			failedMethod = event.GetStepWaitForFailed()
+		}
+	}
+	require.NotNil(t, failedMethod)
+	require.NotNil(t, failedMethod.GetContext().GetPullRouting())
+	require.Empty(t, failedMethod.GetContext().GetPullRouting().GetServedByAppWorkerId())
+	require.Contains(t, failedMethod.GetOutput().GetFailure().GetDetails().GetDetail(), "no Worker available")
 }
 
 func testPullWorkerDispatch(t *testing.T, backend service.BackendType) {
@@ -1824,4 +1864,53 @@ func waitForDexTaskQueue(
 		err := client.QueryWorkflow(ctx, &preparation, flowID, "", service.PrepareRpcQueryType, &dexpb.PrepareRpcQueryRequest{})
 		return err == nil && preparation.GetDexTaskQueue() == expectedQueue
 	}, 10*time.Second, 50*time.Millisecond)
+}
+
+func requirePullHistoryRouting(t *testing.T, ctx context.Context, client dexpb.FlowServiceClient, flowID string, waitWorkerID string, executeWorkerID string, executeSource dexpb.PullRoutingSource) {
+	t.Helper()
+	summary, err := client.GetFlowSummary(ctx, &dexpb.GetFlowSummaryRequest{FlowId: flowID})
+	require.NoError(t, err)
+	history, err := client.GetHistoryEvents(ctx, &dexpb.GetHistoryEventsRequest{FlowId: flowID, RunId: summary.GetFlowExecutionId().GetRunId(), EstimatePageSize: 100})
+	require.NoError(t, err)
+	var waitRouting, executeRouting *dexpb.PullRouting
+	for _, event := range history.GetEvents() {
+		if event.GetStepWaitForCompleted() != nil {
+			waitRouting = event.GetStepWaitForCompleted().GetContext().GetPullRouting()
+		}
+		if event.GetStepExecuteCompleted() != nil {
+			executeRouting = event.GetStepExecuteCompleted().GetContext().GetPullRouting()
+		}
+	}
+	require.NotNil(t, waitRouting)
+	require.Equal(t, waitWorkerID, waitRouting.GetServedByAppWorkerId())
+	require.Empty(t, waitRouting.GetStickyAppWorkerId())
+	require.Equal(t, dexpb.PullRoutingSource_PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE, waitRouting.GetSource())
+	require.NotNil(t, executeRouting)
+	require.Equal(t, executeWorkerID, executeRouting.GetServedByAppWorkerId())
+	require.Equal(t, waitWorkerID, executeRouting.GetStickyAppWorkerId())
+	require.Equal(t, executeSource, executeRouting.GetSource())
+}
+
+func requirePullActiveRouting(t *testing.T, ctx context.Context, client dexpb.FlowServiceClient, flowID string, workerID string) {
+	t.Helper()
+	probe := &pullRoutingStateProbe{test: t, ctx: ctx, client: client, flowID: flowID, workerID: workerID, source: dexpb.PullRoutingSource_PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE}
+	require.Eventually(t, probe.hasExpectedRouting, 10*time.Second, 50*time.Millisecond)
+}
+
+func (p *pullRoutingStateProbe) hasExpectedRouting() bool {
+	state, err := p.client.GetFlowState(p.ctx, &dexpb.GetFlowStateRequest{FlowId: p.flowID})
+	if err != nil {
+		p.test.Logf("waiting for routing state: %v", err)
+		return false
+	}
+	for _, step := range state.GetActiveStepExecutions() {
+		if step.GetStepType() == service.FlowTimeoutStepType {
+			continue
+		}
+		routing := step.GetWaitForPullRouting()
+		if state.GetStickyAppWorkerId() == p.workerID && routing.GetServedByAppWorkerId() == p.workerID && routing.GetSource() == p.source {
+			return true
+		}
+	}
+	return false
 }

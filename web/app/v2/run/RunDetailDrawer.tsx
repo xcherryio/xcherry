@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import { PullRouting, type FlowRoutingData } from '@/app/flows/details/PullRouting';
+import { FailureContent } from '@/app/flows/details/StepMethodSections';
 import type { FlowV2Definition } from '@superdurable/flow-definition-renderer';
 import { Link } from 'react-router-dom';
 import type { FlowSummary } from '@/lib/types';
@@ -18,6 +20,9 @@ import type { StepContextView } from './stepContext';
 
 /** What the canvas is currently showing, so the drawer can say so without owning selection. */
 export interface StepBand {
+  waitForPullRouting?: unknown;
+  executePullRouting?: unknown;
+  failure?: unknown;
   stepType: string;
   /** The templated why-line the canvas already renders, or null for a healthy Step. */
   reason: string | null;
@@ -35,6 +40,7 @@ export function RunDetailDrawer({
   flowId,
   definition,
   summary,
+  routing,
   flowStatusCode,
   band,
   actionable,
@@ -50,6 +56,7 @@ export function RunDetailDrawer({
   flowId: string;
   definition: FlowV2Definition;
   summary: FlowSummary | null;
+  routing?: FlowRoutingData | null;
   flowStatusCode?: number;
   band: StepBand | null;
   actionable: readonly ActionableStep[];
@@ -72,6 +79,7 @@ export function RunDetailDrawer({
           flowId={flowId}
           flowType={flowType}
           summary={summary}
+          routing={routing}
           onStopped={onStopped}
         />
       ) : (
@@ -92,6 +100,11 @@ export function RunDetailDrawer({
           {band.reason && <span className="rdw-bandwhy">{band.reason}</span>}
         </div>
       )}
+      {hasRun && band && routing?.workerTarget.isPullMode === true && <div className="sc-block">
+        <PullRouting value={band.waitForPullRouting} label="WaitFor routing" />
+        <PullRouting value={band.executePullRouting} label="Execute routing" />
+        {Boolean(band.failure) && <FailureContent value={band.failure} />}
+      </div>}
       {hasRun && (
         <SelectedRunPanel
           definition={definition}

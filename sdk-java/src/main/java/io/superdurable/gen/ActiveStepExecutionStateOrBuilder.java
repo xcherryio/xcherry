@@ -164,4 +164,34 @@ public interface ActiveStepExecutionStateOrBuilder extends
    * <code>.dex.StepMethodFailure last_failure_info = 10;</code>
    */
   io.superdurable.gen.StepMethodFailureOrBuilder getLastFailureInfoOrBuilder();
+
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 11;</code>
+   * @return Whether the waitForPullRouting field is set.
+   */
+  boolean hasWaitForPullRouting();
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 11;</code>
+   * @return The waitForPullRouting.
+   */
+  io.superdurable.gen.PullRouting getWaitForPullRouting();
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 11;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getWaitForPullRoutingOrBuilder();
+
+  /**
+   * <code>.dex.PullRouting execute_pull_routing = 12;</code>
+   * @return Whether the executePullRouting field is set.
+   */
+  boolean hasExecutePullRouting();
+  /**
+   * <code>.dex.PullRouting execute_pull_routing = 12;</code>
+   * @return The executePullRouting.
+   */
+  io.superdurable.gen.PullRouting getExecutePullRouting();
+  /**
+   * <code>.dex.PullRouting execute_pull_routing = 12;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getExecutePullRoutingOrBuilder();
 }
