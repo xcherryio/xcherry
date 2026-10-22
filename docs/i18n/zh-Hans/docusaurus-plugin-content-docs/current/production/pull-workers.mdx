@@ -60,6 +60,11 @@ async def start_pull_greeting(
             worker_target=worker.worker_target,
         ),
     )
+    try:
+        await worker.wait_pull_registered(timeout=30)
+    except BaseException:
+        await stop_pull_greeting(worker, client, worker_task)
+        raise
     return flow, worker, client, worker_task
 
 
@@ -143,7 +148,7 @@ public final class PullGreetingExample {
     }
 
     public static RunningPullGreeting start(
-            final BlobCache cache, final String serverAddress) {
+            final BlobCache cache, final String serverAddress) throws InterruptedException, TimeoutException {
         final GreetingFlow flow = new GreetingFlow();
         final Registry registry = new Registry(List.<Flow<?>>of(flow));
         final Worker worker = new Worker(registry, cache, WorkerOptions.newBuilder()
@@ -162,7 +167,26 @@ public final class PullGreetingExample {
             }
         }, "pull-greeting-worker");
         workerThread.start();
-        return new RunningPullGreeting(flow, worker, client, workerThread, workerResult);
+        final RunningPullGreeting running = new RunningPullGreeting(
+                flow, worker, client, workerThread, workerResult);
+        try {
+            worker.waitPullRegistered(Duration.ofSeconds(30));
+        } catch (final InterruptedException | TimeoutException | RuntimeException | Error failure) {
+            try {
+                running.close();
+            } catch (final InterruptedException | RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+                if (cleanupFailure instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            throw failure;
+        }
+        return running;
+    }
+
+    public static boolean isPullGreetingReady(final Worker worker) {
+        return worker.getPullRegistrationState().isReady();
     }
 
     public record RunningPullGreeting(
@@ -194,7 +218,17 @@ export async function startPullGreeting(
     serverAddress,
     pull: { maxConcurrentTasks: 8 },
   });
-  await worker.start();
+  try {
+    await worker.start();
+    await worker.waitPullRegistered({ timeoutMs: 30_000 });
+  } catch (failure) {
+    try {
+      await worker.close();
+    } catch (cleanupFailure) {
+      throw new AggregateError([failure, cleanupFailure], "pull Worker startup and cleanup failed");
+    }
+    throw failure;
+  }
   const client = new Client(registry, cache, {
     serverAddress,
     workerTarget: worker.workerTarget,
@@ -213,10 +247,12 @@ export async function stopPullGreeting(worker: Worker, client: Client): Promise<
 <SdkSnippet lang="rust">
 
 ```rust
+pub type RunningPullGreeting = (Arc<Worker>, Client, JoinHandle<SdkResult<()>>);
+
 pub fn start_pull_greeting(
     cache: Arc<BlobCache>,
     server_address: &str,
-) -> SdkResult<(Arc<Worker>, Client, JoinHandle<SdkResult<()>>)> {
+) -> Result<RunningPullGreeting, Box<dyn Error + Send + Sync>> {
     let registry = Registry::new().register(GreetingFlow::default())?;
     let worker = Arc::new(Worker::try_new(
         registry.clone(),
@@ -232,8 +268,26 @@ pub fn start_pull_greeting(
             .server_address(server_address)
             .worker_target(worker.worker_target().clone()),
     )?;
+    let startup_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let running_worker = Arc::clone(&worker);
     let worker_thread = thread::spawn(move || running_worker.start());
+    let startup_result: Result<(), Box<dyn Error + Send + Sync>> =
+        startup_runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(30), worker.wait_pull_registered()).await??;
+            Ok(())
+        });
+    if let Err(failure) = startup_result {
+        match stop_pull_greeting(worker, client, worker_thread) {
+            Ok(Ok(())) => {}
+            Ok(Err(cleanup_failure)) => {
+                eprintln!("pull Worker cleanup failed: {cleanup_failure}");
+            }
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+        return Err(failure);
+    }
     Ok((worker, client, worker_thread))
 }
 
@@ -280,10 +334,70 @@ TypeScript 等待支持 AbortSignal 或毫秒超时；Rust 可通过丢弃 futur
 取消等待会返回 context 错误；就绪前停止 Worker 会返回错误。
 所有队列都注册成功过一次后，后续等待始终成功。
 
-可运行的 [Go 示例](https://github.com/superdurable/dex/blob/main/examples/go/production/pull-workers/worker.go)
-使用 **WaitPullRegistered** 和 30 秒期限等待启动就绪。它的
-**PullGreetingReadiness** HTTP 处理器读取 **PullRegistrationState().IsReady**，
-为 false 时返回 503，就绪时返回 200。将它挂载到就绪探针端点。
+这些可运行示例使用 30 秒启动期限等待注册，启动失败时会停止 Worker。
+Go SDK 从 1.13.0 开始提供就绪 API；Java、Python、TypeScript 和 Rust SDK 从 1.14.0 开始提供。
+将 Go HTTP handler 挂载到就绪探针端点。其他语言可在探针端点调用布尔值 helper：
+返回 true 时响应 200，返回 false 时响应 503。
+
+<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
+
+<SdkSnippet lang="python">
+
+```python
+def is_pull_greeting_ready(worker: AsyncWorker) -> bool:
+    return worker.pull_registration_state().is_ready
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="go">
+
+```go
+func PullGreetingReadiness(worker *dex.Worker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !worker.PullRegistrationState().IsReady {
+			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="java">
+
+```java
+    public static boolean isPullGreetingReady(final Worker worker) {
+        return worker.getPullRegistrationState().isReady();
+    }
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="typescript">
+
+```typescript
+export function isPullGreetingReady(worker: Worker): boolean {
+  return worker.pullRegistrationState().isReady;
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="rust">
+
+```rust
+pub fn is_pull_greeting_ready(worker: &Worker) -> bool {
+    worker.pull_registration_state().is_ready
+}
+```
+
+</SdkSnippet>
+
+</SdkTabs>
+
 **Queues** 提供每个队列的 **HasRegisteredStream** 和
 **LastPermanentError**。首次就绪后，重连、所有权迁移、临时断连和退避
 都保持 **IsReady** 为 true。只有某个队列既没有已注册的 stream，

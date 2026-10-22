@@ -31,18 +31,25 @@ import java.nio.file.Path;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 @ExtendWith(SharedIntegExtension.class)
 public class PullWorkersIntegTest {
     @Test
     void pullWorkerServesGreetingFlow(@TempDir final Path cacheDirectory)
-            throws InterruptedException {
+            throws Exception {
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String serverAddress = System.getenv().getOrDefault(
                 "DEX_FLOW_SERVICE_ADDRESS", "127.0.0.1:8801");
         try (BlobCache cache = BlobCache.open(new BlobCacheConfig(
                 cacheDirectory.resolve("pull-cache").toString(), 64L << 20))) {
             try (RunningPullGreeting running = PullGreetingExample.start(cache, serverAddress)) {
+                assertTrue(PullGreetingExample.isPullGreetingReady(running.worker()));
+                final var state = running.worker().getPullRegistrationState();
+                assertEquals(2, state.getQueues().size());
+                assertTrue(state.getQueues().stream().allMatch(queue -> queue.hasRegisteredStream()));
                 final Client client = running.client();
                 final GreetingFlow flow = running.flow();
                 final String flowId = environment.newFlowId("pull-greeting");
@@ -53,6 +60,16 @@ public class PullWorkersIntegTest {
                 final GreetingFlow stub = client.newRpcStub(GreetingFlow.class, flowId);
                 assertEquals("Hello, Dex!", client.invokeRPC(stub::getGreeting));
             }
+        }
+    }
+
+    @Test
+    void pullWorkerStopsWhenStartupFails(@TempDir final Path cacheDirectory) {
+        try (BlobCache cache = BlobCache.open(new BlobCacheConfig(
+                cacheDirectory.resolve("pull-timeout-cache").toString(), 64L << 20))) {
+            assertTimeoutPreemptively(Duration.ofSeconds(45), () ->
+                    assertThrows(IllegalStateException.class, () ->
+                            PullGreetingExample.start(cache, "127.0.0.1:1")));
         }
     }
 }
