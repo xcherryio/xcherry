@@ -30,6 +30,7 @@ from dex.blob_cache import BlobCache
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
+from dex.pull_registration import PullRegistrationState
 from dex.worker_options import WorkerOptions, WorkerTarget
 
 
@@ -100,6 +101,7 @@ class AsyncWorker:
             self._server_protocol,
         )
         self._server = None
+        self._has_start_called = False
         self._pull = None
         if self.options.pull is not None:
             self._pull = PullWorkerRuntime(
@@ -167,11 +169,77 @@ class AsyncWorker:
 
         ``start`` may be awaited exactly once. It contacts FlowService before binding
         and completes only after ``stop`` terminates the listener or pull streams.
-        Later pull stream failures are logged and retried.
+        Permanent pull stream rejections raise PullRegistrationError when
+        stop_on_permanent_stream_rejection is enabled; otherwise streams retry.
 
         Raises:
+            PullRegistrationError: A permanent stream rejection stops this Worker.
             RuntimeError: If lifecycle state, index synchronization, or binding fails.
         """
+        if self._has_start_called:
+            raise RuntimeError("Worker can only start once")
+        self._has_start_called = True
+        start_error: BaseException | None = None
+        try:
+            await self._start()
+        except BaseException as failure:
+            start_error = failure
+            raise
+        finally:
+            if self._pull is not None:
+                self._pull.registration.finish_start(start_error)
+                if self._state == "running":
+                    await self.stop()
+
+    async def wait_pull_registered(self, timeout: float | None = None) -> None:
+        """Wait until every pull queue has registered at least once.
+
+        Start the Worker separately before waiting, or start it concurrently.
+        Successful registration latches, including after stop. Use
+        pull_registration_state for subsequent readiness probes. A permanent
+        rejection before readiness raises PullRegistrationError only when no
+        other stream is registered for that queue. Startup failures wake waiters.
+        Multiple callers may wait independently, including before start.
+
+        Args:
+            timeout: Maximum seconds to wait; None waits indefinitely.
+
+        Raises:
+            PullRegistrationError: A queue is permanently rejected before readiness.
+            TimeoutError: The timeout expires.
+            asyncio.CancelledError: The calling task is canceled; the Worker keeps running.
+            RuntimeError: This is a listening Worker, or it stops before readiness.
+            BaseException: The original startup failure, if start fails.
+
+        Examples:
+            >>> start_task = asyncio.create_task(worker.start())
+
+            >>> await worker.wait_pull_registered(timeout=30)
+            >>> is_ready = worker.pull_registration_state().is_ready
+        """
+        if self._pull is None:
+            raise RuntimeError("wait_pull_registered requires a pull Worker")
+        await self._pull.registration.wait_async(timeout)
+
+    def pull_registration_state(self) -> PullRegistrationState:
+        """Return an immutable snapshot of pull queue registrations.
+
+        Transient failures, reconnects, and stop preserve initial readiness.
+        A permanent rejection makes readiness false only while that queue has no
+        registered stream. Re-registration clears its error. Calls are safe
+        concurrently with start, stop, and other waiters. See wait_pull_registered
+        for an example.
+
+        Returns:
+            Current per-queue state, or an empty nonready state in listening mode.
+        """
+        return (
+            PullRegistrationState()
+            if self._pull is None
+            else self._pull.registration.snapshot()
+        )
+
+    async def _start(self) -> None:
         if self._state != "created":
             raise RuntimeError(f"AsyncWorker cannot start from state {self._state}")
         try:
@@ -247,6 +315,8 @@ class AsyncWorker:
         Half-closed pull streams wait for server EOF until the remaining drain
         deadline before the channel closes.
         """
+        if self._pull is not None:
+            self._pull.registration.record_stopping()
         if self._state in ("stopped", "closed"):
             return
         self._state = "stopping"

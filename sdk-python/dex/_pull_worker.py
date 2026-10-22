@@ -28,6 +28,7 @@ from dex._server_protocol import sdk_version
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
+from dex.pull_registration import PullRegistrationError, _PullRegistration
 from dex.worker_options import PullWorkerOptions
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +87,12 @@ class PullWorkerRuntime:
         self.app_worker_id = app_worker_id or resolve_app_worker_id(registry, options)
         self.flow_types = sorted(registry._registered_flows)
         self.queues = (self.app_worker_id, *self.flow_types)
+        self.registration = _PullRegistration(self.queues)
+        self._stop_on_permanent_stream_rejection = (
+            options.stop_on_permanent_stream_rejection
+        )
+        self._permanent_error: PullRegistrationError | None = None
+        self._rejection_stop_task: asyncio.Task[None] | None = None
         self.max_concurrent_tasks = options.max_concurrent_tasks or os.cpu_count() or 1
         self.idle_streams_per_queue = options.idle_streams_per_queue or 1
         self.stop_drain_timeout = options.stop_drain_timeout.total_seconds() or 30
@@ -144,6 +151,10 @@ class PullWorkerRuntime:
                 *(stream.run_task for stream in tuple(self._streams)),
                 return_exceptions=True,
             )
+            if self._rejection_stop_task is not None:
+                await self._rejection_stop_task
+            if self._permanent_error is not None:
+                raise self._permanent_error
         finally:
             try:
                 await channel.close(grace=None)
@@ -192,6 +203,7 @@ class PullWorkerRuntime:
         self.signal()
 
     async def stop(self) -> None:
+        self.registration.record_stopping()
         if self._stopping is None:
             return
         if self._stopping.is_set():
@@ -263,6 +275,7 @@ class PullStream:
         self.handler_task: asyncio.Task[None] | None = None
         self.task_id = ""
         self.is_busy = False
+        self._is_registered = False
         self.is_draining = False
         self.is_half_closing = False
         self._active = threading.Event()
@@ -289,7 +302,24 @@ class PullStream:
                 _LOGGER.exception(
                     "Worker task stream failed", extra={"queue": self.queue}
                 )
-            if self.runtime.is_stopping:
+            finally:
+                code = error.code() if error is not None else None
+                rejection = self.runtime.registration.record_stream_result(
+                    self.queue,
+                    self._is_registered,
+                    error if code in _PERMANENT_CODES else None,
+                )
+                self._is_registered = False
+                if (
+                    rejection is not None
+                    and self.runtime._stop_on_permanent_stream_rejection
+                    and self.runtime._permanent_error is None
+                ):
+                    self.runtime._permanent_error = rejection
+                    self.runtime._rejection_stop_task = asyncio.create_task(
+                        self.runtime.stop()
+                    )
+            if self.runtime.is_stopping or self.runtime._permanent_error is not None:
                 break
             if self._is_reconnecting:
                 self._is_reconnecting = False
@@ -391,6 +421,8 @@ class PullStream:
                         frame.registered.supports_unknown_name_rejection
                     )
                     was_registered = True
+                    self._is_registered = True
+                    self.runtime.registration.record_registered_stream(self.queue)
                     continue
                 if kind == "task":
                     await self._start_task(frame.task)

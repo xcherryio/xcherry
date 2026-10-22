@@ -260,7 +260,12 @@ pub fn stop_pull_greeting(
 
 Starting with Go SDK 1.13.0, **WaitPullRegistered** gates startup until every
 Flow type queue and the app Worker ID queue has received a registration
-acknowledgement. The other SDKs will follow. Start the Worker in a goroutine,
+acknowledgement. Java provides **waitPullRegistered(Duration)** and
+**getPullRegistrationState()**. Python provides **wait_pull_registered(timeout)**
+and **pull_registration_state()** on both Worker and AsyncWorker; await the
+AsyncWorker wait. Java's **stopOnPermanentStreamRejection** and Python's
+**stop_on_permanent_stream_rejection** provide the same opt-in shutdown behavior
+as Go. TypeScript and Rust will follow. Start the Go Worker in a goroutine,
 then wait with a startup deadline before activating it or stopping the old
 Worker during a rolling deployment. Registration does not guarantee spare
 handler capacity.

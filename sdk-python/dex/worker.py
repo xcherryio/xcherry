@@ -35,6 +35,7 @@ from dex.blob_cache import BlobCache
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc
 from dex.flow import Registry
+from dex.pull_registration import PullRegistrationState
 from dex.worker_options import WorkerOptions, WorkerTarget
 
 
@@ -117,6 +118,7 @@ class Worker:
             thread_name_prefix="dex-python-handler",
         )
         self._server = None
+        self._has_start_called = False
         self._pull = None
         if self.options.pull is not None:
             self._pull = PullWorkerRuntime(
@@ -188,12 +190,78 @@ class Worker:
 
         ``start`` may be called exactly once. It first contacts FlowService using the
         configured synchronization timeout, then starts a listener or outbound
-        pull streams and waits until ``stop`` finishes. Later stream failures are
-        logged and retried; they do not raise from ``start``.
+        pull streams and waits until ``stop`` finishes. Permanent stream rejections
+        raise PullRegistrationError when stop_on_permanent_stream_rejection is
+        enabled; otherwise streams retry.
 
         Raises:
+            PullRegistrationError: A permanent stream rejection stops this Worker.
             RuntimeError: If lifecycle state, index synchronization, or binding fails.
         """
+        with self._lock:
+            if self._has_start_called or self._state != "created":
+                raise RuntimeError(f"Worker cannot start from state {self._state}")
+            self._has_start_called = True
+        start_error: BaseException | None = None
+        try:
+            self._start()
+        except BaseException as failure:
+            start_error = failure
+            raise
+        finally:
+            if self._pull is not None:
+                self._pull.registration.finish_start(start_error)
+                if self._state == "running":
+                    self.stop()
+
+    def wait_pull_registered(self, timeout: float | None = None) -> None:
+        """Wait until every pull queue has registered at least once.
+
+        Start the Worker separately before waiting, or start it concurrently.
+        Successful registration latches, including after stop. Use
+        pull_registration_state for subsequent readiness probes. A permanent
+        rejection before readiness raises PullRegistrationError only when no
+        other stream is registered for that queue. Startup failures wake waiters.
+        Multiple callers may wait independently, including before start.
+
+        Args:
+            timeout: Maximum seconds to wait; None waits indefinitely.
+
+        Raises:
+            PullRegistrationError: A queue is permanently rejected before readiness.
+            TimeoutError: The timeout expires.
+            RuntimeError: This is a listening Worker, or it stops before readiness.
+            BaseException: The original startup failure, if start fails.
+
+        Examples:
+            >>> start_thread = threading.Thread(target=worker.start)
+            >>> start_thread.start()
+            >>> worker.wait_pull_registered(timeout=30)
+            >>> is_ready = worker.pull_registration_state().is_ready
+        """
+        if self._pull is None:
+            raise RuntimeError("wait_pull_registered requires a pull Worker")
+        self._pull.registration.wait(timeout)
+
+    def pull_registration_state(self) -> PullRegistrationState:
+        """Return an immutable snapshot of pull queue registrations.
+
+        Transient failures, reconnects, and stop preserve initial readiness.
+        A permanent rejection makes readiness false only while that queue has no
+        registered stream. Re-registration clears its error. Calls are safe
+        concurrently with start, stop, and other waiters. See wait_pull_registered
+        for an example.
+
+        Returns:
+            Current per-queue state, or an empty nonready state in listening mode.
+        """
+        return (
+            PullRegistrationState()
+            if self._pull is None
+            else self._pull.registration.snapshot()
+        )
+
+    def _start(self) -> None:
         with self._lock:
             if self._state != "created":
                 raise RuntimeError(f"Worker cannot start from state {self._state}")
@@ -291,6 +359,7 @@ class Worker:
             was_created = self._state == "created"
             self._state = "stopping"
         if self._pull is not None:
+            self._pull.registration.record_stopping()
             if not was_created:
                 self._pull.stop_threadsafe()
         else:

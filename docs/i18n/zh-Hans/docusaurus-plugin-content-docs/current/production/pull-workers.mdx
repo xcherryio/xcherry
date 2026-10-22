@@ -256,7 +256,13 @@ pub fn stop_pull_greeting(
 ## 就绪检查 {#readiness}
 
 从 Go SDK 1.13.0 开始，**WaitPullRegistered** 会等待所有 Flow type 队列和
-app Worker ID 队列收到注册确认后再允许启动流程继续。其他 SDK 将陆续支持。
+app Worker ID 队列收到注册确认后再允许启动流程继续。Java 提供
+**waitPullRegistered(Duration)** 和 **getPullRegistrationState()**。
+Python 的 Worker 和 AsyncWorker 均提供 **wait_pull_registered(timeout)** 和
+**pull_registration_state()**；AsyncWorker 的等待方法需要 await。
+Java 的 **stopOnPermanentStreamRejection** 和 Python 的
+**stop_on_permanent_stream_rejection** 提供与 Go 相同的可选停止行为。
+TypeScript 和 Rust 将陆续支持。
 在独立 goroutine 中调用 **Start**，然后设置启动截止时间并等待注册完成。
 滚动部署时，先等待新 Worker 就绪，再停止旧 Worker。注册成功不代表处理器
 仍有空闲容量。

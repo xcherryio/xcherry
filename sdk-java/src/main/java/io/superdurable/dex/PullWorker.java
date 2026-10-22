@@ -45,6 +45,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.function.Supplier;
@@ -65,7 +66,20 @@ final class PullWorker {
     private final String appWorkerID;
     private final String sdkVersion;
     private final Random jitter = new SecureRandom();
+    private final Map<String, QueueRegistration> queueRegistrations =
+            new HashMap<String, QueueRegistration>();
+    private boolean hasRegisteredAllQueues;
+    private boolean hasStartReturned;
+    private Throwable startError;
+    private PullRegistrationError initialRegistrationError;
+    private PullRegistrationError permanentStreamError;
     private int busyTasks;
+
+    private static final class QueueRegistration {
+        private int registeredStreams;
+        private boolean hasRegistered;
+        private Throwable lastPermanentError;
+    }
     private boolean isStopping;
     private boolean hasLoggedUnsupported;
     private long stopDeadlineNanos;
@@ -112,6 +126,9 @@ final class PullWorker {
         this.queues = new ArrayList<String>();
         queues.add(appWorkerID);
         queues.addAll(registered);
+        for (String queue : queues) {
+            queueRegistrations.put(queue, new QueueRegistration());
+        }
     }
 
     private PollWorkerTaskRejectReason unknownTaskReason(final PollWorkerTask task) {
@@ -205,7 +222,8 @@ final class PullWorker {
         boolean interrupted = false;
         synchronized (this) {
             reconcile();
-            while (!isStopping || !streams.isEmpty() || busyTasks > 0) {
+            while ((!isStopping || !streams.isEmpty() || busyTasks > 0)
+                    && permanentStreamError == null) {
                 try {
                     wait();
                 } catch (InterruptedException interruption) {
@@ -214,10 +232,104 @@ final class PullWorker {
                 }
             }
         }
+        if (permanentStreamError != null) {
+            stop();
+            throw permanentStreamError;
+        }
         if (interrupted) {
             stop();
             Thread.currentThread().interrupt();
         }
+    }
+
+    synchronized void waitRegistered(final Duration timeout)
+            throws InterruptedException, TimeoutException {
+        final long deadline = System.nanoTime() + timeout.toNanos();
+        while (!hasRegisteredAllQueues) {
+            if (initialRegistrationError != null) {
+                throw initialRegistrationError;
+            }
+            if (hasStartReturned) {
+                if (startError instanceof RuntimeException) {
+                    throw (RuntimeException) startError;
+                }
+                if (startError instanceof Error) {
+                    throw (Error) startError;
+                }
+                throw new IllegalStateException("pull Worker stopped before registration", startError);
+            }
+            if (isStopping) {
+                throw new IllegalStateException("pull Worker stopped before registration");
+            }
+            final long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                throw new TimeoutException("pull Worker registration timed out");
+            }
+            TimeUnit.NANOSECONDS.timedWait(this, remaining);
+        }
+    }
+
+    synchronized PullRegistrationState registrationState() {
+        boolean isReady = hasRegisteredAllQueues;
+        final List<PullQueueRegistrationState> snapshots = new ArrayList<PullQueueRegistrationState>();
+        for (String queue : queues) {
+            final QueueRegistration registration = queueRegistrations.get(queue);
+            final boolean hasRegisteredStream = registration.registeredStreams > 0;
+            snapshots.add(new PullQueueRegistrationState(
+                    queue, hasRegisteredStream, registration.lastPermanentError));
+            if (!hasRegisteredStream && registration.lastPermanentError != null) {
+                isReady = false;
+            }
+        }
+        return new PullRegistrationState(isReady, snapshots);
+    }
+
+    synchronized void finishRegistration(final Throwable failure) {
+        hasStartReturned = true;
+        startError = failure;
+        notifyAll();
+    }
+
+    private void recordRegisteredStream(final PullStream stream) {
+        final QueueRegistration registration = queueRegistrations.get(stream.queue);
+        registration.registeredStreams++;
+        registration.hasRegistered = true;
+        registration.lastPermanentError = null;
+        if (!hasRegisteredAllQueues) {
+            hasRegisteredAllQueues = true;
+            for (QueueRegistration registeredQueue : queueRegistrations.values()) {
+                hasRegisteredAllQueues &= registeredQueue.hasRegistered;
+            }
+        }
+        notifyAll();
+    }
+
+    private void recordStreamResult(final PullStream stream, final Throwable failure) {
+        final QueueRegistration registration = queueRegistrations.get(stream.queue);
+        if (stream.isRegistered) {
+            stream.isRegistered = false;
+            registration.registeredStreams--;
+        }
+        if (isPermanentStreamError(failure)) {
+            registration.lastPermanentError = failure;
+            final PullRegistrationError rejection = new PullRegistrationError(stream.queue, failure);
+            if (registration.registeredStreams == 0) {
+                if (!hasRegisteredAllQueues && initialRegistrationError == null) {
+                    initialRegistrationError = rejection;
+                }
+                if (options.isStopOnPermanentStreamRejection() && permanentStreamError == null) {
+                    permanentStreamError = rejection;
+                }
+            }
+        }
+        notifyAll();
+    }
+
+    private static boolean isPermanentStreamError(final Throwable failure) {
+        final Status.Code code = failure == null ? Status.Code.OK : Status.fromThrowable(failure).getCode();
+        return code == Status.Code.UNAUTHENTICATED || code == Status.Code.PERMISSION_DENIED
+                || code == Status.Code.INVALID_ARGUMENT || code == Status.Code.UNIMPLEMENTED
+                || code == Status.Code.RESOURCE_EXHAUSTED;
     }
 
     void stop() {
@@ -357,6 +469,7 @@ final class PullWorker {
                         halfClose();
                     } else if (response.hasRegistered()) {
                         isRegistered = true;
+                        recordRegisteredStream(this);
                         supportsUnknownNameRejection = response.getRegistered().getSupportsUnknownNameRejection();
                         backoffMillis = 100L;
                     } else {
@@ -637,6 +750,7 @@ final class PullWorker {
                     return;
                 }
                 isClosed = true;
+                recordStreamResult(this, failure);
                 closeFailure = failure;
                 if (closeTimer != null) {
                     closeTimer.cancel(false);
