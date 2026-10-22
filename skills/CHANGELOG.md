@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.44.1 - 2026-10-22
+
+- Document the xtemporal ParadeDB Dex visibility 2.0 cluster-wide generic Indexed Attribute pool, normal Worker discovery and type verification, pinned registration and execution limits, and query/profile restrictions. Recommend the portable SQLite slot names and distinguish ordinary synchronization from managed-external mode.
+
 ## 0.44.0 - 2026-10-22
 
 - Advance all five SDK baselines to their published Dex 1.14.1 tags, including Go through DEX_BASELINE. Keep Server at server/v1.13.0 and CLI at cli-v1.14.0, and refresh pinned source links across Core, language references, and App Builder.
