@@ -76,7 +76,13 @@ func addCommonFlags(flags *flag.FlagSet, options *options) {
 
 type credentialFileFlag struct{ options *options }
 
-func (c credentialFileFlag) String() string { return c.options.credentialFile }
+func (c credentialFileFlag) String() string {
+	// flag.PrintDefaults calls String on a zero value to detect defaults.
+	if c.options == nil {
+		return ""
+	}
+	return c.options.credentialFile
+}
 
 func (c credentialFileFlag) Set(path string) error {
 	c.options.credentialFile = path

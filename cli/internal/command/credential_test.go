@@ -138,3 +138,12 @@ func TestEmptyEnvironmentCredentialsAreUnset(t *testing.T) {
 	require.ErrorContains(t, err, "bearer credential file path is empty")
 	require.Equal(t, []string{"Bearer raw-token"}, service.recordedHeaders())
 }
+
+func TestCredentialFileFlagHelpHasNoNilPanic(t *testing.T) {
+	var output bytes.Buffer
+	flags := newFlagSet("summary", &output)
+	addCommonFlags(flags, &options{})
+	flags.PrintDefaults()
+	require.Contains(t, output.String(), "-credential-file")
+	require.NotContains(t, output.String(), "panic")
+}
