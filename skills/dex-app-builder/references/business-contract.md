@@ -21,6 +21,9 @@ questionnaire before implementation. Identify:
 - whether each integration is a public external product or an
   organization-controlled internal service;
 - start triggers, inputs, outputs, deadlines, waits, approvals, retries, recovery, audit, search, and sensitive data;
+- the business outcome of each run (what counts as success, including results
+  that happen in another system) and the facts the business would compare runs
+  by, such as plan, region, source or customer size;
 - durable facts, their owning business identity, expected read/write paths,
   cross-Flow reuse, volume, contention, search, retention, and cleanup;
 - candidate top-level Flows, their independent waits, Timers, and terminal
@@ -48,7 +51,9 @@ Dex primitive, and any proven reason an external store is required. For every
 integration, record its classification, required Trigger/Query/Mutation/UI capabilities, matching
 released connector capability, and any contribution or internal-library gap.
 For each LLM use, record whether it is generic, a named model, a named
-provider, or provider-native.
+provider, or provider-native. For each outcome and comparison fact, record how
+the run will show it: a Step it enters, an Action, or a scalar Attribute
+([measurable runs](backend-implementation.md#runs-that-can-be-measured-and-improved)).
 Actors describe participants; roles group authenticated people with the same
 visibility and allowed operations; permissions describe individual Actions.
 Default to `admin` or the existing host authorization model and justify every
