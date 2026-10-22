@@ -10,7 +10,6 @@
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,6 +33,7 @@ import {
   type Step,
   type StepDecision,
 } from "../../src/index.js";
+import { WorkerPortReservation } from "../worker-port-reservation.js";
 import { flowId } from "./environment.js";
 
 interface Observation {
@@ -182,7 +182,7 @@ class PullOverrideParentFlow implements Flow<string> {
   public getSteps() { return StepList.startStep(this.start); }
 }
 
-test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and coexists with push", async () => {
+test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and coexists with push", async (context) => {
   const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
   const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-pull-cache-"));
   const cache: BlobCache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1_024 * 1_024 });
@@ -203,13 +203,16 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
   const workerB = new Worker(new Registry([flowB, probe]), cache, {
     serverAddress, pull: { appWorkerID: `typescript-b-${flowId("worker")}`, maxConcurrentTasks: 4 },
   });
+  const reservation = await WorkerPortReservation.reserve();
+  context.after(() => reservation.release());
   const pushWorker = new Worker(new Registry([pushFlow, pushProbe, parentFlow]), cache, {
-    serverAddress, bindAddress: `127.0.0.1:${await availablePort()}`,
+    serverAddress, bindAddress: `127.0.0.1:${reservation.port}`,
   });
   const client = new Client(new Registry([flowA, probe, pushFlow, parentFlow]), cache, {
     serverAddress, workerTarget: workerA.workerTarget,
   });
   try {
+    await reservation.release();
     await pushWorker.start();
     await workerA.start();
     const id = flowId("pull-typescript");
@@ -348,22 +351,6 @@ async function runProbe(client: Client, probe: ProbeFlow): Promise<string> {
   const id = flowId("pull-probe");
   await client.startFlow(probe, id, "pull-b");
   return client.waitForFlow(id, 30_000).then((result) => result.singleOutput(stringCodec));
-}
-
-async function availablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate a Worker port"));
-        return;
-      }
-      server.close((error) => error === undefined ? resolve(address.port) : reject(error));
-    });
-  });
 }
 
 async function until(condition: () => boolean): Promise<void> {
