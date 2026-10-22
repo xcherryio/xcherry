@@ -139,6 +139,10 @@ including one written as `provider/model`, reaches the provider and selects
 there any ID other than one segment of letters, digits, `.`, `_`, and `-` selects
 `defect` with no request.
 
+Run each model call as its own `llm` Step, never from inside another Step's
+`Execute`: the Step's result carries the call's token usage, so the run's
+history shows what each run spent on models.
+
 Keep requests portable by leaving `Temperature` and `ReasoningEffort` unset and
 `MaxOutputTokens` zero or generous. Do not add a per-run model to start input
 unless the user asks, because anyone who can start the Flow could then bill

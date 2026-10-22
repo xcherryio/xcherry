@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.43.0 - 2026-10-22
+
+- Add App Builder guidance for runs that can be measured and improved from their own history: business outcomes visible as Steps, Actions or Attributes, with outcomes in other systems recorded when the application learns them; comparison facts as scalar Attributes; decisions as plain functions of recorded facts, so a changed rule can be run over past runs; each model call its own `llm` Step, so its token usage is in the run's history; and fields that keep their meaning across releases.
+- Record each run's business outcome and comparison facts, and how the run shows them, in the business contract. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.43.0.
+
 ## 0.42.0 - 2026-10-21
 
 - Advance Java, Python, TypeScript, Rust, and CLI baselines to their published Dex 1.14.0 tags. Keep Go and Server at v1.13.0, and refresh pinned source links across Core, language references, and App Builder.

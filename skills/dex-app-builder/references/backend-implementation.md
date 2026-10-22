@@ -58,6 +58,36 @@ scale/SLO, assign one authoritative owner for every fact, define projection or
 synchronization and recovery semantics, and test failure and reconciliation.
 “Future flexibility” is not a sufficient reason.
 
+### Runs that can be measured and improved
+
+Build every Flow so that its own history answers which runs succeeded, for whom,
+at what cost, and what a different decision would have done. These rules cost
+little in the first version and are expensive to retrofit:
+
+- **Outcomes are visible in the run.** Each business outcome the contract names
+  (approved, paid, activated, replied, resolved) is a Step the run enters, an
+  Action it accepts, or an Attribute value. When the outcome happens in another
+  system, record it when the application learns it, through a Trigger, an Action
+  or a Step, rather than leaving it to be inferred later.
+- **Segment facts have their own scalar Attributes.** A fact the business would
+  compare runs by, such as a plan, region, source, tier or customer size, is a
+  scalar Attribute set once when it is known, not only a field inside a JSON
+  value or a display string. Index it only when a list needs it; index slots are
+  few.
+- **Decisions are plain functions.** Routing, scoring, thresholds, lane choices
+  and timer durations are computed by plain functions of the run's recorded facts
+  and configuration, which the Step calls and records the inputs of. The same
+  function can then be run over past runs to see what a changed rule would have
+  done.
+- **Model calls are their own Steps.** Each model call is an `llm` connector Step
+  ([text generation](connector-architecture.md#text-generation)), so its result,
+  with its token usage, is in the run's history.
+- **Fields keep their meaning across releases.** A release adds a new Attribute
+  for new data instead of changing what an existing one means, so runs from
+  different releases stay comparable.
+
+Keep personal data in these Attributes to what the process needs.
+
 For Custom UI, design the application HTTP API contract in the same pass as the
 Flow and Connector boundaries. Map each approved wireframe action to an
 application-level operation backed by a Flow start, typed RPC, query, or
