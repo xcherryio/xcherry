@@ -1,8 +1,8 @@
 # Java handbook
 
-The SDK API reference uses the [released v1.12.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
+The SDK API reference uses the [released v1.14.0 baseline](../core/bundle-baselines.md); the source examples' older dependency pins below remain factual and do not define the current error API.
 
-Use this page first for Java application work. Then load the topic page that matches the task. The [baseline build](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/examples/java/build.gradle) uses `io.superdurable:dex-sdk:1.11.0`, Spring Boot, and JDK 17 or newer. The application's Gradle or Maven lockfile remains authoritative.
+Use this page first for Java application work. Then load the topic page that matches the task. The [baseline build](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/examples/java/build.gradle) uses `io.superdurable:dex-sdk:1.12.0`, Spring Boot, and JDK 17 or newer. The application's Gradle or Maven lockfile remains authoritative.
 
 ## Project shape
 
@@ -12,11 +12,11 @@ The official example layout separates `products/`, `patterns/`, `primitives/`, a
 
 ## Pull Workers and Dex credentials
 
-Use `WorkerOptions.newBuilder().pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build()).build()` for outbound polling. Leave the bind address and listening Worker target unset. Advertise `worker.getWorkerTarget()` or `WorkerTarget.pull()` through `ClientOptions.Builder.workerTarget(...)` or a StartFlow or SubFlow FlowConfig override. `PullWorkerOptions.Builder` also offers `idleStreamsPerQueue`, `appWorkerID`, and `stopDrainTimeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. A supplied app Worker ID must change after restart. With Server and Java SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. Read the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retry consumption, heartbeats, capacity, and Stop. [Released Java options](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/sdk-java/src/main/java/io/superdurable/dex/PullWorkerOptions.java) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java)
+Use `WorkerOptions.newBuilder().pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build()).build()` for outbound polling. Leave the bind address and listening Worker target unset. Advertise `worker.getWorkerTarget()` or `WorkerTarget.pull()` through `ClientOptions.Builder.workerTarget(...)` or a StartFlow or SubFlow FlowConfig override. `PullWorkerOptions.Builder` also offers `idleStreamsPerQueue`, `appWorkerID`, and `stopDrainTimeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. A supplied app Worker ID must change after restart. With Server and Java SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. Read the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retry consumption, heartbeats, capacity, and Stop. [Released Java options](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/sdk-java/src/main/java/io/superdurable/dex/PullWorkerOptions.java) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java)
 
-The published Java SDK remains at v1.12.0. Go SDK v1.13.0's **WaitPullRegistered**, **PullRegistrationState**, **PullRegistrationError**, and opt-in **StopOnPermanentStreamRejection** are not available in this SDK yet. Rely on Worker process health and watch logs for "Worker task stream rejected"; process health does not prove every queue registered. Keep deployment overlap while validating replacement Workers. See [the readiness contract](../core/pull-workers.md#startup-registration-and-readiness) and [SDK parity tracking](https://github.com/superdurable/dex/issues/728).
+Java SDK v1.14.0 adds **worker.waitPullRegistered(Duration.ofSeconds(30))**. Run blocking **start()** on another thread, handle its failures, and wait before activating the Worker. Timeout throws **TimeoutException**; interruption ends only the wait. Probe **worker.getPullRegistrationState().isReady()**. Queue entries expose **getQueue()**, **hasRegisteredStream()**, and **getLastPermanentError()**. A **PullRegistrationError** preserves the queue through **getQueue()** and transport error through **getCause()**. Opt into **PullWorkerOptions.Builder.stopOnPermanentStreamRejection(true)** to drain and throw that error from **start()** when a permanent rejection leaves a queue without another registered stream. Always call **stop()** or **close()** afterward. Follow the shared [readiness contract](../core/pull-workers.md#startup-registration-and-readiness), including stable readiness across reconnects and Stop. [Released Java readiness API](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/sdk-java/src/main/java/io/superdurable/dex/Worker.java)
 
-Set `credential(...)` separately on ClientOptions and WorkerOptions when public API authentication is enabled. `FileCredential` reads a rotating token file; a custom `Credential.token()` supplies the current bearer token for each call and pull stream opening. A credential error prevents the call from reaching Dex. Protect the plaintext connection. [Released Java credential API](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/sdk-java/src/main/java/io/superdurable/dex/FileCredential.java)
+Set `credential(...)` separately on ClientOptions and WorkerOptions when public API authentication is enabled. `FileCredential` reads a rotating token file; a custom `Credential.token()` supplies the current bearer token for each call and pull stream opening. A credential error prevents the call from reaching Dex. Protect the plaintext connection. [Released Java credential API](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/sdk-java/src/main/java/io/superdurable/dex/FileCredential.java)
 
 ## Connector runtime support
 
@@ -55,7 +55,7 @@ Go-only analyzer contract.
 
 ## Minimal Flow
 
-[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
+[Pinned runnable source](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java -->
 ```java
 @Component
@@ -79,7 +79,7 @@ public class ExampleFlow implements Flow<Integer> {
 
 A Flow returns its complete Step registry once. The first Step input type must match `Flow<I>`. All persisted definitions belong in `getPersistenceSchema()`.
 
-[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
+[Pinned Step source](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/primitives/flow/ExampleFlow.java -->
 ```java
 final class ExampleStep implements Step<Integer> {
@@ -103,7 +103,7 @@ final class ExampleStep implements Step<Integer> {
 
 ## Registry, Worker, and Client
 
-[Pinned bootstrap source](https://github.com/superdurable/dex/blob/sdk-java/v1.12.0/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
+[Pinned bootstrap source](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java)
 <!-- dex-source: examples/java/src/main/java/io/superdurable/dex/config/DexConfig.java -->
 ```java
 @Bean
