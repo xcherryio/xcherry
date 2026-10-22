@@ -53,7 +53,7 @@ cross-origin credential forwarding disabled.
 The codec converts known Dex binary protobuf payloads to ProtoJSON. Unknown
 message types and other encodings pass through unchanged. The same tooling
 applies to all five SDK languages. See the released
-[CLI codec server usage](https://github.com/superdurable/dex/blob/cli-v1.13.0/cli/README.md#view-temporal-protobuf-payloads).
+[CLI codec server usage](https://github.com/superdurable/dex/blob/cli-v1.14.0/cli/README.md#view-temporal-protobuf-payloads).
 
 ## Indexed Attribute capacity
 
@@ -131,7 +131,7 @@ Public FlowService authentication is off by default. Configure `auth.authenticat
 
 Clients and Workers have separate credential options in all five SDKs. Supply a rotating file credential where available, or a current-token provider that can be called for every FlowService call and each pull stream opening. With auth enabled, a missing credential is rejected and a failed credential prevents the call; a rotated token is picked up on a later call or stream reconnect. See the language handbook for exact names.
 
-For `dexcli`, `--credential-file` takes precedence over `DEX_CREDENTIAL_FILE`, which takes precedence over `DEX_CREDENTIAL`. The CLI has no raw-token flag. Store a token in a protected file when possible; avoid putting one into shell history or process arguments. [Released CLI options](https://github.com/superdurable/dex/blob/cli-v1.13.0/cli/internal/command/options.go)
+For `dexcli`, `--credential-file` takes precedence over `DEX_CREDENTIAL_FILE`, which takes precedence over `DEX_CREDENTIAL`. The CLI has no raw-token flag. Store a token in a protected file when possible; avoid putting one into shell history or process arguments. [Released CLI options](https://github.com/superdurable/dex/blob/cli-v1.14.0/cli/internal/command/options.go)
 
 When auth is enabled and Dex Web runs, set `web.flowServiceCredentialFile` to a bearer-token file. This authenticates Web's calls to FlowService; it does not authenticate Web users. Anyone who reaches the Web port can act with Web's credential, so protect that port with network controls or an authenticating proxy. This file is distinct from the local Connector development credential store.
 
@@ -139,7 +139,7 @@ Auth requires `internal.listen` and `internal.tokenFile`. The separate listener 
 
 ### Worker readiness and capacity diagnosis
 
-For Go SDK v1.13.0, gate startup and replacement deployment on **WaitPullRegistered(ctx)**, then combine **PullRegistrationState().IsReady** with process lifecycle health. Do not drain old Workers until replacements register. Inspect per-queue **LastPermanentError** and **HasRegisteredStream**: a rejected surplus stream leaves readiness intact while another stream is registered. Stop alone preserves readiness, so remove stopping Workers from service separately. Consider opt-in **StopOnPermanentStreamRejection** only with supervised restarts and cancellation-responsive handlers. Java, Python, TypeScript, and Rust v1.12.0 rely on process health and logs for "Worker task stream rejected" until their readiness APIs ship. Follow the [registration contract](pull-workers.md#startup-registration-and-readiness).
+With Go SDK v1.13.0 or Java, Python, TypeScript, and Rust SDK v1.14.0, gate startup and replacement deployment on the language's pull registration wait, then combine its readiness snapshot with process lifecycle health. Do not drain old Workers until replacements register. Inspect each queue's last permanent error and registered-stream state: a rejected surplus stream leaves readiness intact while another stream is registered. Stop alone preserves readiness, so remove stopping Workers from service separately. Consider opt-in rejection shutdown only with supervised restarts and cancellation-responsive handlers. Continue handling blocking run failures after readiness; TypeScript reports fatal rejection through **run()**, and Rust exposes the typed rejection through **pull_registration_error()**. Follow the [registration contract and language API names](pull-workers.md#startup-registration-and-readiness).
 
 With Server v1.13.0, Client API **ResourceExhausted** can identify capacity or rate limits rather than an unknown application failure. Inspect status details and available retry hints, check configured capacity and load, and follow the [bounded retry and reconciliation guidance](error-handling.md#capacity-and-rate-limit-failures). Do not confuse this with a rejected pull registration.
 

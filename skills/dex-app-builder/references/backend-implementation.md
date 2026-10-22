@@ -58,6 +58,36 @@ scale/SLO, assign one authoritative owner for every fact, define projection or
 synchronization and recovery semantics, and test failure and reconciliation.
 “Future flexibility” is not a sufficient reason.
 
+### Runs that can be measured and improved
+
+Build every Flow so that its own history answers which runs succeeded, for whom,
+at what cost, and what a different decision would have done. These rules cost
+little in the first version and are expensive to retrofit:
+
+- **Outcomes are visible in the run.** Each business outcome the contract names
+  (approved, paid, activated, replied, resolved) is a Step the run enters, an
+  Action it accepts, or an Attribute value. When the outcome happens in another
+  system, record it when the application learns it, through a Trigger, an Action
+  or a Step, rather than leaving it to be inferred later.
+- **Segment facts have their own scalar Attributes.** A fact the business would
+  compare runs by, such as a plan, region, source, tier or customer size, is a
+  scalar Attribute set once when it is known, not only a field inside a JSON
+  value or a display string. Index it only when a list needs it; index slots are
+  few.
+- **Decisions are plain functions.** Routing, scoring, thresholds, lane choices
+  and timer durations are computed by plain functions of the run's recorded facts
+  and configuration, which the Step calls and records the inputs of. The same
+  function can then be run over past runs to see what a changed rule would have
+  done.
+- **Model calls are their own Steps.** Each model call is an `llm` connector Step
+  ([text generation](connector-architecture.md#text-generation)), so its result,
+  with its token usage, is in the run's history.
+- **Fields keep their meaning across releases.** A release adds a new Attribute
+  for new data instead of changing what an existing one means, so runs from
+  different releases stay comparable.
+
+Keep personal data in these Attributes to what the process needs.
+
 For Custom UI, design the application HTTP API contract in the same pass as the
 Flow and Connector boundaries. Map each approved wireframe action to an
 application-level operation backed by a Flow start, typed RPC, query, or
@@ -94,7 +124,7 @@ Do not add projection-only locks. The Server atomically adds newly matched Actio
 
 Keep external effects in `Execute`. `WaitFor` only declares durable conditions and must not query or mutate providers or Dex state.
 
-For Go SDK v1.13.0 pull Workers, start **Worker.Start** on a goroutine and wait with a bounded **WaitPullRegistered(ctx)** before declaring startup complete. Readiness probes combine **PullRegistrationState().IsReady** with application lifecycle health. Wait for replacement registration before stopping old Workers; Stop alone does not clear the snapshot. Continue handling **Start** failures, inspect **PullRegistrationError** by queue and underlying status, and use **StopOnPermanentStreamRejection** only as an explicit deployment choice. Follow the shared [registration and drain contract](../../dex-sdk/references/core/pull-workers.md#startup-registration-and-readiness), including the distinction between rejected surplus streams and a queue with no other registered stream.
+For pull Workers in this Go application workflow, start **Worker.Start** on a goroutine and wait with a bounded **WaitPullRegistered(ctx)** before declaring startup complete. Readiness probes combine **PullRegistrationState().IsReady** with application lifecycle health. Wait for replacement registration before stopping old Workers; Stop alone does not clear the snapshot. Continue handling **Start** failures, inspect **PullRegistrationError** by queue and underlying status, and use **StopOnPermanentStreamRejection** only as an explicit deployment choice. Follow the shared [registration and drain contract](../../dex-sdk/references/core/pull-workers.md#startup-registration-and-readiness), including the distinction between rejected surplus streams and a queue with no other registered stream.
 
 For deployment, choose the listening or [pull Worker](../../dex-sdk/references/core/pull-workers.md) target before wiring the Client. Pull mode needs `WorkerOptions.Pull` and an advertised pull WorkerTarget, not a bind address. Set the Client's default target or a StartFlow/SubFlow override consistently. Use separate Client and Worker bearer credentials when Dex authentication is enabled. A pull Step without an available Worker consumes a retry, so budget startup and dispatch waits with the Step retry policy. When a release adds a Step type or RPC name, start the new pull Workers before stopping the old ones; compatible Server and Worker SDK releases can reassign an unregistered name without consuming the Step attempt. Keep the old logic compatible for names the old Workers still register. Long-running handlers that must observe cancellation record heartbeats within their HeartbeatTimeout.
 

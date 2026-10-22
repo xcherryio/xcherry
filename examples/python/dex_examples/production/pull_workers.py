@@ -85,6 +85,11 @@ async def start_pull_greeting(
             worker_target=worker.worker_target,
         ),
     )
+    try:
+        await worker.wait_pull_registered(timeout=30)
+    except BaseException:
+        await stop_pull_greeting(worker, client, worker_task)
+        raise
     return flow, worker, client, worker_task
 
 
@@ -94,3 +99,7 @@ async def stop_pull_greeting(
     await client.close()
     await worker.close()
     await worker_task
+
+
+def is_pull_greeting_ready(worker: AsyncWorker) -> bool:
+    return worker.pull_registration_state().is_ready

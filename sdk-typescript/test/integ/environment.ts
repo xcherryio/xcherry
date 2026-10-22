@@ -11,7 +11,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +24,8 @@ import {
   type StepExecutionId,
   type TimerId,
 } from "../../src/index.js";
+
+import { WorkerPortReservation } from "../worker-port-reservation.js";
 
 export interface TestEnvironment {
   readonly client: Client;
@@ -44,10 +45,16 @@ export async function startEnvironment(...flows: readonly Flow<any>[]): Promise<
     directory: cacheDirectory,
     maxBytes: 64 * 1_024 * 1_024,
   });
-  const worker = new Worker(registry, blobCache, workerMode === "pull"
+  const reservation = workerMode === "push" ? await WorkerPortReservation.reserve() : undefined;
+  const worker = new Worker(registry, blobCache, reservation === undefined
     ? { serverAddress, pull: { appWorkerID: flowId("integ-worker") } }
-    : { serverAddress, bindAddress: `127.0.0.1:${await availablePort()}` });
-  await worker.start();
+    : { serverAddress, bindAddress: `127.0.0.1:${reservation.port}` });
+  try {
+    await reservation?.release();
+    await worker.start();
+  } finally {
+    await reservation?.release();
+  }
   const client = new Client(registry, blobCache, {
     serverAddress,
     workerTarget: worker.workerTarget,
@@ -115,26 +122,4 @@ export async function expectError<Failure extends Error>(
     return failure;
   }
   assert.fail(`expected ${errorType.name}`);
-}
-
-function availablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate a Worker port"));
-        return;
-      }
-      server.close((error) => {
-        if (error !== undefined) {
-          reject(error);
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-  });
 }

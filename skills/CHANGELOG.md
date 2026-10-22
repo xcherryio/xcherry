@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.43.0 - 2026-10-22
+
+- Add App Builder guidance for runs that can be measured and improved from their own history: business outcomes visible as Steps, Actions or Attributes, with outcomes in other systems recorded when the application learns them; comparison facts as scalar Attributes; decisions as plain functions of recorded facts, so a changed rule can be run over past runs; each model call its own `llm` Step, so its token usage is in the run's history; and fields that keep their meaning across releases.
+- Record each run's business outcome and comparison facts, and how the run shows them, in the business contract. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.43.0.
+
+## 0.42.0 - 2026-10-21
+
+- Advance Java, Python, TypeScript, Rust, and CLI baselines to their published Dex 1.14.0 tags. Keep Go and Server at v1.13.0, and refresh pinned source links across Core, language references, and App Builder.
+- Document pull Worker registration readiness in all five SDKs, replacing the non-Go process-health and rejection-log workaround. Add language-native startup waits, readiness probes, typed rejection handling, and opt-in shutdown guidance, including TypeScript run() and Rust pull_registration_error().
+- Preserve the shared queue semantics: surplus-stream rejection does not make a serving queue unready, transient reconnects do not flap readiness, and Stop does not clear it. Keep App Builder's Go startup guidance aligned and synchronize plugin manifests at version 0.42.0.
+
 ## 0.41.0 - 2026-10-21
 
 - Advance Go, Server, and CLI baselines to their published Dex 1.13.0 tags. Pin Java, Python, TypeScript, and Rust references and examples to their own latest published SDK v1.12.0 tags, with per-language baseline metadata and source validation.

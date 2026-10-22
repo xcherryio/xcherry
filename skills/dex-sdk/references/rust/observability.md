@@ -20,7 +20,7 @@ Heartbeat long-running Execute work at bounded intervals. On retry, resume from 
 
 Server v1.10.1 enforces the Step HeartbeatTimeout for pull Workers; Server v1.10.0 does not. Cancellation reaches a Step handler through heartbeats, so record one within the timeout when a long-running handler must observe cancellation. For a pull target, later attempts after the one-attempt ASYNC local phase receive the last recorded heartbeat. See [pull Worker routing](../core/pull-workers.md).
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/heartbeat/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/heartbeat/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/heartbeat/flow.rs -->
 ```rust
 let completed_batches = context.last_heartbeat_value::<i32>()?.unwrap_or_default();

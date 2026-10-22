@@ -25,15 +25,17 @@ import io.superdurable.dex.Registry;
 import io.superdurable.dex.Worker;
 import io.superdurable.dex.WorkerOptions;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 
 public final class PullGreetingExample {
     private PullGreetingExample() {
     }
 
     public static RunningPullGreeting start(
-            final BlobCache cache, final String serverAddress) {
+            final BlobCache cache, final String serverAddress) throws InterruptedException, TimeoutException {
         final GreetingFlow flow = new GreetingFlow();
         final Registry registry = new Registry(List.<Flow<?>>of(flow));
         final Worker worker = new Worker(registry, cache, WorkerOptions.newBuilder()
@@ -52,7 +54,26 @@ public final class PullGreetingExample {
             }
         }, "pull-greeting-worker");
         workerThread.start();
-        return new RunningPullGreeting(flow, worker, client, workerThread, workerResult);
+        final RunningPullGreeting running = new RunningPullGreeting(
+                flow, worker, client, workerThread, workerResult);
+        try {
+            worker.waitPullRegistered(Duration.ofSeconds(30));
+        } catch (final InterruptedException | TimeoutException | RuntimeException | Error failure) {
+            try {
+                running.close();
+            } catch (final InterruptedException | RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+                if (cleanupFailure instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            throw failure;
+        }
+        return running;
+    }
+
+    public static boolean isPullGreetingReady(final Worker worker) {
+        return worker.getPullRegistrationState().isReady();
     }
 
     public record RunningPullGreeting(

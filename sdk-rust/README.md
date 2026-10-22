@@ -313,6 +313,24 @@ response stream closes.
 
 ### Pull mode
 
+Run `start()` on a dedicated thread, then await `worker.wait_pull_registered()` to wait until
+every Flow type queue and the app Worker ID queue has registered once. Drop the future to
+cancel waiting or wrap it in `tokio::time::timeout`. Concurrent callers and calls before startup
+are safe. Before readiness, a permanent rejection without another registered stream returns
+a service error whose `pull_registration_error()` accessor returns `PullRegistrationError`, preserving the queue and
+original gRPC status. Startup failures and shutdown before readiness also wake waiters.
+Completion stays latched, including after shutdown.
+
+Use `worker.pull_registration_state().is_ready` for ongoing probes. Its queue snapshots expose
+`queue`, `has_registered_stream`, and `last_permanent_error`. Readiness does not flap during
+reconnects or transient errors. A permanent rejection without another registered stream makes
+it false. Re-registration clears that queue's error; Stop does not reset readiness.
+
+`PullWorkerOptions::stop_on_permanent_stream_rejection(true)` opts into draining and stopping
+on such a rejection before or after readiness. The default is false, retrying indefinitely.
+`start()` returns the service error after draining within the configured timeout
+and waiting for cancelled handlers to return. Calling `stop()` afterward remains safe.
+
 Set `WorkerOptions::pull` to open outbound task streams instead of a WorkerService
 listener. Advertise `worker.worker_target().clone()` through
 `ClientOptions::worker_target`, or use `FlowConfig::worker_target` in a
@@ -365,11 +383,12 @@ A permanent registration error waits one minute. If the next attempt fails
 transiently before registration, that retry also waits one minute; subsequent
 transient retries resume at the five-second cap. A registered stream or a
 server-directed reconnect resets backoff to 100 ms, with jitter on every retry.
-The Worker may hold up to
-`(1 + number of Flow types) * (idleStreamsPerQueue + maxConcurrentTasks)`
-streams because busy streams are kept alongside each queue's idle streams.
-Size both options within the server's per-Worker stream cap (256 by default)
-and per-queue stream limits.
+After tasks finish, the Worker gracefully closes surplus idle streams while
+preserving readiness. After load drops, the steady-state stream bound is
+`max_concurrent_tasks + (1 + number of Flow types) * idle_streams_per_queue`.
+The transient peak during a burst remains bounded by the matching caps. Size both
+options for `matching.maxConcurrentTasksCap` per app Worker ID per matching owner
+(256 by default) and `matching.maxStreams` per Matching instance (100,000 by default).
 
 `Worker::stop` begins a graceful drain. After 30 seconds by default, the Worker
 cancels active handlers; `Worker::start` waits for them to return before it

@@ -47,6 +47,7 @@ class StepCancellationWorkflow implements Flow<Void> {
 
     private static final Duration HANDLER_TIMEOUT = Duration.ofSeconds(15);
     private static final Duration HEARTBEAT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration CANCELLATION_INTERRUPT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration WINNER_DELAY = Duration.ofSeconds(3);
     private static final long LOCAL_WINNER_DELAY_MILLIS = 1_000L;
     private static final long BLOCKING_HANDLER_MILLIS = 10_000L;
@@ -211,6 +212,15 @@ class StepCancellationWorkflow implements Flow<Void> {
     }
 
     private void observeCancellation(final Context context) {
+        // Context cancellation can become visible before the Worker interrupts this handler.
+        if (!handlerInterrupted.get() && !Thread.currentThread().isInterrupted()) {
+            try {
+                new CountDownLatch(1).await(
+                        CANCELLATION_INTERRUPT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interruption) {
+                handlerInterrupted.set(true);
+            }
+        }
         if (Thread.currentThread().isInterrupted()) {
             handlerInterrupted.set(true);
         }

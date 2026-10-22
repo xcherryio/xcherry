@@ -23,12 +23,15 @@ import io.superdurable.gen.SyncAttributeIndexRequest;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -72,6 +75,7 @@ public final class Worker implements AutoCloseable {
     private final NegotiatedServerProtocol serverProtocol = new NegotiatedServerProtocol();
     private Server server;
     private State state = State.CREATED;
+    private boolean hasStartCalled;
 
     /**
      * Creates a worker using local development defaults.
@@ -165,10 +169,89 @@ public final class Worker implements AutoCloseable {
      * Attribute indexes and opening the listener or pull streams. If the waiting thread is interrupted, the worker
      * stops and restores the thread's interruption status before returning.
      *
+     * @throws PullRegistrationError if an uncovered permanent stream rejection stops the Worker
+     *     with stopOnPermanentStreamRejection enabled, before or after readiness
      * @throws IllegalStateException if the worker was already started, its address cannot bind,
      *     or authentication fails during startup
      */
     public void start() {
+        synchronized (this) {
+            if (hasStartCalled || state != State.CREATED) {
+                throw new IllegalStateException("Worker cannot start from state " + state);
+            }
+            hasStartCalled = true;
+        }
+        Throwable startFailure = null;
+        try {
+            startInternal();
+        } catch (RuntimeException | Error failure) {
+            startFailure = failure;
+            if (pullWorker != null) {
+                pullWorker.finishRegistration(failure);
+            }
+            shutdownResources();
+            synchronized (this) {
+                state = State.STOPPED;
+            }
+            throw failure;
+        } finally {
+            if (pullWorker != null) {
+                pullWorker.finishRegistration(startFailure);
+            }
+        }
+    }
+
+    /**
+     * Waits until every pull queue has received a Registered acknowledgement at least once.
+     *
+     * <p>Start the Worker on another thread. Multiple callers may wait independently, before or
+     * after start. Success latches even after stop; use getPullRegistrationState for later probes.
+     * Before readiness, a permanent rejection fails this wait only if that queue has no other
+     * registered stream. Startup failures are propagated to waiters. Interrupting this wait leaves
+     * the Worker running.
+     *
+     * <pre>{@code
+     * Thread workerThread = new Thread(worker::start);
+     * workerThread.start();
+     * worker.waitPullRegistered(Duration.ofSeconds(30));
+     * boolean isReady = worker.getPullRegistrationState().isReady();
+     * }</pre>
+     *
+     * @param timeout the nonnull, nonnegative maximum wait duration
+     * @throws InterruptedException if the waiting thread is interrupted
+     * @throws TimeoutException if the timeout expires before readiness
+     * @throws PullRegistrationError if a queue is permanently rejected before readiness
+     * @throws IllegalArgumentException if timeout is null or negative
+     * @throws IllegalStateException if this is a listening Worker, startup fails, or the Worker
+     *     stops before readiness
+     */
+    public void waitPullRegistered(final Duration timeout) throws InterruptedException, TimeoutException {
+        if (timeout == null || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must be nonnull and nonnegative");
+        }
+        if (pullWorker == null) {
+            throw new IllegalStateException("waitPullRegistered requires a pull Worker");
+        }
+        pullWorker.waitRegistered(timeout);
+    }
+
+    /**
+     * Returns an independent snapshot for pull Worker readiness probes.
+     *
+     * <p>After initial readiness, transient failures, reconnects, and stop keep readiness true.
+     * A permanent rejection makes it false only while that queue has no registered stream.
+     * Re-registration clears the error. Safe concurrently with start, stop, and registration waits.
+     * See waitPullRegistered for a startup example.
+     *
+     * @return immutable queue state, or an empty nonready snapshot for a listening Worker
+     */
+    public PullRegistrationState getPullRegistrationState() {
+        return pullWorker == null
+                ? new PullRegistrationState(false, Collections.<PullQueueRegistrationState>emptyList())
+                : pullWorker.registrationState();
+    }
+
+    private void startInternal() {
         final Server runningServer;
         synchronized (this) {
             if (state != State.CREATED) {
@@ -182,21 +265,13 @@ public final class Worker implements AutoCloseable {
                                 TimeUnit.MILLISECONDS)
                         .getServerInfo(Empty.getDefaultInstance());
             } catch (RuntimeException failure) {
-                state = State.STOPPED;
-                shutdownResources();
                 if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
                     throw authenticationFailure(failure);
                 }
                 throw ServerProtocolCompatibility.requestFailure(sdkVersion, failure);
             }
-            try {
-                serverProtocol.recordNegotiatedVersion(
-                        ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion));
-            } catch (IllegalStateException failure) {
-                state = State.STOPPED;
-                shutdownResources();
-                throw failure;
-            }
+            serverProtocol.recordNegotiatedVersion(
+                    ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion));
             try {
                 flowService
                         .withDeadlineAfter(
@@ -206,8 +281,6 @@ public final class Worker implements AutoCloseable {
                                 .putAllAttributeIndexes(registry.getAttributeIndexes())
                                 .build());
             } catch (RuntimeException failure) {
-                state = State.STOPPED;
-                shutdownResources();
                 if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
                     throw authenticationFailure(failure);
                 }
@@ -220,8 +293,6 @@ public final class Worker implements AutoCloseable {
                             .build()
                             .start();
                 } catch (IOException failure) {
-                    state = State.STOPPED;
-                    shutdownResources();
                     throw new IllegalStateException(
                             "cannot bind Java Worker to " + options.getBindAddress(),
                             failure);

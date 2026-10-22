@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 import assert from "node:assert/strict";
-import { createConnection, createServer } from "node:net";
+import { createConnection } from "node:net";
 import test from "node:test";
 
 import {
@@ -50,6 +50,7 @@ import {
   type SyncAttributeIndexResponse,
 } from "../src/gen/dex.js";
 import { encodeValue } from "../src/value-mapper.js";
+import { WorkerPortReservation } from "./worker-port-reservation.js";
 
 class IndexedFlow implements Flow {
   private readonly status = new Attribute(
@@ -71,8 +72,7 @@ class IndexedFlow implements Flow {
   }
 }
 
-test("Worker synchronizes indexes before listening", async () => {
-  const workerPort = await availablePort();
+test("Worker synchronizes indexes before listening", async (context) => {
   let received: SyncAttributeIndexRequest | undefined;
   let listeningDuringSync: boolean | undefined;
   const calls: string[] = [];
@@ -92,11 +92,15 @@ test("Worker synchronizes indexes before listening", async () => {
     },
   } as Partial<FlowServiceServer> as FlowServiceServer);
   const flowPort = await bind(flowServer);
+  const reservation = await WorkerPortReservation.reserve();
+  context.after(() => reservation.release());
+  const workerPort = reservation.port;
   const worker = new Worker(new Registry([new IndexedFlow()]), new MemoryBlobCache(), {
     bindAddress: `127.0.0.1:${workerPort}`,
     serverAddress: `127.0.0.1:${flowPort}`,
   });
   try {
+    await reservation.release();
     await worker.start();
     assert.equal(
       received?.attributeIndexes.TypeScriptWorkerStatus,
@@ -111,8 +115,7 @@ test("Worker synchronizes indexes before listening", async () => {
   }
 });
 
-test("Worker rejects incompatible Server before sync and binding", async () => {
-  const workerPort = await availablePort();
+test("Worker rejects incompatible Server before sync and binding", async (context) => {
   const calls: string[] = [];
   const flowServer = new Server();
   flowServer.addService(FlowServiceService, {
@@ -130,11 +133,15 @@ test("Worker rejects incompatible Server before sync and binding", async () => {
     },
   } as Partial<FlowServiceServer> as FlowServiceServer);
   const flowPort = await bind(flowServer);
+  const reservation = await WorkerPortReservation.reserve();
+  context.after(() => reservation.release());
+  const workerPort = reservation.port;
   const worker = new Worker(new Registry([new IndexedFlow()]), new MemoryBlobCache(), {
     bindAddress: `127.0.0.1:${workerPort}`,
     serverAddress: `127.0.0.1:${flowPort}`,
   });
   try {
+    await reservation.release();
     await assert.rejects(worker.start(), (failure: Error) => {
       assert.match(String(failure.cause), /protocol intervals do not overlap/);
       return true;
@@ -147,8 +154,7 @@ test("Worker rejects incompatible Server before sync and binding", async () => {
   }
 });
 
-test("Worker sync failure keeps its port closed", async () => {
-  const workerPort = await availablePort();
+test("Worker sync failure keeps its port closed", async (context) => {
   const flowServer = new Server();
   flowServer.addService(FlowServiceService, {
     getServerInfo(_call, callback: sendUnaryData<ServerInfo>) {
@@ -159,11 +165,15 @@ test("Worker sync failure keeps its port closed", async () => {
     },
   } as Partial<FlowServiceServer> as FlowServiceServer);
   const flowPort = await bind(flowServer);
+  const reservation = await WorkerPortReservation.reserve();
+  context.after(() => reservation.release());
+  const workerPort = reservation.port;
   const worker = new Worker(new Registry([new IndexedFlow()]), new MemoryBlobCache(), {
     bindAddress: `127.0.0.1:${workerPort}`,
     serverAddress: `127.0.0.1:${flowPort}`,
   });
   try {
+    await reservation.release();
     await assert.rejects(worker.start(), /cannot start TypeScript Worker/);
     assert.equal(await canConnect(workerPort), false);
   } finally {
@@ -172,8 +182,7 @@ test("Worker sync failure keeps its port closed", async () => {
   }
 });
 
-test("Worker streams ordered Step progress and exactly one result", async () => {
-  const workerPort = await availablePort();
+test("Worker streams ordered Step progress and exactly one result", async (context) => {
   const flowServer = new Server();
   flowServer.addService(FlowServiceService, {
     getServerInfo(_call, callback: sendUnaryData<ServerInfo>) {
@@ -184,6 +193,9 @@ test("Worker streams ordered Step progress and exactly one result", async () => 
     },
   } as Partial<FlowServiceServer> as FlowServiceServer);
   const flowPort = await bind(flowServer);
+  const reservation = await WorkerPortReservation.reserve();
+  context.after(() => reservation.release());
+  const workerPort = reservation.port;
   const flow = new StreamingWorkerFlow();
   const worker = new Worker(new Registry([flow]), new MemoryBlobCache(), {
     bindAddress: `127.0.0.1:${workerPort}`,
@@ -194,6 +206,7 @@ test("Worker streams ordered Step progress and exactly one result", async () => 
     credentials.createInsecure(),
   );
   try {
+    await reservation.release();
     await worker.start();
     const waitFor = await observeStream(client.invokeWaitForMethod(
       InvokeWaitForMethodRequest.create({
@@ -372,22 +385,6 @@ function compatibleServerInfo(): ServerInfo {
     minimumSupportedProtocolVersion: 1,
     currentProtocolVersion: 1,
   };
-}
-
-function availablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate a port"));
-        return;
-      }
-      server.close((error) => error === undefined ? resolve(address.port) : reject(error));
-    });
-  });
 }
 
 function canConnect(port: number): Promise<boolean> {

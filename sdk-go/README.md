@@ -707,11 +707,14 @@ returns startup synchronization errors, not later poll stream errors.
 An older server without pull support produces one explicit error log and is retried.
 
 The Worker keeps idle streams on each queue even when all task slots are busy,
-so excess assignments can be rejected for reassignment. A Worker may hold up to
-`(1 + number of Flow types) * (IdleStreamsPerQueue + MaxConcurrentTasks)` streams
-because it retains surplus idle streams after tasks finish. Size both options so
-this bound fits the server's per-Worker stream cap (default 256). Per-queue or
-total server stream limits may also reject registration with `ResourceExhausted`.
+so excess assignments can be rejected for reassignment. It gracefully closes
+surplus idle streams after tasks finish, retaining `IdleStreamsPerQueue` registered
+idle streams per queue. After load drops, the steady-state bound is
+`MaxConcurrentTasks + (1 + number of Flow types) * IdleStreamsPerQueue` streams.
+The transient peak during a burst remains bounded by the matching caps. Size both
+options for `matching.maxConcurrentTasksCap` per app Worker ID per matching owner
+(default 256) and `matching.maxStreams` per Matching instance (default 100,000).
+Server stream limits may reject registration with `ResourceExhausted`.
 Pull mode `Stop` drains for at most `StopDrainTimeout`, which defaults to 30 seconds.
 After that timeout, it cancels active task contexts and waits for handlers to return.
 

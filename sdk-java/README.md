@@ -346,8 +346,12 @@ new Thread(worker::start).start();
 
 Pull mode polls the Worker's sticky queue and each registered Flow type queue.
 It keeps one idle stream per queue by default. Across `F` registered Flow types,
-the stream count stays bounded by `(1+F)*(idleStreamsPerQueue+maxConcurrentTasks)`
-through repeated server Reconnects.
+the steady-state stream count after load drops is bounded by
+`maxConcurrentTasks + (1 + F) * idleStreamsPerQueue`. Completed streams close
+gracefully when their queue already has enough registered idle streams, preserving
+readiness. The transient peak during a burst remains bounded by the matching caps:
+`matching.maxConcurrentTasksCap` per app Worker ID per matching owner and
+`matching.maxStreams` per Matching instance.
 Each stream runs one task at a time. The Worker rejects a task with no capacity
 so Dex can assign it elsewhere. The default task capacity is the available CPU
 count. A zero option value selects its default.
@@ -373,6 +377,28 @@ a handler that ignores cancellation can delay Stop. A server without pull
 support produces one explicit error log and retries polling after a minute.
 Reconnects and transient transport errors are retried automatically. Heartbeats
 and Step Stream writes use the same task stream as the final result.
+
+Call `waitPullRegistered(Duration)` after starting the Worker on another thread
+and before activating it. It waits for every Flow type queue and the app Worker
+ID queue to register at least once. A timeout throws `TimeoutException`;
+interruption cancels only the wait. Startup errors and a permanent rejection
+before readiness reach the waiter. `PullRegistrationError.getQueue()` identifies
+the queue and `getCause()` preserves the transport error. A listening Worker or
+stop before readiness throws `IllegalStateException`.
+
+Use `getPullRegistrationState()` for later readiness probes. Its immutable queue
+entries expose `getQueue()`, `hasRegisteredStream()`, and `getLastPermanentError()`.
+`isReady()` stays true across transient failures, reconnects, and stop after
+initial registration. It becomes false only when a queue has a permanent error
+and no registered stream. Re-registration clears the error. The startup wait
+continues succeeding after initial registration, including after stop.
+
+`stopOnPermanentStreamRejection(true)` is opt-in. The first permanent rejection
+leaving a queue without a registered stream drains within `stopDrainTimeout`
+and makes `start()` throw `PullRegistrationError`, before or after readiness.
+Other registered streams for that queue prevent shutdown. The default remains
+false and retries indefinitely. Always call `stop()` or `close()` afterward;
+both remain safe after `start()` returns.
 
 ### Authentication
 

@@ -14,6 +14,9 @@ import asyncio
 import os
 import queue
 import threading
+
+import grpc
+import pytest
 from datetime import timedelta
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -28,6 +31,7 @@ from dex import (
     Flow,
     FlowConfig,
     PullWorkerOptions,
+    PullRegistrationError,
     Registry,
     RPCResult,
     Step,
@@ -416,3 +420,73 @@ def test_subflow_can_override_push_parent_with_pull_child() -> None:
             assert observations.get(timeout=20) == (pull_worker_id, "first_wait_for")
     finally:
         pull_worker.close()
+
+
+class RegistrationFlow(Flow[None]):
+    def __init__(self, flow_type: str) -> None:
+        self.flow_type = flow_type
+
+    def get_flow_type(self) -> str:
+        return self.flow_type
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("should_reject", [False, True])
+def test_pull_registration_readiness(is_async: bool, should_reject: bool) -> None:
+    asyncio.run(_pull_registration_readiness(is_async, should_reject))
+
+
+async def _pull_registration_readiness(is_async: bool, should_reject: bool) -> None:
+    flow_type = "x" * 257 if should_reject else unique_id("PythonRegistrationFlow")
+    registry = Registry([RegistrationFlow(flow_type)], allow_async_handlers=is_async)
+    with TemporaryDirectory(prefix="python-registration-") as directory:
+        cache = open_blob_cache(BlobCacheConfig(directory, 64 * 1024 * 1024))
+        worker_type = AsyncWorker if is_async else Worker
+        worker = worker_type(
+            registry,
+            cache,
+            WorkerOptions(
+                server_address=os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801"),
+                pull=PullWorkerOptions(
+                    app_worker_id=unique_id("python-registration"),
+                    stop_on_permanent_stream_rejection=True,
+                    stop_drain_timeout=timedelta(seconds=1),
+                ),
+            ),
+        )
+        running = asyncio.create_task(
+            worker.start()
+            if isinstance(worker, AsyncWorker)
+            else asyncio.to_thread(worker.start)
+        )
+        try:
+            if should_reject:
+                with pytest.raises(PullRegistrationError) as rejection:
+                    if isinstance(worker, AsyncWorker):
+                        await worker.wait_pull_registered(10)
+                    else:
+                        await asyncio.to_thread(worker.wait_pull_registered, 10)
+                assert isinstance(rejection.value.error, grpc.RpcError)
+                assert rejection.value.error.code() == grpc.StatusCode.INVALID_ARGUMENT
+                with pytest.raises(PullRegistrationError) as started:
+                    await asyncio.wait_for(asyncio.shield(running), 5)
+                assert started.value is rejection.value
+                assert not worker.pull_registration_state().is_ready
+            else:
+                if isinstance(worker, AsyncWorker):
+                    await worker.wait_pull_registered(10)
+                else:
+                    await asyncio.to_thread(worker.wait_pull_registered, 10)
+                snapshot = worker.pull_registration_state()
+                assert snapshot.is_ready
+                assert len(snapshot.queues) == 2
+                assert all(queue.has_registered_stream for queue in snapshot.queues)
+        finally:
+            if isinstance(worker, AsyncWorker):
+                await worker.close()
+            else:
+                await asyncio.to_thread(worker.close)
+            if not should_reject:
+                await asyncio.wait_for(running, 5)
+                assert worker.pull_registration_state().is_ready
+            cache.close()

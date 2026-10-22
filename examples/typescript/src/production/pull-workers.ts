@@ -79,7 +79,17 @@ export async function startPullGreeting(
     serverAddress,
     pull: { maxConcurrentTasks: 8 },
   });
-  await worker.start();
+  try {
+    await worker.start();
+    await worker.waitPullRegistered({ timeoutMs: 30_000 });
+  } catch (failure) {
+    try {
+      await worker.close();
+    } catch (cleanupFailure) {
+      throw new AggregateError([failure, cleanupFailure], "pull Worker startup and cleanup failed");
+    }
+    throw failure;
+  }
   const client = new Client(registry, cache, {
     serverAddress,
     workerTarget: worker.workerTarget,
@@ -90,4 +100,8 @@ export async function startPullGreeting(
 export async function stopPullGreeting(worker: Worker, client: Client): Promise<void> {
   await client.close();
   await worker.close();
+}
+
+export function isPullGreetingReady(worker: Worker): boolean {
+  return worker.pullRegistrationState().isReady;
 }

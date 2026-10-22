@@ -23,7 +23,9 @@ import pytest
 from google.protobuf import timestamp_pb2
 
 from dex import (
+    AsyncWorker,
     BlobCache,
+    PullRegistrationError,
     Flow,
     FlowConfig,
     PullWorkerOptions,
@@ -1143,3 +1145,396 @@ async def _stop_drains_handler_before_timeout() -> None:
         "done_writing"
     )
     assert call.operations.index("read:EOF") < call.operations.index("cancel")
+
+
+class RegistrationCall(QueueCall):
+    async def read(self) -> Any:
+        frame = await self.frames.get()
+        if isinstance(frame, BaseException):
+            raise frame
+        return frame
+
+
+@pytest.mark.parametrize("code", list(grpc.StatusCode))
+def test_registration_permanent_status_classification(code: grpc.StatusCode) -> None:
+    asyncio.run(_registration_permanent_status_classification(code))
+
+
+async def _registration_permanent_status_classification(code: grpc.StatusCode) -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(app_worker_id="readiness-worker"),
+        "unused",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    call = RegistrationCall([])
+    call.frames.put_nowait(FakeRpcError(code))
+    stream = PullStream(runtime, FakeStub(cast(FakeCall, call)), "readiness-worker")
+    task = asyncio.create_task(stream.run())
+    is_permanent = code in {
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+        grpc.StatusCode.UNIMPLEMENTED,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+    }
+    try:
+        if is_permanent:
+            with pytest.raises(PullRegistrationError) as rejected:
+                await runtime.registration.wait_async(1)
+            assert rejected.value.queue == "readiness-worker"
+            assert cast(FakeRpcError, rejected.value.error).code() == code
+            assert not runtime.registration.snapshot().is_ready
+        else:
+            with pytest.raises(TimeoutError):
+                await runtime.registration.wait_async(0.02)
+    finally:
+        runtime._stopping.set()
+        await asyncio.wait_for(task, 1)
+
+
+def test_registration_readiness_latches_and_surplus_rejection_is_not_fatal() -> None:
+    asyncio.run(_registration_readiness_latches_and_surplus_rejection_is_not_fatal())
+
+
+async def _registration_readiness_latches_and_surplus_rejection_is_not_fatal() -> None:
+    runtime = PullWorkerRuntime(
+        Registry([ConflictingFlow()]),
+        None,
+        PullWorkerOptions(
+            app_worker_id="readiness-worker", stop_on_permanent_stream_rejection=True
+        ),
+        "unused",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    streams: list[PullStream] = []
+    calls: list[RegistrationCall] = []
+    for queue in ("readiness-worker", "conflicting-worker", "conflicting-worker"):
+        call = RegistrationCall(
+            [pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())]
+        )
+        stream = PullStream(runtime, FakeStub(cast(FakeCall, call)), queue)
+        stream.run_task = asyncio.create_task(stream.run())
+        streams.append(stream)
+        calls.append(call)
+    try:
+        await runtime.registration.wait_async(1)
+        snapshot = runtime.registration.snapshot()
+        assert snapshot.is_ready
+        assert len(snapshot.queues) == 2
+        calls[1].frames.put_nowait(FakeRpcError(grpc.StatusCode.PERMISSION_DENIED))
+        while runtime.registration.snapshot().queues[1].last_permanent_error is None:
+            await asyncio.sleep(0)
+        assert runtime.registration.snapshot().is_ready
+        assert runtime._permanent_error is None
+        calls[0].frames.put_nowait(FakeRpcError(grpc.StatusCode.UNAVAILABLE))
+        while runtime.registration.snapshot().queues[0].has_registered_stream:
+            await asyncio.sleep(0)
+        assert runtime.registration.snapshot().is_ready
+        await runtime.registration.wait_async(0)
+        assert snapshot.queues[0].has_registered_stream
+        runtime.registration.record_stream_result(
+            "conflicting-worker", True, FakeRpcError(grpc.StatusCode.INVALID_ARGUMENT)
+        )
+        assert not runtime.registration.snapshot().is_ready
+        await runtime.registration.wait_async(0)
+        runtime.registration.record_registered_stream("conflicting-worker")
+        assert runtime.registration.snapshot().is_ready
+        assert runtime.registration.snapshot().queues[1].last_permanent_error is None
+    finally:
+        runtime._stopping.set()
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*(stream.run_task for stream in streams))
+    assert runtime.registration.snapshot().is_ready
+
+
+@pytest.mark.parametrize("has_registered", [False, True])
+def test_fatal_registration_drains_and_stop_stays_safe(has_registered: bool) -> None:
+    asyncio.run(_fatal_registration_drains_and_stop_stays_safe(has_registered))
+
+
+async def _fatal_registration_drains_and_stop_stays_safe(has_registered: bool) -> None:
+    call = RegistrationCall(
+        [pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())]
+        if has_registered
+        else []
+    )
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(
+            app_worker_id="fatal-worker", stop_on_permanent_stream_rejection=True
+        ),
+        "unused",
+        None,
+    )
+    channel = AsyncMock()
+    with patch(
+        "dex._pull_worker.outbound_worker_task_channel", return_value=channel
+    ), patch(
+        "dex._pull_worker.dex_pb2_grpc.WorkerTaskServiceStub",
+        return_value=FakeStub(cast(FakeCall, call)),
+    ):
+        running = asyncio.create_task(runtime.run())
+        if has_registered:
+            await runtime.registration.wait_async(1)
+        call.frames.put_nowait(FakeRpcError(grpc.StatusCode.INVALID_ARGUMENT))
+        with pytest.raises(PullRegistrationError):
+            await asyncio.wait_for(running, 2)
+        await runtime.stop()
+        assert runtime.registration.snapshot().is_ready is False
+        if has_registered:
+            await runtime.registration.wait_async(0)
+        channel.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_registration_waiters_receive_start_failure_and_stop(is_async: bool) -> None:
+    asyncio.run(_registration_waiters_receive_start_failure_and_stop(is_async))
+
+
+async def _registration_waiters_receive_start_failure_and_stop(is_async: bool) -> None:
+    from test_worker_startup import MemoryBlobCache
+
+    worker_type = AsyncWorker if is_async else Worker
+    worker = worker_type(
+        Registry([]), MemoryBlobCache(), WorkerOptions(pull=PullWorkerOptions())
+    )
+    failure = RuntimeError("startup failed")
+    try:
+        if isinstance(worker, AsyncWorker):
+            waiting = asyncio.create_task(worker.wait_pull_registered(1))
+            with patch.object(
+                worker, "_start", new_callable=AsyncMock, side_effect=failure
+            ):
+                with pytest.raises(RuntimeError) as started:
+                    await worker.start()
+            with pytest.raises(RuntimeError) as waited:
+                await waiting
+        else:
+            waiting = asyncio.create_task(
+                asyncio.to_thread(worker.wait_pull_registered, 1)
+            )
+            with patch.object(worker, "_start", side_effect=failure):
+                with pytest.raises(RuntimeError) as started:
+                    worker.start()
+            with pytest.raises(RuntimeError) as waited:
+                await waiting
+        assert started.value is failure
+        assert waited.value is failure
+    finally:
+        if isinstance(worker, AsyncWorker):
+            await worker.close()
+        else:
+            worker.close()
+    stopped = worker_type(
+        Registry([]), MemoryBlobCache(), WorkerOptions(pull=PullWorkerOptions())
+    )
+    if isinstance(stopped, AsyncWorker):
+        await stopped.stop()
+        with pytest.raises(RuntimeError, match="stopped before registration"):
+            await stopped.wait_pull_registered(1)
+    else:
+        stopped.stop()
+        with pytest.raises(RuntimeError, match="stopped before registration"):
+            stopped.wait_pull_registered(1)
+
+
+def test_registration_wait_cancellation_does_not_cancel_other_waiters() -> None:
+    asyncio.run(_registration_wait_cancellation_does_not_cancel_other_waiters())
+
+
+async def _registration_wait_cancellation_does_not_cancel_other_waiters() -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(app_worker_id="cancel-wait"),
+        "unused",
+        None,
+    )
+    canceled = asyncio.create_task(runtime.registration.wait_async(None))
+    waiting = asyncio.create_task(runtime.registration.wait_async(1))
+    await asyncio.sleep(0)
+    canceled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await canceled
+    runtime.registration.record_registered_stream("cancel-wait")
+    await waiting
+
+
+def test_readiness_requires_each_queue_and_waiters_can_time_out_independently() -> None:
+    asyncio.run(_readiness_requires_each_queue_and_waiters_can_time_out_independently())
+
+
+async def _readiness_requires_each_queue_and_waiters_can_time_out_independently() -> (
+    None
+):
+    runtime = PullWorkerRuntime(
+        Registry([ConflictingFlow()]),
+        None,
+        PullWorkerOptions(app_worker_id="all-queues"),
+        "unused",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    worker_call = RegistrationCall(
+        [pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())]
+    )
+    flow_call = RegistrationCall([])
+    worker_stream = PullStream(
+        runtime, FakeStub(cast(FakeCall, worker_call)), "all-queues"
+    )
+    flow_stream = PullStream(
+        runtime, FakeStub(cast(FakeCall, flow_call)), "conflicting-worker"
+    )
+    running = [
+        asyncio.create_task(stream.run()) for stream in (worker_stream, flow_stream)
+    ]
+    waiting = asyncio.create_task(runtime.registration.wait_async(1))
+    try:
+        with pytest.raises(TimeoutError):
+            await runtime.registration.wait_async(0.02)
+        assert runtime.registration.snapshot().queues[0].has_registered_stream
+        assert not runtime.registration.snapshot().is_ready
+        flow_call.frames.put_nowait(
+            pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())
+        )
+        await waiting
+        assert runtime.registration.snapshot().is_ready
+    finally:
+        runtime._stopping.set()
+        worker_call.cancel()
+        flow_call.cancel()
+        await asyncio.gather(*running)
+
+
+def test_transport_creation_failure_preserves_start_error_and_allows_stop() -> None:
+    asyncio.run(_transport_creation_failure_preserves_start_error_and_allows_stop())
+
+
+async def _transport_creation_failure_preserves_start_error_and_allows_stop() -> None:
+    from test_worker_startup import MemoryBlobCache
+
+    worker = Worker(
+        Registry([]), MemoryBlobCache(), WorkerOptions(pull=PullWorkerOptions())
+    )
+    assert worker._pull is not None
+    failure = RuntimeError("cannot create pull channel")
+
+    def run_pull() -> None:
+        worker._state = "running"
+        assert worker._pull is not None
+        asyncio.run(worker._pull.run())
+
+    try:
+        with patch.object(worker, "_start", side_effect=run_pull), patch(
+            "dex._pull_worker.outbound_worker_task_channel", side_effect=failure
+        ):
+            with pytest.raises(RuntimeError) as started:
+                await asyncio.to_thread(worker.start)
+        assert started.value is failure
+        with pytest.raises(RuntimeError) as waited:
+            worker.wait_pull_registered(1)
+        assert waited.value is failure
+        worker.stop()
+    finally:
+        worker.close()
+
+
+class BurstStub:
+    def __init__(self) -> None:
+        self.calls: list[QueueCall] = []
+
+    def PollWorkerTask(self) -> QueueCall:
+        call = QueueCall(
+            [pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())]
+        )
+        self.calls.append(call)
+        return call
+
+
+async def reconcile_burst_until(
+    runtime: PullWorkerRuntime, stub: BurstStub, predicate: Callable[[], bool]
+) -> None:
+    async with asyncio.timeout(3):
+        while True:
+            runtime._reconcile(stub)
+            if predicate():
+                return
+            assert runtime._wake is not None
+            await runtime._wake.wait()
+            runtime._wake.clear()
+
+
+@pytest.mark.parametrize("idle_streams", [1, 2])
+def test_surplus_streams_shrink_after_burst(idle_streams: int) -> None:
+    asyncio.run(_surplus_streams_shrink_after_burst(idle_streams))
+
+
+async def _surplus_streams_shrink_after_burst(idle_streams: int) -> None:
+    dispatcher = BlockingDispatcher()
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        dispatcher,
+        PullWorkerOptions(
+            app_worker_id="burst-worker",
+            max_concurrent_tasks=3,
+            idle_streams_per_queue=idle_streams,
+        ),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    runtime._wake = asyncio.Event()
+    stub = BurstStub()
+    busy_calls: list[QueueCall] = []
+    try:
+        await reconcile_burst_until(
+            runtime, stub, lambda: runtime.registration.snapshot().is_ready
+        )
+        for task_number in range(3):
+            stream = next(
+                candidate
+                for candidate in runtime._streams
+                if not candidate.is_busy and candidate._is_registered
+            )
+            call = cast(QueueCall, stream._call)
+            busy_calls.append(call)
+            call.frames.put_nowait(
+                pb.PollWorkerTaskResponse(
+                    task=pb.PollWorkerTask(
+                        task_id=f"burst-{task_number}", rpc=pb.InvokeWorkerRPCRequest()
+                    )
+                )
+            )
+            await reconcile_burst_until(
+                runtime,
+                stub,
+                lambda: runtime._busy_tasks == task_number + 1
+                and sum(
+                    not candidate.is_busy and candidate._is_registered
+                    for candidate in runtime._streams
+                )
+                == runtime.idle_streams_per_queue,
+            )
+        assert len(runtime._streams) == 3 + idle_streams
+        assert all(not call.is_half_closed for call in busy_calls)
+        assert runtime.registration.snapshot().is_ready
+        dispatcher.gate.set()
+        await reconcile_burst_until(
+            runtime,
+            stub,
+            lambda: runtime._busy_tasks == 0 and len(runtime._streams) == idle_streams,
+        )
+        assert runtime.registration.snapshot().is_ready
+        await runtime.registration.wait_async(0)
+        opened_calls = len(stub.calls)
+        runtime._reconcile(stub)
+        assert len(stub.calls) == opened_calls
+    finally:
+        dispatcher.gate.set()
+        await runtime.stop()

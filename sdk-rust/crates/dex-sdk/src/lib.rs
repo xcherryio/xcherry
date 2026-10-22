@@ -28,6 +28,7 @@ mod flow_result;
 mod flow_timeout_handler_options;
 mod handler_error;
 mod persistence;
+mod pull_registration;
 mod registry;
 mod retry_policy;
 mod rpc;
@@ -70,6 +71,9 @@ pub use flow_result::{FlowResult, StepCompletion};
 pub use flow_timeout_handler_options::{FlowTimeoutHandlerFailure, FlowTimeoutHandlerOptions};
 pub use handler_error::{HandlerError, HandlerResult};
 pub use persistence::PersistenceSchema;
+pub use pull_registration::{
+    PullQueueRegistrationState, PullRegistrationError, PullRegistrationState,
+};
 pub use registry::Registry;
 pub use retry_policy::RetryPolicy;
 pub use rpc::{Rpc, RpcDefinition, RpcList, RpcResult};
