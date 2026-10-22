@@ -28,11 +28,11 @@ At the released SDK API baseline, use the exact public names:
 
 | SDK | Combined missing/inactive target error | Source |
 | --- | --- | --- |
-| Go | `*dex.FlowNotActiveOrNotFoundError` | [Definition and mapping](https://github.com/superdurable/dex/blob/sdk-go/v1.13.0/sdk-go/dex/errors.go) |
-| Python | `FlowNotActiveOrNotFoundError` | [Definition](https://github.com/superdurable/dex/blob/sdk-python/v1.14.0/sdk-python/dex/runtime_errors.py) |
-| TypeScript | `FlowNotActiveOrNotFoundError` | [Definition](https://github.com/superdurable/dex/blob/sdk-typescript/v1.14.0/sdk-typescript/src/errors.ts) |
-| Java | `FlowNotActiveOrNotFoundException` | [Definition](https://github.com/superdurable/dex/blob/sdk-java/v1.14.0/sdk-java/src/main/java/io/superdurable/dex/exceptions/FlowNotActiveOrNotFoundException.java) |
-| Rust | `SdkError::FlowNotActiveOrNotFound` | [Definition and mapping](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/sdk-rust/crates/dex-sdk/src/sdk_error.rs) |
+| Go | `*dex.FlowNotActiveOrNotFoundError` | [Definition and mapping](https://github.com/superdurable/dex/blob/sdk-go/v1.14.1/sdk-go/dex/errors.go) |
+| Python | `FlowNotActiveOrNotFoundError` | [Definition](https://github.com/superdurable/dex/blob/sdk-python/v1.14.1/sdk-python/dex/runtime_errors.py) |
+| TypeScript | `FlowNotActiveOrNotFoundError` | [Definition](https://github.com/superdurable/dex/blob/sdk-typescript/v1.14.1/sdk-typescript/src/errors.ts) |
+| Java | `FlowNotActiveOrNotFoundException` | [Definition](https://github.com/superdurable/dex/blob/sdk-java/v1.14.1/sdk-java/src/main/java/io/superdurable/dex/exceptions/FlowNotActiveOrNotFoundException.java) |
+| Rust | `SdkError::FlowNotActiveOrNotFound` | [Definition and mapping](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.1/sdk-rust/crates/dex-sdk/src/sdk_error.rs) |
 
 These names replace the old not-active-only names without compatibility aliases. The rename preserves Server routing, protocol sub-statuses, service metadata, and cause chains. The separate Flow-not-found error remains available for operations mapped to it. Inspect an existing application's installed SDK before changing a catch or import; do not assume older packages export the new names.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.44.0 - 2026-10-22
+
+- Advance all five SDK baselines to their published Dex 1.14.1 tags, including Go through DEX_BASELINE. Keep Server at server/v1.13.0 and CLI at cli-v1.14.0, and refresh pinned source links across Core, language references, and App Builder.
+- Document graceful retirement of surplus idle pull Worker streams in all five SDKs. Size steady-state streams as M + (F + 1) × I after load drops; retain matching.maxConcurrentTasksCap and matching.maxStreams as burst limits, and preserve readiness and registered idle capacity during cleanup.
+- Refresh runnable pull Worker example guidance for bounded startup registration waits, startup failure cleanup, and readiness helpers. Correct the example dependency pins and synchronize all three plugin manifests at version 0.44.0.
+
 ## 0.43.0 - 2026-10-22
 
 - Add App Builder guidance for runs that can be measured and improved from their own history: business outcomes visible as Steps, Actions or Attributes, with outcomes in other systems recorded when the application learns them; comparison facts as scalar Attributes; decisions as plain functions of recorded facts, so a changed rule can be run over past runs; each model call its own `llm` Step, so its token usage is in the run's history; and fields that keep their meaning across releases.
