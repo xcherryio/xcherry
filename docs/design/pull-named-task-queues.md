@@ -14,7 +14,7 @@ The stream count is no longer the reason; after #740 a Worker holds about `M + (
 
 1. **Test isolation on a shared server.** Today a pull Flow cannot be confined to one Worker process, so concurrent test runs against one Server can steal each other's tasks. A queue per test run keeps them apart.
 2. **Several applications on one Dex Server.** Today pull Flow types must be globally unique on a Server. Named queues let independent applications deploy the same Flow type names side by side.
-3. **Execution classes.** Long-running Steps, such as model calls or long polling, can run on dedicated Workers with their own concurrency budget. They then no longer compete with RPCs and short Steps for one MaxConcurrentTasks budget. For RPC starvation alone, reserved RPC capacity (below) is the smaller fix and ships first.
+3. **Execution classes.** Long-running Steps, such as model calls or long polling, can run on dedicated Workers with their own concurrency budget, through a per-Step queue override. They then no longer compete with RPCs and short Steps for one MaxConcurrentTasks budget. For RPC starvation alone, reserved RPC capacity (below) is the smaller fix and ships first.
 
 Sharing one stream set across many low-traffic Flow types is not a goal; see the rejected alternatives.
 
@@ -52,17 +52,26 @@ The default queue is the empty name, and its keys hash and compare exactly as to
 - `DispatchTaskRequest` gains `string task_queue = 16`. Matching uses it for both the sticky key and the fallback key. `dispatchQueue` rebuilds the forwarded `remoteRequest` field by field, so `task_queue` must be added to that literal. An owner treats a missing `task_queue` as the default queue; with the rollout flag below, that case only arises for default-queue traffic.
 - Every dispatch path reads the Flow's `WorkerTarget.task_queue`, from the same FlowConfig source that decides `is_pull_mode` today: the interpreter Step dispatch (`pullTaskRequest`), the API-direct RPC path (`server/service/common/rpc/pull.go`), and the transactional RPC activity.
 
-### Execution classes
+### Per-Step queue override (execution classes)
 
-Flow code names an execution class, never a queue. Naming a queue in Flow code would break isolation: a Step pinned to `long-steps` would leave a per-test queue or a tenant queue and reach a shared pool.
+`StepOptions` gains an optional `task_queue` string. When it is set, that Step's WaitFor and Execute dispatches use `(stepQueue, flowType)` and `(stepQueue, lastWorkerID)` instead of the Flow's queue. RPCs always use the Flow's queue. A dedicated Worker pool polls `stepQueue` and registers the Flow type there. It may register only the long-running Step types. Any other Step that reaches it is declined with the existing `UNKNOWN_STEP` reassignment (#711), without consuming an attempt. If nothing polls `stepQueue`, that Step gets `NO_WORKER_AVAILABLE` after the dispatch wait, like any queue without Workers.
 
-- `StepOptions` gains an optional `execution_class` with 1 to 32 characters from `[a-z0-9-]`. RPCs have no class and always use the Flow's queue.
-- At dispatch, the interpreter resolves the class against the Flow's own WorkerTarget:
-  1. If `WorkerTarget.execution_class_queues[class]` (a new `map<string, string>`, field 5) names a queue, that queue is used.
-  2. Otherwise the queue is derived as `<flowQueue>.class.<class>`, or `dex.class.<class>` for the default queue.
-- The map is persisted and inherited by SubFlows exactly like `task_queue`, and UpdateFlowConfig can change it. Isolation therefore stays a property of the Flow's target, and Flow code stays deployment-neutral. A test on `test-abc` resolves class `long` to `test-abc.class.long`, which only that test's Workers poll.
-- A dedicated pool polls the resolved queue and registers the Flow type there. It may register only the long-running Step types. Any other Step that reaches it is declined with the existing `UNKNOWN_STEP` reassignment (#711), without consuming an attempt.
-- If nothing polls the resolved queue, that Step gets `NO_WORKER_AVAILABLE` after the dispatch wait, like any queue without Workers. Deployments that do not run a dedicated pool map the class back to the Flow's queue in `execution_class_queues`.
+Dex applies no derivation rule to the name. The application already builds its Flows and their StepOptions in the Worker process, so it owns isolation. **When tests or tenants share a Server, make per-Step queue names configuration rather than constants in Flow code.** For example, a Flow reads its long-Step queue from its own configuration: `long-steps` in production, and `test-abc-long` in a test process whose Workers poll `test-abc` and `test-abc-long`. The test's long Steps then never reach the production pool.
+
+```go
+type SessionAgentFlow struct {
+	LongStepQueue string // from application configuration
+}
+
+func (flow *SessionAgentFlow) GetStepOptions(step string) *dex.StepOptions {
+	if step == "CallModel" {
+		return &dex.StepOptions{TaskQueue: flow.LongStepQueue}
+	}
+	return nil
+}
+```
+
+The product docs repeat this guidance next to the option, with a runnable example in each SDK.
 
 ### Reserved RPC capacity (ships first, independent of task queues)
 
@@ -146,7 +155,8 @@ Named queues must fail closed. Silently falling back to the default queue would 
   - readiness covering every `(queue, name)` pair;
   - Client rejection of `task_queue` on old Servers;
   - SubFlow override inheritance and the explicit `dex.default` target;
-  - execution class resolution: derived names, the `execution_class_queues` map, SubFlow inheritance, and no leak from a per-test queue;
+  - a per-Step `task_queue` override reaching a dedicated pool, with other Steps reassigned via `UNKNOWN_STEP`;
+  - a configured per-Step queue name keeping a test's long Steps on that test's Workers;
   - per-queue MaxConcurrentTasks declining with `NO_CAPACITY` at the queue cap;
   - the two-Workers-in-one-process pattern, with readiness and Stop for both.
 - Reserved RPC capacity (its own PR, first):
