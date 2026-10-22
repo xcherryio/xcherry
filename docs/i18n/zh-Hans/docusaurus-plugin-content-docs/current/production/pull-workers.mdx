@@ -475,6 +475,35 @@ handler，默认期限为 30 秒。超过期限后，它请求取消，并等待
 返回。长时间运行的 handler 应响应取消。Server 要求重新连接时，Worker 也会先完成
 正在运行的调用。
 
+### 为 RPC 预留容量
+
+当 Step 长时间运行，而同步 RPC 仍需及时响应时，可以预留 RPC 容量。
+Go 使用 **ReservedRPCTasks**，Java 和 TypeScript 使用 **reservedRpcTasks**，
+Python 和 Rust 使用 **reserved_rpc_tasks**。未设置时，如果解析后的任务上限至少为二，
+默认预留一个槽位；上限为一时则预留零个。使用 CPU 数量默认值时，Step 比以前少一个槽位。
+显式设置为零可以关闭预留。上限为一且未显式设置预留值时，Worker 启动会记录一次警告：
+RPC 可能等待长时间运行的 Step，并建议将上限设为至少二，或显式设置预留值。
+Flow 必须保持响应，因此默认预留一个槽位。Dex 无法像工作流引擎优先处理查询或更新那样
+优先处理同步 RPC。
+预留值必须非负，并且小于解析 CPU 数量默认值后的并发任务上限。
+无效值会导致 Worker 构造失败。
+
+RPC 任务包括 API 直接调用和事务型 **InvokeWorkerRPC** 任务。
+RPC 和 Step 的处理函数共同计入任务上限。当忙碌处理函数数量达到任务上限减去预留值时，
+Worker 会以 **NO_CAPACITY** 拒绝所有 Step 任务，包括 WaitFor、Execute 和本地（ASYNC 第一阶段）尝试。RPC 任务可以使用全部容量。
+例如，上限为八、预留值为二时，只有忙碌处理函数少于六个，才能启动新的 Step 任务。
+
+Dex 会尝试其他 Worker，不消耗 Step 尝试次数。如果所有 Worker 都持续达到 Step 容量上限，
+Step 最多等待到分发等待时间结束，然后收到 **NO_WORKER_AVAILABLE**、消耗一次尝试并遵循其重试策略，
+与所有 Worker 都已满载时相同。本地尝试等待本地分发等待时间，然后按照其策略回退。
+每个队列仍保留可用的空闲流。
+预留容量导致的拒绝不会关闭流，也不会改变注册就绪状态。
+每次此类拒绝都会生成包含 Flow 类型的调试日志，并增加 Worker 的累计预留拒绝计数：
+Go 为 **PullReservedRPCDeclines()**，Java 为 **getPullReservedRpcDeclines()**，
+TypeScript 为 **pullReservedRpcDeclines**，Python 为 **pull_reserved_rpc_declines**，
+Rust 为 **pull_reserved_rpc_declines()**。满载拒绝和未知名称不会增加此计数。
+计数从不重置，关闭后仍可读取，监听模式 Worker 返回零。日志配置请参阅各 SDK 的 README。
+
 ## 缩容到零
 
 Worker 可能缩容到零时，配置 [Worker 唤醒 hook](/production/server-operations#worker-wake-hook)。

@@ -221,6 +221,23 @@ class AsyncWorker:
             raise RuntimeError("wait_pull_registered requires a pull Worker")
         await self._pull.registration.wait_async(timeout)
 
+    @property
+    def pull_reserved_rpc_declines(self) -> int:
+        """Return cumulative Step declines caused by reserved RPC capacity.
+
+        Full-capacity rejections and unknown names are excluded. The count never
+        resets during this Worker's lifetime and stays available after stop.
+        Reading it alongside handlers is safe. Listening Workers return zero.
+        Export this value to a monitoring counter to identify reserve pressure.
+
+        Returns:
+            The cumulative reserve-decline count, or zero for a listening Worker.
+
+        Examples:
+            >>> declines = worker.pull_reserved_rpc_declines
+        """
+        return 0 if self._pull is None else self._pull.reserved_rpc_declines
+
     def pull_registration_state(self) -> PullRegistrationState:
         """Return an immutable snapshot of pull queue registrations.
 

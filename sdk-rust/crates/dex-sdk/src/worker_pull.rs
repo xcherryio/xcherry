@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -61,9 +61,12 @@ pub(crate) struct PullWorker {
     flow_types: Vec<String>,
     queues: Vec<String>,
     max_concurrent_tasks: usize,
+    reserved_rpc_tasks: usize,
+    reserved_rpc_declines: Arc<AtomicU64>,
     idle_streams_per_queue: usize,
     stop_drain_timeout: Duration,
     pub(crate) registration: Arc<PullRegistration>,
+    should_warn_rpc_capacity: bool,
     stop_on_permanent_stream_rejection: bool,
 }
 
@@ -89,6 +92,8 @@ struct PullShared {
     state: Mutex<PullState>,
     notify: Notify,
     max_concurrent_tasks: usize,
+    reserved_rpc_tasks: usize,
+    reserved_rpc_declines: Arc<AtomicU64>,
     idle_streams_per_queue: usize,
 }
 
@@ -135,6 +140,14 @@ impl PullWorker {
                     ),
                 })?,
         };
+        let reserved_rpc_tasks = options
+            .reserved_rpc_tasks
+            .unwrap_or(usize::from(max_concurrent_tasks >= 2));
+        if reserved_rpc_tasks >= max_concurrent_tasks {
+            return Err(invalid(
+                "reserved_rpc_tasks must be less than max_concurrent_tasks",
+            ));
+        }
         let idle_streams_per_queue = options.idle_streams_per_queue.unwrap_or(1);
         let stop_drain_timeout = options
             .stop_drain_timeout
@@ -171,12 +184,25 @@ impl PullWorker {
             stop_on_permanent_stream_rejection: options.stop_on_permanent_stream_rejection,
             queues,
             max_concurrent_tasks,
+            reserved_rpc_tasks,
+            reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
+            should_warn_rpc_capacity: options.reserved_rpc_tasks.is_none()
+                && max_concurrent_tasks == 1,
             idle_streams_per_queue,
             stop_drain_timeout,
         })
     }
 
+    pub(crate) fn reserved_rpc_declines(&self) -> u64 {
+        self.reserved_rpc_declines.load(Ordering::Relaxed)
+    }
+
     pub(crate) async fn run(&self, mut shutdown: watch::Receiver<bool>) -> SdkResult<()> {
+        if self.should_warn_rpc_capacity {
+            tracing::warn!(
+                "RPCs may wait behind long-running Steps; use max_concurrent_tasks >= 2 or set reserved_rpc_tasks explicitly"
+            );
+        }
         let shared = Arc::new(PullShared {
             registration: Arc::clone(&self.registration),
             state: Mutex::new(PullState {
@@ -188,6 +214,8 @@ impl PullWorker {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: self.max_concurrent_tasks,
+            reserved_rpc_tasks: self.reserved_rpc_tasks,
+            reserved_rpc_declines: Arc::clone(&self.reserved_rpc_declines),
             idle_streams_per_queue: self.idle_streams_per_queue,
         });
         let (stop, stop_receiver) = watch::channel(StopSignal {
@@ -496,8 +524,10 @@ impl PullStream {
                             }
                             match response.frame {
                                 Some(ResponseFrame::Task(task)) => {
-                                    let rejection = supports_unknown_name_rejection.then(|| self.dispatcher.unknown_task_reason(&task)).flatten().or_else(|| {
-                                        (active.is_some() || is_draining || !self.shared.try_accept(self.stream_id))
+                                    let unknown_reason = self.dispatcher.unknown_task_reason(&task);
+                                    let rejection = unknown_reason.filter(|_| supports_unknown_name_rejection).or_else(|| {
+                                        let reserve_task = if unknown_reason.is_none() { Some(&task) } else { None };
+                                        (active.is_some() || is_draining || !self.shared.try_accept(self.stream_id, reserve_task))
                                             .then_some(PollWorkerTaskRejectReason::NoCapacity)
                                     });
                                     if let Some(reason) = rejection {
@@ -603,16 +633,32 @@ impl PullStream {
 }
 
 impl PullShared {
-    fn try_accept(&self, stream_id: u64) -> bool {
+    fn try_accept(&self, stream_id: u64, task: Option<&PollWorkerTask>) -> bool {
         let mut state = self.state.lock().expect("pull state lock");
         if state.is_stopping || state.busy_tasks >= self.max_concurrent_tasks {
             return false;
         }
+        let busy_tasks = state.busy_tasks;
         let Some(slot) = state.streams.get_mut(&stream_id) else {
             return false;
         };
         if slot.is_busy || slot.is_retiring || slot.is_draining {
             return false;
+        }
+        if self.reserved_rpc_tasks > 0
+            && busy_tasks >= self.max_concurrent_tasks - self.reserved_rpc_tasks
+            && let Some(task) = task
+        {
+            let flow_type = match &task.request {
+                Some(TaskRequest::WaitFor(request)) => Some(&request.flow_type),
+                Some(TaskRequest::Execute(request)) => Some(&request.flow_type),
+                _ => None,
+            };
+            if let Some(flow_type) = flow_type {
+                self.reserved_rpc_declines.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(%flow_type, "decline Step task for reserved RPC capacity");
+                return false;
+            }
         }
         slot.is_busy = true;
         state.busy_tasks += 1;
@@ -980,6 +1026,24 @@ mod tests {
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response};
+
+    struct ReserveCapacityFlow;
+
+    impl Flow for ReserveCapacityFlow {
+        type StartInput = ();
+        fn steps(&self) -> crate::StepList<'_, ()> {
+            crate::StepList::start(&ReserveCapacityStep)
+        }
+    }
+
+    struct ReserveCapacityStep;
+
+    impl crate::Step for ReserveCapacityStep {
+        type Input = ();
+        fn execute(&self, _: &mut Context, _: ()) -> HandlerResult<crate::StepDecision> {
+            Ok(crate::StepDecision::graceful_complete(()))
+        }
+    }
 
     #[derive(Clone)]
     struct RegistrationService {
@@ -1441,6 +1505,16 @@ mod tests {
             .expect("register Flow");
         for options in [
             WorkerOptions::new().pull(PullWorkerOptions::new().max_concurrent_tasks(0)),
+            WorkerOptions::new().pull(
+                PullWorkerOptions::new()
+                    .max_concurrent_tasks(2)
+                    .reserved_rpc_tasks(2),
+            ),
+            WorkerOptions::new().pull(
+                PullWorkerOptions::new()
+                    .max_concurrent_tasks(2)
+                    .reserved_rpc_tasks(3),
+            ),
             WorkerOptions::new().pull(PullWorkerOptions::new().idle_streams_per_queue(0)),
             WorkerOptions::new().pull(PullWorkerOptions::new().stop_drain_timeout(Duration::ZERO)),
             WorkerOptions::new().pull(PullWorkerOptions::new().app_worker_id("bad/id")),
@@ -1469,6 +1543,53 @@ mod tests {
         assert!(WorkerTarget::pull().headless(true).validate().is_err());
     }
 
+    struct ReserveWarningSubscriber(Arc<AtomicU64>);
+
+    impl tracing::Subscriber for ReserveWarningSubscriber {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn defaults_reserve_one_and_warns_for_single_capacity() {
+        let warnings = Arc::new(AtomicU64::new(0));
+        let _subscriber =
+            tracing::subscriber::set_default(ReserveWarningSubscriber(Arc::clone(&warnings)));
+        for capacity in [1, 4] {
+            let channel = outbound_task_channel(Endpoint::from_static("http://127.0.0.1:1"), None);
+            let (cache, _directory) = test_cache();
+            let dispatcher = WorkerDispatcher::new(
+                Registry::new(),
+                ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+                crate::server_protocol::NegotiatedServerProtocolVersion::default(),
+            );
+            let worker = PullWorker::new(
+                &PullWorkerOptions::new().max_concurrent_tasks(capacity),
+                &dispatcher,
+                channel,
+            )
+            .expect("Worker");
+            assert_eq!(usize::from(capacity >= 2), worker.reserved_rpc_tasks);
+            assert_eq!(0, worker.reserved_rpc_declines());
+            let (_stop, shutdown) = watch::channel(true);
+            worker.run(shutdown).await.expect("stop Worker");
+        }
+        assert_eq!(1, warnings.load(Ordering::Relaxed));
+    }
+
     #[test]
     fn generates_distinct_valid_app_worker_ids() {
         let first = generate_app_worker_id();
@@ -1486,6 +1607,104 @@ mod tests {
         assert!(validate_app_worker_id("").is_err());
         assert!(validate_app_worker_id(&"a".repeat(64)).is_err());
         assert!(validate_app_worker_id("has space").is_err());
+    }
+
+    fn reserved_rpc_shared(reserved_rpc_tasks: usize) -> PullShared {
+        PullShared {
+            registration: Arc::default(),
+            state: Mutex::new(PullState {
+                streams: (1..=20)
+                    .map(|stream_id| {
+                        (
+                            stream_id,
+                            StreamSlot {
+                                queue: "queue".to_string(),
+                                is_busy: false,
+                                is_registered: true,
+                                is_retiring: false,
+                                is_draining: false,
+                                retirement: Arc::new(Notify::new()),
+                            },
+                        )
+                    })
+                    .collect(),
+                busy_tasks: 0,
+                next_stream_id: 21,
+                is_stopping: false,
+                logged_unsupported: false,
+            }),
+            notify: Notify::new(),
+            max_concurrent_tasks: 2,
+            reserved_rpc_tasks,
+            reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
+            idle_streams_per_queue: 1,
+        }
+    }
+
+    #[test]
+    fn reserves_rpc_capacity_across_all_busy_handlers() {
+        let step = PollWorkerTask {
+            request: Some(TaskRequest::Execute(Default::default())),
+            ..Default::default()
+        };
+        let wait_for = PollWorkerTask {
+            request: Some(TaskRequest::WaitFor(Default::default())),
+            ..Default::default()
+        };
+        let rpc = PollWorkerTask {
+            request: Some(TaskRequest::Rpc(Default::default())),
+            ..Default::default()
+        };
+        for reserve in [0, 1] {
+            for first in [&step, &wait_for, &rpc] {
+                let shared = reserved_rpc_shared(reserve);
+                assert!(shared.try_accept(1, Some(first)));
+                if reserve == 1 {
+                    assert!(!shared.try_accept(2, Some(&step)));
+                    assert!(!shared.try_accept(2, Some(&wait_for)));
+                    assert!(shared.try_accept(2, Some(&rpc)));
+                } else {
+                    assert!(shared.try_accept(2, Some(&step)));
+                }
+                assert!(!shared.try_accept(3, Some(&step)));
+                assert!(!shared.try_accept(3, Some(&rpc)));
+                let state = shared.state.lock().expect("state lock");
+                assert_eq!(2, state.busy_tasks);
+                assert_eq!(
+                    if reserve == 1 { 2 } else { 0 },
+                    shared.reserved_rpc_declines.load(Ordering::Relaxed)
+                );
+                assert!(!state.streams[&3].is_retiring);
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_step_admission_preserves_rpc_reserve() {
+        let shared = Arc::new(reserved_rpc_shared(1));
+        let barrier = Arc::new(std::sync::Barrier::new(20));
+        let contenders: Vec<_> = (1..=20)
+            .map(|stream_id| {
+                let shared = Arc::clone(&shared);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let task = PollWorkerTask {
+                        request: Some(TaskRequest::Execute(Default::default())),
+                        ..Default::default()
+                    };
+                    barrier.wait();
+                    shared.try_accept(stream_id, Some(&task))
+                })
+            })
+            .collect();
+        assert_eq!(
+            1,
+            contenders
+                .into_iter()
+                .map(|contender| usize::from(contender.join().expect("admission thread")))
+                .sum::<usize>()
+        );
+        assert_eq!(1, shared.state.lock().expect("state lock").busy_tasks);
     }
 
     #[test]
@@ -1524,13 +1743,15 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            reserved_rpc_tasks: 0,
+            reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
             idle_streams_per_queue: 1,
         };
-        assert!(shared.try_accept(1));
-        assert!(!shared.try_accept(2));
+        assert!(shared.try_accept(1, None));
+        assert!(!shared.try_accept(2, None));
         assert_eq!(PollWorkerTaskRejectReason::NoCapacity as i32, 1);
         shared.release(1);
-        assert!(shared.try_accept(2));
+        assert!(shared.try_accept(2, None));
     }
 
     #[test]
@@ -1569,13 +1790,15 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            reserved_rpc_tasks: 0,
+            reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
             idle_streams_per_queue: 1,
         };
         shared.mark_draining(2);
         assert!(!shared.release(1));
         assert!(!shared.is_retiring(1));
-        assert!(shared.try_accept(1));
-        assert!(!shared.try_accept(2));
+        assert!(shared.try_accept(1, None));
+        assert!(!shared.try_accept(2, None));
     }
 
     #[test]
@@ -1860,7 +2083,13 @@ mod tests {
                     frame: Some(ResponseFrame::Task(PollWorkerTask {
                         task_id: "assigned-1".to_string(),
                         deadline: None,
-                        request: None,
+                        request: Some(TaskRequest::Execute(
+                            dex_protocol::dex::InvokeExecuteMethodRequest {
+                                flow_type: "ReserveCapacityFlow".to_string(),
+                                step_type: "ReserveCapacityStep".to_string(),
+                                ..Default::default()
+                            },
+                        )),
                     })),
                 };
                 if sender.send(Ok(assigned)).await.is_err() {
@@ -1884,84 +2113,97 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sends_no_capacity_reject_frame() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind fake task service");
-        let address = listener.local_addr().expect("fake service address");
-        let (rejected, mut rejected_frames) = mpsc::channel(1);
-        let (server_stop, mut server_shutdown) = watch::channel(false);
-        let server = tokio::spawn(
-            Server::builder()
-                .add_service(WorkerTaskServiceServer::new(RejectService { rejected }))
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-                    while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok() {}
+        for reserve in [0, 1] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind fake task service");
+            let address = listener.local_addr().expect("fake service address");
+            let (rejected, mut rejected_frames) = mpsc::channel(1);
+            let (server_stop, mut server_shutdown) = watch::channel(false);
+            let server = tokio::spawn(
+                Server::builder()
+                    .add_service(WorkerTaskServiceServer::new(RejectService { rejected }))
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                        while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok()
+                        {
+                        }
+                    }),
+            );
+            let channel = Endpoint::from_shared(format!("http://{address}"))
+                .expect("endpoint")
+                .connect_lazy();
+            let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
+            let (cache, _directory) = test_cache();
+            let dispatcher = WorkerDispatcher::new(
+                Registry::new()
+                    .register(ReserveCapacityFlow)
+                    .expect("register Flow"),
+                ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+                crate::server_protocol::NegotiatedServerProtocolVersion::default(),
+            );
+            let shared = Arc::new(PullShared {
+                registration: Arc::default(),
+                state: Mutex::new(PullState {
+                    streams: HashMap::from([(
+                        1,
+                        StreamSlot {
+                            queue: "worker-1".to_string(),
+                            is_busy: false,
+                            is_registered: false,
+                            is_retiring: false,
+                            is_draining: false,
+                            retirement: Arc::new(Notify::new()),
+                        },
+                    )]),
+                    busy_tasks: 1,
+                    next_stream_id: 2,
+                    is_stopping: false,
+                    logged_unsupported: false,
                 }),
-        );
-        let channel = Endpoint::from_shared(format!("http://{address}"))
-            .expect("endpoint")
-            .connect_lazy();
-        let channel = CredentialChannel::new(channel, CredentialInterceptor::new(None));
-        let (cache, _directory) = test_cache();
-        let dispatcher = WorkerDispatcher::new(
-            Registry::new(),
-            ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
-            crate::server_protocol::NegotiatedServerProtocolVersion::default(),
-        );
-        let shared = Arc::new(PullShared {
-            registration: Arc::default(),
-            state: Mutex::new(PullState {
-                streams: HashMap::from([(
-                    1,
-                    StreamSlot {
-                        queue: "worker-1".to_string(),
-                        is_busy: false,
-                        is_registered: false,
-                        is_retiring: false,
-                        is_draining: false,
-                        retirement: Arc::new(Notify::new()),
-                    },
-                )]),
-                busy_tasks: 1,
-                next_stream_id: 2,
-                is_stopping: false,
-                logged_unsupported: false,
-            }),
-            notify: Notify::new(),
-            max_concurrent_tasks: 1,
-            idle_streams_per_queue: 1,
-        });
-        let (_stop, stop_receiver) = watch::channel(StopSignal {
-            phase: 0,
-            deadline: None,
-        });
-        let mut stream = PullStream {
-            client: WorkerTaskServiceClient::new(channel),
-            dispatcher,
-            app_worker_id: "worker-1".to_string(),
-            flow_types: Vec::new(),
-            queue: "worker-1".to_string(),
-            stream_id: 1,
-            shared,
-            stop: stop_receiver,
-            stop_drain_timeout: Duration::from_secs(30),
-            is_registered: false,
-            has_recorded_result: false,
-            retirement: Arc::new(Notify::new()),
-        };
-        let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
-            .await
-            .expect("poll returned");
-        assert!(was_registered);
-        result.expect("poll result");
-        let reject = rejected_frames.recv().await.expect("Reject frame");
-        assert_eq!("assigned-1", reject.task_id);
-        assert_eq!(PollWorkerTaskRejectReason::NoCapacity as i32, reject.reason);
-        server_stop.send_replace(true);
-        timeout(Duration::from_secs(5), server)
-            .await
-            .expect("fake server stopped")
-            .expect("join server")
-            .expect("server result");
+                notify: Notify::new(),
+                max_concurrent_tasks: 1 + reserve,
+                reserved_rpc_tasks: reserve,
+                reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
+                idle_streams_per_queue: 1,
+            });
+            let (_stop, stop_receiver) = watch::channel(StopSignal {
+                phase: 0,
+                deadline: None,
+            });
+            let mut stream = PullStream {
+                client: WorkerTaskServiceClient::new(channel),
+                dispatcher,
+                app_worker_id: "worker-1".to_string(),
+                flow_types: Vec::new(),
+                queue: "worker-1".to_string(),
+                stream_id: 1,
+                shared,
+                stop: stop_receiver,
+                stop_drain_timeout: Duration::from_secs(30),
+                is_registered: false,
+                has_recorded_result: false,
+                retirement: Arc::new(Notify::new()),
+            };
+            let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
+                .await
+                .expect("poll returned");
+            assert!(was_registered);
+            result.expect("poll result");
+            let reject = rejected_frames.recv().await.expect("Reject frame");
+            assert_eq!("assigned-1", reject.task_id);
+            assert_eq!(PollWorkerTaskRejectReason::NoCapacity as i32, reject.reason);
+            assert_eq!(
+                reserve as u64,
+                stream.shared.reserved_rpc_declines.load(Ordering::Relaxed)
+            );
+            assert!(!stream.shared.state.lock().expect("state lock").streams[&1].is_retiring);
+            server_stop.send_replace(true);
+            timeout(Duration::from_secs(5), server)
+                .await
+                .expect("fake server stopped")
+                .expect("join server")
+                .expect("server result");
+        }
     }
 
     #[derive(Clone)]
@@ -2131,6 +2373,8 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            reserved_rpc_tasks: 0,
+            reserved_rpc_declines: Arc::new(AtomicU64::new(0)),
             idle_streams_per_queue: 1,
         });
         let (_stop, stop_receiver) = watch::channel(StopSignal {
@@ -2364,6 +2608,7 @@ mod tests {
                 &PullWorkerOptions::new()
                     .app_worker_id("burst-worker")
                     .max_concurrent_tasks(3)
+                    .reserved_rpc_tasks(0)
                     .idle_streams_per_queue(idle_streams),
                 &dispatcher,
                 channel,

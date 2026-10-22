@@ -235,6 +235,9 @@ var (
 )
 
 func TestPublicContractsCompile(t *testing.T) {
+	_ = dex.PullWorkerOptions{MaxConcurrentTasks: 4, ReservedRPCTasks: ptr.Any(0)}
+	var reserveDeclines func(*dex.Worker) uint64 = (*dex.Worker).PullReservedRPCDeclines
+	_ = reserveDeclines
 	registrationState := dex.PullRegistrationState{
 		IsReady: true,
 		Queues:  []dex.PullQueueRegistrationState{{Queue: "OrderFlow", HasRegisteredStream: true, LastPermanentError: nil}},

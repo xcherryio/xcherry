@@ -6,6 +6,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -64,6 +65,23 @@ class PullWorkerOptions:
     Attributes:
         max_concurrent_tasks: Maximum simultaneous handlers. Zero uses the CPU
             count. Negative values are invalid.
+        reserved_rpc_tasks: Capacity reserved to protect synchronous RPC latency
+            from long-running Steps. None reserves one slot when resolved capacity is
+            at least two, otherwise zero. With the CPU-count default, Steps get one
+            fewer slot than before. Set zero to opt out. With one slot and None,
+            start logs one warning that RPCs may wait behind Steps. Flows must stay
+            responsive; Dex cannot prioritize synchronous RPCs like workflow
+            engines prioritize reads.
+            WaitFor and Execute tasks, including local attempts, are declined when total busy handlers reach
+            max_concurrent_tasks minus this reserve. API-direct and transactional RPCs
+            can use the full limit.
+            Must be nonnegative and less than the task limit after its CPU-count
+            default is resolved. Declines reassign without consuming an attempt.
+            If all Workers remain at the Step limit through the dispatch wait,
+            NO_WORKER_AVAILABLE consumes an attempt and follows the Step retry
+            policy. Local attempts wait the local dispatch wait, then fall back
+            according to their policy. Declines emit a Flow-type debug log,
+            increment pull_reserved_rpc_declines, and preserve readiness.
         idle_streams_per_queue: Idle streams for the sticky queue and each Flow
             type queue. Zero uses one. Negative values are invalid.
         app_worker_id: Unique process identity for sticky routing. Empty generates
@@ -83,10 +101,11 @@ class PullWorkerOptions:
             retries indefinitely. Applies before and after initial readiness.
 
     Raises:
-        ValueError: If a numeric option is negative or app_worker_id is invalid.
+        ValueError: If a numeric option is negative, the reserve reaches the task
+            limit, or app_worker_id is invalid.
 
     Examples:
-        >>> pull = PullWorkerOptions(max_concurrent_tasks=8)
+        >>> pull = PullWorkerOptions(max_concurrent_tasks=8, reserved_rpc_tasks=2)
         >>> worker = Worker(registry, cache, WorkerOptions(pull=pull))
         >>> worker.worker_target == WorkerTarget(pull=True)
         True
@@ -97,10 +116,18 @@ class PullWorkerOptions:
     app_worker_id: str = ""
     stop_drain_timeout: timedelta = timedelta(0)
     stop_on_permanent_stream_rejection: bool = False
+    reserved_rpc_tasks: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_concurrent_tasks < 0:
             raise ValueError("max_concurrent_tasks must not be negative")
+        task_limit = self.max_concurrent_tasks or os.cpu_count() or 1
+        if self.reserved_rpc_tasks is not None and (
+            self.reserved_rpc_tasks < 0 or self.reserved_rpc_tasks >= task_limit
+        ):
+            raise ValueError(
+                "reserved_rpc_tasks must be nonnegative and less than max_concurrent_tasks"
+            )
         if self.idle_streams_per_queue < 0:
             raise ValueError("idle_streams_per_queue must not be negative")
         if self.stop_drain_timeout < timedelta(0):

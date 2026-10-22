@@ -250,6 +250,41 @@ remaining drain deadline. A handler that ignores cancellation can delay shutdown
 `StepOptions.waitForMethodTimeoutMs` and `executeMethodTimeoutMs` bound the two
 handler calls. Timer and channel conditions determine how long a Step waits.
 
+#### Reserved RPC capacity
+
+Set `reservedRpcTasks` when synchronous RPC latency must stay responsive behind
+long-running Steps. When unset, it reserves one slot if the resolved task limit
+is at least two, otherwise zero. With the CPU-count default, Steps get one fewer
+slot than before. Set it explicitly to zero to opt out. With one slot and no
+explicit reserve, Worker start logs one warning: RPCs may wait behind
+long-running Steps; use a limit of at least two or set the reserve explicitly.
+Flows must stay responsive; Dex cannot prioritize synchronous RPCs like workflow
+engines prioritize reads. The value must be nonnegative and less than
+`maxConcurrentTasks` after its CPU-count default is resolved; invalid values
+fail construction. RPC and Step handlers count together: WaitFor and Execute
+tasks, including local attempts, are declined with `NO_CAPACITY` when the busy
+count reaches the task limit minus the reserve. API-direct and transactional
+InvokeWorkerRPC tasks can use the full limit.
+
+```ts
+const pull: PullWorkerOptions = { maxConcurrentTasks: 8, reservedRpcTasks: 2 };
+```
+
+A decline lets Dex try another Worker without consuming an attempt. If all
+Workers remain at their Step limit, a Step can wait until the dispatch wait
+expires, then receive `NO_WORKER_AVAILABLE`, consume an attempt, and follow its
+retry policy, as when all Workers are full. Local attempts wait the local
+dispatch wait, then fall back according to their policy. Each queue still keeps
+its configured idle streams; a reserve decline does not close a stream or change
+registration readiness.
+
+Each reserve decline records the Flow type through node:util debuglog under
+dex:pull (enable with NODE_DEBUG=dex:pull). Export the cumulative
+`pullReservedRpcDeclines` Worker value to distinguish reserve pressure from
+full-capacity rejections. The count excludes full-capacity rejections and
+unknown names, never resets, and remains available after shutdown. Listening
+Workers return zero.
+
 ### Canceling Step executions
 
 A successful Step can cancel queued or active executions while continuing with

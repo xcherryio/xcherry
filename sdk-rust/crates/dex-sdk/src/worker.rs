@@ -330,6 +330,23 @@ impl Worker {
         pull.registration.wait().await
     }
 
+    /// Returns cumulative Step declines caused by reserved RPC capacity for this Worker.
+    ///
+    /// Full-capacity rejections and unknown names are excluded. The count never resets and
+    /// remains available after stop. Concurrent reads are safe. Listening Workers return zero.
+    /// Export the count to a monitoring counter to identify reserve pressure.
+    ///
+    /// ```no_run
+    /// # fn inspect(worker: &dex_sdk::Worker) {
+    /// let declines: u64 = worker.pull_reserved_rpc_declines();
+    /// # }
+    /// ```
+    pub fn pull_reserved_rpc_declines(&self) -> u64 {
+        self.pull
+            .as_ref()
+            .map_or(0, |pull| pull.reserved_rpc_declines())
+    }
+
     /// Returns an independent snapshot of current pull queue registrations.
     ///
     /// Readiness latches after every queue registers once. Only a permanent rejection with no

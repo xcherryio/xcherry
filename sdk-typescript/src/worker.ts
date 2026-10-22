@@ -211,6 +211,21 @@ export class Worker {
   }
 
   /**
+   * Cumulative Step declines caused by reserved RPC capacity during this Worker's lifetime.
+   * Excludes full-capacity rejections and unknown names. The count never resets and
+   * remains available after close. Listening Workers return zero. Reading during
+   * handler execution is safe. Export the value to a monitoring counter.
+   * @returns The cumulative reserve-decline count, or zero for a listening Worker.
+   * @example
+   * ```ts
+   * const declines = worker.pullReservedRpcDeclines;
+   * ```
+   */
+  public get pullReservedRpcDeclines(): number {
+    return this.pullWorker?.reservedRpcDeclines ?? 0;
+  }
+
+  /**
    * Returns an independent snapshot of pull queue registrations.
    * Readiness latches after every queue registers once. Only a permanent rejection with no
    * registered stream makes it false; re-registration clears the queue error. Stop preserves readiness.

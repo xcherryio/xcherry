@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import { debuglog } from "node:util";
 import { randomBytes } from "node:crypto";
 import { availableParallelism, hostname } from "node:os";
 
@@ -36,6 +37,8 @@ import type { PullWorkerOptions } from "./options.js";
 import { PullRegistration } from "./pull-registration.js";
 import { sdkVersion } from "./sdk-version.generated.js";
 import { WorkerDispatcher } from "./worker-dispatcher.js";
+
+const debug = debuglog("dex:pull");
 
 interface ActiveTask {
   readonly id: string;
@@ -72,6 +75,9 @@ export class PullWorker {
   private readonly flowTypes: readonly string[];
   private readonly registeredFlows: ReadonlyMap<string, RegisteredFlow>;
   private readonly maxConcurrentTasks: number;
+  private readonly reservedRpcTasks: number;
+  private reservedRpcDeclineCount = 0;
+  private hasWarnedRpcCapacity = false;
   private readonly idleStreamsPerQueue: number;
   private readonly stopDrainTimeoutMs: number;
   private readonly streams = new Set<PollStream>();
@@ -90,6 +96,10 @@ export class PullWorker {
     private readonly onPermanentRejection: () => void = () => {},
   ) {
     this.maxConcurrentTasks = positiveOption(options.maxConcurrentTasks, availableParallelism(), "maxConcurrentTasks");
+    this.reservedRpcTasks = options.reservedRpcTasks ?? (this.maxConcurrentTasks >= 2 ? 1 : 0);
+    if (!Number.isInteger(this.reservedRpcTasks) || this.reservedRpcTasks < 0 || this.reservedRpcTasks >= this.maxConcurrentTasks) {
+      throw new RangeError("reservedRpcTasks must be a nonnegative integer less than maxConcurrentTasks");
+    }
     this.idleStreamsPerQueue = positiveOption(options.idleStreamsPerQueue, 1, "idleStreamsPerQueue");
     this.stopDrainTimeoutMs = options.stopDrainTimeoutMs === undefined || options.stopDrainTimeoutMs === 0
       ? 30_000 : options.stopDrainTimeoutMs;
@@ -113,7 +123,15 @@ export class PullWorker {
     this.client = createWorkerTaskClient(serverAddress, credential);
   }
 
+  public get reservedRpcDeclines(): number {
+    return this.reservedRpcDeclineCount;
+  }
+
   public start(): void {
+    if (this.maxConcurrentTasks === 1 && this.options.reservedRpcTasks === undefined && !this.hasWarnedRpcCapacity) {
+      this.hasWarnedRpcCapacity = true;
+      console.warn("RPCs may wait behind long-running Steps; use maxConcurrentTasks >= 2 or set reservedRpcTasks explicitly");
+    }
     this.reconcile();
   }
 
@@ -277,12 +295,19 @@ export class PullWorker {
   }
 
   private startTask(poll: PollStream, task: PollWorkerTask): void {
-    const unknownReason = poll.supportsUnknownNameRejection ? this.unknownTaskReason(task) : undefined;
-    if (unknownReason !== undefined) {
+    const unknownReason = this.unknownTaskReason(task);
+    if (poll.supportsUnknownNameRejection && unknownReason !== undefined) {
       this.rejectTask(poll, task.taskId, unknownReason);
       return;
     }
     if (poll.task !== undefined || poll.isDraining || this.isStopping || this.busyTaskCount >= this.maxConcurrentTasks) {
+      this.rejectTask(poll, task.taskId, PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
+      return;
+    }
+    const isStepTask = task.request?.$case === "waitFor" || task.request?.$case === "execute";
+    if (isStepTask && this.reservedRpcTasks > 0 && this.busyTaskCount >= this.maxConcurrentTasks - this.reservedRpcTasks && unknownReason === undefined) {
+      this.reservedRpcDeclineCount++;
+      debug("decline Step task for reserved RPC capacity: %s", task.request?.value.flowType);
       this.rejectTask(poll, task.taskId, PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
       return;
     }

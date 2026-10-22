@@ -94,6 +94,15 @@ class PullWorkerRuntime:
         self._permanent_error: PullRegistrationError | None = None
         self._rejection_stop_task: asyncio.Task[None] | None = None
         self.max_concurrent_tasks = options.max_concurrent_tasks or os.cpu_count() or 1
+        self.reserved_rpc_tasks = (
+            options.reserved_rpc_tasks
+            if options.reserved_rpc_tasks is not None
+            else int(self.max_concurrent_tasks >= 2)
+        )
+        self._should_warn_rpc_capacity = (
+            options.reserved_rpc_tasks is None and self.max_concurrent_tasks == 1
+        )
+        self.reserved_rpc_declines = 0
         self.idle_streams_per_queue = options.idle_streams_per_queue or 1
         self.stop_drain_timeout = options.stop_drain_timeout.total_seconds() or 30
         self._dispatcher = dispatcher
@@ -132,6 +141,10 @@ class PullWorkerRuntime:
         return None
 
     async def run(self) -> None:
+        if self._should_warn_rpc_capacity:
+            _LOGGER.warning(
+                "RPCs may wait behind long-running Steps; use max_concurrent_tasks >= 2 or set reserved_rpc_tasks explicitly"
+            )
         self._loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
         self._wake = asyncio.Event()
@@ -193,10 +206,23 @@ class PullWorkerRuntime:
                 _LOGGER.error("Worker task stream failed", exc_info=failure)
         self.signal()
 
-    def accept_task(self) -> bool:
+    def accept_task(self, task: pb.PollWorkerTask | None = None) -> bool:
         if self._stopping is None or self._stopping.is_set():
             return False
         if self._busy_tasks >= self.max_concurrent_tasks:
+            return False
+        if (
+            task is not None
+            and task.WhichOneof("request") in ("wait_for", "execute")
+            and self.reserved_rpc_tasks > 0
+            and self._busy_tasks >= self.max_concurrent_tasks - self.reserved_rpc_tasks
+            and self.unknown_task_reason(task) is None
+        ):
+            self.reserved_rpc_declines += 1
+            request = task.wait_for if task.HasField("wait_for") else task.execute
+            _LOGGER.debug(
+                "decline Step task for reserved RPC capacity: %s", request.flow_type
+            )
             return False
         self._busy_tasks += 1
         self.signal()
@@ -524,7 +550,7 @@ class PullStream:
         if unknown_reason is not None:
             await self._reject_task(task, unknown_reason)
             return
-        if self.is_busy or self.is_draining or not self.runtime.accept_task():
+        if self.is_busy or self.is_draining or not self.runtime.accept_task(task):
             await self._reject_task(task)
             return
         self.is_busy = True
