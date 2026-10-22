@@ -58,6 +58,7 @@ interface PollStream {
   isDisconnected: boolean;
   isHalfClosed: boolean;
   isDraining: boolean;
+  isRetiring: boolean;
   isReconnectRequested: boolean;
   backoffMs: number;
   failure: ServiceError | undefined;
@@ -161,6 +162,14 @@ export class PullWorker {
 
   private reconcile(): void {
     if (this.isStopping) return;
+    for (const poll of this.streams) {
+      if (poll.isRegistered && !poll.isDisconnected && poll.task === undefined
+        && !poll.isDraining && this.hasRegisteredIdleReplacements(poll)) {
+        poll.isDraining = true;
+        poll.isRetiring = true;
+        this.halfCloseStream(poll);
+      }
+    }
     for (const queue of this.queues) {
       let idleCount = 0;
       for (const poll of this.streams) {
@@ -170,7 +179,7 @@ export class PullWorker {
         const poll: PollStream = {
           queue, stream: undefined, task: undefined, retryTimer: undefined,
           halfCloseTimer: undefined, halfClosePromise: undefined, resolveHalfClose: undefined,
-          isRegistered: false, hasRecordedResult: false, supportsUnknownNameRejection: false, isDisconnected: false, isHalfClosed: false, isDraining: false,
+          isRegistered: false, hasRecordedResult: false, supportsUnknownNameRejection: false, isDisconnected: false, isHalfClosed: false, isDraining: false, isRetiring: false,
           isReconnectRequested: false,
           backoffMs: 100, failure: undefined,
         };
@@ -230,6 +239,7 @@ export class PullWorker {
         this.registration.registered(poll.queue);
         poll.supportsUnknownNameRejection = frame.value.supportsUnknownNameRejection;
         poll.backoffMs = 100;
+        this.reconcile();
       } else {
         console.error("Worker task stream did not register");
         this.closeStream(poll);
@@ -371,12 +381,23 @@ export class PullWorker {
     poll.task = undefined;
     this.activeTasks.delete(task.completion);
     this.busyTaskCount--;
+    if (!poll.isDisconnected && !poll.isDraining && this.hasRegisteredIdleReplacements(poll)) {
+      poll.isDraining = true;
+      poll.isRetiring = true;
+    }
     if (poll.isDisconnected) {
       if (!this.isStopping) this.scheduleReconnect(poll);
     } else if (this.isStopping || poll.isDraining) {
       this.halfCloseStream(poll);
     }
     this.reconcile();
+  }
+
+  private hasRegisteredIdleReplacements(poll: PollStream): boolean {
+    return [...this.streams].filter((candidate) =>
+      candidate !== poll && candidate.queue === poll.queue && candidate.isRegistered
+      && candidate.task === undefined && !candidate.isDraining && !candidate.isDisconnected
+    ).length >= this.idleStreamsPerQueue;
   }
 
   private sendTaskFrame(poll: PollStream, frame: PollWorkerTaskFrame): void {
@@ -451,7 +472,7 @@ export class PullWorker {
       const idleStreamCount = [...this.streams].filter((candidate) =>
         candidate !== poll && candidate.queue === poll.queue && candidate.task === undefined && !candidate.isDraining
       ).length;
-      if (poll.isReconnectRequested && idleStreamCount >= this.idleStreamsPerQueue) {
+      if (poll.isRetiring || poll.isReconnectRequested && idleStreamCount >= this.idleStreamsPerQueue) {
         this.streams.delete(poll);
       } else {
         this.scheduleReconnect(poll);

@@ -1443,3 +1443,98 @@ async def _transport_creation_failure_preserves_start_error_and_allows_stop() ->
         worker.stop()
     finally:
         worker.close()
+
+
+class BurstStub:
+    def __init__(self) -> None:
+        self.calls: list[QueueCall] = []
+
+    def PollWorkerTask(self) -> QueueCall:
+        call = QueueCall(
+            [pb.PollWorkerTaskResponse(registered=pb.PollWorkerTaskRegistered())]
+        )
+        self.calls.append(call)
+        return call
+
+
+async def reconcile_burst_until(
+    runtime: PullWorkerRuntime, stub: BurstStub, predicate: Callable[[], bool]
+) -> None:
+    async with asyncio.timeout(3):
+        while True:
+            runtime._reconcile(stub)
+            if predicate():
+                return
+            assert runtime._wake is not None
+            await runtime._wake.wait()
+            runtime._wake.clear()
+
+
+@pytest.mark.parametrize("idle_streams", [1, 2])
+def test_surplus_streams_shrink_after_burst(idle_streams: int) -> None:
+    asyncio.run(_surplus_streams_shrink_after_burst(idle_streams))
+
+
+async def _surplus_streams_shrink_after_burst(idle_streams: int) -> None:
+    dispatcher = BlockingDispatcher()
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        dispatcher,
+        PullWorkerOptions(
+            app_worker_id="burst-worker",
+            max_concurrent_tasks=3,
+            idle_streams_per_queue=idle_streams,
+        ),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    runtime._wake = asyncio.Event()
+    stub = BurstStub()
+    busy_calls: list[QueueCall] = []
+    try:
+        await reconcile_burst_until(
+            runtime, stub, lambda: runtime.registration.snapshot().is_ready
+        )
+        for task_number in range(3):
+            stream = next(
+                candidate
+                for candidate in runtime._streams
+                if not candidate.is_busy and candidate._is_registered
+            )
+            call = cast(QueueCall, stream._call)
+            busy_calls.append(call)
+            call.frames.put_nowait(
+                pb.PollWorkerTaskResponse(
+                    task=pb.PollWorkerTask(
+                        task_id=f"burst-{task_number}", rpc=pb.InvokeWorkerRPCRequest()
+                    )
+                )
+            )
+            await reconcile_burst_until(
+                runtime,
+                stub,
+                lambda: runtime._busy_tasks == task_number + 1
+                and sum(
+                    not candidate.is_busy and candidate._is_registered
+                    for candidate in runtime._streams
+                )
+                == runtime.idle_streams_per_queue,
+            )
+        assert len(runtime._streams) == 3 + idle_streams
+        assert all(not call.is_half_closed for call in busy_calls)
+        assert runtime.registration.snapshot().is_ready
+        dispatcher.gate.set()
+        await reconcile_burst_until(
+            runtime,
+            stub,
+            lambda: runtime._busy_tasks == 0 and len(runtime._streams) == idle_streams,
+        )
+        assert runtime.registration.snapshot().is_ready
+        await runtime.registration.wait_async(0)
+        opened_calls = len(stub.calls)
+        runtime._reconcile(stub)
+        assert len(stub.calls) == opened_calls
+    finally:
+        dispatcher.gate.set()
+        await runtime.stop()

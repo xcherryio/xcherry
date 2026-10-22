@@ -300,6 +300,39 @@ final class PullWorkerTest {
     }
 
     @Test
+    void shrinksSurplusStreamsAfterBurstWithoutClosingBusyStreams() throws Exception {
+        for (int idleStreams : new int[] {1, 2}) {
+            final TestFlow flow = new TestFlow();
+            final PollServer pollServer = new PollServer();
+            try (RunningWorker running = new RunningWorker(pollServer, flow, 3,
+                    Duration.ofSeconds(5), false, idleStreams)) {
+                running.worker.waitPullRegistered(Duration.ofSeconds(5));
+                final java.util.List<PollStream> busyStreams = new java.util.ArrayList<PollStream>();
+                for (int taskNumber = 0; taskNumber < 3; taskNumber++) {
+                    final PollStream stream = pollServer.awaitQueue("PullTestFlow");
+                    busyStreams.add(stream);
+                    stream.assign(executeTask("burst-" + taskNumber, "block"));
+                }
+                assertEquals(3 + 2 * idleStreams, running.awaitStableStreamCount());
+                assertEquals(3, flow.executeCalls.get());
+                for (PollStream stream : busyStreams) {
+                    assertEquals(1L, stream.closed.getCount());
+                }
+                assertTrue(running.worker.getPullRegistrationState().isReady());
+                flow.release.countDown();
+                for (PollStream stream : busyStreams) {
+                    assertTrue(stream.awaitFrame().hasTaskFrame());
+                }
+                assertEquals(2 * idleStreams, running.awaitStableStreamCount());
+                assertEquals(idleStreams, running.idleStreamCount("PullTestFlow"));
+                assertTrue(running.worker.getPullRegistrationState().isReady());
+                running.worker.waitPullRegistered(Duration.ZERO);
+                assertEquals(2 * idleStreams, running.awaitStableStreamCount());
+            }
+        }
+    }
+
+    @Test
     void rejectsAtCapacityAndDrainsLargeFinalFrameOnReconnectAndStop() throws Exception {
         final TestFlow flow = new TestFlow();
         final PollServer pollServer = new PollServer();
@@ -361,9 +394,12 @@ final class PullWorkerTest {
     @Test
     void reusesStreamAfterFinalResult() throws Exception {
         final TestFlow flow = new TestFlow();
-        final PollServer pollServer = new PollServer();
+        final PollServer pollServer = new PollServer(null, false, Duration.ZERO,
+                Collections.<Boolean>emptyList(), true);
         try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
             final PollStream stream = pollServer.awaitQueue("PullTestFlow");
+            stream.respond(PollWorkerTaskResponse.newBuilder().setRegistered(
+                    io.superdurable.gen.PollWorkerTaskRegistered.getDefaultInstance()).build());
             stream.assign(executeTask("one", "one"));
             assertEquals("one", stream.awaitFrame().getTaskFrame().getTaskId());
             stream.assign(executeTask("two", "two"));
@@ -380,14 +416,12 @@ final class PullWorkerTest {
         final PollServer pollServer = new PollServer(Boolean.FALSE, Boolean.TRUE, Boolean.FALSE);
         try (RunningWorker running = new RunningWorker(pollServer, flow, 1)) {
             final PollStream legacy = pollServer.awaitQueue("PullTestFlow");
-            assertLegacyUnknownTask(legacy, unknownStepTask("legacy-step"));
-            assertLegacyUnknownTask(legacy, unknownRPCTask("legacy-rpc"));
             legacy.respond(PollWorkerTaskResponse.newBuilder()
                     .setPing(io.superdurable.gen.PollWorkerTaskPing.getDefaultInstance()).build());
             assertTrue(legacy.awaitFrame().hasPong());
 
-            legacy.respond(PollWorkerTaskResponse.newBuilder()
-                    .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
+            assertLegacyUnknownTask(legacy, unknownStepTask("legacy-step"));
+            assertTrue(legacy.closed.await(5, TimeUnit.SECONDS));
             final PollStream capable = pollServer.awaitQueue("PullTestFlow");
             assertUnknownTaskRejected(capable, unknownStepTask("capable-step"),
                     io.superdurable.gen.PollWorkerTaskRejectReason
@@ -399,7 +433,7 @@ final class PullWorkerTest {
             capable.respond(PollWorkerTaskResponse.newBuilder()
                     .setReconnect(PollWorkerTaskReconnect.getDefaultInstance()).build());
             final PollStream reconnected = pollServer.awaitQueue("PullTestFlow");
-            assertLegacyUnknownTask(reconnected, unknownStepTask("reconnected-step"));
+            assertLegacyUnknownTask(reconnected, unknownRPCTask("reconnected-rpc"));
         }
     }
 

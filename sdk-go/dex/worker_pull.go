@@ -82,6 +82,7 @@ type pullStream struct {
 	taskFinished                 chan struct{}
 	isBusy                       bool
 	isDraining                   bool
+	isRetiring                   bool
 	supportsUnknownNameRejection bool
 }
 
@@ -257,10 +258,22 @@ func (worker *pullWorker) reconcile() {
 		return
 	}
 	for _, queue := range worker.queues {
+		for stream := range worker.streams {
+			if stream.queue != queue {
+				continue
+			}
+			stream.mu.Lock()
+			if stream.isRegistered && !stream.isBusy && !stream.isDraining && stream.hasIdleReplacements() {
+				stream.isDraining = true
+				stream.isRetiring = true
+				stream.closeSend()
+			}
+			stream.mu.Unlock()
+		}
 		idle := 0
 		for stream := range worker.streams {
 			stream.mu.Lock()
-			isIdle := !stream.isBusy
+			isIdle := !stream.isBusy && !stream.isRetiring
 			stream.mu.Unlock()
 			if stream.queue == queue && isIdle {
 				idle++
@@ -398,7 +411,10 @@ func (stream *pullStream) run() {
 		stream.worker.mu.Lock()
 		isStopping := stream.worker.isStopping
 		stream.worker.mu.Unlock()
-		if isStopping {
+		stream.mu.Lock()
+		isRetiring := stream.isRetiring
+		stream.mu.Unlock()
+		if isStopping || isRetiring {
 			return
 		}
 		if stream.isReconnecting() {
@@ -682,6 +698,10 @@ func (stream *pullStream) completeTask() {
 	stream.isBusy = false
 	stream.taskFinished = nil
 	stream.worker.busyTasks--
+	if !stream.isDraining && stream.hasIdleReplacements() {
+		stream.isDraining = true
+		stream.isRetiring = true
+	}
 	isDraining := stream.isDraining
 	stream.mu.Unlock()
 	stream.worker.mu.Unlock()
@@ -689,6 +709,22 @@ func (stream *pullStream) completeTask() {
 		stream.closeSend()
 	}
 	stream.worker.signal()
+}
+
+func (stream *pullStream) hasIdleReplacements() bool {
+	idleStreams := 0
+	for candidate := range stream.worker.streams {
+		if candidate == stream || candidate.queue != stream.queue || !candidate.isRegistered {
+			continue
+		}
+		candidate.mu.Lock()
+		isIdle := !candidate.isBusy && !candidate.isDraining
+		candidate.mu.Unlock()
+		if isIdle {
+			idleStreams++
+		}
+	}
+	return idleStreams >= stream.worker.idleStreamsPerQueue
 }
 
 func (stream *pullStream) cancelTaskContext() {

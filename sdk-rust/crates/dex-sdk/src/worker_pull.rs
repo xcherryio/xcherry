@@ -78,6 +78,9 @@ struct PullState {
 struct StreamSlot {
     queue: String,
     is_busy: bool,
+    is_registered: bool,
+    is_retiring: bool,
+    retirement: Arc<Notify>,
 }
 
 struct PullShared {
@@ -85,6 +88,7 @@ struct PullShared {
     state: Mutex<PullState>,
     notify: Notify,
     max_concurrent_tasks: usize,
+    idle_streams_per_queue: usize,
 }
 
 struct ActiveTask {
@@ -183,6 +187,7 @@ impl PullWorker {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: self.max_concurrent_tasks,
+            idle_streams_per_queue: self.idle_streams_per_queue,
         });
         let (stop, stop_receiver) = watch::channel(StopSignal {
             phase: 0,
@@ -253,19 +258,41 @@ impl PullWorker {
             return;
         }
         for queue in &self.queues {
+            let registered_idle = state
+                .streams
+                .values()
+                .filter(|slot| {
+                    slot.queue == *queue && slot.is_registered && !slot.is_busy && !slot.is_retiring
+                })
+                .count();
+            let mut surplus = registered_idle.saturating_sub(self.idle_streams_per_queue);
+            for slot in state.streams.values_mut().filter(|slot| {
+                slot.queue == *queue && slot.is_registered && !slot.is_busy && !slot.is_retiring
+            }) {
+                if surplus == 0 {
+                    break;
+                }
+                slot.is_retiring = true;
+                slot.retirement.notify_one();
+                surplus -= 1;
+            }
             let idle = state
                 .streams
                 .values()
-                .filter(|slot| slot.queue == *queue && !slot.is_busy)
+                .filter(|slot| slot.queue == *queue && !slot.is_busy && !slot.is_retiring)
                 .count();
             for _ in idle..self.idle_streams_per_queue {
                 let stream_id = state.next_stream_id;
                 state.next_stream_id += 1;
+                let retirement = Arc::new(Notify::new());
                 state.streams.insert(
                     stream_id,
                     StreamSlot {
                         queue: queue.clone(),
                         is_busy: false,
+                        is_registered: false,
+                        is_retiring: false,
+                        retirement: Arc::clone(&retirement),
                     },
                 );
                 let worker = PullStream {
@@ -280,6 +307,7 @@ impl PullWorker {
                     stop_drain_timeout: self.stop_drain_timeout,
                     is_registered: false,
                     has_recorded_result: false,
+                    retirement,
                 };
                 streams.spawn(async move { worker.run().await });
             }
@@ -299,6 +327,7 @@ struct PullStream {
     stop_drain_timeout: Duration,
     is_registered: bool,
     has_recorded_result: bool,
+    retirement: Arc<Notify>,
 }
 
 impl PullStream {
@@ -313,7 +342,7 @@ impl PullStream {
                 break;
             }
             let (was_registered, is_reconnecting, result) = self.poll().await;
-            if self.stop.borrow().phase != 0 {
+            if self.stop.borrow().phase != 0 || self.shared.is_retiring(self.stream_id) {
                 break;
             }
             if was_registered || is_reconnecting {
@@ -380,6 +409,14 @@ impl PullStream {
             failure.filter(|status| is_permanent(status.code())),
         );
         self.is_registered = false;
+        self.shared
+            .state
+            .lock()
+            .expect("pull state lock")
+            .streams
+            .get_mut(&self.stream_id)
+            .expect("registered pull stream")
+            .is_registered = false;
         self.shared.notify.notify_one();
     }
 
@@ -433,7 +470,7 @@ impl PullStream {
                         Ok(Some(response)) => {
                             if !was_registered {
                                 match response.frame {
-                                    Some(ResponseFrame::Registered(registered)) => { supports_unknown_name_rejection = registered.supports_unknown_name_rejection; was_registered = true; self.is_registered = true; self.shared.registration.registered(&self.queue); self.shared.notify.notify_one(); }
+                                    Some(ResponseFrame::Registered(registered)) => { supports_unknown_name_rejection = registered.supports_unknown_name_rejection; was_registered = true; self.is_registered = true; self.shared.state.lock().expect("pull state lock").streams.get_mut(&self.stream_id).expect("registered pull stream").is_registered = true; self.shared.registration.registered(&self.queue); self.shared.notify.notify_one(); }
                                     Some(ResponseFrame::Reconnect(_)) => return (false, true, Ok(())),
                                     _ => return (false, false, Err(Status::internal("Worker task stream did not register"))),
                                 }
@@ -499,9 +536,9 @@ impl PullStream {
                 result = async { (&mut active.as_mut().expect("active task").handler).await }, if active.is_some() => {
                     if let Err(error) = result { eprintln!("ERROR: pull Worker handler failed: {error}"); }
                     active = None;
-                    self.shared.release(self.stream_id);
-                    if is_draining || self.stop.borrow().phase != 0 {
-                        let is_reconnecting = is_draining && self.stop.borrow().phase == 0;
+                    let should_retire = self.shared.release(self.stream_id);
+                    if should_retire || is_draining || self.stop.borrow().phase != 0 {
+                        let is_reconnecting = !should_retire && is_draining && self.stop.borrow().phase == 0;
                         let result = close_poll_send_and_wait(&mut sender, &mut response_stream, &mut self.stop, self.stop_drain_timeout).await;
                         return (was_registered, is_reconnecting, result);
                     }
@@ -512,6 +549,10 @@ impl PullStream {
                         task.cancellation.cancel();
                         task.deadline = None;
                     }
+                }
+                () = self.retirement.notified(), if active.is_none() => {
+                    let result = close_poll_send_and_wait(&mut sender, &mut response_stream, &mut self.stop, self.stop_drain_timeout).await;
+                    return (was_registered, false, result);
                 }
                 change = self.stop.changed() => {
                     if change.is_err() || self.stop.borrow().phase != 0 {
@@ -551,7 +592,7 @@ impl PullShared {
         let Some(slot) = state.streams.get_mut(&stream_id) else {
             return false;
         };
-        if slot.is_busy {
+        if slot.is_busy || slot.is_retiring {
             return false;
         }
         slot.is_busy = true;
@@ -559,7 +600,7 @@ impl PullShared {
         true
     }
 
-    fn release(&self, stream_id: u64) {
+    fn release(&self, stream_id: u64) -> bool {
         let mut state = self.state.lock().expect("pull state lock");
         let slot = state
             .streams
@@ -567,8 +608,39 @@ impl PullShared {
             .expect("registered pull stream");
         assert!(slot.is_busy, "pull stream must have an active task");
         slot.is_busy = false;
+        let queue = slot.queue.clone();
         state.busy_tasks -= 1;
+        let idle_replacements = state
+            .streams
+            .iter()
+            .filter(|(candidate_id, slot)| {
+                **candidate_id != stream_id
+                    && slot.queue == queue
+                    && slot.is_registered
+                    && !slot.is_busy
+                    && !slot.is_retiring
+            })
+            .count();
+        let should_retire = idle_replacements >= self.idle_streams_per_queue;
+        if should_retire {
+            state
+                .streams
+                .get_mut(&stream_id)
+                .expect("registered pull stream")
+                .is_retiring = true;
+        }
         self.notify.notify_one();
+        should_retire
+    }
+
+    fn is_retiring(&self, stream_id: u64) -> bool {
+        self.state
+            .lock()
+            .expect("pull state lock")
+            .streams
+            .get(&stream_id)
+            .expect("registered pull stream")
+            .is_retiring
     }
 }
 
@@ -1397,6 +1469,9 @@ mod tests {
                         StreamSlot {
                             queue: "queue".to_string(),
                             is_busy: false,
+                            is_registered: false,
+                            is_retiring: false,
+                            retirement: Arc::new(Notify::new()),
                         },
                     ),
                     (
@@ -1404,6 +1479,9 @@ mod tests {
                         StreamSlot {
                             queue: "queue".to_string(),
                             is_busy: false,
+                            is_registered: false,
+                            is_retiring: false,
+                            retirement: Arc::new(Notify::new()),
                         },
                     ),
                 ]),
@@ -1414,6 +1492,7 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            idle_streams_per_queue: 1,
         };
         assert!(shared.try_accept(1));
         assert!(!shared.try_accept(2));
@@ -1759,6 +1838,9 @@ mod tests {
                     StreamSlot {
                         queue: "worker-1".to_string(),
                         is_busy: false,
+                        is_registered: false,
+                        is_retiring: false,
+                        retirement: Arc::new(Notify::new()),
                     },
                 )]),
                 busy_tasks: 1,
@@ -1768,6 +1850,7 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            idle_streams_per_queue: 1,
         });
         let (_stop, stop_receiver) = watch::channel(StopSignal {
             phase: 0,
@@ -1785,6 +1868,7 @@ mod tests {
             stop_drain_timeout: Duration::from_secs(30),
             is_registered: false,
             has_recorded_result: false,
+            retirement: Arc::new(Notify::new()),
         };
         let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
             .await
@@ -1956,6 +2040,9 @@ mod tests {
                     StreamSlot {
                         queue: "worker".to_string(),
                         is_busy: false,
+                        is_registered: false,
+                        is_retiring: false,
+                        retirement: Arc::new(Notify::new()),
                     },
                 )]),
                 busy_tasks: 0,
@@ -1965,6 +2052,7 @@ mod tests {
             }),
             notify: Notify::new(),
             max_concurrent_tasks: 1,
+            idle_streams_per_queue: 1,
         });
         let (_stop, stop_receiver) = watch::channel(StopSignal {
             phase: 0,
@@ -1982,6 +2070,7 @@ mod tests {
             stop_drain_timeout: Duration::from_secs(30),
             is_registered: false,
             has_recorded_result: false,
+            retirement: Arc::new(Notify::new()),
         };
         for _ in 0..3 {
             let (was_registered, _, result) = timeout(Duration::from_secs(5), stream.poll())
@@ -2066,6 +2155,240 @@ mod tests {
         fn rpcs(&self) -> RpcList<Self> {
             RpcList::new().function_without_input(GET_DRAIN_RESULT, Self::get_drain_result)
         }
+    }
+
+    struct BurstRegistration {
+        queue: String,
+        responses: mpsc::Sender<Result<PollWorkerTaskResponse, Status>>,
+        is_busy: Arc<AtomicBool>,
+    }
+
+    #[derive(Clone)]
+    struct BurstService {
+        registrations: mpsc::Sender<BurstRegistration>,
+        active_streams: Arc<AtomicUsize>,
+        closed_while_busy: Arc<AtomicBool>,
+        changed: Arc<Notify>,
+    }
+
+    #[tonic::async_trait]
+    impl WorkerTaskService for BurstService {
+        type PollWorkerTaskStream = ReceiverStream<Result<PollWorkerTaskResponse, Status>>;
+
+        async fn poll_worker_task(
+            &self,
+            request: Request<tonic::Streaming<PollWorkerTaskRequest>>,
+        ) -> Result<Response<Self::PollWorkerTaskStream>, Status> {
+            let mut incoming = request.into_inner();
+            let first = incoming
+                .message()
+                .await?
+                .ok_or_else(|| Status::invalid_argument("missing Register"))?;
+            let Some(RequestFrame::Register(register)) = first.frame else {
+                return Err(Status::invalid_argument("Register must be first"));
+            };
+            let (sender, receiver) = mpsc::channel(8);
+            sender
+                .send(Ok(PollWorkerTaskResponse {
+                    frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
+                        supports_unknown_name_rejection: false,
+                    })),
+                }))
+                .await
+                .map_err(|_| Status::internal("registered response closed"))?;
+            let is_busy = Arc::new(AtomicBool::new(false));
+            self.registrations
+                .send(BurstRegistration {
+                    queue: register.queue,
+                    responses: sender.clone(),
+                    is_busy: Arc::clone(&is_busy),
+                })
+                .await
+                .map_err(|_| Status::internal("registration receiver closed"))?;
+            self.active_streams.fetch_add(1, Ordering::AcqRel);
+            self.changed.notify_one();
+            let service = self.clone();
+            tokio::spawn(async move {
+                loop {
+                    match incoming.message().await {
+                        Ok(Some(PollWorkerTaskRequest {
+                            frame: Some(RequestFrame::TaskFrame(_)),
+                        })) => {
+                            is_busy.store(false, Ordering::Release);
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(error) => {
+                            eprintln!("burst stream disconnected: {error}");
+                            break;
+                        }
+                    }
+                }
+                if is_busy.load(Ordering::Acquire) {
+                    service.closed_while_busy.store(true, Ordering::Release);
+                }
+                service.active_streams.fetch_sub(1, Ordering::AcqRel);
+                service.changed.notify_one();
+                drop(sender);
+            });
+            Ok(Response::new(ReceiverStream::new(receiver)))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn surplus_streams_shrink_after_burst_without_losing_readiness() {
+        for idle_streams in [1, 2] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind fake task service");
+            let address = listener.local_addr().expect("fake service address");
+            let (registrations, mut received) = mpsc::channel(16);
+            let service = BurstService {
+                registrations,
+                active_streams: Arc::new(AtomicUsize::new(0)),
+                closed_while_busy: Arc::new(AtomicBool::new(false)),
+                changed: Arc::new(Notify::new()),
+            };
+            let (server_stop, mut server_shutdown) = watch::channel(false);
+            let server = tokio::spawn(
+                Server::builder()
+                    .add_service(WorkerTaskServiceServer::new(service.clone()))
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                        while !*server_shutdown.borrow() && server_shutdown.changed().await.is_ok()
+                        {
+                        }
+                    }),
+            );
+            let channel = CredentialChannel::new(
+                Endpoint::from_shared(format!("http://{address}"))
+                    .expect("endpoint")
+                    .connect_lazy(),
+                CredentialInterceptor::new(None),
+            );
+            let (cache, _directory) = test_cache();
+            let started = Arc::new(Notify::new());
+            let release = Arc::new((Mutex::new(false), Condvar::new()));
+            let registry = Registry::new()
+                .register(DrainFlow {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                    wait_for_cancel: false,
+                    result_size: None,
+                })
+                .expect("register Drain Flow");
+            let dispatcher = WorkerDispatcher::new(
+                registry,
+                ValueHydrator::new(FlowServiceClient::new(channel.clone()), cache),
+                crate::server_protocol::NegotiatedServerProtocolVersion::default(),
+            );
+            let worker = PullWorker::new(
+                &PullWorkerOptions::new()
+                    .app_worker_id("burst-worker")
+                    .max_concurrent_tasks(3)
+                    .idle_streams_per_queue(idle_streams),
+                &dispatcher,
+                channel,
+            )
+            .expect("pull Worker");
+            let registration = Arc::clone(&worker.registration);
+            let (stop, shutdown) = watch::channel(false);
+            let running = tokio::spawn(async move { worker.run(shutdown).await });
+            timeout(Duration::from_secs(5), registration.wait())
+                .await
+                .expect("registration deadline")
+                .expect("registered");
+            for task_number in 0..3 {
+                let stream = timeout(Duration::from_secs(5), async {
+                    loop {
+                        let stream = received.recv().await.expect("registration");
+                        if stream.queue == "DrainFlow" {
+                            break stream;
+                        }
+                    }
+                })
+                .await
+                .expect("task stream registered");
+                stream.is_busy.store(true, Ordering::Release);
+                stream
+                    .responses
+                    .send(Ok(PollWorkerTaskResponse {
+                        frame: Some(ResponseFrame::Task(PollWorkerTask {
+                            task_id: format!("burst-{task_number}"),
+                            deadline: None,
+                            request: Some(TaskRequest::Rpc(InvokeWorkerRpcRequest {
+                                context: Some(ProtoContext {
+                                    flow_id: "burst-flow".to_string(),
+                                    run_id: "burst-run".to_string(),
+                                    ..Default::default()
+                                }),
+                                flow_type: "DrainFlow".to_string(),
+                                rpc_name: "get_drain_result".to_string(),
+                                input: Some(
+                                    crate::value_mapper::encode(&()).expect("encode input"),
+                                ),
+                                ..Default::default()
+                            })),
+                        })),
+                    }))
+                    .await
+                    .expect("send task");
+                timeout(Duration::from_secs(5), started.notified())
+                    .await
+                    .expect("RPC started");
+            }
+            await_burst_stream_count(&service, &registration, 3 + 2 * idle_streams).await;
+            assert!(!service.closed_while_busy.load(Ordering::Acquire));
+            loop {
+                match received.try_recv() {
+                    Ok(pending) => drop(pending),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        panic!("registration sender closed")
+                    }
+                }
+            }
+            let (lock, changed) = &*release;
+            *lock.lock().expect("burst gate lock") = true;
+            changed.notify_all();
+            await_burst_stream_count(&service, &registration, 2 * idle_streams).await;
+            assert!(!service.closed_while_busy.load(Ordering::Acquire));
+            assert!(registration.snapshot().is_ready);
+            registration
+                .wait()
+                .await
+                .expect("readiness remains latched");
+            stop.send_replace(true);
+            timeout(Duration::from_secs(5), running)
+                .await
+                .expect("Worker stopped")
+                .expect("join Worker")
+                .expect("Worker result");
+            drop(received);
+            server_stop.send_replace(true);
+            timeout(Duration::from_secs(5), server)
+                .await
+                .expect("server stopped")
+                .expect("join server")
+                .expect("server result");
+        }
+    }
+
+    async fn await_burst_stream_count(
+        service: &BurstService,
+        registration: &PullRegistration,
+        expected: usize,
+    ) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                assert!(registration.snapshot().is_ready);
+                if service.active_streams.load(Ordering::Acquire) == expected {
+                    break;
+                }
+                service.changed.notified().await;
+            }
+        })
+        .await
+        .expect("stream count converged");
     }
 
     enum DrainEvent {

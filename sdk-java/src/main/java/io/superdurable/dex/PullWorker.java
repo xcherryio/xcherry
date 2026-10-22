@@ -394,6 +394,14 @@ final class PullWorker {
             return;
         }
         for (String queue : queues) {
+            for (PullStream stream : new java.util.ArrayList<PullStream>(streams)) {
+                if (stream.queue.equals(queue) && stream.isRegistered && !stream.isBusy
+                        && !stream.isDraining && stream.hasIdleReplacement(true)) {
+                    stream.isDraining = true;
+                    stream.isRetiring = true;
+                    stream.halfClose();
+                }
+            }
             int idle = 0;
             for (PullStream stream : streams) {
                 if (stream.queue.equals(queue) && !stream.isBusy && !stream.isDraining) {
@@ -426,6 +434,7 @@ final class PullWorker {
         private long backoffMillis = 100L;
         private boolean isBusy;
         private boolean isDraining;
+        private boolean isRetiring;
         private boolean isHalfClosed;
         private boolean isClosed;
         private boolean isRegistered;
@@ -472,6 +481,7 @@ final class PullWorker {
                         recordRegisteredStream(this);
                         supportsUnknownNameRejection = response.getRegistered().getSupportsUnknownNameRejection();
                         backoffMillis = 100L;
+                        reconcile();
                     } else {
                         requests.onError(Status.INTERNAL
                                 .withDescription("Worker task stream did not register")
@@ -675,6 +685,10 @@ final class PullWorker {
             taskID = null;
             isBusy = false;
             busyTasks--;
+            if (!isClosed && !isDraining && hasIdleReplacement(true)) {
+                isDraining = true;
+                isRetiring = true;
+            }
             if (isClosed) {
                 retry(closeFailure);
             } else if (isDraining || isStopping) {
@@ -764,12 +778,12 @@ final class PullWorker {
         }
 
         private void retry(final Throwable failure) {
-            if (isStopping) {
+            if (isStopping || isRetiring) {
                 streams.remove(this);
                 PullWorker.this.notifyAll();
                 return;
             }
-            if (isDraining && hasIdleReplacement()) {
+            if (isDraining && hasIdleReplacement(false)) {
                 streams.remove(this);
                 PullWorker.this.notifyAll();
                 return;
@@ -808,11 +822,12 @@ final class PullWorker {
             PullWorker.this.notifyAll();
         }
 
-        private boolean hasIdleReplacement() {
+        private boolean hasIdleReplacement(final boolean requiresRegistration) {
             int idleReplacements = 0;
             for (PullStream stream : streams) {
                 if (stream != this && stream.queue.equals(queue)
-                        && !stream.isBusy && !stream.isDraining) {
+                        && !stream.isBusy && !stream.isDraining
+                        && (!requiresRegistration || stream.isRegistered)) {
                     idleReplacements++;
                 }
             }

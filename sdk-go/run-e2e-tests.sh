@@ -128,6 +128,9 @@ DEX_WORKER_PORT="$worker_port" \
 DEX_INTEG_WORKER_MODE="$worker_mode" \
   run_go_test -count=1 -race -v ./integ -run "${DEX_GO_INTEG_TEST_PATTERN:-.}"
 
+DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
+  run_go_test -count=1 -race -tags pullintegration -v ./dex -run '^TestWorkerPullShrinksStreamsWithRealServer$'
+
 if $coverage; then
   mkdir -p coverage
   go tool covdata textfmt -i="$cover_dir" -o=coverage/coverage.out

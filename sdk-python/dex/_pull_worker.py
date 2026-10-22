@@ -170,6 +170,8 @@ class PullWorkerRuntime:
     def _reconcile(self, stub: Any) -> None:
         if self._stopping is None or self._stopping.is_set():
             return
+        for stream in tuple(self._streams):
+            stream.try_retire()
         for queue in self.queues:
             idle = sum(
                 stream.queue == queue
@@ -279,6 +281,8 @@ class PullStream:
         self.is_busy = False
         self._is_registered = False
         self.is_draining = False
+        self._is_retiring = False
+        self._retirement_requested = asyncio.Event()
         self.is_half_closing = False
         self._active = threading.Event()
         self._call: Any = None
@@ -321,7 +325,11 @@ class PullStream:
                     self.runtime._rejection_stop_task = asyncio.create_task(
                         self.runtime.stop()
                     )
-            if self.runtime.is_stopping or self.runtime._permanent_error is not None:
+            if (
+                self.runtime.is_stopping
+                or self.runtime._permanent_error is not None
+                or self._is_retiring
+            ):
                 break
             if self._is_reconnecting:
                 self._is_reconnecting = False
@@ -378,11 +386,12 @@ class PullStream:
         )
         was_registered = False
         reader: asyncio.Task[Any] | None = None
+        retirement = asyncio.create_task(self._retirement_requested.wait())
         try:
             while not self.runtime.is_stopping or self.is_busy:
                 if reader is None:
                     reader = asyncio.create_task(self._call.read())
-                waiting: set[asyncio.Task[Any]] = {reader}
+                waiting: set[asyncio.Task[Any]] = {reader, retirement}
                 if self.handler_task is not None:
                     waiting.add(self.handler_task)
                 completed, _ = await asyncio.wait(
@@ -390,22 +399,23 @@ class PullStream:
                 )
                 if self.handler_task in completed:
                     await self._finish_handler()
-                    if self.is_draining:
-                        if reader.done():
-                            frame = reader.result()
-                            reader = None
-                            if (
-                                frame is not _GRPC_AIO_EOF
-                                and frame.WhichOneof("frame") == "task"
-                            ):
-                                await self._reject_task(frame.task)
-                        self.is_half_closing = True
-                        self.runtime.signal()
-                        await self._call.done_writing()
-                        await self._await_stream_eof(reader)
+                    self.try_retire()
+                if self.is_draining and not self.is_busy:
+                    if reader.done():
+                        frame = reader.result()
                         reader = None
-                        self._is_reconnecting = True
-                        return was_registered
+                        if (
+                            frame is not _GRPC_AIO_EOF
+                            and frame.WhichOneof("frame") == "task"
+                        ):
+                            await self._reject_task(frame.task)
+                    self.is_half_closing = True
+                    self.runtime.signal()
+                    await self._call.done_writing()
+                    await self._await_stream_eof(reader)
+                    reader = None
+                    self._is_reconnecting = not self._is_retiring
+                    return was_registered
                 if reader not in completed:
                     continue
                 frame = reader.result()
@@ -425,6 +435,7 @@ class PullStream:
                     was_registered = True
                     self._is_registered = True
                     self.runtime.registration.record_registered_stream(self.queue)
+                    self.runtime.signal()
                     continue
                 if kind == "task":
                     await self._start_task(frame.task)
@@ -442,6 +453,8 @@ class PullStream:
                         self._is_reconnecting = True
                         return was_registered
         finally:
+            retirement.cancel()
+            await asyncio.gather(retirement, return_exceptions=True)
             self.is_half_closing = False
             self.cancel_handler()
             if self.handler_task is not None:
@@ -657,6 +670,22 @@ class PullStream:
         self.is_busy = False
         self._active.clear()
         self.runtime.finish_task()
+
+    def try_retire(self) -> None:
+        if self.is_busy or self.is_draining or not self._is_registered:
+            return
+        idle_replacements = sum(
+            candidate is not self
+            and candidate.queue == self.queue
+            and candidate._is_registered
+            and not candidate.is_busy
+            and not candidate.is_draining
+            for candidate in self.runtime._streams
+        )
+        if idle_replacements >= self.runtime.idle_streams_per_queue:
+            self.is_draining = True
+            self._is_retiring = True
+            self._retirement_requested.set()
 
     def cancel_handler(self) -> None:
         self._active.clear()
