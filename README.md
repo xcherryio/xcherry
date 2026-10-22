@@ -26,19 +26,29 @@ Dex is a simple durable execution framework optimized for AI agents, human+AI pr
 
 Unlike most durable execution frameworks, **Dex takes a fundamentally different approach with its non-replay-based programming model**. It eliminates entire classes of footguns—such as replay-induced non-determinism errors and the need for Continue-As-New—by design, rather than forcing developers to work around them.
 
-### Battle-Tested, Not Built From Scratch
+### Built by a Pioneer in Durable Execution
 
-Dex is forked from [iWF](https://github.com/indeedeng/iwf) by its original creator, building on over **5 years of production experience**, with tens of engineering teams and millions of workflows running in production, without reported incidents.
+Dex is created by **a founding engineer of Uber Cadence, a core contributor to Temporal, and the original creator of iWF**—bringing deep, firsthand experience from multiple generations of durable execution technology.
 
-This isn't just a promising architectural idea. It's a programming model proven at scale in real-world production environments.
+Forked from iWF by its original creator, Dex builds on a proven foundation with:
+
+- **5+ years of production use**, with no known framework-attributable incidents
+- **Tens of engineering teams** relying on the technology
+- **Millions of workflows** running in production
+
+Dex isn't a new programming model being tested for the first time. It's the evolution of a battle-tested architecture, shaped by years of building and operating durable execution systems at scale.
 
 ### Built for Real-World Complexity
 
-To demonstrate what developers can build with Dex, we're also open-sourcing sophisticated platforms built on top of it—including **Superverse, a durable AI agent harness**.
+We're also open-sourcing sophisticated platforms built on Dex, including **[Superverse](https://github.com/superdurable/superverse/blob/main/docs/architecture/agent-harness-design/session.md)**, a durable AI agent harness that demonstrates how Dex handles:
 
-Superverse demonstrates how Dex can orchestrate long-lived, interactive agent sessions, parallel tool execution, subagents, human-in-the-loop interactions, failure recovery, and complex resource lifecycles—all within a structured, durable execution model.
+- Long-lived, interactive agent sessions
+- Parallel tool execution and subagent orchestration
+- Human-in-the-loop interactions and approvals
+- Failure recovery and durable state management
+- Complex resource lifecycles and asynchronous coordination
 
-Explore the [Superverse Agent Harness Architecture](https://github.com/superdurable/superverse/blob/main/docs/architecture/agent-harness-design/session.md).
+**Dex isn't just designed to make workflows durable. It's designed to make complex, long-lived applications easier to build—and we're open-sourcing real applications to prove it.**
 
 Learn more: [What is Durable Execution?](https://docs.superdurable.io/intro/what-is-durable-execution) · [Why Dex?](https://docs.superdurable.io/intro/what-is-dex)
 
