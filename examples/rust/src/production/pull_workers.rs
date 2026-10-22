@@ -78,9 +78,12 @@ pub fn start_pull_greeting(
     let worker = Arc::new(Worker::try_new(
         registry.clone(),
         Arc::clone(&cache),
-        WorkerOptions::new()
-            .server_address(server_address)
-            .pull(PullWorkerOptions::new().max_concurrent_tasks(8)),
+        WorkerOptions::new().server_address(server_address).pull(
+            PullWorkerOptions::new()
+                .max_concurrent_tasks(8)
+                // Keep one slot for RPCs so Flows stay responsive.
+                .reserved_rpc_tasks(1),
+        ),
     )?);
     let client = Client::try_new(
         registry,
@@ -125,4 +128,16 @@ pub fn stop_pull_greeting(
 
 pub fn is_pull_greeting_ready(worker: &Worker) -> bool {
     worker.pull_registration_state().is_ready
+}
+
+pub struct PullGreetingDiagnostics {
+    pub is_ready: bool,
+    pub reserved_rpc_declines: u64,
+}
+
+pub fn get_pull_greeting_diagnostics(worker: &Worker) -> PullGreetingDiagnostics {
+    PullGreetingDiagnostics {
+        is_ready: worker.pull_registration_state().is_ready,
+        reserved_rpc_declines: worker.pull_reserved_rpc_declines(),
+    }
 }

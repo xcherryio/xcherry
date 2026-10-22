@@ -241,9 +241,9 @@ dependencies = [
 
 [[package]]
 name = "dex-blob-cache"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76b6d1792e64721efc33ac8a1e25a1101e75608322315a3f4b312e5f12a87808"
+checksum = "c449d50a1765ef885a68cd779a7b2268b8ffe8ce79826898e53359968877f907"
 dependencies = [
  "crc32c",
  "sha2",
@@ -268,9 +268,9 @@ dependencies = [
 
 [[package]]
 name = "dex-protocol"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfba113a0c04c756e9205b36ab6a8d7fb226b7dc7624f2cdc5b2458a8a8c35c2"
+checksum = "d075eabc7a079a7e5b309cfdca547c6d8ce44137e4a27a0f5acd3856fc0c24e5"
 dependencies = [
  "prost",
  "prost-types",
@@ -282,9 +282,9 @@ dependencies = [
 
 [[package]]
 name = "dex-sdk"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "609484ef8818f188812fbfc4820cadf6a0ca69df412807792b779673b633b113"
+checksum = "a33f3ada315beba191a05aa99ca7432c9e74bcedd20d713d627e4f902bb1447d"
 dependencies = [
  "dex-blob-cache",
  "dex-protocol",
@@ -296,6 +296,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tracing",
  "uuid",
 ]
 

@@ -77,7 +77,11 @@ export async function startPullGreeting(
   const registry = new Registry([flow]);
   const worker = new Worker(registry, cache, {
     serverAddress,
-    pull: { maxConcurrentTasks: 8 },
+    pull: {
+      maxConcurrentTasks: 8,
+      // Keep one slot for RPCs so Flows stay responsive.
+      reservedRpcTasks: 1,
+    },
   });
   try {
     await worker.start();
@@ -104,4 +108,16 @@ export async function stopPullGreeting(worker: Worker, client: Client): Promise<
 
 export function isPullGreetingReady(worker: Worker): boolean {
   return worker.pullRegistrationState().isReady;
+}
+
+export interface PullGreetingDiagnostics {
+  readonly isReady: boolean;
+  readonly reservedRpcDeclines: number;
+}
+
+export function getPullGreetingDiagnostics(worker: Worker): PullGreetingDiagnostics {
+  return {
+    isReady: worker.pullRegistrationState().isReady,
+    reservedRpcDeclines: worker.pullReservedRpcDeclines,
+  };
 }

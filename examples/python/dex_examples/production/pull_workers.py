@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from dex import (
     AsyncClient,
@@ -73,7 +74,11 @@ async def start_pull_greeting(
         cache,
         WorkerOptions(
             server_address=server_address,
-            pull=PullWorkerOptions(max_concurrent_tasks=8),
+            pull=PullWorkerOptions(
+                max_concurrent_tasks=8,
+                # Keep one slot for RPCs so Flows stay responsive.
+                reserved_rpc_tasks=1,
+            ),
         ),
     )
     worker_task = asyncio.create_task(worker.start())
@@ -103,3 +108,16 @@ async def stop_pull_greeting(
 
 def is_pull_greeting_ready(worker: AsyncWorker) -> bool:
     return worker.pull_registration_state().is_ready
+
+
+@dataclass(frozen=True)
+class PullGreetingDiagnostics:
+    is_ready: bool
+    reserved_rpc_declines: int
+
+
+def get_pull_greeting_diagnostics(worker: AsyncWorker) -> PullGreetingDiagnostics:
+    return PullGreetingDiagnostics(
+        is_ready=worker.pull_registration_state().is_ready,
+        reserved_rpc_declines=worker.pull_reserved_rpc_declines,
+    )

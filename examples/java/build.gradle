@@ -23,7 +23,7 @@ repositories {
 
 dependencies {
     implementation "org.springframework.boot:spring-boot-starter-web"
-    implementation "io.superdurable:dex-sdk:1.14.0"
+    implementation "io.superdurable:dex-sdk:1.15.0"
 
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310"
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-jdk8"
