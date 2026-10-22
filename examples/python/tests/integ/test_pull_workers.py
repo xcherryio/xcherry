@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,7 +22,11 @@ import pytest
 from dex import AsyncClient, BlobCacheConfig, open_blob_cache
 
 from dex_examples.config import start_options
-from dex_examples.production.pull_workers import start_pull_greeting, stop_pull_greeting
+from dex_examples.production.pull_workers import (
+    is_pull_greeting_ready,
+    start_pull_greeting,
+    stop_pull_greeting,
+)
 from tests.integ.conftest import WAIT_TIMEOUT, server_address
 
 pytestmark = pytest.mark.integ
@@ -37,6 +42,10 @@ async def test_pull_worker_serves_greeting_flow(
         cache, server_address()
     )
     try:
+        assert is_pull_greeting_ready(worker)
+        state = worker.pull_registration_state()
+        assert len(state.queues) == 2
+        assert all(queue.has_registered_stream for queue in state.queues)
         flow_id = new_flow_id("pull-greeting")
         await pull_client.start_flow(flow, flow_id, "Dex", start_options())
         result = await pull_client.wait_for_flow(flow_id, WAIT_TIMEOUT)
@@ -45,4 +54,14 @@ async def test_pull_worker_serves_greeting_flow(
         assert not worker_task.done()
     finally:
         await stop_pull_greeting(worker, pull_client, worker_task)
+        cache.close()
+
+
+async def test_pull_worker_stops_when_startup_fails(tmp_path: Path) -> None:
+    cache = open_blob_cache(BlobCacheConfig(str(tmp_path / "pull-timeout-cache"), 64 << 20))
+    try:
+        async with asyncio.timeout(45):
+            with pytest.raises(RuntimeError, match="GetServerInfo failed"):
+                await start_pull_greeting(cache, "127.0.0.1:1")
+    finally:
         cache.close()

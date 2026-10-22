@@ -28,7 +28,7 @@ use dex_examples_rust::primitives::channel::flow::{
 };
 use dex_examples_rust::primitives::stream::flow::{PROGRESS, StreamFlow};
 use dex_examples_rust::production::pull_workers::{
-    GET_GREETING, GreetingFlow, start_pull_greeting, stop_pull_greeting,
+    GET_GREETING, GreetingFlow, is_pull_greeting_ready, start_pull_greeting, stop_pull_greeting,
 };
 use dex_examples_rust::products::deal_dsl::{
     ConditionMessage, DEAL_CURRENT_STATE, DealDSLFlow, SEND_DEAL_CONDITION_MESSAGE,
@@ -184,6 +184,10 @@ fn pull_worker_serves_greeting_flow() {
         std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
     let (worker, client, worker_thread) = start_pull_greeting(Arc::clone(&cache), &server_address)
         .expect("start Rust pull greeting Worker");
+    assert!(is_pull_greeting_ready(&worker));
+    let state = worker.pull_registration_state();
+    assert_eq!(state.queues.len(), 2);
+    assert!(state.queues.iter().all(|queue| queue.has_registered_stream));
     let flow_id = unique_flow_id("pull-greeting");
     client
         .start_flow(&GreetingFlow::default(), &flow_id, "Dex".to_string())
@@ -204,6 +208,32 @@ fn pull_worker_serves_greeting_flow() {
         .expect("join Rust pull greeting Worker")
         .expect("stop Rust pull greeting Worker");
     cache.close().expect("close Rust pull greeting cache");
+}
+
+#[test]
+#[ignore = "requires dexcli dev"]
+fn pull_worker_stops_when_startup_fails() {
+    let cache_directory = tempfile::tempdir().expect("create Rust pull timeout cache directory");
+    let cache = Arc::new(
+        BlobCache::open(
+            BlobCacheConfig::new(cache_directory.path(), 64 * 1024 * 1024, 10_000)
+                .expect("valid Rust pull timeout cache config"),
+        )
+        .expect("open Rust pull timeout cache"),
+    );
+    let started_at = Instant::now();
+    let failure = match start_pull_greeting(Arc::clone(&cache), "127.0.0.1:1") {
+        Ok((worker, client, worker_thread)) => {
+            stop_pull_greeting(worker, client, worker_thread)
+                .expect("join unexpected Rust pull Worker")
+                .expect("stop unexpected Rust pull Worker");
+            panic!("pull Worker unexpectedly registered");
+        }
+        Err(failure) => failure,
+    };
+    assert!(failure.to_string().contains("GetServerInfo failed"));
+    assert!(started_at.elapsed() < Duration::from_secs(45));
+    cache.close().expect("close Rust pull timeout cache");
 }
 
 #[test]
