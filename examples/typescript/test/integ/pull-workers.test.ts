@@ -23,6 +23,7 @@ import test from "node:test";
 import { openBlobCache, stringCodec } from "@superdurable/dex";
 
 import {
+  isPullGreetingReady,
   startPullGreeting,
   stopPullGreeting,
 } from "../../src/production/pull-workers.js";
@@ -48,6 +49,10 @@ test("pull Worker serves Greeting Flow", async () => {
     process.env.DEX_FLOW_SERVICE_ADDRESS ?? "127.0.0.1:8801",
   );
   try {
+    assert.equal(isPullGreetingReady(worker), true);
+    const state = worker.pullRegistrationState();
+    assert.equal(state.queues.length, 2);
+    assert.ok(state.queues.every((queue) => queue.hasRegisteredStream));
     const flowId = environment.newFlowId("pull-greeting");
     await client.startFlow(flow, flowId, "Dex", environment.startOptions());
     const result = await client.waitForFlow(flowId, 45_000);
@@ -58,5 +63,17 @@ test("pull Worker serves Greeting Flow", async () => {
     cache.close();
     await rm(cacheDirectory, { recursive: true, force: true });
     await releaseIntegEnvironment();
+  }
+});
+
+
+test("pull Worker stops when startup fails", { timeout: 45_000 }, async () => {
+  const cacheDirectory = await mkdtemp(join(tmpdir(), "dex-pull-timeout-"));
+  const cache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1024 * 1024 });
+  try {
+    await assert.rejects(startPullGreeting(cache, "127.0.0.1:1"), /cannot start TypeScript pull Worker/);
+  } finally {
+    cache.close();
+    await rm(cacheDirectory, { recursive: true, force: true });
   }
 });

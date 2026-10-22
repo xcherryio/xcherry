@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::sync::{Arc, LazyLock};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use dex_sdk::{
     Attribute, BlobCache, Client, ClientOptions, Context, Flow, HandlerResult, PersistenceSchema,
@@ -66,10 +68,12 @@ impl Step for GreetStep {
     }
 }
 
+pub type RunningPullGreeting = (Arc<Worker>, Client, JoinHandle<SdkResult<()>>);
+
 pub fn start_pull_greeting(
     cache: Arc<BlobCache>,
     server_address: &str,
-) -> SdkResult<(Arc<Worker>, Client, JoinHandle<SdkResult<()>>)> {
+) -> Result<RunningPullGreeting, Box<dyn Error + Send + Sync>> {
     let registry = Registry::new().register(GreetingFlow::default())?;
     let worker = Arc::new(Worker::try_new(
         registry.clone(),
@@ -85,8 +89,26 @@ pub fn start_pull_greeting(
             .server_address(server_address)
             .worker_target(worker.worker_target().clone()),
     )?;
+    let startup_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let running_worker = Arc::clone(&worker);
     let worker_thread = thread::spawn(move || running_worker.start());
+    let startup_result: Result<(), Box<dyn Error + Send + Sync>> =
+        startup_runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(30), worker.wait_pull_registered()).await??;
+            Ok(())
+        });
+    if let Err(failure) = startup_result {
+        match stop_pull_greeting(worker, client, worker_thread) {
+            Ok(Ok(())) => {}
+            Ok(Err(cleanup_failure)) => {
+                eprintln!("pull Worker cleanup failed: {cleanup_failure}");
+            }
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+        return Err(failure);
+    }
     Ok((worker, client, worker_thread))
 }
 
@@ -99,4 +121,8 @@ pub fn stop_pull_greeting(
     let worker_result = worker_thread.join();
     drop(client);
     worker_result
+}
+
+pub fn is_pull_greeting_ready(worker: &Worker) -> bool {
+    worker.pull_registration_state().is_ready
 }
