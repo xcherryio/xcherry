@@ -15,11 +15,13 @@ package attributestore
 import (
 	"context"
 	"database/sql"
+	"math"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
@@ -126,6 +128,65 @@ func TestMongoDBAttributeStoreIntegration(t *testing.T) {
 	writeIntegrationBatch(t, manager, "documents", "mongodb-flow")
 	assertMongoDBIntegrationDocument(t, mongodbClient, "mongodb-flow")
 	assertMongoDBPartialUpdateAndInvalidFieldFiltering(t, manager, mongodbClient)
+}
+
+func TestRedisAttributeStoreIntegration(t *testing.T) {
+	ctx := context.Background()
+	redisURL := environmentOrDefault("DEX_ATTRIBUTE_STORE_REDIS_URL", "redis://127.0.0.1:56379/0")
+	redisOptions, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	redisClient := redis.NewClient(redisOptions)
+	require.NoError(t, redisClient.Ping(ctx).Err())
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	keyPrefix := "dex-store-integ:" + time.Now().UTC().Format("20060102T150405.000000000") + ":"
+	t.Cleanup(func() { require.NoError(t, redisClient.Del(context.Background(), keyPrefix+"redis-flow").Err()) })
+
+	_, err = NewManager(ctx, &config.AttributeStoreConfig{
+		Stores: map[string]config.AttributeStoreConfigEntry{
+			"unreachable": {Type: config.AttributeStoreTypeRedis, DSN: "redis://127.0.0.1:1/0"},
+		},
+	}, log.NewNoop())
+	require.ErrorContains(t, err, "ping Redis")
+
+	manager, err := NewManager(ctx, &config.AttributeStoreConfig{
+		Stores: map[string]config.AttributeStoreConfigEntry{
+			"cache": {Type: config.AttributeStoreTypeRedis, DSN: redisURL, KeyPrefix: keyPrefix},
+		},
+	}, log.NewNoop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+
+	writeIntegrationBatch(t, manager, "cache", "redis-flow")
+	fields, err := redisClient.HGetAll(ctx, keyPrefix+"redis-flow").Result()
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"name":           `"latest"`,
+		"count_value":    `42`,
+		"ratio":          `2.5`,
+		"active":         `true`,
+		"logged_at":      `"2026-08-11T15:30:00Z"`,
+		"json_value":     `{"ok":true}`,
+		"binary_value":   `bytes`,
+		"nullable_value": `null`,
+		"missing":        `"filtered"`,
+	}, fields)
+
+	err = manager.WriteBatch(ctx, &dexpb.SyncAttributeBatchActivityInput{
+		FlowId:     "redis-flow",
+		ConfigName: "cache",
+		Items: []*dexpb.AttributeSyncItem{
+			{ConfigName: "cache", Key: "name", Value: stringValue("updated")},
+			{ConfigName: "cache", Key: "ratio", Value: doubleValue(math.Inf(1))},
+			{ConfigName: "cache", Key: "json_value", Value: objectValue("json", `{broken`)},
+		},
+	})
+	require.NoError(t, err)
+	fields, err = redisClient.HGetAll(ctx, keyPrefix+"redis-flow").Result()
+	require.NoError(t, err)
+	require.Equal(t, `"updated"`, fields["name"])
+	require.Equal(t, `2.5`, fields["ratio"])
+	require.Equal(t, `{"ok":true}`, fields["json_value"])
+	require.Equal(t, `42`, fields["count_value"])
 }
 
 func openIntegrationMongoDB(t *testing.T, uri string) *mongo.Client {

@@ -257,7 +257,7 @@ matchingIntegTests:
 
 # Requires MySQL, PostgreSQL, Temporal, and Cadence in label-gated CI.
 attributeSyncIntegTests: prepareIntegrationCoverage
-	@GOWORK=off go test $(integrationCoverageFlags) -v -tags=attributestore_integration ./service/common/attributestore -run '^TestMySQLAndPostgresAttributeStore.*Integration$$' -timeout 5m $(integrationCoverageArgs)
+	@GOWORK=off go test $(integrationCoverageFlags) -v -tags=attributestore_integration ./service/common/attributestore -run '^(TestMySQLAndPostgresAttributeStore.*|TestRedisAttributeStore)Integration$$' -timeout 5m $(integrationCoverageArgs)
 	@GOWORK=off go test $(integrationCoverageFlags) -v -tags=attributestore_integration ./integ -run '^TestAttributeSync' -timeout 10m -temporalHostPort=$(temporalHostPort) $(integrationCoverageArgs)
 
 # Requires MongoDB and covers both workflow backends in label-gated CI.

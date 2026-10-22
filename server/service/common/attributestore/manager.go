@@ -107,9 +107,12 @@ func openStore(ctx context.Context, cfg config.AttributeStoreConfigEntry, logger
 		entry store
 		err   error
 	)
-	if cfg.Type == config.AttributeStoreTypeMongoDB {
+	switch cfg.Type {
+	case config.AttributeStoreTypeMongoDB:
 		entry, err = openMongoStore(ctx, cfg, logger)
-	} else {
+	case config.AttributeStoreTypeRedis:
+		entry, err = openRedisStore(ctx, cfg, logger)
+	default:
 		entry, err = openSQLStore(ctx, cfg, logger)
 	}
 	if err != nil {

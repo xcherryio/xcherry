@@ -13,6 +13,7 @@ package integ
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
@@ -56,6 +58,20 @@ func TestMongoDBAttributeSyncCadence(t *testing.T) {
 		t.Skip()
 	}
 	doTestAttributeSyncMongoDB(t, service.BackendTypeCadence)
+}
+
+func TestAttributeSyncRedisTemporal(t *testing.T) {
+	if !*temporalIntegTest {
+		t.Skip()
+	}
+	doTestAttributeSyncRedis(t, service.BackendTypeTemporal)
+}
+
+func TestAttributeSyncRedisCadence(t *testing.T) {
+	if !*cadenceIntegTest {
+		t.Skip()
+	}
+	doTestAttributeSyncRedis(t, service.BackendTypeCadence)
 }
 
 func TestAttributeSyncFlowTimeoutTemporal(t *testing.T) {
@@ -390,6 +406,89 @@ func doTestAttributeSyncMongoDB(t *testing.T, backendType service.BackendType) {
 		}
 		return document.Message == "terminal-signal" &&
 			document.Document.Source == "blob-cache" && document.Document.Sequence == int64(1)
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func doTestAttributeSyncRedis(t *testing.T, backendType service.BackendType) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	redisURL := os.Getenv("DEX_ATTRIBUTE_STORE_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://127.0.0.1:56379/0"
+	}
+	redisOptions, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	redisClient := redis.NewClient(redisOptions)
+	require.NoError(t, redisClient.Ping(ctx).Err())
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	keyPrefix := "dex-integ:" + newRequestID() + ":"
+
+	runtime := startDexService(t, DexServiceTestConfig{
+		BackendType:        backendType,
+		S3TestThreshold:    1,
+		BlobCacheDirectory: t.TempDir(),
+		AttributeStore: config.AttributeStoreConfig{
+			Stores: map[string]config.AttributeStoreConfigEntry{
+				"cache": {
+					Type:      config.AttributeStoreTypeRedis,
+					DSN:       redisURL,
+					KeyPrefix: keyPrefix,
+				},
+			},
+			SyncBatchSize: 2,
+		},
+	})
+	workerTarget := startWorker(t, signal.NewHandler())
+	flowID := "attribute-sync-redis-" + newRequestID()
+	t.Cleanup(func() { require.NoError(t, redisClient.Del(context.Background(), keyPrefix+flowID).Err()) })
+	_, err = runtime.FlowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
+		RequestId:          newRequestID(),
+		FlowId:             flowID,
+		FlowType:           "attribute-sync-redis",
+		FlowTimeoutSeconds: 30,
+		FlowStartOptions: &dexpb.FlowStartOptions{
+			Attributes: []*dexpb.AttributeWrite{
+				syncedStringAttribute("message", strings.Repeat("cache-backed-string", 8)),
+				syncedObjectAttribute("document", `{"source":"blob-cache","sequence":1}`),
+			},
+			FlowConfigOverride: &dexpb.FlowConfig{
+				AttributeStoreNames: &dexpb.AttributeStoreNames{Names: []string{"cache"}},
+				WorkerTarget:        workerTarget,
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, err = runtime.FlowClient.SetAttributes(ctx, &dexpb.SetAttributesRequest{
+		RequestId: newRequestID(),
+		FlowId:    flowID,
+		Attributes: []*dexpb.AttributeWrite{
+			syncedStringAttribute("message", "terminal-signal"),
+		},
+	})
+	require.NoError(t, err)
+	_, err = runtime.FlowClient.StopFlow(ctx, &dexpb.StopFlowRequest{
+		FlowId:   flowID,
+		StopType: dexpb.StopType_STOP_TYPE_CANCEL,
+	})
+	require.NoError(t, err)
+	response, err := runtime.FlowClient.WaitForFlow(ctx, &dexpb.WaitForFlowRequest{FlowId: flowID})
+	require.NoError(t, err)
+	require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_CANCELED, response.GetFlowStatus())
+
+	require.Eventually(t, func() bool {
+		fields, readErr := redisClient.HGetAll(ctx, keyPrefix+flowID).Result()
+		if readErr != nil || fields["message"] != `"terminal-signal"` {
+			return false
+		}
+		var document struct {
+			Source   string `json:"source"`
+			Sequence int64  `json:"sequence"`
+		}
+		if decodeErr := json.Unmarshal([]byte(fields["document"]), &document); decodeErr != nil {
+			return false
+		}
+		return document.Source == "blob-cache" && document.Sequence == 1
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
