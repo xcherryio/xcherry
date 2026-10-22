@@ -76,6 +76,52 @@ Treat this as a local development constraint, not an application schema limit. D
 
 Production capacity is determined by its Temporal visibility backend. Elasticsearch-backed deployments do not have SQLite's fixed per-type slot pool, although Elasticsearch mapping limits can still apply. Temporal Cloud and self-hosted SQL visibility stores have their own limits. Verify the target environment against [Temporal's current Search Attribute limits](https://docs.temporal.io/search-attribute#custom-search-attribute-limits).
 
+### xtemporal ParadeDB Dex visibility
+
+With **xtemporal v1.32.1-x.5**, **paradedb-dex** and schema
+**paradedb/visibility 2.0**, Search Attributes use one cluster-wide type map,
+shared by every namespace. The operator pre-registers a generic pool before
+Dex and application Workers start; creating a namespace does not register a
+separate copy. Reserve **FlowType** and **DexParentFlowID** as Keyword and
+**ActiveStepTypes** as KeywordList. Use **keyword1**–**keyword8**,
+**keywordList1**–**keywordList2**, and **text1**–**text3**,
+**int1**–**int3**, **bool1**–**bool3**, **double1**–**double3** and
+**datetime1**–**datetime3** for application indexes so one schema fits the local
+SQLite pool and this store. Dex **KEYWORD_ARRAY** maps to KeywordList and
+**FULL_TEXT** maps to Text.
+
+Keep **interpreter.attributeIndexesManagedExternally** at its default **false**
+when the Operator Service is available. Normal Worker startup discovers existing
+names, verifies declared types and creates only missing indexes. With a complete
+pre-registered pool it performs discovery and type checks without adding names.
+Real-service verification with Dex Server 1.13.0 and Go SDK 1.13.0 confirmed
+Worker startup in a newly registered namespace, a Flow writing **int1** and
+**keyword4**, its typed snapshot and indexed search; the cluster type map
+was unchanged before and after. This mode differs from the Temporal Cloud
+managed-external mode below, which deliberately skips discovery and verification.
+
+Capacity checked **2026-10-21** against the pinned xtemporal release: the cluster
+registration path imposes **no explicit per-type or total registration count
+limit**. Its [operator add path](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/service/frontend/operator_handler.go)
+uses the [cluster metadata map](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/common/searchattribute/manager.go),
+and the [custom store](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/x/paradedb/visibility_store.go)
+adds no per-name DDL. The [schema](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/schema/paradedb/visibility/versioned/v2.0/schema.sql)
+uses typed JSONB buckets rather than SQLite's fixed slots. This is not an
+unlimited-capacity guarantee: shared metadata, database and RPC payload sizes
+still bound growth, and the pinned implementation specifies no maximum cluster
+registration count. Separately, the [frontend defaults](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/common/dynamicconfig/constants.go)
+limit one execution's attributes to **100 keys**, **2 KiB per value** and
+**40 KiB total**; these configurable write limits are not cluster slot quotas.
+Keep the pool fixed rather than allocating new names for each tenant or Flow.
+
+The store rejects **STARTS_WITH** and ordering by custom attributes. The Dex
+profile can additionally disable all explicit ordering and the Count API with
+**system.visibilityDisableOrderByClause** and
+**xtemporal.frontend.disableCountWorkflowExecutions**; when enabled, do not
+issue Count calls or rely on custom sort order. Use bounded, namespace-scoped
+search pages and the returned cursor. See the pinned
+[query support and profile settings](https://github.com/superdurable/xtemporal/blob/v1.32.1-x.5/docs/xtemporal/paradedb-dex-store.md).
+
 ## FDG 2.0 management metadata
 
 Dex Web can inspect Runs created by every SDK, but the current FDG 2.0
