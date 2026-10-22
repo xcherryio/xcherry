@@ -498,6 +498,43 @@ seconds by default. After the deadline, it requests cancellation and waits for h
 to return. Long-running handlers should respond to cancellation. A Worker also
 finishes an active call before a server-directed reconnect.
 
+### Reserved RPC capacity
+
+Reserve capacity when synchronous RPC calls must stay responsive while Steps run
+for a long time. Set **ReservedRPCTasks** in Go, **reservedRpcTasks** in Java and
+TypeScript, or **reserved_rpc_tasks** in Python and Rust. When unset, the reserve
+is one if the resolved task limit is at least two, otherwise zero. With the
+CPU-count default, Steps get one fewer slot than before. Set the reserve to zero
+to opt out. With a task limit of one and no explicit reserve, Worker start logs
+one warning that RPCs may wait behind long-running Steps and recommends a limit
+of at least two or an explicit reserve. Flows must stay responsive. Dex reserves
+a slot by default because it cannot prioritize synchronous RPCs the way a workflow
+engine prioritizes queries or updates.
+
+The reserve must be nonnegative and less than the concurrent task limit after
+its CPU-count default is resolved. Invalid values fail Worker construction.
+
+RPC tasks include both API-direct and transactional **InvokeWorkerRPC** tasks.
+RPC and Step handlers count together against the task limit. Every Step task,
+WaitFor and Execute alike, including local (ASYNC first-phase) attempts, is
+declined with **NO_CAPACITY** when the busy count reaches the task limit minus
+the reserve. RPC tasks can use the full limit. For example, a limit of eight
+and a reserve of two lets Steps start only while fewer than six handlers are busy.
+
+Dex tries other Workers without consuming a Step attempt. If all Workers remain
+at their Step limit, a Step can wait until the dispatch wait expires, then receive
+**NO_WORKER_AVAILABLE**, consume an attempt, and follow its retry policy, as when
+all Workers are full. A local attempt waits the local dispatch wait and then falls
+back according to its policy.
+Idle streams stay available on every queue. Reserve declines do not close streams
+or change registration readiness. Each SDK emits a debug log with the Flow type
+for each reserve decline. Each Worker also exposes a cumulative reserve-decline
+counter: **PullReservedRPCDeclines()** in Go, **getPullReservedRpcDeclines()** in Java,
+**pullReservedRpcDeclines** in TypeScript, **pull_reserved_rpc_declines** in Python,
+and **pull_reserved_rpc_declines()** in Rust. Full-capacity rejections and unknown
+names do not increment it. The count never resets, remains available after shutdown,
+and is zero for listening Workers. See each SDK README for logger configuration.
+
 ## Scale to zero
 
 Configure the [Worker wake hook](/production/server-operations#worker-wake-hook)

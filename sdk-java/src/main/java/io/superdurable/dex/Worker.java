@@ -236,6 +236,23 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
+     * Returns cumulative Step declines caused by reserved RPC capacity for this Worker.
+     *
+     * <p>Full-capacity rejections and unknown names are excluded. The count never resets,
+     * remains available after stop, and is safe to read concurrently with handlers.
+     * Listening Workers return zero. Export this value to a monitoring counter:
+     *
+     * <pre>{@code
+     * long declines = worker.getPullReservedRpcDeclines();
+     * }</pre>
+     *
+     * @return the cumulative reserve-decline count, or zero for listening Workers
+     */
+    public long getPullReservedRpcDeclines() {
+        return pullWorker == null ? 0L : pullWorker.getReservedRpcDeclines();
+    }
+
+    /**
      * Returns an independent snapshot for pull Worker readiness probes.
      *
      * <p>After initial readiness, transient failures, reconnects, and stop keep readiness true.

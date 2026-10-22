@@ -36,6 +36,9 @@ type pullWorker struct {
 	flowTypes                      []string
 	queues                         []string
 	maxConcurrentTasks             int
+	reservedRPCTasks               int
+	shouldWarnRPCCapacity          bool
+	reservedRPCDeclines            uint64
 	idleStreamsPerQueue            int
 	stopDrainTimeout               time.Duration
 	stopOnPermanentStreamRejection bool
@@ -94,6 +97,15 @@ func newPullWorker(registry *Registry, service *workerService, conn *grpc.Client
 	if maxConcurrentTasks == 0 {
 		maxConcurrentTasks = runtime.NumCPU()
 	}
+	reservedRPCTasks := 0
+	if options.ReservedRPCTasks != nil {
+		reservedRPCTasks = *options.ReservedRPCTasks
+	} else if maxConcurrentTasks >= 2 {
+		reservedRPCTasks = 1
+	}
+	if reservedRPCTasks < 0 || reservedRPCTasks >= maxConcurrentTasks {
+		return nil, fmt.Errorf("dex: ReservedRPCTasks must be nonnegative and less than MaxConcurrentTasks")
+	}
 	idleStreamsPerQueue := options.IdleStreamsPerQueue
 	if idleStreamsPerQueue < 0 {
 		return nil, fmt.Errorf("dex: IdleStreamsPerQueue must not be negative")
@@ -140,7 +152,9 @@ func newPullWorker(registry *Registry, service *workerService, conn *grpc.Client
 		flowTypes: flowTypes, queues: queues,
 		queueRegistrations: queueRegistrations, registrationChanged: make(chan struct{}), permanentStreamRejected: make(chan struct{}),
 		stopOnPermanentStreamRejection: options.StopOnPermanentStreamRejection,
-		maxConcurrentTasks:             maxConcurrentTasks, idleStreamsPerQueue: idleStreamsPerQueue, stopDrainTimeout: stopDrainTimeout, sdkVersion: sdkVersion,
+		maxConcurrentTasks:             maxConcurrentTasks, reservedRPCTasks: reservedRPCTasks,
+		shouldWarnRPCCapacity: options.ReservedRPCTasks == nil && maxConcurrentTasks == 1,
+		idleStreamsPerQueue:   idleStreamsPerQueue, stopDrainTimeout: stopDrainTimeout, sdkVersion: sdkVersion,
 		ctx: ctx, cancel: cancel, streams: make(map[*pullStream]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}, nil
 }
@@ -196,6 +210,9 @@ func validateAppWorkerID(appWorkerID string) error {
 }
 
 func (worker *pullWorker) run() error {
+	if worker.shouldWarnRPCCapacity {
+		worker.service.logger.Warn("RPCs may wait behind long-running Steps; use MaxConcurrentTasks >= 2 or set ReservedRPCTasks explicitly")
+	}
 	defer func() {
 		worker.streamWG.Wait()
 		close(worker.done)
@@ -566,11 +583,8 @@ func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
 	stream.mu.Lock()
 	supportsUnknownNameRejection := stream.supportsUnknownNameRejection
 	stream.mu.Unlock()
-	reason := dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED
-	if supportsUnknownNameRejection {
-		reason = stream.worker.unknownTaskReason(task)
-	}
-	if reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
+	reason := stream.worker.unknownTaskReason(task)
+	if supportsUnknownNameRejection && reason != dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
 		stream.rejectTask(task.GetTaskId(), reason)
 		return
 	}
@@ -579,6 +593,19 @@ func (stream *pullStream) startTask(task *dexpb.PollWorkerTask) {
 	if stream.isBusy || stream.isDraining || stream.worker.isStopping || stream.worker.busyTasks >= stream.worker.maxConcurrentTasks {
 		stream.mu.Unlock()
 		stream.worker.mu.Unlock()
+		stream.rejectTask(task.GetTaskId(), dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY)
+		return
+	}
+	isStepTask := task.GetWaitFor() != nil || task.GetExecute() != nil
+	if isStepTask && stream.worker.reservedRPCTasks > 0 && stream.worker.busyTasks >= stream.worker.maxConcurrentTasks-stream.worker.reservedRPCTasks && reason == dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED {
+		stream.worker.reservedRPCDeclines++
+		stream.mu.Unlock()
+		stream.worker.mu.Unlock()
+		flowType := task.GetWaitFor().GetFlowType()
+		if task.GetExecute() != nil {
+			flowType = task.GetExecute().GetFlowType()
+		}
+		stream.worker.service.logger.Debug("decline Step task for reserved RPC capacity", "flowType", flowType)
 		stream.rejectTask(task.GetTaskId(), dexpb.PollWorkerTaskRejectReason_POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY)
 		return
 	}

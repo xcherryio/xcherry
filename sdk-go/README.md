@@ -761,6 +761,40 @@ at most 2N-1 calls. A single blob that still does not fit returns
 `blobcache.Config.Logger` defaults to `slog.Default` and is inherited by Client
 and Worker. Their option-level loggers override it for that component.
 
+### Reserved RPC capacity
+
+Set `ReservedRPCTasks` when synchronous RPC latency must stay responsive behind
+long-running Steps. When unset, it reserves one slot if the resolved task limit
+is at least two, otherwise zero. With the CPU-count default, Steps get one fewer
+slot than before. Set it explicitly to zero to opt out. With one slot and no
+explicit reserve, Worker start logs one warning: RPCs may wait behind
+long-running Steps; use a limit of at least two or set the reserve explicitly.
+Flows must stay responsive; Dex cannot prioritize synchronous RPCs like workflow
+engines prioritize reads. The value must be nonnegative and less than
+`MaxConcurrentTasks` after its CPU-count default is resolved; invalid values
+fail construction. RPC and Step handlers count together: WaitFor and Execute
+tasks, including local attempts, are declined with `NO_CAPACITY` when the busy
+count reaches the task limit minus the reserve. API-direct and transactional
+InvokeWorkerRPC tasks can use the full limit.
+
+```go
+pull := dex.PullWorkerOptions{MaxConcurrentTasks: 8, ReservedRPCTasks: ptr.Any(2)}
+```
+
+A decline lets Dex try another Worker without consuming an attempt. If all
+Workers remain at their Step limit, a Step can wait until the dispatch wait
+expires, then receive `NO_WORKER_AVAILABLE`, consume an attempt, and follow its
+retry policy, as when all Workers are full. Local attempts wait the local
+dispatch wait, then fall back according to their policy. Each queue still keeps
+its configured idle streams; a reserve decline does not close a stream or change
+registration readiness.
+
+Each reserve decline records the Flow type through the configured Go logger at
+debug level. Export the cumulative `PullReservedRPCDeclines()` Worker value to
+distinguish reserve pressure from full-capacity rejections. The count excludes
+full-capacity rejections and unknown names, never resets, and remains available
+after shutdown. Listening Workers return zero.
+
 ## Calling FlowService
 
 Client methods target the current run by sending an empty run ID. This follows

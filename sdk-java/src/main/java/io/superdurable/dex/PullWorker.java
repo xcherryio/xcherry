@@ -74,6 +74,7 @@ final class PullWorker {
     private PullRegistrationError initialRegistrationError;
     private PullRegistrationError permanentStreamError;
     private int busyTasks;
+    private long reservedRpcDeclines;
 
     private static final class QueueRegistration {
         private int registeredStreams;
@@ -218,7 +219,14 @@ final class PullWorker {
         return generated.toString();
     }
 
+    synchronized long getReservedRpcDeclines() {
+        return reservedRpcDeclines;
+    }
+
     void runBlocking() {
+        if (options.shouldWarnRpcCapacity()) {
+            LOGGER.warning("RPCs may wait behind long-running Steps; use maxConcurrentTasks >= 2 or set reservedRpcTasks explicitly");
+        }
         boolean interrupted = false;
         synchronized (this) {
             reconcile();
@@ -510,15 +518,25 @@ final class PullWorker {
         }
 
         private void startTask(final PollWorkerTask task) {
-            final PollWorkerTaskRejectReason unknownReason = supportsUnknownNameRejection
-                    ? unknownTaskReason(task)
-                    : PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED;
-            if (unknownReason != PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED) {
+            final PollWorkerTaskRejectReason unknownReason = unknownTaskReason(task);
+            if (supportsUnknownNameRejection
+                    && unknownReason != PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED) {
                 reject(task.getTaskId(), unknownReason);
                 return;
             }
             if (isBusy || isDraining || isStopping
                     || busyTasks >= options.getMaxConcurrentTasks()) {
+                reject(task.getTaskId(), PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
+                return;
+            }
+            final boolean isStepTask = task.hasWaitFor() || task.hasExecute();
+            if (isStepTask && options.getReservedRpcTasks() > 0
+                    && busyTasks >= options.getMaxConcurrentTasks() - options.getReservedRpcTasks()
+                    && unknownReason == PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED) {
+                reservedRpcDeclines++;
+                final String flowType = task.hasWaitFor()
+                        ? task.getWaitFor().getFlowType() : task.getExecute().getFlowType();
+                LOGGER.log(Level.FINE, "decline Step task for reserved RPC capacity: {0}", flowType);
                 reject(task.getTaskId(), PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
                 return;
             }

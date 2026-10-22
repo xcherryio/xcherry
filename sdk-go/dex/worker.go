@@ -93,6 +93,20 @@ type PullWorkerOptions struct {
 	StopOnPermanentStreamRejection bool
 	// MaxConcurrentTasks bounds simultaneous handlers. Zero uses runtime.NumCPU().
 	MaxConcurrentTasks int
+	// ReservedRPCTasks protects synchronous RPC latency from long-running Steps.
+	// Nil reserves one slot when resolved MaxConcurrentTasks is at least two, otherwise zero.
+	// With the CPU-count default, Steps therefore get one fewer slot than before. Set ptr.Any(0) to opt out.
+	// With one slot and nil reserve, Start warns once that RPCs may wait behind Steps.
+	// Flows must stay responsive: Dex cannot prioritize synchronous RPCs like workflow engines prioritize reads.
+	// WaitFor and Execute tasks, including local attempts, are declined when total busy handlers reach
+	// MaxConcurrentTasks minus the reserve. API-direct and transactional RPC tasks may use the full limit.
+	// NewWorker returns an error unless 0 <= reserve < resolved MaxConcurrentTasks.
+	// Declines reassign without consuming an attempt. If all Workers stay at their Step limit until the
+	// dispatch wait expires, NO_WORKER_AVAILABLE consumes an attempt and follows the Step retry policy.
+	// Local attempts wait the local dispatch wait, then fall back according to their policy.
+	// Declines emit a Flow-type debug log, increment PullReservedRPCDeclines, and preserve readiness.
+	// For example: PullWorkerOptions{MaxConcurrentTasks: 8, ReservedRPCTasks: ptr.Any(2)}.
+	ReservedRPCTasks *int
 	// IdleStreamsPerQueue sets waiting streams for each Flow type and the sticky queue. Zero uses one.
 	IdleStreamsPerQueue int
 	// AppWorkerID overrides the generated process identity. Empty generates identity plus eight base32 characters.
@@ -536,6 +550,22 @@ func (worker *Worker) WaitPullRegistered(ctx context.Context) error {
 		return fmt.Errorf("dex: WaitPullRegistered requires a pull Worker")
 	}
 	return worker.pull.waitRegistered(ctx)
+}
+
+// PullReservedRPCDeclines returns the cumulative number of Step tasks declined for reserved RPC capacity.
+// It excludes full-capacity rejections and unknown names. It never resets during this Worker's lifetime.
+// Calls are safe alongside Start, Stop, and handlers. Listening Workers return zero.
+// Export the value to a monitoring counter to distinguish reserve pressure from full capacity:
+//
+//	declines := worker.PullReservedRPCDeclines()
+//	log.Printf("reserved RPC capacity declines: %d", declines)
+func (worker *Worker) PullReservedRPCDeclines() uint64 {
+	if worker.pull == nil {
+		return 0
+	}
+	worker.pull.mu.Lock()
+	defer worker.pull.mu.Unlock()
+	return worker.pull.reservedRPCDeclines
 }
 
 // PullRegistrationState returns an independent snapshot of all pull queue registrations.

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import threading
+from contextlib import ExitStack
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -1483,6 +1484,7 @@ async def _surplus_streams_shrink_after_burst(idle_streams: int) -> None:
         PullWorkerOptions(
             app_worker_id="burst-worker",
             max_concurrent_tasks=3,
+            reserved_rpc_tasks=0,
             idle_streams_per_queue=idle_streams,
         ),
         "localhost:8801",
@@ -1538,3 +1540,153 @@ async def _surplus_streams_shrink_after_burst(idle_streams: int) -> None:
     finally:
         dispatcher.gate.set()
         await runtime.stop()
+
+
+@pytest.mark.parametrize("reserve", [-1, 2, 3])
+def test_invalid_reserved_rpc_tasks(reserve: int) -> None:
+    with pytest.raises(ValueError, match="reserved_rpc_tasks"):
+        PullWorkerOptions(max_concurrent_tasks=2, reserved_rpc_tasks=reserve)
+
+
+@pytest.mark.parametrize("reserve", [0, 1])
+@pytest.mark.parametrize("first_kind", ["wait_for", "execute", "rpc"])
+def test_reserved_rpc_admission(reserve: int, first_kind: str) -> None:
+    asyncio.run(_reserved_rpc_admission(reserve, first_kind))
+
+
+async def _reserved_rpc_admission(reserve: int, first_kind: str) -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(max_concurrent_tasks=2, reserved_rpc_tasks=reserve),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    streams = [PullStream(runtime, None, "queue") for _ in range(20)]
+    senders = [AsyncMock() for _ in streams]
+    gate = asyncio.Event()
+
+    async def execute(task: pb.PollWorkerTask) -> None:
+        await gate.wait()
+
+    patches = ExitStack()
+    for stream, sender in zip(streams, senders):
+        patches.enter_context(patch.object(stream, "_send", sender))
+        patches.enter_context(patch.object(stream, "_execute", execute))
+    try:
+        first_task = pb.PollWorkerTask(task_id="first")
+        getattr(first_task, first_kind).SetInParent()
+        await streams[0]._start_task(first_task)
+        assert runtime._busy_tasks == 1
+        streams[2]._supports_unknown_name_rejection = True
+        for reason, kind in (
+            (pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP, "wait_for"),
+            (pb.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC, "rpc"),
+        ):
+            unknown = pb.PollWorkerTask(task_id="unknown")
+            getattr(unknown, kind).SetInParent()
+            with patch.object(runtime, "unknown_task_reason", return_value=reason):
+                await streams[2]._start_task(unknown)
+            assert senders[2].await_args is not None
+            assert senders[2].await_args.args[0].reject.reason == reason
+            assert runtime.reserved_rpc_declines == 0
+        await streams[1]._start_task(
+            pb.PollWorkerTask(
+                task_id="second-step", execute=pb.InvokeExecuteMethodRequest()
+            )
+        )
+        if reserve:
+            assert senders[1].await_args is not None
+            assert (
+                senders[1].await_args.args[0].reject.reason
+                == pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY
+            )
+            await streams[1]._start_task(
+                pb.PollWorkerTask(task_id="rpc", rpc=pb.InvokeWorkerRPCRequest())
+            )
+        assert runtime._busy_tasks == 2
+        await asyncio.gather(
+            *(
+                stream._start_task(
+                    pb.PollWorkerTask(
+                        task_id=str(index), rpc=pb.InvokeWorkerRPCRequest()
+                    )
+                )
+                for index, stream in enumerate(streams[2:])
+            )
+        )
+        assert runtime._busy_tasks == 2
+        for sender in senders[2:]:
+            assert sender.await_args is not None
+            assert (
+                sender.await_args.args[0].reject.reason
+                == pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY
+            )
+        await streams[2]._start_task(
+            pb.PollWorkerTask(
+                task_id="full-step", wait_for=pb.InvokeWaitForMethodRequest()
+            )
+        )
+        assert senders[2].await_args is not None
+        assert (
+            senders[2].await_args.args[0].reject.reason
+            == pb.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY
+        )
+        assert not streams[2].is_draining
+        assert runtime.reserved_rpc_declines == reserve
+    finally:
+        gate.set()
+        for stream in streams:
+            if stream.handler_task is not None:
+                await stream._finish_handler()
+    patches.close()
+    assert runtime._busy_tasks == 0
+
+
+def test_reserved_rpc_concurrent_step_admission() -> None:
+    asyncio.run(_reserved_rpc_concurrent_step_admission())
+
+
+async def _reserved_rpc_concurrent_step_admission() -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(max_concurrent_tasks=2, reserved_rpc_tasks=1),
+        "localhost:8801",
+        None,
+    )
+    runtime._stopping = asyncio.Event()
+    tasks = [
+        pb.PollWorkerTask(execute=pb.InvokeExecuteMethodRequest()) for _ in range(20)
+    ]
+
+    async def admit(task: pb.PollWorkerTask) -> bool:
+        return runtime.accept_task(task)
+
+    assert sum(await asyncio.gather(*(admit(task) for task in tasks))) == 1
+    assert runtime.accept_task(pb.PollWorkerTask(rpc=pb.InvokeWorkerRPCRequest()))
+    assert not runtime.accept_task(pb.PollWorkerTask(rpc=pb.InvokeWorkerRPCRequest()))
+
+
+@pytest.mark.parametrize("capacity", [1, 4])
+def test_reserved_rpc_default_and_warning(
+    capacity: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtime = PullWorkerRuntime(
+        Registry([]),
+        None,
+        PullWorkerOptions(max_concurrent_tasks=capacity),
+        "localhost:8801",
+        None,
+    )
+    assert runtime.reserved_rpc_tasks == (1 if capacity >= 2 else 0)
+    with caplog.at_level(logging.WARNING), patch(
+        "dex._pull_worker.outbound_worker_task_channel",
+        side_effect=RuntimeError("test stop"),
+    ):
+        with pytest.raises(RuntimeError, match="test stop"):
+            asyncio.run(runtime.run())
+    assert sum("RPCs may wait" in record.message for record in caplog.records) == int(
+        capacity == 1
+    )

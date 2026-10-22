@@ -20,6 +20,7 @@ import { Client, Registry, StepList, Worker, PullRegistrationError, retryAfter, 
 import {
   FlowServiceService,
   type FlowServiceServer,
+  InvokeExecuteMethodRequest,
   InvokeWorkerRPCRequest,
   InvokeWorkerRPCResponse,
   InvokeWaitForMethodRequest,
@@ -61,6 +62,139 @@ test("pull options reject listener conflicts, invalid capacity, and Worker IDs",
   const worker = new Worker(registry, cache, { pull: {} });
   assert.deepEqual(worker.workerTarget, { address: "", pull: true });
   await worker.close();
+});
+
+test("unset reserve defaults to one and a one-slot Worker warns once", async (context) => {
+  const warning = context.mock.method(console, "warn", () => {});
+  for (const maxConcurrentTasks of [1, 4]) {
+    const harness = await startHarness();
+    const worker = harness.worker(async () => InvokeWorkerRPCResponse.create({}), { maxConcurrentTasks });
+    try {
+      assert.equal(Reflect.get(worker, "reservedRpcTasks"), maxConcurrentTasks === 1 ? 0 : 1);
+      worker.start();
+      worker.start();
+      const stream = await harness.nextStream();
+      stream.call.write(registered(true));
+    } finally {
+      await worker.close();
+      await harness.close();
+    }
+  }
+  assert.equal(warning.mock.calls.length, 1);
+  assert.match(String(warning.mock.calls[0]?.arguments[0]), /RPCs may wait/);
+});
+
+for (const reservedRpcTasks of [-1, 2, 3, 0.5, NaN, Infinity]) {
+  test(`invalid RPC reserve ${reservedRpcTasks} is rejected`, () => {
+    assert.throws(() => new PullWorker(new Registry([]), {} as WorkerDispatcher,
+      "127.0.0.1:1", { maxConcurrentTasks: 2, reservedRpcTasks }), RangeError);
+  });
+}
+
+for (const reservedRpcTasks of [0, 1]) {
+  for (const firstKind of ["execute", "waitFor", "rpc"] as const) {
+    test(`reserve ${reservedRpcTasks} admits ${firstKind} and RPCs within total capacity`, async () => {
+      const harness = await startHarness();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const worker = harness.worker(async () => {
+        await gate;
+        return InvokeWorkerRPCResponse.create({});
+      }, { maxConcurrentTasks: 2, reservedRpcTasks });
+      Reflect.set(worker, "dispatcher", {
+        invokeRPC: async () => { await gate; return InvokeWorkerRPCResponse.create({}); },
+        invokeWaitFor: async () => { await gate; return InvokeWaitForMethodResponse.create({}); },
+        invokeExecute: async () => { await gate; return {}; },
+      } as unknown as WorkerDispatcher);
+      const stepTask = (taskId: string, kind: "execute" | "waitFor" = "execute"): PollWorkerTaskResponse => ({
+        frame: { $case: "task", value: { taskId, deadline: undefined,
+          request: kind === "execute"
+            ? { $case: "execute", value: InvokeExecuteMethodRequest.create({ flowType: "TestFlow", stepType: "TestStep" }) }
+            : { $case: "waitFor", value: InvokeWaitForMethodRequest.create({ flowType: "TestFlow", stepType: "TestStep" }) },
+        } },
+      });
+      try {
+        worker.start();
+        const first = await harness.nextStream();
+        first.call.write(registered(true));
+        first.call.write(firstKind === "rpc" ? rpcTask("first") : stepTask("first", firstKind));
+        await until(() => Reflect.get(worker, "busyTaskCount") === 1);
+        const second = await harness.nextStream();
+        second.call.write(registered(true));
+        if (reservedRpcTasks === 1) {
+          second.call.write(stepTask("declined"));
+          const rejection = await second.frame("reject");
+          assert.equal(rejection.frame?.$case === "reject" && rejection.frame.value.reason,
+            PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
+          second.call.write(unknownStepTask("unknown"));
+          const unknown = await second.frame("reject", 2);
+          assert.equal(unknown.frame?.$case === "reject" && unknown.frame.value.reason,
+            PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP);
+          second.call.write(unknownRPCTask("unknown-rpc"));
+          const unknownRpc = await second.frame("reject", 3);
+          assert.equal(unknownRpc.frame?.$case === "reject" && unknownRpc.frame.value.reason,
+            PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_RPC);
+        }
+        second.call.write(reservedRpcTasks === 0 ? stepTask("second-step") : rpcTask("second-rpc"));
+        await until(() => Reflect.get(worker, "busyTaskCount") === 2);
+        const idle = await harness.nextStream();
+        idle.call.write(registered(true));
+        idle.call.write(stepTask("full-step"));
+        idle.call.write(rpcTask("full-rpc"));
+        for (const occurrence of [1, 2]) {
+          const rejection = await idle.frame("reject", occurrence);
+          assert.equal(rejection.frame?.$case === "reject" && rejection.frame.value.reason,
+            PollWorkerTaskRejectReason.POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY);
+        }
+        idle.call.write({ frame: { $case: "ping", value: {} } });
+        await idle.frame("pong");
+        assert.equal(worker.registration.snapshot().isReady, true);
+        assert.equal(worker.reservedRpcDeclines, reservedRpcTasks);
+      } finally {
+        release();
+        await worker.close();
+        await harness.close();
+      }
+    });
+  }
+}
+
+test("simultaneous Step arrivals cannot consume the RPC reserve", async () => {
+  const harness = await startHarness();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const worker = harness.worker(async () => { await gate; return InvokeWorkerRPCResponse.create({}); },
+    { maxConcurrentTasks: 2, reservedRpcTasks: 1, idleStreamsPerQueue: 20 });
+  Reflect.set(worker, "dispatcher", {
+    invokeExecute: async () => { await gate; return {}; },
+    invokeRPC: async () => { await gate; return InvokeWorkerRPCResponse.create({}); },
+  } as unknown as WorkerDispatcher);
+  try {
+    worker.start();
+    const streams: CapturedStream[] = [];
+    for (let index = 0; index < 20; index++) {
+      const stream = await harness.nextStream();
+      stream.call.write(registered(true));
+      streams.push(stream);
+    }
+    await Promise.all(streams.map(async (stream, index) => {
+      stream.call.write({ frame: { $case: "task", value: { taskId: `step-${index}`, deadline: undefined,
+        request: { $case: "execute", value: InvokeExecuteMethodRequest.create({ flowType: "TestFlow", stepType: "TestStep" }) },
+      } } });
+      stream.call.write({ frame: { $case: "ping", value: {} } });
+      await stream.frame("pong");
+    }));
+    assert.equal(Reflect.get(worker, "busyTaskCount"), 1);
+    assert.equal(worker.reservedRpcDeclines, 19);
+    const idle = streams.find((stream) => stream.frames.some((frame) => frame.frame?.$case === "reject"))!;
+    idle.call.write(rpcTask("rpc"));
+    await until(() => Reflect.get(worker, "busyTaskCount") === 2);
+    assert.equal(worker.reservedRpcDeclines, 19);
+  } finally {
+    release();
+    await worker.close();
+    await harness.close();
+  }
 });
 
 test("generated appWorkerID uses host identity and eight base32 characters", async () => {
@@ -145,7 +279,7 @@ test("surplus streams shrink after a burst without closing busy streams or losin
     const worker = harness.worker(async () => {
       await taskGate;
       return InvokeWorkerRPCResponse.create({});
-    }, { maxConcurrentTasks: 3, idleStreamsPerQueue });
+    }, { maxConcurrentTasks: 3, reservedRpcTasks: 0, idleStreamsPerQueue });
     const waitingStreams: CapturedStream[] = [];
     const busyStreams: CapturedStream[] = [];
     try {
@@ -173,6 +307,7 @@ test("surplus streams shrink after a burst without closing busy streams or losin
       for (const stream of busyStreams) await stream.frame("taskFrame");
       await until(() => {
         assert.equal(worker.registration.snapshot().isReady, true);
+
         return (Reflect.get(worker, "streams") as Set<unknown>).size === idleStreamsPerQueue;
       });
       await worker.registration.wait();

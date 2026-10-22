@@ -111,6 +111,7 @@ impl WorkerTarget {
 #[derive(Clone, Debug, Default)]
 pub struct PullWorkerOptions {
     pub(crate) max_concurrent_tasks: Option<usize>,
+    pub(crate) reserved_rpc_tasks: Option<usize>,
     pub(crate) idle_streams_per_queue: Option<usize>,
     pub(crate) app_worker_id: Option<String>,
     pub(crate) stop_drain_timeout: Option<Duration>,
@@ -131,6 +132,33 @@ impl PullWorkerOptions {
     /// from [`crate::Worker::try_new`]. Additional assignments are rejected at capacity.
     pub fn max_concurrent_tasks(mut self, value: usize) -> Self {
         self.max_concurrent_tasks = Some(value);
+        self
+    }
+
+    /// Reserves capacity to protect synchronous RPC latency from long-running Steps.
+    ///
+    /// Unset reserves one slot when resolved capacity is at least two, otherwise zero.
+    /// With the CPU-count default, Steps get one fewer slot than before. Set zero to opt out.
+    /// With one slot and no explicit reserve, start warns once that RPCs may wait behind Steps.
+    /// Flows must stay responsive; Dex cannot prioritize synchronous RPCs like workflow engines prioritize reads.
+    /// WaitFor and Execute tasks, including local attempts, are declined when
+    /// total busy handlers reach the resolved task limit minus this reserve. RPCs use the full limit.
+    /// API-direct and transactional RPCs both use the full limit. Declines reassign without consuming an attempt.
+    /// If all Workers remain at the Step limit through the dispatch wait, NO_WORKER_AVAILABLE
+    /// consumes an attempt and follows the Step retry policy. Local attempts wait the local dispatch
+    /// wait, then fall back according to their policy. Readiness is unaffected.
+    /// Declines emit a tracing debug event and increment [`crate::Worker::pull_reserved_rpc_declines`].
+    ///
+    /// `value` must be less than the task limit after its CPU-count default is resolved.
+    /// [`crate::Worker::try_new`] returns [`crate::SdkError::FlowDefinition`] otherwise.
+    /// Returns these options with the reserve applied.
+    ///
+    /// ```
+    /// use dex_sdk::PullWorkerOptions;
+    /// let pull = PullWorkerOptions::new().max_concurrent_tasks(8).reserved_rpc_tasks(2);
+    /// ```
+    pub fn reserved_rpc_tasks(mut self, value: usize) -> Self {
+        self.reserved_rpc_tasks = Some(value);
         self
     }
 

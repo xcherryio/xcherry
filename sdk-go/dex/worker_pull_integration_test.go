@@ -29,11 +29,12 @@ import (
 
 type pullTestServer struct {
 	dexpb.UnimplementedWorkerTaskServiceServer
-	registered          chan *pullTestStream
-	mu                  sync.Mutex
-	reconnectFirst      bool
-	firstReconnectQueue chan string
-	streams             []*pullTestStream
+	registered                   chan *pullTestStream
+	mu                           sync.Mutex
+	supportsUnknownNameRejection bool
+	reconnectFirst               bool
+	firstReconnectQueue          chan string
+	streams                      []*pullTestStream
 }
 
 type pullTestStream struct {
@@ -59,7 +60,7 @@ func (server *pullTestServer) PollWorkerTask(stream dexpb.WorkerTaskService_Poll
 		server.firstReconnectQueue <- registered.registration.Queue
 		return stream.Send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Reconnect{Reconnect: &dexpb.PollWorkerTaskReconnect{Reason: "owner moved"}}})
 	}
-	if err := stream.Send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{}}}); err != nil {
+	if err := stream.Send(&dexpb.PollWorkerTaskResponse{Frame: &dexpb.PollWorkerTaskResponse_Registered{Registered: &dexpb.PollWorkerTaskRegistered{SupportsUnknownNameRejection: server.supportsUnknownNameRejection}}}); err != nil {
 		return err
 	}
 	select {

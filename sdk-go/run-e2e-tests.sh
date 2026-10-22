@@ -129,7 +129,7 @@ DEX_INTEG_WORKER_MODE="$worker_mode" \
   run_go_test -count=1 -race -v ./integ -run "${DEX_GO_INTEG_TEST_PATTERN:-.}"
 
 DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
-  run_go_test -count=1 -race -tags pullintegration -v ./dex -run '^TestWorkerPullShrinksStreamsWithRealServer$'
+  run_go_test -count=1 -race -tags pullintegration -v ./dex -run '^TestWorkerPull(ShrinksStreams|ReservedRPC)WithRealServer$'
 
 if $coverage; then
   mkdir -p coverage

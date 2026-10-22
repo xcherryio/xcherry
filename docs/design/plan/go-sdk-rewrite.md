@@ -3119,3 +3119,14 @@ Temporal-backed.
 ## UI/UX
 
 N/A: no in-repo web UI.
+
+## Pull Worker RPC reserve contract
+
+PullWorkerOptions.ReservedRPCTasks is an optional pointer. Nil reserves one slot
+when resolved concurrency is at least two, otherwise zero with a startup warning.
+Explicit zero opts out. NewWorker resolves the
+MaxConcurrentTasks default before checking that the reserve is nonnegative and
+strictly below that limit. WaitFor and Execute admission uses the total busy
+handler count and the limit minus the reserve. RPC admission uses the full limit.
+Both checks share the admission lock. Declines use the existing NO_CAPACITY frame
+and preserve idle streams and readiness. Unknown-name rejection remains first.

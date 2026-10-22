@@ -17,7 +17,7 @@ import java.time.Duration;
  *
  * <p>Pass these options to {@link WorkerOptions.Builder#pull(PullWorkerOptions)}. Each Worker polls
  * its sticky queue and every registered Flow type queue. The worker does not open a listener.
- * Zero counts and a zero timeout select defaults. An empty Worker ID is generated per Worker.
+ * Zero task and idle counts and a zero timeout select defaults. An empty Worker ID is generated per Worker.
  *
  * <pre>{@code
  * PullWorkerOptions pull = PullWorkerOptions.newBuilder()
@@ -29,6 +29,8 @@ import java.time.Duration;
  */
 public final class PullWorkerOptions {
     private final int maxConcurrentTasks;
+    private final int reservedRpcTasks;
+    private final boolean shouldWarnRpcCapacity;
     private final int idleStreamsPerQueue;
     private final String appWorkerID;
     private final Duration stopDrainTimeout;
@@ -38,6 +40,12 @@ public final class PullWorkerOptions {
         this.stopOnPermanentStreamRejection = builder.stopOnPermanentStreamRejection;
         this.maxConcurrentTasks = builder.maxConcurrentTasks == 0
                 ? Runtime.getRuntime().availableProcessors() : builder.maxConcurrentTasks;
+        this.shouldWarnRpcCapacity = builder.reservedRpcTasks == null && maxConcurrentTasks == 1;
+        this.reservedRpcTasks = builder.reservedRpcTasks == null
+                ? (maxConcurrentTasks >= 2 ? 1 : 0) : builder.reservedRpcTasks;
+        if (reservedRpcTasks < 0 || reservedRpcTasks >= maxConcurrentTasks) {
+            throw new IllegalArgumentException("reservedRpcTasks must be nonnegative and less than maxConcurrentTasks");
+        }
         this.idleStreamsPerQueue = builder.idleStreamsPerQueue == 0
                 ? 1 : builder.idleStreamsPerQueue;
         this.appWorkerID = builder.appWorkerID;
@@ -56,6 +64,14 @@ public final class PullWorkerOptions {
 
     int getMaxConcurrentTasks() {
         return maxConcurrentTasks;
+    }
+
+    boolean shouldWarnRpcCapacity() {
+        return shouldWarnRpcCapacity;
+    }
+
+    int getReservedRpcTasks() {
+        return reservedRpcTasks;
     }
 
     int getIdleStreamsPerQueue() {
@@ -82,6 +98,7 @@ public final class PullWorkerOptions {
      */
     public static final class Builder {
         private int maxConcurrentTasks;
+        private Integer reservedRpcTasks;
         private int idleStreamsPerQueue;
         private String appWorkerID = "";
         private Duration stopDrainTimeout = Duration.ZERO;
@@ -105,6 +122,35 @@ public final class PullWorkerOptions {
                 throw new IllegalArgumentException("maxConcurrentTasks must not be negative");
             }
             this.maxConcurrentTasks = value;
+            return this;
+        }
+
+        /**
+         * Reserves handler capacity to protect synchronous RPC latency from long-running Steps.
+         *
+         * <p>Unset reserves one slot when the resolved task limit is at least two, otherwise zero.
+         * With the CPU-count default, Steps get one fewer slot than before. Set zero to opt out.
+         * With one slot and no explicit reserve, Worker start logs one warning about RPC starvation.
+         * Flows must stay responsive; Dex cannot prioritize synchronous RPCs like workflow engines prioritize reads.
+         * WaitFor and Execute tasks, including local attempts, are declined when
+         * total busy handlers reach maxConcurrentTasks minus this reserve. RPCs can use the full
+         * task limit, including API-direct and transactional RPCs. Declines reassign without consuming an attempt.
+         * If all Workers remain at the Step limit until the dispatch wait expires, NO_WORKER_AVAILABLE
+         * consumes an attempt and follows the Step retry policy, as when all Workers are full.
+         * Local attempts wait the local dispatch wait, then fall back according to their policy.
+         * Declines emit a FINE debug log, increment getPullReservedRpcDeclines, and preserve readiness.
+         *
+         * <pre>{@code
+         * PullWorkerOptions pull = PullWorkerOptions.newBuilder()
+         *         .maxConcurrentTasks(8).reservedRpcTasks(2).build();
+         * }</pre>
+         *
+         * @param value nonnegative reserved capacity below the resolved limit; null selects the default
+         * @return this builder
+         * @throws IllegalArgumentException from build if value is negative or reaches the task limit
+         */
+        public Builder reservedRpcTasks(final Integer value) {
+            this.reservedRpcTasks = value;
             return this;
         }
 
