@@ -80,6 +80,7 @@ struct StreamSlot {
     is_busy: bool,
     is_registered: bool,
     is_retiring: bool,
+    is_draining: bool,
     retirement: Arc<Notify>,
 }
 
@@ -262,12 +263,20 @@ impl PullWorker {
                 .streams
                 .values()
                 .filter(|slot| {
-                    slot.queue == *queue && slot.is_registered && !slot.is_busy && !slot.is_retiring
+                    slot.queue == *queue
+                        && slot.is_registered
+                        && !slot.is_busy
+                        && !slot.is_retiring
+                        && !slot.is_draining
                 })
                 .count();
             let mut surplus = registered_idle.saturating_sub(self.idle_streams_per_queue);
             for slot in state.streams.values_mut().filter(|slot| {
-                slot.queue == *queue && slot.is_registered && !slot.is_busy && !slot.is_retiring
+                slot.queue == *queue
+                    && slot.is_registered
+                    && !slot.is_busy
+                    && !slot.is_retiring
+                    && !slot.is_draining
             }) {
                 if surplus == 0 {
                     break;
@@ -292,6 +301,7 @@ impl PullWorker {
                         is_busy: false,
                         is_registered: false,
                         is_retiring: false,
+                        is_draining: false,
                         retirement: Arc::clone(&retirement),
                     },
                 );
@@ -393,6 +403,14 @@ impl PullStream {
     async fn poll(&mut self) -> (bool, bool, Result<(), Status>) {
         self.is_registered = false;
         self.has_recorded_result = false;
+        self.shared
+            .state
+            .lock()
+            .expect("pull state lock")
+            .streams
+            .get_mut(&self.stream_id)
+            .expect("registered pull stream")
+            .is_draining = false;
         let result = self.poll_stream().await;
         self.record_stream_result(result.2.as_ref().err());
         result
@@ -514,6 +532,7 @@ impl PullStream {
                                     }
                                 }
                                 Some(ResponseFrame::Reconnect(_)) => {
+                                    self.shared.mark_draining(self.stream_id);
                                     is_draining = true;
                                     if active.is_none() { return (was_registered, true, Ok(())); }
                                     self.shared.notify.notify_one();
@@ -592,7 +611,7 @@ impl PullShared {
         let Some(slot) = state.streams.get_mut(&stream_id) else {
             return false;
         };
-        if slot.is_busy || slot.is_retiring {
+        if slot.is_busy || slot.is_retiring || slot.is_draining {
             return false;
         }
         slot.is_busy = true;
@@ -619,6 +638,7 @@ impl PullShared {
                     && slot.is_registered
                     && !slot.is_busy
                     && !slot.is_retiring
+                    && !slot.is_draining
             })
             .count();
         let should_retire = idle_replacements >= self.idle_streams_per_queue;
@@ -631,6 +651,16 @@ impl PullShared {
         }
         self.notify.notify_one();
         should_retire
+    }
+
+    fn mark_draining(&self, stream_id: u64) {
+        self.state
+            .lock()
+            .expect("pull state lock")
+            .streams
+            .get_mut(&stream_id)
+            .expect("registered pull stream")
+            .is_draining = true;
     }
 
     fn is_retiring(&self, stream_id: u64) -> bool {
@@ -1471,6 +1501,7 @@ mod tests {
                             is_busy: false,
                             is_registered: false,
                             is_retiring: false,
+                            is_draining: false,
                             retirement: Arc::new(Notify::new()),
                         },
                     ),
@@ -1481,6 +1512,7 @@ mod tests {
                             is_busy: false,
                             is_registered: false,
                             is_retiring: false,
+                            is_draining: false,
                             retirement: Arc::new(Notify::new()),
                         },
                     ),
@@ -1499,6 +1531,51 @@ mod tests {
         assert_eq!(PollWorkerTaskRejectReason::NoCapacity as i32, 1);
         shared.release(1);
         assert!(shared.try_accept(2));
+    }
+
+    #[test]
+    fn draining_stream_is_not_an_idle_replacement() {
+        let shared = PullShared {
+            registration: Arc::default(),
+            state: Mutex::new(PullState {
+                streams: HashMap::from([
+                    (
+                        1,
+                        StreamSlot {
+                            queue: "queue".to_string(),
+                            is_busy: true,
+                            is_registered: true,
+                            is_retiring: false,
+                            is_draining: false,
+                            retirement: Arc::new(Notify::new()),
+                        },
+                    ),
+                    (
+                        2,
+                        StreamSlot {
+                            queue: "queue".to_string(),
+                            is_busy: false,
+                            is_registered: true,
+                            is_retiring: false,
+                            is_draining: false,
+                            retirement: Arc::new(Notify::new()),
+                        },
+                    ),
+                ]),
+                busy_tasks: 1,
+                next_stream_id: 3,
+                is_stopping: false,
+                logged_unsupported: false,
+            }),
+            notify: Notify::new(),
+            max_concurrent_tasks: 1,
+            idle_streams_per_queue: 1,
+        };
+        shared.mark_draining(2);
+        assert!(!shared.release(1));
+        assert!(!shared.is_retiring(1));
+        assert!(shared.try_accept(1));
+        assert!(!shared.try_accept(2));
     }
 
     #[test]
@@ -1840,6 +1917,7 @@ mod tests {
                         is_busy: false,
                         is_registered: false,
                         is_retiring: false,
+                        is_draining: false,
                         retirement: Arc::new(Notify::new()),
                     },
                 )]),
@@ -2042,6 +2120,7 @@ mod tests {
                         is_busy: false,
                         is_registered: false,
                         is_retiring: false,
+                        is_draining: false,
                         retirement: Arc::new(Notify::new()),
                     },
                 )]),
