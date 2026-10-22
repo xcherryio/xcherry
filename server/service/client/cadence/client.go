@@ -990,6 +990,7 @@ func (t *cadenceClient) cadenceStepFailure(
 	if err := t.converter.FromData(detailsData, activityError); err != nil {
 		return nil, fmt.Errorf("decode step failure details: %w", err)
 	}
+	failure.PullRouting = activityError.GetPullRouting()
 	failure.Details = serviceerrors.ServiceErrorResponseFromActivityError(
 		cadenceFlowErrorType(reason),
 		activityError,
@@ -1013,6 +1014,7 @@ func (t *cadenceClient) cadenceLocalStepFailure(
 	}
 	return &dexpb.StepMethodFailure{
 		BackendError: reason,
+		PullRouting:  metadata.GetPullRouting(),
 		Details: serviceerrors.ServiceErrorResponseFromActivityError(
 			cadenceFlowErrorType(reason),
 			metadata.GetActivityError(),

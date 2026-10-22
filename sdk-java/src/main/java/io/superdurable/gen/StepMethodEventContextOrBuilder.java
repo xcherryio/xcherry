@@ -122,4 +122,19 @@ public interface StepMethodEventContextOrBuilder extends
    * <code>.dex.StepMethodFailure last_failure_info = 9;</code>
    */
   io.superdurable.gen.StepMethodFailureOrBuilder getLastFailureInfoOrBuilder();
+
+  /**
+   * <code>.dex.PullRouting pull_routing = 10;</code>
+   * @return Whether the pullRouting field is set.
+   */
+  boolean hasPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 10;</code>
+   * @return The pullRouting.
+   */
+  io.superdurable.gen.PullRouting getPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 10;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getPullRoutingOrBuilder();
 }

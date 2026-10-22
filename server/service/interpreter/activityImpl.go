@@ -164,12 +164,14 @@ func (a *Activities) IWaitForM(
 		activityInfo.Attempt,
 	)
 	activityAttempt.ApplyToWorkerContext(req.GetContext())
+	routing := pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), "")
 	var localActivityFailure *dexpb.InternalLocalStepActivityFailure
 	if activityInfo.IsLocalActivity {
 		localActivityFailure = activityAttempt.LocalFailureDetails(
 			req.GetContext(),
 			localInput.GetMethodOptions(),
 		)
+		localActivityFailure.PullRouting = routing
 	}
 	if err := a.restoreHeartbeatValue(ctx, activityInfo, req.GetContext()); err != nil {
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
@@ -221,9 +223,15 @@ func (a *Activities) IWaitForM(
 		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	resp, err := a.receiveWaitForMethodResponse(ctx, stream, req, activityInfo, logger)
+	if pullStream != nil {
+		routing = pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), pullStream.servedByAppWorkerID)
+		if localActivityFailure != nil {
+			localActivityFailure.PullRouting = routing
+		}
+	}
 	printDebugMsg(logger, err, workerAddressForLogging(callCtx, input.GetWorkerTarget()))
 	if err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
@@ -232,22 +240,22 @@ func (a *Activities) IWaitForM(
 		if errors.As(err, &matchingError) {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := validateWaitingCondition(
 		resp.GetWaitingCondition(),
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 	); err != nil {
 		a.emitStepWaitForMethodEvent(req, activityInfo, event.EventTypeWaitForAttemptFail)
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := validateWorkerWaitForResponse(resp, a.unifiedClient.GetBackendType()); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := a.rejectHardDeleteWritesWithoutBlobStore(
 		resp.GetUpsertAttributes(), resp.GetWaitingCondition().GetSubFlowConditions(),
 	); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := a.offloadSubFlowStartInputs(
 		ctx,
@@ -300,6 +308,7 @@ func (a *Activities) IWaitForM(
 	if pullStream != nil {
 		output.ServedByAppWorkerId = pullStream.servedByAppWorkerID
 	}
+	output.PullRouting = pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), output.GetServedByAppWorkerId())
 	return output, nil
 }
 
@@ -380,12 +389,14 @@ func (a *Activities) IExecuteM(
 		activityInfo.Attempt,
 	)
 	activityAttempt.ApplyToWorkerContext(req.GetContext())
+	routing := pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), "")
 	var localActivityFailure *dexpb.InternalLocalStepActivityFailure
 	if activityInfo.IsLocalActivity {
 		localActivityFailure = activityAttempt.LocalFailureDetails(
 			req.GetContext(),
 			localInput.GetMethodOptions(),
 		)
+		localActivityFailure.PullRouting = routing
 	}
 	if err := a.restoreHeartbeatValue(ctx, activityInfo, req.GetContext()); err != nil {
 		return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
@@ -450,9 +461,15 @@ func (a *Activities) IExecuteM(
 		if pullStream == nil && input.GetWorkerTarget().GetIsPullMode() {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	resp, err := a.receiveExecuteMethodResponse(ctx, stream, req, activityInfo, logger)
+	if pullStream != nil {
+		routing = pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), pullStream.servedByAppWorkerID)
+		if localActivityFailure != nil {
+			localActivityFailure.PullRouting = routing
+		}
+	}
 	printDebugMsg(logger, err, workerAddressForLogging(callCtx, input.GetWorkerTarget()))
 	if err != nil {
 		a.emitStepExecuteMethodEvent(req, activityInfo, event.EventTypeExecuteAttemptFail)
@@ -461,17 +478,17 @@ func (a *Activities) IExecuteM(
 		if errors.As(err, &matchingError) {
 			return nil, newServerSideActivityError(ctx, provider, err, localActivityFailure)
 		}
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := validateExecuteResponse(
 		resp,
 		a.cfg.Interpreter.InterpreterActivityConfig.EffectiveMinimumStepHeartbeatTimeout(),
 		a.unifiedClient.GetBackendType(),
 	); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := a.rejectHardDeleteWritesWithoutBlobStore(resp.GetUpsertAttributes(), nil); err != nil {
-		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure)
+		return nil, newWorkerSideActivityError(ctx, provider, a.unifiedClient.GetBackendType(), err, localActivityFailure, routing)
 	}
 	if err := a.persistStepEventInput(
 		ctx,
@@ -531,6 +548,7 @@ func (a *Activities) IExecuteM(
 	if pullStream != nil {
 		output.ServedByAppWorkerId = pullStream.servedByAppWorkerID
 	}
+	output.PullRouting = pulldispatch.Routing(input.GetWorkerTarget(), input.GetDexTaskQueue(), output.GetServedByAppWorkerId())
 	return output, nil
 }
 
@@ -1976,6 +1994,7 @@ func newWorkerSideActivityError(
 	backendType service.BackendType,
 	err error,
 	localActivityFailure *dexpb.InternalLocalStepActivityFailure,
+	routing ...*dexpb.PullRouting,
 ) error {
 	if ctx.Err() == context.Canceled {
 		return context.Canceled
@@ -1992,6 +2011,9 @@ func newWorkerSideActivityError(
 	}
 	activityError := &dexpb.InternalActivityError{
 		WorkerGrpcStatus: int32(grpcStatus.Code()),
+	}
+	if len(routing) > 0 {
+		activityError.PullRouting = routing[0]
 	}
 	for _, statusDetail := range grpcStatus.Details() {
 		workerError, ok := statusDetail.(*dexpb.WorkerErrorResponse)

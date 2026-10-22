@@ -42,4 +42,19 @@ public interface InternalActivityErrorOrBuilder extends
    * <code>.dex.InternalWorkerError worker_error = 3;</code>
    */
   io.superdurable.gen.InternalWorkerErrorOrBuilder getWorkerErrorOrBuilder();
+
+  /**
+   * <code>.dex.PullRouting pull_routing = 4;</code>
+   * @return Whether the pullRouting field is set.
+   */
+  boolean hasPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 4;</code>
+   * @return The pullRouting.
+   */
+  io.superdurable.gen.PullRouting getPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 4;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getPullRoutingOrBuilder();
 }

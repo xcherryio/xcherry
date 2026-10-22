@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { displayEventNumber } from '@/lib/timeline';
 import type { FlowHistoryEvent, FlowState, FlowSummary } from '@/lib/types';
+import { FlowRouting, PullRouting, flowRoutingData } from './PullRouting';
 import { JsonView } from '../../components/JsonView';
 import { EventDetails, eventTitle, FailureContent, SemanticEventDetails } from './EventDetails';
 import type { StateWriteKind } from './StateWriteDialog';
@@ -111,6 +112,7 @@ export function FlowOverview({
               <h2>Live Flow State</h2>
             </div>
           </div>
+          <FlowRouting routing={flowRoutingData(state, events)} flowType={summary.flowType} />
           {!state && <p className="muted">Live state is queried only while this run is active.</p>}
           {state && (
             <>
@@ -153,6 +155,10 @@ export function FlowOverview({
                     <div className="active-step-content">
                       <code>{step.stepExecutionId}</code>
                       <span>From {step.fromStepExecutionId || '—'}</span>
+                      {flowRoutingData(state, events).workerTarget.isPullMode === true && <>
+                        <PullRouting value={step.waitForPullRouting} label="WaitFor routing" />
+                        <PullRouting value={step.executePullRouting} label="Execute routing" />
+                      </>}
                       {step.waitingCondition && Object.keys(step.waitingCondition).length > 0 && (
                         <JsonView
                           value={step.waitingCondition}

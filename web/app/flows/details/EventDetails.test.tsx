@@ -681,3 +681,25 @@ describe('flow start event details', () => {
     expect(markup).toContain('Flow timed out');
   });
 });
+
+describe('routing context and dispatch failures', () => {
+  it('shows the serving Worker and dispatch sticky Worker in method context', () => {
+    const event = executeEvent(1);
+    (event.payload.context as Record<string, unknown>).pullRouting = { servedByAppWorkerId: 'worker-new', stickyAppWorkerId: 'worker-old', source: 2 };
+    const markup = renderDetails(event);
+    expect(markup).toContain('worker-new');
+    expect(markup).toContain('worker-old');
+    expect(markup).toContain('Flow type queue');
+  });
+  it.each([
+    ['no Worker available for queue PaymentFlow', 'No Worker available'],
+    ['Worker disconnected during pull dispatch: connection lost', 'Worker disconnected'],
+    ['no pull Worker registered Step "Charge"', 'Unknown Step type: dispatch timed out'],
+    ['no pull Worker registered RPC "getStatus"', 'Unknown RPC name: dispatch timed out'],
+  ])('labels dispatch error %s', (detail, expected) => {
+    const event = executeEvent(1);
+    event.type = 'StepExecuteFailed';
+    event.payload.output = { failure: { details: { detail } } };
+    expect(renderDetails(event)).toContain(expected);
+  });
+});

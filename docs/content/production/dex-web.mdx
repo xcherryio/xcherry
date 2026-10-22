@@ -87,6 +87,14 @@ Set **web.startFlowWorkerTargetHeadless** or **DEX_WEB_START_FLOW_WORKER_TARGET_
 
 The **POST /api/v2/start** request accepts **workerTargetAddress** or **workerTargetPull: true**. Sending both returns HTTP 400. If neither is supplied, **web.startFlowWorkerTargetPull** selects a pull target when true. Its default is false, and an explicit address still works. **workerTargetPull: false** requires an address even when the pull default is enabled. **DEX_WEB_START_FLOW_WORKER_TARGET_PULL** sets the same default through the environment. The dialog initially selects **Pull Worker** when this default is true. Headless routing applies only to address targets, so both settings can be enabled together. Dex Web does not check for a registered pull Worker before starting because registrations can change before dispatch.
 
+## Worker routing
+
+Flow detail shows the **Worker target**: a listening address, a headless address, or **Pull**. A pull Flow also shows **Flow type queue**, named after its Flow type, and **Sticky app Worker ID**, the last app Worker recorded as serving the Flow.
+
+For pull Flows, active Steps and Step history show routing for **WaitFor** and **Execute**. **Serving app Worker ID** identifies the Worker that served the method. **Queue source** is **Sticky queue** when that Worker matches the **Dispatch sticky app Worker ID** recorded for the dispatch. Otherwise, a completed dispatch shows **Flow type queue**. A pending or failed dispatch without a serving Worker shows **—** for its Worker and queue source.
+
+A dispatch failure distinguishes no available Worker, an unknown Step type or RPC name that exhausted the dispatch wait, and a Worker disconnect. RPC history shows the serving app Worker ID for recorded invocations. Address targets show their address without pull routing fields. Older runs without routing metadata show **—**.
+
 ## Search and Summary
 
 An indexed Attribute declaration binds the Dex Attribute key, physical search index key, index type, application value type, and description. The analyzer compares every value with the Go definition and the SDK's effective index configuration.

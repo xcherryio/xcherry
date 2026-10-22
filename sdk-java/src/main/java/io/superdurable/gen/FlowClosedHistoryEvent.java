@@ -33,6 +33,7 @@ private static final long serialVersionUID = 0L;
     errorType_ = 0;
     errorMessage_ = "";
     continuedToRunId_ = "";
+    stickyAppWorkerId_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -208,6 +209,45 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int STICKY_APP_WORKER_ID_FIELD_NUMBER = 6;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object stickyAppWorkerId_ = "";
+  /**
+   * <code>string sticky_app_worker_id = 6;</code>
+   * @return The stickyAppWorkerId.
+   */
+  @java.lang.Override
+  public java.lang.String getStickyAppWorkerId() {
+    java.lang.Object ref = stickyAppWorkerId_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      stickyAppWorkerId_ = s;
+      return s;
+    }
+  }
+  /**
+   * <code>string sticky_app_worker_id = 6;</code>
+   * @return The bytes for stickyAppWorkerId.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getStickyAppWorkerIdBytes() {
+    java.lang.Object ref = stickyAppWorkerId_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      stickyAppWorkerId_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -237,6 +277,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(continuedToRunId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 5, continuedToRunId_);
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(stickyAppWorkerId_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 6, stickyAppWorkerId_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -263,6 +306,9 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(continuedToRunId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(5, continuedToRunId_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(stickyAppWorkerId_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(6, stickyAppWorkerId_);
     }
     return size;
   }
@@ -296,6 +342,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getErrorMessage())) return false;
     if (!getContinuedToRunId()
         .equals(other.getContinuedToRunId())) return false;
+    if (!getStickyAppWorkerId()
+        .equals(other.getStickyAppWorkerId())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -319,6 +367,8 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getErrorMessage().hashCode();
     hash = (37 * hash) + CONTINUED_TO_RUN_ID_FIELD_NUMBER;
     hash = (53 * hash) + getContinuedToRunId().hashCode();
+    hash = (37 * hash) + STICKY_APP_WORKER_ID_FIELD_NUMBER;
+    hash = (53 * hash) + getStickyAppWorkerId().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -461,6 +511,7 @@ private static final long serialVersionUID = 0L;
       errorType_ = 0;
       errorMessage_ = "";
       continuedToRunId_ = "";
+      stickyAppWorkerId_ = "";
       return this;
     }
 
@@ -519,6 +570,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000010) != 0)) {
         result.continuedToRunId_ = continuedToRunId_;
       }
+      if (((from_bitField0_ & 0x00000020) != 0)) {
+        result.stickyAppWorkerId_ = stickyAppWorkerId_;
+      }
     }
 
     @java.lang.Override
@@ -573,6 +627,11 @@ private static final long serialVersionUID = 0L;
       if (!other.getContinuedToRunId().isEmpty()) {
         continuedToRunId_ = other.continuedToRunId_;
         bitField0_ |= 0x00000010;
+        onChanged();
+      }
+      if (!other.getStickyAppWorkerId().isEmpty()) {
+        stickyAppWorkerId_ = other.stickyAppWorkerId_;
+        bitField0_ |= 0x00000020;
         onChanged();
       }
       this.mergeUnknownFields(other.getUnknownFields());
@@ -634,6 +693,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000010;
               break;
             } // case 42
+            case 50: {
+              stickyAppWorkerId_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000020;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1135,6 +1199,78 @@ private static final long serialVersionUID = 0L;
       checkByteStringIsUtf8(value);
       continuedToRunId_ = value;
       bitField0_ |= 0x00000010;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object stickyAppWorkerId_ = "";
+    /**
+     * <code>string sticky_app_worker_id = 6;</code>
+     * @return The stickyAppWorkerId.
+     */
+    public java.lang.String getStickyAppWorkerId() {
+      java.lang.Object ref = stickyAppWorkerId_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        stickyAppWorkerId_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <code>string sticky_app_worker_id = 6;</code>
+     * @return The bytes for stickyAppWorkerId.
+     */
+    public com.google.protobuf.ByteString
+        getStickyAppWorkerIdBytes() {
+      java.lang.Object ref = stickyAppWorkerId_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        stickyAppWorkerId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <code>string sticky_app_worker_id = 6;</code>
+     * @param value The stickyAppWorkerId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStickyAppWorkerId(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      stickyAppWorkerId_ = value;
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>string sticky_app_worker_id = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearStickyAppWorkerId() {
+      stickyAppWorkerId_ = getDefaultInstance().getStickyAppWorkerId();
+      bitField0_ = (bitField0_ & ~0x00000020);
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>string sticky_app_worker_id = 6;</code>
+     * @param value The bytes for stickyAppWorkerId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStickyAppWorkerIdBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      stickyAppWorkerId_ = value;
+      bitField0_ |= 0x00000020;
       onChanged();
       return this;
     }

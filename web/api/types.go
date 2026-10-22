@@ -82,6 +82,7 @@ type historyEvent struct {
 }
 
 type flowState struct {
+	StickyAppWorkerID      string                 `json:"stickyAppWorkerId,omitempty"`
 	FlowConfig             map[string]interface{} `json:"flowConfig"`
 	Attributes             []keyValue             `json:"attributes"`
 	ActiveStepExecutions   []activeStepExecution  `json:"activeStepExecutions"`
@@ -121,6 +122,8 @@ type streamMessage struct {
 }
 
 type activeStepExecution struct {
+	WaitForPullRouting  map[string]interface{} `json:"waitForPullRouting,omitempty"`
+	ExecutePullRouting  map[string]interface{} `json:"executePullRouting,omitempty"`
 	StepExecutionID     string                 `json:"stepExecutionId"`
 	FromStepExecutionID string                 `json:"fromStepExecutionId"`
 	StepType            string                 `json:"stepType"`

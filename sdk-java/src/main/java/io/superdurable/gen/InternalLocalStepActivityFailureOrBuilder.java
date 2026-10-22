@@ -66,4 +66,19 @@ public interface InternalLocalStepActivityFailureOrBuilder extends
    * <code>.dex.InternalActivityError activity_error = 5;</code>
    */
   io.superdurable.gen.InternalActivityErrorOrBuilder getActivityErrorOrBuilder();
+
+  /**
+   * <code>.dex.PullRouting pull_routing = 6;</code>
+   * @return Whether the pullRouting field is set.
+   */
+  boolean hasPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 6;</code>
+   * @return The pullRouting.
+   */
+  io.superdurable.gen.PullRouting getPullRouting();
+  /**
+   * <code>.dex.PullRouting pull_routing = 6;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getPullRoutingOrBuilder();
 }

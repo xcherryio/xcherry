@@ -32,6 +32,7 @@ private static final long serialVersionUID = 0L;
     activeStepExecutions_ = java.util.Collections.emptyList();
     queuedSteps_ = java.util.Collections.emptyList();
     completedSteps_ = java.util.Collections.emptyList();
+    stickyAppWorkerId_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -334,6 +335,45 @@ io.superdurable.gen.ChannelValues defaultValue) {
     return completedSteps_.get(index);
   }
 
+  public static final int STICKY_APP_WORKER_ID_FIELD_NUMBER = 7;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object stickyAppWorkerId_ = "";
+  /**
+   * <code>string sticky_app_worker_id = 7;</code>
+   * @return The stickyAppWorkerId.
+   */
+  @java.lang.Override
+  public java.lang.String getStickyAppWorkerId() {
+    java.lang.Object ref = stickyAppWorkerId_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      stickyAppWorkerId_ = s;
+      return s;
+    }
+  }
+  /**
+   * <code>string sticky_app_worker_id = 7;</code>
+   * @return The bytes for stickyAppWorkerId.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getStickyAppWorkerIdBytes() {
+    java.lang.Object ref = stickyAppWorkerId_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      stickyAppWorkerId_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -368,6 +408,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
         5);
     for (int i = 0; i < completedSteps_.size(); i++) {
       output.writeMessage(6, completedSteps_.get(i));
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(stickyAppWorkerId_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 7, stickyAppWorkerId_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -423,6 +466,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
           }
           size += 1 * count;
         }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(stickyAppWorkerId_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(7, stickyAppWorkerId_);
+    }
     return size;
   }
   @java.lang.Override
@@ -462,6 +508,8 @@ io.superdurable.gen.ChannelValues defaultValue) {
         other.internalGetPendingChannelMessages())) return false;
     if (!getCompletedStepsList()
         .equals(other.getCompletedStepsList())) return false;
+    if (!getStickyAppWorkerId()
+        .equals(other.getStickyAppWorkerId())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -497,6 +545,8 @@ io.superdurable.gen.ChannelValues defaultValue) {
       hash = (37 * hash) + COMPLETED_STEPS_FIELD_NUMBER;
       hash = (53 * hash) + getCompletedStepsList().hashCode();
     }
+    hash = (37 * hash) + STICKY_APP_WORKER_ID_FIELD_NUMBER;
+    hash = (53 * hash) + getStickyAppWorkerId().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -694,6 +744,7 @@ io.superdurable.gen.ChannelValues defaultValue) {
         completedStepsBuilder_.clear();
       }
       bitField0_ = (bitField0_ & ~0x00000020);
+      stickyAppWorkerId_ = "";
       return this;
     }
 
@@ -776,6 +827,9 @@ io.superdurable.gen.ChannelValues defaultValue) {
       }
       if (((from_bitField0_ & 0x00000010) != 0)) {
         result.pendingChannelMessages_ = internalGetPendingChannelMessages().build(PendingChannelMessagesDefaultEntryHolder.defaultEntry);
+      }
+      if (((from_bitField0_ & 0x00000040) != 0)) {
+        result.stickyAppWorkerId_ = stickyAppWorkerId_;
       }
       result.bitField0_ |= to_bitField0_;
     }
@@ -902,6 +956,11 @@ io.superdurable.gen.ChannelValues defaultValue) {
           }
         }
       }
+      if (!other.getStickyAppWorkerId().isEmpty()) {
+        stickyAppWorkerId_ = other.stickyAppWorkerId_;
+        bitField0_ |= 0x00000040;
+        onChanged();
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -996,6 +1055,11 @@ io.superdurable.gen.ChannelValues defaultValue) {
               }
               break;
             } // case 50
+            case 58: {
+              stickyAppWorkerId_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000040;
+              break;
+            } // case 58
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2247,6 +2311,78 @@ io.superdurable.gen.ChannelValues defaultValue) {
         completedSteps_ = null;
       }
       return completedStepsBuilder_;
+    }
+
+    private java.lang.Object stickyAppWorkerId_ = "";
+    /**
+     * <code>string sticky_app_worker_id = 7;</code>
+     * @return The stickyAppWorkerId.
+     */
+    public java.lang.String getStickyAppWorkerId() {
+      java.lang.Object ref = stickyAppWorkerId_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        stickyAppWorkerId_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <code>string sticky_app_worker_id = 7;</code>
+     * @return The bytes for stickyAppWorkerId.
+     */
+    public com.google.protobuf.ByteString
+        getStickyAppWorkerIdBytes() {
+      java.lang.Object ref = stickyAppWorkerId_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        stickyAppWorkerId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <code>string sticky_app_worker_id = 7;</code>
+     * @param value The stickyAppWorkerId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStickyAppWorkerId(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      stickyAppWorkerId_ = value;
+      bitField0_ |= 0x00000040;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>string sticky_app_worker_id = 7;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearStickyAppWorkerId() {
+      stickyAppWorkerId_ = getDefaultInstance().getStickyAppWorkerId();
+      bitField0_ = (bitField0_ & ~0x00000040);
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>string sticky_app_worker_id = 7;</code>
+     * @param value The bytes for stickyAppWorkerId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStickyAppWorkerIdBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      stickyAppWorkerId_ = value;
+      bitField0_ |= 0x00000040;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.GetFlowStateResponse)

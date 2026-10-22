@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+import type { FlowRoutingData } from '@/app/flows/details/PullRouting';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import type { FlowSummary } from '@/lib/types';
@@ -71,6 +72,7 @@ export function RunWorkspace() {
   const [band, setBand] = useState<StepBand | null>(null);
   const [stepView, setStepView] = useState<StepContextView | null>(null);
   const [actionable, setActionable] = useState<ActionableStep[]>([]);
+  const [routing, setRouting] = useState<FlowRoutingData | null>(null);
   const [summary, setSummary] = useState<FlowSummary | null>(null);
   const [tick, setTick] = useState(0);
   /** Bumped to tell the canvas to drop its Step selection. */
@@ -199,6 +201,7 @@ export function RunWorkspace() {
             focusBlockingStep={showRun}
             refocusKey={refocusKey}
             onSummary={setSummary}
+            onRouting={setRouting}
             showStepPanel={false}
             onTick={onTick}
           />
@@ -238,6 +241,7 @@ export function RunWorkspace() {
                 reloadKey={tick}
                 stepContext={stepView}
                 summary={summary}
+                routing={routing}
                 onClose={() => {
                   setDrawerOpen(false);
                   setDeselectKey((previous) => previous + 1);

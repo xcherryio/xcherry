@@ -168,4 +168,16 @@ public interface RpcExecutionCompletedEventOrBuilder extends
    */
   io.superdurable.gen.ChannelMessageDeletionOrBuilder getDeleteFromChannelOrBuilder(
       int index);
+
+  /**
+   * <code>string served_by_app_worker_id = 10;</code>
+   * @return The servedByAppWorkerId.
+   */
+  java.lang.String getServedByAppWorkerId();
+  /**
+   * <code>string served_by_app_worker_id = 10;</code>
+   * @return The bytes for servedByAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getServedByAppWorkerIdBytes();
 }

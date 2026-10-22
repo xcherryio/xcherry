@@ -30,7 +30,9 @@ const SplitWaitForAttributeTimeoutSemanticsVersion = 4
 
 const TypedSubFlowStartFailureVersion = 5
 
-const MaxOfAllVersions = TypedSubFlowStartFailureVersion
+const PullRoutingVisibilityVersion = 6
+
+const MaxOfAllVersions = PullRoutingVisibilityVersion
 
 // GlobalVersioner is the forward hook for determinism-safe interpreter changes.
 // See https://stackoverflow.com/questions/73941723 for the pattern.
@@ -59,4 +61,8 @@ func (v *GlobalVersioner) UsesSplitWaitForAttributeTimeoutSemantics() bool {
 
 func (v *GlobalVersioner) UsesTypedSubFlowStartFailures() bool {
 	return v.version >= TypedSubFlowStartFailureVersion
+}
+
+func (v *GlobalVersioner) UsesPullRoutingVisibility() bool {
+	return v.version >= PullRoutingVisibilityVersion
 }

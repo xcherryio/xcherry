@@ -33,6 +33,13 @@ const (
 	dexWebV2ActionRPCName      = "ApproveDecision"
 )
 
+type dexWebPullRoutingProbe struct {
+	runID  string
+	test   *testing.T
+	client *dexWebV2Client
+	flowID string
+}
+
 type dexWebV2TestFlow struct {
 	flow          dex.Flow
 	flowType      string
@@ -180,6 +187,9 @@ func TestDexWebV2ServesGoFlowsWithoutTypeOverrides(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
 
+		if isPullWorkerMode {
+			web.requirePullStateRouting(t, flowID)
+		}
 		web.approveDecision(t, testFlow, flowID)
 		require.Equal(t, dex.FlowCompleted, waitForFlow(t, flowID, false).Status)
 	}
@@ -305,6 +315,12 @@ func (web *dexWebV2Client) historyStepTypes(t *testing.T, flowID string) []strin
 			stepContext, _ := event.Payload["context"].(map[string]any)
 			if stepType, isString := stepContext["stepType"].(string); isString && stepType != "" {
 				stepTypes = append(stepTypes, stepType)
+				if isPullWorkerMode {
+					routing, hasRouting := stepContext["pullRouting"].(map[string]any)
+					require.True(t, hasRouting, "missing routing for %s", stepType)
+					require.NotEmpty(t, routing["servedByAppWorkerId"])
+					require.Contains(t, []any{float64(1), float64(2)}, routing["source"])
+				}
 			}
 		}
 		if page.NextPageToken == "" {
@@ -361,4 +377,41 @@ func dexWebAddress() string {
 		return address
 	}
 	return "127.0.0.1:8802"
+}
+
+func (web *dexWebV2Client) requirePullStateRouting(t *testing.T, flowID string) {
+	t.Helper()
+	var summary dexWebFlowSummary
+	status, err := web.getJSON("/api/flows/summary?flowId="+url.QueryEscape(flowID), &summary)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	probe := &dexWebPullRoutingProbe{test: t, client: web, flowID: flowID, runID: summary.RunID}
+	require.Eventually(t, probe.hasServingWorker, dexWebV2ConvergenceTimeout, dexWebV2PollInterval)
+}
+
+func (p *dexWebPullRoutingProbe) hasServingWorker() bool {
+	var state struct {
+		StickyAppWorkerID    string `json:"stickyAppWorkerId"`
+		ActiveStepExecutions []struct {
+			WaitForPullRouting struct {
+				ServedByAppWorkerID string `json:"servedByAppWorkerId"`
+				Source              int    `json:"source"`
+			} `json:"waitForPullRouting"`
+		} `json:"activeStepExecutions"`
+	}
+	status, err := p.client.getJSON("/api/flows/state?"+url.Values{"flowId": {p.flowID}, "runId": {p.runID}}.Encode(), &state)
+	if err != nil {
+		p.test.Logf("waiting for pull state: %v", err)
+		return false
+	}
+	if status != http.StatusOK {
+		p.test.Logf("waiting for pull state: HTTP %d", status)
+		return false
+	}
+	for _, step := range state.ActiveStepExecutions {
+		if state.StickyAppWorkerID != "" && step.WaitForPullRouting.ServedByAppWorkerID == state.StickyAppWorkerID {
+			return true
+		}
+	}
+	return false
 }

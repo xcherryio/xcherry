@@ -18,6 +18,7 @@ import (
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/event"
+	"github.com/superdurable/dex/service/common/pulldispatch"
 	"github.com/superdurable/dex/service/common/retry"
 	"github.com/superdurable/dex/service/interpreter/condition"
 	interpreterconfig "github.com/superdurable/dex/service/interpreter/config"
@@ -896,6 +897,9 @@ func (i *Interpreter) processStepExecution(
 
 	if isResumeFromContinueAsNew {
 		resumeRequest := stepRequest.GetStepResumeRequest()
+		if globalVersioner.UsesPullRoutingVisibility() {
+			continueAsNewer.RecordWaitForPullRouting(stepExeId, resumeRequest.GetWaitForPullRouting())
+		}
 		stepExeLocals = resumeRequest.GetStepExeLocals()
 		waitingCondition = resumeRequest.GetWaitingCondition()
 		if resumeRequest.GetCompletedConditions() != nil &&
@@ -950,6 +954,9 @@ func (i *Interpreter) processStepExecution(
 			activityInput.DispatchWait = durationpb.New(i.activities.MatchingConfig().DispatchWait)
 			activityInput.StickyWait = durationpb.New(i.activities.MatchingConfig().StickyWait)
 		}
+		if globalVersioner.UsesPullRoutingVisibility() {
+			continueAsNewer.RecordWaitForPullRouting(stepExeId, pulldispatch.Routing(activityInput.GetWorkerTarget(), activityInput.GetDexTaskQueue(), ""))
+		}
 		var activityOutput dexpb.InvokeWaitForMethodActivityOutput
 		waitForMethErr = provider.ExecuteActivity(
 			&activityOutput,
@@ -966,6 +973,10 @@ func (i *Interpreter) processStepExecution(
 
 		if err := ctx.Err(); err != nil {
 			return nil, service.StepExecutionStatusInternalError, err
+		}
+
+		if globalVersioner.UsesPullRoutingVisibility() && waitForMethErr == nil {
+			continueAsNewer.RecordWaitForPullRouting(stepExeId, activityOutput.GetPullRouting())
 		}
 
 		if waitForMethErr != nil && !shouldProceedOnWaitForMethodError(step) {
@@ -1306,6 +1317,9 @@ func (i *Interpreter) invokeExecuteMethod(
 		activityInput.DispatchWait = durationpb.New(i.activities.MatchingConfig().DispatchWait)
 		activityInput.StickyWait = durationpb.New(i.activities.MatchingConfig().StickyWait)
 	}
+	if globalVersioner.UsesPullRoutingVisibility() {
+		continueAsNewer.RecordExecutePullRouting(stepExeId, pulldispatch.Routing(activityInput.GetWorkerTarget(), activityInput.GetDexTaskQueue(), ""))
+	}
 	var activityOutput dexpb.InvokeExecuteMethodActivityOutput
 	exeMethErr := provider.ExecuteActivity(
 		&activityOutput,
@@ -1329,6 +1343,9 @@ func (i *Interpreter) invokeExecuteMethod(
 			return nil, service.StepExecutionStatusFailedAndProceed, exeMethErr
 		}
 		return nil, service.StepExecutionStatusFailedNoProceed, exeMethErr
+	}
+	if globalVersioner.UsesPullRoutingVisibility() {
+		continueAsNewer.RecordExecutePullRouting(stepExeId, activityOutput.GetPullRouting())
 	}
 	executeResponse := activityOutput.GetResponse()
 	if err := persistenceManager.ApplyAttributeWritesWithActionPermissionMappings(

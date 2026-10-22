@@ -151,4 +151,16 @@ io.superdurable.gen.ChannelValues defaultValue);
    */
   io.superdurable.gen.StepCompletionOutputOrBuilder getCompletedStepsOrBuilder(
       int index);
+
+  /**
+   * <code>string sticky_app_worker_id = 7;</code>
+   * @return The stickyAppWorkerId.
+   */
+  java.lang.String getStickyAppWorkerId();
+  /**
+   * <code>string sticky_app_worker_id = 7;</code>
+   * @return The bytes for stickyAppWorkerId.
+   */
+  com.google.protobuf.ByteString
+      getStickyAppWorkerIdBytes();
 }

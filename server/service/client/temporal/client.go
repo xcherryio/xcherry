@@ -608,7 +608,7 @@ func (t *temporalClient) buildTemporalHistoryEvents(
 	localFallbackCounts := map[string]int{}
 	acceptedRpcUpdates := map[int64]*dexpb.InvokeRPCRequest{}
 	acceptedChannelDeleteUpdates := map[int64]*dexpb.DeleteChannelMessageRequest{}
-	rpcLocalActivityResults := map[string]*dexpb.InvokeWorkerRPCResponse{}
+	rpcLocalActivityResults := map[string]*dexpb.InvokeWorkerRPCActivityOutput{}
 	for iterator.HasNext() {
 		event, err := iterator.Next()
 		if err != nil {
@@ -663,7 +663,7 @@ func (t *temporalClient) addTemporalHistoryEvent(
 	localFallbackCounts map[string]int,
 	acceptedRpcUpdates map[int64]*dexpb.InvokeRPCRequest,
 	acceptedChannelDeleteUpdates map[int64]*dexpb.DeleteChannelMessageRequest,
-	rpcLocalActivityResults map[string]*dexpb.InvokeWorkerRPCResponse,
+	rpcLocalActivityResults map[string]*dexpb.InvokeWorkerRPCActivityOutput,
 	event *history.HistoryEvent,
 ) error {
 	eventTime := event.GetEventTime().AsTime()
@@ -998,7 +998,7 @@ func (t *temporalClient) recordTemporalCompletedActivity(
 func (t *temporalClient) recordTemporalLocalActivity(
 	builder *historybuilder.Builder,
 	localFallbackCounts map[string]int,
-	rpcLocalActivityResults map[string]*dexpb.InvokeWorkerRPCResponse,
+	rpcLocalActivityResults map[string]*dexpb.InvokeWorkerRPCActivityOutput,
 	event *history.HistoryEvent,
 ) error {
 	attributes := event.GetMarkerRecordedEventAttributes()
@@ -1076,7 +1076,7 @@ func (t *temporalClient) recordTemporalLocalActivity(
 		if err := t.dataConverter.FromPayloads(result, &output); err != nil {
 			return err
 		}
-		rpcLocalActivityResults[output.GetRequestId()] = output.GetResponse()
+		rpcLocalActivityResults[output.GetRequestId()] = &output
 	}
 	return nil
 }
@@ -1094,6 +1094,7 @@ func (t *temporalClient) temporalStepFailure(
 	if err := t.dataConverter.FromPayload(payloads[0], activityError); err != nil {
 		return nil, fmt.Errorf("decode step failure details: %w", err)
 	}
+	stepFailure.PullRouting = activityError.GetPullRouting()
 	stepFailure.Details = serviceerrors.ServiceErrorResponseFromActivityError(
 		temporalFlowErrorType(failure),
 		activityError,
@@ -1120,6 +1121,7 @@ func (t *temporalClient) temporalLocalStepFailure(
 	if metadata.GetActivityError() == nil {
 		return nil, nil, fmt.Errorf("local step activity error is missing")
 	}
+	stepFailure.PullRouting = metadata.GetPullRouting()
 	stepFailure.Details = serviceerrors.ServiceErrorResponseFromActivityError(
 		temporalFlowErrorType(failure),
 		metadata.GetActivityError(),

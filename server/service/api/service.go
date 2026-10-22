@@ -1516,6 +1516,7 @@ func (s *serviceImpl) GetFlowState(
 	attachPendingStepFailures(activeStepExecutions, description.PendingStepFailures)
 	return &dexpb.GetFlowStateResponse{
 		FlowConfig:             dump.GetConfig(),
+		StickyAppWorkerId:      snapshot.GetDexTaskQueue(),
 		Attributes:             snapshot.GetAttributes(),
 		ActiveStepExecutions:   activeStepExecutions,
 		QueuedSteps:            snapshot.GetStepsToStartFromBeginning(),
@@ -1660,7 +1661,7 @@ func (s *serviceImpl) doInvokeRPC(
 	); err != nil {
 		return nil, err
 	}
-	workerResponse, _, err := rpc.InvokeWorkerRpc(
+	workerResponse, servedByAppWorkerID, err := rpc.InvokeWorkerRpc(
 		ctx,
 		s.workerPool,
 		&preparation,
@@ -1695,6 +1696,7 @@ func (s *serviceImpl) doInvokeRPC(
 			DeleteFromChannel:        workerResponse.GetDeleteFromChannel(),
 			PublishToChannel:         workerResponse.GetPublishToChannel(),
 			ActionPermissionMappings: workerResponse.GetActionPermissionMappings(),
+			ServedByAppWorkerId:      servedByAppWorkerID,
 		}
 		if err := s.client.SignalWorkflow(
 			ctx,

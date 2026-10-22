@@ -681,3 +681,12 @@ Selected event Context uses the same failure view with the stack collapsed.
 
 [Sustainable Use License 1.0](LICENSE), with legacy portions under their
 original terms as described in [LEGACY_NOTICES.md](LEGACY_NOTICES.md).
+
+### Worker routing
+
+Flow detail shows the Worker target. Pull Flows also show the Flow type queue and
+sticky app Worker ID. Active Steps and Step method history show the serving app
+Worker ID, the sticky ID used at dispatch, and the sticky or Flow type queue
+source. Failed dispatches show no available Worker, unknown Step or RPC name,
+or disconnect reasons. Recorded RPC invocations show their serving app Worker ID.
+Missing metadata displays an em dash. Address targets show only their address.

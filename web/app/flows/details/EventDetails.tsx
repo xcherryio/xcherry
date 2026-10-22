@@ -196,11 +196,11 @@ function TimeTravelForkDetails({ payload, parentFlowId }: { payload: Data; paren
   );
 }
 
-function RPCDetails({ payload }: { payload: Data }) {
+function RPCDetails({ payload, isPull }: { payload: Data; isPull: boolean }) {
   return (
     <>
       <DetailSection title="RPC call">
-        <Fields values={[['RPC name', payload.rpcName]]} />
+        <Fields values={[['RPC name', payload.rpcName], ['Serving app Worker ID', isPull ? payload.servedByAppWorkerId || '—' : undefined]]} />
         <ValueBlock label="Input" value={payload.input} />
         <ValueBlock label="Output" value={payload.output} />
       </DetailSection>
@@ -246,7 +246,7 @@ export function SemanticEventDetails({
     return <TimeTravelForkDetails payload={event.payload} parentFlowId={parentFlowId} />;
   }
   if (isSetAttributesEvent(event)) return <SetAttributesDetails payload={event.payload} />;
-  if (event.type === 'RpcExecutionCompleted') return <RPCDetails payload={event.payload} />;
+  if (event.type === 'RpcExecutionCompleted') return <RPCDetails payload={event.payload} isPull={Boolean(event.payload.servedByAppWorkerId) || asData(asData(history.find((candidate) => candidate.type === 'FlowStartedOrContinued')?.payload.flowConfig).workerTarget).isPullMode === true} />;
   return (
     <DetailSection title="Published messages">
       <ChannelMessages values={event.payload.messages} />

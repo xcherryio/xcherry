@@ -29,6 +29,7 @@ const STEP_EVENT_TYPES = new Set([
 
 export interface ExecutionRecord {
   execution: StepExecution;
+  activeStep?: ActiveStepExecution;
   waitEvent?: FlowHistoryEvent;
   executeEvent?: FlowHistoryEvent;
   runId: string;
@@ -292,6 +293,7 @@ function applyEvent(record: ExecutionRecord, event: FlowHistoryEvent): void {
 }
 
 function applyActive(record: ExecutionRecord, active: ActiveStepExecution): void {
+  record.activeStep = active;
   if (active.phase === 'Waiting') {
     record.execution.waitFor = {
       status: 'waiting',

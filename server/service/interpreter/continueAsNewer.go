@@ -36,6 +36,8 @@ type ContinueAsNewer struct {
 	channelStore          *ChannelStore
 	stepExecutionCounter  *StepExecutionCounter
 	activeStepMovements   map[string]*dexpb.StepMovement
+	waitForPullRouting    map[string]*dexpb.PullRouting
+	executePullRouting    map[string]*dexpb.PullRouting
 	persistenceManager    *PersistenceManager
 	outputCollector       *OutputCollector
 	timerProcessor        interfaces.TimerProcessor
@@ -67,6 +69,8 @@ func NewContinueAsNewer(
 		channelStore:          channelStore,
 		stepExecutionCounter:  stepExecutionCounter,
 		activeStepMovements:   map[string]*dexpb.StepMovement{},
+		waitForPullRouting:    map[string]*dexpb.PullRouting{},
+		executePullRouting:    map[string]*dexpb.PullRouting{},
 		persistenceManager:    persistenceManager,
 		outputCollector:       collector,
 		timerProcessor:        timerProcessor,
@@ -224,11 +228,13 @@ func (c *ContinueAsNewer) activeStepExecutionState(
 	timers []*dexpb.TimerInfo,
 ) *dexpb.ActiveStepExecutionState {
 	state := &dexpb.ActiveStepExecutionState{
-		StepExecutionId: stepExecutionID,
-		StepType:        stepType,
-		Phase:           dexpb.ActiveStepPhase_ACTIVE_STEP_PHASE_ACTIVE,
-		Movement:        c.activeStepMovements[stepExecutionID],
-		Timers:          timers,
+		StepExecutionId:    stepExecutionID,
+		StepType:           stepType,
+		Phase:              dexpb.ActiveStepPhase_ACTIVE_STEP_PHASE_ACTIVE,
+		Movement:           c.activeStepMovements[stepExecutionID],
+		Timers:             timers,
+		WaitForPullRouting: c.waitForPullRouting[stepExecutionID],
+		ExecutePullRouting: c.executePullRouting[stepExecutionID],
 	}
 	resumeInfo := c.StepExecutionToResumeMap[stepExecutionID]
 	if resumeInfo == nil {
@@ -237,6 +243,7 @@ func (c *ContinueAsNewer) activeStepExecutionState(
 		}
 		return state
 	}
+	state.WaitForPullRouting = resumeInfo.GetWaitForPullRouting()
 	state.Phase = dexpb.ActiveStepPhase_ACTIVE_STEP_PHASE_WAITING
 	state.Movement = resumeInfo.GetStep()
 	state.FromStepExecutionId = resumeInfo.GetStep().GetFromStepExecutionIdInternalOnly()
@@ -303,6 +310,9 @@ func (c *ContinueAsNewer) AddPotentialStepExecutionToResume(
 	if resumeInfo == nil || resumeInfo.GetStepExecutionId() == "" {
 		panic("step resume info requires an execution ID")
 	}
+	if resumeInfo.GetWaitForPullRouting() == nil {
+		resumeInfo.WaitForPullRouting = c.waitForPullRouting[resumeInfo.GetStepExecutionId()]
+	}
 	c.StepExecutionToResumeMap[resumeInfo.GetStepExecutionId()] = resumeInfo
 }
 
@@ -318,6 +328,8 @@ func (c *ContinueAsNewer) TrackActiveStep(
 
 func (c *ContinueAsNewer) RemoveActiveStep(stepExecutionID string) {
 	delete(c.activeStepMovements, stepExecutionID)
+	delete(c.waitForPullRouting, stepExecutionID)
+	delete(c.executePullRouting, stepExecutionID)
 }
 
 func (c *ContinueAsNewer) HasAnyStepExecutionToResume() bool {
@@ -391,4 +403,12 @@ func (c *ContinueAsNewer) allThreadsDrained(ctx interfaces.UnifiedContext) bool 
 			remainingThreadCount, initTime, c.provider.GetPendingThreadNames(), c.inflightUpdateOperations)
 	}
 	return false
+}
+
+func (c *ContinueAsNewer) RecordWaitForPullRouting(stepExecutionID string, routing *dexpb.PullRouting) {
+	c.waitForPullRouting[stepExecutionID] = routing
+}
+
+func (c *ContinueAsNewer) RecordExecutePullRouting(stepExecutionID string, routing *dexpb.PullRouting) {
+	c.executePullRouting[stepExecutionID] = routing
 }

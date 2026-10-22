@@ -90,4 +90,19 @@ public interface StepExecutionResumeInfoOrBuilder extends
    */
   io.superdurable.gen.KVOrBuilder getStepExeLocalsOrBuilder(
       int index);
+
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   * @return Whether the waitForPullRouting field is set.
+   */
+  boolean hasWaitForPullRouting();
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   * @return The waitForPullRouting.
+   */
+  io.superdurable.gen.PullRouting getWaitForPullRouting();
+  /**
+   * <code>.dex.PullRouting wait_for_pull_routing = 6;</code>
+   */
+  io.superdurable.gen.PullRoutingOrBuilder getWaitForPullRoutingOrBuilder();
 }

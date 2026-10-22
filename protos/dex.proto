@@ -870,6 +870,7 @@ message FlowContinuedStart {
   map<string, ChannelValues> pending_channel_messages = 4;
   repeated KV attributes = 5;
   repeated StepCompletionOutput completed_steps = 6;
+  string sticky_app_worker_id = 7;
 }
 
 message FlowClosedHistoryEvent {
@@ -878,6 +879,7 @@ message FlowClosedHistoryEvent {
   FlowErrorType error_type = 3;
   string error_message = 4;
   string continued_to_run_id = 5;
+  string sticky_app_worker_id = 6;
 }
 
 // PendingStepMethodPhase reports the latest persisted backend lifecycle event.
@@ -898,6 +900,7 @@ message StepMethodFailure {
   string backend_error = 1;
   ServiceErrorResponse details = 2;
   int32 attempt = 3;
+  PullRouting pull_routing = 4;
 }
 
 message StepMethodOptions {
@@ -914,6 +917,18 @@ message StepMethodEventInput {
   repeated KV step_execution_locals = 5;
 }
 
+enum PullRoutingSource {
+  PULL_ROUTING_SOURCE_UNSPECIFIED = 0;
+  PULL_ROUTING_SOURCE_STICKY_QUEUE = 1;
+  PULL_ROUTING_SOURCE_FLOW_TYPE_QUEUE = 2;
+}
+
+message PullRouting {
+  string sticky_app_worker_id = 1;
+  string served_by_app_worker_id = 2;
+  PullRoutingSource source = 3;
+}
+
 message StepMethodEventContext {
   string step_execution_id = 1;
   string from_step_execution_id = 2;
@@ -924,6 +939,7 @@ message StepMethodEventContext {
   google.protobuf.Duration duration = 7;
   StepMethodOptions method_options = 8;
   StepMethodFailure last_failure_info = 9;
+  PullRouting pull_routing = 10;
 }
 
 message StepWaitForCompletedOutput {
@@ -984,6 +1000,7 @@ message RpcExecutionCompletedEvent {
   repeated ChannelMessage publish_to_channel = 7;
   bool is_set_attribute_api = 8;
   repeated ChannelMessageDeletion delete_from_channel = 9;
+  string served_by_app_worker_id = 10;
 }
 
 message ChannelExternalPublishEvent {
@@ -1023,6 +1040,8 @@ message ActiveStepExecutionState {
   repeated KV step_execution_locals = 8;
   repeated TimerInfo timers = 9;
   StepMethodFailure last_failure_info = 10;
+  PullRouting wait_for_pull_routing = 11;
+  PullRouting execute_pull_routing = 12;
 }
 
 message GetFlowStateRequest {
@@ -1037,6 +1056,7 @@ message GetFlowStateResponse {
   repeated StepMovement queued_steps = 4;
   map<string, ChannelValues> pending_channel_messages = 5;
   repeated StepCompletionOutput completed_steps = 6;
+  string sticky_app_worker_id = 7;
 }
 
 enum FlowResetType {
@@ -1211,6 +1231,7 @@ message InternalActivityError {
   string server_detail = 1;
   int32 worker_grpc_status = 2;
   InternalWorkerError worker_error = 3;
+  PullRouting pull_routing = 4;
 }
 
 message InternalWorkerError {
@@ -1499,6 +1520,7 @@ message StepExecutionResumeInfo {
   StepExecutionCompletedConditions completed_conditions = 3;
   WaitingConditionState waiting_condition = 4;
   repeated KV step_exe_locals = 5;
+  PullRouting wait_for_pull_routing = 6;
 }
 
 message StepExecutionCounterInfo {
@@ -1599,6 +1621,7 @@ message InvokeWaitForMethodActivityOutput {
   InvokeWaitForMethodResponse response = 1;
   // Identifies the Worker that completed this pull task for sticky routing.
   string served_by_app_worker_id = 2;
+  PullRouting pull_routing = 3;
 }
 
 message InvokeExecuteMethodActivityInput {
@@ -1625,12 +1648,14 @@ message InternalLocalStepActivityFailure {
   StepMethodOptions method_options = 3;
   int32 attempt = 4;
   InternalActivityError activity_error = 5;
+  PullRouting pull_routing = 6;
 }
 
 message InvokeExecuteMethodActivityOutput {
   InvokeExecuteMethodResponse response = 1;
   // Identifies the Worker that completed this pull task for sticky routing.
   string served_by_app_worker_id = 2;
+  PullRouting pull_routing = 3;
 }
 
 message DumpFlowForContinueAsNewActivityInput {
@@ -1722,6 +1747,7 @@ message ExecuteRpcSignalRequest {
   repeated ChannelMessageDeletion delete_from_channel = 8;
   bool is_delete_channel_message_api = 9;
   ActionPermissionMappings action_permission_mappings = 10;
+  string served_by_app_worker_id = 11;
 }
 
 message SkipTimerSignalRequest {
