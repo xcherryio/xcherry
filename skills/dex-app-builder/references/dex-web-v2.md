@@ -1,6 +1,6 @@
 # Dex Web v2 and FDG 2.0
 
-Reference capability baselines: Dex Server `v1.13.0`, Dex CLI `v1.14.0`, and
+Reference capability baselines: Dex Server `v1.15.0`, Dex CLI `v1.15.0`, and
 the SDK source baseline in [bundle-baselines.md](../../dex-sdk/references/core/bundle-baselines.md).
 These validate the guidance, not an instruction to upgrade an application.
 An application retains its pinned Server, CLI, and Go SDK versions unless the
@@ -30,6 +30,14 @@ Dex Web derives its experience from:
   failure handling only on request;
 - waits on Channels/ChannelMaps for actionable human work;
 - eligible Action RPCs for operator operations.
+
+## Pull routing and debugging
+
+With Server and CLI v1.15.0, Flow detail shows the Worker target and, for pull Flows, the Flow type queue and sticky app Worker ID. Active Steps and Step history show serving app Worker IDs for WaitFor and Execute, the dispatch sticky app Worker ID, and the queue source. **Sticky queue** means the serving ID matches the sticky ID captured for that dispatch; otherwise a completed dispatch shows **Flow type queue**. Compare against that captured ID, not just the Flow's current sticky ID.
+
+Dispatch failures distinguish no available Worker, an unknown Step type or RPC name after the dispatch wait, and a Worker disconnect. Existing RPC history shows the serving app Worker ID for recorded invocations. Pending or failed dispatches without a serving Worker show **—** for Worker and queue source; older runs without metadata also show **—**. Address targets retain address-only routing. Step history still groups retries into its final method attempt and latest failure; routing does not provide a separate record for every retry or expand RPC history coverage. [Released routing UI](https://github.com/superdurable/dex/blob/server/v1.15.0/web/app/flows/details/PullRouting.tsx)
+
+Use the Flow target, captured dispatch sticky ID, queue source, and failure reason before changing Worker routing. Inspect [reserve pressure and capacity](../../dex-sdk/references/core/pull-workers.md#reserved-rpc-capacity) when registered Workers decline Steps.
 
 ## Management UI design
 

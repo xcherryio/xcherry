@@ -2,7 +2,7 @@
 
 Use a pull Worker when the application can reach Dex Server but cannot accept inbound WorkerService calls. Configure the Worker's pull options and advertise a pull WorkerTarget through the Client default or a StartFlow or SubFlow FlowConfig override. A pull target has no address and cannot be headless. Keep listening Worker targets for applications that accept inbound calls. See the published [Pull Workers guide](https://docs.superdurable.io/production/pull-workers).
 
-Copy application setup from the runnable [Go](https://github.com/superdurable/dex/blob/sdk-go/v1.14.1/examples/go/production/pull-workers/worker.go), [Java](https://github.com/superdurable/dex/blob/sdk-java/v1.14.1/examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java), [Python](https://github.com/superdurable/dex/blob/sdk-python/v1.14.1/examples/python/dex_examples/production/pull_workers.py), [TypeScript](https://github.com/superdurable/dex/blob/sdk-typescript/v1.14.1/examples/typescript/src/production/pull-workers.ts), or [Rust](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.1/examples/rust/src/production/pull_workers.rs) example at each language's published SDK tag. These examples include bounded registration waits, cleanup on startup failure, and snapshot-based readiness helpers. Combine those helpers with application lifecycle health for production probes.
+Copy application setup from the runnable [Go](https://github.com/superdurable/dex/blob/sdk-go/v1.15.0/examples/go/production/pull-workers/worker.go), [Java](https://github.com/superdurable/dex/blob/sdk-java/v1.15.0/examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java), [Python](https://github.com/superdurable/dex/blob/sdk-python/v1.15.0/examples/python/dex_examples/production/pull_workers.py), [TypeScript](https://github.com/superdurable/dex/blob/sdk-typescript/v1.15.0/examples/typescript/src/production/pull-workers.ts), or [Rust](https://github.com/superdurable/dex/blob/sdk-rust/v1.15.0/examples/rust/src/production/pull_workers.rs) example at each language's published SDK tag. These examples include bounded registration waits, cleanup on startup failure, and snapshot-based readiness helpers. Combine those helpers with application lifecycle health for production probes.
 
 Each pull Worker opens outbound streams to its app Worker ID queue and every Flow type it registers. Flow types must be unique within a Dex Server. The app Worker ID identifies one process, changes after every restart, and cannot equal a registered Flow type. Let the SDK generate it unless a deployment needs an explicit process-unique value. Dex first tries the previously used app Worker ID. When that ID has no connected streams after a restart, crash, or deployment, Dex immediately tries the Flow type queue; the sticky wait applies only while that ID still has connected streams. Keep durable state in Dex; sticky routing does not promise the same process.
 
@@ -32,7 +32,17 @@ The opt-in rejection shutdown defaults to false in every SDK. When true, the fir
 
 For rolling deployments, start replacement Workers and wait for their registration before stopping old Workers. Keep handling blocking Worker run failures after startup. See each language's startup and error-handling details: [Go](../go/go.md), [Java](../java/java.md#pull-workers-and-dex-credentials), [Python](../python/python.md#pull-workers-and-dex-credentials), [TypeScript](../typescript/typescript.md#pull-workers-and-dex-credentials), and [Rust](../rust/rust.md#pull-workers-and-dex-credentials).
 
-[Released Go registration API and complete startup/probe example](https://github.com/superdurable/dex/blob/sdk-go/v1.14.1/sdk-go/dex/worker.go)
+[Released Go registration API and complete startup/probe example](https://github.com/superdurable/dex/blob/sdk-go/v1.15.0/sdk-go/dex/worker.go)
+
+## Reserved RPC capacity
+
+SDK v1.15.0 in all five languages intentionally reserves one RPC slot by default when the resolved maximum concurrent task count **M** is at least two. With **M = 1**, an unset reserve becomes zero and Worker startup logs one warning. Explicit zero opts out, restoring shared capacity. Require **0 ≤ R < M**, where **R** is the reserve; invalid values fail construction. See the language handbook for the option and counter accessors.
+
+Only RPC tasks, both API-direct and transactional, may use the reserved slots. WaitFor and Execute tasks, including local attempts, receive **NO_CAPACITY** once the total busy-handler count reaches **M − R**. RPCs can use the full **M** slots. A decline permits reassignment within the dispatch wait without consuming an attempt. If every Worker stays at its Step limit through that wait, the Step receives **NO_WORKER_AVAILABLE**, consumes an attempt, and follows its retry policy. Local attempts use the local dispatch wait and then their configured fallback policy. Reserve declines preserve streams and registration readiness.
+
+Size **M** for both Step concurrency and RPC demand: to retain eight simultaneous Step handlers with **R = 1**, use at least **M = 9**. Raise **R** for Workers whose Steps hold slots for minutes, based on concurrent RPC demand and handler duration. The reserve is admission capacity, not a latency guarantee; busy RPCs also count toward **M − R**, and saturation can still delay RPCs. Keep the stream caps below in the same budget.
+
+Export the language's cumulative reserve-decline counter and collect debug logs with the Flow type. The counter excludes full-capacity rejections and unknown Step types or RPC names. It never resets, remains readable after shutdown, and is zero for listening Workers. Distinguish reserve pressure from full saturation before changing concurrency. [Released reserve contract](https://github.com/superdurable/dex/blob/sdk-go/v1.15.0/sdk-go/README.md#reserved-rpc-capacity)
 
 ## Heartbeats, capacity, and shutdown
 
@@ -44,4 +54,4 @@ On Stop, the Worker stops accepting assignments and waits for handlers up to its
 
 For scale to zero, configure [worker.wake](operations.md#worker-wake-hook). Dex sends a best-effort wake notification after the sticky wait and continues the same dispatch attempt. Size dispatch waits, Worker startup time, and Step retry policy together; the notification does not guarantee a Worker starts in time.
 
-[Released pull Worker behavior](https://github.com/superdurable/dex/blob/sdk-go/v1.14.1/sdk-go/dex/worker_pull.go)
+[Released pull Worker behavior](https://github.com/superdurable/dex/blob/sdk-go/v1.15.0/sdk-go/dex/worker_pull.go)
