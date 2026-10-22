@@ -180,4 +180,14 @@ Named queues must fail closed. Silently falling back to the default queue would 
 
 ## UI/UX
 
-Dex Web v2 start dialog: an optional queue name next to the pull target. Flow detail views show the queue in the WorkerTarget.
+Dex Web shows task queues wherever Temporal Web shows task queues: on the Flow, on each Step execution and on each RPC.
+
+- **Start dialog.** An optional task queue name next to the pull target.
+- **Flow detail.** The Flow's WorkerTarget (address or pull) and its task queue, with `default` shown for the empty name. It also shows the last app Worker ID that served the Flow (the sticky Worker).
+- **Step executions.** For each WaitFor and Execute attempt: the task queue it dispatched on (the Flow's queue or the Step's `task_queue` override), whether it was served from the sticky queue or the Flow type queue, and the serving app Worker ID. A failed dispatch shows its reason: `NO_WORKER_AVAILABLE`, an `UNKNOWN_*` reassignment that ran out of time, or a disconnect.
+- **RPCs.** In the RPC history or detail view, where Dex Web shows RPCs: the task queue and the serving app Worker ID.
+- **Filtering.** List Flows by task queue, through a search attribute or the existing Flow search.
+
+Data: the interpreter already receives `served_by_app_worker_id` on WaitFor, Execute and RPC activity outputs, and records the sticky Worker (`RecordServedByAppWorkerID`). The implementation adds the resolved task queue and the sticky-or-fallback source to those outputs. It records them on the Step execution and RPC history records that Dex Web reads, and exposes them through the Web API.
+
+Even before named queues ship, showing today's routing on the default queue (the Flow type queue, the sticky app Worker ID and the serving app Worker ID) is useful on its own. It can be built first as a separate, smaller change.
