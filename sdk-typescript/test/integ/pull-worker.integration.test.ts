@@ -16,6 +16,7 @@ import test from "node:test";
 
 import {
   Client,
+  PullRegistrationError,
   Registry,
   StepList,
   SubFlow,
@@ -360,3 +361,37 @@ async function until(condition: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+
+class RegistrationProbeFlow implements Flow<void> {
+  public constructor(private readonly flowType: string) {}
+  public getFlowType(): string { return this.flowType; }
+  public getSteps(): StepList<void> { return StepList.empty(); }
+}
+
+test("pull registration readiness succeeds and reports a real InvalidArgument", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "dex-typescript-registration-"));
+  const cache = openBlobCache({ directory, maxBytes: 64 * 1_024 * 1_024 });
+  try {
+    for (const isInvalid of [false, true]) {
+      const registeredFlowType = isInvalid ? "x".repeat(257) : flowId("ReadyFlow");
+      const worker = new Worker(new Registry([new RegistrationProbeFlow(registeredFlowType)]), cache, {
+        serverAddress: process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801",
+        pull: { stopOnPermanentStreamRejection: isInvalid },
+      });
+      try {
+        await worker.start();
+        if (isInvalid) {
+          await assert.rejects(worker.waitPullRegistered({ timeoutMs: 10_000 }),
+            (failure: unknown) => failure instanceof PullRegistrationError &&
+              (failure.cause as { code: number }).code === 3);
+          assert.equal(worker.pullRegistrationState().isReady, false);
+        } else {
+          await worker.waitPullRegistered({ timeoutMs: 10_000 });
+          assert.equal(worker.pullRegistrationState().isReady, true);
+          assert.equal(worker.pullRegistrationState().queues.length, 2);
+        }
+      } finally { await worker.close(); }
+    }
+  } finally { cache.close(); rmSync(directory, { recursive: true, force: true }); }
+});

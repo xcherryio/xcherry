@@ -114,6 +114,7 @@ pub struct PullWorkerOptions {
     pub(crate) idle_streams_per_queue: Option<usize>,
     pub(crate) app_worker_id: Option<String>,
     pub(crate) stop_drain_timeout: Option<Duration>,
+    pub(crate) stop_on_permanent_stream_rejection: bool,
 }
 
 impl PullWorkerOptions {
@@ -150,6 +151,17 @@ impl PullWorkerOptions {
     /// If omitted, the Worker generates a fresh ID during construction.
     pub fn app_worker_id(mut self, value: impl Into<String>) -> Self {
         self.app_worker_id = Some(value.into());
+        self
+    }
+
+    /// Stops when a permanent rejection leaves a queue without any registered stream.
+    ///
+    /// Defaults to false, retrying indefinitely. When enabled, [`crate::Worker::start`] drains
+    /// within the configured timeout, cancels remaining handlers, and waits for their return.
+    /// It returns a service error exposing [`crate::SdkError::pull_registration_error`] before or after initial readiness.
+    /// Calling [`crate::Worker::stop`] afterward remains safe.
+    pub fn stop_on_permanent_stream_rejection(mut self, value: bool) -> Self {
+        self.stop_on_permanent_stream_rejection = value;
         self
     }
 

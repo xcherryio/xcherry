@@ -465,6 +465,8 @@ export interface WorkerOptions {
  * ```
  */
 export interface PullWorkerOptions {
+  /** Stops and drains the Worker when a permanent rejection leaves a queue without registered streams. Defaults to false, retrying indefinitely. Worker.run rejects with PullRegistrationError after draining; Worker.start keeps its non-blocking startup behavior. */
+  readonly stopOnPermanentStreamRejection?: boolean;
   /** Maximum simultaneous handlers; zero or omission uses the logical CPU count. Negative values are invalid. */
   readonly maxConcurrentTasks?: number;
   /** Waiting streams on the sticky queue and each Flow type queue; zero or omission uses one. Negative values are invalid. */

@@ -265,10 +265,18 @@ acknowledgement. Java provides **waitPullRegistered(Duration)** and
 and **pull_registration_state()** on both Worker and AsyncWorker; await the
 AsyncWorker wait. Java's **stopOnPermanentStreamRejection** and Python's
 **stop_on_permanent_stream_rejection** provide the same opt-in shutdown behavior
-as Go. TypeScript and Rust will follow. Start the Go Worker in a goroutine,
+as Go. Start the Go Worker in a goroutine,
 then wait with a startup deadline before activating it or stopping the old
 Worker during a rolling deployment. Registration does not guarantee spare
 handler capacity.
+
+TypeScript exposes **waitPullRegistered**, **pullRegistrationState**, and
+**stopOnPermanentStreamRejection**. Rust exposes **wait_pull_registered**,
+**pull_registration_state**, and **stop_on_permanent_stream_rejection** with the
+same readiness semantics. TypeScript waits accept an AbortSignal or timeout in
+milliseconds; Rust waits can be cancelled by dropping the future or bounded with
+a Tokio timeout. Opt-in fatal rejections are returned by TypeScript **run** and
+Rust **start** after draining.
 
 **WaitPullRegistered** is safe to call concurrently, including before
 **Start**. It returns a **PullRegistrationError** with the queue name and

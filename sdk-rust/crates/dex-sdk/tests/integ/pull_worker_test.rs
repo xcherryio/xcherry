@@ -806,3 +806,94 @@ fn pull_worker_test_cancel_and_forced_stop() {
     drop(client);
     cache.close().expect("close pull cache");
 }
+
+struct RegistrationProbeFlow {
+    is_invalid: bool,
+}
+
+impl Flow for RegistrationProbeFlow {
+    type StartInput = ();
+
+    fn flow_type(&self) -> &'static str {
+        if self.is_invalid {
+            concat!(
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            )
+        } else {
+            "RegistrationProbeFlow"
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires dexcli dev"]
+fn pull_registration_readiness_and_invalid_argument() {
+    let directory = tempfile::tempdir().expect("cache directory");
+    let cache = Arc::new(
+        BlobCache::open(
+            BlobCacheConfig::new(directory.path(), 64 * 1024 * 1024, 0).expect("cache config"),
+        )
+        .expect("cache"),
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("wait runtime");
+    for is_invalid in [false, true] {
+        let registry = Registry::new()
+            .register(RegistrationProbeFlow { is_invalid })
+            .expect("register Flow");
+        let worker = Arc::new(
+            Worker::try_new(
+                registry,
+                Arc::clone(&cache),
+                WorkerOptions::new()
+                    .server_address(
+                        std::env::var("DEX_SERVER_ADDRESS")
+                            .unwrap_or_else(|_| "127.0.0.1:8801".to_string()),
+                    )
+                    .pull(PullWorkerOptions::new().stop_on_permanent_stream_rejection(is_invalid)),
+            )
+            .expect("pull Worker"),
+        );
+        let running = Arc::clone(&worker);
+        let worker_thread = thread::spawn(move || running.start());
+        let result = runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(10), worker.wait_pull_registered()).await
+            })
+            .expect("registration deadline");
+        if is_invalid {
+            assert!(
+                result
+                    .expect_err("registration rejected")
+                    .pull_registration_error()
+                    .is_some_and(
+                        |rejection| rejection.status.code() == tonic::Code::InvalidArgument
+                    )
+            );
+            assert!(!worker.pull_registration_state().is_ready);
+        } else {
+            result.expect("all queues registered");
+            assert!(worker.pull_registration_state().is_ready);
+            assert_eq!(worker.pull_registration_state().queues.len(), 2);
+        }
+        worker.stop();
+        let result = worker_thread.join().expect("join Worker");
+        if is_invalid {
+            assert!(
+                result
+                    .expect_err("fatal rejection")
+                    .pull_registration_error()
+                    .is_some()
+            );
+        } else {
+            result.expect("Worker stopped");
+        }
+        worker.stop();
+    }
+    cache.close().expect("close cache");
+}

@@ -16,8 +16,10 @@ import {
   type ServerDuplexStream,
 } from "@grpc/grpc-js";
 
-import { Client, Registry, StepList, Worker, retryAfter, type BlobCache, type Flow, type PullWorkerTarget } from "../src/index.js";
+import { Client, Registry, StepList, Worker, PullRegistrationError, retryAfter, type PullWorkerOptions, type BlobCache, type Flow, type PullWorkerTarget } from "../src/index.js";
 import {
+  FlowServiceService,
+  type FlowServiceServer,
   InvokeWorkerRPCRequest,
   InvokeWorkerRPCResponse,
   InvokeWaitForMethodRequest,
@@ -512,6 +514,12 @@ async function startHarness() {
   const streams: CapturedStream[] = [];
   let consumed = 0;
   let invocationCount = 0;
+  server.addService(FlowServiceService, {
+    getServerInfo(_call, callback) {
+      callback(null, { serverVersion: "test", minimumSupportedProtocolVersion: 1, currentProtocolVersion: 1 });
+    },
+    syncAttributeIndexes(_call, callback) { callback(null, {}); },
+  } as Partial<FlowServiceServer> as FlowServiceServer);
   server.addService(WorkerTaskServiceService, {
     pollWorkerTask(call: TaskStream) {
       const frames: PollWorkerTaskRequest[] = [];
@@ -536,14 +544,15 @@ async function startHarness() {
     });
   });
   return {
+    address: `127.0.0.1:${port}`,
     get invocationCount() { return invocationCount; },
     get openedStreamCount() { return streams.length; },
-    worker(invokeRPC: (request: InvokeWorkerRPCRequest, signal: AbortSignal) => Promise<InvokeWorkerRPCResponse>, options: { maxConcurrentTasks?: number; stopDrainTimeoutMs?: number } = {}) {
+    worker(invokeRPC: (request: InvokeWorkerRPCRequest, signal: AbortSignal) => Promise<InvokeWorkerRPCResponse>, options: PullWorkerOptions = {}, onPermanentRejection: () => void = () => {}) {
       const dispatcher = { invokeRPC: async (request: InvokeWorkerRPCRequest, signal: AbortSignal) => {
         invocationCount++;
         return invokeRPC(request, signal);
       } } as WorkerDispatcher;
-      const worker = new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, options);
+      const worker = new PullWorker(new Registry([]), dispatcher, `127.0.0.1:${port}`, options, undefined, onPermanentRejection);
       Reflect.set(worker, "registeredFlows", new Map([["TestFlow", {
         steps: [{ name: "TestStep" }], rpcs: [{ name: "getWorker" }],
       }]]));
@@ -606,3 +615,132 @@ function restoreEnvironment(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
+
+
+test("registration waits for every queue and survives reconnects and Stop", async () => {
+  const harness = await startHarness();
+  const worker = new Worker(new Registry([new TestFlow()]), {} as BlobCache, {
+    serverAddress: harness.address, pull: {},
+  });
+  try {
+    const waiting = worker.waitPullRegistered({ timeoutMs: 5_000 });
+    await worker.start();
+    const first = await harness.nextStream();
+    const second = await harness.nextStream();
+    first.call.write(registered(false));
+    await until(() => worker.pullRegistrationState().queues.some((queue) => queue.hasRegisteredStream));
+    assert.equal(worker.pullRegistrationState().isReady, false);
+    second.call.write(registered(false));
+    await waiting;
+    const snapshot = worker.pullRegistrationState();
+    assert.equal(snapshot.isReady, true);
+    first.call.emit("error", { code: status.UNAVAILABLE, details: "transient" });
+    await until(() => worker.pullRegistrationState().queues.some((queue) => !queue.hasRegisteredStream));
+    assert.equal(worker.pullRegistrationState().isReady, true);
+    assert.equal(snapshot.queues.every((queue) => queue.hasRegisteredStream), true);
+    await worker.close();
+    await worker.waitPullRegistered();
+    assert.equal(worker.pullRegistrationState().isReady, true);
+  } finally { await worker.close(); await harness.close(); }
+});
+
+for (const code of [status.INVALID_ARGUMENT, status.RESOURCE_EXHAUSTED, status.UNIMPLEMENTED, status.PERMISSION_DENIED, status.UNAUTHENTICATED]) {
+  test(`registration rejects promptly for permanent status ${code}`, async () => {
+    const harness = await startHarness();
+    const worker = harness.worker(async () => InvokeWorkerRPCResponse.create());
+    try {
+      const waiting = assert.rejects(worker.registration.wait({ timeoutMs: 5_000 }), (failure: unknown) =>
+        failure instanceof PullRegistrationError && failure.queue === worker.appWorkerID);
+      worker.start();
+      const stream = await harness.nextStream();
+      stream.call.emit("error", { code, details: "rejected" });
+      await waiting;
+      assert.equal(worker.registration.snapshot().isReady, false);
+      assert.equal(worker.registration.snapshot().queues[0]?.lastPermanentError?.code, code);
+    } finally { await worker.close(); await harness.close(); }
+  });
+}
+
+test("permanent rejection preserves readiness while another stream holds the queue", async () => {
+  const harness = await startHarness();
+  let rejectionCount = 0;
+  const worker = harness.worker(async () => InvokeWorkerRPCResponse.create(), {
+    idleStreamsPerQueue: 2, stopOnPermanentStreamRejection: true,
+  }, () => { rejectionCount++; });
+  try {
+    worker.start();
+    const first = await harness.nextStream();
+    const second = await harness.nextStream();
+    first.call.write(registered(false));
+    await worker.registration.wait({ timeoutMs: 5_000 });
+    second.call.emit("error", { code: status.PERMISSION_DENIED, details: "rejected" });
+    await until(() => worker.registration.snapshot().queues[0]?.lastPermanentError !== undefined);
+    assert.equal(worker.registration.snapshot().isReady, true);
+    assert.equal(worker.registration.permanentError, undefined);
+    assert.equal(rejectionCount, 0);
+    first.call.emit("error", { code: status.UNAVAILABLE, details: "disconnected" });
+    await until(() => !worker.registration.snapshot().queues[0]?.hasRegisteredStream);
+    assert.equal(worker.registration.snapshot().isReady, false);
+    await worker.registration.wait();
+    const replacement = await harness.nextStream();
+    replacement.call.write(registered(false));
+    await until(() => worker.registration.snapshot().isReady);
+    assert.equal(worker.registration.snapshot().queues[0]?.lastPermanentError, undefined);
+    assert.equal(rejectionCount, 0);
+  } finally { await worker.close(); await harness.close(); }
+});
+
+for (const hasRegistered of [false, true]) {
+  test(`opt-in rejection drains run and leaves close safe, registered=${hasRegistered}`, async () => {
+    const harness = await startHarness();
+    const worker = new Worker(new Registry([]), {} as BlobCache, {
+      serverAddress: harness.address, pull: { stopOnPermanentStreamRejection: true, stopDrainTimeoutMs: 100 },
+    });
+    try {
+      const running = assert.rejects(worker.run(), PullRegistrationError);
+      const stream = await harness.nextStream();
+      if (hasRegistered) {
+        stream.call.write(registered(false));
+        await worker.waitPullRegistered({ timeoutMs: 5_000 });
+      }
+      stream.call.emit("error", { code: status.INVALID_ARGUMENT, details: "rejected" });
+      await running;
+      await worker.close();
+      if (hasRegistered) await worker.waitPullRegistered();
+      else await assert.rejects(worker.waitPullRegistered(), PullRegistrationError);
+      assert.equal(worker.pullRegistrationState().isReady, false);
+    } finally { await worker.close(); await harness.close(); }
+  });
+}
+
+test("registration wait handles startup failure, cancellation, timeout, and listening Workers", async () => {
+  const worker = new Worker(new Registry([]), {} as BlobCache, {
+    serverAddress: "127.0.0.1:1", attributeIndexSyncTimeoutMs: 100, pull: {},
+  });
+  let registrationFailure: unknown;
+  let registrationFailureMessage: string | undefined;
+  const waiting = assert.rejects(worker.waitPullRegistered({ timeoutMs: 5_000 }), (failure: unknown) => {
+    registrationFailure = failure;
+    registrationFailureMessage = (failure as Error).message;
+    return true;
+  });
+  await assert.rejects(worker.start(), (failure: unknown) =>
+    failure === registrationFailure && (failure as Error).message === registrationFailureMessage &&
+    registrationFailureMessage.includes("127.0.0.1:1"));
+  await waiting;
+  await worker.close();
+  const pending = new Worker(new Registry([]), {} as BlobCache, { pull: {} });
+  const controller = new AbortController();
+  const cancelled = assert.rejects(pending.waitPullRegistered({ signal: controller.signal }), { name: "AbortError" });
+  controller.abort();
+  await cancelled;
+  await assert.rejects(pending.waitPullRegistered({ timeoutMs: 1 }), { name: "TimeoutError" });
+  await assert.rejects(pending.waitPullRegistered({ timeoutMs: -1 }), RangeError);
+  const stopped = assert.rejects(pending.waitPullRegistered(), /stopped before registration/);
+  await pending.close();
+  await stopped;
+  const listener = new Worker(new Registry([]), {} as BlobCache);
+  await assert.rejects(listener.waitPullRegistered(), /requires a pull Worker/);
+  assert.deepEqual(listener.pullRegistrationState(), { isReady: false, queues: [] });
+  await listener.close();
+});

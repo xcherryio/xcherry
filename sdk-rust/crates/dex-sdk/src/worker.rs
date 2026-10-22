@@ -220,7 +220,16 @@ impl Worker {
     ///
     /// Returns FlowDefinition if called more than once, or Service for index synchronization,
     /// timeout, bind, and server failures.
+    /// Returns a service error exposing [`SdkError::pull_registration_error`] after draining when permanent-rejection shutdown is enabled.
     pub fn start(&self) -> SdkResult<()> {
+        let result = self.start_worker();
+        if let Some(pull) = &self.pull {
+            pull.registration.finish(result.as_ref().err().cloned());
+        }
+        result
+    }
+
+    fn start_worker(&self) -> SdkResult<()> {
         self.state
             .compare_exchange(CREATED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| SdkError::FlowDefinition {
@@ -293,6 +302,47 @@ impl Worker {
         result
     }
 
+    /// Waits until every Flow type queue and the app Worker ID queue has registered once.
+    ///
+    /// Safe before or after [`Self::start`] and for concurrent callers. Start the Worker on a
+    /// dedicated thread. Drop this future to cancel the wait, or use `tokio::time::timeout`.
+    /// Completion remains latched after shutdown; use [`Self::pull_registration_state`] for probes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a service error exposing [`SdkError::pull_registration_error`] for a permanent rejection without another registered
+    /// stream before readiness. Returns the startup error if startup fails, or InvalidArgument
+    /// for a listening Worker or shutdown before readiness.
+    ///
+    /// ```no_run
+    /// # async fn ready(worker: &dex_sdk::Worker) -> Result<(), Box<dyn std::error::Error>> {
+    /// tokio::time::timeout(std::time::Duration::from_secs(10), worker.wait_pull_registered()).await??;
+    /// assert!(worker.pull_registration_state().is_ready);
+    /// # Ok(()) }
+    /// ```
+    pub async fn wait_pull_registered(&self) -> SdkResult<()> {
+        let pull = self
+            .pull
+            .as_ref()
+            .ok_or_else(|| SdkError::InvalidArgument {
+                message: "wait_pull_registered requires a pull Worker".to_string(),
+            })?;
+        pull.registration.wait().await
+    }
+
+    /// Returns an independent snapshot of current pull queue registrations.
+    ///
+    /// Readiness latches after every queue registers once. Only a permanent rejection with no
+    /// registered stream makes it false. Successful registration clears that queue's error.
+    /// Transient disconnects and Stop do not clear readiness. Listening Workers return false
+    /// with no queues. See [`Self::wait_pull_registered`] for a startup and probe example.
+    pub fn pull_registration_state(&self) -> crate::PullRegistrationState {
+        self.pull
+            .as_ref()
+            .map(|pull| pull.registration.snapshot())
+            .unwrap_or_default()
+    }
+
     /// Requests shutdown of a running Worker and returns immediately.
     ///
     /// Calling `stop` before or after `start` is safe; [`Self::start`] observes the shutdown signal.
@@ -300,6 +350,9 @@ impl Worker {
     /// [`Self::start`] waits for their return. Half-closed pull streams wait for server EOF
     /// until the remaining drain deadline. Stop is idempotent.
     pub fn stop(&self) {
+        if let Some(pull) = &self.pull {
+            pull.registration.finish(None);
+        }
         self.shutdown.send_replace(true);
     }
 }
