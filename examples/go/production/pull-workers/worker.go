@@ -28,7 +28,13 @@ import (
 
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/dex"
+	"github.com/superdurable/dex/sdk-go/dex/ptr"
 )
+
+type PullGreetingDiagnostics struct {
+	IsReady             bool
+	ReservedRPCDeclines uint64
+}
 
 func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingFlow, *dex.Worker, *dex.Client, <-chan error, error) {
 	flow := &GreetingFlow{}
@@ -38,7 +44,11 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 	}
 	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
 		FlowServiceAddress: serverAddress,
-		Pull:               &dex.PullWorkerOptions{MaxConcurrentTasks: 8},
+		Pull: &dex.PullWorkerOptions{
+			MaxConcurrentTasks: 8,
+			// Keep one slot for RPCs so Flows stay responsive.
+			ReservedRPCTasks: ptr.Any(1),
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -80,6 +90,13 @@ func PullGreetingReadiness(worker *dex.Worker) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+func GetPullGreetingDiagnostics(worker *dex.Worker) PullGreetingDiagnostics {
+	return PullGreetingDiagnostics{
+		IsReady:             worker.PullRegistrationState().IsReady,
+		ReservedRPCDeclines: worker.PullReservedRPCDeclines(),
+	}
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {

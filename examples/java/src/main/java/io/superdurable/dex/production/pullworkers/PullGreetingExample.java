@@ -40,7 +40,11 @@ public final class PullGreetingExample {
         final Registry registry = new Registry(List.<Flow<?>>of(flow));
         final Worker worker = new Worker(registry, cache, WorkerOptions.newBuilder()
                 .serverAddress(serverAddress)
-                .pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build())
+                .pull(PullWorkerOptions.newBuilder()
+                        .maxConcurrentTasks(8)
+                        // Keep one slot for RPCs so Flows stay responsive.
+                        .reservedRpcTasks(1)
+                        .build())
                 .build());
         final Client client = new Client(registry, cache,
                 new ClientOptions(serverAddress, worker.getWorkerTarget()));
@@ -74,6 +78,14 @@ public final class PullGreetingExample {
 
     public static boolean isPullGreetingReady(final Worker worker) {
         return worker.getPullRegistrationState().isReady();
+    }
+
+    public static PullGreetingDiagnostics getPullGreetingDiagnostics(final Worker worker) {
+        return new PullGreetingDiagnostics(
+                worker.getPullRegistrationState().isReady(), worker.getPullReservedRpcDeclines());
+    }
+
+    public record PullGreetingDiagnostics(boolean isReady, long reservedRpcDeclines) {
     }
 
     public record RunningPullGreeting(

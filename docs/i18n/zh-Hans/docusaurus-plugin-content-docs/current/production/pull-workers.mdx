@@ -48,7 +48,11 @@ async def start_pull_greeting(
         cache,
         WorkerOptions(
             server_address=server_address,
-            pull=PullWorkerOptions(max_concurrent_tasks=8),
+            pull=PullWorkerOptions(
+                max_concurrent_tasks=8,
+                # Keep one slot for RPCs so Flows stay responsive.
+                reserved_rpc_tasks=1,
+            ),
         ),
     )
     worker_task = asyncio.create_task(worker.start())
@@ -81,6 +85,11 @@ async def stop_pull_greeting(
 <SdkSnippet lang="go">
 
 ```go
+type PullGreetingDiagnostics struct {
+	IsReady             bool
+	ReservedRPCDeclines uint64
+}
+
 func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingFlow, *dex.Worker, *dex.Client, <-chan error, error) {
 	flow := &GreetingFlow{}
 	registry, err := dex.NewRegistry([]dex.Flow{flow})
@@ -89,7 +98,11 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 	}
 	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
 		FlowServiceAddress: serverAddress,
-		Pull:               &dex.PullWorkerOptions{MaxConcurrentTasks: 8},
+		Pull: &dex.PullWorkerOptions{
+			MaxConcurrentTasks: 8,
+			// Keep one slot for RPCs so Flows stay responsive.
+			ReservedRPCTasks: ptr.Any(1),
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -133,6 +146,13 @@ func PullGreetingReadiness(worker *dex.Worker) http.Handler {
 	})
 }
 
+func GetPullGreetingDiagnostics(worker *dex.Worker) PullGreetingDiagnostics {
+	return PullGreetingDiagnostics{
+		IsReady:             worker.PullRegistrationState().IsReady,
+		ReservedRPCDeclines: worker.PullReservedRPCDeclines(),
+	}
+}
+
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
 	workerResult <- worker.Start()
 }
@@ -153,7 +173,11 @@ public final class PullGreetingExample {
         final Registry registry = new Registry(List.<Flow<?>>of(flow));
         final Worker worker = new Worker(registry, cache, WorkerOptions.newBuilder()
                 .serverAddress(serverAddress)
-                .pull(PullWorkerOptions.newBuilder().maxConcurrentTasks(8).build())
+                .pull(PullWorkerOptions.newBuilder()
+                        .maxConcurrentTasks(8)
+                        // Keep one slot for RPCs so Flows stay responsive.
+                        .reservedRpcTasks(1)
+                        .build())
                 .build());
         final Client client = new Client(registry, cache,
                 new ClientOptions(serverAddress, worker.getWorkerTarget()));
@@ -189,6 +213,14 @@ public final class PullGreetingExample {
         return worker.getPullRegistrationState().isReady();
     }
 
+    public static PullGreetingDiagnostics getPullGreetingDiagnostics(final Worker worker) {
+        return new PullGreetingDiagnostics(
+                worker.getPullRegistrationState().isReady(), worker.getPullReservedRpcDeclines());
+    }
+
+    public record PullGreetingDiagnostics(boolean isReady, long reservedRpcDeclines) {
+    }
+
     public record RunningPullGreeting(
             GreetingFlow flow, Worker worker, Client client, Thread workerThread,
             CompletableFuture<Void> workerResult) implements AutoCloseable {
@@ -216,7 +248,11 @@ export async function startPullGreeting(
   const registry = new Registry([flow]);
   const worker = new Worker(registry, cache, {
     serverAddress,
-    pull: { maxConcurrentTasks: 8 },
+    pull: {
+      maxConcurrentTasks: 8,
+      // Keep one slot for RPCs so Flows stay responsive.
+      reservedRpcTasks: 1,
+    },
   });
   try {
     await worker.start();
@@ -257,9 +293,12 @@ pub fn start_pull_greeting(
     let worker = Arc::new(Worker::try_new(
         registry.clone(),
         Arc::clone(&cache),
-        WorkerOptions::new()
-            .server_address(server_address)
-            .pull(PullWorkerOptions::new().max_concurrent_tasks(8)),
+        WorkerOptions::new().server_address(server_address).pull(
+            PullWorkerOptions::new()
+                .max_concurrent_tasks(8)
+                // Keep one slot for RPCs so Flows stay responsive.
+                .reserved_rpc_tasks(1),
+        ),
     )?);
     let client = Client::try_new(
         registry,
@@ -477,14 +516,13 @@ handler，默认期限为 30 秒。超过期限后，它请求取消，并等待
 
 ### 为 RPC 预留容量
 
-当 Step 长时间运行，而同步 RPC 仍需及时响应时，可以预留 RPC 容量。
+SDK 1.15.0 预留 RPC 容量，使 Step 长时间运行时，同步 RPC 仍能及时响应。
 Go 使用 **ReservedRPCTasks**，Java 和 TypeScript 使用 **reservedRpcTasks**，
 Python 和 Rust 使用 **reserved_rpc_tasks**。未设置时，如果解析后的任务上限至少为二，
 默认预留一个槽位；上限为一时则预留零个。使用 CPU 数量默认值时，Step 比以前少一个槽位。
 显式设置为零可以关闭预留。上限为一且未显式设置预留值时，Worker 启动会记录一次警告：
 RPC 可能等待长时间运行的 Step，并建议将上限设为至少二，或显式设置预留值。
-Flow 必须保持响应，因此默认预留一个槽位。Dex 无法像工作流引擎优先处理查询或更新那样
-优先处理同步 RPC。
+Step 占用其余容量时，预留槽位可让 Flow 保持响应。
 预留值必须非负，并且小于解析 CPU 数量默认值后的并发任务上限。
 无效值会导致 Worker 构造失败。
 
@@ -503,6 +541,100 @@ Go 为 **PullReservedRPCDeclines()**，Java 为 **getPullReservedRpcDeclines()**
 TypeScript 为 **pullReservedRpcDeclines**，Python 为 **pull_reserved_rpc_declines**，
 Rust 为 **pull_reserved_rpc_declines()**。满载拒绝和未知名称不会增加此计数。
 计数从不重置，关闭后仍可读取，监听模式 Worker 返回零。日志配置请参阅各 SDK 的 README。
+
+上面的启动示例将任务上限设为八，并显式为 RPC 预留一个槽位，与默认值一致。
+下面的诊断函数返回注册就绪状态和累计预留拒绝计数，供监控使用。
+计数增加表示 Step 容量紧张，不会使 Worker 变为未就绪。
+
+<SdkTabs examples={{python: 'examples/python/dex_examples/production/pull_workers.py', go: 'examples/go/production/pull-workers/worker.go', java: 'examples/java/src/main/java/io/superdurable/dex/production/pullworkers/PullGreetingExample.java', typescript: 'examples/typescript/src/production/pull-workers.ts', rust: 'examples/rust/src/production/pull_workers.rs'}}>
+
+<SdkSnippet lang="python">
+
+```python
+@dataclass(frozen=True)
+class PullGreetingDiagnostics:
+    is_ready: bool
+    reserved_rpc_declines: int
+
+
+def get_pull_greeting_diagnostics(worker: AsyncWorker) -> PullGreetingDiagnostics:
+    return PullGreetingDiagnostics(
+        is_ready=worker.pull_registration_state().is_ready,
+        reserved_rpc_declines=worker.pull_reserved_rpc_declines,
+    )
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="go">
+
+```go
+type PullGreetingDiagnostics struct {
+	IsReady             bool
+	ReservedRPCDeclines uint64
+}
+
+func GetPullGreetingDiagnostics(worker *dex.Worker) PullGreetingDiagnostics {
+	return PullGreetingDiagnostics{
+		IsReady:             worker.PullRegistrationState().IsReady,
+		ReservedRPCDeclines: worker.PullReservedRPCDeclines(),
+	}
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="java">
+
+```java
+    public static PullGreetingDiagnostics getPullGreetingDiagnostics(final Worker worker) {
+        return new PullGreetingDiagnostics(
+                worker.getPullRegistrationState().isReady(), worker.getPullReservedRpcDeclines());
+    }
+
+    public record PullGreetingDiagnostics(boolean isReady, long reservedRpcDeclines) {
+    }
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="typescript">
+
+```typescript
+export interface PullGreetingDiagnostics {
+  readonly isReady: boolean;
+  readonly reservedRpcDeclines: number;
+}
+
+export function getPullGreetingDiagnostics(worker: Worker): PullGreetingDiagnostics {
+  return {
+    isReady: worker.pullRegistrationState().isReady,
+    reservedRpcDeclines: worker.pullReservedRpcDeclines,
+  };
+}
+```
+
+</SdkSnippet>
+
+<SdkSnippet lang="rust">
+
+```rust
+pub struct PullGreetingDiagnostics {
+    pub is_ready: bool,
+    pub reserved_rpc_declines: u64,
+}
+
+pub fn get_pull_greeting_diagnostics(worker: &Worker) -> PullGreetingDiagnostics {
+    PullGreetingDiagnostics {
+        is_ready: worker.pull_registration_state().is_ready,
+        reserved_rpc_declines: worker.pull_reserved_rpc_declines(),
+    }
+}
+```
+
+</SdkSnippet>
+
+</SdkTabs>
 
 ## 缩容到零
 

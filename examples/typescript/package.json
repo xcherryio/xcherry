@@ -16,7 +16,7 @@
     "smoke": "npm run build && node --test --experimental-test-isolation=none --test-force-exit --test-concurrency=1 'dist/test/e2e/flow-smoke.test.js'"
   },
   "dependencies": {
-    "@superdurable/dex": "1.14.0",
+    "@superdurable/dex": "1.15.0",
     "express": "^5.1.0"
   },
   "devDependencies": {
