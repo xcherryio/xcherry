@@ -44,6 +44,10 @@ import { ValueHydrator } from "./value-mapper.js";
 import { WorkerDispatcher } from "./worker-dispatcher.js";
 import { PullWorker } from "./pull-worker.js";
 
+export { PullRegistrationError } from "./pull-registration.js";
+export type { PullRegistrationState, PullQueueRegistrationState, WaitPullRegisteredOptions } from "./pull-registration.js";
+import type { PullRegistrationState, WaitPullRegisteredOptions } from "./pull-registration.js";
+
 type WorkerState = "created" | "running" | "stopping" | "stopped" | "closed";
 
 /**
@@ -77,6 +81,7 @@ export class Worker {
   private resolveStopped!: () => void;
   private state: WorkerState = "created";
   private negotiatedProtocolVersion = 0;
+  private shutdownError: unknown;
 
   /**
    * Constructs a Worker without starting its listener or task streams.
@@ -112,7 +117,7 @@ export class Worker {
     try {
       this.pullWorker = options.pull === undefined
         ? undefined
-        : new PullWorker(registry, dispatcher, options.serverAddress ?? "localhost:8801", options.pull, options.credential);
+        : new PullWorker(registry, dispatcher, options.serverAddress ?? "localhost:8801", options.pull, options.credential, () => this.stopAfterPermanentRejection());
     } catch (failure) {
       this.flowService.close();
       throw failure;
@@ -128,6 +133,7 @@ export class Worker {
   /**
    * Negotiates the Server protocol, synchronizes indexes, and starts listening or polling.
    * The promise resolves after binding or launching pull streams; call exactly once.
+   * Await waitPullRegistered separately to gate startup on pull queue acknowledgements.
    */
   public async start(): Promise<void> {
     if (this.state !== "created") {
@@ -154,21 +160,72 @@ export class Worker {
       }
       this.state = "running";
     } catch (failure) {
+      const endpoint = this.pullWorker === undefined
+        ? `Worker on ${bindAddress}`
+        : `pull Worker for ${this.options.serverAddress ?? "localhost:8801"}`;
+      const startupError = new Error(`cannot start TypeScript ${endpoint}`, { cause: failure });
+      this.pullWorker?.registration.stopped(startupError);
       this.state = "stopped";
       await this.pullWorker?.close();
       this.flowService.close();
       this.resolveStopped();
-      const endpoint = this.pullWorker === undefined
-        ? `Worker on ${bindAddress}`
-        : `pull Worker for ${this.options.serverAddress ?? "localhost:8801"}`;
-      throw new Error(`cannot start TypeScript ${endpoint}`, { cause: failure });
+      throw startupError;
     }
   }
 
-  /** Starts the Worker and waits until `close` completes shutdown. */
+  /**
+   * Starts the Worker and waits until `close` completes shutdown.
+   * @returns A promise resolved after graceful shutdown and handler completion.
+   * @throws {Error} Startup or shutdown fails.
+   * @throws {PullRegistrationError} A permanent rejection leaves a queue without registered streams when stopOnPermanentStreamRejection is enabled.
+   */
   public async run(): Promise<void> {
     await this.start();
     await this.stopped;
+    if (this.shutdownError !== undefined) throw this.shutdownError;
+    if (this.options.pull?.stopOnPermanentStreamRejection === true && this.pullWorker?.registration.permanentError !== undefined) {
+      throw this.pullWorker.registration.permanentError;
+    }
+  }
+
+  /**
+   * Waits until every Flow type queue and the app Worker ID queue has registered at least once.
+   * Safe before or after start and for concurrent callers. Later calls resolve even after shutdown.
+   * Reconnects do not reset completion. Use pullRegistrationState for ongoing readiness probes.
+   * @param options - Optional AbortSignal and positive timeout in milliseconds; defaults to waiting indefinitely.
+   * @returns A promise resolved after all queues have registered once.
+   * @throws {PullRegistrationError} A permanent rejection leaves a queue without another registered stream before readiness.
+   * @throws {Error} Startup fails, the Worker stops before readiness, or this is a listening Worker.
+   * @throws {RangeError} The timeout is invalid.
+   * @throws {DOMException} The timeout expires; cancellation rejects with the signal's reason.
+   * @example
+   * ```ts
+   * await worker.start();
+   * await worker.waitPullRegistered({ timeoutMs: 10_000 });
+   * console.log(worker.pullRegistrationState().isReady);
+   * ```
+   */
+  public waitPullRegistered(options: WaitPullRegisteredOptions = {}): Promise<void> {
+    if (this.pullWorker === undefined) return Promise.reject(new Error("waitPullRegistered requires a pull Worker"));
+    return this.pullWorker.registration.wait(options);
+  }
+
+  /**
+   * Returns an independent snapshot of pull queue registrations.
+   * Readiness latches after every queue registers once. Only a permanent rejection with no
+   * registered stream makes it false; re-registration clears the queue error. Stop preserves readiness.
+   * @returns Current readiness and queue snapshots, or false and an empty list for a listening Worker.
+   * See waitPullRegistered for a startup and readiness example. Treat errors as immutable.
+   */
+  public pullRegistrationState(): PullRegistrationState {
+    return this.pullWorker?.registration.snapshot() ?? { isReady: false, queues: [] };
+  }
+
+  private stopAfterPermanentRejection(): void {
+    this.close().catch((failure: unknown) => {
+      this.shutdownError = failure;
+      this.resolveStopped();
+    });
   }
 
   /**

@@ -262,10 +262,16 @@ Python 的 Worker 和 AsyncWorker 均提供 **wait_pull_registered(timeout)** �
 **pull_registration_state()**；AsyncWorker 的等待方法需要 await。
 Java 的 **stopOnPermanentStreamRejection** 和 Python 的
 **stop_on_permanent_stream_rejection** 提供与 Go 相同的可选停止行为。
-TypeScript 和 Rust 将陆续支持。
 在独立 goroutine 中调用 **Start**，然后设置启动截止时间并等待注册完成。
 滚动部署时，先等待新 Worker 就绪，再停止旧 Worker。注册成功不代表处理器
 仍有空闲容量。
+
+TypeScript 提供 **waitPullRegistered**、**pullRegistrationState** 和
+**stopOnPermanentStreamRejection**。Rust 提供 **wait_pull_registered**、
+**pull_registration_state** 和 **stop_on_permanent_stream_rejection**，就绪语义相同。
+TypeScript 等待支持 AbortSignal 或毫秒超时；Rust 可通过丢弃 future 取消等待，
+或使用 Tokio 超时。启用停止选项后，TypeScript 的 **run** 和 Rust 的 **start**
+会在排空后返回永久拒绝错误。
 
 **WaitPullRegistered** 支持并发调用，也可以在 **Start** 之前调用。
 如果就绪前发生永久拒绝，且该队列没有其他已注册的 stream，它会返回包含

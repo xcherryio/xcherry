@@ -38,7 +38,7 @@ pub enum ErrorSubStatus {
     RequestTimeout,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Preserves one failed Dex service operation and its transport source.
 pub struct ServiceError {
     code: GrpcCode,
@@ -47,6 +47,7 @@ pub struct ServiceError {
     operation: &'static str,
     flow_id: Option<String>,
     source: Status,
+    pull_registration_error: Option<Box<crate::PullRegistrationError>>,
 }
 
 impl ServiceError {
@@ -84,6 +85,7 @@ impl ServiceError {
             operation,
             flow_id: None,
             source: Status::unknown(detail),
+            pull_registration_error: None,
         }
     }
 }
@@ -96,7 +98,10 @@ impl Display for ServiceError {
 
 impl Error for ServiceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
+        match &self.pull_registration_error {
+            Some(rejection) => Some(rejection.as_ref()),
+            None => Some(&self.source),
+        }
     }
 }
 
@@ -125,7 +130,7 @@ impl WorkerError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Reports service, definition, value, handler, and Flow-completion failures.
 ///
 /// Match specific variants when recovery differs. [`Self::service_error`] extracts common gRPC
@@ -253,6 +258,30 @@ impl Error for SdkError {
 }
 
 impl SdkError {
+    /// Returns the typed pull queue rejection when a permanent error leaves no registered stream.
+    ///
+    /// Registration waiters and opt-in Worker shutdown return the existing [`Self::Service`]
+    /// variant. This accessor preserves its queue name and original gRPC status. Other errors
+    /// return `None`. See [`crate::PullRegistrationError`] for a complete inspection example.
+    pub fn pull_registration_error(&self) -> Option<&crate::PullRegistrationError> {
+        self.service_error()
+            .and_then(|service| service.pull_registration_error.as_deref())
+    }
+
+    pub(crate) fn from_pull_registration(rejection: crate::PullRegistrationError) -> Self {
+        Self::Service {
+            service: ServiceError {
+                code: rejection.status.code(),
+                sub_status: ErrorSubStatus::Uncategorized,
+                detail: rejection.to_string(),
+                operation: "pull_worker_registration",
+                flow_id: None,
+                source: rejection.status.clone(),
+                pull_registration_error: Some(Box::new(rejection)),
+            },
+        }
+    }
+
     /// Returns shared service metadata for service-backed variants.
     ///
     /// Local definition, argument, mapping, and invalid-result errors return `None`.
@@ -302,6 +331,7 @@ impl SdkError {
             operation,
             flow_id: flow_id.map(str::to_string),
             source: status,
+            pull_registration_error: None,
         };
         if decoded.is_err() {
             return Self::Service { service };
@@ -345,6 +375,7 @@ impl SdkError {
                 operation,
                 flow_id: Some(flow_id.to_string()),
                 source: Status::deadline_exceeded(detail),
+                pull_registration_error: None,
             },
         }
     }
