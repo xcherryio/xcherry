@@ -6,7 +6,7 @@ Read the core primitives guide first for product semantics. This page records th
 
 `Flow::StartInput` is the input accepted by `Client::start_flow`. `steps` returns the closed Step graph. A Step's WaitFor phase decides durable readiness; Execute performs side effects and returns the next graph movement. `Wait::until`, `any_of`, `all_of`, and `any_combination_of` compose Conditions. `Wait::skip_immediately` bypasses waiting.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/wait_types/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/wait_types/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/wait_types/flow.rs -->
 ```rust
 fn wait_for(&self, _context: &mut Context, input: Self::Input) -> HandlerResult<Wait> {
@@ -55,7 +55,7 @@ Use `StepMovement::to_with_options` when one transition needs different options 
 
 An `Attribute<T>` stores one typed durable value. `AttributeMap<T>` stores independently addressable instances. Both belong in `PersistenceSchema`. Indexed attributes support Flow search; `sync_to_attribute_store` projects values into an Attribute Store configured by `FlowConfig`. For a short-lived secret, such as an API key, use a [hard-delete Attribute](data-handling.md#hard-delete-attributes); it supports only string and object values and cannot be indexed or synced.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/attribute/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/attribute/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/attribute/flow.rs -->
 ```rust
 static STATUS: LazyLock<Attribute<String>> = LazyLock::new(|| {
@@ -78,7 +78,7 @@ Call `get`, `set`, or `clear` through `&mut Context`. Load only the map instance
 
 Channels are durable message queues. `for_one` and `for_n` create wait Conditions; `publish` appends; `pending_messages`, `find_pending_message`, and `delete` support explicit queue management. A `ChannelMap<T>` partitions queues by instance key. Declare the definition before attaching instance loads.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/channel/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/channel/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/channel/flow.rs -->
 ```rust
 fn rpcs(&self) -> RpcList<Self> {
@@ -122,7 +122,7 @@ RPCs can declare locks, timeout, transactions, and selective loads. An RPC witho
 
 `Stream<T>` is append-oriented output. Give it a maximum payload size and add it to `PersistenceSchema`. Text output can be buffered to avoid one remote write per fragment.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/stream/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/stream/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/stream/flow.rs -->
 ```rust
 let progress = PROGRESS.buffered_text_with_options(
@@ -137,7 +137,7 @@ Buffered writes are asynchronous; use them for progress-like output, not as the 
 
 Use `Client::read_stream_with_timeout` for forward, one-at-a-time, long-polling consumption. Use `Client::list_stream_messages` for non-blocking newest-first pages. Pass the typed Stream directly, and pass `next_page_token` unchanged until it is empty.
 
-[Runnable listing source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/stream/controller.rs)
+[Runnable listing source](https://github.com/superdurable/dex/blob/sdk-rust/v1.14.0/examples/rust/src/primitives/stream/controller.rs)
 <!-- dex-source: examples/rust/src/primitives/stream/controller.rs -->
 ```rust
 client

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.42.0 - 2026-10-21
+
+- Advance Java, Python, TypeScript, Rust, and CLI baselines to their published Dex 1.14.0 tags. Keep Go and Server at v1.13.0, and refresh pinned source links across Core, language references, and App Builder.
+- Document pull Worker registration readiness in all five SDKs, replacing the non-Go process-health and rejection-log workaround. Add language-native startup waits, readiness probes, typed rejection handling, and opt-in shutdown guidance, including TypeScript run() and Rust pull_registration_error().
+- Preserve the shared queue semantics: surplus-stream rejection does not make a serving queue unready, transient reconnects do not flap readiness, and Stop does not clear it. Keep App Builder's Go startup guidance aligned and synchronize plugin manifests at version 0.42.0.
+
 ## 0.41.0 - 2026-10-21
 
 - Advance Go, Server, and CLI baselines to their published Dex 1.13.0 tags. Pin Java, Python, TypeScript, and Rust references and examples to their own latest published SDK v1.12.0 tags, with per-language baseline metadata and source validation.
