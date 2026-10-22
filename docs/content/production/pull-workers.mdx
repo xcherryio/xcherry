@@ -97,10 +97,15 @@ func StartPullGreeting(cache *blobcache.Cache, serverAddress string) (*GreetingF
 		WorkerTarget:       worker.WorkerTarget(),
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, errors.Join(err, worker.Stop(context.Background()))
 	}
 	workerResult := make(chan error, 1)
 	go reportWorkerResult(worker, workerResult)
+	startupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := worker.WaitPullRegistered(startupContext); err != nil {
+		return nil, nil, nil, nil, errors.Join(err, StopPullGreeting(context.Background(), worker, client, workerResult))
+	}
 	return flow, worker, client, workerResult, nil
 }
 
@@ -114,6 +119,16 @@ func StopPullGreeting(ctx context.Context, worker *dex.Worker, client *dex.Clien
 		workerRunErr = ctx.Err()
 	}
 	return errors.Join(clientCloseErr, workerStopErr, workerRunErr)
+}
+
+func PullGreetingReadiness(worker *dex.Worker) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !worker.PullRegistrationState().IsReady {
+			http.Error(w, "pull queues unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func reportWorkerResult(worker *dex.Worker, workerResult chan<- error) {
@@ -259,8 +274,11 @@ from **Start** also reach the waiter. Cancellation returns the context error;
 stopping before readiness returns an error. Once all queues have registered,
 this wait keeps returning successfully.
 
-Use **PullRegistrationState().IsReady** for readiness probes, such as a
-**/readyz** handler that returns 503 while it is false.
+The runnable [Go example](https://github.com/superdurable/dex/blob/main/examples/go/production/pull-workers/worker.go)
+gates startup with **WaitPullRegistered** and a 30-second deadline. Its
+**PullGreetingReadiness** HTTP handler reads **PullRegistrationState().IsReady**
+and returns 503 while it is false, or 200 when ready. Mount it at your readiness
+probe endpoint.
 **Queues** reports each queue's **HasRegisteredStream** and
 **LastPermanentError**. After initial registration, reconnects, ownership moves,
 transient disconnects, and backoff keep **IsReady** true. It becomes false only
