@@ -14,13 +14,15 @@ dexcli dev
 cargo run --locked
 ```
 
-The example defaults are Dex at `127.0.0.1:8801`, Worker bind at `127.0.0.1:8803`, and the HTTP controller at `127.0.0.1:8080`. Use the environment variables documented in the [pinned Rust example README](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/rust/README.md) when those addresses or the BlobCache directory differ.
+The example defaults are Dex at `127.0.0.1:8801`, Worker bind at `127.0.0.1:8803`, and the HTTP controller at `127.0.0.1:8080`. Use the environment variables documented in the [pinned Rust example README](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/README.md) when those addresses or the BlobCache directory differ.
 
 ## Pull Workers and Dex credentials
 
-Use `WorkerOptions::new().pull(PullWorkerOptions::new().max_concurrent_tasks(8))` for outbound polling, without a bind address or listening target. Advertise `worker.worker_target().clone()` or `WorkerTarget::pull()` through `ClientOptions::worker_target` or a StartFlow or SubFlow FlowConfig override. Pull options also have `idle_streams_per_queue`, `app_worker_id`, and `stop_drain_timeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. Change an explicit app Worker ID after restart. With Server and Rust SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. Follow the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retries, heartbeats, stream capacity, and Stop. [Released Rust options](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-rust/crates/dex-sdk/src/worker_options.rs) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/rust/src/production/pull_workers.rs)
+Use `WorkerOptions::new().pull(PullWorkerOptions::new().max_concurrent_tasks(8))` for outbound polling, without a bind address or listening target. Advertise `worker.worker_target().clone()` or `WorkerTarget::pull()` through `ClientOptions::worker_target` or a StartFlow or SubFlow FlowConfig override. Pull options also have `idle_streams_per_queue`, `app_worker_id`, and `stop_drain_timeout`; defaults are one idle stream per queue, a generated process ID, and 30 seconds. Change an explicit app Worker ID after restart. With Server and Rust SDK v1.12.0, a Worker that lacks a requested Step type or RPC name declines it before the handler runs, so Dex can reassign the task without consuming the Step attempt. Follow the [pull Worker guarantees](../core/pull-workers.md) for sticky routing, retries, heartbeats, stream capacity, and Stop. [Released Rust options](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/sdk-rust/crates/dex-sdk/src/worker_options.rs) [Runnable pull Worker example](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/production/pull_workers.rs)
 
-Set `credential(Arc<dyn Credential>)` separately on ClientOptions and WorkerOptions when public API authentication is enabled. `FileCredential::new(path)` reads a rotating bearer token. A custom `Credential` returns the current token for each call and pull stream opening; a credential error fails the call locally. Protect the plaintext connection. [Released Rust credentials](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/sdk-rust/crates/dex-sdk/src/credential.rs)
+The published Rust SDK remains at v1.12.0. Go SDK v1.13.0's **WaitPullRegistered**, **PullRegistrationState**, **PullRegistrationError**, and opt-in **StopOnPermanentStreamRejection** are not available in this SDK yet. Rely on Worker process health and watch logs for "Worker task stream rejected"; process health does not prove every queue registered. Keep deployment overlap while validating replacement Workers. See [the readiness contract](../core/pull-workers.md#startup-registration-and-readiness) and [SDK parity tracking](https://github.com/superdurable/dex/issues/728).
+
+Set `credential(Arc<dyn Credential>)` separately on ClientOptions and WorkerOptions when public API authentication is enabled. `FileCredential::new(path)` reads a rotating bearer token. A custom `Credential` returns the current token for each call and pull stream opening; a credential error fails the call locally. Protect the plaintext connection. [Released Rust credentials](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/sdk-rust/crates/dex-sdk/src/credential.rs)
 
 ## Connector runtime support
 
@@ -61,7 +63,7 @@ Go-only analyzer contract.
 
 A Rust Flow owns its Step values and returns a `StepList` that borrows them. Each Step declares its input type and returns a `StepDecision`. `wait_for` is optional; omitting it makes Execute eligible immediately.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/rust/src/primitives/timer/flow.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/timer/flow.rs)
 <!-- dex-source: examples/rust/src/primitives/timer/flow.rs -->
 ```rust
 #[derive(Default)]
@@ -101,7 +103,7 @@ Keep every `Attribute`, `AttributeMap`, `Channel`, `ChannelMap`, and `Stream` sc
 
 The Registry must contain every Flow that a Client starts or a Worker executes. Registration validates names, Step graphs, persistence declarations, loads, and RPC definitions. Build the registry with chained `register` calls and propagate `SdkResult`.
 
-[Runnable source](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/rust/src/primitives/mod.rs)
+[Runnable source](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/primitives/mod.rs)
 <!-- dex-source: examples/rust/src/primitives/mod.rs -->
 ```rust
 pub fn register(registry: Registry) -> SdkResult<Registry> {
@@ -128,7 +130,7 @@ pub fn register(registry: Registry) -> SdkResult<Registry> {
 }
 ```
 
-Create one shared `Arc<BlobCache>` for the Client and Worker. Start the blocking Worker on a dedicated OS thread; application HTTP work may remain on Tokio. If a Flow constructor needs a Client, construct the Client registry and Worker registry separately so dependency injection remains explicit. See the complete [bootstrap](https://github.com/superdurable/dex/blob/sdk-go/v1.12.0/examples/rust/src/main.rs).
+Create one shared `Arc<BlobCache>` for the Client and Worker. Start the blocking Worker on a dedicated OS thread; application HTTP work may remain on Tokio. If a Flow constructor needs a Client, construct the Client registry and Worker registry separately so dependency injection remains explicit. See the complete [bootstrap](https://github.com/superdurable/dex/blob/sdk-rust/v1.12.0/examples/rust/src/main.rs).
 
 ## Suggested project layout
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.41.0 - 2026-10-21
+
+- Advance Go, Server, and CLI baselines to their published Dex 1.13.0 tags. Pin Java, Python, TypeScript, and Rust references and examples to their own latest published SDK v1.12.0 tags, with per-language baseline metadata and source validation.
+- Document Go pull Worker startup gating with WaitPullRegistered, stable PullRegistrationState probes, PullRegistrationError, and opt-in StopOnPermanentStreamRejection. Distinguish surplus-stream rejection from a rejected queue with no other registered stream, preserve readiness through reconnects, and remove stopping Workers from service separately. Add deployment and verification guidance to Core and App Builder.
+- State the readiness API limitation in the other four SDK handbooks and the process-health and rejection-log workaround. Document Server 1.13.0 ResourceExhausted preservation, available retry hints, bounded backoff, and mutation reconciliation. Synchronize the Codex, Claude Code, and Cursor plugin manifests at version 0.41.0.
+
 ## 0.40.0 - 2026-10-17
 
 - Advance the SDK, Server, and CLI baselines to the published Dex 1.12.0 tags and refresh every pinned Dex source link. The example dependency manifests at those tags select SDK 1.11.0; application lockfiles remain authoritative.

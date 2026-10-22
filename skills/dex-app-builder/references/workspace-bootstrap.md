@@ -30,7 +30,7 @@ Create a Go application that depends only on open-source Dex:
 1. Install `dexcli` with the supported package for the platform (on macOS,
    `brew install superdurable/tap/dexcli`) and run `dexcli version`.
 2. Create the Go module and add the Dex Go SDK at an exact released version,
-   for example `go get github.com/superdurable/dex/sdk-go@v1.12.0`. Select the
+   for example `go get github.com/superdurable/dex/sdk-go@v1.13.0`. Select the
    newest stable SDK release that pairs with the installed `dexcli` and the
    target Dex Server; do not copy versions from a neighboring project or
    resolve a branch, pseudo-version, or commit.
@@ -76,6 +76,8 @@ repository record the releases this guidance was checked against. They do not
 authorize upgrading an existing application's pinned dependencies.
 
 ## Worker and access topology
+
+For Go SDK v1.13.0 pull Workers, gate startup on **WaitPullRegistered(ctx)** after launching **Start** in another goroutine. Use **PullRegistrationState().IsReady** together with process lifecycle health for probes; wait for replacement registration before stopping old Workers. Stop preserves latched readiness, so mark shutdown separately. See the [registration contract](../../dex-sdk/references/core/pull-workers.md#startup-registration-and-readiness).
 
 Choose a listening Worker when Dex Server can reach its advertised WorkerService address. Choose a [pull Worker](../../dex-sdk/references/core/pull-workers.md) when the application can only open outbound connections. For pull mode, set Go `WorkerOptions.Pull`, advertise the Worker's pull target through Client defaults or StartFlow/SubFlow overrides, size streams for the registered Flow types, and keep its app Worker ID unique per process restart. Plan Step retries for unavailable Workers and record heartbeats in long-running handlers that must observe cancellation.
 
