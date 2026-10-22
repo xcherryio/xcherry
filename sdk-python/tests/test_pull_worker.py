@@ -1410,3 +1410,36 @@ async def _readiness_requires_each_queue_and_waiters_can_time_out_independently(
         worker_call.cancel()
         flow_call.cancel()
         await asyncio.gather(*running)
+
+
+def test_transport_creation_failure_preserves_start_error_and_allows_stop() -> None:
+    asyncio.run(_transport_creation_failure_preserves_start_error_and_allows_stop())
+
+
+async def _transport_creation_failure_preserves_start_error_and_allows_stop() -> None:
+    from test_worker_startup import MemoryBlobCache
+
+    worker = Worker(
+        Registry([]), MemoryBlobCache(), WorkerOptions(pull=PullWorkerOptions())
+    )
+    assert worker._pull is not None
+    failure = RuntimeError("cannot create pull channel")
+
+    def run_pull() -> None:
+        worker._state = "running"
+        assert worker._pull is not None
+        asyncio.run(worker._pull.run())
+
+    try:
+        with patch.object(worker, "_start", side_effect=run_pull), patch(
+            "dex._pull_worker.outbound_worker_task_channel", side_effect=failure
+        ):
+            with pytest.raises(RuntimeError) as started:
+                await asyncio.to_thread(worker.start)
+        assert started.value is failure
+        with pytest.raises(RuntimeError) as waited:
+            worker.wait_pull_registered(1)
+        assert waited.value is failure
+        worker.stop()
+    finally:
+        worker.close()

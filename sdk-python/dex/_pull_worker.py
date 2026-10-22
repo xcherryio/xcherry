@@ -138,9 +138,10 @@ class PullWorkerRuntime:
         self._stopping = asyncio.Event()
         self._stop_completed = asyncio.Event()
         self._started.set()
-        channel = outbound_worker_task_channel(self._server_address)
-        stub = dex_pb2_grpc.WorkerTaskServiceStub(channel)  # type: ignore[no-untyped-call]
+        channel: grpc.aio.Channel | None = None
         try:
+            channel = outbound_worker_task_channel(self._server_address)
+            stub = dex_pb2_grpc.WorkerTaskServiceStub(channel)  # type: ignore[no-untyped-call]
             self._wake.set()
             while not self._stopping.is_set():
                 await self._wake.wait()
@@ -157,7 +158,8 @@ class PullWorkerRuntime:
                 raise self._permanent_error
         finally:
             try:
-                await channel.close(grace=None)
+                if channel is not None:
+                    await channel.close(grace=None)
             finally:
                 self._loop_thread_id = None
 
