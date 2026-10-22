@@ -214,9 +214,13 @@ Flow type names must be unique within one Dex server. `maxConcurrentTasks`
 defaults to the logical CPU count, and `idleStreamsPerQueue` defaults to one.
 Each stream runs one task at a time. When all slots are busy, the Worker rejects
 additional assignments for reassignment. The Worker keeps idle streams on each
-queue even when all slots are busy, so it can hold up to
-`(1 + F) * (idleStreamsPerQueue + maxConcurrentTasks)` streams, where `F` is the
-number of registered Flow types. Size both options for the server's stream cap.
+queue even when all slots are busy. After tasks finish, it gracefully closes surplus
+idle streams while preserving readiness. With `F` registered Flow types, the
+steady-state bound after load drops is
+`maxConcurrentTasks + (1 + F) * idleStreamsPerQueue` streams. The transient peak
+during a burst remains bounded by the matching caps. Size both options for
+`matching.maxConcurrentTasksCap` per app Worker ID per matching owner and
+`matching.maxStreams` per Matching instance.
 
 The Worker rejects an unregistered Step or RPC by name. Dex retries that task
 on another pull Worker without consuming a Step attempt, including when the

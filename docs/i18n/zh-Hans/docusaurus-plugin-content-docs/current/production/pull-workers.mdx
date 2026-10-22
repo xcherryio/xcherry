@@ -345,9 +345,12 @@ Server，Worker 与之前一样返回未注册错误。推送模式 Worker 仍�
 表中 Java 和 Rust 的选项名称是 builder method。下方公式使用 TypeScript 的两个容量参数名称；
 同一上限适用于所有 SDK。
 
-一个注册了 **F** 个 Flow 类型的 Worker 最多可能持有
-**(1 + F) × (idleStreamsPerQueue + maxConcurrentTasks)** 条 stream。额外的队列是该
-Worker 的 app Worker ID 队列。该上限不应超过 **matching.maxConcurrentTasksCap**；
+任务完成后，Worker 会正常关闭多余的空闲 stream。每个队列保留至少
+**idleStreamsPerQueue** 条已注册的空闲 stream，清理期间就绪状态保持为 true。
+对于注册了 **F** 个 Flow 类型的 Worker，负载下降后的稳态上限为
+**maxConcurrentTasks + (F + 1) × idleStreamsPerQueue** 条 stream。
+额外的队列是该 Worker 的 app Worker ID 队列。突发负载期间的瞬时峰值仍受 matching
+容量上限约束。应根据 **matching.maxConcurrentTasksCap** 配置 Worker；
 默认每个 matching owner 上每个 app Worker ID 最多 256 条 stream。
 **matching.maxStreams** 默认限制每个 Matching 实例最多注册 100,000 条 stream。
 **matching.maxQueueLength**、**matching.maxFlowTypes** 和

@@ -78,11 +78,13 @@ The Worker polls its sticky queue and every registered Flow type queue. Flow
 type names must be unique within a Dex server. `max_concurrent_tasks` defaults
 to the CPU count, and `idle_streams_per_queue` defaults to one. At capacity,
 the Worker rejects an assignment so Dex can reassign it. Each stream runs one
-task at a time; Step heartbeat and stream writes use the same stream. A Worker
-may hold up to `(1 + number of Flow types) * (idle_streams_per_queue +
-max_concurrent_tasks)` streams because busy streams are replaced with idle
-streams and retained after tasks finish. Size these options for the server's
-per-Worker stream cap (256 by default).
+task at a time; Step heartbeat and stream writes use the same stream. After tasks finish, the Worker
+gracefully closes surplus idle streams while preserving readiness. After load drops,
+the steady-state bound is `max_concurrent_tasks + (1 + number of Flow types) *
+idle_streams_per_queue` streams. The transient peak during a burst remains bounded
+by the matching caps. Size these options for `matching.maxConcurrentTasksCap` per
+app Worker ID per matching owner (256 by default) and `matching.maxStreams` per
+Matching instance (100,000 by default).
 
 The Worker rejects an unregistered Step or RPC by name. Dex retries that task
 on another pull Worker without consuming a Step attempt, including when the

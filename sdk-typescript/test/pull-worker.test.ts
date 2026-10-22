@@ -137,6 +137,56 @@ test("poll streams register first, reject at capacity, answer Ping, and reuse af
   }
 });
 
+test("surplus streams shrink after a burst without closing busy streams or losing readiness", async () => {
+  for (const idleStreamsPerQueue of [1, 2]) {
+    const harness = await startHarness();
+    let releaseTasks!: () => void;
+    const taskGate = new Promise<void>((resolve) => { releaseTasks = resolve; });
+    const worker = harness.worker(async () => {
+      await taskGate;
+      return InvokeWorkerRPCResponse.create({});
+    }, { maxConcurrentTasks: 3, idleStreamsPerQueue });
+    const waitingStreams: CapturedStream[] = [];
+    const busyStreams: CapturedStream[] = [];
+    try {
+      worker.start();
+      for (let idleNumber = 0; idleNumber < idleStreamsPerQueue; idleNumber++) {
+        const stream = await harness.nextStream();
+        stream.call.write(registered(false));
+        waitingStreams.push(stream);
+      }
+      await worker.registration.wait({ timeoutMs: 5_000 });
+      for (let taskNumber = 0; taskNumber < 3; taskNumber++) {
+        const stream = waitingStreams.shift()!;
+        busyStreams.push(stream);
+        stream.call.write(rpcTask(`burst-${taskNumber}`));
+        await until(() => harness.invocationCount === taskNumber + 1);
+        const replacement = await harness.nextStream();
+        replacement.call.write(registered(false));
+        await replacement.frame("register");
+        waitingStreams.push(replacement);
+      }
+      assert.equal(harness.openedStreamCount, 3 + idleStreamsPerQueue);
+      assert.equal(busyStreams.some((stream) => stream.call.readableEnded), false);
+      assert.equal(worker.registration.snapshot().isReady, true);
+      releaseTasks();
+      for (const stream of busyStreams) await stream.frame("taskFrame");
+      await until(() => {
+        assert.equal(worker.registration.snapshot().isReady, true);
+        return (Reflect.get(worker, "streams") as Set<unknown>).size === idleStreamsPerQueue;
+      });
+      await worker.registration.wait();
+      const openedStreams = harness.openedStreamCount;
+      await until(() => busyStreams.every((stream) => stream.call.readableEnded));
+      assert.equal(harness.openedStreamCount, openedStreams);
+    } finally {
+      releaseTasks();
+      await worker.close();
+      await harness.close();
+    }
+  }
+});
+
 test("unknown task rejection follows the Registered capability for each stream", async () => {
   const harness = await startHarness();
   const dispatcher = {

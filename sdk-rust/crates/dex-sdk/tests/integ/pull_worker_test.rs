@@ -803,6 +803,9 @@ fn pull_worker_test_cancel_and_forced_stop() {
             .expect("forced handler returned")
     );
     worker.join();
+    client
+        .stop_flow(&forced_flow_id, StopFlowOptions::cancel())
+        .expect("cancel forced-stop Flow");
     drop(client);
     cache.close().expect("close pull cache");
 }

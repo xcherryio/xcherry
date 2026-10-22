@@ -346,8 +346,12 @@ new Thread(worker::start).start();
 
 Pull mode polls the Worker's sticky queue and each registered Flow type queue.
 It keeps one idle stream per queue by default. Across `F` registered Flow types,
-the stream count stays bounded by `(1+F)*(idleStreamsPerQueue+maxConcurrentTasks)`
-through repeated server Reconnects.
+the steady-state stream count after load drops is bounded by
+`maxConcurrentTasks + (1 + F) * idleStreamsPerQueue`. Completed streams close
+gracefully when their queue already has enough registered idle streams, preserving
+readiness. The transient peak during a burst remains bounded by the matching caps:
+`matching.maxConcurrentTasksCap` per app Worker ID per matching owner and
+`matching.maxStreams` per Matching instance.
 Each stream runs one task at a time. The Worker rejects a task with no capacity
 so Dex can assign it elsewhere. The default task capacity is the available CPU
 count. A zero option value selects its default.

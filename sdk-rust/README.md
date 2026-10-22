@@ -383,11 +383,12 @@ A permanent registration error waits one minute. If the next attempt fails
 transiently before registration, that retry also waits one minute; subsequent
 transient retries resume at the five-second cap. A registered stream or a
 server-directed reconnect resets backoff to 100 ms, with jitter on every retry.
-The Worker may hold up to
-`(1 + number of Flow types) * (idleStreamsPerQueue + maxConcurrentTasks)`
-streams because busy streams are kept alongside each queue's idle streams.
-Size both options within the server's per-Worker stream cap (256 by default)
-and per-queue stream limits.
+After tasks finish, the Worker gracefully closes surplus idle streams while
+preserving readiness. After load drops, the steady-state stream bound is
+`max_concurrent_tasks + (1 + number of Flow types) * idle_streams_per_queue`.
+The transient peak during a burst remains bounded by the matching caps. Size both
+options for `matching.maxConcurrentTasksCap` per app Worker ID per matching owner
+(256 by default) and `matching.maxStreams` per Matching instance (100,000 by default).
 
 `Worker::stop` begins a graceful drain. After 30 seconds by default, the Worker
 cancels active handlers; `Worker::start` waits for them to return before it
