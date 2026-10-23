@@ -9,17 +9,16 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-dexzd-protocol.workspace = true
-dexzd-server.workspace = true
-s3mock-server.workspace = true
-tempfile.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tonic.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
+dexzd-protocol.workspace = true
+dexzd-server.workspace = true
+futures.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
 
 [lints]
 workspace = true

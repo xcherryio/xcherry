@@ -9,35 +9,175 @@
 //! The dex-server-zd executable: typed configuration, startup, shutdown, and the dev mode with an embedded S3 emulator.
 
 mod command_line_options;
+mod component_configs;
 pub mod config;
+mod embedded_s3;
+mod object_stores;
+mod runtime_hooks;
+mod server_logging;
+mod server_node;
+mod worker_rpc_invoker;
 
 pub use command_line_options::{CommandLineOptions, DevCommandOptions, ServerCommand};
+pub use server_node::RunningServer;
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::Parser;
+use dexzd_engine::{EngineStartError, NodeStopReason};
 
-/// Errors that stop `dex-server-zd` before or while it serves requests.
+use crate::embedded_s3::EmbeddedS3;
+
+/// Why the server could not start or stopped abnormally. Every variant exits with a failure status.
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
     /// Configuration could not be loaded or validated.
     #[error(transparent)]
     Config(#[from] config::ConfigError),
-    /// The requested command is not available in this build yet.
-    #[error("the {command} command is not available in this build yet")]
-    CommandNotAvailable {
-        /// The command line subcommand name.
-        command: &'static str,
+    /// A configuration value does not fit the component that uses it.
+    #[error("configuration value {field} is out of range for this platform")]
+    ConfigValueOutOfRange {
+        /// CamelCase YAML field path.
+        field: &'static str,
+    },
+    /// The configured object store credentials cannot be used.
+    #[error("{field}: {detail}")]
+    UnsupportedCredentials {
+        /// CamelCase YAML field path.
+        field: &'static str,
+        /// Why the credentials cannot be used.
+        detail: String,
+    },
+    /// The S3 client for a bucket could not be created.
+    #[error("connecting to object storage bucket {bucket}: {source}")]
+    ObjectStore {
+        /// Bucket name.
+        bucket: String,
+        /// Client error.
+        #[source]
+        source: dexzd_object_store::ObjectStoreError,
+    },
+    /// The object store does not support the conditional writes the engine relies on.
+    #[error("object storage bucket {bucket} failed the startup check: {source}")]
+    ObjectStoreSelfCheck {
+        /// Bucket name.
+        bucket: String,
+        /// Failed check.
+        #[source]
+        source: dexzd_object_store::StartupSelfCheckError,
+    },
+    /// The embedded S3 emulator of dev mode could not start.
+    #[error("starting the embedded S3 emulator in {}: {detail}", directory.display())]
+    EmbeddedS3 {
+        /// Emulator data directory.
+        directory: PathBuf,
+        /// What failed.
+        detail: String,
+    },
+    /// The Stream Store configuration is invalid.
+    #[error("starting the Stream Store: {source}")]
+    StreamStore {
+        /// Store error.
+        #[source]
+        source: dexzd_stream_store::StreamStoreError,
+    },
+    /// The SearchFlows backend could not be created.
+    #[error("starting the search backend: {source}")]
+    SearchBackend {
+        /// Search error.
+        #[source]
+        source: dexzd_search::SearchError,
+    },
+    /// The engine could not recover or start serving.
+    #[error("starting the engine: {source}")]
+    EngineStart {
+        /// Engine error.
+        #[source]
+        source: EngineStartError,
+    },
+    /// The gRPC listener could not be bound.
+    #[error("listening on {address}: {source}")]
+    Listen {
+        /// Configured address.
+        address: SocketAddr,
+        /// Socket error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The gRPC server failed.
+    #[error("serving gRPC: {source}")]
+    Serve {
+        /// Transport error.
+        #[source]
+        source: tonic::transport::Error,
+    },
+    /// The node stopped serving, for example after losing its lease; the process must restart.
+    #[error("the node stopped: {reason}")]
+    NodeStopped {
+        /// Why the node stopped.
+        reason: NodeStopReason,
+    },
+    /// A server task ended unexpectedly.
+    #[error("server task failed: {detail}")]
+    ServingTaskFailed {
+        /// What failed.
+        detail: String,
+    },
+    /// Logging could not be set up.
+    #[error("setting up logging: {detail}")]
+    Logging {
+        /// What failed.
+        detail: String,
+    },
+    /// The async runtime could not start.
+    #[error("starting the async runtime: {source}")]
+    AsyncRuntime {
+        /// Runtime error.
+        #[source]
+        source: std::io::Error,
     },
 }
 
-/// Parses the process command line and runs the selected command until it exits.
-///
-/// Returns `Ok(())` after a graceful shutdown, or the error that stopped the command.
+/// Parses the command line, runs the selected command until SIGINT or SIGTERM, and returns how it ended.
 pub fn run_from_command_line() -> Result<(), ServerError> {
     let options = CommandLineOptions::parse();
     match options.command {
         ServerCommand::Dev(options) => {
-            let _configuration = config::Config::load_dev(&options)?;
-            Err(ServerError::CommandNotAvailable { command: "dev" })
+            let configuration = config::Config::load_dev(&options)?;
+            server_logging::install(configuration.dev.log_directory.as_deref())?;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|source| ServerError::AsyncRuntime { source })?;
+            runtime.block_on(async {
+                let server = start_dev_server_with_config(configuration).await?;
+                let shutdown = server.shutdown_token();
+                let signals = tokio::spawn(async move {
+                    server_logging::wait_for_termination_signal().await;
+                    shutdown.cancel();
+                });
+                let result = server.wait().await;
+                signals.abort();
+                result
+            })
         }
     }
+}
+
+/// Starts the single-node dev server: an embedded S3 emulator under `<data-dir>/s3` and the
+/// engine's local store under `<data-dir>/store`, serving on `--listen`.
+///
+/// Does not install logging; the caller owns the global tracing subscriber.
+pub async fn start_dev_server(options: &DevCommandOptions) -> Result<RunningServer, ServerError> {
+    start_dev_server_with_config(config::Config::load_dev(options)?).await
+}
+
+async fn start_dev_server_with_config(
+    mut configuration: config::Config,
+) -> Result<RunningServer, ServerError> {
+    let embedded_s3 =
+        EmbeddedS3::start(&configuration.dev, &configuration.object_store.bucket).await?;
+    configuration.object_store.endpoint = embedded_s3.endpoint();
+    server_node::start_server(&configuration, Some(embedded_s3)).await
 }
