@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use dexzd_apply::{ApplyEffect, ApplyOutcome, StateWrite, WaitableChange};
 use dexzd_keyspace::{ColumnFamily, RunId};
+use dexzd_protocol::dex::{
+    AttributeMatch, AttributeMatchOperator, GetAttributesRequest, WaitForAttributeRequest,
+};
 use dexzd_protocol::dexzd::v1::FlowCommand;
 
 use crate::runtime::tests::fixtures::{
@@ -562,4 +565,83 @@ async fn halt_ends_a_waiting_sync_barrier() {
         matches!(error, RuntimeError::NodeStopping { .. }),
         "{error:?}"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_crash_before_commit_keeps_only_committed_state() {
+    let crashed = RuntimeHarness::new();
+    let run_id = started(&crashed, "order-1").await;
+    crashed
+        .registry
+        .propose(
+            flow("order-1"),
+            attribute_command("order-1", run_id, "count", 1),
+            CommitUrgency::Batched,
+        )
+        .await
+        .unwrap();
+    let store = crashed.store.clone();
+    drop(crashed);
+
+    let restarted = RuntimeHarness::with_store(&RuntimeConfig::default(), store);
+    let attributes = restarted
+        .registry
+        .get_attributes(
+            TENANT,
+            GetAttributesRequest {
+                flow_id: "order-1".to_owned(),
+                all_keys: true,
+                ..GetAttributesRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        attributes.attributes.is_empty(),
+        "the uncommitted write never happened"
+    );
+    assert_eq!(restarted.registry.uncommitted_bytes(), 0);
+
+    let wait = restarted.registry.wait_for_attribute(
+        TENANT,
+        WaitForAttributeRequest {
+            flow_id: "order-1".to_owned(),
+            r#match: Some(AttributeMatch {
+                key: "count".to_owned(),
+                operator: AttributeMatchOperator::Equal as i32,
+                operand: Some(int_value(1)),
+            }),
+            ..WaitForAttributeRequest::default()
+        },
+    );
+    tokio::pin!(wait);
+    tokio::select! {
+        _ = &mut wait => panic!("nothing is committed yet"),
+        () = tokio::time::sleep(Duration::from_millis(10)) => {}
+    }
+
+    // Recovery replays a command this registry never proposed.
+    let address = flow("order-1");
+    let context = restarted.registry.flow_context(&address);
+    let mut replayed = attribute_command("order-1", run_id, "count", 1);
+    replayed.command_id = vec![77; 16];
+    let outcome = crate::CommandApplier::apply(
+        restarted.applier.as_ref(),
+        &context,
+        &restarted.store.view(),
+        &replayed,
+    )
+    .unwrap();
+    restarted.store.apply_writes(&outcome.writes);
+    restarted.registry.apply_committed(CommittedFlowCommand {
+        command: replayed,
+        context,
+        committed: CommittedCommand {
+            outcome,
+            position: Default::default(),
+        },
+    });
+    let response = wait.await.unwrap();
+    assert_eq!(response.matched_value, Some(int_value(1)));
+    assert!(!restarted.registry.halted().is_cancelled());
 }

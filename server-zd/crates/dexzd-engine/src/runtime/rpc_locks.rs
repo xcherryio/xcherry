@@ -61,8 +61,7 @@ pub(crate) enum LockBlocker {
     EarlierWaiter,
 }
 
-/// Returns the first reason why `lock_keys` cannot be taken by an RPC: an RPC or Step holder.
-/// Queued Step waiters do not block RPCs (plan 8.3).
+/// Returns a held key that blocks an RPC; queued Step waiters never block RPCs (plan 8.3).
 pub(crate) fn find_rpc_lock_blocker(
     state: &dyn FlowStateReader,
     rpc_locks: &RpcLockTable,
@@ -82,8 +81,7 @@ pub(crate) fn find_rpc_lock_blocker(
     Ok(None)
 }
 
-/// Returns the first reason why the invocation cannot start: a held key or an earlier waiter
-/// on one of its keys.
+/// Returns a held key or an earlier waiter that blocks the invocation.
 pub(crate) fn find_invocation_lock_blocker(
     state: &dyn FlowStateReader,
     rpc_locks: &RpcLockTable,

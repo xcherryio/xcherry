@@ -243,8 +243,7 @@ impl FlowRuntimeRegistry {
         .await
     }
 
-    /// Registers a waiter, then checks committed state after every committed change that may
-    /// satisfy it, until `check` returns a result or the deadline passes.
+    /// Registers first, then rechecks committed state after each relevant change until `check` succeeds.
     async fn long_poll<T>(
         &self,
         flow: &FlowAddress,
@@ -348,8 +347,7 @@ fn flow_result(
     Ok(result)
 }
 
-/// Compares like the Go Server: equality for strings and booleans, every operator for
-/// integers and finite doubles, and a type mismatch never matches.
+/// Matches like the Go Server: strings and booleans by equality; type mismatches never match.
 fn is_attribute_matched(
     current: &Value,
     attribute_match: &AttributeMatch,

@@ -299,8 +299,7 @@ impl FlowRuntimeRegistry {
         Ok((run.run_id, records))
     }
 
-    /// Reads a hard-delete value; when the object is gone, rereads the current object once to
-    /// cover an overwrite that deleted it (plan 10.3).
+    /// Reads a hard-delete value, retrying once with the current object after an overwrite (plan 10.3).
     async fn read_hard_delete_attribute(
         &self,
         flow: &FlowAddress,

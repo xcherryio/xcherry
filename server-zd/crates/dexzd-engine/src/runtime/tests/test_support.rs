@@ -278,7 +278,11 @@ impl RuntimeHarness {
     }
 
     pub(crate) fn with_config(config: &RuntimeConfig) -> Self {
-        let store = MemoryStore::default();
+        Self::with_store(config, MemoryStore::default())
+    }
+
+    /// Builds a registry over existing committed state, as a restarted owner would.
+    pub(crate) fn with_store(config: &RuntimeConfig, store: MemoryStore) -> Self {
         let committer = Arc::new(FakeCommitter::new(store.clone()));
         let applier = Arc::new(ModelApplier::default());
         let effects = Arc::new(RecordingEffectSink::default());

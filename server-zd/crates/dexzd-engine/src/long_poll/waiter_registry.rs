@@ -176,8 +176,7 @@ impl WaiterShared {
 }
 
 impl WaiterRegistration {
-    /// Waits until a committed change may satisfy the waiter, or the registry closes.
-    /// A wake that arrived since the last call returns immediately.
+    /// Waits for a relevant committed change or close; an earlier unobserved wake returns at once.
     pub(crate) async fn changed(&self) {
         self.notify.notified().await;
     }

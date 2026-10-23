@@ -15,10 +15,7 @@ use crate::runtime::FlowAddress;
 use crate::runtime::rpc_locks::RpcLockTable;
 use crate::runtime::speculative_overlay::SpeculativeOverlay;
 
-/// Runtime state of one Flow. Its lock serializes the Flow: every proposal applies to the
-/// overlay, stamps, and enqueues while holding it, so overlay order equals log order.
-///
-/// The lock is never held across an await point or while calling another component.
+/// One Flow's state; proposals stamp, enqueue, and apply under its lock, never held across awaits.
 pub(crate) struct FlowRuntime {
     pub(crate) address: FlowAddress,
     pub(crate) context: ApplyContext,

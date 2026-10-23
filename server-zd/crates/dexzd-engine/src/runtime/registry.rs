@@ -318,10 +318,7 @@ impl FlowRuntimeRegistry {
         self.inner.waiters.waiter_count()
     }
 
-    /// Runs `build` under the Flow's lock with the speculative view and, when it returns a
-    /// command, applies it to the overlay and submits it in the same critical section.
-    ///
-    /// `build` may run more than once when the Flow waits for speculation capacity.
+    /// Builds, submits, and speculatively applies a command in one critical section of the Flow's lock.
     pub(crate) async fn propose_with<T>(
         &self,
         flow: &FlowAddress,
@@ -456,8 +453,7 @@ impl FlowRuntimeRegistry {
         tracing::warn!(flow_id = %flow.flow_id, entry_count, "discarded speculative overlay after a commit failure");
     }
 
-    /// Takes the RPC locks of `lock_keys`, or fails with `ABORTED` when any key is held by an
-    /// RPC or a running Step attempt, committed or speculative (plan 8.3).
+    /// Takes RPC locks, or fails with `ABORTED` when an RPC or a running Step holds a key.
     pub(crate) fn acquire_rpc_locks(
         &self,
         lease: FlowRuntimeLease,
@@ -605,7 +601,7 @@ impl Drop for FlowRuntimeLease {
         let mut runtimes = self.inner.lock_runtimes();
         drop(runtime);
         let is_reclaimable = runtimes.get(&address).is_some_and(|registered| {
-            // Leases are cloned only under the map lock, so a count of one means nobody uses it.
+            // Leases clone only under the map lock, so one reference means unused.
             Arc::strong_count(registered) == 1
                 && registered
                     .try_lock_state()

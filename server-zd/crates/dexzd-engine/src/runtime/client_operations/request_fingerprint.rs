@@ -9,9 +9,7 @@
 use prost::Message;
 use xxhash_rust::xxh3::xxh3_128;
 
-/// Returns the 16-byte big-endian xxh3-128 of the request's protobuf encoding.
-///
-/// Generated maps are ordered, so the encoding of one request is canonical.
+/// Returns the 16-byte big-endian xxh3-128 of the request encoding; ordered maps make it canonical.
 pub(crate) fn request_fingerprint(request: &impl Message) -> Vec<u8> {
     xxh3_128(&request.encode_to_vec()).to_be_bytes().to_vec()
 }
