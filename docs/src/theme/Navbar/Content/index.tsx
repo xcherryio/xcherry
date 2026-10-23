@@ -1,37 +1,11 @@
-import React, {type ReactNode} from 'react';
-import {useNavbarMobileSidebar} from '@docusaurus/theme-common/internal';
-import NavbarColorModeToggle from '@theme/Navbar/ColorModeToggle';
-import NavbarMobileSidebarToggle from '@theme/Navbar/MobileSidebar/Toggle';
-import NavbarLogo from '@theme/Navbar/Logo';
-import LocaleSwitcher from '@site/src/components/LocaleSwitcher';
-import {BOOKING_URL, GITHUB_URL} from '@site/src/components/brandNavigation';
+/*
+ * Copyright (c) 2026 Super Durable, Inc.
+ *
+ * Licensed under the Super Durable Source License 1.0.
+ * You may not use this file except in compliance with the License.
+ * See the LICENSE file in the repository root.
+ *
+ * SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
+ */
 
-export default function NavbarContent(): ReactNode {
-  const mobileSidebar = useNavbarMobileSidebar();
-
-  return (
-    <div className="navbar__inner brand-navbar-inner">
-      <div className="brand-navbar-start">
-        <NavbarLogo />
-      </div>
-      <nav className="desktop-nav" aria-label="Primary navigation">
-        <a href="https://superdurable.io/dex">Dex</a>
-        <a href={GITHUB_URL} target="_blank" rel="noreferrer">
-          GitHub <span className="external-arrow" aria-hidden="true">↗</span>
-        </a>
-      </nav>
-      <div className="header-actions">
-        <LocaleSwitcher />
-        <NavbarColorModeToggle />
-        <a className="button button-small header-cta" href={BOOKING_URL} target="_blank" rel="noreferrer">
-          Book a call <span aria-hidden="true">↗</span>
-        </a>
-      </div>
-      {!mobileSidebar.disabled && (
-        <div className="mobile-navbar-toggle">
-          <NavbarMobileSidebarToggle />
-        </div>
-      )}
-    </div>
-  );
-}
+export {default} from '@theme-original/Navbar/Content';

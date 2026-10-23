@@ -1,26 +1,11 @@
-import React, {type ReactNode} from 'react';
-import {useNavbarMobileSidebar} from '@docusaurus/theme-common/internal';
-import LocaleSwitcher from '@site/src/components/LocaleSwitcher';
-import {BOOKING_URL, GITHUB_URL} from '@site/src/components/brandNavigation';
+/*
+ * Copyright (c) 2026 Super Durable, Inc.
+ *
+ * Licensed under the Super Durable Source License 1.0.
+ * You may not use this file except in compliance with the License.
+ * See the LICENSE file in the repository root.
+ *
+ * SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
+ */
 
-export default function NavbarMobilePrimaryMenu(): ReactNode {
-  const mobileSidebar = useNavbarMobileSidebar();
-  const close = () => mobileSidebar.toggle();
-
-  return (
-    <ul className="menu__list brand-mobile-nav">
-      <li className="menu__list-item"><a className="menu__link" href="https://superdurable.io/dex" onClick={close}>Dex</a></li>
-      <li className="menu__list-item">
-        <a className="menu__link" href={GITHUB_URL} target="_blank" rel="noreferrer" onClick={close}>
-          GitHub <span className="external-arrow" aria-hidden="true">↗</span>
-        </a>
-      </li>
-      <li className="menu__list-item locale-switcher-mobile">
-        <LocaleSwitcher />
-      </li>
-      <li className="menu__list-item">
-        <a className="button header-booking-link" href={BOOKING_URL} target="_blank" rel="noreferrer" onClick={close}>Book a call <span aria-hidden="true">↗</span></a>
-      </li>
-    </ul>
-  );
-}
+export {default} from '@theme-original/Navbar/MobileSidebar/PrimaryMenu';

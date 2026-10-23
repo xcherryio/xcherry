@@ -96,29 +96,33 @@ const dexSkillSourcePaths = [
 ];
 const dexSkillSources = await Promise.all(dexSkillSourcePaths.map((filePath) => readFile(filePath, 'utf8')));
 
-assert.match(home, /Super Durable home/);
-assert.match(home, /https:\/\/superdurable\.io\/dex/);
+assert.match(home, /https:\/\/superdurable\.ai\/dex-ai\//);
 assert.match(home, /https:\/\/github\.com\/superdurable/);
-assert.match(home, /Toggle color theme/);
-assert.match(home, />Book a call\s*</);
-assert.doesNotMatch(home, /github-star-link|github-star-stat/);
+assert.doesNotMatch(home, /Toggle color theme/);
+assert.match(home, />Sign up\s*</);
+assert.doesNotMatch(home, /github-star-link|github-star-stat|Book a call|Book a demo/);
 
-const navbar = home.match(/<nav aria-label="Main"[\s\S]*?<\/nav><div role="presentation"/)?.[0] ?? '';
-assert.doesNotMatch(navbar, />Team</);
-assert.match(home, /footer-links[\s\S]*?>Team</);
+const navbar = home.match(/<nav aria-label="Main"[\s\S]*?<\/nav>/)?.[0] ?? '';
+assert.match(navbar, />Platform<[\s\S]*?>Engine<[\s\S]*?>About</);
+assert.match(navbar, /navbar__link--active[^>]*>Engine</);
+assert.doesNotMatch(navbar, />Docs</);
+assert.match(navbar, /href="https:\/\/dex\.superdurable\.ai\/login"/);
+assert.match(navbar, /href="https:\/\/dex\.superdurable\.ai\/register"/);
+assert.doesNotMatch(navbar, /target="_blank"/);
+assert.doesNotMatch(home, /product-bar|https:\/\/superdurable\.io\//);
 
-assert.doesNotMatch(home, /product-bar/);
-const desktopNav = home.match(/<nav class="desktop-nav"[\s\S]*?<\/nav>/)?.[0] ?? '';
-assert.match(desktopNav, />Dex</);
-assert.match(desktopNav, />GitHub/);
-assert.match(desktopNav, /https:\/\/github\.com\/superdurable/);
-assert.doesNotMatch(desktopNav, /Docs|BYOC|Star Us|github-star-stat/);
-
-const footer = home.match(/<footer class="site-footer"[\s\S]*?<\/footer>/)?.[0] ?? '';
-assert.match(footer, />Dex</);
-assert.match(footer, />Team</);
-assert.match(footer, /Process-centric apps, powered by Dex/);
-assert.doesNotMatch(footer, />Docs<|BYOC|Star Us on GitHub/);
+const footer = home.match(/<footer class="theme-layout-footer footer[\s\S]*?<\/footer>/)?.[0] ?? '';
+assert.match(footer, /company-footer-brand[\s\S]*?>Super Durable</);
+assert.match(footer, /company-footer-bottom/);
+assert.match(footer, />Products</);
+assert.match(footer, />Developers</);
+assert.match(footer, />Company</);
+assert.match(footer, />Dex AI Platform</);
+assert.match(footer, />Managed Dex Engine</);
+assert.match(footer, /href="\/quick-start\/"/);
+assert.match(footer, /href="https:\/\/superdurable\.ai\/about\/#contact"/);
+assert.match(footer, /Super Durable, Inc\./);
+assert.doesNotMatch(footer, /Process-centric apps|Simple, reliable|>Team<|Book a/);
 assert.match(home, /English/);
 assert.match(home, /中文/);
 assert.match(home, /Build with AI/);
@@ -134,11 +138,17 @@ assert.ok(designPatternsPosition > buildWithAIPosition);
 const zhHome = await readFile(join(root, 'zh-Hans', 'index.html'), 'utf8');
 assert.match(zhHome, /English/);
 assert.match(zhHome, /中文/);
+for (const label of ['平台', '引擎', '文档', '关于', '登录', '注册', '产品', '开发者', '公司', '快速开始', '引擎对比', '联系我们']) {
+  assert.ok(zhHome.includes(label), `Missing Chinese shell label: ${label}`);
+}
+assert.match(zhHome, /href="\/zh-Hans\/quick-start\/"/);
 
 assert.match(cloud, /Dex Cloud \/ BYOC/);
 assert.match(cloud, /Coming Soon/);
 assert.match(cloud, /Explore Dex OSS Docs/);
-assert.match(cloud, /https:\/\/superdurable\.io\/byoc/);
+assert.match(cloud, />Managed Dex Engine <span/);
+assert.doesNotMatch(cloud, /View Dex BYOC/);
+assert.match(cloud, /https:\/\/superdurable\.ai\/dex-engine\//);
 assert.match(cron, /flow-definition-canvas/);
 assert.match(cron, /CronScheduleFlow/);
 assert.match(zhCron, /flow-definition-canvas/);

@@ -1,27 +1,11 @@
-import React, {type ReactNode} from 'react';
-import Brand from '@site/src/components/Brand';
+/*
+ * Copyright (c) 2026 Super Durable, Inc.
+ *
+ * Licensed under the Super Durable Source License 1.0.
+ * You may not use this file except in compliance with the License.
+ * See the LICENSE file in the repository root.
+ *
+ * SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
+ */
 
-export default function Footer(): ReactNode {
-  return (
-    <footer className="site-footer">
-      <div className="footer-brand">
-        <a className="wordmark" href="https://superdurable.io/" aria-label="Super Durable home"><Brand /></a>
-        <p>Simple, reliable and efficient solutions to complex problems.</p>
-      </div>
-      <div className="footer-links">
-        <div>
-          <p className="footer-label">Explore</p>
-          <a href="https://superdurable.io/dex">Dex</a>
-        </div>
-        <div>
-          <p className="footer-label">Company</p>
-          <a href="https://superdurable.io/team">Team</a>
-        </div>
-      </div>
-      <div className="footer-bottom">
-        <span>© {new Date().getFullYear()} Super Durable</span>
-        <span>Process-centric apps, powered by Dex.</span>
-      </div>
-    </footer>
-  );
-}
+export {default} from '@theme-original/Footer';

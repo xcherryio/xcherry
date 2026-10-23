@@ -1,0 +1,34 @@
+{
+  "title": {
+    "message": "Super Durable",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "Super Durable",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Platform": {
+    "message": "平台",
+    "description": "Navbar item with label Platform"
+  },
+  "item.label.Engine": {
+    "message": "引擎",
+    "description": "Navbar item with label Engine"
+  },
+  "item.label.About": {
+    "message": "关于",
+    "description": "Navbar item with label About"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  },
+  "item.label.Log in": {
+    "message": "登录",
+    "description": "Navbar item with label Log in"
+  },
+  "item.label.Sign up": {
+    "message": "注册",
+    "description": "Navbar item with label Sign up"
+  }
+}

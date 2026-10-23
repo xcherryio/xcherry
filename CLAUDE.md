@@ -51,6 +51,10 @@ Dex: no product names, deployments, environments, dependency pins, or platform
 concepts. Describe a requirement in Dex terms, as any Dex application would
 need it.
 
+The docs site shell (navbar and footer in `docs/docusaurus.config.ts` and their
+zh-Hans translations) may link to company product pages. Content pages must
+still not describe downstream products.
+
 ## Temporal Skill Routing
 
 - In this repository, use the `temporal-developer` skill only when changing or
