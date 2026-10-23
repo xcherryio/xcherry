@@ -8,10 +8,13 @@
 
 //! Applies a Worker's committed RPC response to one run.
 
+use std::collections::BTreeMap;
+
 use dexzd_keyspace::row_keys::RequestKind;
 use dexzd_protocol::dex::{
-    ErrorSubStatus, ExecuteMethodFailurePolicy, FlowStatus, InvokeWorkerRpcResponse,
-    RpcExecutionCompletedEvent, WaitForMethodFailurePolicy, flow_history_event,
+    ChannelMessageDeletion, ErrorSubStatus, ExecuteMethodFailurePolicy, FlowStatus,
+    InvokeWorkerRpcResponse, RpcExecutionCompletedEvent, WaitForMethodFailurePolicy,
+    flow_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
     CommandReply, RequestDedupRecord, RpcCommittedCommand, RpcReply, command_reply,
@@ -21,7 +24,7 @@ use crate::ApplyError;
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::flow_data::{
     apply_attribute_writes, apply_channel_deletions, apply_channel_publications,
-    apply_permission_mappings, find_pending_message,
+    apply_permission_mappings,
 };
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor, flow_not_found_reply};
 use crate::command_handlers::{CommandScope, HandlerResult};
@@ -29,7 +32,7 @@ use crate::state_access::FlowTransaction;
 use crate::steps::{
     NewStepExecution, cancel_steps_by_type, create_step_execution, wait_conditions,
 };
-use crate::values::{ValueHolder, ValueRejection, release_stored_value, store_value};
+use crate::values::{ValueHolder, ValueRejection, store_value, validate_value};
 
 pub(crate) fn apply_rpc_committed(
     transaction: &mut FlowTransaction<'_>,
@@ -91,26 +94,18 @@ pub(crate) fn apply_rpc_committed(
             "RPC Step decision uses an unsupported failure policy",
         ));
     }
-    if is_transactional {
-        for deletion in &response.delete_from_channel {
-            if find_pending_message(
-                transaction,
-                &cursor,
-                &deletion.channel_name,
-                &deletion.message_id,
-            )?
-            .is_none()
-            {
-                return Ok(HandlerResult::Rejected(error_reply(
-                    grpc_code::NOT_FOUND,
-                    ErrorSubStatus::ChannelMessageNotFound,
-                    format!(
-                        "message {} is not pending in channel {}",
-                        deletion.message_id, deletion.channel_name
-                    ),
-                )));
-            }
-        }
+    if is_transactional
+        && let Some(deletion) =
+            first_missing_deletion(transaction, &cursor, &response.delete_from_channel)?
+    {
+        return Ok(HandlerResult::Rejected(error_reply(
+            grpc_code::NOT_FOUND,
+            ErrorSubStatus::ChannelMessageNotFound,
+            format!(
+                "message {} is not pending in channel {}",
+                deletion.message_id, deletion.channel_name
+            ),
+        )));
     }
     if let Err(rejection) = apply_attribute_writes(
         transaction,
@@ -178,9 +173,7 @@ pub(crate) fn apply_rpc_committed(
     } else {
         None
     };
-    if let Err(rejection) =
-        validate_ephemeral_response_values(transaction, &mut cursor, &request.request_id, response)?
-    {
+    if let Err(rejection) = validate_ephemeral_response_values(transaction, &cursor, response)? {
         return Ok(reject_value(rejection));
     }
     cursor.add_event(flow_history_event::Payload::RpcExecutionCompleted(
@@ -223,55 +216,59 @@ pub(crate) fn apply_rpc_committed(
     )?))
 }
 
+fn first_missing_deletion<'a>(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+    deletions: &'a [ChannelMessageDeletion],
+) -> Result<Option<&'a ChannelMessageDeletion>, ApplyError> {
+    let mut remaining_by_channel = BTreeMap::<String, BTreeMap<String, usize>>::new();
+    for deletion in deletions {
+        if !remaining_by_channel.contains_key(&deletion.channel_name) {
+            let mut counts = BTreeMap::<String, usize>::new();
+            for message in
+                cursor
+                    .rows
+                    .channel_messages(transaction, &deletion.channel_name, usize::MAX)?
+            {
+                *counts.entry(message.message_id).or_default() += 1;
+            }
+            remaining_by_channel.insert(deletion.channel_name.clone(), counts);
+        }
+        let Some(remaining) = remaining_by_channel
+            .get_mut(&deletion.channel_name)
+            .and_then(|counts| counts.get_mut(&deletion.message_id))
+        else {
+            return Ok(Some(deletion));
+        };
+        if *remaining == 0 {
+            return Ok(Some(deletion));
+        }
+        *remaining -= 1;
+    }
+    Ok(None)
+}
+
 fn validate_ephemeral_response_values(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
-    request_id: &str,
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
     response: &InvokeWorkerRpcResponse,
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
-    for (index, event) in response.record_events.iter().enumerate() {
+    for event in &response.record_events {
         let Some(value) = event.value.as_ref() else {
             continue;
         };
-        let holder = ValueHolder::RpcRecordedEvent {
-            request_id: request_id.to_owned(),
-            index: u32::try_from(index).unwrap_or(u32::MAX),
-        };
-        let limits = cursor.value_limits();
-        let stored = match store_value(
-            transaction,
-            cursor.rows,
-            limits,
-            &mut cursor.values,
-            value,
-            &holder,
-        )? {
-            Ok(stored) => stored,
+        match validate_value(transaction, cursor.rows, cursor.value_limits(), value)? {
+            Ok(()) => {}
             Err(rejection) => return Ok(Err(rejection)),
-        };
-        release_stored_value(transaction, cursor.rows, &stored, &holder, cursor.seq)?;
+        }
     }
     if let Some(mappings) = response.action_permission_mappings.as_ref() {
-        for (mapping_index, mapping) in mappings.mappings.iter().enumerate() {
-            for (value_index, value) in mapping.equal_values.iter().enumerate() {
-                let holder = ValueHolder::RpcPermissionComparison {
-                    request_id: request_id.to_owned(),
-                    mapping_index: u32::try_from(mapping_index).unwrap_or(u32::MAX),
-                    value_index: u32::try_from(value_index).unwrap_or(u32::MAX),
-                };
-                let limits = cursor.value_limits();
-                let stored = match store_value(
-                    transaction,
-                    cursor.rows,
-                    limits,
-                    &mut cursor.values,
-                    value,
-                    &holder,
-                )? {
-                    Ok(stored) => stored,
+        for mapping in &mappings.mappings {
+            for value in &mapping.equal_values {
+                match validate_value(transaction, cursor.rows, cursor.value_limits(), value)? {
+                    Ok(()) => {}
                     Err(rejection) => return Ok(Err(rejection)),
-                };
-                release_stored_value(transaction, cursor.rows, &stored, &holder, cursor.seq)?;
+                }
             }
         }
     }
@@ -289,7 +286,8 @@ fn remember_reply(
         .record
         .settings
         .as_ref()
-        .map_or(1000, |settings| settings.request_dedup_capacity);
+        .map_or(1000, |settings| settings.request_dedup_capacity)
+        .max(1);
     cursor.rows.put_request_dedup(
         transaction,
         RequestKind::InvokeRpc,

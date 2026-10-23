@@ -14,8 +14,11 @@ use dexzd_apply::{
 };
 use dexzd_keyspace::row_keys::{
     channel_message_key, history_record_key, request_dedup_key, run_named_key, run_singleton_key,
+    value_row_key,
 };
-use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, RunTable, TenantId};
+use dexzd_keyspace::{
+    ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, run_table_prefix,
+};
 use dexzd_protocol::dex::{
     ActionPermissionMapping, ActionPermissionMappings, AttributeWrite, ChannelMessage,
     ChannelMessageDeletion, ErrorSubStatus, FlowStatus, FlowTimeoutPolicy, InvokeRpcRequest,
@@ -26,7 +29,7 @@ use dexzd_protocol::dex::{
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, ChannelMessageRecord, CommandReply, FlowCommand,
     FlowStartCommand, HistoryRecord, PermissionSetRecord, RpcCommittedCommand, RunRecord,
-    RunSettings, StepExecutionRecord, command_reply, flow_command::Command,
+    RunSettings, StepExecutionRecord, ValueBirthRecord, command_reply, flow_command::Command,
 };
 use prost::Message;
 
@@ -382,6 +385,74 @@ fn transactional_rpc_checks_all_deletions_before_writing() {
 }
 
 #[test]
+fn transactional_rpc_rejects_duplicate_deletion_target_without_writes() {
+    let mut harness = Harness::new(1000, 16 << 20);
+    harness.rpc(
+        request("publishUpdate"),
+        InvokeWorkerRpcResponse {
+            publish_to_channel: vec![ChannelMessage {
+                channel_name: "updates".to_owned(),
+                message_id: "m1".to_owned(),
+                value: Some(string_value("queued")),
+            }],
+            ..InvokeWorkerRpcResponse::default()
+        },
+        &[1],
+    );
+    let mut rpc_request = request("rpc-1");
+    rpc_request.is_transactional = true;
+    let deletion = ChannelMessageDeletion {
+        channel_name: "updates".to_owned(),
+        message_id: "m1".to_owned(),
+    };
+    let outcome = harness.rpc(
+        rpc_request,
+        InvokeWorkerRpcResponse {
+            upsert_attributes: vec![AttributeWrite {
+                key: "status".to_owned(),
+                value: Some(string_value("ready")),
+                ..AttributeWrite::default()
+            }],
+            delete_from_channel: vec![deletion.clone(), deletion],
+            ..InvokeWorkerRpcResponse::default()
+        },
+        &[2],
+    );
+    assert_error(&outcome.reply, 5, ErrorSubStatus::ChannelMessageNotFound);
+    assert!(outcome.writes.is_empty());
+    assert!(outcome.effects.is_empty());
+    assert_eq!(harness.run_record().next_run_seq, 3);
+    assert!(
+        harness
+            .state
+            .row::<AttributeRecord>(
+                ColumnFamily::Flow,
+                &run_named_key(
+                    harness.context.flow_hash,
+                    harness.run_id(),
+                    RunTable::Attribute,
+                    "status"
+                ),
+            )
+            .is_none()
+    );
+    assert!(
+        harness
+            .state
+            .row::<ChannelMessageRecord>(
+                ColumnFamily::Flow,
+                &channel_message_key(
+                    harness.context.flow_hash,
+                    harness.run_id(),
+                    "updates",
+                    2_000_000
+                ),
+            )
+            .is_some()
+    );
+}
+
+#[test]
 fn rpc_request_ids_replay_the_reply_and_reject_changed_fingerprints() {
     let mut harness = Harness::new(1000, 16 << 20);
     let first = harness.rpc(
@@ -606,6 +677,117 @@ fn invalid_recorded_event_value_discards_the_rpc() {
     );
     assert_error(&outcome.reply, 3, ErrorSubStatus::Uncategorized);
     assert!(outcome.writes.is_empty());
+}
+
+#[test]
+fn large_record_event_and_permission_comparison_create_no_value_rows() {
+    let mut harness = Harness::new(1000, 16 << 20);
+    let large_value = string_value(&"x".repeat(500));
+    let outcome = harness.rpc(
+        request("rpc-1"),
+        InvokeWorkerRpcResponse {
+            record_events: vec![Kv {
+                key: "note".to_owned(),
+                value: Some(large_value.clone()),
+            }],
+            action_permission_mappings: Some(ActionPermissionMappings {
+                mappings: vec![ActionPermissionMapping {
+                    attribute_key: "status".to_owned(),
+                    equal_values: vec![large_value],
+                    required_permission: "read-order".to_owned(),
+                }],
+            }),
+            ..InvokeWorkerRpcResponse::default()
+        },
+        &[1],
+    );
+    assert!(matches!(
+        outcome.reply.reply,
+        Some(command_reply::Reply::Rpc(_))
+    ));
+    assert!(
+        !harness
+            .state
+            .rows
+            .keys()
+            .any(|(family, _)| *family == ColumnFamily::Value)
+    );
+    for table in [RunTable::ValueBirth, RunTable::ValueGarbage] {
+        let prefix = run_table_prefix(harness.context.flow_hash, harness.run_id(), table);
+        assert!(
+            !harness
+                .state
+                .rows
+                .keys()
+                .any(|(family, key)| { *family == ColumnFamily::Flow && key.starts_with(&prefix) })
+        );
+    }
+}
+
+#[test]
+fn zero_dedup_capacity_keeps_rpc_output_live() {
+    let mut harness = Harness::new(0, 16 << 20);
+    let first = harness.rpc(
+        request("rpc-1"),
+        InvokeWorkerRpcResponse {
+            output: Some(string_value(&"x".repeat(500))),
+            ..InvokeWorkerRpcResponse::default()
+        },
+        &[1],
+    );
+    let Some(command_reply::Reply::Rpc(reply)) = &first.reply.reply else {
+        panic!("expected RPC reply");
+    };
+    let Some(dexzd_protocol::dexzd::v1::stored_value::Kind::TableValue(reference)) = reply
+        .output
+        .as_ref()
+        .and_then(|output| output.kind.as_ref())
+    else {
+        panic!("expected table value");
+    };
+    let value_id = reference.value_id.expect("value ID");
+    let value_id = ValueId {
+        run_seq: value_id.run_seq,
+        index_in_command: value_id.index_in_command,
+    };
+    assert!(
+        harness
+            .state
+            .row::<dexzd_protocol::dexzd::v1::RequestDedupRecord>(
+                ColumnFamily::Flow,
+                &request_dedup_key(
+                    harness.context.flow_hash,
+                    harness.run_id(),
+                    dexzd_keyspace::row_keys::RequestKind::InvokeRpc,
+                    "rpc-1",
+                ),
+            )
+            .is_some()
+    );
+    let birth: ValueBirthRecord = harness
+        .state
+        .row(
+            ColumnFamily::Flow,
+            &value_row_key(
+                harness.context.flow_hash,
+                harness.run_id(),
+                RunTable::ValueBirth,
+                value_id,
+            ),
+        )
+        .expect("value birth exists");
+    assert_eq!(birth.garbage_seq, 0);
+    let holder_prefix = dexzd_keyspace::row_keys::value_holder_key(
+        harness.context.flow_hash,
+        harness.run_id(),
+        value_id,
+        &[],
+    );
+    assert!(
+        harness.state.rows.keys().any(|(family, key)| {
+            *family == ColumnFamily::Flow && key.starts_with(&holder_prefix)
+        })
+    );
 }
 
 #[test]

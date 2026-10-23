@@ -53,14 +53,6 @@ pub(crate) enum ValueHolder {
     SubFlowResult { child_flow_id: String },
     /// A recorded RPC reply for request ID deduplication.
     RpcReply { request_id: String },
-    /// An RPC event value while its size and reference are checked.
-    RpcRecordedEvent { request_id: String, index: u32 },
-    /// An RPC permission comparison value while its size and reference are checked.
-    RpcPermissionComparison {
-        request_id: String,
-        mapping_index: u32,
-        value_index: u32,
-    },
 }
 
 impl ValueHolder {
@@ -132,21 +124,6 @@ impl ValueHolder {
             Self::RpcReply { request_id } => {
                 encoded.push(0x0b);
                 encoded.extend_from_slice(&length_prefixed_name(request_id));
-            }
-            Self::RpcRecordedEvent { request_id, index } => {
-                encoded.push(0x0c);
-                encoded.extend_from_slice(&length_prefixed_name(request_id));
-                encoded.extend_from_slice(&index.to_be_bytes());
-            }
-            Self::RpcPermissionComparison {
-                request_id,
-                mapping_index,
-                value_index,
-            } => {
-                encoded.push(0x0d);
-                encoded.extend_from_slice(&length_prefixed_name(request_id));
-                encoded.extend_from_slice(&mapping_index.to_be_bytes());
-                encoded.extend_from_slice(&value_index.to_be_bytes());
             }
         }
         encoded
