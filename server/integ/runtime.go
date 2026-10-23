@@ -228,6 +228,9 @@ func startStreamingWorker(
 			require.NoError(t, err)
 		}
 	})
+	if *integWorkerMode == "pull" {
+		return registerPullWorkerAdapter(t, listener.Addr().String())
+	}
 	return &dexpb.WorkerTarget{Address: listener.Addr().String()}
 }
 
@@ -248,14 +251,23 @@ func withWorkerTarget(
 // startDexService returns clients, starting API and interpreter unless an external Dex address is configured.
 func startDexService(t *testing.T, testConfig DexServiceTestConfig) *integRuntime {
 	t.Helper()
-	if *dexServerAddress != "" {
-		return connectToExternalDexService(t, testConfig)
+	if *dexServerBinary != "" {
+		return startBinaryDexService(t, testConfig)
 	}
-	return startInProcessDexService(t, testConfig)
+	if *dexServerAddress != "" {
+		runtime := connectToExternalDexService(t, testConfig)
+		return configurePullWorkerClient(t, runtime)
+	}
+	if *integWorkerMode == "pull" && testConfig.Matching == nil {
+		testConfig.Matching = &config.MatchingConfig{}
+	}
+	runtime := startInProcessDexService(t, testConfig)
+	return configurePullWorkerClient(t, runtime)
 }
 
 func startInProcessDexService(t *testing.T, testConfig DexServiceTestConfig) *integRuntime {
 	t.Helper()
+	requireGoServerSetting(t, "Go Server internals")
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -493,7 +505,11 @@ func startInterpreter(t *testing.T, worker interpreterWorker) {
 func newFlowClientWithCredential(t *testing.T, address string, credential string) dexpb.FlowServiceClient {
 	t.Helper()
 	connection := newDexClientConnectionWithCredential(t, address, credential, config.DefaultGrpcMaxMessageBytes)
-	return dexpb.NewFlowServiceClient(connection)
+	client := dexpb.NewFlowServiceClient(connection)
+	if *integWorkerMode == "pull" {
+		return &pullWorkerFlowClient{FlowServiceClient: client, test: t, serverAddress: address}
+	}
+	return client
 }
 
 func newDexClientConnectionWithCredential(
