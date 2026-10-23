@@ -59,6 +59,15 @@ The local port conventions are:
 application starts its own SDK Worker, while `dexcli codec-server` starts the
 Codec Server separately.
 
+Select the Rust zd engine with `dexcli dev --engine zd`. It starts
+`dex-server-zd` and Dex Web without Temporal. Install `dex-server-zd` on PATH,
+set `DEX_SERVER_ZD_BINARY`, or pass `--zd-binary /path/to/dex-server-zd`.
+The CLI stores zd state in `$HOME/.dex/zd/<dex-port>` and waits for its gRPC
+health services before opening Dex Web. zd supports pull Workers only.
+Temporal-only options such as `--sqlite-db-filename`,
+`--external-temporal-address`, and `--verbose-engine-log` cannot be combined
+with `--engine zd`.
+
 If a `dexcli dev` port is already in use, it binds the next free port and prints
 the Dex addresses it selected. Running several `dexcli dev` processes on the
 same machine therefore starts isolated stacks: distinct Dex ports, a distinct
@@ -159,6 +168,8 @@ must exist and be reachable before startup.
 ```text
 --attribute-store-config string    Dex YAML file supplying Attribute Store settings
 --bind-address string              local bind IP (default 127.0.0.1)
+--engine string                    Dex Server engine: temporal or zd (default temporal)
+--zd-binary string                 dex-server-zd executable (default DEX_SERVER_ZD_BINARY or PATH)
 --blob-store-dir string            persistent Dex blob storage directory (default $HOME/.dex/blobs)
 --dex-port int                     Dex gRPC port (default 8801)
 --flow-rendering-dir string        directory containing Flow Definition Graph JSON files

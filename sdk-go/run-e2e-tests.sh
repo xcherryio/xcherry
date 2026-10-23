@@ -26,9 +26,22 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
-worker_mode="${DEX_INTEG_WORKER_MODE:-push}"
+export DEX_INTEG_ENGINE="${DEX_INTEG_ENGINE:-temporal}"
+if [[ "$DEX_INTEG_ENGINE" != temporal && "$DEX_INTEG_ENGINE" != zd ]]; then
+  echo "DEX_INTEG_ENGINE must be temporal or zd" >&2
+  exit 2
+fi
+default_worker_mode=push
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_worker_mode=pull
+fi
+worker_mode="${DEX_INTEG_WORKER_MODE:-$default_worker_mode}"
 if [[ "$worker_mode" != push && "$worker_mode" != pull ]]; then
   echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && "$worker_mode" == push ]]; then
+  echo "DEX_INTEG_WORKER_MODE=push is not supported with DEX_INTEG_ENGINE=zd" >&2
   exit 2
 fi
 
@@ -37,6 +50,10 @@ available_port() {
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$script_dir/.." && pwd)
+if [[ -n "${DEX_SERVER_ZD_BINARY:-}" && "$DEX_SERVER_ZD_BINARY" == */* ]]; then
+  DEX_SERVER_ZD_BINARY="$(cd "$(dirname "$DEX_SERVER_ZD_BINARY")" && pwd)/$(basename "$DEX_SERVER_ZD_BINARY")"
+fi
 cd "$script_dir"
 
 dex_port="${DEX_INTEG_DEX_PORT:-$(available_port)}"
@@ -87,6 +104,22 @@ if $coverage; then
 fi
 
 make -C ../cli build
+dev_args=(
+  -bind-address 127.0.0.1
+  -dex-port "$dex_port"
+  -web-port "$web_port"
+  -open=false
+  -flow-rendering-dir "$test_dir/definitions"
+)
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  if [[ -z "${DEX_SERVER_ZD_BINARY:-}" ]]; then
+    (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
+    DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
+  fi
+  dev_args+=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY")
+else
+  dev_args+=(-sqlite-db-filename "$test_dir/temporal.db")
+fi
 mkdir -p "$test_dir/definitions"
 for flow_package in webv2approval webv2reply; do
   ../cli/dexcli visualize "integ/$flow_package/workflow.go" \
@@ -94,14 +127,7 @@ for flow_package in webv2approval webv2reply; do
     --json \
     --out "$test_dir/definitions/$flow_package"
 done
-../cli/dexcli dev \
-  -bind-address 127.0.0.1 \
-  -dex-port "$dex_port" \
-  -web-port "$web_port" \
-  -open=false \
-  -flow-rendering-dir "$test_dir/definitions" \
-  -sqlite-db-filename "$test_dir/temporal.db" \
-  >>"$log_file" 2>&1 &
+../cli/dexcli dev "${dev_args[@]}" >>"$log_file" 2>&1 &
 dexcli_pid=$!
 
 dex_ready=false

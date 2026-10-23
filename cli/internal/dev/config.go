@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,6 +41,8 @@ const (
 var flagOrder = []string{
 	"attribute-store-config",
 	"bind-address",
+	"engine",
+	"zd-binary",
 	"blob-store-dir",
 	"dex-port",
 	"flow-rendering-dir",
@@ -55,6 +58,10 @@ var flagOrder = []string{
 }
 
 type Config struct {
+	// Engine defaults to temporal and selects the local Dex Server implementation.
+	Engine string
+	// ZDBinary defaults to DEX_SERVER_ZD_BINARY or dex-server-zd on PATH.
+	ZDBinary string
 	// BindAddress defaults to 127.0.0.1 for all owned listeners.
 	BindAddress string
 	// DexPort defaults to 8801 for the Dex gRPC server.
@@ -114,6 +121,8 @@ func parseConfig(args []string, output io.Writer) (*Config, error) {
 		"Dex YAML file supplying attributeStore settings",
 	)
 	flags.StringVar(&cfg.BindAddress, "bind-address", cfg.BindAddress, "address for local services")
+	flags.StringVar(&cfg.Engine, "engine", cfg.Engine, "Dex Server engine: temporal or zd")
+	flags.StringVar(&cfg.ZDBinary, "zd-binary", cfg.ZDBinary, "dex-server-zd executable (default DEX_SERVER_ZD_BINARY or PATH)")
 	flags.StringVar(
 		&cfg.BlobStoreDirectory,
 		"blob-store-dir",
@@ -180,9 +189,10 @@ func parseConfig(args []string, output io.Writer) (*Config, error) {
 	cfg.explicitLocalFlags = make(map[string]bool)
 	flags.Visit(func(item *flag.Flag) {
 		switch item.Name {
-		case "dex-port", "web-port", "sqlite-db-filename", "server-log-folder", "verbose-engine-log", "external-temporal-namespace":
+		case "dex-port", "web-port", "sqlite-db-filename", "server-log-folder", "verbose-engine-log", "external-temporal-address", "external-temporal-namespace", "attribute-store-config", "zd-binary":
 			cfg.explicitLocalFlags[item.Name] = true
 		case "blob-store-dir":
+			cfg.explicitLocalFlags[item.Name] = true
 			cfg.blobStoreDirectoryDefault = false
 		}
 	})
@@ -198,6 +208,8 @@ func defaultConfig() (*Config, error) {
 		return nil, err
 	}
 	return &Config{
+		Engine:                    "temporal",
+		ZDBinary:                  os.Getenv("DEX_SERVER_ZD_BINARY"),
 		BindAddress:               defaultBindAddress,
 		DexPort:                   defaultDexPort,
 		WebPort:                   defaultWebPort,
@@ -233,6 +245,26 @@ func defaultBlobStoreDirectory() (string, error) {
 }
 
 func (c *Config) validate() error {
+	if c.Engine != "temporal" && c.Engine != "zd" {
+		return fmt.Errorf("engine must be temporal or zd: %q", c.Engine)
+	}
+	if c.Engine == "zd" {
+		for _, name := range []string{"external-temporal-address", "external-temporal-namespace", "sqlite-db-filename", "verbose-engine-log", "attribute-store-config", "blob-store-dir"} {
+			if c.isExplicit(name) {
+				return fmt.Errorf("--%s cannot be used with --engine zd", name)
+			}
+		}
+		if c.ZDBinary == "" {
+			c.ZDBinary = "dex-server-zd"
+		}
+		binaryPath, err := exec.LookPath(c.ZDBinary)
+		if err != nil {
+			return fmt.Errorf("dex-server-zd binary %q was not found; use --zd-binary or DEX_SERVER_ZD_BINARY: %w", c.ZDBinary, err)
+		}
+		c.ZDBinary = binaryPath
+	} else if c.isExplicit("zd-binary") {
+		return fmt.Errorf("--zd-binary requires --engine zd")
+	}
 	if net.ParseIP(c.BindAddress) == nil {
 		return fmt.Errorf("bind address must be an IP address: %q", c.BindAddress)
 	}
@@ -269,7 +301,7 @@ func (c *Config) validate() error {
 	if c.TemporalNamespace == "" {
 		return fmt.Errorf("temporal namespace is required")
 	}
-	if c.ExternalTemporalAddress != "" {
+	if c.Engine == "temporal" && c.ExternalTemporalAddress != "" {
 		if strings.Contains(c.ExternalTemporalAddress, "://") {
 			return fmt.Errorf("external Temporal address must be host:port, not a URL")
 		}
@@ -281,7 +313,7 @@ func (c *Config) validate() error {
 				return fmt.Errorf("--%s cannot be used with --external-temporal-address", name)
 			}
 		}
-	} else if c.explicitLocalFlags["external-temporal-namespace"] {
+	} else if c.Engine == "temporal" && c.explicitLocalFlags["external-temporal-namespace"] {
 		return fmt.Errorf("--external-temporal-namespace cannot be used without --external-temporal-address")
 	}
 	if c.explicitLocalFlags["server-log-folder"] {
@@ -335,7 +367,7 @@ func (c *Config) ownedAddresses() map[string]string {
 		"Dex Server": net.JoinHostPort(c.BindAddress, strconv.Itoa(c.DexPort)),
 		"Dex Web":    net.JoinHostPort(c.BindAddress, strconv.Itoa(c.WebPort)),
 	}
-	if c.ExternalTemporalAddress == "" {
+	if c.Engine == "temporal" && c.ExternalTemporalAddress == "" {
 		addresses["Temporal"] = net.JoinHostPort(c.BindAddress, strconv.Itoa(c.TemporalPort))
 		addresses["Temporal Web"] = net.JoinHostPort(c.BindAddress, strconv.Itoa(c.TemporalUIPort))
 	}

@@ -66,6 +66,9 @@ func newSupervisor(cfg *Config, stdout io.Writer, stderr io.Writer) *supervisor 
 }
 
 func (s *supervisor) Run(ctx context.Context) (runErr error) {
+	if s.cfg.Engine == "zd" {
+		return s.runZD(ctx)
+	}
 	listeners, err := reserveOwnedListeners(s.cfg)
 	if err != nil {
 		return err
@@ -202,6 +205,96 @@ func (s *supervisor) Run(ctx context.Context) (runErr error) {
 		}
 	}
 	return s.shutdown(runCtx, cancelRun, webServer, dexRuntime, runErr)
+}
+
+func (s *supervisor) runZD(ctx context.Context) (runErr error) {
+	listeners, err := reserveOwnedListeners(s.cfg)
+	if err != nil {
+		return err
+	}
+	resources := &zdRunResources{ctx: ctx, shutdownTimeout: s.cfg.ShutdownTimeout, listeners: listeners}
+	defer resources.closeInto(&runErr)
+	logDir, err := openServerLogDir(s.cfg)
+	if err != nil {
+		return err
+	}
+	resources.logs = logDir
+	if s.cfg.StateDirectory == "" {
+		return fmt.Errorf("Dex state directory is required")
+	}
+	dataDirectory := filepath.Join(s.cfg.StateDirectory, "zd", strconv.Itoa(s.cfg.DexPort))
+	if err := os.MkdirAll(dataDirectory, 0o700); err != nil {
+		return fmt.Errorf("create zd state directory: %w", err)
+	}
+	dexAddress := listeners.dex.Addr().String()
+	if err := closeListener(listeners.dex); err != nil {
+		return err
+	}
+	listeners.dex = nil
+	process, err := startZDProcess(s.cfg, dataDirectory, dexAddress, s.stderr)
+	if err != nil {
+		return err
+	}
+	resources.process = process
+
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelStartup()
+	dexConnection, err := waitForZD(startupCtx, dexAddress, process)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	resources.connection = dexConnection
+
+	webServer, err := dexweb.NewServer(
+		&dexweb.Config{
+			BindAddress:               s.cfg.BindAddress,
+			Port:                      s.cfg.WebPort,
+			FlowRenderingDirectory:    s.cfg.FlowRenderingDirectory,
+			ConnectorSetupEnabled:     true,
+			ConnectorConfigDirectory:  s.cfg.ConnectorConfigDirectory,
+			ConnectorReleaseOverrides: s.cfg.ConnectorReleaseOverrides,
+		},
+		dexpb.NewFlowServiceClient(dexConnection),
+		assets.Files,
+	)
+	if err != nil {
+		return err
+	}
+	resources.web = webServer
+	componentExits := make(chan componentExit, 2)
+	go func() { componentExits <- componentExit{name: "Dex Web", err: webServer.Serve(listeners.web)} }()
+	go func() {
+		<-process.done
+		componentExits <- componentExit{name: "Dex Server", err: process.Err()}
+	}()
+	webURL := "http://" + listeners.web.Addr().String()
+	if err := waitForComponentHTTP(startupCtx, webURL+"/healthz", componentExits); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	select {
+	case exited := <-componentExits:
+		return fmt.Errorf("%s stopped before readiness: %v", exited.name, exited.err)
+	default:
+	}
+	s.printReady(webURL, dexAddress, dataDirectory)
+	s.printUpdateNotice(ctx)
+	if s.cfg.OpenBrowser {
+		if err := openBrowser(webURL); err != nil {
+			return err
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return nil
+	case exited := <-componentExits:
+		return fmt.Errorf("%s stopped unexpectedly: %v", exited.name, exited.err)
+	}
 }
 
 func (s *supervisor) startLocalTemporal(ctx context.Context, logs io.Writer) (*temporalProcess, temporalclient.Client, error) {
@@ -346,7 +439,11 @@ func (s *supervisor) printReady(webURL string, dexAddress string, blobStoreDirec
 	if s.cfg.SQLiteDBFilename != "" {
 		fmt.Fprintf(s.stdout, "Local DB:      %s\n", s.cfg.SQLiteDBFilename)
 	}
-	fmt.Fprintf(s.stdout, "Blob store:    %s\n", blobStoreDirectory)
+	if s.cfg.Engine == "zd" {
+		fmt.Fprintf(s.stdout, "State dir:     %s\n", blobStoreDirectory)
+	} else {
+		fmt.Fprintf(s.stdout, "Blob store:    %s\n", blobStoreDirectory)
+	}
 	if s.cfg.LogDirectory != "" {
 		fmt.Fprintf(s.stdout, "Server log folder: %s\n", s.cfg.LogDirectory)
 	}
@@ -372,7 +469,7 @@ func reserveOwnedListeners(cfg *Config) (*ownedListeners, error) {
 		return nil, errors.Join(err, listeners.Close())
 	}
 	listeners.web = webListener
-	if cfg.ExternalTemporalAddress != "" {
+	if cfg.Engine == "zd" || cfg.ExternalTemporalAddress != "" {
 		return listeners, nil
 	}
 	temporalListener, err := bindServicePort("Temporal", false, cfg, &cfg.TemporalPort, allocated)

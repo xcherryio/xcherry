@@ -147,7 +147,7 @@ func openServerLogDir(cfg *Config) (*serverLogDir, error) {
 	}
 	cfg.LogDirectory = directory
 	logs := &serverLogDir{directory: directory, isEphemeral: isEphemeral}
-	if cfg.ExternalTemporalAddress != "" {
+	if cfg.Engine == "zd" || cfg.ExternalTemporalAddress != "" {
 		return logs, nil
 	}
 	file, err := os.OpenFile(cfg.temporalEngineLogPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
