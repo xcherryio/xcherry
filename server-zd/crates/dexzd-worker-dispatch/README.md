@@ -8,4 +8,6 @@ Pull Worker protocol server for server-zd: Worker registration, task queues, mat
 
 `dispatch` accepts a Flow ID, Flow type, optional sticky Worker ID, method deadline, and one unmodified WaitFor, Execute, or RPC request. Its handle yields ordered non-final frames and one final outcome. Dropping or cancelling the handle requests task cancellation; an unresponsive Worker stream closes after one second. `shutdown` asks idle Workers to reconnect immediately and busy Workers to reconnect after their current task.
 
+Worker frames and dispatch events each use a 32-frame buffer, so a slow engine applies backpressure to the Worker. A waiting dispatch returns `ServerClosing` when matching shuts down.
+
 The registry is local to one node and is intentionally not persisted. The engine must redispatch unfinished tasks after a restart.

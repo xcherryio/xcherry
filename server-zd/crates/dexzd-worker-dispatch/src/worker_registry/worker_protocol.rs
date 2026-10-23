@@ -71,9 +71,12 @@ impl worker_task_service_server::WorkerTaskService for WorkerTaskService {
             app_worker_id: registration.app_worker_id.clone(),
             output,
             close,
-            state: Mutex::new(WorkerState::default()),
+            state: Mutex::new(WorkerState {
+                is_busy: true,
+                ..WorkerState::default()
+            }),
         });
-        {
+        let shutdown = {
             let mut registry = self
                 .dispatch
                 .inner
@@ -83,12 +86,13 @@ impl worker_task_service_server::WorkerTaskService for WorkerTaskService {
             if registry.is_closing {
                 return Err(Status::unavailable("matching server is closing"));
             }
+            let shutdown = self.dispatch.inner.shutdown.subscribe();
             if registry.streams.len() >= self.dispatch.inner.config.max_streams {
                 return Err(Status::resource_exhausted("matching stream limit reached"));
             }
             if registry
                 .worker_counts
-                .get(&worker.app_worker_id)
+                .get(&(worker.tenant_id, worker.app_worker_id.clone()))
                 .copied()
                 .unwrap_or(0)
                 >= self.dispatch.inner.config.max_concurrent_tasks_cap
@@ -97,21 +101,17 @@ impl worker_task_service_server::WorkerTaskService for WorkerTaskService {
             }
             *registry
                 .worker_counts
-                .entry(worker.app_worker_id.clone())
+                .entry((worker.tenant_id, worker.app_worker_id.clone()))
                 .or_default() += 1;
-            registry
+            let queue = registry
                 .queues
                 .entry((worker.tenant_id, worker.queue.clone()))
-                .or_insert_with(QueueState::new)
-                .stream_ids
-                .push(worker.id);
+                .or_insert_with(QueueState::new);
+            queue.stream_ids.insert(worker.id);
+            queue.users += 1;
             registry.streams.insert(worker.id, worker.clone());
-            registry
-                .queues
-                .get(&(worker.tenant_id, worker.queue.clone()))
-                .expect("registered queue exists")
-                .signal();
-        }
+            shutdown
+        };
         if worker
             .output
             .send(Ok(PollWorkerTaskResponse {
@@ -128,9 +128,9 @@ impl worker_task_service_server::WorkerTaskService for WorkerTaskService {
                 "Worker stream closed during registration",
             ));
         }
+        self.dispatch.make_idle(&worker);
         let dispatch = self.dispatch.clone();
         let worker_for_reader = worker.clone();
-        let shutdown = dispatch.inner.shutdown.subscribe();
         let reader = tokio::spawn(async move {
             read_worker_stream(
                 dispatch,
@@ -157,12 +157,16 @@ async fn read_worker_stream(
     mut shutdown: watch::Receiver<bool>,
     mut close: watch::Receiver<bool>,
 ) {
+    if *shutdown.borrow() && begin_shutdown(&worker) {
+        dispatch.disconnect(worker.id);
+        return;
+    }
     let mut ping = tokio::time::interval(dispatch.inner.config.ping_interval);
     ping.tick().await;
     loop {
         tokio::select! {
             message = incoming.message() => match message {
-                Ok(Some(frame)) => match process_worker_frame(&dispatch, &worker, frame) {
+                Ok(Some(frame)) => match process_worker_frame(&dispatch, &worker, frame).await {
                     Ok(should_continue) => if !should_continue { break },
                     Err(status) => {
                         if worker.output.send(Err(status)).is_err() { tracing::debug!("Worker response stream closed"); }
@@ -179,14 +183,7 @@ async fn read_worker_stream(
                 })).is_err() { break; }
             },
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    let mut state = worker.state.lock().expect("Worker state lock poisoned");
-                    state.is_closing = true;
-                    if !state.is_busy {
-                        send_reconnect(&worker, "matching server is closing");
-                        break;
-                    }
-                }
+                if (changed.is_err() || *shutdown.borrow()) && begin_shutdown(&worker) { break; }
             },
             _ = worker.output.closed() => break,
             changed = close.changed() => { if changed.is_err() || *close.borrow() { break; } },
@@ -195,7 +192,17 @@ async fn read_worker_stream(
     dispatch.disconnect(worker.id);
 }
 
-fn process_worker_frame(
+fn begin_shutdown(worker: &WorkerStream) -> bool {
+    let mut state = worker.state.lock().expect("Worker state lock poisoned");
+    state.is_closing = true;
+    if state.is_busy {
+        return false;
+    }
+    send_reconnect(worker, "matching server is closing");
+    true
+}
+
+async fn process_worker_frame(
     dispatch: &WorkerDispatch,
     worker: &WorkerStream,
     frame: PollWorkerTaskRequest,
@@ -206,33 +213,30 @@ fn process_worker_frame(
         }
         Some(poll_worker_task_request::Frame::Pong(_)) => Ok(true),
         Some(poll_worker_task_request::Frame::TaskFrame(frame)) => {
-            let mut state = worker.state.lock().expect("Worker state lock poisoned");
-            let Some(assignment) = state.current.as_ref() else {
-                return Ok(true);
+            let assignment_sender = {
+                let state = worker.state.lock().expect("Worker state lock poisoned");
+                let Some(assignment) = state.current.as_ref() else {
+                    return Ok(true);
+                };
+                if frame.task_id != assignment.task_id {
+                    return Ok(true);
+                }
+                if frame.output.is_none() {
+                    return Err(Status::invalid_argument("task output is required"));
+                }
+                assignment.frames.clone()
             };
-            if frame.task_id != assignment.task_id {
-                return Ok(true);
-            }
-            if frame.output.is_none() {
-                return Err(Status::invalid_argument("task output is required"));
-            }
             let is_final = is_final(&frame);
-            if assignment
-                .frames
+            let task_id = frame.task_id.clone();
+            if assignment_sender
                 .send(AssignmentFrame::Output(Box::new(frame)))
+                .await
                 .is_err()
             {
                 tracing::debug!("abandoned task output received");
             }
             if is_final {
-                state.current = None;
-                state.is_busy = false;
-                if state.is_closing {
-                    send_reconnect(worker, "matching server is closing");
-                    return Ok(false);
-                }
-                drop(state);
-                dispatch.signal_queue(worker);
+                return Ok(finish_assignment(dispatch, worker, &task_id));
             }
             Ok(true)
         }
@@ -247,48 +251,47 @@ fn process_worker_frame(
             ) {
                 return Err(Status::invalid_argument("invalid task rejection"));
             }
-            let mut state = worker.state.lock().expect("Worker state lock poisoned");
-            let Some(assignment) = state.current.as_ref() else {
-                return Ok(true);
+            let assignment_sender = {
+                let state = worker.state.lock().expect("Worker state lock poisoned");
+                let Some(assignment) = state.current.as_ref() else {
+                    return Ok(true);
+                };
+                if rejection.task_id != assignment.task_id {
+                    return Ok(true);
+                }
+                assignment.frames.clone()
             };
-            if rejection.task_id != assignment.task_id {
-                return Ok(true);
-            }
-            if assignment
-                .frames
+            if assignment_sender
                 .send(AssignmentFrame::Reject(reason))
+                .await
                 .is_err()
             {
                 tracing::debug!("abandoned task rejection received");
             }
-            state.current = None;
-            state.is_busy = false;
-            if state.is_closing {
-                send_reconnect(worker, "matching server is closing");
-                return Ok(false);
-            }
-            drop(state);
-            dispatch.signal_queue(worker);
-            Ok(true)
+            Ok(finish_assignment(dispatch, worker, &rejection.task_id))
         }
         None => Err(Status::invalid_argument("unknown Worker frame")),
     }
 }
 
-impl WorkerDispatch {
-    fn signal_queue(&self, worker: &WorkerStream) {
-        let registry = self
-            .inner
-            .registry
-            .lock()
-            .expect("matching registry lock poisoned");
-        if let Some(queue) = registry
-            .queues
-            .get(&(worker.tenant_id, worker.queue.clone()))
-        {
-            queue.signal();
-        }
+fn finish_assignment(dispatch: &WorkerDispatch, worker: &WorkerStream, task_id: &str) -> bool {
+    let mut state = worker.state.lock().expect("Worker state lock poisoned");
+    if !state
+        .current
+        .as_ref()
+        .is_some_and(|assignment| assignment.task_id == task_id)
+    {
+        return true;
     }
+    state.current = None;
+    state.is_busy = false;
+    if state.is_closing {
+        send_reconnect(worker, "matching server is closing");
+        return false;
+    }
+    drop(state);
+    dispatch.make_idle(worker);
+    true
 }
 
 fn send_reconnect(worker: &WorkerStream, reason: &str) {
