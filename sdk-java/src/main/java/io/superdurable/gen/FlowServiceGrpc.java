@@ -1085,6 +1085,9 @@ public final class FlowServiceGrpc {
     }
 
     /**
+     * <pre>
+     * server-zd returns UNIMPLEMENTED.
+     * </pre>
      */
     default void triggerContinueAsNew(io.superdurable.gen.TriggerContinueAsNewRequest request,
         io.grpc.stub.StreamObserver<com.google.protobuf.Empty> responseObserver) {
@@ -1336,6 +1339,9 @@ public final class FlowServiceGrpc {
     }
 
     /**
+     * <pre>
+     * server-zd returns UNIMPLEMENTED.
+     * </pre>
      */
     public void triggerContinueAsNew(io.superdurable.gen.TriggerContinueAsNewRequest request,
         io.grpc.stub.StreamObserver<com.google.protobuf.Empty> responseObserver) {
@@ -1550,6 +1556,9 @@ public final class FlowServiceGrpc {
     }
 
     /**
+     * <pre>
+     * server-zd returns UNIMPLEMENTED.
+     * </pre>
      */
     public com.google.protobuf.Empty triggerContinueAsNew(io.superdurable.gen.TriggerContinueAsNewRequest request) {
       return io.grpc.stub.ClientCalls.blockingUnaryCall(
@@ -1787,6 +1796,9 @@ public final class FlowServiceGrpc {
     }
 
     /**
+     * <pre>
+     * server-zd returns UNIMPLEMENTED.
+     * </pre>
      */
     public com.google.common.util.concurrent.ListenableFuture<com.google.protobuf.Empty> triggerContinueAsNew(
         io.superdurable.gen.TriggerContinueAsNewRequest request) {

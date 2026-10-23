@@ -287,6 +287,10 @@ private static final long serialVersionUID = 0L;
 
   public static final int CONTINUED_START_FIELD_NUMBER = 11;
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    * @return Whether the continuedStart field is set.
    */
@@ -295,6 +299,10 @@ private static final long serialVersionUID = 0L;
     return startOrContinueCase_ == 11;
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    * @return The continuedStart.
    */
@@ -306,6 +314,10 @@ private static final long serialVersionUID = 0L;
     return io.superdurable.gen.FlowContinuedStart.getDefaultInstance();
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    */
   @java.lang.Override
@@ -1651,6 +1663,10 @@ private static final long serialVersionUID = 0L;
     private com.google.protobuf.SingleFieldBuilder<
         io.superdurable.gen.FlowContinuedStart, io.superdurable.gen.FlowContinuedStart.Builder, io.superdurable.gen.FlowContinuedStartOrBuilder> continuedStartBuilder_;
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      * @return Whether the continuedStart field is set.
      */
@@ -1659,6 +1675,10 @@ private static final long serialVersionUID = 0L;
       return startOrContinueCase_ == 11;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      * @return The continuedStart.
      */
@@ -1677,6 +1697,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     public Builder setContinuedStart(io.superdurable.gen.FlowContinuedStart value) {
@@ -1693,6 +1717,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     public Builder setContinuedStart(
@@ -1707,6 +1735,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     public Builder mergeContinuedStart(io.superdurable.gen.FlowContinuedStart value) {
@@ -1730,6 +1762,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     public Builder clearContinuedStart() {
@@ -1749,12 +1785,20 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     public io.superdurable.gen.FlowContinuedStart.Builder getContinuedStartBuilder() {
       return internalGetContinuedStartFieldBuilder().getBuilder();
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     @java.lang.Override
@@ -1769,6 +1813,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.FlowContinuedStart continued_start = 11;</code>
      */
     private com.google.protobuf.SingleFieldBuilder<

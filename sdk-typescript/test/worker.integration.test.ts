@@ -125,6 +125,7 @@ test("Worker rejects incompatible Server before sync and binding", async (contex
         serverVersion: "future",
         minimumSupportedProtocolVersion: 4,
         currentProtocolVersion: 4,
+        serverEngine: 0,
       });
     },
     syncAttributeIndexes(_call, callback: sendUnaryData<SyncAttributeIndexResponse>) {
@@ -384,6 +385,7 @@ function compatibleServerInfo(): ServerInfo {
     serverVersion: "test",
     minimumSupportedProtocolVersion: 1,
     currentProtocolVersion: 1,
+    serverEngine: 0,
   };
 }
 

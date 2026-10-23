@@ -75,11 +75,21 @@ public interface StepOptionsOrBuilder extends
   io.superdurable.gen.ExecuteMethodFailurePolicy getExecuteFailurePolicy();
 
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string execute_failure_proceed_step_type = 7;</code>
    * @return The executeFailureProceedStepType.
    */
   java.lang.String getExecuteFailureProceedStepType();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string execute_failure_proceed_step_type = 7;</code>
    * @return The bytes for executeFailureProceedStepType.
    */
@@ -87,16 +97,31 @@ public interface StepOptionsOrBuilder extends
       getExecuteFailureProceedStepTypeBytes();
 
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions execute_failure_proceed_step_options = 8;</code>
    * @return Whether the executeFailureProceedStepOptions field is set.
    */
   boolean hasExecuteFailureProceedStepOptions();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions execute_failure_proceed_step_options = 8;</code>
    * @return The executeFailureProceedStepOptions.
    */
   io.superdurable.gen.StepOptions getExecuteFailureProceedStepOptions();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions execute_failure_proceed_step_options = 8;</code>
    */
   io.superdurable.gen.StepOptionsOrBuilder getExecuteFailureProceedStepOptionsOrBuilder();

@@ -113,4 +113,15 @@ public interface ResetFlowRequestOrBuilder extends
    * @return The stepMethod.
    */
   io.superdurable.gen.FlowResetStepMethod getStepMethod();
+
+  /**
+   * <pre>
+   * server-zd only: selects the run attempt whose history is searched for the reset point.
+   * Zero selects the current run attempt.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 10;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
 }

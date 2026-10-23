@@ -364,6 +364,7 @@ func TestSubFlowDefaultReuseRestartsFailedExecutionAcrossParentReset(t *testing.
 }
 
 func TestSubFlowPartialResultsSurviveContinueAsNewWithoutRestart(t *testing.T) {
+	skipIfServerZD(t, "Continue-As-New")
 	flowID := newFlowID(t, "sub-flow-can")
 	completedID := subFlowID(flowID, subFlowContinueAsNewParentStep{}, 0)
 	delayedID := subFlowID(flowID, subFlowContinueAsNewParentStep{}, 1)

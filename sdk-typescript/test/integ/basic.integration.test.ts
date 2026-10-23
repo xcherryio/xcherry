@@ -25,7 +25,7 @@ import {
 import { AbnormalExitFlow } from "./abnormal_exit_flow.js";
 import { BasicFlow } from "./basic_flow.js";
 import { EmptyInputFlow } from "./empty_input_flow.js";
-import { expectError, flowId, withEnvironment } from "./environment.js";
+import { expectError, flowId, skipIfServerZD, withEnvironment } from "./environment.js";
 import { ImmutableStepOptionsFlow } from "./immutable_step_options_flow.js";
 import { MixedWaitFlow } from "./mixed_wait_flow.js";
 import { ModelInputFlow } from "./model_input_flow.js";
@@ -114,7 +114,8 @@ test("model input is serialized and invalid runtime input is rejected", async ()
   });
 });
 
-test("Flow config override survives Continue-As-New", async () => {
+test("Flow config override survives Continue-As-New", async (context) => {
+  if (await skipIfServerZD(context, "Continue-As-New")) return;
   const flow = new BasicFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("config-override");
@@ -155,7 +156,8 @@ test("waitForStepCompletion observes the requested Step", async () => {
   });
 });
 
-test("waitFor failure can proceed to execute", async () => {
+test("waitFor failure can proceed to execute", async (context) => {
+  if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new ProceedOnWaitFailureFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("proceed-on-wait-failure");
@@ -173,7 +175,8 @@ test("Steps with and without waitFor compose", async () => {
   });
 });
 
-test("movement options do not mutate Step defaults", async () => {
+test("movement options do not mutate Step defaults", async (context) => {
+  if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new ImmutableStepOptionsFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("immutable-options");

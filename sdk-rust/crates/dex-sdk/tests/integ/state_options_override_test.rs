@@ -13,11 +13,14 @@ use std::time::Duration;
 use dex_sdk::{Client, Registry, SdkResult};
 
 use crate::state_options_override_workflow::StateOptionsOverrideWorkflow;
-use crate::support::{DexDevTestEnvironment, flow_id};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_state_options_override_workflow() {
+    if skip_if_server_zd("Step failure policies") {
+        return;
+    }
     let environment =
         DexDevTestEnvironment::start(Registry::new().register(StateOptionsOverrideWorkflow::new()));
     let workflow = StateOptionsOverrideWorkflow::new();

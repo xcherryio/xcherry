@@ -55,6 +55,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Plaintext gRPC dial target, not an HTTP URL.
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
    * </pre>
    *
    * <code>string address = 1;</code>
@@ -76,6 +77,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Plaintext gRPC dial target, not an HTTP URL.
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
    * </pre>
    *
    * <code>string address = 1;</code>
@@ -99,6 +101,10 @@ private static final long serialVersionUID = 0L;
   public static final int IS_HEADLESS_ADDRESS_FIELD_NUMBER = 2;
   private boolean isHeadlessAddress_ = false;
   /**
+   * <pre>
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>bool is_headless_address = 2;</code>
    * @return The isHeadlessAddress.
    */
@@ -472,6 +478,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Plaintext gRPC dial target, not an HTTP URL.
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
      * </pre>
      *
      * <code>string address = 1;</code>
@@ -492,6 +499,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Plaintext gRPC dial target, not an HTTP URL.
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
      * </pre>
      *
      * <code>string address = 1;</code>
@@ -513,6 +521,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Plaintext gRPC dial target, not an HTTP URL.
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
      * </pre>
      *
      * <code>string address = 1;</code>
@@ -530,6 +539,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Plaintext gRPC dial target, not an HTTP URL.
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
      * </pre>
      *
      * <code>string address = 1;</code>
@@ -544,6 +554,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Plaintext gRPC dial target, not an HTTP URL.
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
      * </pre>
      *
      * <code>string address = 1;</code>
@@ -562,6 +573,10 @@ private static final long serialVersionUID = 0L;
 
     private boolean isHeadlessAddress_ ;
     /**
+     * <pre>
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>bool is_headless_address = 2;</code>
      * @return The isHeadlessAddress.
      */
@@ -570,6 +585,10 @@ private static final long serialVersionUID = 0L;
       return isHeadlessAddress_;
     }
     /**
+     * <pre>
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>bool is_headless_address = 2;</code>
      * @param value The isHeadlessAddress to set.
      * @return This builder for chaining.
@@ -582,6 +601,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>bool is_headless_address = 2;</code>
      * @return This builder for chaining.
      */
