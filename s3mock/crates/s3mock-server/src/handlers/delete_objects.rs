@@ -11,7 +11,6 @@
 use std::sync::Arc;
 
 use http::HeaderMap;
-use hyper::body::Incoming;
 use s3mock::{DeleteObjectOutcome, DeleteObjectRequest, Store, StoreError};
 
 use super::request_body::read_small_body;
@@ -33,7 +32,7 @@ pub(crate) async fn delete_objects(
     store: Arc<Store>,
     bucket: String,
     headers: HeaderMap,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     {
         let bucket = bucket.clone();

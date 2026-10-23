@@ -78,12 +78,25 @@ pub enum Durability {
     Relaxed,
 }
 
+/// ETag representation assigned when an object version commits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EtagMode {
+    /// Derive ETags from object content.
+    #[default]
+    Md5,
+    /// Assign a stable opaque ETag to each stored version.
+    Opaque,
+}
+
 /// Settings fixed when a store is opened.
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
     /// Directory holding `metadata.redb`, `data/`, and `tmp/`; created when missing.
     pub root_directory: PathBuf,
     pub durability: Durability,
+    /// Default `Md5`; `Opaque` assigns a stable identifier to each committed version.
+    pub etag_mode: EtagMode,
 }
 
 /// A local-disk object store with S3 semantics. Share it across threads with `Arc`.
@@ -94,6 +107,7 @@ pub struct Store {
     temporary_directory: PathBuf,
     database: Database,
     durability: Durability,
+    etag_mode: EtagMode,
     /// Monotonic so sequential writes to one key always order by request arrival.
     version_generator: Mutex<ulid::Generator>,
     /// Every later ULID is at least this old because the generator is monotonic, even if the clock steps back.
@@ -103,6 +117,11 @@ pub struct Store {
 }
 
 impl Store {
+    /// Returns the store-owned directory for temporary request bodies.
+    pub fn temporary_directory(&self) -> &std::path::Path {
+        &self.temporary_directory
+    }
+
     /// Opens or creates a store, removing temporary files left by an earlier process.
     pub fn open(config: &StoreConfig) -> Result<Store, StoreError> {
         let data_directory = config.root_directory.join(DATA_DIRECTORY_NAME);
@@ -125,6 +144,7 @@ impl Store {
             temporary_directory,
             database,
             durability: config.durability,
+            etag_mode: config.etag_mode,
             version_generator: Mutex::new(version_generator),
             opened_at_unix_ms: opened_at.timestamp_ms(),
             lifecycle_clock_offset_ms: AtomicI64::new(0),

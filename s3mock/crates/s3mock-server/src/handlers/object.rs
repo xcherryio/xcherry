@@ -14,7 +14,7 @@ use bytes::Bytes;
 use futures_util::TryStreamExt;
 use http::{HeaderMap, HeaderValue, Response, StatusCode};
 use http_body_util::{BodyExt, StreamBody};
-use hyper::body::{Frame, Incoming};
+use hyper::body::Frame;
 use s3mock::{
     DeleteObjectRequest, ObjectReadRequest, ObjectSelection, ObjectWriter, PutObjectRequest, Store,
     StoreError, UploadChecksumExpectations, VersioningState,
@@ -53,7 +53,7 @@ pub(crate) async fn put_object(
     bucket: String,
     key: String,
     headers: HeaderMap,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     let encoding = body_encoding(&headers)?;
     let checksum_plan = upload_checksum_plan(&headers)?;
@@ -106,7 +106,7 @@ pub(crate) async fn put_object(
 /// Streams the request body into the writer on a blocking thread and returns the aws-chunked trailers.
 pub(super) async fn stream_upload(
     writer: ObjectWriter,
-    body: Incoming,
+    body: crate::server::RequestBody,
     encoding: BodyEncoding,
 ) -> Result<(ObjectWriter, Vec<(String, String)>), S3Error> {
     let (sender, receiver) = mpsc::channel(UPLOAD_CHANNEL_CAPACITY);
@@ -136,7 +136,7 @@ fn write_chunks(
 }
 
 async fn receive_body(
-    mut body: Incoming,
+    mut body: crate::server::RequestBody,
     encoding: BodyEncoding,
     sender: &mpsc::Sender<Bytes>,
 ) -> Result<Vec<(String, String)>, S3Error> {

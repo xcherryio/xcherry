@@ -147,6 +147,7 @@ async fn start_s3mock(data_directory: &TempDir) -> (ServerHandle, Arc<Store>) {
     let config = StoreConfig {
         root_directory: data_directory.path().to_path_buf(),
         durability: Durability::Strict,
+        etag_mode: s3mock::EtagMode::Md5,
     };
     let store = Arc::new(
         tokio::task::spawn_blocking(move || Store::open(&config))

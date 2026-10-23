@@ -14,6 +14,7 @@ use s3mock::{Durability, Store, StoreConfig};
 fn a_second_store_on_the_same_directory_fails_to_open() {
     let directory = tempfile::tempdir().unwrap();
     let config = StoreConfig {
+        etag_mode: s3mock::EtagMode::Md5,
         root_directory: directory.path().to_path_buf(),
         durability: Durability::Strict,
     };

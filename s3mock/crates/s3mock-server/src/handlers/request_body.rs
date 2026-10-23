@@ -11,7 +11,6 @@
 use bytes::Bytes;
 use http::HeaderMap;
 use http_body_util::{BodyExt, Limited};
-use hyper::body::Incoming;
 use s3mock::{ChecksumAlgorithm, md5_base64};
 
 use crate::aws_chunked::AwsChunkedDecoder;
@@ -26,7 +25,7 @@ pub(super) struct SmallBody {
 
 /// Reads a body of at most `limit` bytes, decoding aws-chunked framing.
 pub(super) async fn read_small_body(
-    body: Incoming,
+    body: crate::server::RequestBody,
     headers: &HeaderMap,
     limit: usize,
 ) -> Result<SmallBody, S3Error> {

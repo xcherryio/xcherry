@@ -10,8 +10,8 @@
 
 use std::sync::Arc;
 
+use crate::server::RequestBody;
 use http::{HeaderMap, StatusCode};
-use hyper::body::Incoming;
 use s3mock::{LifecycleConfiguration, LifecycleRule, Store};
 
 use super::bucket::status_response;
@@ -30,7 +30,7 @@ pub(crate) async fn put_bucket_lifecycle_configuration(
     store: Arc<Store>,
     bucket: String,
     headers: &HeaderMap,
-    body: Incoming,
+    body: RequestBody,
 ) -> Result<S3Response, S3Error> {
     let body = read_small_body(body, headers, MAX_LIFECYCLE_BODY_BYTES).await?;
     body.verify_integrity(headers, false)?;

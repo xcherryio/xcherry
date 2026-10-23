@@ -27,14 +27,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_config = StoreConfig {
         root_directory: config.data_directory.clone(),
         durability: config.durability.into(),
+        etag_mode: config.etag_mode.into(),
     };
     let store = Arc::new(tokio::task::spawn_blocking(move || Store::open(&store_config)).await??);
     let listener = tokio::net::TcpListener::bind(config.listen_address).await?;
-    let server = s3mock_server::start(Arc::clone(&store), listener)?;
+    let server = s3mock_server::start_with_config(Arc::clone(&store), listener, config.clone())?;
     tracing::info!(
         address = %server.local_address(),
         data_directory = %config.data_directory.display(),
         durability = ?config.durability,
+        signature_verification = ?config.signature_verification,
         "s3mock is serving"
     );
     let lifecycle_scanner = if config.lifecycle_scan_interval_seconds > 0 {

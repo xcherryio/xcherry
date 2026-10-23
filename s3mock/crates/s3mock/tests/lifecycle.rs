@@ -19,6 +19,7 @@ const DAY_MS: i64 = 86_400_000;
 
 fn open_store(directory: &tempfile::TempDir, versioning: Option<VersioningState>) -> Store {
     let store = Store::open(&StoreConfig {
+        etag_mode: s3mock::EtagMode::Md5,
         root_directory: directory.path().to_path_buf(),
         durability: Durability::Relaxed,
     })
