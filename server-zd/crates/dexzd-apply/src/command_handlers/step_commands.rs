@@ -121,7 +121,10 @@ pub(crate) fn apply_timers_fired(
 ) -> Result<HandlerResult, ApplyError> {
     let mut is_any_applied = false;
     for timer in &command.timers {
-        let is_retention = matches!(timer.kind, Some(timer_id::Kind::Retention(_)));
+        let is_retention = matches!(
+            timer.kind,
+            Some(timer_id::Kind::Retention(_) | timer_id::Kind::OutboxRetention(_))
+        );
         if !is_retention && timer.run_attempt != cursor.attempt() {
             continue;
         }

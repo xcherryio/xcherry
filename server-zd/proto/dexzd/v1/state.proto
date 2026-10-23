@@ -130,6 +130,8 @@ message RunRecord {
   int64 retention_deadline_micros = 28;
   // A Step returned GracefulComplete; the attempt completes once no user Step is active.
   bool is_graceful_completion_requested = 29;
+  // Additional parents attached to this child run through SubFlow reuse.
+  repeated ParentFlowReference attached_parents = 30;
 }
 
 // Close details of a closed attempt.
@@ -365,6 +367,8 @@ message OutboxRecord {
   uint64 written_seq = 5;
   // Set when the receiver acknowledged; the row is deleted when its retention timer fires.
   int64 acknowledged_at_micros = 6;
+  // Values pinned while this message is retained.
+  repeated StoredValue held_values = 7;
 }
 
 // Row of RunTable::InboxDedup, keyed by source run ID (16 bytes) and message ID (16 bytes).

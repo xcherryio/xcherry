@@ -6,31 +6,14 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Cross-Flow messages through the outbox and inbox (plan section 9.5): child Flow starts and
-//! completion reports. Implemented by task A6; the backbone only defines the entry points.
+//! Durable cross-Flow delivery, child Flow reuse, and run deletion.
 
-use crate::ApplyError;
-use crate::command_handlers::CommandScope;
-use crate::command_handlers::run_cursor::RunCursor;
-use crate::state_access::FlowTransaction;
+mod inbox;
+mod outbox;
+mod run_purge;
 
-/// Writes a completion report to the parent's inbox through the outbox when this run is a
-/// child Flow.
-pub(crate) fn report_child_closed(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
-    scope: &CommandScope<'_>,
-) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, scope);
-    Ok(())
-}
-
-/// An acknowledged outbox message's retention passed; delete it.
-pub(crate) fn on_outbox_retention_fired(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
-    timer: &dexzd_protocol::dexzd::v1::OutboxRetentionTimerId,
-) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, timer);
-    Ok(())
-}
+pub(crate) use inbox::apply_inbox_message;
+pub(crate) use outbox::{
+    apply_outbox_ack, on_outbox_retention_fired, report_child_closed, start_child_flows,
+};
+pub(crate) use run_purge::{apply_hard_delete_objects_deleted, apply_run_purge};
