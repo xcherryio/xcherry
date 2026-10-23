@@ -59,6 +59,8 @@ message SnapshotFile {
 message PartitionAppliedPosition {
   uint32 partition = 1;
   LogPosition applied = 2;
+  // Epoch of that batch; see PartitionMeta.applied_epoch.
+  uint64 applied_epoch = 3;
 }
 
 // Local store record for one partition, written in the same atomic batch as the state it
@@ -71,6 +73,9 @@ message PartitionMeta {
   int64 last_command_timestamp_micros = 3;
   // Behavior version of the last applied command, for diagnostics.
   uint32 last_behavior_version = 4;
+  // Epoch of the last applied batch: the effective writer epoch at `applied`. Log recovery
+  // needs it to recognize void batches without rereading earlier EpochStart batches.
+  uint64 applied_epoch = 5;
 }
 
 // Local store record for the node (column family node_meta).
