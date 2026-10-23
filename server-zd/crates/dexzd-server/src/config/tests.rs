@@ -41,8 +41,13 @@ fn example_declares_every_default_key_and_value() {
     assert_eq!(parsed.values.wire_inline_threshold_bytes, 100);
     assert_eq!(parsed.values.max_value_bytes, 16 * 1024 * 1024);
     assert_eq!(parsed.api.grpc_max_message_bytes, 32 * 1024 * 1024);
+    assert_eq!(parsed.api.max_wait_seconds, 60);
     assert_eq!(parsed.matching.dispatch_wait, Duration::from_secs(10));
     assert_eq!(parsed.stream_store.backend, StreamStoreBackend::Disabled);
+    assert_eq!(
+        parsed.stream_store.trim_batch_yield_time,
+        Duration::from_millis(1)
+    );
 }
 
 fn assert_same_yaml_keys(declared: &serde_yaml_ng::Value, expected: &serde_yaml_ng::Value) {
@@ -59,20 +64,24 @@ fn assert_same_yaml_keys(declared: &serde_yaml_ng::Value, expected: &serde_yaml_
 
 #[test]
 fn yaml_overrides_sections_and_rejects_unknown_keys() {
-    let parsed = Config::parse_yaml("cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\nmatching:\n  dispatchWait: 12s\n  stickyWait: 4s\nvalues:\n  maxValueBytes: 20000000\nsearch:\n  backend: paradedb\n  paradeDbConnectionString: postgres://localhost/dex\n")
+    let parsed = Config::parse_yaml("cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\napi:\n  maxWaitSeconds: 60\nmatching:\n  dispatchWait: 12s\n  stickyWait: 4s\nvalues:\n  maxValueBytes: 20000000\nsearch:\n  backend: paradedb\n  paradeDbConnectionString: postgres://localhost/dex\n")
         .expect("valid YAML override");
     assert_eq!(parsed.matching.dispatch_wait, Duration::from_secs(12));
     assert_eq!(parsed.matching.sticky_wait, Duration::from_secs(4));
     assert_eq!(parsed.values.max_value_bytes, 20_000_000);
+    assert_eq!(parsed.api.max_wait_seconds, 60);
     assert_eq!(parsed.search.backend, SearchBackend::Paradedb);
     assert!(!format!("{parsed:?}").contains("postgres://localhost/dex"));
+    let serialized = serde_yaml_ng::to_string(&parsed).expect("serialize redacted config");
+    assert!(!serialized.contains("postgres://localhost/dex"));
+    assert!(serialized.contains("[redacted]"));
     parsed.validate().expect("complete YAML configuration");
 
     for yaml in [
         "unexpected: true",
         "matching:\n  dispachWait: 10s",
         "values:\n  maxValueBytes: -1",
-        "api:\n  maxWaitSeconds: gibberish",
+        "api:\n  maxWaitSeconds: 60s",
     ] {
         assert!(
             matches!(Config::parse_yaml(yaml), Err(ConfigError::Yaml { .. })),
@@ -85,7 +94,7 @@ fn yaml_overrides_sections_and_rejects_unknown_keys() {
 fn dev_flags_override_yaml_and_create_documented_local_layout() {
     let temporary = tempfile::tempdir().expect("test directory");
     let yaml_path = temporary.path().join("config.yaml");
-    fs::write(&yaml_path, "cluster:\n  nodeId: other\nobjectStore:\n  endpoint: 'https://external.invalid'\n  region: other-region\napi:\n  listen: '0.0.0.0:9000'\nsearch:\n  backend: paradedb\nstreamStore:\n  backend: disabled\ndev:\n  durabilityMode: strict\n").expect("write test config");
+    fs::write(&yaml_path, "cluster:\n  nodeId: other\nobjectStore:\n  endpoint: 'https://external.invalid'\n  region: other-region\napi:\n  listen: '0.0.0.0:9000'\nsearch:\n  backend: paradedb\n  paradeDbConnectionString: postgres://localhost/dex\nstreamStore:\n  backend: disabled\ndev:\n  durabilityMode: strict\n").expect("write test config");
     let data_directory = temporary.path().join("data");
     let log_directory = temporary.path().join("logs");
     let options = DevCommandOptions {
@@ -109,17 +118,17 @@ fn dev_flags_override_yaml_and_create_documented_local_layout() {
     assert_eq!(configuration.dev.log_directory, Some(log_directory));
     assert_eq!(configuration.dev.durability_mode, DevDurabilityMode::Strict);
     assert_eq!(configuration.object_store.bucket, "dex-dev");
-    assert!(configuration.object_store.endpoint.is_empty());
+    assert_eq!(configuration.object_store.endpoint, "http://127.0.0.1:0");
     assert_eq!(configuration.object_store.region, "us-east-1");
     assert!(configuration.object_store.force_path_style);
     assert_eq!(
         configuration.object_store.credentials_source,
         CredentialSource::Anonymous
     );
-    assert_eq!(configuration.search.backend, SearchBackend::Builtin);
+    assert_eq!(configuration.search.backend, SearchBackend::Paradedb);
     assert_eq!(
         configuration.stream_store.backend,
-        StreamStoreBackend::Memory
+        StreamStoreBackend::Disabled
     );
     let defaults = Config::load_dev(&DevCommandOptions {
         data_dir: temporary.path().join("other-data"),
@@ -137,6 +146,9 @@ fn dev_flags_override_yaml_and_create_documented_local_layout() {
         temporary.path().join("other-data/store")
     );
     assert_eq!(defaults.dev.durability_mode, DevDurabilityMode::Relaxed);
+    assert_eq!(defaults.search.backend, SearchBackend::Builtin);
+    assert_eq!(defaults.stream_store.backend, StreamStoreBackend::Memory);
+    assert_eq!(defaults.object_store.endpoint, "http://127.0.0.1:0");
     let empty_data_directory = Config::load_dev(&DevCommandOptions {
         data_dir: PathBuf::new(),
         listen: options.listen,
@@ -151,6 +163,56 @@ fn dev_flags_override_yaml_and_create_documented_local_layout() {
             ..
         }
     ));
+}
+
+#[test]
+fn dev_rejects_a_separate_hard_delete_store_before_resolving_credentials() {
+    let temporary = tempfile::tempdir().expect("test directory");
+    let yaml_path = temporary.path().join("config.yaml");
+    fs::write(
+        &yaml_path,
+        "objectStore:\n  hardDeleteStore:\n    bucket: external\n    credentialsSource: environment\n",
+    )
+    .expect("write test config");
+    let error = Config::load_dev(&DevCommandOptions {
+        data_dir: temporary.path().join("data"),
+        listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 8801)),
+        log_dir: None,
+        config: Some(yaml_path),
+    })
+    .expect_err("dev must reject a separate hard-delete destination");
+    assert!(matches!(
+        error,
+        ConfigError::Invalid {
+            field: "objectStore.hardDeleteStore",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn hard_delete_location_keys_round_trip_and_lease_is_independent_of_batch_window() {
+    let mut configuration = valid_config();
+    configuration.object_store.hard_delete_store = Some(ObjectStoreLocationConfig {
+        bucket: "hard-delete".to_owned(),
+        ..ObjectStoreLocationConfig::default()
+    });
+    configuration.commit.batch_window = Duration::from_secs(8);
+    configuration.lease.duration = Duration::from_secs(1);
+    configuration
+        .validate()
+        .expect("lease renewal is independent of commit batching");
+    let yaml = serde_yaml_ng::to_string(&configuration).expect("serialize config");
+    let parsed = Config::parse_yaml(&yaml).expect("parse all hard-delete location keys");
+    assert_eq!(parsed, configuration);
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).expect("YAML value");
+    let hard_delete = value
+        .get("objectStore")
+        .and_then(|store| store.get("hardDeleteStore"))
+        .expect("hard-delete destination");
+    let expected = serde_yaml_ng::to_value(ObjectStoreLocationConfig::default())
+        .expect("default hard-delete location keys");
+    assert_same_yaml_keys(hard_delete, &expected);
 }
 
 #[test]
@@ -180,8 +242,17 @@ fn load_file_reports_io_and_field_failures() {
 fn every_field_constraint_names_the_rejected_yaml_path() {
     let cases: Vec<InvalidConfigCase> = vec![
         ("cluster.nodeId", |config| config.cluster.node_id.clear()),
+        ("cluster.nodeId", |config| {
+            config.cluster.node_id = "Node_A".to_owned()
+        }),
+        ("cluster.nodeId", |config| {
+            config.cluster.node_id = "a".repeat(64)
+        }),
         ("cluster.partitionCount", |config| {
             config.cluster.partition_count = 3
+        }),
+        ("cluster.partitionCount", |config| {
+            config.cluster.partition_count = 131_072
         }),
         ("objectStore.region", |config| {
             config.object_store.region.clear()
@@ -248,7 +319,7 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
             config.commit.multipart_threshold_bytes = 4 * 1024 * 1024
         }),
         ("lease.duration", |config| {
-            config.lease.duration = Duration::from_millis(1)
+            config.lease.duration = Duration::ZERO
         }),
         ("snapshot.logThresholdBytes", |config| {
             config.snapshot.log_threshold_bytes = 0
@@ -296,7 +367,7 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
             config.api.grpc_max_message_bytes = config.values.max_value_bytes
         }),
         ("api.maxWaitSeconds", |config| {
-            config.api.max_wait_seconds = Duration::ZERO
+            config.api.max_wait_seconds = 0
         }),
         ("api.defaultRpcTimeout", |config| {
             config.api.default_rpc_timeout = Duration::ZERO
@@ -339,6 +410,9 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
         }),
         ("streamStore.backgroundTrimBatchSize", |config| {
             config.stream_store.background_trim_batch_size = 0
+        }),
+        ("streamStore.trimBatchYieldTime", |config| {
+            config.stream_store.trim_batch_yield_time = Duration::ZERO
         }),
         ("streamStore.trimWorkers", |config| {
             config.stream_store.trim_workers = 0

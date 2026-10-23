@@ -107,6 +107,7 @@ impl Default for SnapshotConfig {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct HistoryConfig {
     /// Defaults to 10000; maximum semantic events in the recent reconstruction window before chunk pruning.
+    /// Recorded in RunRecord at FlowStart; changes affect only later runs.
     pub window_semantic_events: u32,
     /// Defaults to 1000; number of old semantic events pruned per chunk, no greater than the window.
     pub prune_chunk_size: u32,
@@ -115,6 +116,7 @@ pub struct HistoryConfig {
     /// Defaults to 10000; checkpoint after this many commands even when the byte threshold is not met.
     pub checkpoint_command_interval: u32,
     /// Defaults to 256 MiB per run; cap on superseded values retained for reconstruction within the window.
+    /// Recorded in RunRecord at FlowStart; changes affect only later runs.
     pub max_retained_superseded_bytes: u64,
 }
 

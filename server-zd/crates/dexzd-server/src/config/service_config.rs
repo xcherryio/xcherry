@@ -10,7 +10,7 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Configures the public FlowService and WorkerTaskService gRPC listener.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -20,9 +20,8 @@ pub struct ApiConfig {
     pub listen: SocketAddr,
     /// Defaults to 32 MiB; maximum incoming and outgoing gRPC message size, above maxValueBytes for envelope headroom.
     pub grpc_max_message_bytes: u64,
-    /// Defaults to 60 s; upper bound on one transport long poll, reusing the Go maxWaitSeconds key.
-    #[serde(with = "humantime_serde")]
-    pub max_wait_seconds: Duration,
+    /// Defaults to 60 seconds; upper bound on one transport long poll, matching the Go maxWaitSeconds integer key.
+    pub max_wait_seconds: u64,
     /// Defaults to 60 s; timeout used for RPC calls that do not specify one.
     #[serde(with = "humantime_serde")]
     pub default_rpc_timeout: Duration,
@@ -33,7 +32,7 @@ impl Default for ApiConfig {
         Self {
             listen: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8801)),
             grpc_max_message_bytes: 32 * 1024 * 1024,
-            max_wait_seconds: Duration::from_secs(60),
+            max_wait_seconds: 60,
             default_rpc_timeout: Duration::from_secs(60),
         }
     }
@@ -94,7 +93,7 @@ pub enum StreamStoreBackend {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct StreamStoreConfig {
-    /// Defaults to disabled; dev mode overrides this to memory storage.
+    /// Defaults to disabled; dev mode defaults to memory when YAML does not set this field.
     pub backend: StreamStoreBackend,
     /// Defaults to 100 KiB; maximum serialized Value in one Stream message.
     pub max_message_bytes: u64,
@@ -108,6 +107,9 @@ pub struct StreamStoreConfig {
     pub trim_target_percent: u8,
     /// Defaults to 256; maximum messages removed in one trim batch.
     pub background_trim_batch_size: u32,
+    /// Defaults to 1 ms; positive pause between atomic memory-backend trim batches.
+    #[serde(with = "humantime_serde")]
+    pub trim_batch_yield_time: Duration,
     /// Defaults to 4; maximum concurrent background trim jobs in one process.
     pub trim_workers: u32,
 }
@@ -122,6 +124,7 @@ impl Default for StreamStoreConfig {
             trim_trigger_percent: 90,
             trim_target_percent: 80,
             background_trim_batch_size: 256,
+            trim_batch_yield_time: Duration::from_millis(1),
             trim_workers: 4,
         }
     }
@@ -147,6 +150,8 @@ pub struct SearchConfig {
     /// Defaults to 100000 documents; maximum builtin documents inspected by one SearchFlows query.
     pub builtin_scan_budget_documents: u32,
     /// Defaults to empty; required when backend is paradedb and identifies the PostgreSQL-compatible endpoint.
+    /// When empty, loading may read DEX_ZD_PARADEDB_CONNECTION_STRING; serialization redacts non-empty values.
+    #[serde(serialize_with = "serialize_parade_db_connection_string")]
     pub parade_db_connection_string: String,
     /// Defaults to 10; maximum ParadeDB connections held by one node.
     pub parade_db_connection_pool_size: u32,
@@ -155,6 +160,20 @@ pub struct SearchConfig {
     /// Defaults to 2 s; maximum wait for ParadeDB projection to catch up to the node's committed position.
     #[serde(with = "humantime_serde")]
     pub read_your_writes_wait: Duration,
+}
+
+fn serialize_parade_db_connection_string<S>(
+    connection_string: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(if connection_string.is_empty() {
+        ""
+    } else {
+        "[redacted]"
+    })
 }
 
 impl fmt::Debug for SearchConfig {

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use super::{Config, CredentialSource, ObjectStoreCredentials, SearchBackend, StreamStoreBackend};
 use crate::DevCommandOptions;
 
+const EMBEDDED_S3_ENDPOINT_PENDING: &str = "http://127.0.0.1:0";
+
 /// Reports a YAML, filesystem, environment, or field validation failure.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -83,15 +85,33 @@ impl Config {
                 message: "--data-dir must be non-empty".to_owned(),
             });
         }
-        let mut configuration = if let Some(path) = &options.config {
+        let (mut configuration, has_stream_store_backend_override) = if let Some(path) =
+            &options.config
+        {
             let contents = fs::read_to_string(path).map_err(|source| ConfigError::Read {
                 path: path.clone(),
                 source,
             })?;
-            Self::parse_yaml(&contents)?
+            let yaml_configuration: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)
+                .map_err(|source| ConfigError::Yaml { source })?;
+            let has_stream_store_backend_override = yaml_configuration
+                .get("streamStore")
+                .and_then(|section| section.get("backend"))
+                .is_some();
+            (
+                Self::parse_yaml(&contents)?,
+                has_stream_store_backend_override,
+            )
         } else {
-            Self::default()
+            (Self::default(), false)
         };
+        if configuration.object_store.hard_delete_store.is_some() {
+            return Err(ConfigError::Invalid {
+                field: "objectStore.hardDeleteStore",
+                message: "dev mode uses the embedded object store for hard-delete values"
+                    .to_owned(),
+            });
+        }
         configuration.cluster.node_id = "dev".to_owned();
         configuration.api.listen = options.listen;
         configuration
@@ -101,12 +121,13 @@ impl Config {
         configuration.dev.s3_data_directory = options.data_dir.join("s3");
         configuration.dev.log_directory.clone_from(&options.log_dir);
         configuration.local_storage.directory = options.data_dir.join("store");
-        configuration.search.backend = SearchBackend::Builtin;
-        configuration.stream_store.backend = StreamStoreBackend::Memory;
+        if !has_stream_store_backend_override {
+            configuration.stream_store.backend = StreamStoreBackend::Memory;
+        }
         if configuration.object_store.bucket.is_empty() {
             configuration.object_store.bucket = "dex-dev".to_owned();
         }
-        configuration.object_store.endpoint.clear();
+        configuration.object_store.endpoint = EMBEDDED_S3_ENDPOINT_PENDING.to_owned();
         configuration.object_store.region = "us-east-1".to_owned();
         configuration.object_store.force_path_style = true;
         configuration.object_store.credentials_source = CredentialSource::Anonymous;
@@ -116,6 +137,15 @@ impl Config {
     }
 
     fn resolve_environment_credentials(&mut self) -> Result<(), ConfigError> {
+        if self.search.backend == SearchBackend::Paradedb
+            && self.search.parade_db_connection_string.is_empty()
+            && let Some(connection_string) = read_environment_credential(
+                "DEX_ZD_PARADEDB_CONNECTION_STRING",
+                "search.paradeDbConnectionString",
+            )?
+        {
+            self.search.parade_db_connection_string = connection_string;
+        }
         self.object_store.credentials = credentials_from_lookup(
             self.object_store.credentials_source,
             "objectStore.credentialsSource",

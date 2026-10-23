@@ -1118,6 +1118,7 @@ dependencies = [
  "dexzd-api",
  "dexzd-clock",
  "dexzd-engine",
+ "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-storage",
  "humantime-serde",
