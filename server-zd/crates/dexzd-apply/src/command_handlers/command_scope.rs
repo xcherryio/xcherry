@@ -14,14 +14,12 @@ use crate::{ApplyEffect, ApplyOutcome, BehaviorVersion, StateWrite};
 /// Read-only facts of the command being applied.
 pub(crate) struct CommandScope<'command> {
     pub(crate) command: &'command FlowCommand,
-    #[expect(
-        dead_code,
-        reason = "Behavior-version predicates are added with the first behavior change."
-    )]
     pub(crate) behavior_version: BehaviorVersion,
     pub(crate) tenant_id: TenantId,
     /// The only time apply may use.
     pub(crate) now_micros: i64,
+    /// Time travel replays a recorded command to rebuild state; it records no history.
+    pub(crate) is_replay: bool,
 }
 
 impl<'command> CommandScope<'command> {
@@ -31,6 +29,7 @@ impl<'command> CommandScope<'command> {
             behavior_version,
             tenant_id: TenantId(command.tenant_id),
             now_micros: command.proposed_at_micros,
+            is_replay: false,
         }
     }
 

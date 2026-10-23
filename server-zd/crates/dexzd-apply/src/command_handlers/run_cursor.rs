@@ -12,6 +12,7 @@ use dexzd_protocol::dexzd::v1::{CommandReply, HistoryRecord, RunRecord};
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::{CommandScope, HandlerOutput};
+use crate::history;
 use crate::state_access::{FlowTransaction, RunRows};
 use crate::values::enforce_superseded_byte_cap;
 use crate::values::{ValueIdAllocator, ValueLimits};
@@ -51,6 +52,8 @@ pub(crate) struct RunCursor {
     pub(crate) values: ValueIdAllocator,
     events: Vec<flow_history_event::Payload>,
     pub(crate) effects: Vec<ApplyEffect>,
+    /// Set by TimeTravel: the command starts a new attempt and writes its start checkpoint.
+    pub(crate) starts_attempt: bool,
 }
 
 impl RunCursor {
@@ -104,6 +107,7 @@ impl RunCursor {
             values: ValueIdAllocator::new(seq),
             events: Vec::new(),
             effects: Vec::new(),
+            starts_attempt: false,
         }
     }
 
@@ -162,19 +166,24 @@ impl RunCursor {
         }
         self.record.commands_since_checkpoint += 1;
         let last_event_id = events.last().map(|event| event.event_id);
-        self.rows.put_history_record(
-            transaction,
-            &HistoryRecord {
-                seq: self.seq,
-                attempt: self.record.current_attempt,
-                timestamp_micros: scope.now_micros,
-                is_semantic: kind.is_semantic,
-                is_external_input: kind.is_external_input,
-                command: Some(scope.command.clone()),
-                events,
-                state_hash: Vec::new(),
-            },
-        );
+        if !scope.is_replay {
+            let pending_step_methods = history::pending_step_methods(transaction, &self)?;
+            self.rows.put_history_record(
+                transaction,
+                &HistoryRecord {
+                    seq: self.seq,
+                    attempt: self.record.current_attempt,
+                    timestamp_micros: scope.now_micros,
+                    is_semantic: kind.is_semantic,
+                    is_external_input: kind.is_external_input,
+                    command: Some(scope.command.clone()),
+                    events,
+                    state_hash: Vec::new(),
+                    pending_step_methods,
+                },
+            );
+            history::after_command(transaction, &mut self, kind)?;
+        }
         self.rows.put_run_record(transaction, &self.record);
         enforce_superseded_byte_cap(transaction, &mut self)?;
         if let Some(last_event_id) = last_event_id {

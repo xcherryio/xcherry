@@ -23,13 +23,6 @@ use crate::state_access::FlowTransaction;
 type HolderAssignments = BTreeMap<(ValueId, Vec<u8>), (StoredValue, ValueHolder)>;
 
 /// Replaces attempt holders; additions precede removals so shared values remain live.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Called by the time travel handler when task A4 lands."
-    )
-)]
 pub(crate) fn rewrite_holders_for_time_travel(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,

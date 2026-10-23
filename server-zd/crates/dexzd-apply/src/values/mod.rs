@@ -18,16 +18,12 @@ mod time_travel;
 mod value_holder;
 
 pub(crate) use garbage::enforce_superseded_byte_cap;
-#[expect(
-    unused_imports,
-    reason = "Called by time travel and window integration after task A4 lands."
-)]
+#[expect(unused_imports, reason = "Available to window maintenance handlers.")]
 pub(crate) use garbage::{prune_garbage, superseded_bytes_over_cap};
-pub(crate) use storage_accounting::{reconcile_run_storage, total_run_storage_bytes};
-#[expect(
-    unused_imports,
-    reason = "Called by the time travel handler after task A4 lands."
-)]
+pub(crate) use storage_accounting::{
+    active_run_storage_bytes, projected_superseded_value_bytes, reconcile_run_storage,
+    total_run_storage_bytes,
+};
 pub(crate) use time_travel::rewrite_holders_for_time_travel;
 pub(crate) use value_holder::ValueHolder;
 

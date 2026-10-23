@@ -117,10 +117,6 @@ impl<'reader> FlowTransaction<'reader> {
     }
 
     /// Deletes every key in `[start, end)`, including rows buffered earlier in this call.
-    #[expect(
-        dead_code,
-        reason = "Run purge (task A6) deletes whole runs with range deletes."
-    )]
     pub(crate) fn delete_range(
         &mut self,
         column_family: ColumnFamily,
@@ -189,10 +185,8 @@ impl<'reader> FlowTransaction<'reader> {
     ) -> Result<Vec<StateRowChange>, ApplyError> {
         let mut changes = BTreeMap::new();
         for ((column_family, key), current) in &self.rows {
-            if matches!(
-                column_family,
-                ColumnFamily::Flow | ColumnFamily::History | ColumnFamily::Value
-            ) && key.starts_with(run_prefix)
+            if matches!(column_family, ColumnFamily::Flow | ColumnFamily::History)
+                && key.starts_with(run_prefix)
             {
                 changes.insert(
                     (*column_family, key.clone()),
@@ -206,10 +200,7 @@ impl<'reader> FlowTransaction<'reader> {
             }
         }
         for (column_family, start, end) in &self.range_deletes {
-            if !matches!(
-                column_family,
-                ColumnFamily::Flow | ColumnFamily::History | ColumnFamily::Value
-            ) {
+            if !matches!(column_family, ColumnFamily::Flow | ColumnFamily::History) {
                 continue;
             }
             let mut page_start = start.clone();
@@ -237,6 +228,37 @@ impl<'reader> FlowTransaction<'reader> {
             }
         }
         Ok(changes.into_values().collect())
+    }
+
+    /// Returns individual buffered row writes under one table prefix with their committed values.
+    pub(crate) fn buffered_row_changes_with_prefix(
+        &self,
+        column_family: ColumnFamily,
+        prefix: &[u8],
+    ) -> Result<Vec<StateRowChange>, ApplyError> {
+        let (start, end) = dexzd_keyspace::row_keys::prefix_range(prefix);
+        self.rows
+            .range((column_family, start)..(column_family, end))
+            .map(|((_, key), current)| {
+                Ok(StateRowChange {
+                    column_family,
+                    key: key.clone(),
+                    previous: self.reader.get(column_family, key)?,
+                    current: current.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Returns the rows this call put in `column_family`, in key order.
+    pub(crate) fn buffered_puts(
+        &self,
+        column_family: ColumnFamily,
+    ) -> impl Iterator<Item = (&[u8], &[u8])> {
+        self.rows
+            .range((column_family, Vec::new())..)
+            .take_while(move |((family, _), _)| *family == column_family)
+            .filter_map(|((_, key), value)| value.as_deref().map(|value| (key.as_slice(), value)))
     }
 
     /// Returns the buffered writes in deterministic order.

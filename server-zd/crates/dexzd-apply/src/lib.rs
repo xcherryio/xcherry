@@ -18,6 +18,7 @@ mod apply_context;
 mod apply_outcome;
 mod command_handlers;
 mod cross_flow;
+mod history;
 mod projections;
 mod state_access;
 mod steps;
