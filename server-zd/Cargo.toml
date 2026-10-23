@@ -57,6 +57,7 @@ protoc-bin-vendored = "3.2"
 rand = "0.10"
 rand_chacha = "0.10"
 rocksdb = { version = "0.25", default-features = false, features = ["lz4", "zstd", "bindgen-runtime"] }
+s3mock = { path = "../s3mock/crates/s3mock" }
 s3mock-server = { path = "../s3mock/crates/s3mock-server" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
