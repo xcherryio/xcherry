@@ -14,12 +14,14 @@
     "sdk-typescript",
     "protos",
     "s3mock",
+    "server-zd",
     "script"
   ],
   "forced_new_prefixes": [
     "blob-cache-go",
     "protos",
     "s3mock",
+    "server-zd",
     "sdk-rust",
     "sdk-typescript",
     "web"
