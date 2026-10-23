@@ -222,8 +222,8 @@ impl Step for WaitSubFlows {
     }
 }
 
-pub const SEND_LONG_LIVE_REQUEST: Rpc<String, bool> = Rpc::new("SendLongLiveRequest");
-pub const STOP_LONG_LIVE_FLOW: Rpc<(), ()> = Rpc::new("StopLongLiveFlow");
+pub(super) const SEND_LONG_LIVE_REQUEST: Rpc<String, bool> = Rpc::new("SendLongLiveRequest");
+pub(super) const STOP_LONG_LIVE_FLOW: Rpc<(), ()> = Rpc::new("StopLongLiveFlow");
 
 #[derive(Default)]
 pub struct AdvancedLongLiveParentFlow {
@@ -348,7 +348,7 @@ impl Step for LongLiveHandleSubFlow {
     }
 }
 
-pub const SEND_SHORT_LIVE_REQUEST: Rpc<String, bool> = Rpc::new("SendShortLiveRequest");
+pub(super) const SEND_SHORT_LIVE_REQUEST: Rpc<String, bool> = Rpc::new("SendShortLiveRequest");
 
 #[derive(Default)]
 pub struct AdvancedShortLiveParentFlow {

@@ -39,6 +39,7 @@ jobs:
             sdk-go-ci.yml
             sdk-java-ci.yml
             sdk-python-ci.yml
+            rust-rules-ci.yml
             sdk-rust-ci.yml
             sdk-typescript-ci.yml
             server-ci.yml

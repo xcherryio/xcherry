@@ -274,3 +274,42 @@ note that publish takes the version from the tag.
 - [sdk-java/README.md](sdk-java/README.md)
 - [sdk-python/README.md](sdk-python/README.md)
 - [sdk-typescript/README.md](sdk-typescript/README.md)
+
+## Rust rules
+
+Run `make rust-rules-check` from the repository root. It discovers every Cargo
+workspace and standalone package, checks structural and dependency conventions,
+and runs the Python fixture suite. Each workspace must also pass
+`cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`, and
+`cargo test`. CI runs these checks and the applicable real-server integration suites.
+
+Register new workspaces and crates in `script/rust-crate-layers.json`. Crates may
+depend only on crates at the same or a lower layer. The registry also declares
+FFI and printing crates; their complete lint tables must match the workspace
+except for the explicitly permitted unsafe and printing levels.
+
+`script/rust-rules-baseline.json` records only existing R1/R2 structural debt.
+Keys combine the rule and repository-relative path. R1 values are line-count
+ceilings. R2 values contain separate `files` and `submodules` ceilings, each
+at least the normal limit of 10; the baseline cannot hide a new violation
+in another dimension. Never add entries or increase ceilings.
+The checker compares the baseline with origin/main when that baseline exists.
+CI fetches full history for this comparison. Remove an entry when its file or
+directory meets the limit; fixed entries left in the baseline fail. Lower a
+ceiling when reducing existing debt. New violations must be fixed immediately.
+
+Use `#[expect(lint, reason = "...")]` for a necessary lint suppression, with a
+concrete reason explaining the invariant. Do not use `#[allow]` or weaken a
+crate's lint table. Keep each expectation close to the relevant declaration or
+expression. Remove it when the underlying lint is no longer emitted; Rust
+reports unfulfilled expectations.
+
+```rust
+#[expect(unsafe_code, reason = "Java owns this allocation until the native close call.")]
+let cache = unsafe { Box::from_raw(handle) };
+```
+
+Production code uses `expect("why failure is impossible")` for invariants and
+typed errors for untrusted input. Tests may use unwrap. Generated code belongs
+to its generator; lint expectations for generated declarations belong at the
+include boundary, without editing generated output.

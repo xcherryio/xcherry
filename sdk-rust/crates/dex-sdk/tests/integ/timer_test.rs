@@ -47,7 +47,10 @@ fn test_basic_timer_workflow() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_timer_and_step_wait(client: &Client) -> SdkResult<()> {
     let workflow = TimerWorkflow::new();
     client.start_flow(&workflow, "timer", 1)?;

@@ -47,7 +47,10 @@ fn test_state_api_fail_workflow() {
     assert_eq!(FlowStatus::Failed, info.status);
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_state_api_failure(client: &Client) -> SdkResult<()> {
     client.start_flow_with_options(
         &AnyCommandCombinationWorkflow::new(),

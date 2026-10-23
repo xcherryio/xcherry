@@ -69,7 +69,10 @@ fn test_internal_channel() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_conditional_complete(client: &Client) -> SdkResult<()> {
     let workflow = ConditionalCompleteWorkflow::new();
     client.start_flow(&workflow, "conditional-signal", true)?;

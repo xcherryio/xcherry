@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Runnable Rust examples for Dex Flows, Steps, and application patterns.
+
 pub mod patterns;
 pub mod primitives;
 pub mod production;

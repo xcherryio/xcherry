@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+//! Node-API bindings for the shared Dex blob cache.
+
 use dex_blob_cache::{BlobCache, BlobCacheConfig};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;

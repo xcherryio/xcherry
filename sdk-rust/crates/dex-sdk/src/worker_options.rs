@@ -316,3 +316,19 @@ impl Default for WorkerOptions {
         Self::new()
     }
 }
+
+pub(crate) struct WorkerEnvironmentConfig {
+    pub(crate) identity: String,
+}
+
+impl WorkerEnvironmentConfig {
+    pub(crate) fn from_environment() -> Self {
+        let identity = ["DEX_WORKER_INSTANCE", "POD_NAME", "HOSTNAME"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(|value| value.to_string_lossy().into_owned())
+            .find(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned());
+        Self { identity }
+    }
+}

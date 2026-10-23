@@ -1,0 +1,56 @@
+name: Rust Rules CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "**/clippy.toml"
+      - "script/check-rust-rules.py"
+      - "script/check_rust_rules_test.py"
+      - "script/rust-crate-layers.json"
+      - "script/rust-rules-baseline.json"
+      - "Makefile"
+      - ".github/workflows/rust-rules-ci.yml"
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "**/clippy.toml"
+      - "script/check-rust-rules.py"
+      - "script/check_rust_rules_test.py"
+      - "script/rust-crate-layers.json"
+      - "script/rust-rules-baseline.json"
+      - "Makefile"
+      - ".github/workflows/rust-rules-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-rules-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTUP_TOOLCHAIN: "1.97.1"
+
+jobs:
+  rust-rules:
+    name: Rust rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Check Rust rules and fixtures
+        run: make rust-rules-check
+      - name: Validate workflow policy
+        run: make ci-runner-check

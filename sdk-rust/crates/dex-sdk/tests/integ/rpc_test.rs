@@ -382,7 +382,10 @@ pub(crate) fn assert_rpc_completion(
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_locking(client: &Client) -> SdkResult<()> {
     client.start_flow(&RpcNoStateWorkflow::new(), "rpc-lock", ())?;
     let _first: i32 =
@@ -392,7 +395,10 @@ fn compile_locking(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_functions_and_procedures(client: &Client) -> SdkResult<()> {
     client.start_flow(&RpcWorkflow::new(), "rpc", 0)?;
     client.invoke_rpc_without_input::<()>("rpc", RpcWorkflow::PUBLISH_WITHOUT_ATTRIBUTE_ACCESS)?;
@@ -409,7 +415,10 @@ fn compile_functions_and_procedures(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_rpc_error_and_channel_size(client: &Client) -> SdkResult<()> {
     let _ignored: i64 =
         client.invoke_rpc("rpc-error", RpcNoStateWorkflow::FAIL, "error".to_string())?;

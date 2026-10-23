@@ -1,0 +1,29 @@
+{
+  "sdk-rust": {
+    "layers": {
+      "dex-blob-cache": 0,
+      "dex-protocol": 0,
+      "dex-blob-cache-jni": 1,
+      "dex-blob-cache-node": 1,
+      "dex-blob-cache-python": 1,
+      "dex-sdk": 1
+    },
+    "ffi_crates": [
+      "dex-blob-cache-jni",
+      "dex-blob-cache-node",
+      "dex-blob-cache-python"
+    ],
+    "print_crates": [
+      "dex-protocol"
+    ]
+  },
+  "examples/rust": {
+    "layers": {
+      "dex-examples-rust": 0
+    },
+    "ffi_crates": [],
+    "print_crates": [
+      "dex-examples-rust"
+    ]
+  }
+}

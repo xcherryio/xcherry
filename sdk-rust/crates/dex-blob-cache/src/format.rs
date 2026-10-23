@@ -88,9 +88,21 @@ pub(crate) fn decode_header(
     }
 
     Ok(FileHeader {
-        blob_id_length: u32::from_le_bytes(encoded[8..12].try_into().unwrap()),
-        payload_length: u64::from_le_bytes(encoded[12..20].try_into().unwrap()),
-        checksum: u32::from_le_bytes(encoded[20..24].try_into().unwrap()),
+        blob_id_length: u32::from_le_bytes(
+            encoded[8..12]
+                .try_into()
+                .expect("fixed-width header slice has the required byte length"),
+        ),
+        payload_length: u64::from_le_bytes(
+            encoded[12..20]
+                .try_into()
+                .expect("fixed-width header slice has the required byte length"),
+        ),
+        checksum: u32::from_le_bytes(
+            encoded[20..24]
+                .try_into()
+                .expect("fixed-width header slice has the required byte length"),
+        ),
     })
 }
 

@@ -483,3 +483,45 @@ Every implementation plan must include all three sections below. Use
 ## UI/UX
 
 - `N/A: no in-repo web UI` unless a change adds one.
+
+## Rust Code Conventions
+
+These rules apply to all hand-written Rust workspaces and standalone packages.
+Run `make rust-rules-check` and each package's formatting, Clippy, and test targets.
+The checker discovers Cargo manifests automatically through Cargo metadata.
+
+| Rule | Convention | Enforcement |
+| --- | --- | --- |
+| R1 | Non-test Rust files contain at most 1000 lines, excluding the license header. | Rust rules checker; existing oversized files use a shrink-only baseline. |
+| R2 | A module directory contains at most 10 non-test Rust files and 10 submodules. Split by responsibility. | Rust rules checker; existing oversized directories use the same baseline. |
+| R3 | Every crate has a README with an opening Purpose sentence of at most 30 words. Start its lib.rs and main.rs crate documentation with the same sentence. | Rust rules checker. |
+| R4 | Use pub(crate) for internal items and pub only for public APIs, including in the SDK. | rustc unreachable_pub. |
+| R5 | Test-only public items end in _for_test and require cfg(test) or the test-util feature. | Rust rules checker verifies the configuration of suffixed items; review verifies naming. |
+| R6 | Register every crate in script/rust-crate-layers.json. Depend only on crates in the same or a lower layer. | Rust rules checker using Cargo metadata. |
+| R7 | Each executable has one typed configuration. Read environment settings only in configuration modules or tests. Configuration modules are config, *_config, and *_options. | Rust rules checker verifies std::env::var and std::env::var_os locations; review verifies typed ownership. |
+| R8 | Use complete domain names. Avoid utils, helpers, common, and misc modules and generic Manager, Handler, Data, or Info types. | Rust rules checker rejects generic module filenames; review checks type names. |
+| R9 | Represent closed sets with enums rather than repeated strings. Across crates, use non-exhaustive enums or newtypes. | Clippy match_wildcard_for_single_variants and review. |
+| R10 | Handle every error. Do not discard fallible results with let _ or .ok(); explain intentional ignores. | rustc unused_must_use and Clippy let_underscore_must_use, let_underscore_future, and unused_result_ok; review. |
+| R11 | Libraries use typed errors, such as thiserror. Generic errors such as anyhow belong only at binary boundaries. Include the operation and object in errors. | Rust rules checker rejects non-development anyhow dependencies in library crates; review checks error context. |
+| R12 | Panic on programming errors with expect explaining why failure is impossible. Production code must not use bare unwrap. Never use todo!, unimplemented!, or dbg!. | Clippy unwrap_used, todo, unimplemented, and dbg_macro; Rust rules checker rejects empty expect explanations. Tests may unwrap. |
+| R13 | Libraries log with tracing. Keep messages constant and values in fields. Examples, CLI crates, and build scripts may print through registered crate lint overrides. | Clippy print_stdout and print_stderr; review checks structured messages. |
+| R14 | Every background task, connection, and child process has an owner and cancellation path. Bind tokio::spawn JoinHandles; never use let _ to discard them. Explain deliberate detachment. | Rust rules checker verifies binding; review checks lifecycle and cancellation. |
+| R15 | Forbid unsafe outside registered FFI crates. FFI crates use unsafe_code = "deny" and an expect with a safety reason at each unsafe operation. | rustc unsafe_code; Rust rules checker verifies registered FFI lint tables. |
+| R16 | Suppress lints with #[expect(lint, reason = "...")], never #[allow]. Remove expectations when the lint no longer applies. | Clippy allow_attributes and allow_attributes_without_reason; rustc unfulfilled_lint_expectations. |
+| R17 | Never hand-edit generated code. | make generated-code-check. |
+| R18 | Preserve existing comments. New comments explain non-obvious reasons and contain fewer than 20 words per block. Public SDK API documentation follows the detailed SDK documentation rules. | SDK missing_docs and review. |
+| R19 | Format Rust with rustfmt. | cargo fmt --all --check. |
+
+Use the frozen workspace Rust and Clippy lint tables in every workspace. Members
+inherit with `[lints] workspace = true`. Registered FFI and printing crates copy
+the entire table, changing only unsafe_code to deny for FFI and print_stdout /
+print_stderr to allow for printing crates. The checker rejects other differences.
+Keep clippy.toml test settings identical across workspaces. CI runs Clippy with
+`--all-targets -- -D warnings`.
+
+The checker uses one generated-code predicate: opening Code generated or
+@generated markers, or a gen/ or OUT_DIR path. Generated and test source files
+are excluded from structural counts. Inline test modules still count toward a
+production file's size. The baseline may only shrink against origin/main:
+never add an entry or increase its ceiling. Remove an entry as soon as the
+file or directory meets its limit; stale entries fail the check.

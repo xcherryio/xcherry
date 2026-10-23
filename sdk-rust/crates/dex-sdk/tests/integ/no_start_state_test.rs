@@ -105,7 +105,10 @@ fn test_dead_end_workflow() {
         .expect("complete resumed dead-end Flow");
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_no_start_step(client: &Client) -> SdkResult<()> {
     client.start_flow(&NoStartStateWorkflow::new(), "no-start", ())?;
     let _: i64 = client.invoke_rpc(
@@ -116,7 +119,10 @@ fn compile_no_start_step(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_no_step(client: &Client) -> SdkResult<()> {
     client.start_flow(&RpcNoStateWorkflow::new(), "no-step", ())?;
     let _: i32 =
@@ -124,7 +130,10 @@ fn compile_no_step(client: &Client) -> SdkResult<()> {
     client.stop_flow("no-step", StopFlowOptions::cancel())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_dead_end(client: &Client) -> SdkResult<()> {
     client.start_flow(&NoStartStateDeadEndWorkflow::new(), "dead-end", ())?;
     let _: usize = client

@@ -238,7 +238,8 @@ impl LocalFileStore {
         let mut buffer = [0_u8; 64 * 1024];
         let mut remaining = header.payload_length;
         while remaining != 0 {
-            let amount = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
+            let amount = usize::try_from(remaining.min(buffer.len() as u64))
+                .expect("read amount is bounded by the buffer length");
             file.read_exact(&mut buffer[..amount]).map_err(|error| {
                 BlobCacheError::Corrupt(format!("read payload {}: {error}", self.relative(path)))
             })?;
@@ -282,7 +283,12 @@ impl LocalFileStore {
         let header = decode_header(&encoded).map_err(|error| {
             BlobCacheError::Corrupt(format!("{error}: {}", self.relative(path)))
         })?;
-        let blob_id_size = usize::try_from(header.blob_id_length).unwrap();
+        let blob_id_size = usize::try_from(header.blob_id_length).map_err(|error| {
+            BlobCacheError::Corrupt(format!(
+                "read blob ID length {}: {error}",
+                self.relative(path)
+            ))
+        })?;
         if blob_id_size == 0 || blob_id_size > MAX_BLOB_ID_BYTES {
             return Err(BlobCacheError::Corrupt(format!(
                 "invalid blob ID length {}",

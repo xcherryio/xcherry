@@ -1587,7 +1587,6 @@ fn handler_error(error: SdkError) -> HandlerError {
     HandlerError::from_error(error)
 }
 
-#[allow(dead_code)]
 fn _keep_output_types(
     _attributes: Vec<AttributeWrite>,
     _locals: Vec<Kv>,

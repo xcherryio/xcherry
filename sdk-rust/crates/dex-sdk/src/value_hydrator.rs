@@ -108,7 +108,9 @@ impl ValueHydrator {
                     }
                 })?;
                 key.validate_hydrated(&value)?;
-                let _ = self.write_cache(&key, &value);
+                if let Err(error) = self.write_cache(&key, &value) {
+                    tracing::warn!(%error, blob_id = %key.id, "cache hydrated blob");
+                }
                 resolved.insert(key, value);
             }
         }

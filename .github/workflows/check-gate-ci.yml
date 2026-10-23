@@ -47,6 +47,16 @@ jobs:
             sdk_rust:
               - 'sdk-rust/**'
               - '.github/workflows/sdk-rust-ci.yml'
+            rust_rules:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/clippy.toml'
+              - 'script/check-rust-rules.py'
+              - 'script/check_rust_rules_test.py'
+              - 'script/rust-crate-layers.json'
+              - 'script/rust-rules-baseline.json'
+              - 'Makefile'
+              - '.github/workflows/rust-rules-ci.yml'
             web:
               - 'web/**'
               - 'protos/**'
@@ -123,6 +133,7 @@ jobs:
           FILTER_SERVER_ALL_IN_ONE: ${{ steps.filter.outputs.server_all_in_one }}
           FILTER_SDK_GO: ${{ steps.filter.outputs.sdk_go }}
           FILTER_SDK_RUST: ${{ steps.filter.outputs.sdk_rust }}
+          FILTER_RUST_RULES: ${{ steps.filter.outputs.rust_rules }}
           FILTER_WEB: ${{ steps.filter.outputs.web }}
           FILTER_EXAMPLES_GO: ${{ steps.filter.outputs.examples_go }}
           FILTER_EXAMPLES_JAVA: ${{ steps.filter.outputs.examples_java }}
@@ -153,6 +164,7 @@ jobs:
               "Go SDK CI"
               "Java SDK CI"
               "Python SDK CI"
+              "Rust Rules CI"
               "Rust SDK CI"
               "TypeScript SDK CI"
               "S3mock CI"
@@ -166,6 +178,7 @@ jobs:
             [[ "$FILTER_SERVER_ALL_IN_ONE" == "true" ]] && expected+=("Server All-in-One CI")
             [[ "$FILTER_SDK_GO" == "true" ]] && expected+=("Go SDK CI")
             [[ "$FILTER_SDK_RUST" == "true" ]] && expected+=("Rust SDK CI")
+            [[ "$FILTER_RUST_RULES" == "true" ]] && expected+=("Rust Rules CI")
             [[ "$FILTER_WEB" == "true" ]] && expected+=("Web CI")
             [[ "$FILTER_EXAMPLES_GO" == "true" ]] && expected+=("Go examples CI")
             [[ "$FILTER_EXAMPLES_JAVA" == "true" ]] && expected+=("Java examples CI")

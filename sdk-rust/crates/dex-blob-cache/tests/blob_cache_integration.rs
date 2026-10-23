@@ -254,7 +254,8 @@ fn blob_cache_uses_private_file_permissions() {
 }
 
 fn config(directory: &Path, max_bytes: i64) -> BlobCacheConfig {
-    BlobCacheConfig::new(directory, max_bytes, 10_000).unwrap()
+    BlobCacheConfig::new(directory, max_bytes, 10_000)
+        .expect("the blob cache test fixture was initialized successfully")
 }
 
 fn path_for(root: &Path, blob_id: &str) -> PathBuf {
@@ -280,7 +281,11 @@ fn owned_bytes(root: &Path) -> u64 {
     regular_files(&root.join("tmp"))
         .into_iter()
         .chain(regular_files(&root.join("blobs")))
-        .map(|path| fs::metadata(path).unwrap().len())
+        .map(|path| {
+            fs::metadata(path)
+                .expect("the blob cache test fixture was initialized successfully")
+                .len()
+        })
         .sum()
 }
 
@@ -289,9 +294,13 @@ fn regular_files(root: &Path) -> Vec<PathBuf> {
         return Vec::new();
     }
     let mut files = Vec::new();
-    for entry in fs::read_dir(root).unwrap() {
-        let entry = entry.unwrap();
-        let file_type = entry.file_type().unwrap();
+    for entry in
+        fs::read_dir(root).expect("the blob cache test fixture was initialized successfully")
+    {
+        let entry = entry.expect("the blob cache test fixture was initialized successfully");
+        let file_type = entry
+            .file_type()
+            .expect("the blob cache test fixture was initialized successfully");
         if file_type.is_dir() {
             files.extend(regular_files(&entry.path()));
         } else if file_type.is_file() {
@@ -311,7 +320,7 @@ impl TestDirectory {
             directory: tempfile::Builder::new()
                 .prefix("dex-rust-blob-cache-")
                 .tempdir()
-                .unwrap(),
+                .expect("the blob cache test fixture was initialized successfully"),
         }
     }
 

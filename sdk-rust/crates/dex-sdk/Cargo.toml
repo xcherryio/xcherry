@@ -26,3 +26,6 @@ uuid.workspace = true
 tempfile.workspace = true
 tonic-prost.workspace = true
 trybuild = "1.0"
+
+[lints]
+workspace = true
