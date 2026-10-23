@@ -392,6 +392,7 @@ pub(crate) fn apply_method_effects(
     cursor: &mut RunCursor,
     step: &mut dexzd_protocol::dexzd::v1::StepExecutionRecord,
     effects: &MethodEffects<'_>,
+    now_micros: i64,
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
     if let Err(rejection) = apply_attribute_writes(
         transaction,
@@ -445,6 +446,11 @@ pub(crate) fn apply_method_effects(
         });
     }
     step.locals.sort_by(|left, right| left.key.cmp(&right.key));
-    crate::steps::wait_conditions::on_channels_changed(transaction, cursor, &changed_channels)?;
+    crate::steps::wait_conditions::on_channels_changed(
+        transaction,
+        cursor,
+        now_micros,
+        &changed_channels,
+    )?;
     Ok(Ok(()))
 }
