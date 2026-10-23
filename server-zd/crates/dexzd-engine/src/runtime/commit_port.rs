@@ -95,8 +95,7 @@ impl CommitTicket {
 impl CommitTicketSender {
     /// Resolves the ticket. A ticket whose waiter is gone is resolved silently.
     pub fn resolve(self, result: Result<CommittedCommand, CommitError>) {
-        // A dropped ticket means nobody waits for this command; the outcome stream still
-        // carries it, so there is nothing to report.
+        // Nobody waits; the outcome stream still carries the command.
         if self.sender.send(result).is_err() {
             tracing::trace!("commit ticket waiter is gone");
         }
