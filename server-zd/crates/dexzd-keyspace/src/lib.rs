@@ -15,7 +15,6 @@ mod identifiers;
 mod key_layout;
 mod node_identifier;
 mod partition_hash;
-pub mod row_keys;
 mod value_reference;
 
 pub use identifiers::{FlowHash, IdentifierError, PartitionId, RunId, TenantId, ValueId};

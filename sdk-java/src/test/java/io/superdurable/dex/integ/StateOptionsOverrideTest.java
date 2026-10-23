@@ -34,6 +34,7 @@ public final class StateOptionsOverrideTest {
 
     @Test
     void testStateOptionsOverrideWorkflow() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Step failure policies");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 WORKFLOW)) {
