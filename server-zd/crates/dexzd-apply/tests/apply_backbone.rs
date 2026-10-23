@@ -10,12 +10,16 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_apply::values::load_for_wire;
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::run_singleton_key;
-use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, RunTable, TenantId};
+use dexzd_keyspace::{
+    ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, ValueReference,
+    parse_run_key, run_prefix,
+};
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowStartOptions,
     FlowStatus, FlowTimeoutPolicy, IdReusePolicy, InvokeExecuteMethodResponse,
@@ -25,10 +29,10 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     AttributesSetCommand, CommandReply, FlowCommand, FlowStartCommand, FlowStopCommand,
-    FlowTimeoutTimerId, RetryBackoffTimerId, RunRecord, RunSettings, StepAttemptFailedCommand,
-    StepAttemptStartedCommand, StepInvocationKey, StepMethod, StepMethodCompletedCommand, TimerId,
-    TimersFiredCommand, command_reply, flow_command::Command, step_method_completed_command,
-    timer_id,
+    FlowTimeoutTimerId, RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage,
+    StepAttemptFailedCommand, StepAttemptStartedCommand, StepInvocationKey, StepMethod,
+    StepMethodCompletedCommand, TimerId, TimersFiredCommand, ValueBirthRecord, ValueGarbageRecord,
+    command_reply, flow_command::Command, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -149,15 +153,29 @@ impl Harness {
             apply_flow_command(&self.context, &self.state, &command).expect("apply succeeds");
         assert_eq!(outcome.writes, again.writes, "apply must be deterministic");
         self.state.commit(&outcome);
+        if !self.run_id.is_empty() && !outcome.writes.is_empty() {
+            assert_eq!(
+                self.run_record().storage.expect("run storage is accounted"),
+                self.recount_storage()
+            );
+        }
         outcome
     }
 
     fn start(&mut self, request: StartFlowRequest) -> ApplyOutcome {
+        self.start_with_settings(request, settings())
+    }
+
+    fn start_with_settings(
+        &mut self,
+        request: StartFlowRequest,
+        run_settings: RunSettings,
+    ) -> ApplyOutcome {
         let new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
         let outcome = self.apply(Command::FlowStart(FlowStartCommand {
             new_run_id: new_run_id.clone(),
             request: Some(request),
-            settings: Some(settings()),
+            settings: Some(run_settings),
             resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
             worker_target: Some(WorkerTarget {
                 is_pull_mode: true,
@@ -171,6 +189,12 @@ impl Harness {
         {
             self.run_id = reply.run_id.clone();
         }
+        if !self.run_id.is_empty() && !outcome.writes.is_empty() {
+            assert_eq!(
+                self.run_record().storage.expect("run storage is accounted"),
+                self.recount_storage()
+            );
+        }
         outcome
     }
 
@@ -183,6 +207,72 @@ impl Harness {
             .expect("memory reads never fail")
             .expect("the run record exists");
         RunRecord::decode(bytes.as_slice()).expect("the run record decodes")
+    }
+
+    fn set_attribute(
+        &mut self,
+        attribute_key: &str,
+        value: Value,
+        request_id: &str,
+    ) -> ApplyOutcome {
+        self.apply(Command::AttributesSet(AttributesSetCommand {
+            request: Some(SetAttributesRequest {
+                attributes: vec![AttributeWrite {
+                    key: attribute_key.to_owned(),
+                    value: Some(value),
+                    ..AttributeWrite::default()
+                }],
+                request_id: request_id.to_owned(),
+                ..SetAttributesRequest::default()
+            }),
+            hard_delete_objects: Vec::new(),
+            request_fingerprint: request_id.as_bytes().to_vec(),
+        }))
+    }
+
+    fn value_reference(&self, run_seq: u64, index_in_command: u32) -> String {
+        ValueReference {
+            run_id: RunId::from_slice(&self.run_id).expect("started run"),
+            value_id: ValueId {
+                run_seq,
+                index_in_command,
+            },
+        }
+        .to_string()
+    }
+
+    fn recount_storage(&self) -> RunStorageUsage {
+        let run_id = RunId::from_slice(&self.run_id).expect("started run");
+        let prefix = run_prefix(self.context.flow_hash, run_id);
+        let mut usage = RunStorageUsage::default();
+        let mut birth_bytes = 0;
+        for ((column_family, key), value) in &self.state.rows {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let table = parse_run_key(key).expect("valid run key").table;
+            match column_family {
+                ColumnFamily::Flow => {
+                    usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    if table == RunTable::ValueBirth {
+                        birth_bytes += ValueBirthRecord::decode(value.as_slice())
+                            .expect("valid birth row")
+                            .size_bytes;
+                    } else if table == RunTable::ValueGarbage {
+                        usage.superseded_value_bytes +=
+                            ValueGarbageRecord::decode(value.as_slice())
+                                .expect("valid garbage row")
+                                .size_bytes;
+                    }
+                }
+                ColumnFamily::History => {
+                    usage.history_bytes += (key.len() + value.len()) as u64;
+                }
+                _ => {}
+            }
+        }
+        usage.live_value_bytes = birth_bytes - usage.superseded_value_bytes;
+        usage
     }
 
     fn start_attempt(
@@ -576,5 +666,302 @@ fn large_attribute_values_go_to_the_value_table_and_reach_the_snapshot_as_refere
     assert!(
         is_error(&repeated.reply, 3),
         "a reused request ID with different content is rejected"
+    );
+}
+
+#[test]
+fn load_blobs_reads_live_values_and_omits_invalid_or_foreign_references() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let value = string_value(&"v".repeat(500));
+    harness.set_attribute("report", value.clone(), "set-1");
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    let reference = ValueReference {
+        run_id,
+        value_id: ValueId {
+            run_seq: 2,
+            index_in_command: 0,
+        },
+    }
+    .to_string();
+    assert_eq!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &reference
+        )
+        .expect("value lookup succeeds"),
+        Some(value)
+    );
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            "hard-delete/object"
+        )
+        .expect("invalid reference is omitted")
+        .is_none()
+    );
+    let other_run_id = RunId::from_slice(&[8; 16]).expect("valid run ID");
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            other_run_id,
+            &reference,
+        )
+        .expect("foreign reference is omitted")
+        .is_none()
+    );
+}
+
+#[test]
+fn superseded_values_revive_and_repeated_holder_writes_remain_live() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let first_value = string_value(&"a".repeat(500));
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", first_value.clone(), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        first_value.encoded_len() as u64
+    );
+    harness.set_attribute(
+        "report",
+        Value {
+            kind: Some(value::Kind::InternalBlobIdForStringValue(
+                first_reference.clone(),
+            )),
+        },
+        "set-3",
+    );
+    assert_eq!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            RunId::from_slice(&harness.run_id).expect("started run"),
+            &first_reference,
+        )
+        .expect("value lookup succeeds"),
+        Some(first_value)
+    );
+    let superseded_after_revival = harness.run_record().storage.unwrap().superseded_value_bytes;
+    harness.set_attribute(
+        "report",
+        Value {
+            kind: Some(value::Kind::InternalBlobIdForStringValue(first_reference)),
+        },
+        "set-4",
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        superseded_after_revival
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap(),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn byte_cap_advances_the_window_and_collects_old_values() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 0;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    let record = harness.run_record();
+    assert_eq!(record.window_start_seq, 4);
+    assert_eq!(record.storage.unwrap().superseded_value_bytes, 0);
+    assert_eq!(record.storage.unwrap(), harness.recount_storage());
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            RunId::from_slice(&harness.run_id).expect("started run"),
+            &first_reference,
+        )
+        .expect("collected reference is omitted")
+        .is_none()
+    );
+    assert_eq!(
+        harness
+            .state
+            .rows
+            .keys()
+            .filter(|(family, key)| {
+                *family == ColumnFamily::Flow
+                    && parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::ValueGarbage)
+            })
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn repeated_overwrites_retain_values_at_the_window_boundary() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 600;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_reference = harness.value_reference(2, 0);
+    let second_reference = harness.value_reference(3, 0);
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference,
+        )
+        .expect("window value remains readable")
+        .is_some()
+    );
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    assert_eq!(harness.run_record().window_start_seq, 4);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference,
+        )
+        .expect("old value lookup succeeds")
+        .is_none()
+    );
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &second_reference,
+        )
+        .expect("boundary value remains readable")
+        .is_some()
+    );
+    assert_eq!(
+        harness
+            .run_record()
+            .storage
+            .expect("run storage is accounted"),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn running_snapshot_holds_a_superseded_value_until_the_attempt_ends() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        0
+    );
+    harness.complete_wait_for("ChargeStep-1", 1);
+    assert!(harness.run_record().storage.unwrap().superseded_value_bytes > 0);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            RunId::from_slice(&harness.run_id).expect("started run"),
+            &first_reference,
+        )
+        .expect("window value remains readable")
+        .is_some()
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap(),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn client_state_limit_rejects_writes_without_changes() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_run_state_bytes = 10_000;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let before = harness.state.rows.clone();
+    let rejected = harness.set_attribute("report", string_value(&"x".repeat(9000)), "set-1");
+    assert!(is_error(&rejected.reply, 8));
+    assert!(rejected.writes.is_empty());
+    assert_eq!(harness.state.rows, before);
+}
+
+#[test]
+fn worker_state_limit_becomes_a_non_retryable_attempt_failure() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_run_state_bytes = 10_000;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    let outcome = harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "report".to_owned(),
+                    value: Some(string_value(&"x".repeat(9000))),
+                    ..AttributeWrite::default()
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert!(!is_error(&outcome.reply, 8));
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    assert!(record.close.unwrap().error_message.contains("run state"));
+    assert_eq!(record.storage.unwrap(), harness.recount_storage());
+}
+
+#[test]
+fn value_size_limit_rejects_client_writes_and_fails_worker_attempts() {
+    let mut client_harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_value_bytes = 100;
+    client_harness.start_with_settings(start_request("request-1"), run_settings);
+    let rejected = client_harness.set_attribute("report", string_value(&"x".repeat(500)), "set-1");
+    assert!(is_error(&rejected.reply, 3));
+    assert!(rejected.writes.is_empty());
+
+    let mut worker_harness = Harness::new("order-1");
+    worker_harness.start_with_settings(start_request("request-1"), run_settings);
+    worker_harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    worker_harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "report".to_owned(),
+                    value: Some(string_value(&"x".repeat(500))),
+                    ..AttributeWrite::default()
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    let record = worker_harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    assert!(
+        record
+            .close
+            .expect("failure has close details")
+            .error_message
+            .contains("value")
     );
 }

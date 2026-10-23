@@ -87,6 +87,9 @@ fn apply_plain_write(
         return Ok(Ok(()));
     }
     let value = write.value.clone().unwrap_or_default();
+    if let Some(previous) = &previous {
+        release_previous(transaction, cursor, previous, &holder)?;
+    }
     let limits = cursor.value_limits();
     let stored = match store_value(
         transaction,
@@ -99,9 +102,6 @@ fn apply_plain_write(
         Ok(stored) => stored,
         Err(rejection) => return Ok(Err(rejection)),
     };
-    if let Some(previous) = previous {
-        release_previous(transaction, cursor, &previous, &holder)?;
-    }
     cursor.rows.put_attribute(
         transaction,
         &write.key,

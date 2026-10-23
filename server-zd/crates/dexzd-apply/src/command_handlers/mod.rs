@@ -22,12 +22,17 @@ mod step_commands;
 pub(crate) use command_replies::unimplemented_reply;
 pub(crate) use command_scope::{CommandScope, HandlerOutput};
 
+use dexzd_protocol::dex::ErrorSubStatus;
 use dexzd_protocol::dexzd::v1::flow_command::Command;
-use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
+use dexzd_protocol::dexzd::v1::{
+    CommandReply, FlowCommand, StepAttemptFailedCommand, StepAttemptFailureKind,
+};
 
+use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::run_cursor::RunCursor;
 use crate::command_handlers::step_commands::{StepHandlerResult, apply_step_command};
-use crate::state_access::FlowTransaction;
+use crate::state_access::{FlowTransaction, RunRows};
+use crate::values::total_run_storage_bytes;
 use crate::{ApplyContext, ApplyError, ApplyOutcome, BehaviorVersion, FlowStateReader};
 
 /// Result of a command handler.
@@ -51,6 +56,7 @@ pub(crate) fn apply_command(
     };
     let scope = CommandScope::new(command, behavior_version);
     let mut transaction = FlowTransaction::new(state, *context);
+    let mut is_failure_reapply = false;
     let result = match body {
         Command::FlowStart(start) => flow_start::apply_flow_start(&mut transaction, &scope, start)?,
         Command::StepAttemptStarted(_)
@@ -63,6 +69,7 @@ pub(crate) fn apply_command(
                     StepHandlerResult::Done(result) => result,
                     StepHandlerResult::ApplyAsFailure(failure) => {
                         // Discard the result's partial writes and record the failure instead.
+                        is_failure_reapply = true;
                         transaction = FlowTransaction::new(state, *context);
                         let failure_command = Command::StepAttemptFailed(failure);
                         let cursor = match with_run(&transaction, &scope)? {
@@ -92,8 +99,62 @@ pub(crate) fn apply_command(
         },
     };
     Ok(match result {
-        HandlerResult::Applied(output) => output.into_outcome(transaction.into_writes()),
+        HandlerResult::Applied(output) => {
+            if let Some(run_id) = output.run_id {
+                let rows = RunRows::new(context.flow_hash, run_id);
+                let record = rows.run_record(&transaction)?.ok_or_else(|| {
+                    ApplyError::InvariantViolation {
+                        detail: "applied command did not write its run record".to_owned(),
+                    }
+                })?;
+                let usage =
+                    record
+                        .storage
+                        .as_ref()
+                        .ok_or_else(|| ApplyError::InvariantViolation {
+                            detail: "applied command did not account for run storage".to_owned(),
+                        })?;
+                let total_bytes = total_run_storage_bytes(usage);
+                let max_bytes = record.settings.unwrap_or_default().max_run_state_bytes;
+                if total_bytes > max_bytes
+                    && !is_failure_reapply
+                    && !matches!(body, Command::StepAttemptFailed(_))
+                {
+                    let detail = format!(
+                        "run state of {total_bytes} bytes exceeds the maximum of {max_bytes} bytes"
+                    );
+                    if let Some(failure) = storage_limit_attempt_failure(body, &detail) {
+                        let mut failure_command = command.clone();
+                        failure_command.command = Some(Command::StepAttemptFailed(failure));
+                        return apply_command(context, state, &failure_command, behavior_version);
+                    }
+                    return Ok(ApplyOutcome::rejected(error_reply(
+                        grpc_code::RESOURCE_EXHAUSTED,
+                        ErrorSubStatus::Uncategorized,
+                        detail,
+                    )));
+                }
+            }
+            output.into_outcome(transaction.into_writes())
+        }
         HandlerResult::Rejected(reply) => ApplyOutcome::rejected(reply),
+    })
+}
+
+fn storage_limit_attempt_failure(body: &Command, detail: &str) -> Option<StepAttemptFailedCommand> {
+    let (invocation, attempt) = match body {
+        Command::StepAttemptStarted(command) => (command.invocation.clone(), command.attempt),
+        Command::StepAttemptHeartbeat(command) => (command.invocation.clone(), command.attempt),
+        Command::StepMethodCompleted(command) => (command.invocation.clone(), command.attempt),
+        _ => return None,
+    };
+    Some(StepAttemptFailedCommand {
+        invocation,
+        attempt,
+        kind: StepAttemptFailureKind::ValueTooLarge as i32,
+        server_detail: detail.to_owned(),
+        is_non_retryable: true,
+        ..StepAttemptFailedCommand::default()
     })
 }
 
