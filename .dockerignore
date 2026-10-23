@@ -14,6 +14,7 @@ sdk-typescript/node_modules/
 sdk-rust/target/
 sdk-rust/coverage/
 examples/rust/target/
+s3mock/target/
 sdk-typescript/dist/
 sdk-java/publication-smoke-test/target/
 sdk-typescript/coverage/
