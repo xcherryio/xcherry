@@ -9,24 +9,23 @@
 //! Object storage deletions that precede a command: hard-delete objects replaced by a committed
 //! write, and a run's whole hard-delete prefix before its retention purge.
 
+use dexzd_keyspace::row_keys::HARD_DELETE_PENDING_OBJECT;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_table_prefix};
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, HardDeleteObjectRecord, HardDeleteObjectsDeletedCommand, RunPurgeCommand,
     command_reply, flow_command,
 };
 
-use crate::effects::effect_runtime::{EffectFlow, EffectUrgency};
 use crate::effects::hard_delete_objects::HardDeleteObjectOwner;
-use crate::effects::state_reads::{
-    HARD_DELETE_PENDING_OBJECT_TAG, decode_row, read_run_record, scan_all,
-};
+use crate::effects::state_reads::{decode_row, read_run_record, scan_all};
 use crate::effects::{EffectContext, EffectError};
+use crate::runtime::{CommitUrgency, FlowAddress};
 
 /// Deletes the run's hard-delete objects that wait for deletion, then proposes
 /// `HardDeleteObjectsDeleted`; repeats until committed state has none left.
 pub(crate) async fn delete_pending_hard_delete_objects(
     context: &EffectContext,
-    flow: &EffectFlow,
+    flow: &FlowAddress,
     run_id: RunId,
 ) -> Result<(), EffectError> {
     let run = context.run_location(flow, run_id);
@@ -37,10 +36,10 @@ pub(crate) async fn delete_pending_hard_delete_objects(
     };
     loop {
         let object_ids = {
-            let reader = context.runtime.flow_state_reader(flow, false);
+            let reader = context.runtime.flow_state_reader(flow, false)?;
             let mut prefix =
                 run_table_prefix(run.flow_hash, run.run_id, RunTable::HardDeleteObject);
-            prefix.push(HARD_DELETE_PENDING_OBJECT_TAG);
+            prefix.push(HARD_DELETE_PENDING_OBJECT);
             let mut object_ids = Vec::new();
             for (key, value) in scan_all(reader.as_ref(), ColumnFamily::Flow, &prefix)? {
                 let record: HardDeleteObjectRecord = decode_row("HardDeleteObject", &key, &value)?;
@@ -78,7 +77,7 @@ pub(crate) async fn delete_pending_hard_delete_objects(
             ..FlowCommand::default()
         };
         let reply = context
-            .propose_until_committed(flow, command, EffectUrgency::Prompt)
+            .propose_until_committed(flow, command, CommitUrgency::Prompt)
             .await
             .ok_or(EffectError::Stopped)?;
         if let Some(command_reply::Reply::Error(error)) = reply.reply {
@@ -91,12 +90,12 @@ pub(crate) async fn delete_pending_hard_delete_objects(
 /// Deletes the run's hard-delete object prefix, then proposes `RunPurge`.
 pub(crate) async fn purge_run(
     context: &EffectContext,
-    flow: &EffectFlow,
+    flow: &FlowAddress,
     run_id: RunId,
 ) -> Result<(), EffectError> {
     let run = context.run_location(flow, run_id);
     let is_purging = {
-        let reader = context.runtime.flow_state_reader(flow, false);
+        let reader = context.runtime.flow_state_reader(flow, false)?;
         read_run_record(reader.as_ref(), run)?.is_some_and(|record| record.is_purging)
     };
     if !is_purging {
@@ -122,7 +121,7 @@ pub(crate) async fn purge_run(
         ..FlowCommand::default()
     };
     let reply = context
-        .propose_until_committed(flow, command, EffectUrgency::Prompt)
+        .propose_until_committed(flow, command, CommitUrgency::Prompt)
         .await
         .ok_or(EffectError::Stopped)?;
     if let Some(command_reply::Reply::Error(error)) = reply.reply {

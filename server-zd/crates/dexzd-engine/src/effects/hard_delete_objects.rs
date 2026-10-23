@@ -14,15 +14,22 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use dexzd_apply::FlowStateReader;
 use dexzd_clock::WallClock;
-use dexzd_keyspace::{ColumnFamily, FlowHash, PartitionId, PartitionHasher, RunId, RunTable, TenantId, run_table_prefix};
+use dexzd_keyspace::{
+    ColumnFamily, FlowHash, PartitionHasher, PartitionId, RunId, RunTable, TenantId,
+    run_table_prefix,
+};
 use dexzd_object_store::{ObjectStore, WriteCondition, WriteOutcome};
 use dexzd_protocol::dex::{AttributeWrite, Value, value};
-use dexzd_protocol::dexzd::v1::{HardDeleteObjectRecord, HardDeleteObjectReference, PendingHardDeleteUpload};
+use dexzd_protocol::dexzd::v1::{
+    HardDeleteObjectRecord, HardDeleteObjectReference, PendingHardDeleteUpload,
+};
 use dexzd_storage::{LocalStore, WriteBatch};
+use futures::future::BoxFuture;
 use prost::Message;
 
 use crate::effects::EffectError;
 use crate::effects::state_reads::{RunLocation, decode_row, scan_all};
+use crate::runtime::{FlowAddress, HardDeleteReadError, HardDeleteValueReader};
 
 /// Key prefix of every hard-delete object, relative to the hard-delete object store.
 pub const HARD_DELETE_OBJECT_KEY_PREFIX: &str = "hard-delete/";
@@ -94,7 +101,10 @@ pub fn decode_hard_delete_value(object_key: &str, body: &[u8]) -> Result<Value, 
 /// delete the orphans.
 pub trait HardDeleteUploadLedger: Send + Sync + 'static {
     /// Durably records uploads before they start.
-    fn record_pending_uploads(&self, uploads: &[PendingHardDeleteUpload]) -> Result<(), EffectError>;
+    fn record_pending_uploads(
+        &self,
+        uploads: &[PendingHardDeleteUpload],
+    ) -> Result<(), EffectError>;
     /// Removes records once their command committed or their objects were deleted.
     fn clear_pending_uploads(&self, object_keys: &[String]) -> Result<(), EffectError>;
     /// Returns every recorded upload.
@@ -104,16 +114,18 @@ pub trait HardDeleteUploadLedger: Send + Sync + 'static {
 /// [`HardDeleteUploadLedger`] stored in the local store's node metadata row.
 pub struct NodeMetaUploadLedger {
     store: Arc<dyn LocalStore + Send + Sync>,
-    // Serializes read-modify-write of the single node metadata row.
-    node_meta_lock: Mutex<()>,
+    node_meta_lock: Arc<Mutex<()>>,
 }
 
 impl NodeMetaUploadLedger {
     /// Creates a ledger over `store`, which must already hold a node metadata row.
-    pub fn new(store: Arc<dyn LocalStore + Send + Sync>) -> Self {
+    ///
+    /// `node_meta_lock` must be held by every other read-modify-write of the node metadata
+    /// row, such as the snapshot service's, or one writer loses the other's update.
+    pub fn new(store: Arc<dyn LocalStore + Send + Sync>, node_meta_lock: Arc<Mutex<()>>) -> Self {
         Self {
             store,
-            node_meta_lock: Mutex::new(()),
+            node_meta_lock,
         }
     }
 
@@ -138,7 +150,10 @@ impl NodeMetaUploadLedger {
 }
 
 impl HardDeleteUploadLedger for NodeMetaUploadLedger {
-    fn record_pending_uploads(&self, uploads: &[PendingHardDeleteUpload]) -> Result<(), EffectError> {
+    fn record_pending_uploads(
+        &self,
+        uploads: &[PendingHardDeleteUpload],
+    ) -> Result<(), EffectError> {
         self.update(|pending| pending.extend_from_slice(uploads))
     }
 
@@ -177,6 +192,7 @@ pub struct HardDeleteObjects {
     store: Arc<dyn ObjectStore>,
     ledger: Arc<dyn HardDeleteUploadLedger>,
     clock: Arc<dyn WallClock>,
+    hasher: PartitionHasher,
 }
 
 impl HardDeleteObjects {
@@ -186,11 +202,22 @@ impl HardDeleteObjects {
         store: Arc<dyn ObjectStore>,
         ledger: Arc<dyn HardDeleteUploadLedger>,
         clock: Arc<dyn WallClock>,
+        hasher: PartitionHasher,
     ) -> Self {
         Self {
             store,
             ledger,
             clock,
+            hasher,
+        }
+    }
+
+    /// Returns the owner of `flow`'s run `run_id`.
+    pub fn owner_of(&self, flow: &FlowAddress, run_id: RunId) -> HardDeleteObjectOwner {
+        HardDeleteObjectOwner {
+            tenant_id: flow.tenant_id,
+            flow_hash: self.hasher.flow_hash(flow.tenant_id, &flow.flow_id),
+            run_id,
         }
     }
 
@@ -226,13 +253,19 @@ impl HardDeleteObjects {
         self.ledger.record_pending_uploads(&records)?;
         let mut uploads = HardDeleteUploads {
             references: Vec::with_capacity(planned.len()),
-            object_keys: records.into_iter().map(|record| record.object_key).collect(),
+            object_keys: records
+                .into_iter()
+                .map(|record| record.object_key)
+                .collect(),
         };
         for ((write_index, object_id, is_string_value), object_key) in
             planned.into_iter().zip(uploads.object_keys.clone())
         {
             let write = &mut writes[write_index];
-            let value = write.value.replace(hard_delete_placeholder_value()).unwrap_or_default();
+            let value = write
+                .value
+                .replace(hard_delete_placeholder_value())
+                .unwrap_or_default();
             let body = encode_hard_delete_value(&value);
             let size_bytes = body.len() as u64;
             let failure = match self
@@ -251,8 +284,10 @@ impl HardDeleteObjects {
                 return Err(failure);
             }
             uploads.references.push(HardDeleteObjectReference {
-                write_index: u32::try_from(write_index).map_err(|_| EffectError::InvariantViolation {
-                    detail: "attribute write index exceeds u32".to_owned(),
+                write_index: u32::try_from(write_index).map_err(|_| {
+                    EffectError::InvariantViolation {
+                        detail: "attribute write index exceeds u32".to_owned(),
+                    }
                 })?,
                 object_id,
                 size_bytes,
@@ -319,7 +354,11 @@ impl HardDeleteObjects {
             if listing.objects.is_empty() {
                 return Ok(());
             }
-            let keys: Vec<String> = listing.objects.into_iter().map(|object| object.key).collect();
+            let keys: Vec<String> = listing
+                .objects
+                .into_iter()
+                .map(|object| object.key)
+                .collect();
             self.store.delete_many(&keys).await?;
         }
     }
@@ -329,11 +368,13 @@ impl HardDeleteObjects {
         &self,
         partition: PartitionId,
         hasher: &PartitionHasher,
-        reader: &dyn FlowStateReader,
+        reader: Box<dyn FlowStateReader + Send>,
     ) -> Result<(), EffectError> {
         let mut finished_keys = Vec::new();
+        let mut orphan_keys = Vec::new();
         for upload in self.ledger.pending_uploads()? {
-            let Some((owner, object_id)) = HardDeleteObjectOwner::parse_object_key(&upload.object_key)
+            let Some((owner, object_id)) =
+                HardDeleteObjectOwner::parse_object_key(&upload.object_key)
             else {
                 tracing::warn!(object_key = %upload.object_key, "ignoring malformed pending hard-delete upload");
                 finished_keys.push(upload.object_key);
@@ -346,15 +387,18 @@ impl HardDeleteObjects {
                 flow_hash: owner.flow_hash,
                 run_id: owner.run_id,
             };
-            if !is_object_referenced(reader, run, &object_id)? {
-                self.delete_keys(std::slice::from_ref(&upload.object_key))
-                    .await?;
-                tracing::info!(object_key = %upload.object_key, "deleted orphan hard-delete upload");
+            if !is_object_referenced(reader.as_ref(), run, &object_id)? {
+                orphan_keys.push(upload.object_key.clone());
             }
             finished_keys.push(upload.object_key);
         }
+        drop(reader);
         if finished_keys.is_empty() {
             return Ok(());
+        }
+        self.delete_keys(&orphan_keys).await?;
+        for object_key in &orphan_keys {
+            tracing::info!(%object_key, "deleted orphan hard-delete upload");
         }
         self.ledger.clear_pending_uploads(&finished_keys)
     }
@@ -376,6 +420,24 @@ impl HardDeleteObjects {
             }
             Err(error) => tracing::warn!(%error, "deleting abandoned hard-delete uploads failed"),
         }
+    }
+}
+
+impl HardDeleteValueReader for HardDeleteObjects {
+    fn read_hard_delete_value<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+        run_id: RunId,
+        object: &'a HardDeleteObjectReference,
+    ) -> BoxFuture<'a, Result<Option<Value>, HardDeleteReadError>> {
+        Box::pin(async move {
+            self.read_value(self.owner_of(flow, run_id), &object.object_id)
+                .await
+                .map_err(|error| HardDeleteReadError {
+                    object_id: object.object_id.clone(),
+                    detail: error.to_string(),
+                })
+        })
     }
 }
 

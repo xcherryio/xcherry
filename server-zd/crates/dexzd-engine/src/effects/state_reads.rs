@@ -9,9 +9,13 @@
 //! Decoding of committed state rows and partition index keys that the effect runner reads.
 
 use dexzd_apply::FlowStateReader;
+use dexzd_keyspace::row_keys::{
+    decode_timer_index_key, ordered_timestamp_bytes, run_named_key, run_singleton_key,
+    timestamp_from_ordered_bytes,
+};
 use dexzd_keyspace::{
     ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, partition_index_prefix,
-    run_key, run_table_prefix,
+    run_table_prefix,
 };
 use dexzd_protocol::dexzd::v1::{RunRecord, StepExecutionRecord, TimerId};
 use prost::Message;
@@ -20,11 +24,6 @@ use crate::effects::EffectError;
 
 /// Largest number of rows read from one index or table in one scan.
 pub(crate) const SCAN_PAGE_ROWS: usize = 1024;
-
-/// Hard-delete object table key prefix of the current object of an Attribute key.
-pub(crate) const HARD_DELETE_CURRENT_OBJECT_TAG: u8 = 0x00;
-/// Hard-delete object table key prefix of an object waiting for deletion.
-pub(crate) const HARD_DELETE_PENDING_OBJECT_TAG: u8 = 0x01;
 
 /// A run identified by the keys that prefix its state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,7 +50,7 @@ pub(crate) fn read_run_record(
     reader: &dyn FlowStateReader,
     run: RunLocation,
 ) -> Result<Option<RunRecord>, EffectError> {
-    let key = run_key(run.flow_hash, run.run_id, RunTable::RunRecord, &[]);
+    let key = run_singleton_key(run.flow_hash, run.run_id, RunTable::RunRecord);
     reader
         .get(ColumnFamily::Flow, &key)?
         .map(|bytes| decode_row("RunRecord", &key, &bytes))
@@ -64,11 +63,11 @@ pub(crate) fn read_step_execution(
     run: RunLocation,
     step_execution_id: &str,
 ) -> Result<Option<StepExecutionRecord>, EffectError> {
-    let key = run_key(
+    let key = run_named_key(
         run.flow_hash,
         run.run_id,
         RunTable::StepExecution,
-        step_execution_id.as_bytes(),
+        step_execution_id,
     );
     reader
         .get(ColumnFamily::Flow, &key)?
@@ -139,21 +138,21 @@ pub(crate) struct TimerIndexEntry {
     pub(crate) timer_id: TimerId,
 }
 
-/// Parses `fire_at_micros(8) ‖ flow_hash(8) ‖ run_id(16) ‖ timer_id` after the index prefix.
+/// Parses a Timer index key of `partition`.
 pub(crate) fn parse_timer_index_key(
     partition: PartitionId,
     key: &[u8],
 ) -> Result<TimerIndexEntry, EffectError> {
-    let rest = strip_index_prefix(partition, IndexKind::Timer, key)?;
-    if rest.len() < 32 {
-        return Err(corrupt_index("Timer", key, "key is too short"));
-    }
-    let fire_at_micros = i64::from_be_bytes(rest[..8].try_into().expect("8 bytes"));
-    let run = parse_run_location(&rest[8..32]);
-    let timer_id = decode_row("Timer index", key, &rest[32..])?;
+    strip_index_prefix(partition, IndexKind::Timer, key)?;
+    let entry =
+        decode_timer_index_key(key).ok_or_else(|| corrupt_index("Timer", key, "malformed key"))?;
+    let timer_id = decode_row("Timer index", key, &entry.encoded_timer_id)?;
     Ok(TimerIndexEntry {
-        fire_at_micros,
-        run,
+        fire_at_micros: entry.fire_at_micros,
+        run: RunLocation {
+            flow_hash: entry.flow_hash,
+            run_id: entry.run_id,
+        },
         timer_id,
     })
 }
@@ -161,7 +160,7 @@ pub(crate) fn parse_timer_index_key(
 /// Returns the Timer index key of the first timer that fires at or after `fire_at_micros`.
 pub(crate) fn timer_index_start_key(partition: PartitionId, fire_at_micros: i64) -> Vec<u8> {
     let mut key = partition_index_prefix(partition, IndexKind::Timer);
-    key.extend_from_slice(&fire_at_micros.max(0).to_be_bytes());
+    key.extend_from_slice(&ordered_timestamp_bytes(fire_at_micros));
     key
 }
 
@@ -188,7 +187,7 @@ pub(crate) fn parse_retention_index_key(
     if rest.len() != 32 {
         return Err(corrupt_index("Retention", key, "key has the wrong length"));
     }
-    let delete_at_micros = i64::from_be_bytes(rest[..8].try_into().expect("8 bytes"));
+    let delete_at_micros = timestamp_from_ordered_bytes(rest[..8].try_into().expect("8 bytes"));
     Ok((delete_at_micros, parse_run_location(&rest[8..])))
 }
 

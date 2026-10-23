@@ -17,9 +17,10 @@ use dexzd_protocol::dexzd::v1::StepInvocationKey;
 use tokio_util::sync::CancellationToken;
 
 use crate::effects::dispatch::method_attempt::MethodAttempt;
-use crate::effects::effect_runtime::{EffectFlow, EffectRuntimeError, InvocationStartOutcome};
+use crate::effects::effect_runtime::{EffectRuntimeError, InvocationStartOutcome};
 use crate::effects::method_request::MethodAttemptKey;
 use crate::effects::{EffectContext, RouterMessage};
+use crate::runtime::FlowAddress;
 
 /// Task IDs of finished attempts remembered to ignore duplicate start effects.
 const FINISHED_TASK_ID_CAPACITY: usize = 4096;
@@ -46,7 +47,7 @@ struct StartingInvocation {
 pub(crate) struct DispatchScheduler {
     context: Arc<EffectContext>,
     starting: BTreeMap<MethodAttemptKey, StartingInvocation>,
-    parked: BTreeMap<RunId, BTreeMap<MethodAttemptKey, EffectFlow>>,
+    parked: BTreeMap<RunId, BTreeMap<MethodAttemptKey, FlowAddress>>,
     lock_release_counts: BTreeMap<RunId, u64>,
     running: BTreeMap<Vec<u8>, RunningAttempt>,
     finished_task_ids: BTreeSet<Vec<u8>>,
@@ -67,7 +68,7 @@ impl DispatchScheduler {
     }
 
     /// Starts a pending invocation unless a start of the same attempt is in flight.
-    pub(crate) fn start_pending_invocation(&mut self, flow: EffectFlow, key: MethodAttemptKey) {
+    pub(crate) fn start_pending_invocation(&mut self, flow: FlowAddress, key: MethodAttemptKey) {
         if self.starting.contains_key(&key) {
             return;
         }
@@ -84,7 +85,7 @@ impl DispatchScheduler {
     /// Records the answer of a lock-checked start.
     pub(crate) fn finish_start(
         &mut self,
-        flow: EffectFlow,
+        flow: FlowAddress,
         key: MethodAttemptKey,
         result: InvocationStartResult,
     ) {
@@ -121,7 +122,7 @@ impl DispatchScheduler {
     /// Runs a started attempt unless it already runs or ran.
     pub(crate) fn run_started_attempt(
         &mut self,
-        flow: EffectFlow,
+        flow: FlowAddress,
         key: MethodAttemptKey,
         task_id: Vec<u8>,
     ) {
@@ -182,7 +183,7 @@ impl DispatchScheduler {
 /// Asks the runtime to start the attempt, retrying while the runtime is unavailable.
 async fn try_start_until_answered(
     context: &EffectContext,
-    flow: &EffectFlow,
+    flow: &FlowAddress,
     key: &MethodAttemptKey,
 ) -> InvocationStartResult {
     let invocation: StepInvocationKey = key.invocation();

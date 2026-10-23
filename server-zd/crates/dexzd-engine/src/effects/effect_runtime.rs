@@ -9,28 +9,12 @@
 //! What the effect runner needs from the Flow runtime: proposals, lock-checked attempt starts,
 //! and state reads. The runtime registry implements [`EffectRuntime`].
 
-use async_trait::async_trait;
 use dexzd_apply::FlowStateReader;
-use dexzd_keyspace::{RunId, TenantId};
+use dexzd_keyspace::RunId;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, StepInvocationKey};
+use futures::future::BoxFuture;
 
-/// Identifies a Flow by tenant and Flow ID.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EffectFlow {
-    /// Tenant of the Flow.
-    pub tenant_id: TenantId,
-    /// The Flow ID.
-    pub flow_id: String,
-}
-
-/// How promptly a proposal must be sealed into a log batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectUrgency {
-    /// SYNC Step events, cross-Flow messages, and owner maintenance commands.
-    Prompt,
-    /// ASYNC Step events and heartbeats.
-    Batched,
-}
+use crate::runtime::{CommitError, CommitUrgency, FlowAddress};
 
 /// A proposal or read the runtime could not serve.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -49,8 +33,17 @@ pub enum EffectRuntimeError {
     },
 }
 
+impl From<CommitError> for EffectRuntimeError {
+    fn from(error: CommitError) -> Self {
+        match error {
+            CommitError::Unavailable { detail } => Self::Unavailable { detail },
+            CommitError::NodeStopping { detail } => Self::NodeStopping { detail },
+        }
+    }
+}
+
 /// Result of a lock-checked attempt start.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationStartOutcome {
     /// `StepAttemptStarted` was proposed; its `InvocationStarted` effect follows.
     Started,
@@ -61,46 +54,56 @@ pub enum InvocationStartOutcome {
 }
 
 /// Flow runtime operations used by the effect runner.
-#[async_trait]
 pub trait EffectRuntime: Send + Sync + 'static {
-    /// Proposes `command` to `flow` and waits until it is committed and applied, returning
-    /// apply's reply on committed state.
-    async fn propose_committed(
-        &self,
-        flow: &EffectFlow,
+    /// Proposes `command` to `flow` and waits until it is committed and applied.
+    ///
+    /// Returns apply's reply on committed state, or [`EffectRuntimeError`] when the command was
+    /// not committed.
+    fn propose_committed<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
         command: FlowCommand,
-        urgency: EffectUrgency,
-    ) -> Result<CommandReply, EffectRuntimeError>;
+        urgency: CommitUrgency,
+    ) -> BoxFuture<'a, Result<CommandReply, EffectRuntimeError>>;
 
     /// Proposes `command` to `flow` and returns once it is applied to the speculative overlay.
-    async fn propose_speculative(
-        &self,
-        flow: &EffectFlow,
+    ///
+    /// Returns the speculative reply, or [`EffectRuntimeError`] when nothing was proposed.
+    fn propose_speculative<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
         command: FlowCommand,
-        urgency: EffectUrgency,
-    ) -> Result<CommandReply, EffectRuntimeError>;
+        urgency: CommitUrgency,
+    ) -> BoxFuture<'a, Result<CommandReply, EffectRuntimeError>>;
 
-    /// Inside the Flow's actor: proposes `StepAttemptStarted` when every lock key of the
-    /// invocation is free in the overlay lock table and the in-memory RPC locks, and no earlier
-    /// waiter queues on any of its keys.
-    async fn try_start_invocation(
-        &self,
-        flow: &EffectFlow,
+    /// Inside the Flow's actor: proposes `StepAttemptStarted` with `task_id` when every lock
+    /// key of the invocation is free in the overlay lock table and the in-memory RPC locks, and
+    /// no earlier waiter queues on any of its keys. The urgency follows the method's durability.
+    ///
+    /// Returns whether the attempt started, or [`EffectRuntimeError`] when nothing was proposed.
+    fn try_start_invocation<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
         run_id: RunId,
         run_attempt: u32,
-        invocation: &StepInvocationKey,
+        invocation: &'a StepInvocationKey,
         attempt: u32,
         task_id: Vec<u8>,
-    ) -> Result<InvocationStartOutcome, EffectRuntimeError>;
+    ) -> BoxFuture<'a, Result<InvocationStartOutcome, EffectRuntimeError>>;
 
     /// Returns a read view of `flow`'s state, including uncommitted speculative commands when
     /// `include_speculative` is true.
+    ///
+    /// Returns [`EffectRuntimeError`] when the local store cannot open a view.
     fn flow_state_reader(
         &self,
-        flow: &EffectFlow,
+        flow: &FlowAddress,
         include_speculative: bool,
-    ) -> Box<dyn FlowStateReader + Send>;
+    ) -> Result<Box<dyn FlowStateReader + Send>, EffectRuntimeError>;
 
     /// Returns a consistent read view of committed state of every partition.
-    fn committed_state_reader(&self) -> Box<dyn FlowStateReader + Send>;
+    ///
+    /// Returns [`EffectRuntimeError`] when the local store cannot open a view.
+    fn committed_state_reader(&self)
+    -> Result<Box<dyn FlowStateReader + Send>, EffectRuntimeError>;
 }

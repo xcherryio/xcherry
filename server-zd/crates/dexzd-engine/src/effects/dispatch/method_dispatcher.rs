@@ -11,10 +11,10 @@
 
 use std::time::SystemTime;
 
-use async_trait::async_trait;
 use dexzd_worker_dispatch::{
     DispatchEvent, DispatchHandle, DispatchRequest, DispatchTaskPayload, WorkerDispatch,
 };
+use futures::future::BoxFuture;
 
 use crate::effects::method_request::MethodRequest;
 
@@ -45,10 +45,9 @@ pub struct MethodDispatchStartError {
 
 /// Ordered Worker frames and the single outcome of one dispatch. Dropping it cancels the
 /// Worker task.
-#[async_trait]
 pub trait MethodDispatchSession: Send {
     /// Returns the next Worker frame or the final outcome, then `None`.
-    async fn next_event(&mut self) -> Option<DispatchEvent>;
+    fn next_event(&mut self) -> BoxFuture<'_, Option<DispatchEvent>>;
     /// Asks the Worker to stop the task.
     fn cancel(&self);
 }
@@ -95,10 +94,9 @@ struct WorkerDispatchSession {
     handle: DispatchHandle,
 }
 
-#[async_trait]
 impl MethodDispatchSession for WorkerDispatchSession {
-    async fn next_event(&mut self) -> Option<DispatchEvent> {
-        self.handle.next().await
+    fn next_event(&mut self) -> BoxFuture<'_, Option<DispatchEvent>> {
+        Box::pin(self.handle.next())
     }
 
     fn cancel(&self) {

@@ -420,6 +420,7 @@ fn partition_positions(store: &impl LocalReadView) -> StorageResult<Vec<Partitio
             meta.applied.map(|applied| PartitionAppliedPosition {
                 partition: meta.partition,
                 applied: Some(applied),
+                applied_epoch: meta.applied_epoch,
             })
         })
         .collect())

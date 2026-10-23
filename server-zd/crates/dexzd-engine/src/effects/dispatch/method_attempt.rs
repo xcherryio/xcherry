@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use dexzd_keyspace::{ColumnFamily, RunTable, TenantId, run_key};
+use dexzd_keyspace::row_keys::hard_delete_current_key;
+use dexzd_keyspace::{ColumnFamily, TenantId};
 use dexzd_protocol::dex::{
     self, DispatchTaskErrorReason, PollWorkerTaskFrame, PullRouting, PullRoutingSource, Value,
     WorkerErrorResponse, invoke_execute_method_output, invoke_wait_for_method_output,
@@ -31,14 +32,14 @@ use crate::effects::dispatch::MethodDispatchRequest;
 use crate::effects::dispatch::worker_result::{
     MethodResult, WorkerResultCheck, check_worker_result,
 };
-use crate::effects::effect_runtime::{EffectFlow, EffectUrgency};
 use crate::effects::hard_delete_objects::HardDeleteObjectOwner;
 use crate::effects::method_request::{
     MethodAttemptKey, MethodAttemptState, MethodRequest, build_method_request,
-    read_method_attempt_state, resolve_method_durability,
+    heartbeat_checkpoint_value, read_method_attempt_state, resolve_method_durability,
 };
-use crate::effects::state_reads::{HARD_DELETE_CURRENT_OBJECT_TAG, RunLocation, decode_row};
+use crate::effects::state_reads::{RunLocation, decode_row};
 use crate::effects::{EffectContext, EffectError};
+use crate::runtime::{CommitUrgency, FlowAddress};
 
 const DEFAULT_METHOD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -46,7 +47,7 @@ const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 /// A method attempt task's inputs.
 pub(crate) struct MethodAttempt {
     pub(crate) context: Arc<EffectContext>,
-    pub(crate) flow: EffectFlow,
+    pub(crate) flow: FlowAddress,
     pub(crate) run: RunLocation,
     pub(crate) key: MethodAttemptKey,
     pub(crate) task_id: Vec<u8>,
@@ -97,7 +98,7 @@ impl MethodAttempt {
 
     async fn run_attempt(&self) -> Result<(), EffectError> {
         let state = {
-            let reader = self.context.runtime.flow_state_reader(&self.flow, true);
+            let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
             read_method_attempt_state(reader.as_ref(), self.run, &self.key, &self.task_id)?
         };
         let Some(state) = state else {
@@ -109,8 +110,8 @@ impl MethodAttempt {
             &state.step_execution,
             self.key.method,
         ) {
-            dex::StepDurability::Async => EffectUrgency::Batched,
-            _ => EffectUrgency::Prompt,
+            dex::StepDurability::Async => CommitUrgency::Batched,
+            _ => CommitUrgency::Prompt,
         };
         let hard_delete_values = self.read_hard_delete_values(&state).await?;
         let request = build_method_request(&state, &hard_delete_values)?;
@@ -168,15 +169,8 @@ impl MethodAttempt {
         &self,
         attribute_key: &str,
     ) -> Result<Option<String>, EffectError> {
-        let mut suffix = vec![HARD_DELETE_CURRENT_OBJECT_TAG];
-        suffix.extend_from_slice(attribute_key.as_bytes());
-        let key = run_key(
-            self.run.flow_hash,
-            self.run.run_id,
-            RunTable::HardDeleteObject,
-            &suffix,
-        );
-        let reader = self.context.runtime.flow_state_reader(&self.flow, false);
+        let key = hard_delete_current_key(self.run.flow_hash, self.run.run_id, attribute_key);
+        let reader = self.context.runtime.flow_state_reader(&self.flow, false)?;
         let Some(bytes) = reader.get(ColumnFamily::Flow, &key)? else {
             return Ok(None);
         };
@@ -196,7 +190,7 @@ impl MethodAttempt {
         &self,
         state: &MethodAttemptState,
         request: MethodRequest,
-        urgency: EffectUrgency,
+        urgency: CommitUrgency,
     ) -> AttemptEnd {
         let (method_timeout, heartbeat_timeout) = method_timeouts(state, self.key.method);
         let started = Instant::now();
@@ -226,17 +220,13 @@ impl MethodAttempt {
             }
         };
         // Matching may wait for a Worker before the Worker can heartbeat.
-        let mut heartbeat_deadline = started + self.context.config.dispatch_wait + heartbeat_timeout;
-        let mut checkpoints = CheckpointTracker::new(state.invocation().heartbeat_checkpoint.is_some(), {
-            let initial = build_method_request(state, &BTreeMap::new())
-                .ok()
-                .and_then(|request| match request {
-                    MethodRequest::WaitFor(request) => request.context,
-                    MethodRequest::Execute(request) => request.context,
-                })
-                .and_then(|context| context.last_heartbeat_value);
-            initial
-        });
+        let mut heartbeat_deadline =
+            started + self.context.config.dispatch_wait + heartbeat_timeout;
+        let mut checkpoints = CheckpointTracker {
+            last_proposed: heartbeat_checkpoint_value(state),
+            pending: None,
+            flush_at: None,
+        };
         loop {
             let flush_at = checkpoints.flush_at;
             tokio::select! {
@@ -289,7 +279,7 @@ impl MethodAttempt {
         }
     }
 
-    async fn propose_heartbeat(&self, checkpoint: Option<Value>, urgency: EffectUrgency) {
+    async fn propose_heartbeat(&self, checkpoint: Option<Value>, urgency: CommitUrgency) {
         let checkpoint = match checkpoint {
             Some(value) => step_attempt_heartbeat_command::Checkpoint::Value(value),
             None => step_attempt_heartbeat_command::Checkpoint::IsCleared(true),
@@ -317,17 +307,19 @@ impl MethodAttempt {
         state: &MethodAttemptState,
         frame: PollWorkerTaskFrame,
         app_worker_id: String,
-        urgency: EffectUrgency,
+        urgency: CommitUrgency,
     ) -> Result<(), EffectError> {
         let sticky_app_worker_id = state.run_record.sticky_app_worker_id.clone();
         let max_value_bytes = match state.run_record.settings.as_ref() {
             Some(settings) if settings.max_value_bytes > 0 => settings.max_value_bytes,
             _ => self.context.config.default_max_value_bytes,
         };
+        let flow_config = state.run_record.flow_config.clone().unwrap_or_default();
         let check = check_worker_result(
             frame,
             self.key.method,
             &self.context.validation_config,
+            &flow_config,
             max_value_bytes,
         );
         let mut result = match check {
@@ -367,24 +359,21 @@ impl MethodAttempt {
             .context
             .propose_until_committed(&self.flow, command, urgency)
             .await;
-        let is_committed = reply.as_ref().is_some_and(|reply| !reply.is_error());
-        if reply.is_some() || !uploads.is_empty() {
-            // Without a reply the node is stopping; recovery finishes the recorded uploads.
-            if reply.is_some() {
-                self.context
-                    .hard_delete_objects
-                    .finish_uploads(uploads, is_committed)
-                    .await?;
-            }
-        }
-        Ok(())
+        // Without a reply the node is stopping; recovery finishes the recorded uploads.
+        let Some(reply) = reply else {
+            return Ok(());
+        };
+        self.context
+            .hard_delete_objects
+            .finish_uploads(uploads, !reply.is_error())
+            .await
     }
 
     async fn propose_failure(
         &self,
         failure: AttemptFailure,
         sticky_app_worker_id: &str,
-        urgency: EffectUrgency,
+        urgency: CommitUrgency,
     ) {
         tracing::info!(
             run_id = %self.key.run_id,
@@ -519,14 +508,6 @@ struct CheckpointTracker {
 }
 
 impl CheckpointTracker {
-    fn new(has_checkpoint: bool, initial: CheckpointChange) -> Self {
-        Self {
-            last_proposed: if has_checkpoint { initial } else { None },
-            pending: None,
-            flush_at: None,
-        }
-    }
-
     fn observe(&mut self, change: CheckpointChange, batch_window: Duration) {
         if change == self.last_proposed {
             self.pending = None;
@@ -534,7 +515,8 @@ impl CheckpointTracker {
             return;
         }
         self.pending = Some(change);
-        self.flush_at.get_or_insert_with(|| Instant::now() + batch_window);
+        self.flush_at
+            .get_or_insert_with(|| Instant::now() + batch_window);
     }
 
     fn take_pending(&mut self) -> Option<CheckpointChange> {

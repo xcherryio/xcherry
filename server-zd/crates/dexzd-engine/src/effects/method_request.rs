@@ -15,13 +15,12 @@ use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::{RunId, ValueId, ValueReference};
 use dexzd_protocol::dex::{
     self, ChannelMessage, ChannelResult, ChannelValues, ConditionResults, Context, FlowResult,
-    InvokeExecuteMethodRequest, InvokeWaitForMethodRequest, Kv, StepCompletionOutput, Value,
-    value,
+    InvokeExecuteMethodRequest, InvokeWaitForMethodRequest, Kv, StepCompletionOutput, Value, value,
 };
 use dexzd_protocol::dexzd::v1::{
     ChannelMessageRecord, ConditionResultsRecord, HardDeleteObjectReference, RunRecord,
-    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepInvocationRecord,
-    StepMethod, StoredFlowResult, StoredKeyValue, StoredValue, stored_value,
+    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepInvocationRecord, StepMethod,
+    StoredFlowResult, StoredKeyValue, StoredValue, stored_value,
 };
 
 use crate::effects::EffectError;
@@ -129,17 +128,19 @@ pub(crate) fn read_method_attempt_state(
     if run_record.current_attempt != attempt_key.run_attempt {
         return Ok(None);
     }
-    let Some(step_execution) =
-        read_step_execution(reader, run, &attempt_key.step_execution_id)?
+    let Some(step_execution) = read_step_execution(reader, run, &attempt_key.step_execution_id)?
     else {
         return Ok(None);
     };
-    let is_running = step_execution.invocation.as_ref().is_some_and(|invocation| {
-        invocation.method == attempt_key.method
-            && invocation.phase == StepInvocationPhase::Running as i32
-            && invocation.attempt == attempt_key.attempt
-            && invocation.task_id == task_id
-    });
+    let is_running = step_execution
+        .invocation
+        .as_ref()
+        .is_some_and(|invocation| {
+            invocation.method == attempt_key.method
+                && invocation.phase == StepInvocationPhase::Running as i32
+                && invocation.attempt == attempt_key.attempt
+                && invocation.task_id == task_id
+        });
     if !is_running {
         return Ok(None);
     }
@@ -267,13 +268,15 @@ impl WireValues {
             None => Ok(None),
             Some(stored_value::Kind::InlineValue(value)) => Ok(Some(value.clone())),
             Some(stored_value::Kind::TableValue(table_value)) => {
-                let value_id = table_value.value_id.as_ref().ok_or_else(|| {
-                    EffectError::CorruptState {
-                        table: "StoredValue",
-                        key: self.run_id.to_string(),
-                        detail: "value-table reference has no value ID".to_owned(),
-                    }
-                })?;
+                let value_id =
+                    table_value
+                        .value_id
+                        .as_ref()
+                        .ok_or_else(|| EffectError::CorruptState {
+                            table: "StoredValue",
+                            key: self.run_id.to_string(),
+                            detail: "value-table reference has no value ID".to_owned(),
+                        })?;
                 let reference = ValueReference {
                     run_id: self.run_id,
                     value_id: ValueId {
@@ -304,7 +307,10 @@ impl WireValues {
         })
     }
 
-    fn channel_message(&self, message: &ChannelMessageRecord) -> Result<ChannelMessage, EffectError> {
+    fn channel_message(
+        &self,
+        message: &ChannelMessageRecord,
+    ) -> Result<ChannelMessage, EffectError> {
         Ok(ChannelMessage {
             channel_name: message.channel_name.clone(),
             value: self.optional(message.value.as_ref())?,
@@ -365,6 +371,15 @@ impl WireValues {
             error_message: result.error_message.clone(),
         })
     }
+}
+
+/// Returns the attempt's current heartbeat checkpoint as the Worker receives it.
+pub(crate) fn heartbeat_checkpoint_value(state: &MethodAttemptState) -> Option<Value> {
+    let run_id = RunId::from_slice(&state.run_record.run_id).ok()?;
+    WireValues { run_id }
+        .optional(state.invocation().heartbeat_checkpoint.as_ref())
+        .ok()
+        .flatten()
 }
 
 fn stored_kind(stored: Option<&StoredValue>) -> Option<&stored_value::Kind> {

@@ -10,7 +10,7 @@
 //! validation, and the per-run value size limit.
 
 use dexzd_protocol::dex::{
-    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, PollWorkerTaskFrame,
+    FlowConfig, InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, PollWorkerTaskFrame,
     PullRouting, Value, invoke_execute_method_output, invoke_wait_for_method_output,
     poll_worker_task_frame, value,
 };
@@ -70,6 +70,7 @@ pub(crate) fn check_worker_result(
     frame: PollWorkerTaskFrame,
     method: i32,
     validation_config: &ValidationConfig,
+    flow_config: &FlowConfig,
     max_value_bytes: u64,
 ) -> WorkerResultCheck {
     let result = match (method, frame.output) {
@@ -97,7 +98,11 @@ pub(crate) fn check_worker_result(
     };
     let validation = match &result {
         MethodResult::WaitFor(response) => {
-            validate_worker_response(WorkerResponse::WaitFor(Some(response)), validation_config)
+            let response = WorkerResponse::WaitFor {
+                response: Some(response),
+                parent_flow_config: flow_config,
+            };
+            validate_worker_response(response, validation_config)
         }
         MethodResult::Execute(response) => {
             validate_worker_response(WorkerResponse::Execute(Some(response)), validation_config)

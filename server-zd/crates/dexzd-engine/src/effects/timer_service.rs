@@ -19,11 +19,11 @@ use dexzd_protocol::dexzd::v1::{FlowCommand, TimerId, TimersFiredCommand, flow_c
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::effects::effect_runtime::{EffectFlow, EffectUrgency};
 use crate::effects::state_reads::{
     RunLocation, TimerIndexEntry, parse_timer_index_key, read_run_record, timer_index_start_key,
 };
 use crate::effects::{EffectContext, EffectError};
+use crate::runtime::{CommitUrgency, FlowAddress};
 
 /// The router's handles to the running partition timer services.
 pub(crate) struct TimerServices {
@@ -116,8 +116,9 @@ impl PartitionTimerService {
         let horizon_micros = now_micros.saturating_add(lookahead_micros);
         let entries = self.load_timers(horizon_micros)?;
         let now = Instant::now();
-        self.retry_after
-            .retain(|key, retry_at| *retry_at > now && entries.iter().any(|(entry_key, _)| entry_key == key));
+        self.retry_after.retain(|key, retry_at| {
+            *retry_at > now && entries.iter().any(|(entry_key, _)| entry_key == key)
+        });
 
         let mut runs: Vec<(RunLocation, Vec<TimerId>)> = Vec::new();
         let mut run_positions: BTreeMap<RunLocation, usize> = BTreeMap::new();
@@ -172,7 +173,7 @@ impl PartitionTimerService {
         &self,
         horizon_micros: i64,
     ) -> Result<Vec<(Vec<u8>, TimerIndexEntry)>, EffectError> {
-        let reader = self.context.runtime.committed_state_reader();
+        let reader = self.context.runtime.committed_state_reader()?;
         let start = partition_index_prefix(self.partition, IndexKind::Timer);
         let end = timer_index_start_key(self.partition, horizon_micros.saturating_add(1));
         reader
@@ -196,14 +197,14 @@ impl PartitionTimerService {
         timers: Vec<TimerId>,
     ) -> Result<(), EffectError> {
         let run_record = {
-            let reader = self.context.runtime.committed_state_reader();
+            let reader = self.context.runtime.committed_state_reader()?;
             read_run_record(reader.as_ref(), run)?
         };
         let Some(run_record) = run_record else {
             tracing::warn!(run_id = %run.run_id, "timer index refers to a missing run");
             return Ok(());
         };
-        let flow = EffectFlow {
+        let flow = FlowAddress {
             tenant_id: TenantId(run_record.tenant_id),
             flow_id: run_record.flow_id,
         };
@@ -211,11 +212,13 @@ impl PartitionTimerService {
             flow_id: flow.flow_id.clone(),
             run_id: run.run_id.as_bytes().to_vec(),
             tenant_id: flow.tenant_id.0,
-            command: Some(flow_command::Command::TimersFired(TimersFiredCommand { timers })),
+            command: Some(flow_command::Command::TimersFired(TimersFiredCommand {
+                timers,
+            })),
             ..FlowCommand::default()
         };
         self.context
-            .propose_until_committed(&flow, command, EffectUrgency::Prompt)
+            .propose_until_committed(&flow, command, CommitUrgency::Prompt)
             .await
             .ok_or(EffectError::Stopped)?;
         Ok(())

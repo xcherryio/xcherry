@@ -15,27 +15,25 @@ use dexzd_apply::{ApplyEffect, FlowStateReader};
 use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionId, TenantId, partition_index_prefix};
 use dexzd_protocol::dexzd::v1::{StepInvocationKey, StepInvocationPhase};
 
-use crate::effects::effect_runtime::EffectFlow;
 use crate::effects::state_reads::{
     RunLocation, parse_retention_index_key, parse_run_item_index_key, read_run_record,
     read_step_executions, scan_all,
 };
 use crate::effects::{EffectContext, EffectError, RouterMessage};
+use crate::runtime::FlowAddress;
 
 /// Rebuilds the partition's work and submits it to the router as committed effects.
 pub(crate) async fn rebuild_partition(
     context: &EffectContext,
     partition: PartitionId,
 ) -> Result<(), EffectError> {
-    {
-        let reader = context.runtime.committed_state_reader();
-        context
-            .hard_delete_objects
-            .recover_pending_uploads(partition, &context.hasher, reader.as_ref())
-            .await?;
-    }
-    let reader = context.runtime.committed_state_reader();
-    let mut work: BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)> = BTreeMap::new();
+    let reader = context.runtime.committed_state_reader()?;
+    context
+        .hard_delete_objects
+        .recover_pending_uploads(partition, &context.hasher, reader)
+        .await?;
+    let reader = context.runtime.committed_state_reader()?;
+    let mut work: BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)> = BTreeMap::new();
     rebuild_invocations(reader.as_ref(), partition, &mut work)?;
     rebuild_outbox_messages(reader.as_ref(), partition, &mut work)?;
     rebuild_hard_delete_deletions(reader.as_ref(), partition, &mut work)?;
@@ -56,7 +54,7 @@ pub(crate) async fn rebuild_partition(
 fn rebuild_invocations(
     reader: &dyn FlowStateReader,
     partition: PartitionId,
-    work: &mut BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)>,
+    work: &mut BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)>,
 ) -> Result<(), EffectError> {
     let prefix = partition_index_prefix(partition, IndexKind::ActiveWork);
     for (key, _) in scan_all(reader, ColumnFamily::PartitionIndex, &prefix)? {
@@ -98,13 +96,17 @@ fn rebuild_invocations(
 fn rebuild_outbox_messages(
     reader: &dyn FlowStateReader,
     partition: PartitionId,
-    work: &mut BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)>,
+    work: &mut BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)>,
 ) -> Result<(), EffectError> {
     let prefix = partition_index_prefix(partition, IndexKind::OutboxPending);
     let mut message_ids: BTreeMap<RunLocation, Vec<Vec<u8>>> = BTreeMap::new();
     for (key, _) in scan_all(reader, ColumnFamily::PartitionIndex, &prefix)? {
-        let (run, message_id) = parse_run_item_index_key(partition, IndexKind::OutboxPending, &key)?;
-        message_ids.entry(run).or_default().push(message_id.to_vec());
+        let (run, message_id) =
+            parse_run_item_index_key(partition, IndexKind::OutboxPending, &key)?;
+        message_ids
+            .entry(run)
+            .or_default()
+            .push(message_id.to_vec());
     }
     for (run, message_ids) in message_ids {
         if let Some((flow, _)) = flow_of_run(reader, run)? {
@@ -121,7 +123,7 @@ fn rebuild_outbox_messages(
 fn rebuild_hard_delete_deletions(
     reader: &dyn FlowStateReader,
     partition: PartitionId,
-    work: &mut BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)>,
+    work: &mut BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)>,
 ) -> Result<(), EffectError> {
     let prefix = partition_index_prefix(partition, IndexKind::HardDeletePending);
     let mut object_ids: BTreeMap<RunLocation, Vec<String>> = BTreeMap::new();
@@ -149,7 +151,7 @@ fn rebuild_hard_delete_deletions(
 fn rebuild_run_purges(
     reader: &dyn FlowStateReader,
     partition: PartitionId,
-    work: &mut BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)>,
+    work: &mut BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)>,
 ) -> Result<(), EffectError> {
     let prefix = partition_index_prefix(partition, IndexKind::Retention);
     for (key, _) in scan_all(reader, ColumnFamily::PartitionIndex, &prefix)? {
@@ -160,7 +162,7 @@ fn rebuild_run_purges(
         if !run_record.is_purging {
             continue;
         }
-        let flow = EffectFlow {
+        let flow = FlowAddress {
             tenant_id: TenantId(run_record.tenant_id),
             flow_id: run_record.flow_id,
         };
@@ -174,10 +176,10 @@ fn rebuild_run_purges(
 fn flow_of_run(
     reader: &dyn FlowStateReader,
     run: RunLocation,
-) -> Result<Option<(EffectFlow, u32)>, EffectError> {
+) -> Result<Option<(FlowAddress, u32)>, EffectError> {
     Ok(read_run_record(reader, run)?.map(|record| {
         (
-            EffectFlow {
+            FlowAddress {
                 tenant_id: TenantId(record.tenant_id),
                 flow_id: record.flow_id,
             },
@@ -187,9 +189,9 @@ fn flow_of_run(
 }
 
 fn add_effects(
-    work: &mut BTreeMap<RunLocation, (EffectFlow, Vec<ApplyEffect>)>,
+    work: &mut BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)>,
     run: RunLocation,
-    flow: EffectFlow,
+    flow: FlowAddress,
     effects: Vec<ApplyEffect>,
 ) {
     if effects.is_empty() {

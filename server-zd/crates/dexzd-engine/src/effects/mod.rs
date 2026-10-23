@@ -26,7 +26,7 @@ mod timer_service;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,9 +44,7 @@ use tokio_util::task::TaskTracker;
 pub use dispatch::{
     MethodDispatchRequest, MethodDispatchSession, MethodDispatchStartError, MethodDispatcher,
 };
-pub use effect_runtime::{
-    EffectFlow, EffectRuntime, EffectRuntimeError, EffectUrgency, InvocationStartOutcome,
-};
+pub use effect_runtime::{EffectRuntime, EffectRuntimeError, InvocationStartOutcome};
 pub use hard_delete_objects::{
     HARD_DELETE_OBJECT_KEY_PREFIX, HardDeleteObjectOwner, HardDeleteObjects,
     HardDeleteUploadLedger, HardDeleteUploads, NodeMetaUploadLedger, decode_hard_delete_value,
@@ -54,6 +52,7 @@ pub use hard_delete_objects::{
 };
 pub use method_request::MethodRequest;
 
+use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
 use method_request::MethodAttemptKey;
 use state_reads::RunLocation;
@@ -147,7 +146,7 @@ pub enum EffectError {
 /// Messages to the router task.
 pub(crate) enum RouterMessage {
     Effects {
-        flow: EffectFlow,
+        flow: FlowAddress,
         effects: Vec<ApplyEffect>,
         is_committed: bool,
     },
@@ -156,7 +155,7 @@ pub(crate) enum RouterMessage {
         reply: oneshot::Sender<Result<(), EffectError>>,
     },
     InvocationStartFinished {
-        flow: EffectFlow,
+        flow: FlowAddress,
         key: MethodAttemptKey,
         result: InvocationStartResult,
     },
@@ -212,7 +211,7 @@ impl EffectContext {
         }
     }
 
-    pub(crate) fn run_location(&self, flow: &EffectFlow, run_id: RunId) -> RunLocation {
+    pub(crate) fn run_location(&self, flow: &FlowAddress, run_id: RunId) -> RunLocation {
         RunLocation {
             flow_hash: self.hasher.flow_hash(flow.tenant_id, &flow.flow_id),
             run_id,
@@ -230,9 +229,9 @@ impl EffectContext {
     /// unavailable. Returns `None` when the node is stopping.
     pub(crate) async fn propose_until_committed(
         &self,
-        flow: &EffectFlow,
+        flow: &FlowAddress,
         command: FlowCommand,
-        urgency: EffectUrgency,
+        urgency: CommitUrgency,
     ) -> Option<CommandReply> {
         let mut backoff = self.retry_backoff();
         loop {
@@ -311,11 +310,22 @@ impl EffectRunner {
         (runner, tasks)
     }
 
-    /// Submits the effects of one command applied to `flow`. Never blocks.
-    ///
+    /// Rebuilds pending work of every run of `partition` from committed state: pending and
+    /// running invocations, timers, outbox messages, hard-delete deletions, retention purges,
+    /// and hard-delete uploads that never committed.
+    pub async fn rebuild_partition(&self, partition: PartitionId) -> Result<(), EffectError> {
+        let (reply, response) = oneshot::channel();
+        self.router
+            .send(RouterMessage::RebuildPartition { partition, reply })
+            .map_err(|_| EffectError::Stopped)?;
+        response.await.map_err(|_| EffectError::Stopped)?
+    }
+}
+
+impl RuntimeEffectSink for EffectRunner {
     /// Committed effects run all work. Speculative effects (ASYNC Steps) only start and run
     /// method attempts; the committed copy of the same effect is then ignored.
-    pub fn handle(&self, flow: &EffectFlow, effects: &[ApplyEffect], is_committed: bool) {
+    fn handle(&self, flow: &FlowAddress, effects: &[ApplyEffect], is_committed: bool) {
         if effects.is_empty() {
             return;
         }
@@ -327,17 +337,6 @@ impl EffectRunner {
         if self.router.send(message).is_err() {
             tracing::debug!("effect runner stopped; effects are rebuilt after restart");
         }
-    }
-
-    /// Rebuilds pending work of every run of `partition` from committed state: pending and
-    /// running invocations, timers, outbox messages, hard-delete deletions, retention purges,
-    /// and hard-delete uploads that never committed.
-    pub async fn rebuild_partition(&self, partition: PartitionId) -> Result<(), EffectError> {
-        let (reply, response) = oneshot::channel();
-        self.router
-            .send(RouterMessage::RebuildPartition { partition, reply })
-            .map_err(|_| EffectError::Stopped)?;
-        response.await.map_err(|_| EffectError::Stopped)?
     }
 }
 
@@ -436,7 +435,7 @@ impl EffectRouter {
         }
     }
 
-    fn route_effect(&mut self, flow: &EffectFlow, effect: ApplyEffect, is_committed: bool) {
+    fn route_effect(&mut self, flow: &FlowAddress, effect: ApplyEffect, is_committed: bool) {
         match effect {
             ApplyEffect::InvocationPending {
                 run_id,
@@ -455,7 +454,8 @@ impl EffectRouter {
                 task_id,
             } => {
                 let key = MethodAttemptKey::new(run_id, run_attempt, &invocation, attempt);
-                self.dispatch.run_started_attempt(flow.clone(), key, task_id);
+                self.dispatch
+                    .run_started_attempt(flow.clone(), key, task_id);
             }
             ApplyEffect::InvocationCanceled { task_id, .. } => {
                 self.dispatch.cancel_attempt(&task_id);
@@ -492,7 +492,7 @@ impl EffectRouter {
 
     /// Spawns `work` unless the same work already runs; it rereads committed state, so a
     /// duplicate request while it runs is covered by that read.
-    fn spawn_tracked(&mut self, flow: &EffectFlow, work: TrackedWork) {
+    fn spawn_tracked(&mut self, flow: &FlowAddress, work: TrackedWork) {
         if !self.tracked_work.insert(work.clone()) {
             return;
         }
@@ -518,13 +518,4 @@ impl EffectRouter {
             context.report(RouterMessage::WorkFinished { work });
         });
     }
-}
-
-/// Groups `(key, item)` pairs by key, preserving item order.
-pub(crate) fn group_by_key<K: Ord, V>(pairs: impl IntoIterator<Item = (K, V)>) -> BTreeMap<K, Vec<V>> {
-    let mut groups: BTreeMap<K, Vec<V>> = BTreeMap::new();
-    for (key, value) in pairs {
-        groups.entry(key).or_default().push(value);
-    }
-    groups
 }
