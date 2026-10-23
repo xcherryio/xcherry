@@ -157,6 +157,15 @@ async fn dispatch(store: Arc<Store>, request: Request<Incoming>) -> Result<S3Res
         S3Operation::CreateBucket { bucket } => {
             handlers::create_bucket(store, bucket, &parts.headers).await
         }
+        S3Operation::GetBucketLifecycleConfiguration { bucket } => {
+            handlers::get_bucket_lifecycle_configuration(store, bucket).await
+        }
+        S3Operation::PutBucketLifecycleConfiguration { bucket } => {
+            handlers::put_bucket_lifecycle_configuration(store, bucket, &parts.headers, body).await
+        }
+        S3Operation::DeleteBucketLifecycle { bucket } => {
+            handlers::delete_bucket_lifecycle(store, bucket).await
+        }
         S3Operation::GetObjectLockConfiguration { bucket } => {
             handlers::get_object_lock_configuration(store, bucket).await
         }

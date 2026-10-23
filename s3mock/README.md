@@ -22,6 +22,11 @@ Every flag also reads an environment variable: `S3MOCK_LISTEN_ADDRESS`, `S3MOCK_
 and `S3MOCK_DURABILITY`. Point an S3 client at `http://127.0.0.1:9000` with path-style addressing
 and any access key. Request signatures are not verified.
 
+Lifecycle rules run every `--lifecycle-scan-interval-seconds` (default 60; `0` disables).
+A pass removes everything due at the lifecycle clock, so expiration happens within one interval
+of its due time instead of on S3's daily schedule. Tests advance the lifecycle clock instead of
+waiting days; dates, tag and size filters, and transitions return `501 NotImplemented`.
+
 `--durability strict` (the default) flushes every acknowledged write with fsync, so it survives a
 crash. `--durability relaxed` skips fsync. It is much faster, but a crash may lose acknowledged
 writes, so do not use it for crash-recovery tests.
@@ -40,6 +45,7 @@ writes, so do not use it for crash-recovery tests.
 | Multipart | CreateMultipartUpload, UploadPart, CompleteMultipartUpload (with `If-None-Match` and `If-Match`), AbortMultipartUpload, ListParts, ListMultipartUploads |
 | Batch delete | DeleteObjects with Quiet mode and per-key results |
 | Object Lock | Get/PutObjectLockConfiguration and CreateBucket with Object Lock; retention is stored, never enforced |
+| Lifecycle | Put/Get/DeleteBucketLifecycle with prefix filters: `Expiration` `Days` and `ExpiredObjectDeleteMarker`, `NoncurrentVersionExpiration` (with `NewerNoncurrentVersions`), and `AbortIncompleteMultipartUpload` |
 
 Other operations and subresources return `501 NotImplemented`.
 
@@ -50,5 +56,7 @@ make test
 S3MOCK_CONFORMANCE_TARGET=aws make test
 ```
 
-The second command runs the conformance suite against real S3. It creates and deletes buckets
+The second command runs the conformance suite against real S3. The
+`S3mock AWS conformance` workflow runs it nightly once the repository variable
+`S3MOCK_CONFORMANCE_AWS_ROLE_ARN` names an IAM role that GitHub OIDC can assume. It creates and deletes buckets
 named `s3mock-conformance-<ULID>`.

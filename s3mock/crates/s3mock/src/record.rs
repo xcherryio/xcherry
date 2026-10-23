@@ -32,6 +32,34 @@ pub struct BucketRecord {
     /// Stored and returned only; s3mock never enforces retention.
     #[serde(default)]
     pub object_lock: Option<ObjectLockConfiguration>,
+    #[serde(default)]
+    pub lifecycle: Option<LifecycleConfiguration>,
+}
+
+/// The lifecycle rules of a bucket, applied by [`crate::Store::run_lifecycle`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleConfiguration {
+    pub rules: Vec<LifecycleRule>,
+}
+
+/// One lifecycle rule; s3mock supports prefix filters and day-based actions.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleRule {
+    pub id: Option<String>,
+    pub is_enabled: bool,
+    /// Applies to keys that start with this prefix; empty matches every key.
+    pub prefix: String,
+    /// Expires the current version this many days after it was written.
+    pub expiration_days: Option<u32>,
+    /// `Some(true)` removes a delete marker once it is the only version of its key; `Some(false)`
+    /// is an explicit no-op that S3 accepts.
+    pub expired_object_delete_marker: Option<bool>,
+    /// Removes a noncurrent version this many days after it became noncurrent.
+    pub noncurrent_expiration_days: Option<u32>,
+    /// Keeps this many newest noncurrent versions regardless of age.
+    pub newer_noncurrent_versions: Option<u32>,
+    /// Aborts multipart uploads this many days after they were initiated.
+    pub abort_incomplete_upload_days: Option<u32>,
 }
 
 /// Object Lock configuration of a bucket created with Object Lock enabled.

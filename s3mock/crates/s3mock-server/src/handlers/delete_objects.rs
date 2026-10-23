@@ -43,19 +43,19 @@ pub(crate) async fn delete_objects(
     body.verify_integrity(&headers, true)?;
     let document = parse_document(&body.bytes, "Delete")?;
     let is_quiet = document
-        .child_text("Quiet")
+        .child_text("Quiet")?
         .is_some_and(|quiet| quiet.trim().eq_ignore_ascii_case("true"));
     let targets = document
         .children_named("Object")
         .map(|object| {
             let key = object
-                .child_text("Key")
+                .child_text("Key")?
                 .ok_or_else(|| S3Error::malformed_xml("every Object needs a Key"))?
                 .to_owned();
             Ok(DeleteTarget {
                 key,
                 version_id: object
-                    .child_text("VersionId")
+                    .child_text("VersionId")?
                     .map(str::trim)
                     .filter(|version_id| !version_id.is_empty())
                     .map(str::to_owned),

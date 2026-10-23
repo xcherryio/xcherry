@@ -17,6 +17,8 @@ use s3mock_server::ServerHandle;
 use tempfile::TempDir;
 
 const TARGET_ENVIRONMENT_VARIABLE: &str = "S3MOCK_CONFORMANCE_TARGET";
+/// When set, every created bucket name is appended to this file so CI can clean up after failures.
+const BUCKET_LOG_ENVIRONMENT_VARIABLE: &str = "S3MOCK_CONFORMANCE_BUCKET_LOG";
 const REGION: &str = "us-east-1";
 
 /// The endpoint one test talks to, with the resources it must release.
@@ -99,6 +101,7 @@ impl ConformanceTarget {
             .await
             .expect("creating a uniquely named bucket succeeds");
         self.created_buckets.push(bucket.clone());
+        record_created_bucket(&bucket);
         bucket
     }
 
@@ -249,4 +252,17 @@ pub(crate) async fn read_body(
         .expect("the object body streams completely")
         .into_bytes()
         .to_vec()
+}
+
+fn record_created_bucket(bucket: &str) {
+    let Ok(log_path) = std::env::var(BUCKET_LOG_ENVIRONMENT_VARIABLE) else {
+        return;
+    };
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .expect("the bucket log is writable");
+    std::io::Write::write_all(&mut log, format!("{bucket}\n").as_bytes())
+        .expect("the bucket log is writable");
 }

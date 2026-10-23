@@ -50,6 +50,8 @@ pub enum StoreError {
     InvalidBucketState(String),
     #[error("bucket {0:?} has no Object Lock configuration")]
     ObjectLockConfigurationNotFound(String),
+    #[error("bucket {0:?} has no lifecycle configuration")]
+    NoSuchLifecycleConfiguration(String),
     #[error("multipart upload {upload_id:?} does not exist")]
     NoSuchUpload { upload_id: String },
     #[error("one or more of the specified parts could not be found or did not match: {0}")]

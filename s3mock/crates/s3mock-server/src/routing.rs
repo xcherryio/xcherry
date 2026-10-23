@@ -76,6 +76,15 @@ pub(crate) enum S3Operation {
     PutBucketVersioning {
         bucket: String,
     },
+    GetBucketLifecycleConfiguration {
+        bucket: String,
+    },
+    PutBucketLifecycleConfiguration {
+        bucket: String,
+    },
+    DeleteBucketLifecycle {
+        bucket: String,
+    },
     GetObjectLockConfiguration {
         bucket: String,
     },
@@ -215,6 +224,18 @@ fn route_bucket(
     query: QueryParameters,
 ) -> Result<S3Operation, S3Error> {
     match *method {
+        Method::PUT if query.contains("lifecycle") => {
+            query.require_only(&["lifecycle"], "PutBucketLifecycleConfiguration")?;
+            Ok(S3Operation::PutBucketLifecycleConfiguration { bucket })
+        }
+        Method::GET if query.contains("lifecycle") => {
+            query.require_only(&["lifecycle"], "GetBucketLifecycleConfiguration")?;
+            Ok(S3Operation::GetBucketLifecycleConfiguration { bucket })
+        }
+        Method::DELETE if query.contains("lifecycle") => {
+            query.require_only(&["lifecycle"], "DeleteBucketLifecycle")?;
+            Ok(S3Operation::DeleteBucketLifecycle { bucket })
+        }
         Method::PUT if query.contains("object-lock") => {
             query.require_only(&["object-lock"], "PutObjectLockConfiguration")?;
             Ok(S3Operation::PutObjectLockConfiguration { bucket })

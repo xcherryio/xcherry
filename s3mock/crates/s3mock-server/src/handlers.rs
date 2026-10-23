@@ -10,6 +10,7 @@
 
 mod bucket;
 mod delete_objects;
+mod lifecycle;
 mod listing;
 mod multipart;
 mod object;
@@ -21,6 +22,9 @@ pub(crate) use bucket::{
     put_object_lock_configuration,
 };
 pub(crate) use delete_objects::delete_objects;
+pub(crate) use lifecycle::{
+    delete_bucket_lifecycle, get_bucket_lifecycle_configuration, put_bucket_lifecycle_configuration,
+};
 pub(crate) use listing::{list_object_versions, list_objects_v2};
 pub(crate) use multipart::{
     abort_multipart_upload, complete_multipart_upload, create_multipart_upload,
