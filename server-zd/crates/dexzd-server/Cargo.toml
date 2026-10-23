@@ -17,6 +17,7 @@ clap.workspace = true
 dexzd-api.workspace = true
 dexzd-clock.workspace = true
 dexzd-engine.workspace = true
+dexzd-keyspace.workspace = true
 dexzd-object-store.workspace = true
 dexzd-storage.workspace = true
 humantime-serde.workspace = true
