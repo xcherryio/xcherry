@@ -208,6 +208,7 @@ public final class BasicTest {
 
     @Test
     void testSubFlowPartialResultsSurviveContinueAsNewWithoutRestart() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Continue-As-New");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 SUB_FLOW_CAN_PARENT_WORKFLOW,
@@ -355,6 +356,7 @@ public final class BasicTest {
 
     @Test
     void testWorkflowConfigOverride() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Continue-As-New");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 WORKFLOW)) {
@@ -418,6 +420,7 @@ public final class BasicTest {
 
     @Test
     void testProceedOnWaitFailureWorkflow() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Step failure policies");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 WAIT_FAILURE_WORKFLOW)) {
@@ -440,6 +443,7 @@ public final class BasicTest {
 
     @Test
     void testMovementOptionsDoNotMutateStepDefaults() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Step failure policies");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 IMMUTABLE_OPTIONS_WORKFLOW)) {

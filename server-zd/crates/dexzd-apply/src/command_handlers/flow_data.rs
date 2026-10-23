@@ -83,17 +83,15 @@ fn apply_plain_write(
     cursor: &mut RunCursor,
     write: &AttributeWrite,
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
+    // Release first: a write may name the value the Attribute already holds.
+    release_previous_attribute(transaction, cursor, &write.key)?;
+    if is_null_value(write.value.as_ref()) {
+        cursor.rows.delete_attribute(transaction, &write.key);
+        return Ok(Ok(()));
+    }
     let holder = ValueHolder::Attribute {
         attribute_key: write.key.clone(),
     };
-    let previous = cursor.rows.attribute(transaction, &write.key)?;
-    if is_null_value(write.value.as_ref()) {
-        if let Some(previous) = previous {
-            release_previous(transaction, cursor, &previous, &holder)?;
-            cursor.rows.delete_attribute(transaction, &write.key);
-        }
-        return Ok(Ok(()));
-    }
     let value = write.value.clone().unwrap_or_default();
     let limits = cursor.value_limits();
     let stored = match store_value(
@@ -107,9 +105,6 @@ fn apply_plain_write(
         Ok(stored) => stored,
         Err(rejection) => return Ok(Err(rejection)),
     };
-    if let Some(previous) = previous {
-        release_previous(transaction, cursor, &previous, &holder)?;
-    }
     cursor.rows.put_attribute(
         transaction,
         &write.key,
@@ -132,18 +127,13 @@ fn apply_hard_delete_write(
     write: &AttributeWrite,
     hard_delete_object: Option<&HardDeleteObjectReference>,
 ) -> Result<(), ApplyError> {
-    let flow_hash = cursor.rows.flow_hash;
-    let run_id = cursor.run_id();
-    let current_key = hard_delete_current_key(flow_hash, run_id, &write.key);
-    let previous: Option<HardDeleteObjectRecord> =
-        transaction.get_message(ColumnFamily::Flow, &current_key, "hard-delete object")?;
-    if let Some(previous) = previous.and_then(|record| record.object) {
-        schedule_hard_delete(transaction, cursor, previous);
-    }
+    release_previous_attribute(transaction, cursor, &write.key)?;
     // The owner replaced the value with an uploaded object; its reference means "set" even
     // though the value in the command is now empty.
     match (hard_delete_object, is_null_value(write.value.as_ref())) {
         (Some(object), _) => {
+            let current_key =
+                hard_delete_current_key(cursor.rows.flow_hash, cursor.run_id(), &write.key);
             transaction.put_message(
                 ColumnFamily::Flow,
                 current_key,
@@ -166,10 +156,7 @@ fn apply_hard_delete_write(
                 },
             );
         }
-        (None, true) => {
-            transaction.delete(ColumnFamily::Flow, current_key);
-            cursor.rows.delete_attribute(transaction, &write.key);
-        }
+        (None, true) => cursor.rows.delete_attribute(transaction, &write.key),
         (None, false) => {
             return Err(ApplyError::InvariantViolation {
                 detail: format!(
@@ -178,6 +165,37 @@ fn apply_hard_delete_write(
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+/// Releases what an Attribute holds before a write replaces or deletes it: the holder of a
+/// stored value, or a hard-delete object, which is scheduled for deletion.
+fn release_previous_attribute(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    attribute_key: &str,
+) -> Result<(), ApplyError> {
+    let Some(previous) = cursor.rows.attribute(transaction, attribute_key)? else {
+        return Ok(());
+    };
+    match previous.value {
+        Some(StoredValue {
+            kind: Some(stored_value::Kind::HardDeleteObject(object)),
+        }) => {
+            transaction.delete(
+                ColumnFamily::Flow,
+                hard_delete_current_key(cursor.rows.flow_hash, cursor.run_id(), attribute_key),
+            );
+            schedule_hard_delete(transaction, cursor, object);
+        }
+        Some(stored) => {
+            let holder = ValueHolder::Attribute {
+                attribute_key: attribute_key.to_owned(),
+            };
+            release_stored_value(transaction, cursor.rows, &stored, &holder, cursor.seq)?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -213,18 +231,6 @@ pub(crate) fn schedule_hard_delete(
         run_id,
         object_ids: vec![object.object_id],
     });
-}
-
-fn release_previous(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
-    previous: &AttributeRecord,
-    holder: &ValueHolder,
-) -> Result<(), ApplyError> {
-    if let Some(stored) = &previous.value {
-        release_stored_value(transaction, cursor.rows, stored, holder, cursor.seq)?;
-    }
-    Ok(())
 }
 
 /// Adds work queue permissions for written Attributes whose new value equals a mapped value.

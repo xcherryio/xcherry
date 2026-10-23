@@ -51,6 +51,7 @@ from dex import (
 
 from .basic_flow import BasicFlow
 from .environment import DexDevTestEnvironment
+from .flow_service_client import skip_if_server_zd
 from .shared import unique_id
 
 
@@ -398,6 +399,7 @@ async def _async_pull_worker_handles_flow() -> None:
 
 
 def test_subflow_can_override_push_parent_with_pull_child() -> None:
+    skip_if_server_zd("push Workers")
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
     observations: queue.Queue[tuple[str, str]] = queue.Queue()
     first_gate = threading.Event()

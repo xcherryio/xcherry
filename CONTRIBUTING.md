@@ -181,6 +181,8 @@ CI jobs use GitHub-hosted runners for pushes, pull requests, and manual runs. Li
 
 To run every CI workflow against the latest `main` commit, dispatch **Main CI (all)** in GitHub Actions or run `gh workflow run main-ci-all.yml --ref main`. The dispatcher starts every non-release CI workflow, then starts Check Gate to report their aggregate result.
 
+Check Gate CI is the only required check. It waits for every workflow whose paths a pull request touches. A pull request with the `ci:fast-merge` label does not wait for the Temporal/Cadence server, SDK, CLI, Web, and examples suites; they still run on the pull request and again on `main`, and a failure on `main` must be fixed forward right away. Generated Code CI, Server ZD CI, S3mock CI, Rust Rules CI, Copyright, CLA, Skills CI, and Release Tooling CI still block. Use the label only for changes that cannot affect the existing engine's behavior, such as additive protocol fields or test runner support for another engine.
+
 ## Releases (monorepo tags)
 
 Each component has its own version and tag prefix. Create a GitHub Release for that tag only — workflows filter on the prefix so one release does not publish another component.

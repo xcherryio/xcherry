@@ -467,6 +467,9 @@ func TestStepCancellation(t *testing.T) {
 	}
 	for _, scenario := range scenarios {
 		t.Run(string(scenario), func(t *testing.T) {
+			if scenario != cancelGlobalSelector && scenario != cancelSiblingSelector {
+				skipIfServerZD(t, "Step failure policies")
+			}
 			runCancellationScenario(t, scenario)
 		})
 	}
