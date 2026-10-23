@@ -22,7 +22,7 @@ use crate::subflow_workflow::{
     AbnormalSubFlowParent, AllSubFlowParent, AnySubFlowParent, ContinueAsNewSubFlowParent,
     SingleSubFlowParent, TimerSubFlowParent,
 };
-use crate::support::{DexDevTestEnvironment, flow_id, skip_timer_when_pending};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd, skip_timer_when_pending};
 use crate::timer_workflow::{TimerStep, TimerWorkflow};
 
 #[test]
@@ -124,6 +124,9 @@ fn test_subflow_default_reuse_restarts_failed_execution_across_parent_reset() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_subflow_partial_results_survive_continue_as_new_without_restart() {
+    if skip_if_server_zd("Continue-As-New") {
+        return;
+    }
     let parent = ContinueAsNewSubFlowParent::new();
     let id = flow_id("sub-flow-can");
     let completed_id = sub_flow_id(&id, &parent.start, 0);

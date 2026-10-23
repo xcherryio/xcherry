@@ -1,0 +1,17 @@
+allow-unwrap-in-tests = true
+allow-dbg-in-tests = false
+allow-print-in-tests = true
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "apply must be deterministic; use BTreeMap" },
+    { path = "std::collections::HashSet", reason = "apply must be deterministic; use BTreeSet" },
+    { path = "std::time::SystemTime", reason = "apply must not read a clock; use the command timestamp" },
+    { path = "std::time::Instant", reason = "apply must not read a clock; use the command timestamp" },
+]
+disallowed-methods = [
+    { path = "f64::powf", reason = "backoff must multiply step by step for deterministic results" },
+    { path = "f64::powi", reason = "backoff must multiply step by step for deterministic results" },
+    { path = "f32::powf", reason = "backoff must multiply step by step for deterministic results" },
+    { path = "f32::powi", reason = "backoff must multiply step by step for deterministic results" },
+    { path = "std::env::var", reason = "apply must not read configuration" },
+    { path = "std::env::var_os", reason = "apply must not read configuration" },
+]

@@ -2,6 +2,8 @@ name: Check Gate CI
 
 on:
   pull_request:
+    # Adding or removing the ci:fast-merge label changes the required workflows.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -76,6 +78,11 @@ jobs:
             s3mock:
               - 's3mock/**'
               - '.github/workflows/s3mock-ci.yml'
+            server_zd:
+              - 'server-zd/**'
+              - 's3mock/**'
+              - 'protos/**'
+              - '.github/workflows/server-zd-ci.yml'
             examples_typescript:
               - 'examples/typescript/**'
               - '.github/workflows/examples-typescript-ci.yml'
@@ -109,6 +116,7 @@ jobs:
               - 'sdk-python/**'
               - 'sdk-rust/**'
               - 's3mock/**'
+              - 'server-zd/**'
               - 'web/**'
               - 'examples/go/**'
               - 'examples/java/**'
@@ -140,11 +148,13 @@ jobs:
           FILTER_EXAMPLES_PYTHON: ${{ steps.filter.outputs.examples_python }}
           FILTER_EXAMPLES_RUST: ${{ steps.filter.outputs.examples_rust }}
           FILTER_S3MOCK: ${{ steps.filter.outputs.s3mock }}
+          FILTER_SERVER_ZD: ${{ steps.filter.outputs.server_zd }}
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
           FILTER_SKILLS: ${{ steps.filter.outputs.skills }}
           FILTER_COPYRIGHT: ${{ steps.filter.outputs.copyright }}
+          IS_FAST_MERGE: ${{ contains(github.event.pull_request.labels.*.name, 'ci:fast-merge') }}
         run: |
           set -euo pipefail
 
@@ -169,6 +179,7 @@ jobs:
               "TypeScript SDK CI"
               "S3mock CI"
               "Server CI"
+              "Server ZD CI"
               "Server All-in-One CI"
               "Web CI"
             )
@@ -185,11 +196,47 @@ jobs:
             [[ "$FILTER_EXAMPLES_PYTHON" == "true" ]] && expected+=("Python examples CI")
             [[ "$FILTER_EXAMPLES_RUST" == "true" ]] && expected+=("Rust examples CI")
             [[ "$FILTER_S3MOCK" == "true" ]] && expected+=("S3mock CI")
+            [[ "$FILTER_SERVER_ZD" == "true" ]] && expected+=("Server ZD CI")
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")
             [[ "$FILTER_SKILLS" == "true" ]] && expected+=("Skills CI")
             [[ "$FILTER_COPYRIGHT" == "true" ]] && expected+=("Copyright")
+          fi
+
+          # ci:fast-merge stops the existing Temporal/Cadence engine, SDK, CLI, Web, and examples
+          # suites from blocking the merge. They still run on the pull request and on main.
+          if [[ "$EVENT_NAME" == "pull_request" && "$IS_FAST_MERGE" == "true" ]]; then
+            non_blocking=(
+              "Blob Cache Go CI"
+              "Dex CLI CI"
+              "Go SDK CI"
+              "Java SDK CI"
+              "Python SDK CI"
+              "Rust SDK CI"
+              "TypeScript SDK CI"
+              "Server CI"
+              "Server All-in-One CI"
+              "Web CI"
+              "Go examples CI"
+              "Java examples CI"
+              "Python examples CI"
+              "Rust examples CI"
+              "TypeScript examples CI"
+            )
+            blocking=()
+            for name in "${expected[@]}"; do
+              is_non_blocking=false
+              for skipped in "${non_blocking[@]}"; do
+                [[ "$name" == "$skipped" ]] && is_non_blocking=true
+              done
+              if [[ "$is_non_blocking" == "true" ]]; then
+                echo "NOT WAITING $name (ci:fast-merge)"
+              else
+                blocking+=("$name")
+              fi
+            done
+            expected=("${blocking[@]}")
           fi
 
           if [[ ${#expected[@]} -eq 0 ]]; then

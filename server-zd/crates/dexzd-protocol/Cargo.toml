@@ -1,0 +1,38 @@
+[package]
+name = "dexzd-protocol"
+description = "Generated protobuf and gRPC bindings for the public Dex protocol and the server-zd internal formats"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+let_underscore_must_use = "warn"
+let_underscore_future = "warn"
+unused_result_ok = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+print_stdout = "allow"
+print_stderr = "allow"
+match_wildcard_for_single_variants = "warn"
