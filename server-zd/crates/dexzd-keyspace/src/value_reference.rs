@@ -68,7 +68,11 @@ impl FromStr for ValueReference {
         if !is_canonical_number(seq_text) || !is_canonical_number(index_text) {
             return Err(malformed());
         }
-        let run_seq = seq_text.parse().map_err(|_| malformed())?;
+        let run_seq: u64 = seq_text.parse().map_err(|_| malformed())?;
+        // Run seqs start at 1, so seq 0 can only come from a forged reference.
+        if run_seq == 0 {
+            return Err(malformed());
+        }
         let index_in_command = index_text.parse().map_err(|_| malformed())?;
         Ok(Self {
             run_id,
@@ -111,6 +115,7 @@ mod tests {
             "zd1|0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6|12",
             "zd1|0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6|012-0",
             "zd1|0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6|12-+1",
+            "zd1|0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6|0-0",
             "zd1|not-a-uuid|1-0",
             "zd2|0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6|1-0",
         ] {
