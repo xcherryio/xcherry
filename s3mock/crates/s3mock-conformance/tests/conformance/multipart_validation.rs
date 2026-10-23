@@ -199,3 +199,23 @@ async fn delete_objects_on_a_missing_bucket_is_no_such_bucket() {
     );
     target.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_full_object_checksum_with_a_part_count_suffix_is_rejected() {
+    let mut target = ConformanceTarget::connect().await;
+    let bucket = target.create_bucket().await;
+    let client = target.client.clone();
+    let (upload_id, part) = full_object_crc32_upload(&client, &bucket, "k").await;
+    let error = client
+        .complete_multipart_upload()
+        .bucket(&bucket)
+        .key("k")
+        .upload_id(&upload_id)
+        .checksum_crc32(format!("{}-999", crc32_base64(b"hello")))
+        .multipart_upload(CompletedMultipartUpload::builder().parts(part).build())
+        .send()
+        .await
+        .unwrap_err();
+    assert_eq!(error_code_and_status(&error).1, Some(400));
+    target.cleanup().await;
+}

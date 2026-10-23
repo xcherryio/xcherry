@@ -145,3 +145,17 @@ async fn truncated_documents_change_nothing() {
     assert!(exists(&server, "keep"));
     server.server.shutdown().await;
 }
+
+#[tokio::test]
+async fn mixed_content_is_rejected() {
+    let server = start_with_objects(&["foobar"]).await;
+    let (status, _) = send_with_md5(
+        &server,
+        "POST /raw?delete",
+        "<Delete><Object><Key>foo<Nested>x</Nested>bar</Key></Object></Delete>",
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(exists(&server, "foobar"));
+    server.server.shutdown().await;
+}

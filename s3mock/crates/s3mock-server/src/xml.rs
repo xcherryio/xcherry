@@ -149,6 +149,13 @@ pub(crate) fn parse_document(body: &[u8], root: &str) -> Result<XmlElement, S3Er
                         element.name
                     )));
                 }
+                // S3 documents never mix character data with child elements.
+                if !element.children.is_empty() && !element.text.trim().is_empty() {
+                    return Err(malformed(format!(
+                        "{} mixes text and elements",
+                        element.name
+                    )));
+                }
                 match open_elements.last_mut() {
                     Some(parent) => parent.children.push(element),
                     None => document = Some(element),
@@ -164,10 +171,14 @@ pub(crate) fn parse_document(body: &[u8], root: &str) -> Result<XmlElement, S3Er
                     None => return Err(malformed("text outside the root element".to_owned())),
                 }
             }
-            Event::CData(cdata) => match open_elements.last_mut() {
-                Some(element) => element.text.push_str(&String::from_utf8_lossy(&cdata)),
-                None => return Err(malformed("CDATA outside the root element".to_owned())),
-            },
+            Event::CData(cdata) => {
+                let text = std::str::from_utf8(&cdata)
+                    .map_err(|_| malformed("CDATA is not valid UTF-8".to_owned()))?;
+                match open_elements.last_mut() {
+                    Some(element) => element.text.push_str(text),
+                    None => return Err(malformed("CDATA outside the root element".to_owned())),
+                }
+            }
             Event::Eof => {
                 if !open_elements.is_empty() {
                     return Err(malformed(

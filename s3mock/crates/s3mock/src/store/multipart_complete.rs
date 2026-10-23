@@ -121,15 +121,19 @@ impl Store {
                     checksum.algorithm.s3_name()
                 )));
             }
-            let without_part_count = |value: &str| {
-                value
-                    .trim()
-                    .split('-')
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned()
+            // A composite value may omit its `-N` suffix; a full-object value must match exactly.
+            let expected_value = expected_value.trim();
+            let is_match = match checksum.checksum_type {
+                ChecksumType::FullObject => expected_value == checksum.base64_value,
+                ChecksumType::Composite => {
+                    let (base64_value, _) = checksum
+                        .base64_value
+                        .split_once('-')
+                        .expect("composite checksums end with a part count");
+                    expected_value == checksum.base64_value || expected_value == base64_value
+                }
             };
-            if without_part_count(expected_value) != without_part_count(&checksum.base64_value) {
+            if !is_match {
                 return Err(StoreError::BadDigest {
                     algorithm: algorithm.s3_name(),
                 });
