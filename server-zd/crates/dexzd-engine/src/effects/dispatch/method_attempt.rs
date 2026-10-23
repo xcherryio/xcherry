@@ -470,6 +470,10 @@ fn attempt_end(outcome: DispatchOutcome) -> AttemptEnd {
             ))
         }
         DispatchOutcome::Cancelled => AttemptEnd::Canceled,
+        DispatchOutcome::ServerClosing => AttemptEnd::Failure(AttemptFailure::server(
+            StepAttemptFailureKind::DispatchError,
+            "matching server is closing",
+        )),
         DispatchOutcome::DeadlineExceeded => AttemptEnd::Failure(AttemptFailure::server(
             StepAttemptFailureKind::MethodTimeout,
             "method deadline elapsed before the Worker result",

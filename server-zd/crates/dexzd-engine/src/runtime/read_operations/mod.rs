@@ -145,6 +145,9 @@ impl FlowRuntimeRegistry {
             start_time: Some(timestamp_from_micros(record.started_at_micros)),
             close_time: (record.closed_at_micros > 0)
                 .then(|| timestamp_from_micros(record.closed_at_micros)),
+            run_attempt: i32::try_from(record.current_attempt).map_err(|_| RuntimeError::Internal {
+                        detail: "run attempt exceeds i32".to_owned(),
+                    })?,
         })
     }
 
