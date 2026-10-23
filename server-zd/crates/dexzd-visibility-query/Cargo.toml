@@ -1,6 +1,6 @@
 [package]
 name = "dexzd-visibility-query"
-description = "Parser, syntax tree, and type checker for the visibility query language accepted by server-zd SearchFlows"
+description = "Parser, validated syntax tree, and evaluator for server-zd SearchFlows visibility queries"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
