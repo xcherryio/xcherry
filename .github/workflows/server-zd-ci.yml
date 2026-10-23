@@ -115,11 +115,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+        run: rustup toolchain install 1.97.1 --profile minimal
       - name: Install libclang for the RocksDB bindings
         run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server-zd
+          shared-key: server-zd-paradedb
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Compare ParadeDB and builtin search
         run: cargo test -p dexzd-search paradedb::integration::paradedb_matches_builtin_evaluator -- --exact
