@@ -56,5 +56,7 @@ make test
 S3MOCK_CONFORMANCE_TARGET=aws make test
 ```
 
-The second command runs the conformance suite against real S3. It creates and deletes buckets
+The second command runs the conformance suite against real S3. The
+`S3mock AWS conformance` workflow runs it nightly once the repository variable
+`S3MOCK_CONFORMANCE_AWS_ROLE_ARN` names an IAM role that GitHub OIDC can assume. It creates and deletes buckets
 named `s3mock-conformance-<ULID>`.

@@ -1,0 +1,46 @@
+name: S3mock AWS conformance
+
+# Runs the s3mock conformance suite against real S3 so s3mock behavior stays comparable with AWS.
+# Configure the repository variable S3MOCK_CONFORMANCE_AWS_ROLE_ARN (an IAM role trusted for
+# GitHub OIDC that may create and delete buckets named s3mock-conformance-*) to enable it.
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: s3mock-aws-conformance
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RUSTUP_TOOLCHAIN: "1.97.1"
+
+jobs:
+  aws:
+    name: Conformance suite against AWS S3
+    if: vars.S3MOCK_CONFORMANCE_AWS_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: s3mock
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.S3MOCK_CONFORMANCE_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Run the conformance suite against AWS S3
+        env:
+          S3MOCK_CONFORMANCE_TARGET: aws
+          AWS_REGION: us-east-1
+        run: cargo test --locked -p s3mock-conformance -- --test-threads=4
