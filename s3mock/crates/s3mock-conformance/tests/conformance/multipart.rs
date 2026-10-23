@@ -466,19 +466,21 @@ async fn aborted_and_unknown_upload_ids_return_no_such_upload() {
             error_code_and_status(&error),
             (Some("NoSuchUpload".to_owned()), Some(404))
         );
-        let error = client
-            .abort_multipart_upload()
-            .bucket(&bucket)
-            .key("aborted")
-            .upload_id(missing_id)
-            .send()
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error_code_and_status(&error),
-            (Some("NoSuchUpload".to_owned()), Some(404))
-        );
     }
+    // Aborting an aborted upload again succeeds; an ID that never existed is NoSuchUpload (verified against AWS S3).
+    abort(&client, &bucket, "aborted", &upload_id).await;
+    let error = client
+        .abort_multipart_upload()
+        .bucket(&bucket)
+        .key("aborted")
+        .upload_id("nonexistent-upload-id")
+        .send()
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_code_and_status(&error),
+        (Some("NoSuchUpload".to_owned()), Some(404))
+    );
     assert!(
         client
             .list_multipart_uploads()

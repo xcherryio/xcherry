@@ -158,10 +158,13 @@ async fn checksummed_completion_requires_parts_to_start_at_one() {
         .send()
         .await
         .unwrap_err();
-    assert_eq!(
-        error_code_and_status(&error),
+    // s3mock follows the documented InvalidPartOrder; AWS S3 was observed answering 500 InternalError.
+    let expected = if target.is_s3mock() {
         (Some("InvalidPartOrder".to_owned()), Some(400))
-    );
+    } else {
+        (Some("InternalError".to_owned()), Some(500))
+    };
+    assert_eq!(error_code_and_status(&error), expected);
     client
         .abort_multipart_upload()
         .bucket(&bucket)

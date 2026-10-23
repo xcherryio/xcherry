@@ -13,7 +13,10 @@ use std::net::Ipv4Addr;
 
 use redb::{ReadableDatabase, ReadableTable};
 
-use super::{BUCKETS, PARTS, Store, UPLOADS, VERSIONS, decode_json, encode_json, require_bucket};
+use super::{
+    ABORTED_UPLOADS, BUCKETS, PARTS, Store, UPLOADS, VERSIONS, decode_json, encode_json,
+    require_bucket,
+};
 use crate::error::StoreError;
 use crate::key_codec::{encode_bucket_prefix, prefix_successor};
 use crate::record::{
@@ -73,7 +76,7 @@ impl Store {
             }
             buckets.remove(bucket)?;
             // In-progress multipart uploads end with the bucket; their files go with its directory.
-            for table in [UPLOADS, PARTS] {
+            for table in [UPLOADS, PARTS, ABORTED_UPLOADS] {
                 let mut uploads_or_parts = transaction.open_table(table)?;
                 let mut keys = Vec::new();
                 for entry in uploads_or_parts.range(bucket_prefix.as_slice()..end.as_slice())? {
