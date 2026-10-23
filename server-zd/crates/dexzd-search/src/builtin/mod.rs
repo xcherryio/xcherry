@@ -33,11 +33,21 @@ use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 /// Default maximum number of indexed documents examined by one builtin search.
 pub const DEFAULT_SCAN_BUDGET: usize = 100_000;
+/// Default SearchFlows page size when the caller supplies zero.
+pub const DEFAULT_PAGE_SIZE: usize = 1_000;
+/// Largest SearchFlows page the builtin backend will allocate.
+pub const MAX_PAGE_SIZE: usize = 1_000;
+
+/// Opens a consistent committed state view for each SearchFlows request.
+pub trait CommittedSearchViewProvider: Send + Sync {
+    /// Returns one view that remains consistent through all partition scans of a search.
+    fn committed_view(&self) -> Result<Arc<dyn FlowStateReader + Send + Sync>, SearchError>;
+}
 
 /// Searches all local partitions through one committed state view.
 #[derive(Clone)]
 pub struct BuiltinSearchBackend {
-    reader: Arc<dyn FlowStateReader + Send + Sync>,
+    view_provider: Arc<dyn CommittedSearchViewProvider>,
     partition_count: u16,
     scan_budget: usize,
 }
@@ -45,15 +55,15 @@ pub struct BuiltinSearchBackend {
 impl BuiltinSearchBackend {
     /// Creates a backend using the default 100,000-document scan budget.
     pub fn new(
-        reader: Arc<dyn FlowStateReader + Send + Sync>,
+        view_provider: Arc<dyn CommittedSearchViewProvider>,
         partition_count: u16,
     ) -> Result<Self, SearchError> {
-        Self::with_scan_budget(reader, partition_count, DEFAULT_SCAN_BUDGET)
+        Self::with_scan_budget(view_provider, partition_count, DEFAULT_SCAN_BUDGET)
     }
 
     /// Creates a backend with a specified document scan budget.
     pub fn with_scan_budget(
-        reader: Arc<dyn FlowStateReader + Send + Sync>,
+        view_provider: Arc<dyn CommittedSearchViewProvider>,
         partition_count: u16,
         scan_budget: usize,
     ) -> Result<Self, SearchError> {
@@ -63,18 +73,13 @@ impl BuiltinSearchBackend {
             ));
         }
         Ok(Self {
-            reader,
+            view_provider,
             partition_count,
             scan_budget,
         })
     }
 
     fn search_committed(&self, request: OwnedSearchRequest) -> Result<SearchPage, SearchError> {
-        if request.page_size == 0 {
-            return Err(SearchError::InvalidArgument(
-                "SearchFlows page size must be positive".into(),
-            ));
-        }
         let query = parse_and_check(&request.query, &request.field_registry)
             .map_err(|error| SearchError::InvalidArgument(error.to_string()))?;
         let cursor = request
@@ -83,8 +88,12 @@ impl BuiltinSearchBackend {
             .map(|token| PagePosition::decode(token, request.tenant_id, &request.query))
             .transpose()?;
         let flow_type = pinned_flow_type(query.expression());
+        let committed_view = self.view_provider.committed_view()?;
         let mut partition_matches = Vec::with_capacity(usize::from(self.partition_count));
-        let mut scanned = 0;
+        let mut scan_state = ScanState {
+            committed_view: committed_view.as_ref(),
+            scanned: 0,
+        };
         for partition_number in 0..self.partition_count {
             let mut matches = self.scan_partition(
                 PartitionId(partition_number),
@@ -92,7 +101,7 @@ impl BuiltinSearchBackend {
                 flow_type,
                 &query,
                 cursor.as_ref(),
-                &mut scanned,
+                &mut scan_state,
             )?;
             matches.sort_by(|left, right| compare_documents(&query, left, right));
             partition_matches.push(matches);
@@ -113,7 +122,7 @@ impl BuiltinSearchBackend {
         flow_type: Option<&str>,
         query: &Query,
         cursor: Option<&PagePosition>,
-        scanned: &mut usize,
+        scan_state: &mut ScanState<'_>,
     ) -> Result<Vec<IndexedDocument>, SearchError> {
         let index_kind = if flow_type.is_some() {
             IndexKind::FlowList
@@ -129,9 +138,9 @@ impl BuiltinSearchBackend {
         let identity_offset = prefix.len() + usize::from(flow_type.is_some());
         let mut matches = Vec::new();
         loop {
-            let remaining = self.scan_budget - *scanned;
-            let index_rows = self
-                .reader
+            let remaining = self.scan_budget - scan_state.scanned;
+            let index_rows = scan_state
+                .committed_view
                 .scan(
                     ColumnFamily::PartitionIndex,
                     &start,
@@ -148,7 +157,7 @@ impl BuiltinSearchBackend {
             if index_rows.is_empty() {
                 break;
             }
-            *scanned += index_rows.len();
+            scan_state.scanned += index_rows.len();
             let last_key = index_rows.last().expect("nonempty index batch").0.clone();
             if last_key < start {
                 return Err(SearchError::Internal("search index scan regressed".into()));
@@ -162,8 +171,8 @@ impl BuiltinSearchBackend {
                 let (flow_hash, run_id) = decode_flow_run_after_prefix(&index_key, identity_offset)
                     .ok_or_else(|| SearchError::Internal("malformed search index key".into()))?;
                 let document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
-                let encoded = self
-                    .reader
+                let encoded = scan_state
+                    .committed_view
                     .get(ColumnFamily::Flow, &document_key)
                     .map_err(|error| SearchError::Unavailable(error.to_string()))?
                     .ok_or_else(|| {
@@ -186,11 +195,16 @@ impl BuiltinSearchBackend {
 #[async_trait]
 impl SearchBackend for BuiltinSearchBackend {
     async fn search(&self, request: SearchRequest<'_>) -> Result<SearchPage, SearchError> {
+        let page_size = if request.page_size == 0 {
+            DEFAULT_PAGE_SIZE
+        } else {
+            request.page_size.min(MAX_PAGE_SIZE)
+        };
         let backend = self.clone();
         let owned = OwnedSearchRequest {
             tenant_id: request.tenant_id,
             query: request.query.to_owned(),
-            page_size: request.page_size,
+            page_size,
             page_token: request.page_token.map(str::to_owned),
             field_registry: request.field_registry.clone(),
         };
@@ -208,6 +222,11 @@ struct OwnedSearchRequest {
     page_size: usize,
     page_token: Option<String>,
     field_registry: FieldRegistry,
+}
+
+struct ScanState<'a> {
+    committed_view: &'a (dyn FlowStateReader + Send + Sync),
+    scanned: usize,
 }
 
 fn pinned_flow_type(expression: &Expression) -> Option<&str> {
