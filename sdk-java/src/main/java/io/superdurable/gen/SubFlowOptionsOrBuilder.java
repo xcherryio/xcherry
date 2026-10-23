@@ -28,22 +28,38 @@ public interface SubFlowOptionsOrBuilder extends
   int getFlowTimeoutSeconds();
 
   /**
+   * <pre>
+   * server-zd rejects a positive start delay with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>int32 flow_start_delay_seconds = 3;</code>
    * @return The flowStartDelaySeconds.
    */
   int getFlowStartDelaySeconds();
 
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 4;</code>
    * @return Whether the retryPolicy field is set.
    */
   boolean hasRetryPolicy();
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 4;</code>
    * @return The retryPolicy.
    */
   io.superdurable.gen.FlowRetryPolicy getRetryPolicy();
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 4;</code>
    */
   io.superdurable.gen.FlowRetryPolicyOrBuilder getRetryPolicyOrBuilder();

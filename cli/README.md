@@ -59,6 +59,17 @@ The local port conventions are:
 application starts its own SDK Worker, while `dexcli codec-server` starts the
 Codec Server separately.
 
+Select the Rust zd engine with `dexcli dev --engine zd`. It starts
+`dex-server-zd` and Dex Web without Temporal. Install `dex-server-zd` on PATH,
+set `DEX_SERVER_ZD_BINARY`, or pass `--zd-binary /path/to/dex-server-zd`.
+The CLI stores zd state in `$HOME/.dex/zd/<dex-port>` by default. Pass
+`--zd-data-dir ./zd-state` to choose another directory. It waits for the zd
+gRPC health services before opening Dex Web. zd supports pull Workers only.
+Options for Temporal or the in-process Go Server, including
+`--sqlite-db-filename`, `--external-temporal-address`,
+`--verbose-engine-log`, `--attribute-store-config`, and `--blob-store-dir`,
+cannot be combined with `--engine zd`.
+
 If a `dexcli dev` port is already in use, it binds the next free port and prints
 the Dex addresses it selected. Running several `dexcli dev` processes on the
 same machine therefore starts isolated stacks: distinct Dex ports, a distinct
@@ -69,7 +80,8 @@ Dex Web opens after every component becomes ready. Pass `--open=false` to skip
 that. Ctrl+C stops Dex Web, Dex Server, and all internal processes owned by
 `dexcli`.
 
-Local state persists in `$HOME/.dex/dev/<port>/dex.sqlite.db`.
+With the default Temporal engine, local state persists in
+`$HOME/.dex/dev/<port>/dex.sqlite.db`.
 Dex Web step inputs and values larger than 1 KB persist next to that database
 in `dex.blobs`, so execution history and its blobs share a lifecycle. Override
 the database path with:
@@ -123,12 +135,15 @@ independent messages.
 `--blob-store-dir` takes precedence over the directory derived from
 `--sqlite-db-filename`.
 
-Server logs go to a temp folder that `dexcli` prints on readiness and deletes
-when it exits. Keep them with:
+With the Temporal engine, server logs go to a temp folder that `dexcli` prints
+on readiness and deletes when it exits. Keep them with:
 
 ```bash
 dexcli dev --server-log-folder ./dex-logs
 ```
+
+With zd, logs go to stderr by default. `--server-log-folder` also writes them
+to `dex-server-zd.log` in that folder.
 
 When investigating the local Temporal Server, add `--verbose-engine-log`. It
 writes Temporal Server info logs to `temporal-engine-server.log` in that folder.
@@ -160,17 +175,20 @@ must exist and be reachable before startup.
 --attribute-store-config string    Dex YAML file supplying Attribute Store settings
 --bind-address string              local bind IP (default 127.0.0.1)
 --blob-store-dir string            persistent Dex blob storage directory (default $HOME/.dex/blobs)
---dex-port int                     Dex gRPC port (default 8801)
---flow-rendering-dir string        directory containing Flow Definition Graph JSON files
 --connector-config-dir string      local Connector config directory (default $HOME/.dex/connectors)
 --connector-release-override value local Connector release as connector-id=artifact-directory (repeatable)
---open                             open Dex Web after readiness (default true)
---web-port int                     Dex Web port (default 8802)
---sqlite-db-filename string        local SQLite file (default $HOME/.dex/dev/<port>/dex.sqlite.db)
---server-log-folder string         keep server logs (default temp folder, deleted on exit)
---verbose-engine-log               write Temporal Server logs to temporal-engine-server.log
+--dex-port int                     Dex gRPC port (default 8801)
+--engine string                    Dex Server engine: temporal or zd (default temporal)
 --external-temporal-address string      external Temporal host:port
 --external-temporal-namespace string    external Temporal namespace (default default)
+--flow-rendering-dir string        directory containing Flow Definition Graph JSON files
+--open                             open Dex Web after readiness (default true)
+--server-log-folder string         keep server logs (Temporal defaults to temp; zd logs to stderr)
+--sqlite-db-filename string        local SQLite file (default $HOME/.dex/dev/<port>/dex.sqlite.db)
+--verbose-engine-log               write Temporal Server logs to temporal-engine-server.log
+--web-port int                     Dex Web port (default 8802)
+--zd-binary string                 dex-server-zd executable (default DEX_SERVER_ZD_BINARY or PATH)
+--zd-data-dir string               zd state directory (default $HOME/.dex/zd/<dex-port>)
 ```
 
 Local Temporal gRPC and Web ports start at `7233` and `8233` and move to free

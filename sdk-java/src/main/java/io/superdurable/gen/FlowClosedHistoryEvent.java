@@ -174,6 +174,10 @@ private static final long serialVersionUID = 0L;
   @SuppressWarnings("serial")
   private volatile java.lang.Object continuedToRunId_ = "";
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>string continued_to_run_id = 5;</code>
    * @return The continuedToRunId.
    */
@@ -191,6 +195,10 @@ private static final long serialVersionUID = 0L;
     }
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>string continued_to_run_id = 5;</code>
    * @return The bytes for continuedToRunId.
    */
@@ -1133,6 +1141,10 @@ private static final long serialVersionUID = 0L;
 
     private java.lang.Object continuedToRunId_ = "";
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>string continued_to_run_id = 5;</code>
      * @return The continuedToRunId.
      */
@@ -1149,6 +1161,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>string continued_to_run_id = 5;</code>
      * @return The bytes for continuedToRunId.
      */
@@ -1166,6 +1182,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>string continued_to_run_id = 5;</code>
      * @param value The continuedToRunId to set.
      * @return This builder for chaining.
@@ -1179,6 +1199,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>string continued_to_run_id = 5;</code>
      * @return This builder for chaining.
      */
@@ -1189,6 +1213,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>string continued_to_run_id = 5;</code>
      * @param value The bytes for continuedToRunId to set.
      * @return This builder for chaining.

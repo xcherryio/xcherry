@@ -69,11 +69,19 @@ public interface FlowClosedHistoryEventOrBuilder extends
       getErrorMessageBytes();
 
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>string continued_to_run_id = 5;</code>
    * @return The continuedToRunId.
    */
   java.lang.String getContinuedToRunId();
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>string continued_to_run_id = 5;</code>
    * @return The bytes for continuedToRunId.
    */
