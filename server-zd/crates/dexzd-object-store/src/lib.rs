@@ -12,11 +12,17 @@
 //! `log/node-a/0000000001/00000000000000000042`. Every server-zd commit depends on conditional
 //! writes, so implementations must honor [`WriteCondition`] exactly.
 
+mod in_memory;
 mod object_store_error;
+mod s3;
+mod startup_self_check;
 
 use std::path::Path;
 
+pub use in_memory::{FaultAction, FaultInjector, InMemoryObjectStore};
 pub use object_store_error::{ObjectStoreError, ObjectStoreErrorKind, ObjectStoreOperation};
+pub use s3::{S3Credentials, S3ObjectStore, S3ObjectStoreConfig};
+pub use startup_self_check::{StartupSelfCheckError, StartupSelfCheckFailure, startup_self_check};
 
 use async_trait::async_trait;
 use bytes::Bytes;
