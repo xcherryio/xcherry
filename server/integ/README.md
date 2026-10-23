@@ -5,6 +5,25 @@ This directory contains integration tests for the Dex service.
 * [How to run](../CONTRIBUTING.md#how-to-run-server-or-integration-test)
 * The integration tests are written without Dex SDKs. The workflows are implemented in REST API routes. e.g. [this basic workflow](./workflow/basic/routers.go)
 
+Run existing scenarios with pull Workers against the in-process Go Server:
+
+```shell
+cd server
+DEX_INTEG_WORKER_MODE=pull go test ./integ -cadence=false -run 'TestBasicFlowTemporal'
+```
+
+To launch a Dex Server binary for each test, pass `-dex-server-binary` and
+`-dex-server-engine=zd`. Binary mode selects pull Workers and gives each process
+a fresh data directory and loopback port. Each test waits for gRPC health on the
+empty service name before making FlowService calls. Configuration supported by
+the binary is written to a temporary YAML file. Tests requiring Go Server
+settings or direct Temporal state are skipped with a specific reason.
+
+```shell
+cd server
+go test ./integ -dex-server-binary=/path/to/dex-server-zd -dex-server-engine=zd -run 'TestBasicFlowTemporal'
+```
+
 Attribute Sync integration uses isolated MySQL and PostgreSQL services:
 
 ```shell
