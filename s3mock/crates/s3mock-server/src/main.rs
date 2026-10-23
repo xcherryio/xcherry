@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! The `s3mock` binary: serves a local-disk S3 endpoint until interrupted.
+//! S3-compatible HTTP server that serves an s3mock store over path-style URLs.
 
 use std::sync::Arc;
 

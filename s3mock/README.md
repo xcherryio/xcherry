@@ -1,6 +1,8 @@
 # s3mock
 
-Purpose: an S3-compatible object store on local disk, so Dex development and tests need no MinIO or cloud account.
+## Purpose
+
+An S3-compatible object store on local disk, so Dex development and tests need no MinIO or cloud account.
 
 ## Crates
 

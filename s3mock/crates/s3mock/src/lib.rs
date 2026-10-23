@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Local-disk object store with the S3 semantics Dex development needs.
+//! Local-disk object store with S3 versioning, conditional writes, and listing semantics for s3mock.
 
 mod checksum;
 mod data_file;
