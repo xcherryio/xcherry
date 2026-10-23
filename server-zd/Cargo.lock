@@ -1086,11 +1086,16 @@ name = "dexzd-search"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "dexzd-apply",
  "dexzd-keyspace",
  "dexzd-protocol",
  "dexzd-storage",
  "dexzd-visibility-query",
+ "prost",
+ "prost-types",
+ "serde_json",
  "thiserror",
+ "time",
  "tokio",
  "tokio-postgres",
  "tracing",
