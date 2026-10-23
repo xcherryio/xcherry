@@ -8,24 +8,27 @@
 
 use std::path::Path;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{
     BehaviorVersion, Credentials, Region, retry::RetryConfig, timeout::TimeoutConfig,
 };
-use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
 use bytes::Bytes;
 
+use crate::file_download::TemporaryDownloadFile;
+use crate::s3_error::{is_conflict_error, is_precondition_error, map_sdk_error, required};
 use crate::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
 
 const DEFAULT_PART_SIZE: usize = 8 * 1024 * 1024;
+const MAX_CONFLICT_RETRIES: u32 = 2;
 
 /// Credentials used by an S3 object store.
 #[derive(Debug, Clone)]
@@ -415,6 +418,58 @@ impl S3ObjectStore {
         })
     }
 
+    async fn put_file_once(
+        &self,
+        key: &str,
+        path: &Path,
+        condition: WriteCondition,
+    ) -> ObjectStoreResult<WriteOutcome> {
+        let size = tokio::fs::metadata(path)
+            .await
+            .map_err(|error| {
+                ObjectStoreError::new(
+                    ObjectStoreOperation::Put,
+                    key,
+                    ObjectStoreErrorKind::Permanent,
+                    format!("reading {}: {error}", path.display()),
+                )
+            })?
+            .len();
+        if size >= self.multipart_threshold as u64 {
+            return self.put_multipart_file(key, path, condition).await;
+        }
+        let body = ByteStream::from_path(path).await.map_err(|error| {
+            ObjectStoreError::new(
+                ObjectStoreOperation::Put,
+                key,
+                ObjectStoreErrorKind::Permanent,
+                format!("reading {}: {error}", path.display()),
+            )
+        })?;
+        let is_conditional = condition != WriteCondition::Unconditional;
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(self.full_key(key))
+            .body(body);
+        request = match condition {
+            WriteCondition::Unconditional => request,
+            WriteCondition::CreateOnly => request.if_none_match("*"),
+            WriteCondition::ReplaceIfEtagMatches { etag } => request.if_match(etag),
+        };
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) if is_conditional && is_precondition_error(&error) => {
+                return Ok(WriteOutcome::PreconditionFailed);
+            }
+            Err(error) => return Err(map_sdk_error(ObjectStoreOperation::Put, key, true, error)),
+        };
+        Ok(WriteOutcome::Written {
+            etag: required(response.e_tag(), ObjectStoreOperation::Put, key, "ETag")?.to_owned(),
+        })
+    }
+
     async fn get_inner(
         &self,
         key: &str,
@@ -509,10 +564,23 @@ impl ObjectStore for S3ObjectStore {
         body: Bytes,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
-        if body.len() >= self.multipart_threshold {
-            self.put_multipart(key, body, condition).await
-        } else {
-            self.put_single(key, body, condition).await
+        let mut conflict_retries = 0;
+        loop {
+            let result = if body.len() >= self.multipart_threshold {
+                self.put_multipart(key, body.clone(), condition.clone())
+                    .await
+            } else {
+                self.put_single(key, body.clone(), condition.clone()).await
+            };
+            match result {
+                Err(error)
+                    if is_conflict_error(&error) && conflict_retries < MAX_CONFLICT_RETRIES =>
+                {
+                    tokio::time::sleep(conflict_backoff(conflict_retries)).await;
+                    conflict_retries += 1;
+                }
+                other => return other,
+            }
         }
     }
 
@@ -522,50 +590,19 @@ impl ObjectStore for S3ObjectStore {
         path: &Path,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
-        let size = tokio::fs::metadata(path)
-            .await
-            .map_err(|error| {
-                ObjectStoreError::new(
-                    ObjectStoreOperation::Put,
-                    key,
-                    ObjectStoreErrorKind::Permanent,
-                    format!("reading {}: {error}", path.display()),
-                )
-            })?
-            .len();
-        if size >= self.multipart_threshold as u64 {
-            return self.put_multipart_file(key, path, condition).await;
-        }
-        let body = ByteStream::from_path(path).await.map_err(|error| {
-            ObjectStoreError::new(
-                ObjectStoreOperation::Put,
-                key,
-                ObjectStoreErrorKind::Permanent,
-                format!("reading {}: {error}", path.display()),
-            )
-        })?;
-        let is_conditional = condition != WriteCondition::Unconditional;
-        let mut request = self
-            .client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(self.full_key(key))
-            .body(body);
-        request = match condition {
-            WriteCondition::Unconditional => request,
-            WriteCondition::CreateOnly => request.if_none_match("*"),
-            WriteCondition::ReplaceIfEtagMatches { etag } => request.if_match(etag),
-        };
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) if is_conditional && is_precondition_error(&error) => {
-                return Ok(WriteOutcome::PreconditionFailed);
+        let mut conflict_retries = 0;
+        loop {
+            let result = self.put_file_once(key, path, condition.clone()).await;
+            match result {
+                Err(error)
+                    if is_conflict_error(&error) && conflict_retries < MAX_CONFLICT_RETRIES =>
+                {
+                    tokio::time::sleep(conflict_backoff(conflict_retries)).await;
+                    conflict_retries += 1;
+                }
+                other => return other,
             }
-            Err(error) => return Err(map_sdk_error(ObjectStoreOperation::Put, key, true, error)),
-        };
-        Ok(WriteOutcome::Written {
-            etag: required(response.e_tag(), ObjectStoreOperation::Put, key, "ETag")?.to_owned(),
-        })
+        }
     }
 
     async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
@@ -615,19 +652,7 @@ impl ObjectStore for S3ObjectStore {
                 error.to_string(),
             )
         })?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .await
-            .map_err(|error| {
-                ObjectStoreError::new(
-                    ObjectStoreOperation::Get,
-                    key,
-                    ObjectStoreErrorKind::Permanent,
-                    format!("creating {}: {error}", path.display()),
-                )
-            })?;
+        let mut download = TemporaryDownloadFile::create(key, path).await?;
         let mut body = response.body;
         while let Some(chunk) = body.try_next().await.map_err(|error| {
             ObjectStoreError::new(
@@ -637,23 +662,9 @@ impl ObjectStore for S3ObjectStore {
                 error.to_string(),
             )
         })? {
-            file.write_all(&chunk).await.map_err(|error| {
-                ObjectStoreError::new(
-                    ObjectStoreOperation::Get,
-                    key,
-                    ObjectStoreErrorKind::Permanent,
-                    format!("writing {}: {error}", path.display()),
-                )
-            })?;
+            download.write_all(&chunk).await?;
         }
-        file.flush().await.map_err(|error| {
-            ObjectStoreError::new(
-                ObjectStoreOperation::Get,
-                key,
-                ObjectStoreErrorKind::Permanent,
-                format!("flushing {}: {error}", path.display()),
-            )
-        })?;
+        download.commit().await?;
         Ok(Some(size))
     }
 
@@ -849,106 +860,6 @@ impl ObjectStore for S3ObjectStore {
     }
 }
 
-fn required<'a>(
-    value: Option<&'a str>,
-    operation: ObjectStoreOperation,
-    key: &str,
-    field: &str,
-) -> ObjectStoreResult<&'a str> {
-    value.ok_or_else(|| {
-        ObjectStoreError::new(
-            operation,
-            key,
-            ObjectStoreErrorKind::Permanent,
-            format!("response omitted {field}"),
-        )
-    })
-}
-
-fn is_precondition_error<E>(error: &SdkError<E>) -> bool {
-    matches!(
-        error
-            .raw_response()
-            .map(|response| response.status().as_u16()),
-        Some(409 | 412)
-    )
-}
-
-fn map_sdk_error<E>(
-    operation: ObjectStoreOperation,
-    key: &str,
-    is_write: bool,
-    error: SdkError<E>,
-) -> ObjectStoreError
-where
-    E: ProvideErrorMetadata + std::fmt::Display,
-{
-    let status = error
-        .raw_response()
-        .map(|response| response.status().as_u16());
-    let code = error
-        .as_service_error()
-        .and_then(ProvideErrorMetadata::code)
-        .unwrap_or("");
-    let kind = match &error {
-        SdkError::ConstructionFailure(_) => ObjectStoreErrorKind::Permanent,
-        SdkError::TimeoutError(_) | SdkError::ResponseError(_) => {
-            if is_write {
-                ObjectStoreErrorKind::OutcomeUnknown
-            } else {
-                ObjectStoreErrorKind::Transient
-            }
-        }
-        SdkError::DispatchFailure(dispatch) if dispatch.is_user() => {
-            ObjectStoreErrorKind::Permanent
-        }
-        SdkError::DispatchFailure(dispatch)
-            if is_write
-                && !dispatch
-                    .as_connector_error()
-                    .is_some_and(is_connect_failure) =>
-        {
-            ObjectStoreErrorKind::OutcomeUnknown
-        }
-        SdkError::DispatchFailure(_) => ObjectStoreErrorKind::Transient,
-        SdkError::ServiceError(_)
-            if status == Some(429)
-                || matches!(code, "SlowDown" | "Throttling" | "ThrottlingException") =>
-        {
-            ObjectStoreErrorKind::Transient
-        }
-        SdkError::ServiceError(_) if matches!(status, Some(500..=599)) => {
-            if is_write {
-                ObjectStoreErrorKind::OutcomeUnknown
-            } else {
-                ObjectStoreErrorKind::Transient
-            }
-        }
-        SdkError::ServiceError(_) => ObjectStoreErrorKind::Permanent,
-        _ => ObjectStoreErrorKind::Permanent,
-    };
-    ObjectStoreError::new(
-        operation,
-        key,
-        kind,
-        format!("{error}; status={status:?}; code={code}"),
-    )
-}
-
-fn is_connect_failure(dispatch: &aws_sdk_s3::error::ConnectorError) -> bool {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(dispatch);
-    while let Some(error) = source {
-        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
-            && matches!(
-                io_error.kind(),
-                std::io::ErrorKind::ConnectionRefused
-                    | std::io::ErrorKind::AddrNotAvailable
-                    | std::io::ErrorKind::NotFound
-            )
-        {
-            return true;
-        }
-        source = error.source();
-    }
-    false
+fn conflict_backoff(conflict_retries: u32) -> Duration {
+    Duration::from_millis(10u64 << conflict_retries)
 }
