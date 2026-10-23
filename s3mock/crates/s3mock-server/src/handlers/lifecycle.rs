@@ -8,7 +8,6 @@
 
 //! Bucket lifecycle configuration: prefix filters and day-based expiration actions.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use http::{HeaderMap, StatusCode};
@@ -19,23 +18,13 @@ use super::bucket::status_response;
 use super::request_body::read_small_body;
 use crate::s3_error::S3Error;
 use crate::server::{S3Response, run_store_operation, xml_response};
-use crate::xml::{XmlWriter, parse_document};
+use crate::xml::{XmlElement, XmlWriter, parse_document};
 
 const MAX_LIFECYCLE_BODY_BYTES: usize = 256 * 1024;
 /// S3 accepts at most 1000 rules per configuration.
 const MAX_LIFECYCLE_RULES: usize = 1000;
-/// Rule elements s3mock cannot apply; accepting them silently would hide a test gap.
-const UNSUPPORTED_RULE_ELEMENTS: [(&str, &str); 6] = [
-    ("Date", "date-based expiration"),
-    ("StorageClass", "storage class transitions"),
-    ("Tag", "tag filters"),
-    ("ObjectSizeGreaterThan", "object size filters"),
-    ("ObjectSizeLessThan", "object size filters"),
-    (
-        "NewerNoncurrentVersionsTransition",
-        "noncurrent transitions",
-    ),
-];
+/// AWS limits NewerNoncurrentVersions to this range.
+const MAX_NEWER_NONCURRENT_VERSIONS: u32 = 100;
 
 pub(crate) async fn put_bucket_lifecycle_configuration(
     store: Arc<Store>,
@@ -48,7 +37,7 @@ pub(crate) async fn put_bucket_lifecycle_configuration(
     let document = parse_document(&body.bytes, "LifecycleConfiguration")?;
     let rules = document
         .children_named("Rule")
-        .map(|rule| parse_rule(rule.leaf_texts()))
+        .map(parse_rule)
         .collect::<Result<Vec<_>, S3Error>>()?;
     if rules.is_empty() || rules.len() > MAX_LIFECYCLE_RULES {
         return Err(S3Error::malformed_xml(format!(
@@ -87,14 +76,36 @@ pub(crate) async fn delete_bucket_lifecycle(
     status_response(StatusCode::NO_CONTENT, &[])
 }
 
-fn parse_rule(fields: BTreeMap<String, String>) -> Result<LifecycleRule, S3Error> {
-    if let Some((_, feature)) = UNSUPPORTED_RULE_ELEMENTS
-        .iter()
-        .find(|(element, _)| fields.contains_key(*element))
-    {
-        return Err(S3Error::not_implemented(&format!("lifecycle {feature}")));
+fn parse_rule(rule: &XmlElement) -> Result<LifecycleRule, S3Error> {
+    for child in &rule.children {
+        match child.name.as_str() {
+            "Transition" | "NoncurrentVersionTransition" => {
+                return Err(S3Error::not_implemented(
+                    "lifecycle storage class transitions",
+                ));
+            }
+            "ID"
+            | "Status"
+            | "Filter"
+            | "Prefix"
+            | "Expiration"
+            | "NoncurrentVersionExpiration"
+            | "AbortIncompleteMultipartUpload" => {
+                if rule.children_named(&child.name).count() > 1 {
+                    return Err(S3Error::malformed_xml(format!(
+                        "a Rule has more than one {}",
+                        child.name
+                    )));
+                }
+            }
+            other => {
+                return Err(S3Error::malformed_xml(format!(
+                    "unexpected Rule element {other}"
+                )));
+            }
+        }
     }
-    let is_enabled = match fields.get("Status").map(String::as_str) {
+    let is_enabled = match rule.child_text("Status").map(str::trim) {
         Some("Enabled") => true,
         Some("Disabled") => false,
         _ => {
@@ -103,38 +114,171 @@ fn parse_rule(fields: BTreeMap<String, String>) -> Result<LifecycleRule, S3Error
             ));
         }
     };
-    let days = |element: &str| -> Result<Option<u32>, S3Error> {
-        fields
-            .get(element)
-            .map(|text| {
-                text.trim().parse::<u32>().map_err(|_| {
-                    S3Error::malformed_xml(format!("{element} must be a non-negative integer"))
-                })
-            })
-            .transpose()
+    let prefix = match (rule.child("Filter"), rule.child_text("Prefix")) {
+        (Some(filter), None) => parse_filter(filter)?,
+        (None, Some(legacy_prefix)) => legacy_prefix.to_owned(),
+        (Some(_), Some(_)) => {
+            return Err(S3Error::malformed_xml("a Rule has both Filter and Prefix"));
+        }
+        (None, None) => {
+            return Err(S3Error::malformed_xml(
+                "every Rule needs a Filter or a Prefix",
+            ));
+        }
     };
-    let rule = LifecycleRule {
-        id: fields.get("ID").cloned(),
+    let mut parsed = LifecycleRule {
+        id: rule.child_text("ID").map(str::to_owned),
         is_enabled,
-        prefix: fields.get("Prefix").cloned().unwrap_or_default(),
-        expiration_days: days("Days")?,
-        expired_object_delete_marker: fields
-            .get("ExpiredObjectDeleteMarker")
-            .is_some_and(|value| value.trim() == "true"),
-        noncurrent_expiration_days: days("NoncurrentDays")?,
-        newer_noncurrent_versions: days("NewerNoncurrentVersions")?,
-        abort_incomplete_upload_days: days("DaysAfterInitiation")?,
+        prefix,
+        ..LifecycleRule::default()
     };
-    if rule.expiration_days.is_none()
-        && !rule.expired_object_delete_marker
-        && rule.noncurrent_expiration_days.is_none()
-        && rule.abort_incomplete_upload_days.is_none()
+    if let Some(expiration) = rule.child("Expiration") {
+        expect_only_children(expiration, &["Days", "Date", "ExpiredObjectDeleteMarker"])?;
+        if expiration.child("Date").is_some() {
+            return Err(S3Error::not_implemented("lifecycle date-based expiration"));
+        }
+        parsed.expiration_days = optional_positive(expiration, "Days")?;
+        parsed.expired_object_delete_marker = expiration
+            .child_text("ExpiredObjectDeleteMarker")
+            .map(|value| match value.trim() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(S3Error::malformed_xml(
+                    "ExpiredObjectDeleteMarker must be true or false",
+                )),
+            })
+            .transpose()?;
+        match (parsed.expiration_days, parsed.expired_object_delete_marker) {
+            (Some(_), Some(_)) => {
+                return Err(S3Error::malformed_xml(
+                    "Expiration cannot combine Days with ExpiredObjectDeleteMarker",
+                ));
+            }
+            (None, None) => {
+                return Err(S3Error::malformed_xml(
+                    "Expiration needs Days or ExpiredObjectDeleteMarker",
+                ));
+            }
+            (Some(_), None) | (None, Some(_)) => {}
+        }
+    }
+    if let Some(noncurrent) = rule.child("NoncurrentVersionExpiration") {
+        expect_only_children(noncurrent, &["NoncurrentDays", "NewerNoncurrentVersions"])?;
+        parsed.noncurrent_expiration_days = Some(
+            optional_positive(noncurrent, "NoncurrentDays")?.ok_or_else(|| {
+                S3Error::malformed_xml("NoncurrentVersionExpiration needs NoncurrentDays")
+            })?,
+        );
+        parsed.newer_noncurrent_versions =
+            optional_positive(noncurrent, "NewerNoncurrentVersions")?;
+        if let Some(retained) = parsed.newer_noncurrent_versions {
+            if retained > MAX_NEWER_NONCURRENT_VERSIONS {
+                return Err(S3Error::invalid_argument(format!(
+                    "NewerNoncurrentVersions must be between 1 and {MAX_NEWER_NONCURRENT_VERSIONS}"
+                )));
+            }
+            if rule.child("Filter").is_none() {
+                return Err(S3Error::invalid_argument(
+                    "NewerNoncurrentVersions requires a Filter",
+                ));
+            }
+        }
+    }
+    if let Some(abort) = rule.child("AbortIncompleteMultipartUpload") {
+        expect_only_children(abort, &["DaysAfterInitiation"])?;
+        parsed.abort_incomplete_upload_days = Some(
+            optional_positive(abort, "DaysAfterInitiation")?.ok_or_else(|| {
+                S3Error::malformed_xml("AbortIncompleteMultipartUpload needs DaysAfterInitiation")
+            })?,
+        );
+    }
+    if rule.child("Expiration").is_none()
+        && rule.child("NoncurrentVersionExpiration").is_none()
+        && rule.child("AbortIncompleteMultipartUpload").is_none()
     {
         return Err(S3Error::malformed_xml(
             "every Rule needs at least one action",
         ));
     }
-    Ok(rule)
+    Ok(parsed)
+}
+
+/// Returns the prefix a Filter selects; tag and size filters are not supported.
+fn parse_filter(filter: &XmlElement) -> Result<String, S3Error> {
+    if filter.children.len() > 1 {
+        return Err(S3Error::malformed_xml(
+            "a Filter has at most one condition; use And to combine",
+        ));
+    }
+    let Some(condition) = filter.children.first() else {
+        return Ok(String::new());
+    };
+    match condition.name.as_str() {
+        "Prefix" => Ok(condition.text.clone()),
+        "And" => {
+            expect_only_children(
+                condition,
+                &[
+                    "Prefix",
+                    "Tag",
+                    "ObjectSizeGreaterThan",
+                    "ObjectSizeLessThan",
+                ],
+            )?;
+            if condition.child("Tag").is_some() {
+                return Err(S3Error::not_implemented("lifecycle tag filters"));
+            }
+            if condition.child("ObjectSizeGreaterThan").is_some()
+                || condition.child("ObjectSizeLessThan").is_some()
+            {
+                return Err(S3Error::not_implemented("lifecycle object size filters"));
+            }
+            Ok(condition
+                .child_text("Prefix")
+                .unwrap_or_default()
+                .to_owned())
+        }
+        "Tag" => Err(S3Error::not_implemented("lifecycle tag filters")),
+        "ObjectSizeGreaterThan" | "ObjectSizeLessThan" => {
+            Err(S3Error::not_implemented("lifecycle object size filters"))
+        }
+        other => Err(S3Error::malformed_xml(format!(
+            "unexpected Filter element {other}"
+        ))),
+    }
+}
+
+fn expect_only_children(element: &XmlElement, allowed: &[&str]) -> Result<(), S3Error> {
+    for child in &element.children {
+        if !allowed.contains(&child.name.as_str()) {
+            return Err(S3Error::malformed_xml(format!(
+                "unexpected {} element {}",
+                element.name, child.name
+            )));
+        }
+        if element.children_named(&child.name).count() > 1 {
+            return Err(S3Error::malformed_xml(format!(
+                "{} has more than one {}",
+                element.name, child.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn optional_positive(element: &XmlElement, name: &str) -> Result<Option<u32>, S3Error> {
+    element
+        .child_text(name)
+        .map(|text| {
+            text.trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    S3Error::invalid_argument(format!("{name} must be a positive integer"))
+                })
+        })
+        .transpose()
 }
 
 fn write_rule(document: &mut XmlWriter, rule: &LifecycleRule) {
@@ -152,7 +296,7 @@ fn write_rule(document: &mut XmlWriter, rule: &LifecycleRule) {
                 "Disabled"
             },
         );
-    if rule.expiration_days.is_some() || rule.expired_object_delete_marker {
+    if rule.expiration_days.is_some() || rule.expired_object_delete_marker.is_some() {
         document
             .open("Expiration")
             .optional_text_element(
@@ -161,7 +305,8 @@ fn write_rule(document: &mut XmlWriter, rule: &LifecycleRule) {
             )
             .optional_text_element(
                 "ExpiredObjectDeleteMarker",
-                rule.expired_object_delete_marker.then_some("true"),
+                rule.expired_object_delete_marker
+                    .map(|is_enabled| if is_enabled { "true" } else { "false" }),
             )
             .close("Expiration");
     }

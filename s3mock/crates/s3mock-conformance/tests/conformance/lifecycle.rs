@@ -111,3 +111,69 @@ async fn lifecycle_configuration_round_trips_and_deletes() {
     assert_eq!(error_code_and_status(&deleted).1, Some(404));
     target.cleanup().await;
 }
+
+fn rule_with_expiration(expiration: LifecycleExpiration) -> LifecycleRule {
+    LifecycleRule::builder()
+        .status(ExpirationStatus::Enabled)
+        .filter(LifecycleRuleFilter::builder().prefix("").build())
+        .expiration(expiration)
+        .build()
+        .expect("the rule has a status")
+}
+
+// Days must be positive and cannot be combined with ExpiredObjectDeleteMarker; an explicit false
+// marker action is a valid no-op: https://docs.aws.amazon.com/AmazonS3/latest/API/API_LifecycleExpiration.html
+#[tokio::test]
+async fn invalid_expiration_actions_are_rejected_and_a_false_marker_action_is_accepted() {
+    let mut target = ConformanceTarget::connect().await;
+    let bucket = target.create_bucket().await;
+    let put = |rule: LifecycleRule| {
+        target
+            .client
+            .put_bucket_lifecycle_configuration()
+            .bucket(&bucket)
+            .lifecycle_configuration(
+                BucketLifecycleConfiguration::builder()
+                    .rules(rule)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+    };
+    let zero_days = put(rule_with_expiration(
+        LifecycleExpiration::builder().days(0).build(),
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(error_code_and_status(&zero_days).1, Some(400));
+    let combined = put(rule_with_expiration(
+        LifecycleExpiration::builder()
+            .days(1)
+            .expired_object_delete_marker(true)
+            .build(),
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(error_code_and_status(&combined).1, Some(400));
+    put(rule_with_expiration(
+        LifecycleExpiration::builder()
+            .expired_object_delete_marker(false)
+            .build(),
+    ))
+    .await
+    .unwrap();
+    let stored = target
+        .client
+        .get_bucket_lifecycle_configuration()
+        .bucket(&bucket)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.rules()[0]
+            .expiration()
+            .and_then(|expiration| expiration.expired_object_delete_marker()),
+        Some(false)
+    );
+    target.cleanup().await;
+}

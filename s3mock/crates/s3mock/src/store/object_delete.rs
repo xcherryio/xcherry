@@ -31,6 +31,14 @@ pub struct DeleteObjectOutcome {
     pub is_delete_marker: bool,
 }
 
+/// A condition re-checked inside the delete transaction, so a stale decision never applies.
+pub(super) struct DeleteGuard<'guard> {
+    /// Receives the key's versions, newest first, as they are at commit time.
+    pub(super) is_still_due: &'guard dyn Fn(&[VersionRecord]) -> bool,
+    /// Last-modified time for a delete marker this delete creates, instead of wall-clock time.
+    pub(super) marker_last_modified_unix_ms: Option<i64>,
+}
+
 impl Store {
     /// Deletes an object; deleting a missing key or version succeeds, as in S3.
     pub fn delete_object(
@@ -40,18 +48,19 @@ impl Store {
         request: &DeleteObjectRequest,
     ) -> Result<DeleteObjectOutcome, StoreError> {
         Ok(self
-            .delete_object_if_unchanged(bucket, key, request, None)?
+            .delete_object_if(bucket, key, request, None)?
             .expect("an unguarded delete always applies"))
     }
 
-    /// Deletes like [`Store::delete_object`] only while the addressed version, or the current
-    /// version when none is addressed, still has `expected_internal_version`; otherwise returns `None`.
-    pub(super) fn delete_object_if_unchanged(
+    /// Deletes like [`Store::delete_object`] when `guard` approves the key's current versions.
+    ///
+    /// Returns `None`, changing nothing, when the guard rejects them.
+    pub(super) fn delete_object_if(
         &self,
         bucket: &str,
         key: &str,
         request: &DeleteObjectRequest,
-        expected_internal_version: Option<&str>,
+        guard: Option<&DeleteGuard<'_>>,
     ) -> Result<Option<DeleteObjectOutcome>, StoreError> {
         validate_object_key(key)?;
         let addressed_version = request
@@ -66,24 +75,12 @@ impl Store {
             let mut latest = transaction.open_table(LATEST)?;
             let mut versions = transaction.open_table(VERSIONS)?;
             let stored_versions = load_versions(&versions, bucket, key)?;
-            if let Some(expected) = expected_internal_version {
-                let guarded = match addressed_version {
-                    Some(internal_version) => {
-                        stored_versions
-                            .iter()
-                            .find(|stored| match internal_version {
-                                None => stored.record.is_null_version,
-                                Some(ulid) => {
-                                    !stored.record.is_null_version
-                                        && stored.record.internal_version == ulid.to_string()
-                                }
-                            })
-                    }
-                    None => stored_versions
-                        .first()
-                        .filter(|stored| !stored.record.is_delete_marker),
-                };
-                if guarded.is_none_or(|stored| stored.record.internal_version != expected) {
+            if let Some(guard) = guard {
+                let records: Vec<VersionRecord> = stored_versions
+                    .iter()
+                    .map(|stored| stored.record.clone())
+                    .collect();
+                if !(guard.is_still_due)(&records) {
                     return Ok(None);
                 }
             }
@@ -119,7 +116,10 @@ impl Store {
                     match bucket_record.versioning {
                         VersioningState::Unversioned => DeleteObjectOutcome::default(),
                         VersioningState::Enabled | VersioningState::Suspended => {
-                            let marker = self.new_delete_marker(replaces_null_version);
+                            let marker = self.new_delete_marker(
+                                replaces_null_version,
+                                guard.and_then(|guard| guard.marker_last_modified_unix_ms),
+                            );
                             let internal_version = marker
                                 .internal_version
                                 .parse()
@@ -143,7 +143,11 @@ impl Store {
         Ok(Some(outcome))
     }
 
-    fn new_delete_marker(&self, is_null_version: bool) -> VersionRecord {
+    fn new_delete_marker(
+        &self,
+        is_null_version: bool,
+        last_modified_unix_ms: Option<i64>,
+    ) -> VersionRecord {
         let internal_version = self.next_internal_version();
         VersionRecord {
             internal_version: internal_version.to_string(),
@@ -154,8 +158,9 @@ impl Store {
             checksum: None,
             content_headers: ContentHeaders::default(),
             user_metadata: Default::default(),
-            last_modified_unix_ms: i64::try_from(internal_version.timestamp_ms())
-                .expect("ULID timestamps fit in i64"),
+            last_modified_unix_ms: last_modified_unix_ms.unwrap_or_else(|| {
+                i64::try_from(internal_version.timestamp_ms()).expect("ULID timestamps fit in i64")
+            }),
             data_file: None,
             parts_count: None,
         }

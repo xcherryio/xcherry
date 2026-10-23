@@ -2,7 +2,7 @@ name: S3mock AWS conformance
 
 # Runs the s3mock conformance suite against real S3 so s3mock behavior stays comparable with AWS.
 # Configure the repository variable S3MOCK_CONFORMANCE_AWS_ROLE_ARN (an IAM role trusted for
-# GitHub OIDC that may create and delete buckets named s3mock-conformance-*) to enable it.
+# GitHub OIDC with full S3 access to buckets named s3mock-conformance-*) to enable it.
 
 on:
   schedule:
@@ -42,5 +42,30 @@ jobs:
       - name: Run the conformance suite against AWS S3
         env:
           S3MOCK_CONFORMANCE_TARGET: aws
+          S3MOCK_CONFORMANCE_BUCKET_LOG: ${{ runner.temp }}/s3mock-conformance-buckets.txt
           AWS_REGION: us-east-1
         run: cargo test --locked -p s3mock-conformance -- --test-threads=4
+      # Tests delete their buckets only when they pass, so remove whatever this run created.
+      - name: Delete buckets this run created
+        if: always()
+        env:
+          BUCKET_LOG: ${{ runner.temp }}/s3mock-conformance-buckets.txt
+          AWS_REGION: us-east-1
+        run: |
+          set -uo pipefail
+          [[ -f "$BUCKET_LOG" ]] || exit 0
+          sort -u "$BUCKET_LOG" | while read -r bucket; do
+            aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1 || continue
+            aws s3api list-multipart-uploads --bucket "$bucket" --output json \
+              | jq -r '.Uploads[]? | [.Key, .UploadId] | @tsv' \
+              | while IFS=$'\t' read -r key upload_id; do
+                  aws s3api abort-multipart-upload --bucket "$bucket" --key "$key" --upload-id "$upload_id"
+                done
+            while true; do
+              batch="$(aws s3api list-object-versions --bucket "$bucket" --max-items 1000 --output json \
+                | jq -c '{Objects: ([.Versions[]?, .DeleteMarkers[]?] | map({Key, VersionId})), Quiet: true}')"
+              [[ "$(jq '.Objects | length' <<<"$batch")" == "0" ]] && break
+              aws s3api delete-objects --bucket "$bucket" --delete "$batch" >/dev/null
+            done
+            aws s3api delete-bucket --bucket "$bucket"
+          done

@@ -158,7 +158,7 @@ fn versioned_expiration_adds_a_marker_then_noncurrent_and_marker_cleanup_remove_
         &store,
         LifecycleRule {
             is_enabled: true,
-            expired_object_delete_marker: true,
+            expired_object_delete_marker: Some(true),
             ..LifecycleRule::default()
         },
     );
@@ -229,24 +229,53 @@ fn incomplete_multipart_uploads_are_aborted() {
 }
 
 #[test]
-fn an_overwrite_after_the_scan_decision_is_not_expired() {
+fn a_lone_delete_marker_expires_under_a_days_rule() {
     let directory = tempfile::tempdir().unwrap();
-    let store = open_store(&directory, None);
-    put(&store, "k", b"old");
+    let store = open_store(&directory, Some(VersioningState::Enabled));
+    store
+        .delete_object("life", "k", &DeleteObjectRequest::default())
+        .unwrap();
+    set_rule(
+        &store,
+        LifecycleRule {
+            is_enabled: true,
+            expiration_days: Some(2),
+            ..LifecycleRule::default()
+        },
+    );
+    store.advance_lifecycle_clock(DAY_MS);
+    assert_eq!(store.run_lifecycle().unwrap().removed_delete_markers, 0);
+    store.advance_lifecycle_clock(DAY_MS);
+    assert_eq!(store.run_lifecycle().unwrap().removed_delete_markers, 1);
+    store
+        .delete_bucket("life")
+        .expect("the marker was the last version");
+}
+
+#[test]
+fn a_version_made_noncurrent_by_lifecycle_starts_its_noncurrent_period_at_lifecycle_time() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = open_store(&directory, Some(VersioningState::Enabled));
+    put(&store, "k", b"one");
     set_rule(
         &store,
         LifecycleRule {
             is_enabled: true,
             expiration_days: Some(1),
+            noncurrent_expiration_days: Some(1),
             ..LifecycleRule::default()
         },
     );
-    store.advance_lifecycle_clock(DAY_MS);
-    store
-        .delete_object("life", "k", &DeleteObjectRequest::default())
-        .unwrap();
-    put(&store, "k", b"new");
-    // The new object is also older than a day on the lifecycle clock, so it expires; the guard
-    // only prevents deleting a version the scan did not examine.
+    store.advance_lifecycle_clock(3 * DAY_MS);
     assert_eq!(store.run_lifecycle().unwrap().expired_current_versions, 1);
+    assert_eq!(
+        store.run_lifecycle().unwrap().expired_noncurrent_versions,
+        0,
+        "the version became noncurrent at the current lifecycle time"
+    );
+    store.advance_lifecycle_clock(DAY_MS);
+    assert_eq!(
+        store.run_lifecycle().unwrap().expired_noncurrent_versions,
+        1
+    );
 }

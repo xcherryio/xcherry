@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use redb::ReadableDatabase;
 
-use super::object_delete::DeleteObjectRequest;
+use super::object_delete::{DeleteGuard, DeleteObjectRequest};
 use super::{Store, UPLOADS, VERSIONS, decode_json};
 use crate::error::StoreError;
 use crate::key_codec::{decode_object_key, encode_bucket_prefix, prefix_successor};
@@ -86,7 +86,7 @@ impl Store {
                 continue;
             }
             for action in self.plan_lifecycle_actions(&bucket, &rules, now)? {
-                self.apply_lifecycle_action(&bucket, action, &mut run)?;
+                self.apply_lifecycle_action(&bucket, &rules, now, action, &mut run)?;
             }
         }
         Ok(run)
@@ -145,55 +145,97 @@ impl Store {
     fn apply_lifecycle_action(
         &self,
         bucket: &BucketRecord,
+        rules: &[&LifecycleRule],
+        now: i64,
         action: LifecycleAction,
         run: &mut LifecycleRun,
     ) -> Result<(), StoreError> {
-        match action {
-            LifecycleAction::ExpireCurrent {
-                key,
-                internal_version,
-            } => {
-                let applied = self.delete_object_if_unchanged(
-                    &bucket.name,
-                    &key,
-                    &DeleteObjectRequest::default(),
-                    Some(&internal_version),
-                )?;
-                if applied.is_some() {
-                    run.expired_current_versions += 1;
-                }
-            }
-            LifecycleAction::RemoveVersion {
-                key,
-                version_id,
-                internal_version,
-                is_expired_delete_marker,
-            } => {
-                let request = DeleteObjectRequest {
-                    version_id: Some(version_id),
-                };
-                let applied = self.delete_object_if_unchanged(
-                    &bucket.name,
-                    &key,
-                    &request,
-                    Some(&internal_version),
-                )?;
-                match (applied.is_some(), is_expired_delete_marker) {
-                    (true, true) => run.removed_delete_markers += 1,
-                    (true, false) => run.expired_noncurrent_versions += 1,
-                    (false, _) => {}
-                }
-            }
+        let (key, request) = match &action {
             LifecycleAction::AbortUpload { key, upload_id } => {
-                match self.abort_multipart_upload(&bucket.name, &key, &upload_id) {
+                match self.abort_multipart_upload(&bucket.name, key, upload_id) {
                     Ok(()) => run.aborted_uploads += 1,
                     // A client completed or aborted it since the scan.
                     Err(StoreError::NoSuchUpload { .. }) => {}
                     Err(error) => return Err(error),
                 }
+                return Ok(());
             }
+            LifecycleAction::ExpireCurrent { key, .. } => (key, DeleteObjectRequest::default()),
+            LifecycleAction::RemoveVersion {
+                key, version_id, ..
+            } => (
+                key,
+                DeleteObjectRequest {
+                    version_id: Some(version_id.clone()),
+                },
+            ),
+        };
+        // Writes since the scan may have changed what is due, so the decision is remade at commit.
+        let is_still_due = |versions: &[VersionRecord]| {
+            let mut replanned = Vec::new();
+            plan_key_actions(key, versions, rules, now, &mut replanned);
+            replanned
+                .iter()
+                .any(|candidate| candidate.is_same_removal(&action))
+        };
+        let guard = DeleteGuard {
+            is_still_due: &is_still_due,
+            // Lifecycle-created markers start their noncurrent period at lifecycle time.
+            marker_last_modified_unix_ms: Some(now),
+        };
+        if self
+            .delete_object_if(&bucket.name, key, &request, Some(&guard))?
+            .is_none()
+        {
+            return Ok(());
+        }
+        match action {
+            LifecycleAction::ExpireCurrent { .. } => run.expired_current_versions += 1,
+            LifecycleAction::RemoveVersion {
+                is_expired_delete_marker: true,
+                ..
+            } => run.removed_delete_markers += 1,
+            LifecycleAction::RemoveVersion {
+                is_expired_delete_marker: false,
+                ..
+            } => run.expired_noncurrent_versions += 1,
+            LifecycleAction::AbortUpload { .. } => {}
         }
         Ok(())
+    }
+}
+
+impl LifecycleAction {
+    /// Returns whether both actions remove the same version in the same way.
+    fn is_same_removal(&self, other: &LifecycleAction) -> bool {
+        match (self, other) {
+            (
+                LifecycleAction::ExpireCurrent {
+                    internal_version: left,
+                    ..
+                },
+                LifecycleAction::ExpireCurrent {
+                    internal_version: right,
+                    ..
+                },
+            )
+            | (
+                LifecycleAction::RemoveVersion {
+                    internal_version: left,
+                    ..
+                },
+                LifecycleAction::RemoveVersion {
+                    internal_version: right,
+                    ..
+                },
+            ) => left == right,
+            (
+                LifecycleAction::ExpireCurrent { .. }
+                | LifecycleAction::RemoveVersion { .. }
+                | LifecycleAction::AbortUpload { .. },
+                _,
+            ) => false,
+        }
     }
 }
 
@@ -213,11 +255,14 @@ fn plan_key_actions(
         return;
     };
     if current.is_delete_marker {
-        if versions.len() == 1
-            && matching
-                .iter()
-                .any(|rule| rule.expired_object_delete_marker)
-        {
+        // A lone marker is removed by ExpiredObjectDeleteMarker, or by a Days rule once it is old enough.
+        let is_marker_due = matching.iter().any(|rule| {
+            rule.expired_object_delete_marker == Some(true)
+                || rule.expiration_days.is_some_and(|days| {
+                    is_older_than_days(current.last_modified_unix_ms, days, now)
+                })
+        });
+        if versions.len() == 1 && is_marker_due {
             actions.push(LifecycleAction::RemoveVersion {
                 key: key.to_owned(),
                 version_id: current.version_id(),

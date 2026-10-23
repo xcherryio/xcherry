@@ -51,8 +51,9 @@ pub struct LifecycleRule {
     pub prefix: String,
     /// Expires the current version this many days after it was written.
     pub expiration_days: Option<u32>,
-    /// Removes a delete marker once it is the only version of its key.
-    pub expired_object_delete_marker: bool,
+    /// `Some(true)` removes a delete marker once it is the only version of its key; `Some(false)`
+    /// is an explicit no-op that S3 accepts.
+    pub expired_object_delete_marker: Option<bool>,
     /// Removes a noncurrent version this many days after it became noncurrent.
     pub noncurrent_expiration_days: Option<u32>,
     /// Keeps this many newest noncurrent versions regardless of age.
