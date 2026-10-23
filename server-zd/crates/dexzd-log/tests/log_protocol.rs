@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -24,6 +24,8 @@ use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
+use dexzd_protocol::dexzd::v1::LogBatchHeader;
+use prost::Message;
 use tokio::sync::{Mutex, Notify};
 
 struct FixedClock;
@@ -31,6 +33,15 @@ struct FixedClock;
 impl WallClock for FixedClock {
     fn now_unix_micros(&self) -> i64 {
         1_700_000_000_000_000
+    }
+}
+
+#[derive(Default)]
+struct AdvancingClock(AtomicI64);
+
+impl WallClock for AdvancingClock {
+    fn now_unix_micros(&self) -> i64 {
+        self.0.fetch_add(1_000, Ordering::SeqCst) + 1_700_000_000_000_000
     }
 }
 
@@ -47,6 +58,8 @@ struct MemoryStore {
 struct StoreState {
     objects: BTreeMap<String, Bytes>,
     unknown_after_write: HashSet<String>,
+    unknown_then_transient_get: HashSet<String>,
+    transient_get_once: HashSet<String>,
     race_insert: HashMap<String, Bytes>,
     version: u64,
 }
@@ -64,6 +77,12 @@ impl MemoryStore {
 
     async fn inject_unknown_after_write(&self, key: String) {
         self.state.lock().await.unknown_after_write.insert(key);
+    }
+
+    async fn inject_unknown_then_transient_readback(&self, key: String) {
+        let mut state = self.state.lock().await;
+        state.unknown_after_write.insert(key.clone());
+        state.unknown_then_transient_get.insert(key);
     }
 
     async fn inject_race(&self, key: String, body: Bytes) {
@@ -120,6 +139,9 @@ impl ObjectStore for MemoryStore {
         state.objects.insert(key.to_owned(), body);
         state.version += 1;
         if state.unknown_after_write.remove(key) {
+            if state.unknown_then_transient_get.remove(key) {
+                state.transient_get_once.insert(key.to_owned());
+            }
             return Err(ObjectStoreError::new(
                 ObjectStoreOperation::Put,
                 key,
@@ -148,17 +170,20 @@ impl ObjectStore for MemoryStore {
     }
 
     async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
-        Ok(self
-            .state
-            .lock()
-            .await
-            .objects
-            .get(key)
-            .map(|body| ObjectContent {
-                bytes: body.clone(),
-                etag: format!("{:x}", xxhash_rust::xxh3::xxh3_64(body)),
-                object_size: body.len() as u64,
-            }))
+        let mut state = self.state.lock().await;
+        if state.transient_get_once.remove(key) {
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Get,
+                key,
+                ObjectStoreErrorKind::Transient,
+                "injected read failure",
+            ));
+        }
+        Ok(state.objects.get(key).map(|body| ObjectContent {
+            bytes: body.clone(),
+            etag: format!("{:x}", xxhash_rust::xxh3::xxh3_64(body)),
+            object_size: body.len() as u64,
+        }))
     }
 
     async fn get_range(
@@ -275,6 +300,42 @@ fn epoch_start(epoch: u64, seq: u64) -> Bytes {
     .expect("test EpochStart encodes")
 }
 
+fn rebuild_batch_with_header(original: &[u8], mut header: LogBatchHeader, unknown: &[u8]) -> Bytes {
+    let original_header_length =
+        u32::from_le_bytes(original[10..14].try_into().expect("test header length")) as usize;
+    let original_offsets: Vec<_> = header
+        .partition_frames
+        .iter()
+        .map(|frame| frame.byte_offset)
+        .collect();
+    let mut offset_delta = 0_i64;
+    let header_bytes = loop {
+        for (frame, original_offset) in header.partition_frames.iter_mut().zip(&original_offsets) {
+            frame.byte_offset = u64::try_from(*original_offset as i64 + offset_delta)
+                .expect("test offset remains positive");
+        }
+        let encoded = header.encode_to_vec();
+        let next_delta =
+            encoded.len() as i64 + unknown.len() as i64 - original_header_length as i64;
+        if next_delta == offset_delta {
+            break encoded;
+        }
+        offset_delta = next_delta;
+    };
+    let mut rebuilt = Vec::new();
+    rebuilt.extend_from_slice(&original[..10]);
+    rebuilt.extend_from_slice(
+        &u32::try_from(header_bytes.len() + unknown.len())
+            .expect("test header length fits")
+            .to_le_bytes(),
+    );
+    rebuilt.extend_from_slice(&header_bytes);
+    rebuilt.extend_from_slice(unknown);
+    rebuilt.extend_from_slice(&original[14 + original_header_length..original.len() - 16]);
+    rebuilt.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&rebuilt).to_le_bytes());
+    Bytes::from(rebuilt)
+}
+
 #[tokio::test]
 async fn codec_round_trip_range_read_and_corruption() {
     let store = MemoryStore::default();
@@ -331,6 +392,78 @@ async fn codec_round_trip_range_read_and_corruption() {
         read_partition_records(&store, &stream().batch_key(1), 2).await,
         Err(LogError::Corrupt(_))
     ));
+}
+
+#[tokio::test]
+async fn decoder_accepts_additive_unknown_header_fields() {
+    let store = MemoryStore::default();
+    let original = batch(1, 1, b"future header");
+    let header_length = u32::from_le_bytes(original[10..14].try_into().unwrap()) as usize;
+    let header = LogBatchHeader::decode(&original[14..14 + header_length]).unwrap();
+    let future = rebuild_batch_with_header(&original, header, &[0xa0, 0x06, 0x01]);
+    assert_eq!(
+        decode_batch(&future).unwrap().records[0].bytes,
+        "future header"
+    );
+    store.insert(stream().batch_key(1), future).await;
+    let (_, records) = read_partition_records(&store, &stream().batch_key(1), 2)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(records[0].bytes, "future header");
+}
+
+#[tokio::test]
+async fn node_ids_are_validated_before_key_use_and_after_decode() {
+    let mut invalid_stream = stream();
+    invalid_stream.node_id = "node/a".to_owned();
+    let invalid_content = BatchContent {
+        stream: invalid_stream.clone(),
+        epoch: 1,
+        seq: 1,
+        sealed_at_unix_micros: 0,
+        records: vec![BatchRecord {
+            partition: 2,
+            bytes: Bytes::from_static(b"value"),
+        }],
+        epoch_start_writer: None,
+    };
+    assert!(matches!(
+        encode_batch(&invalid_content),
+        Err(LogError::Invalid(_))
+    ));
+    let store = Arc::new(MemoryStore::default());
+    assert!(matches!(
+        CommitPipeline::start(
+            store.clone(),
+            Arc::new(FixedClock),
+            invalid_stream.clone(),
+            1,
+            1,
+            CommitPipelineConfig::default()
+        ),
+        Err(LogError::Invalid(_))
+    ));
+    assert!(matches!(
+        recover_stream(
+            store.as_ref(),
+            &FixedClock,
+            &invalid_stream,
+            0,
+            0,
+            1,
+            "writer"
+        )
+        .await,
+        Err(LogError::Invalid(_))
+    ));
+
+    let original = batch(1, 1, b"value");
+    let header_length = u32::from_le_bytes(original[10..14].try_into().unwrap()) as usize;
+    let mut header = LogBatchHeader::decode(&original[14..14 + header_length]).unwrap();
+    header.node_id = "node/a".to_owned();
+    let forged = rebuild_batch_with_header(&original, header, &[]);
+    assert!(matches!(decode_batch(&forged), Err(LogError::Corrupt(_))));
 }
 
 #[tokio::test]
@@ -571,6 +704,21 @@ async fn recovery_handles_all_precondition_outcomes() {
         .await,
         Err(LogError::Fenced)
     ));
+}
+
+#[tokio::test]
+async fn epoch_start_retry_uses_the_original_bytes() {
+    let store = MemoryStore::default();
+    store
+        .inject_unknown_then_transient_readback(stream().batch_key(1))
+        .await;
+    let clock = AdvancingClock::default();
+    let recovered = recover_stream(&store, &clock, &stream(), 0, 0, 1, "writer")
+        .await
+        .unwrap();
+    assert_eq!(recovered.epoch_start_seq, 1);
+    assert_eq!(recovered.next_seq, 2);
+    assert!(store.put_count.load(Ordering::SeqCst) >= 2);
 }
 
 #[tokio::test]
@@ -846,6 +994,108 @@ async fn large_batch_uses_store_multipart_path() {
     assert_eq!(ticket.committed.await.unwrap().unwrap(), 1);
     assert_eq!(committed.recv().await.unwrap().seq, 1);
     assert_eq!(store.multipart_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn oversized_records_are_invalid_before_write() {
+    let oversized = Bytes::from(vec![0_u8; 32 * 1024 * 1024 + 1]);
+    let content = BatchContent {
+        stream: stream(),
+        epoch: 1,
+        seq: 1,
+        sealed_at_unix_micros: 0,
+        records: vec![BatchRecord {
+            partition: 2,
+            bytes: oversized.clone(),
+        }],
+        epoch_start_writer: None,
+    };
+    assert!(matches!(encode_batch(&content), Err(LogError::Invalid(_))));
+    let store = Arc::new(MemoryStore::default());
+    let (pipeline, _) = CommitPipeline::start(
+        store.clone(),
+        Arc::new(FixedClock),
+        stream(),
+        1,
+        1,
+        CommitPipelineConfig::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        pipeline.propose(2, oversized, true).await,
+        Err(LogError::Invalid(_))
+    ));
+    assert_eq!(store.put_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pipeline_seals_before_partition_frame_exceeds_decoder_limit() {
+    let record = Bytes::from(vec![0_u8; 32 * 1024 * 1024]);
+    let content = BatchContent {
+        stream: stream(),
+        epoch: 1,
+        seq: 1,
+        sealed_at_unix_micros: 0,
+        records: vec![
+            BatchRecord {
+                partition: 2,
+                bytes: record.clone(),
+            },
+            BatchRecord {
+                partition: 2,
+                bytes: record.clone(),
+            },
+        ],
+        epoch_start_writer: None,
+    };
+    assert!(matches!(encode_batch(&content), Err(LogError::Invalid(_))));
+
+    let store = Arc::new(MemoryStore::default());
+    let config = CommitPipelineConfig {
+        batch_window: Duration::from_secs(1),
+        target_batch_bytes: usize::MAX,
+        ..Default::default()
+    };
+    let (pipeline, mut committed) =
+        CommitPipeline::start(store.clone(), Arc::new(FixedClock), stream(), 1, 1, config).unwrap();
+    let first = pipeline.propose(2, record.clone(), false).await.unwrap();
+    let second = pipeline.propose(2, record, false).await.unwrap();
+    while store.put_count.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(first.committed.await.unwrap().unwrap(), 1);
+    assert_eq!(second.committed.await.unwrap().unwrap(), 2);
+    assert_eq!(committed.recv().await.unwrap().seq, 1);
+    assert_eq!(committed.recv().await.unwrap().seq, 2);
+    assert_eq!(
+        decode_batch(
+            &store
+                .get(&stream().batch_key(1))
+                .await
+                .unwrap()
+                .unwrap()
+                .bytes
+        )
+        .unwrap()
+        .records
+        .len(),
+        1
+    );
+    assert_eq!(
+        decode_batch(
+            &store
+                .get(&stream().batch_key(2))
+                .await
+                .unwrap()
+                .unwrap()
+                .bytes
+        )
+        .unwrap()
+        .records
+        .len(),
+        1
+    );
 }
 
 #[tokio::test(start_paused = true)]
