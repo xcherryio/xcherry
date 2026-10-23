@@ -72,10 +72,14 @@ pub(crate) fn make_invocation_pending(
         });
         cursor.rows.put_lock(transaction, lock_key, &lock);
     }
-    let previous = step
-        .invocation
-        .take()
-        .filter(|invocation| invocation.method == method as i32);
+    let mut previous = step.invocation.take();
+    if let Some(other_method) = previous
+        .as_mut()
+        .filter(|invocation| invocation.method != method as i32)
+    {
+        release_heartbeat_checkpoint(transaction, cursor, &step.step_execution_id, other_method)?;
+        previous = None;
+    }
     step.invocation = Some(StepInvocationRecord {
         method: method as i32,
         phase: StepInvocationPhase::Pending as i32,
@@ -98,6 +102,23 @@ pub(crate) fn make_invocation_pending(
         attempt,
     });
     Ok(())
+}
+
+/// Releases the invocation's heartbeat checkpoint, if any, when the invocation ends for good.
+pub(crate) fn release_heartbeat_checkpoint(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &RunCursor,
+    step_execution_id: &str,
+    invocation: &mut StepInvocationRecord,
+) -> Result<(), ApplyError> {
+    let Some(checkpoint) = invocation.heartbeat_checkpoint.take() else {
+        return Ok(());
+    };
+    let holder = ValueHolder::HeartbeatCheckpoint {
+        step_execution_id: step_execution_id.to_owned(),
+        method: invocation.method,
+    };
+    release_stored_value(transaction, cursor.rows, &checkpoint, &holder, cursor.seq)
 }
 
 /// Whether the owner may start this pending attempt: every lock key is free and this call is
