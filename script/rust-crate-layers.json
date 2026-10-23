@@ -34,5 +34,31 @@
     },
     "ffi_crates": [],
     "print_crates": []
+  },
+  "server-zd": {
+    "layers": {
+      "dexzd-protocol": 0,
+      "dexzd-clock": 1,
+      "dexzd-keyspace": 1,
+      "dexzd-object-store": 1,
+      "dexzd-visibility-query": 1,
+      "dexzd-apply": 2,
+      "dexzd-cluster-metadata": 2,
+      "dexzd-log": 2,
+      "dexzd-stream-store": 2,
+      "dexzd-storage": 3,
+      "dexzd-worker-dispatch": 3,
+      "dexzd-engine": 4,
+      "dexzd-search": 4,
+      "dexzd-api": 5,
+      "dexzd-server": 6,
+      "dexzd-e2e-tests": 7,
+      "dexzd-simulation": 7
+    },
+    "ffi_crates": [],
+    "print_crates": [
+      "dexzd-protocol",
+      "dexzd-server"
+    ]
   }
 }

@@ -1,0 +1,25 @@
+[package]
+name = "dexzd-object-store"
+description = "Object storage interface used by server-zd, with an S3 implementation and a fault-injecting in-memory implementation for tests"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+s3mock-server.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

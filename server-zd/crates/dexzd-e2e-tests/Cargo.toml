@@ -1,0 +1,25 @@
+[package]
+name = "dexzd-e2e-tests"
+description = "End-to-end tests that start s3mock and dex-server-zd in process and drive them through the real gRPC protocol"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-protocol.workspace = true
+dexzd-server.workspace = true
+s3mock-server.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
