@@ -8,5 +8,9 @@
 
 //! SearchFlows backends for server-zd: a builtin evaluator over local search documents and a ParadeDB projection.
 
+mod search_backend;
+
+pub use search_backend::{SearchBackend, SearchError, SearchPage, SearchRequest};
+
 /// ParadeDB schema, projection rows, and visibility query translation.
 pub mod paradedb;

@@ -9,6 +9,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+dexzd-keyspace.workspace = true
 dexzd-protocol.workspace = true
 dexzd-storage.workspace = true
 dexzd-visibility-query.workspace = true

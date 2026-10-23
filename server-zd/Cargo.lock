@@ -1085,6 +1085,8 @@ dependencies = [
 name = "dexzd-search"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "dexzd-keyspace",
  "dexzd-protocol",
  "dexzd-storage",
  "dexzd-visibility-query",
