@@ -108,7 +108,7 @@ const SECOND: i64 = 1_000_000;
 
 impl Harness {
     fn new(flow_id: &str) -> Self {
-        let hasher = PartitionHasher::new(&[7; 16], 1024).unwrap();
+        let hasher = PartitionHasher::new(&[7; 16], 1024).expect("valid partition hasher");
         let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
         Self {
             state: MemoryState::default(),
@@ -143,8 +143,10 @@ impl Harness {
 
     fn apply(&mut self, body: Command) -> ApplyOutcome {
         let command = self.command(body);
-        let outcome = apply_flow_command(&self.context, &self.state, &command).unwrap();
-        let again = apply_flow_command(&self.context, &self.state, &command).unwrap();
+        let outcome =
+            apply_flow_command(&self.context, &self.state, &command).expect("apply succeeds");
+        let again =
+            apply_flow_command(&self.context, &self.state, &command).expect("apply succeeds");
         assert_eq!(outcome.writes, again.writes, "apply must be deterministic");
         self.state.commit(&outcome);
         outcome
@@ -164,25 +166,23 @@ impl Harness {
             hard_delete_objects: Vec::new(),
             request_fingerprint: Vec::new(),
         }));
-        if let Some(command_reply::Reply::StartFlow(reply)) = &outcome.reply.reply {
-            if !reply.is_existing_run {
-                self.run_id = reply.run_id.clone();
-            }
+        if let Some(command_reply::Reply::StartFlow(reply)) = &outcome.reply.reply
+            && !reply.is_existing_run
+        {
+            self.run_id = reply.run_id.clone();
         }
         outcome
     }
 
     fn run_record(&self) -> RunRecord {
-        let run_id = RunId::from_slice(&self.run_id).unwrap();
+        let run_id = RunId::from_slice(&self.run_id).expect("the harness has a run");
         let key = run_singleton_key(self.context.flow_hash, run_id, RunTable::RunRecord);
-        RunRecord::decode(
-            self.state
-                .get(ColumnFamily::Flow, &key)
-                .unwrap()
-                .unwrap()
-                .as_slice(),
-        )
-        .unwrap()
+        let bytes = self
+            .state
+            .get(ColumnFamily::Flow, &key)
+            .expect("memory reads never fail")
+            .expect("the run record exists");
+        RunRecord::decode(bytes.as_slice()).expect("the run record decodes")
     }
 
     fn start_attempt(
