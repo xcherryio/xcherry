@@ -185,6 +185,13 @@ async fn unsupported_lifecycle_filters_fail_without_replacing_the_configuration(
         );
     }
     let misnested = "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>keep/</Prefix><Days>1</Days></Filter></Rule></LifecycleConfiguration>";
+    let nested_prefix = "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix><Prefix>logs/</Prefix></Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>";
+    assert_eq!(
+        send_with_md5(&server, "PUT /raw?lifecycle", nested_prefix)
+            .await
+            .0,
+        400
+    );
     assert_eq!(
         send_with_md5(&server, "PUT /raw?lifecycle", misnested)
             .await

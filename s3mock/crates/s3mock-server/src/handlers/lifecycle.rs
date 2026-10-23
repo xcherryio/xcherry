@@ -105,7 +105,7 @@ fn parse_rule(rule: &XmlElement) -> Result<LifecycleRule, S3Error> {
             }
         }
     }
-    let is_enabled = match rule.child_text("Status").map(str::trim) {
+    let is_enabled = match rule.child_text("Status")?.map(str::trim) {
         Some("Enabled") => true,
         Some("Disabled") => false,
         _ => {
@@ -114,7 +114,7 @@ fn parse_rule(rule: &XmlElement) -> Result<LifecycleRule, S3Error> {
             ));
         }
     };
-    let prefix = match (rule.child("Filter"), rule.child_text("Prefix")) {
+    let prefix = match (rule.child("Filter"), rule.child_text("Prefix")?) {
         (Some(filter), None) => parse_filter(filter)?,
         (None, Some(legacy_prefix)) => legacy_prefix.to_owned(),
         (Some(_), Some(_)) => {
@@ -127,7 +127,7 @@ fn parse_rule(rule: &XmlElement) -> Result<LifecycleRule, S3Error> {
         }
     };
     let mut parsed = LifecycleRule {
-        id: rule.child_text("ID").map(str::to_owned),
+        id: rule.child_text("ID")?.map(str::to_owned),
         is_enabled,
         prefix,
         ..LifecycleRule::default()
@@ -139,7 +139,7 @@ fn parse_rule(rule: &XmlElement) -> Result<LifecycleRule, S3Error> {
         }
         parsed.expiration_days = optional_positive(expiration, "Days")?;
         parsed.expired_object_delete_marker = expiration
-            .child_text("ExpiredObjectDeleteMarker")
+            .child_text("ExpiredObjectDeleteMarker")?
             .map(|value| match value.trim() {
                 "true" => Ok(true),
                 "false" => Ok(false),
@@ -214,7 +214,9 @@ fn parse_filter(filter: &XmlElement) -> Result<String, S3Error> {
         return Ok(String::new());
     };
     match condition.name.as_str() {
-        "Prefix" => Ok(condition.text.clone()),
+        "Prefix" => filter
+            .child_text("Prefix")
+            .map(|prefix| prefix.unwrap_or_default().to_owned()),
         "And" => {
             expect_only_children(
                 condition,
@@ -234,7 +236,7 @@ fn parse_filter(filter: &XmlElement) -> Result<String, S3Error> {
                 return Err(S3Error::not_implemented("lifecycle object size filters"));
             }
             Ok(condition
-                .child_text("Prefix")
+                .child_text("Prefix")?
                 .unwrap_or_default()
                 .to_owned())
         }
@@ -268,7 +270,7 @@ fn expect_only_children(element: &XmlElement, allowed: &[&str]) -> Result<(), S3
 
 fn optional_positive(element: &XmlElement, name: &str) -> Result<Option<u32>, S3Error> {
     element
-        .child_text(name)
+        .child_text(name)?
         .map(|text| {
             text.trim()
                 .parse::<u32>()

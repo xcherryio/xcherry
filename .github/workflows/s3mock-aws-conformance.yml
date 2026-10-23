@@ -39,6 +39,18 @@ jobs:
         with:
           role-to-assume: ${{ vars.S3MOCK_CONFORMANCE_AWS_ROLE_ARN }}
           aws-region: us-east-1
+      # A cancelled run cannot clean up after itself; no run lasts a day, so older buckets are leftovers.
+      - name: Delete conformance buckets left by earlier cancelled runs
+        env:
+          AWS_REGION: us-east-1
+        run: |
+          set -uo pipefail
+          cutoff="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%S)"
+          aws s3api list-buckets --output json \
+            | jq -r --arg cutoff "$cutoff" '.Buckets[] | select((.Name | startswith("s3mock-conformance-")) and .CreationDate < $cutoff) | .Name' \
+            > "$RUNNER_TEMP/s3mock-stale-buckets.txt"
+          echo "stale buckets: $(wc -l < "$RUNNER_TEMP/s3mock-stale-buckets.txt")"
+          cat "$RUNNER_TEMP/s3mock-stale-buckets.txt" >> "$RUNNER_TEMP/s3mock-conformance-buckets.txt"
       - name: Run the conformance suite against AWS S3
         env:
           S3MOCK_CONFORMANCE_TARGET: aws

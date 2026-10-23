@@ -112,7 +112,7 @@ pub(crate) async fn put_bucket_versioning(
         })?
         .to_bytes();
     let document = parse_document(&body, "VersioningConfiguration")?;
-    let versioning = match document.child_text("Status").map(str::trim) {
+    let versioning = match document.child_text("Status")?.map(str::trim) {
         Some("Enabled") => VersioningState::Enabled,
         Some("Suspended") => VersioningState::Suspended,
         _ => {
@@ -166,7 +166,7 @@ pub(crate) async fn put_object_lock_configuration(
     let body = read_small_body(body, headers, MAX_CONFIGURATION_BYTES).await?;
     body.verify_integrity(headers, false)?;
     let document = parse_document(&body.bytes, "ObjectLockConfiguration")?;
-    if document.child_text("ObjectLockEnabled").map(str::trim) != Some("Enabled") {
+    if document.child_text("ObjectLockEnabled")?.map(str::trim) != Some("Enabled") {
         return Err(S3Error::malformed_xml("ObjectLockEnabled must be Enabled"));
     }
     let default_retention = match document.child("Rule") {
@@ -190,12 +190,12 @@ fn parse_default_retention(retention: &XmlElement) -> Result<DefaultRetention, S
         )
     };
     let mode = retention
-        .child_text("Mode")
+        .child_text("Mode")?
         .and_then(|mode| RetentionMode::from_s3_name(mode.trim()))
         .ok_or_else(invalid)?;
     let parse_count = |element: &str| -> Result<Option<u32>, S3Error> {
         retention
-            .child_text(element)
+            .child_text(element)?
             .map(|text| {
                 text.trim()
                     .parse::<u32>()
