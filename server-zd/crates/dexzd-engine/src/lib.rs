@@ -7,3 +7,14 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 //! Runtime that proposes, commits, and applies server-zd commands and runs their effects: dispatch, timers, deliveries, and recovery.
+
+mod command_applier;
+mod runtime;
+
+pub use command_applier::CommandApplier;
+pub use runtime::{
+    CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
+    CommittedFlowCommand, FlowAddress, FlowCommandCommitter, HardDeleteReadError,
+    HardDeleteValueReader, RpcInvokeError, RpcWorkerInvoker, RuntimeEffectSink,
+    WorkerRpcInvocation, WorkerRpcResult,
+};

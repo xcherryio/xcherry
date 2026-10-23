@@ -1014,6 +1014,7 @@ dependencies = [
  "dexzd-log",
  "dexzd-object-store",
  "dexzd-protocol",
+ "dexzd-request-validation",
  "dexzd-storage",
  "dexzd-worker-dispatch",
  "futures",
@@ -1024,6 +1025,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
