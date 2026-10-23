@@ -12,17 +12,33 @@ from __future__ import annotations
 
 import os
 import time
+from functools import cache
 from typing import cast
 
 import grpc
+import pytest
 from dex.dexpb import dex_pb2 as pb
 from dex.dexpb import dex_pb2_grpc as pb_grpc
+from google.protobuf.empty_pb2 import Empty
 
 
 def flow_service_client() -> pb_grpc.FlowServiceStub:
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
     channel = grpc.insecure_channel(server_address)
     return pb_grpc.FlowServiceStub(channel)  # type: ignore[no-untyped-call]
+
+
+def skip_if_server_zd(feature: str) -> None:
+    if _server_engine() == pb.SERVER_ENGINE_ZD:
+        pytest.skip(f"server-zd does not support {feature}")
+
+
+@cache
+def _server_engine() -> int:
+    server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
+    with grpc.insecure_channel(server_address) as channel:
+        server_info = pb_grpc.FlowServiceStub(channel).GetServerInfo(Empty())
+    return int(server_info.server_engine)
 
 
 def await_live_worker_failure(
