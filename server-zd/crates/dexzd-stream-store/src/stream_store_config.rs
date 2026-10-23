@@ -11,7 +11,7 @@
 pub struct StreamStoreConfig {
     /// Enables writes and reads. Default false, matching the production Go Server.
     pub enabled: bool,
-    /// Supplies capacity when a write has no explicit Stream capacity. Default 10 MiB.
+    /// Supplies capacity for internal writes without one. Default 0 rejects missing capacity.
     pub capacity_per_stream_bytes: u64,
     /// Limits the serialized Value size. Default 100 KiB.
     pub max_message_bytes: usize,
@@ -27,7 +27,7 @@ impl Default for StreamStoreConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            capacity_per_stream_bytes: 10 * 1024 * 1024,
+            capacity_per_stream_bytes: 0,
             max_message_bytes: 100 * 1024,
             max_read_messages: 1000,
             trim_trigger_percent: 90,
@@ -38,9 +38,6 @@ impl Default for StreamStoreConfig {
 
 impl StreamStoreConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if self.capacity_per_stream_bytes == 0 {
-            return Err("capacity_per_stream_bytes must be positive");
-        }
         if self.max_message_bytes == 0 {
             return Err("max_message_bytes must be positive");
         }

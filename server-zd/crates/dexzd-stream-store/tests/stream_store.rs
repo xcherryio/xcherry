@@ -39,7 +39,7 @@ fn write_input(
         flow_id: flow_id.to_owned(),
         flow_type: flow_type.to_owned(),
         stream_name: stream_name.to_owned(),
-        stream_capacity_bytes: Some(capacity),
+        stream_capacity_bytes: Some(capacity as i64),
         value: string_value(value),
         source: source.to_owned(),
     }
@@ -189,7 +189,29 @@ async fn capacity_is_shared_across_flows_and_trimmed_in_global_fifo_order() {
         + sample.source.len() as u64
         + 512;
     let capacity = charge * 10;
-    for index in 0..10 {
+    for index in 0..8 {
+        let flow_id = if index % 2 == 0 { "flow-a" } else { "flow-b" };
+        store
+            .write(write_input(
+                0,
+                "OrderFlow",
+                flow_id,
+                "Progress",
+                &format!("source-{index}"),
+                "value-0000",
+                capacity,
+            ))
+            .await
+            .unwrap();
+    }
+    tokio::task::yield_now().await;
+    let below_trigger = store
+        .list(0, "OrderFlow", "flow-a", "Progress", 10, "")
+        .await
+        .unwrap();
+    assert_eq!(below_trigger.messages.len(), 4);
+    assert_eq!(below_trigger.messages.last().unwrap().source, "source-0");
+    for index in 8..10 {
         let flow_id = if index % 2 == 0 { "flow-a" } else { "flow-b" };
         store
             .write(write_input(
@@ -454,7 +476,7 @@ async fn exact_protobuf_size_and_configuration_limits_apply() {
     };
     assert!(matches!(
         StreamStore::new(&invalid),
-        Err(StreamStoreError::InvalidArgument(_))
+        Err(StreamStoreError::InvalidConfig(_))
     ));
 }
 
@@ -654,6 +676,31 @@ async fn worker_write_is_best_effort_and_close_wakes_readers() {
     assert!(
         !store
             .write_worker_best_effort(
+                write_input(
+                    0,
+                    "OrderFlow",
+                    "flow-a",
+                    "Progress",
+                    "ignored",
+                    "rejected",
+                    1 << 20,
+                ),
+                "",
+            )
+            .await
+    );
+    assert_eq!(
+        store
+            .list(0, "OrderFlow", "flow-a", "Progress", 10, "")
+            .await
+            .unwrap()
+            .messages
+            .len(),
+        1,
+    );
+    assert!(
+        !store
+            .write_worker_best_effort(
                 write_input(0, "OrderFlow", "flow-a", "Progress", "ignored", "worker", 1),
                 "step-17"
             )
@@ -680,8 +727,8 @@ async fn worker_write_is_best_effort_and_close_wakes_readers() {
     ));
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn concurrent_capacity_rejections_schedule_one_effective_trim() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_capacity_rejections_do_not_over_trim() {
     let store = Arc::new(StreamStore::new(&enabled_config()).unwrap());
     let sample = write_input(
         0,
@@ -710,10 +757,13 @@ async fn concurrent_capacity_rejections_schedule_one_effective_trim() {
             .await
             .unwrap();
     }
+    let start_barrier = Arc::new(tokio::sync::Barrier::new(21));
     let mut writers = Vec::new();
     for _ in 0..20 {
         let writer_store = Arc::clone(&store);
+        let writer_barrier = Arc::clone(&start_barrier);
         let writer = tokio::spawn(async move {
+            writer_barrier.wait().await;
             writer_store
                 .write(write_input(
                     0,
@@ -728,6 +778,7 @@ async fn concurrent_capacity_rejections_schedule_one_effective_trim() {
         });
         writers.push(writer);
     }
+    start_barrier.wait().await;
     let mut rejected = 0;
     for writer in writers {
         match writer.await.unwrap() {
@@ -826,4 +877,194 @@ async fn resume_token_can_read_after_a_store_restart() {
     .await;
     assert_eq!(second.source, "after");
     second_store.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_and_nonpositive_capacity_are_rejected_by_default() {
+    let store = StreamStore::new(&enabled_config()).unwrap();
+    let mut missing = write_input(
+        0,
+        "OrderFlow",
+        "flow-a",
+        "Progress",
+        "source",
+        "value",
+        1 << 20,
+    );
+    missing.stream_capacity_bytes = None;
+    assert_eq!(
+        store.write(missing).await,
+        Err(StreamStoreError::InvalidArgument(
+            "stream_capacity_bytes is required"
+        ))
+    );
+    for capacity in [0, -1] {
+        let mut invalid = write_input(
+            0,
+            "OrderFlow",
+            "flow-a",
+            "Progress",
+            "source",
+            "value",
+            1 << 20,
+        );
+        invalid.stream_capacity_bytes = Some(capacity);
+        assert_eq!(
+            store.write(invalid).await,
+            Err(StreamStoreError::InvalidArgument(
+                "stream_capacity_bytes must be positive"
+            ))
+        );
+    }
+    store.close().await.unwrap();
+
+    let configured = StreamStoreConfig {
+        capacity_per_stream_bytes: 1 << 20,
+        ..enabled_config()
+    };
+    let fallback_store = StreamStore::new(&configured).unwrap();
+    let mut internal_write = write_input(
+        0,
+        "OrderFlow",
+        "flow-a",
+        "Progress",
+        "source",
+        "value",
+        1 << 20,
+    );
+    internal_write.stream_capacity_bytes = None;
+    fallback_store.write(internal_write).await.unwrap();
+    fallback_store.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn expired_deadline_and_post_close_calls_have_distinct_results() {
+    let store = StreamStore::new(&enabled_config()).unwrap();
+    assert!(
+        store
+            .read(
+                0,
+                "OrderFlow",
+                "flow-a",
+                "Progress",
+                "",
+                Instant::now() - Duration::from_millis(1)
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store.close().await.unwrap();
+    assert_eq!(
+        store
+            .write(write_input(
+                0,
+                "OrderFlow",
+                "flow-a",
+                "Progress",
+                "source",
+                "value",
+                1 << 20
+            ))
+            .await,
+        Err(StreamStoreError::Closed)
+    );
+    assert!(matches!(
+        store
+            .read(
+                0,
+                "OrderFlow",
+                "flow-a",
+                "Progress",
+                "",
+                Instant::now() + Duration::from_secs(1)
+            )
+            .await,
+        Err(StreamStoreError::Closed)
+    ));
+    assert!(matches!(
+        store
+            .list(0, "OrderFlow", "flow-a", "Progress", 1, "")
+            .await,
+        Err(StreamStoreError::Closed)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_close_calls_both_finish_after_shutdown() {
+    let store = Arc::new(StreamStore::new(&enabled_config()).unwrap());
+    store
+        .write(write_input(
+            0,
+            "OrderFlow",
+            "flow-a",
+            "Progress",
+            "source",
+            "value",
+            1 << 20,
+        ))
+        .await
+        .unwrap();
+    let start_barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first_store = Arc::clone(&store);
+    let first_barrier = Arc::clone(&start_barrier);
+    let first_close = tokio::spawn(async move {
+        first_barrier.wait().await;
+        first_store.close().await
+    });
+    let second_store = Arc::clone(&store);
+    let second_barrier = Arc::clone(&start_barrier);
+    let second_close = tokio::spawn(async move {
+        second_barrier.wait().await;
+        second_store.close().await
+    });
+    start_barrier.wait().await;
+    first_close.await.unwrap().unwrap();
+    second_close.await.unwrap().unwrap();
+    assert!(matches!(
+        store
+            .list(0, "OrderFlow", "flow-a", "Progress", 1, "")
+            .await,
+        Err(StreamStoreError::Closed)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn configuration_rules_fail_at_startup() {
+    let configurations = [
+        StreamStoreConfig {
+            max_message_bytes: 0,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            max_read_messages: 0,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            max_read_messages: 1001,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            trim_trigger_percent: 0,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            trim_trigger_percent: 100,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            trim_target_percent: 0,
+            ..enabled_config()
+        },
+        StreamStoreConfig {
+            trim_target_percent: 90,
+            ..enabled_config()
+        },
+    ];
+    for configuration in configurations {
+        assert!(matches!(
+            StreamStore::new(&configuration),
+            Err(StreamStoreError::InvalidConfig(_))
+        ));
+    }
 }

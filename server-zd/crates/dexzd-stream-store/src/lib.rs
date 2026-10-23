@@ -18,14 +18,14 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 const ESTIMATED_MESSAGE_OVERHEAD_BYTES: u64 = 512;
 const TRIM_BATCH_SIZE: usize = 256;
 const TRIM_BATCH_PAUSE: Duration = Duration::from_millis(1);
 
-/// Store failures map to gRPC codes as documented on each variant. Missing Flows never fail.
+/// Store errors map to gRPC codes below; read None maps to DeadlineExceeded/LONG_POLL_TIME_OUT.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StreamStoreError {
     /// Disabled storage maps to FailedPrecondition.
@@ -34,6 +34,9 @@ pub enum StreamStoreError {
     /// Invalid input maps to InvalidArgument.
     #[error("invalid Stream Store argument: {0}")]
     InvalidArgument(&'static str),
+    /// Invalid startup configuration has no gRPC mapping.
+    #[error("invalid Stream Store configuration: {0}")]
+    InvalidConfig(&'static str),
     /// Oversized Values map to ResourceExhausted.
     #[error("serialized Stream Value exceeds configured max_message_bytes")]
     MessageTooLarge,
@@ -51,13 +54,13 @@ pub enum StreamStoreError {
     TrimWorkerFailed,
 }
 
-/// Inputs for one Stream append. An explicit capacity matches WriteStreamRequest; None uses the configured capacity.
+/// Inputs for one Stream append. API and Worker callers must pass the signed proto capacity.
 pub struct WriteStreamInput {
     pub tenant_id: u64,
     pub flow_id: String,
     pub flow_type: String,
     pub stream_name: String,
-    pub stream_capacity_bytes: Option<u64>,
+    pub stream_capacity_bytes: Option<i64>,
     pub value: Value,
     pub source: String,
 }
@@ -82,7 +85,7 @@ pub struct StreamStore {
     config: StreamStoreConfig,
     state: Arc<Mutex<StoreState>>,
     trim_sender: mpsc::UnboundedSender<TrimCommand>,
-    trim_worker: Mutex<Option<JoinHandle<()>>>,
+    trim_worker: AsyncMutex<Option<JoinHandle<()>>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -134,40 +137,48 @@ struct ReadWaiter {
 }
 
 impl StreamStore {
-    /// Starts the owned trim worker. Configuration errors are InvalidArgument.
+    /// Starts the trim worker in the current Tokio runtime. Invalid configuration fails startup.
     pub fn new(config: &StreamStoreConfig) -> Result<Self, StreamStoreError> {
-        config
-            .validate()
-            .map_err(StreamStoreError::InvalidArgument)?;
+        config.validate().map_err(StreamStoreError::InvalidConfig)?;
         let state = Arc::new(Mutex::new(StoreState::default()));
         let (trim_sender, trim_receiver) = mpsc::unbounded_channel();
         let worker_state = Arc::clone(&state);
-        let trim_worker =
-            tokio::spawn(async move { run_trim_worker(worker_state, trim_receiver).await });
+        let worker_sender = trim_sender.clone();
+        let trim_worker = tokio::spawn(async move {
+            run_trim_worker(worker_state, trim_receiver, worker_sender).await
+        });
         Ok(Self {
             config: config.clone(),
             state,
             trim_sender,
-            trim_worker: Mutex::new(Some(trim_worker)),
+            trim_worker: AsyncMutex::new(Some(trim_worker)),
         })
     }
 
     /// Appends a Value independently of Flow existence. Capacity is shared by tenant, Flow type, and Stream name.
     pub async fn write(&self, input: WriteStreamInput) -> Result<(), StreamStoreError> {
-        if !self.config.enabled {
-            return Err(StreamStoreError::Disabled);
-        }
         validate_identity(&input.flow_id, &input.flow_type, &input.stream_name)?;
         if input.source.is_empty() {
             return Err(StreamStoreError::InvalidArgument("source is required"));
         }
-        let capacity = input
-            .stream_capacity_bytes
-            .unwrap_or(self.config.capacity_per_stream_bytes);
-        if capacity == 0 {
-            return Err(StreamStoreError::InvalidArgument(
-                "stream_capacity_bytes must be positive",
-            ));
+        let capacity = match input.stream_capacity_bytes {
+            Some(capacity) if capacity > 0 => capacity as u64,
+            Some(_) => {
+                return Err(StreamStoreError::InvalidArgument(
+                    "stream_capacity_bytes must be positive",
+                ));
+            }
+            None if self.config.capacity_per_stream_bytes > 0 => {
+                self.config.capacity_per_stream_bytes
+            }
+            None => {
+                return Err(StreamStoreError::InvalidArgument(
+                    "stream_capacity_bytes is required",
+                ));
+            }
+        };
+        if !self.config.enabled {
+            return Err(StreamStoreError::Disabled);
         }
         let value_bytes = input.value.encoded_len();
         if value_bytes > self.config.max_message_bytes {
@@ -237,11 +248,24 @@ impl StreamStore {
         mut input: WriteStreamInput,
         step_execution_id: &str,
     ) -> bool {
+        if step_execution_id.is_empty() {
+            tracing::warn!(
+                flow_type = %input.flow_type,
+                stream_name = %input.stream_name,
+                source = "#",
+                reason = "missing Step execution ID",
+                "Worker Stream write was dropped"
+            );
+            return false;
+        }
         input.source = format!("#{step_execution_id}");
+        let flow_type = input.flow_type.clone();
+        let stream_name = input.stream_name.clone();
+        let source = input.source.clone();
         match self.write(input).await {
             Ok(()) => true,
             Err(error) => {
-                tracing::warn!(%error, "Worker Stream write was dropped");
+                tracing::warn!(%error, %flow_type, %stream_name, %source, "Worker Stream write was dropped");
                 false
             }
         }
@@ -257,10 +281,10 @@ impl StreamStore {
         resume_token: &str,
         deadline: Instant,
     ) -> Result<Option<StreamMessage>, StreamStoreError> {
+        validate_identity(flow_id, flow_type, stream_name)?;
         if !self.config.enabled {
             return Err(StreamStoreError::Disabled);
         }
-        validate_identity(flow_id, flow_type, stream_name)?;
         let scope_key = ScopeKey {
             tenant_id,
             flow_type: flow_type.to_owned(),
@@ -281,11 +305,10 @@ impl StreamStore {
                 }
                 let scope = state.scopes.entry(scope_key.clone()).or_default();
                 let instance = scope.instance(flow_id);
-                if let Some(entry) = instance
+                let next_index = instance
                     .messages
-                    .iter()
-                    .find(|entry| entry.identity > cursor)
-                {
+                    .partition_point(|entry| entry.identity <= cursor);
+                if let Some(entry) = instance.messages.get(next_index) {
                     return Ok(Some(make_message(entry, &scope_key)));
                 }
                 instance.waiters += 1;
@@ -316,10 +339,10 @@ impl StreamStore {
         page_size: usize,
         before_page_token: &str,
     ) -> Result<StreamMessagePage, StreamStoreError> {
+        validate_identity(flow_id, flow_type, stream_name)?;
         if !self.config.enabled {
             return Err(StreamStoreError::Disabled);
         }
-        validate_identity(flow_id, flow_type, stream_name)?;
         if page_size == 0 || page_size > self.config.max_read_messages {
             return Err(StreamStoreError::InvalidArgument(
                 "page_size must be between 1 and max_read_messages",
@@ -346,15 +369,13 @@ impl StreamStore {
         let mut messages = Vec::with_capacity(page_size);
         let mut has_more = false;
         if let Some(entries) = entries {
-            for entry in entries.iter().rev() {
-                if cursor.is_some_and(|before| entry.identity >= before) {
-                    continue;
-                }
-                if messages.len() == page_size {
-                    has_more = true;
-                    break;
-                }
-                messages.push(make_message(entry, &scope_key));
+            let end_index = cursor.map_or(entries.len(), |before| {
+                entries.partition_point(|entry| entry.identity < before)
+            });
+            let start_index = end_index.saturating_sub(page_size);
+            has_more = start_index > 0;
+            for index in (start_index..end_index).rev() {
+                messages.push(make_message(&entries[index], &scope_key));
             }
         }
         let next_page_token = if has_more {
@@ -389,15 +410,11 @@ impl StreamStore {
         if self.trim_sender.send(TrimCommand::Shutdown).is_err() {
             tracing::debug!("Stream Store trim worker had already stopped");
         }
-        let trim_worker = self
-            .trim_worker
-            .lock()
-            .expect("Stream Store worker mutex is not poisoned")
-            .take();
-        if let Some(trim_worker) = trim_worker {
-            trim_worker
-                .await
-                .map_err(|_| StreamStoreError::TrimWorkerFailed)?;
+        let mut trim_worker = self.trim_worker.lock().await;
+        if let Some(worker_handle) = trim_worker.as_mut() {
+            let join_result = worker_handle.await;
+            *trim_worker = None;
+            join_result.map_err(|_| StreamStoreError::TrimWorkerFailed)?;
         }
         Ok(())
     }
@@ -405,12 +422,7 @@ impl StreamStore {
 
 impl Drop for StreamStore {
     fn drop(&mut self) {
-        if let Some(trim_worker) = self
-            .trim_worker
-            .lock()
-            .expect("Stream Store worker mutex is not poisoned")
-            .take()
-        {
+        if let Some(trim_worker) = self.trim_worker.get_mut().take() {
             trim_worker.abort();
         }
     }
@@ -497,41 +509,44 @@ impl StreamScope {
 async fn run_trim_worker(
     state: Arc<Mutex<StoreState>>,
     mut receiver: mpsc::UnboundedReceiver<TrimCommand>,
+    sender: mpsc::UnboundedSender<TrimCommand>,
 ) {
     while let Some(command) = receiver.recv().await {
         let TrimCommand::Scope(scope_key) = command else {
             return;
         };
-        loop {
-            let is_complete =
-                {
-                    let mut state = state
-                        .lock()
-                        .expect("Stream Store state mutex is not poisoned");
-                    if state.closed {
-                        return;
-                    }
-                    let Some(target_bytes) = state.pending_trims.get(&scope_key).copied() else {
-                        break;
-                    };
-                    let is_complete = state
-                        .scopes
-                        .get_mut(&scope_key)
-                        .is_none_or(|scope| scope.trim_batch(target_bytes));
-                    if is_complete {
-                        state.pending_trims.remove(&scope_key);
-                        if state.scopes.get(&scope_key).is_some_and(|scope| {
-                            scope.fifo.is_empty() && scope.instances.is_empty()
-                        }) {
-                            state.scopes.remove(&scope_key);
-                        }
-                    }
-                    is_complete
-                };
-            if is_complete {
-                break;
+        let is_complete = {
+            let mut state = state
+                .lock()
+                .expect("Stream Store state mutex is not poisoned");
+            if state.closed {
+                return;
             }
+            let Some(target_bytes) = state.pending_trims.get(&scope_key).copied() else {
+                continue;
+            };
+            let is_complete = state
+                .scopes
+                .get_mut(&scope_key)
+                .is_none_or(|scope| scope.trim_batch(target_bytes));
+            if is_complete {
+                state.pending_trims.remove(&scope_key);
+                if state
+                    .scopes
+                    .get(&scope_key)
+                    .is_some_and(|scope| scope.fifo.is_empty() && scope.instances.is_empty())
+                {
+                    state.scopes.remove(&scope_key);
+                }
+            }
+            is_complete
+        };
+        if !is_complete {
             tokio::time::sleep(TRIM_BATCH_PAUSE).await;
+            if sender.send(TrimCommand::Scope(scope_key)).is_err() {
+                tracing::warn!("Stream Store trim queue closed during trimming");
+                return;
+            }
         }
     }
 }
@@ -667,4 +682,53 @@ fn take_u32(bytes: &mut &[u8]) -> Option<u32> {
 fn take_u64(bytes: &mut &[u8]) -> Option<u64> {
     let raw: [u8; 8] = take_bytes(bytes, 8)?.try_into().ok()?;
     Some(u64::from_be_bytes(raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_reader_releases_empty_scope() {
+        let store = Arc::new(
+            StreamStore::new(&StreamStoreConfig {
+                enabled: true,
+                ..StreamStoreConfig::default()
+            })
+            .unwrap(),
+        );
+        let reader_store = Arc::clone(&store);
+        let reader = tokio::spawn(async move {
+            reader_store
+                .read(
+                    0,
+                    "OrderFlow",
+                    "flow-a",
+                    "Progress",
+                    "",
+                    Instant::now() + Duration::from_secs(10),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let has_waiter = store.state.lock().unwrap().scopes.values().any(|scope| {
+                    scope
+                        .instances
+                        .values()
+                        .any(|instance| instance.waiters == 1)
+                });
+                if has_waiter {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        reader.abort();
+        assert!(reader.await.unwrap_err().is_cancelled());
+        assert!(store.state.lock().unwrap().scopes.is_empty());
+        store.close().await.unwrap();
+    }
 }
