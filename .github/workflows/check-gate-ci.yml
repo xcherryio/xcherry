@@ -76,6 +76,11 @@ jobs:
             s3mock:
               - 's3mock/**'
               - '.github/workflows/s3mock-ci.yml'
+            server_zd:
+              - 'server-zd/**'
+              - 's3mock/**'
+              - 'protos/**'
+              - '.github/workflows/server-zd-ci.yml'
             examples_typescript:
               - 'examples/typescript/**'
               - '.github/workflows/examples-typescript-ci.yml'
@@ -109,6 +114,7 @@ jobs:
               - 'sdk-python/**'
               - 'sdk-rust/**'
               - 's3mock/**'
+              - 'server-zd/**'
               - 'web/**'
               - 'examples/go/**'
               - 'examples/java/**'
@@ -140,6 +146,7 @@ jobs:
           FILTER_EXAMPLES_PYTHON: ${{ steps.filter.outputs.examples_python }}
           FILTER_EXAMPLES_RUST: ${{ steps.filter.outputs.examples_rust }}
           FILTER_S3MOCK: ${{ steps.filter.outputs.s3mock }}
+          FILTER_SERVER_ZD: ${{ steps.filter.outputs.server_zd }}
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
@@ -169,6 +176,7 @@ jobs:
               "TypeScript SDK CI"
               "S3mock CI"
               "Server CI"
+              "Server ZD CI"
               "Server All-in-One CI"
               "Web CI"
             )
@@ -185,6 +193,7 @@ jobs:
             [[ "$FILTER_EXAMPLES_PYTHON" == "true" ]] && expected+=("Python examples CI")
             [[ "$FILTER_EXAMPLES_RUST" == "true" ]] && expected+=("Rust examples CI")
             [[ "$FILTER_S3MOCK" == "true" ]] && expected+=("S3mock CI")
+            [[ "$FILTER_SERVER_ZD" == "true" ]] && expected+=("Server ZD CI")
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")
