@@ -57,6 +57,7 @@ func (executeRecoveryFinishStep) Execute(
 }
 
 func TestStepRecovery(t *testing.T) {
+	skipIfServerZD(t, "Step failure policies")
 	flowID := newFlowID(t, "execute-recovery")
 	_, err := integClient.StartFlow(
 		integrationContext(t),

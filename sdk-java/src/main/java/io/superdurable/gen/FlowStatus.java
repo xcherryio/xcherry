@@ -30,6 +30,7 @@ public enum FlowStatus
   /**
    * <pre>
    * Reserved for reporting a backend hard timeout; applications must not depend on this status.
+   * server-zd never returns this status.
    * </pre>
    *
    * <code>FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY = 4;</code>
@@ -44,6 +45,10 @@ public enum FlowStatus
    */
   FLOW_STATUS_CANCELED(6),
   /**
+   * <pre>
+   * server-zd never returns this status.
+   * </pre>
+   *
    * <code>FLOW_STATUS_CONTINUED_AS_NEW = 7;</code>
    */
   FLOW_STATUS_CONTINUED_AS_NEW(7),
@@ -78,6 +83,7 @@ public enum FlowStatus
   /**
    * <pre>
    * Reserved for reporting a backend hard timeout; applications must not depend on this status.
+   * server-zd never returns this status.
    * </pre>
    *
    * <code>FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY = 4;</code>
@@ -92,6 +98,10 @@ public enum FlowStatus
    */
   public static final int FLOW_STATUS_CANCELED_VALUE = 6;
   /**
+   * <pre>
+   * server-zd never returns this status.
+   * </pre>
+   *
    * <code>FLOW_STATUS_CONTINUED_AS_NEW = 7;</code>
    */
   public static final int FLOW_STATUS_CONTINUED_AS_NEW_VALUE = 7;
@@ -159,7 +169,7 @@ public enum FlowStatus
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(10);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(11);
   }
 
   private static final FlowStatus[] VALUES = values();

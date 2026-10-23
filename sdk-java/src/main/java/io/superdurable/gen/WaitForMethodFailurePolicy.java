@@ -20,6 +20,11 @@ public enum WaitForMethodFailurePolicy
    */
   WAIT_FOR_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_FAILURE(1),
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE = 2;</code>
    */
   WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE(2),
@@ -44,6 +49,11 @@ public enum WaitForMethodFailurePolicy
    */
   public static final int WAIT_FOR_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_FAILURE_VALUE = 1;
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE = 2;</code>
    */
   public static final int WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE_VALUE = 2;
@@ -106,7 +116,7 @@ public enum WaitForMethodFailurePolicy
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(3);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(4);
   }
 
   private static final WaitForMethodFailurePolicy[] VALUES = values();

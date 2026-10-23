@@ -124,7 +124,7 @@ public enum IdReusePolicy
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(5);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(6);
   }
 
   private static final IdReusePolicy[] VALUES = values();

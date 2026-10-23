@@ -106,7 +106,7 @@ public enum SubFlowCompletionDeliveryStatus
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(25);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(26);
   }
 
   private static final SubFlowCompletionDeliveryStatus[] VALUES = values();

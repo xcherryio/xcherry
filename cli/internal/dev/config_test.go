@@ -230,7 +230,7 @@ func TestExternalTemporalNamespaceRequiresAddress(t *testing.T) {
 	}
 }
 
-func TestHelpListsFlagsWithTemporalLast(t *testing.T) {
+func TestHelpListsFlagsInOrder(t *testing.T) {
 	var output bytes.Buffer
 	_, err := parseConfig([]string{"-h"}, &output)
 	if err != nil && !errors.Is(err, flag.ErrHelp) {

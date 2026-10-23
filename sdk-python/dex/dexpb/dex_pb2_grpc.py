@@ -56,6 +56,7 @@ class FlowServiceStub:
     Canceled          — caller canceled the RPC context
     Unavailable       — Temporal/Cadence backend or Stream Store backend unavailable;
     never Dex application WorkerService
+    server-zd also returns this when object storage is unavailable or it applies backpressure.
     Internal          — unexpected / violated trusted invariant
     Unimplemented     — Cadence: WaitForStepCompletion, WaitForAttribute,
     locking InvokeRPC (Temporal sync update required)
@@ -255,6 +256,7 @@ class FlowServiceServicer:
     Canceled          — caller canceled the RPC context
     Unavailable       — Temporal/Cadence backend or Stream Store backend unavailable;
     never Dex application WorkerService
+    server-zd also returns this when object storage is unavailable or it applies backpressure.
     Internal          — unexpected / violated trusted invariant
     Unimplemented     — Cadence: WaitForStepCompletion, WaitForAttribute,
     locking InvokeRPC (Temporal sync update required)
@@ -433,7 +435,8 @@ class FlowServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def TriggerContinueAsNew(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """server-zd returns UNIMPLEMENTED.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -620,6 +623,7 @@ class FlowService:
     Canceled          — caller canceled the RPC context
     Unavailable       — Temporal/Cadence backend or Stream Store backend unavailable;
     never Dex application WorkerService
+    server-zd also returns this when object storage is unavailable or it applies backpressure.
     Internal          — unexpected / violated trusted invariant
     Unimplemented     — Cadence: WaitForStepCompletion, WaitForAttribute,
     locking InvokeRPC (Temporal sync update required)
@@ -1378,6 +1382,7 @@ class FlowService:
 
 class WorkerServiceStub:
     """Hosted by Dex worker; server calls these RPCs.
+    server-zd supports only pull Workers and never calls WorkerService.
     """
 
     def __init__(self, channel):
@@ -1405,6 +1410,7 @@ class WorkerServiceStub:
 
 class WorkerServiceServicer:
     """Hosted by Dex worker; server calls these RPCs.
+    server-zd supports only pull Workers and never calls WorkerService.
     """
 
     def InvokeWaitForMethod(self, request, context):
@@ -1453,6 +1459,7 @@ def add_WorkerServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class WorkerService:
     """Hosted by Dex worker; server calls these RPCs.
+    server-zd supports only pull Workers and never calls WorkerService.
     """
 
     @staticmethod
@@ -1615,6 +1622,7 @@ class WorkerTaskService:
 
 class MatchingServiceStub:
     """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     def __init__(self, channel):
@@ -1637,6 +1645,7 @@ class MatchingServiceStub:
 
 class MatchingServiceServicer:
     """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     def DispatchTask(self, request, context):
@@ -1676,6 +1685,7 @@ def add_MatchingServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class MatchingService:
     """Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     @staticmethod
@@ -1735,6 +1745,7 @@ class MatchingService:
 
 class InternalServiceStub:
     """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     def __init__(self, channel):
@@ -1752,6 +1763,7 @@ class InternalServiceStub:
 
 class InternalServiceServicer:
     """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     def DumpFlowForContinueAsNew(self, request, context):
@@ -1778,6 +1790,7 @@ def add_InternalServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class InternalService:
     """Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+    Go Server internals; server-zd does not serve or persist them.
     """
 
     @staticmethod

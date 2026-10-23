@@ -80,6 +80,7 @@ func doTestLockingWorkflow(
 	backendType service.BackendType,
 	flowConfig *dexpb.FlowConfig,
 ) {
+	requireTemporalOnly(t)
 	workerHandler := locking.NewHandler()
 	workerTarget := startWorker(t, workerHandler)
 	runtime := startDexService(t, DexServiceTestConfig{BackendType: backendType})

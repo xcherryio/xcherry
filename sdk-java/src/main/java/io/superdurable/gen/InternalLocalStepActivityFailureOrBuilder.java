@@ -11,16 +11,28 @@ public interface InternalLocalStepActivityFailureOrBuilder extends
     com.google.protobuf.MessageOrBuilder {
 
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    * @return Whether the localActivityMetadata field is set.
    */
   boolean hasLocalActivityMetadata();
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    * @return The localActivityMetadata.
    */
   io.superdurable.gen.LocalActivityMetadata getLocalActivityMetadata();
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    */
   io.superdurable.gen.LocalActivityMetadataOrBuilder getLocalActivityMetadataOrBuilder();

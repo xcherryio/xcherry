@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  *
  * Protobuf enum {@code dex.DispatchTaskErrorReason}
@@ -127,7 +128,7 @@ public enum DispatchTaskErrorReason
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(1);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(2);
   }
 
   private static final DispatchTaskErrorReason[] VALUES = values();

@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+// Persistent format of server-zd cluster metadata objects.
+// Compatibility: additive changes only; never renumber, reuse, or retype a field.
+syntax = "proto3";
+
+package dexzd.v1;
+
+// Hash function that maps (tenant ID, Flow ID) to a partition. It never changes for a cluster.
+enum PartitionHashAlgorithm {
+  PARTITION_HASH_ALGORITHM_UNSPECIFIED = 0;
+  // Keyed SipHash-2-4 over tenant_id (8 bytes big-endian) followed by the UTF-8 Flow ID.
+  PARTITION_HASH_ALGORITHM_SIPHASH_2_4 = 1;
+}
+
+// Immutable cluster identity, created once at <prefix>/cluster with If-None-Match.
+message ClusterObject {
+  // Format version of the cluster metadata.
+  uint32 format_version = 1;
+  // 16-byte UUIDv7.
+  bytes cluster_id = 2;
+  // Number of partitions; a power of two that never changes.
+  uint32 partition_count = 3;
+  PartitionHashAlgorithm partition_hash_algorithm = 4;
+  // 16-byte random key for the partition hash. Bytes 0-7 are SipHash k0 and bytes 8-15 are k1,
+  // each read as a little-endian u64.
+  bytes partition_hash_key = 5;
+  // Version of the RocksDB key layout; every node must support it.
+  uint32 key_layout_version = 6;
+  int64 created_at_unix_micros = 7;
+}
+
+// Cluster-wide routing state at <prefix>/manifest, updated only with If-Match.
+message Manifest {
+  // Increases by one on every successful update. Readers use it, not the ETag, to detect ABA.
+  uint64 version = 1;
+  uint32 partition_count = 2;
+  // Exactly partition_count entries; entry i describes partition i.
+  repeated PartitionAssignment partitions = 3;
+  // Nodes that have joined, keyed by node ID.
+  map<string, ManifestNode> nodes = 4;
+  VersionBarrier version_barrier = 5;
+  ControllerLease controller_lease = 6;
+  int64 updated_at_unix_micros = 7;
+}
+
+// Ownership and recovery sources of one partition.
+message PartitionAssignment {
+  uint32 partition = 1;
+  // Node that currently owns the partition; empty when unassigned.
+  string owner_node_id = 2;
+  // Owner epoch when it acquired the partition.
+  uint64 owner_epoch = 3;
+  // Log segments that contain this partition's records, oldest first.
+  repeated LogSegment segments = 4;
+  // Newest complete snapshot that covers this partition.
+  SnapshotReference snapshot = 5;
+}
+
+// A contiguous range of one node stream that may contain records of a partition.
+message LogSegment {
+  string node_id = 1;
+  uint32 incarnation = 2;
+  uint64 start_seq = 3;
+  // Inclusive end; meaningful only when is_open is false.
+  uint64 end_seq = 4;
+  bool is_open = 5;
+}
+
+// A node known to the manifest.
+message ManifestNode {
+  string node_id = 1;
+  uint32 incarnation = 2;
+  // Current writer epoch of this node's log stream.
+  uint64 epoch = 3;
+  // Internal gRPC address that other nodes use to forward requests (host:port).
+  string internal_address = 4;
+  int64 joined_at_unix_micros = 5;
+}
+
+// Highest behavior and format versions that owners may use when writing commands.
+message VersionBarrier {
+  uint32 behavior_version = 1;
+  uint32 format_version = 2;
+}
+
+// Which node acts as the controller, and until when.
+message ControllerLease {
+  string node_id = 1;
+  int64 expires_at_unix_micros = 2;
+}
+
+// Pointer to a complete snapshot manifest.
+message SnapshotReference {
+  string node_id = 1;
+  // 16-byte UUIDv7 of the local store lineage that produced the snapshot.
+  bytes lineage_id = 2;
+  uint64 snapshot_number = 3;
+  // Full object key of the snapshot manifest.
+  string manifest_key = 4;
+}
+
+// Liveness lease of one node process at <prefix>/lease/<node_id>, updated only with If-Match.
+message NodeLease {
+  string node_id = 1;
+  uint32 incarnation = 2;
+  uint64 epoch = 3;
+  // Random ID of the process that holds the lease.
+  string holder_process_id = 4;
+  int64 expires_at_unix_micros = 5;
+  int64 duration_micros = 6;
+  // Increases by one on every renewal, for ABA detection.
+  uint64 version = 7;
+}
+
+// Attribute index declarations registered by SyncAttributeIndexes, at
+// <prefix>/registry/attribute-indexes, updated only with If-Match.
+message AttributeIndexRegistry {
+  // Increases by one on every successful update.
+  uint64 version = 1;
+  // One entry per (tenant ID, index key).
+  repeated AttributeIndexRegistration registrations = 2;
+}
+
+// The declared type of one index key in one tenant.
+message AttributeIndexRegistration {
+  uint64 tenant_id = 1;
+  string index_key = 2;
+  // Numeric value of the public Dex IndexType enum.
+  int32 index_type = 3;
+  int64 registered_at_unix_micros = 4;
+}
