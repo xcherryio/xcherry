@@ -1,3 +1,13 @@
+/*
+ * Copyright (c) 2026 Super Durable, Inc.
+ *
+ * Licensed under the Super Durable Source License 1.0.
+ * You may not use this file except in compliance with the License.
+ * See the LICENSE file in the repository root.
+ *
+ * SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
+ */
+
 import React, {type ReactNode} from 'react';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
@@ -20,7 +30,7 @@ export default function CloudPage(): ReactNode {
           <Link className="brand-button brand-button-primary" to="/">
             Explore Dex OSS Docs <span aria-hidden="true">→</span>
           </Link>
-          <a className="brand-button" href="https://superdurable.io/byoc">
+          <a className="brand-button" href="https://superdurable.ai/dex-engine/">
             View Dex BYOC <span aria-hidden="true">↗</span>
           </a>
         </div>

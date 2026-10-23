@@ -1,10 +1,11 @@
-import React, {type ReactNode} from 'react';
-import Brand from '@site/src/components/Brand';
+/*
+ * Copyright (c) 2026 Super Durable, Inc.
+ *
+ * Licensed under the Super Durable Source License 1.0.
+ * You may not use this file except in compliance with the License.
+ * See the LICENSE file in the repository root.
+ *
+ * SPDX-License-Identifier: LicenseRef-Super-Durable-1.0
+ */
 
-export default function NavbarLogo(): ReactNode {
-  return (
-    <a className="navbar__brand wordmark" href="https://superdurable.io/" aria-label="Super Durable home">
-      <Brand />
-    </a>
-  );
-}
+export {default} from '@theme-original/Navbar/Logo';

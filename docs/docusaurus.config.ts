@@ -14,6 +14,22 @@ import type {Config, LoadContext} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 import redirects from './redirects.json';
 
+const companyProductNavigation = {
+  navbar: [
+    {label: 'Platform', href: 'https://superdurable.ai/dex-ai/', position: 'left', target: '_self'},
+    {label: 'Engine', href: 'https://superdurable.ai/dex-engine/', position: 'left', target: '_self', className: 'navbar__link--active', 'aria-current': 'page'},
+  ],
+  account: [{label: 'Log in', href: 'https://dex.superdurable.ai/login', position: 'right', target: '_self'}],
+  footer: [{
+    title: 'Products',
+    items: [
+      {label: 'Dex AI Platform', href: 'https://superdurable.ai/dex-ai/', target: '_self'},
+      {label: 'Managed Dex Engine', href: 'https://superdurable.ai/dex-engine/', target: '_self'},
+      {label: 'Dex (open source)', href: 'https://github.com/superdurable', target: '_self'},
+    ],
+  }],
+} satisfies {navbar: NonNullable<Preset.ThemeConfig['navbar']>['items']; account: NonNullable<Preset.ThemeConfig['navbar']>['items']; footer: NonNullable<Preset.ThemeConfig['footer']>['links']};
+
 const config: Config = {
   title: 'Super Durable Docs',
   tagline: 'Durable Execution for backend engineering',
@@ -168,50 +184,44 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
+      title: 'Super Durable',
       logo: {
         alt: 'Super Durable',
         src: 'img/brand/dex-mark.svg',
-        href: 'https://superdurable.io/',
+        href: 'https://superdurable.ai/',
         target: '_self',
       },
       items: [
-        {
-          href: 'https://superdurable.io/dex',
-          label: 'Dex',
-          position: 'left',
-          target: '_self',
-        },
-        {
-          href: 'https://github.com/superdurable',
-          label: 'GitHub',
-          position: 'left',
-          target: '_blank',
-        },
-        {
-          href: 'https://calendar.google.com/appointments/schedules/AcZssZ0XTgrR4TGKOsS-zcB7tu_xqIaYaM3MQGXraOJccpyUe9LK0Z_FF7ImVSw4g_4UGGfx3ykq81mw',
-          label: 'Book a call',
-          position: 'right',
-          className: 'header-booking-link',
-        },
+        ...companyProductNavigation.navbar,
+        {label: 'About', href: 'https://superdurable.ai/about/', position: 'left', target: '_self'},
+        {type: 'localeDropdown', position: 'right'},
+        {label: 'GitHub', href: 'https://github.com/superdurable', position: 'right', target: '_self'},
+        ...companyProductNavigation.account,
+        {label: 'Sign up', href: 'https://dex.superdurable.ai/register', position: 'right', className: 'header-signup-link', target: '_self'},
       ],
     },
     footer: {
-      style: 'dark',
+      style: 'light',
       links: [
+        ...companyProductNavigation.footer,
         {
-          title: 'Explore',
+          title: 'Developers',
           items: [
-            {label: 'Dex', href: 'https://superdurable.io/dex'},
+            {label: 'Docs', to: '/'},
+            {label: 'Quick start', to: '/quick-start'},
+            {label: 'GitHub', href: 'https://github.com/superdurable', target: '_self'},
+            {label: 'Compare engines', href: 'https://superdurable.ai/compare/', target: '_self'},
           ],
         },
         {
           title: 'Company',
           items: [
-            {label: 'Team', href: 'https://superdurable.io/team'},
+            {label: 'About', href: 'https://superdurable.ai/about/', target: '_self'},
+            {label: 'Contact', href: 'https://superdurable.ai/about/#contact', target: '_self'},
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Super Durable, Inc.`,
+      copyright: `© ${new Date().getFullYear()} Super Durable, Inc.`,
     },
     prism: {
       theme: prismThemes.github,
