@@ -16,6 +16,7 @@ import (
 	"log"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type pullWorkerAdapter struct {
@@ -40,12 +42,21 @@ type pullWorkerFlowClient struct {
 }
 
 type pullAdapterStream struct {
-	stream dexpb.WorkerTaskService_PollWorkerTaskClient
-	worker dexpb.WorkerServiceClient
-	mu     sync.Mutex
+	stream        dexpb.WorkerTaskService_PollWorkerTaskClient
+	pullClient    dexpb.WorkerTaskServiceClient
+	worker        dexpb.WorkerServiceClient
+	adapter       *pullWorkerAdapter
+	test          *testing.T
+	serverAddress string
+	queue         string
+	flowType      string
+	streamCancel  context.CancelFunc
+	mu            sync.Mutex
 }
 
 var pullWorkerAdapters sync.Map
+var pullFlowTypeOwners sync.Map
+var pullAdapterRegistrationTimeout = 5 * time.Second
 
 func registerPullWorkerAdapter(t *testing.T, pushAddress string) *dexpb.WorkerTarget {
 	t.Helper()
@@ -69,11 +80,22 @@ func configurePullWorkerClient(t *testing.T, runtime *integRuntime) *integRuntim
 	return runtime
 }
 
+func requirePushWorkers(t *testing.T, reason string) {
+	t.Helper()
+	if *integWorkerMode == "pull" {
+		t.Skipf("requires push Workers: %s", reason)
+	}
+}
+
 func (client *pullWorkerFlowClient) StartFlow(
 	ctx context.Context, request *dexpb.StartFlowRequest, options ...grpc.CallOption,
 ) (*dexpb.StartFlowResponse, error) {
 	if target := request.GetFlowStartOptions().GetFlowConfigOverride().GetWorkerTarget(); target != nil {
-		if loaded, ok := pullWorkerAdapters.Load(target); ok {
+		if target.GetIsPullMode() {
+			loaded, ok := pullWorkerAdapters.Load(target)
+			if !ok {
+				return nil, fmt.Errorf("pull Worker target for Flow type %s was not registered by startWorker", request.GetFlowType())
+			}
 			adapter := loaded.(*pullWorkerAdapter)
 			if err := adapter.registerFlowType(client.test, client.serverAddress, request.GetFlowType()); err != nil {
 				return nil, err
@@ -83,6 +105,26 @@ func (client *pullWorkerFlowClient) StartFlow(
 	return client.FlowServiceClient.StartFlow(ctx, request, options...)
 }
 
+func (client *pullWorkerFlowClient) UpdateFlowConfig(
+	ctx context.Context, request *dexpb.UpdateFlowConfigRequest, options ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	target := request.GetFlowConfig().GetWorkerTarget()
+	if target != nil && target.GetIsPullMode() {
+		loaded, ok := pullWorkerAdapters.Load(target)
+		if !ok {
+			return nil, fmt.Errorf("pull Worker target for Flow %s was not registered by startWorker", request.GetFlowId())
+		}
+		summary, err := client.FlowServiceClient.GetFlowSummary(ctx, &dexpb.GetFlowSummaryRequest{FlowId: request.GetFlowId()})
+		if err != nil {
+			return nil, err
+		}
+		if err := loaded.(*pullWorkerAdapter).registerFlowType(client.test, client.serverAddress, summary.GetFlowType()); err != nil {
+			return nil, err
+		}
+	}
+	return client.FlowServiceClient.UpdateFlowConfig(ctx, request, options...)
+}
+
 func (adapter *pullWorkerAdapter) registerFlowType(t *testing.T, serverAddress string, flowType string) error {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
@@ -90,6 +132,16 @@ func (adapter *pullWorkerAdapter) registerFlowType(t *testing.T, serverAddress s
 	if adapter.registered[registrationKey] {
 		return nil
 	}
+	registeredOwner, ownerExists := pullFlowTypeOwners.LoadOrStore(registrationKey, adapter)
+	if ownerExists && registeredOwner != adapter {
+		return fmt.Errorf("pull Flow type %s on %s is already registered by another test Worker", flowType, serverAddress)
+	}
+	shouldReleaseOwner := !ownerExists
+	defer func() {
+		if shouldReleaseOwner {
+			pullFlowTypeOwners.CompareAndDelete(registrationKey, adapter)
+		}
+	}()
 	pushConnection, err := newDexClientConnection(adapter.pushAddress, config.DefaultGrpcMaxMessageBytes)
 	if err != nil {
 		return err
@@ -98,42 +150,130 @@ func (adapter *pullWorkerAdapter) registerFlowType(t *testing.T, serverAddress s
 	if err != nil {
 		return errors.Join(err, pushConnection.Close())
 	}
-	t.Cleanup(func() {
-		require.NoError(t, pullConnection.Close())
-		require.NoError(t, pushConnection.Close())
-	})
 	worker := dexpb.NewWorkerServiceClient(pushConnection)
+	pullClient := dexpb.NewWorkerTaskServiceClient(pullConnection)
+	var streamCancels []context.CancelFunc
+	registrationSucceeded := false
+	defer func() {
+		if !registrationSucceeded {
+			for _, cancel := range streamCancels {
+				cancel()
+			}
+			if closeErr := pullConnection.Close(); closeErr != nil {
+				t.Logf("close failed pull registration: %v", closeErr)
+			}
+			if closeErr := pushConnection.Close(); closeErr != nil {
+				t.Logf("close failed push registration: %v", closeErr)
+			}
+		}
+	}()
 	for _, queue := range []string{flowType, adapter.workerID} {
 		for range 4 {
 			streamCtx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			stream, streamErr := dexpb.NewWorkerTaskServiceClient(pullConnection).PollWorkerTask(streamCtx)
+			streamCancels = append(streamCancels, cancel)
+			stream, streamCancel, streamErr := openRegisteredPullStream(streamCtx, pullClient, queue, adapter.workerID, flowType)
 			if streamErr != nil {
 				return streamErr
 			}
-			registration := &dexpb.PollWorkerTaskRegister{
-				Queue: queue, AppWorkerId: adapter.workerID, FlowTypes: []string{flowType},
-				SdkName: "integ-pull-adapter",
-			}
-			if sendErr := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: registration}}); sendErr != nil {
-				return sendErr
-			}
-			acknowledgment, receiveErr := stream.Recv()
-			if receiveErr != nil {
-				return receiveErr
-			}
-			if acknowledgment.GetRegistered() == nil {
-				return fmt.Errorf("pull Worker registration on %s was not acknowledged", queue)
-			}
-			go (&pullAdapterStream{stream: stream, worker: worker}).serve(streamCtx)
+			go (&pullAdapterStream{
+				stream: stream, pullClient: pullClient, worker: worker, adapter: adapter,
+				test: t, serverAddress: serverAddress, queue: queue, flowType: flowType, streamCancel: streamCancel,
+			}).serve(streamCtx)
 		}
 	}
 	adapter.registered[registrationKey] = true
+	registrationSucceeded = true
+	shouldReleaseOwner = false
+	t.Cleanup(func() {
+		for _, cancel := range streamCancels {
+			cancel()
+		}
+		require.NoError(t, pullConnection.Close())
+		require.NoError(t, pushConnection.Close())
+		pullFlowTypeOwners.CompareAndDelete(registrationKey, adapter)
+	})
 	return nil
 }
 
+func openRegisteredPullStream(
+	ctx context.Context, client dexpb.WorkerTaskServiceClient, queue string, workerID string, flowType string,
+) (dexpb.WorkerTaskService_PollWorkerTaskClient, context.CancelFunc, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	registrationSucceeded := false
+	defer func() {
+		if !registrationSucceeded {
+			cancel()
+		}
+	}()
+	stream, err := client.PollWorkerTask(streamCtx)
+	if err != nil {
+		return nil, nil, err
+	}
+	registration := &dexpb.PollWorkerTaskRegister{
+		Queue: queue, AppWorkerId: workerID, FlowTypes: []string{flowType}, SdkName: "integ-pull-adapter",
+	}
+	if err := stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Register{Register: registration}}); err != nil {
+		return nil, nil, err
+	}
+	type registrationResult struct {
+		response *dexpb.PollWorkerTaskResponse
+		err      error
+	}
+	acknowledgmentResult := make(chan registrationResult, 1)
+	go func() {
+		response, receiveErr := stream.Recv()
+		acknowledgmentResult <- registrationResult{response: response, err: receiveErr}
+	}()
+	var acknowledgment *dexpb.PollWorkerTaskResponse
+	select {
+	case result := <-acknowledgmentResult:
+		if result.err != nil {
+			return nil, nil, result.err
+		}
+		acknowledgment = result.response
+	case <-time.After(pullAdapterRegistrationTimeout):
+		return nil, nil, fmt.Errorf("pull Worker registration on %s timed out", queue)
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+	if acknowledgment.GetRegistered() == nil {
+		return nil, nil, fmt.Errorf("pull Worker registration on %s was not acknowledged", queue)
+	}
+	registrationSucceeded = true
+	return stream, cancel, nil
+}
+
 func (adapter *pullAdapterStream) serve(ctx context.Context) {
+	for ctx.Err() == nil {
+		adapter.serveCurrent(ctx)
+		adapter.streamCancel()
+		if ctx.Err() != nil {
+			return
+		}
+		for ctx.Err() == nil {
+			stream, streamCancel, err := openRegisteredPullStream(ctx, adapter.pullClient, adapter.queue, adapter.adapter.workerID, adapter.flowType)
+			if err == nil {
+				adapter.mu.Lock()
+				adapter.stream = stream
+				adapter.mu.Unlock()
+				adapter.streamCancel = streamCancel
+				break
+			}
+			log.Printf("reconnect pull Worker queue %s: %v", adapter.queue, err)
+			retryTimer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				retryTimer.Stop()
+				return
+			case <-retryTimer.C:
+			}
+		}
+	}
+}
+
+func (adapter *pullAdapterStream) serveCurrent(ctx context.Context) {
 	var taskCancel context.CancelFunc
+	var taskDone chan struct{}
 	taskID := ""
 	for {
 		response, err := adapter.stream.Recv()
@@ -154,15 +294,27 @@ func (adapter *pullAdapterStream) serve(ctx context.Context) {
 		}
 		if task := response.GetTask(); task != nil {
 			taskID = task.GetTaskId()
+			currentTaskDone := make(chan struct{})
+			taskDone = currentTaskDone
 			taskCtx := ctx
 			if deadline := task.GetDeadline(); deadline != nil {
 				taskCtx, taskCancel = context.WithDeadline(ctx, deadline.AsTime())
 			} else {
 				taskCtx, taskCancel = context.WithCancel(ctx)
 			}
-			go adapter.runTask(taskCtx, task, taskCancel)
+			currentTaskCancel := taskCancel
+			go func() {
+				adapter.runTask(taskCtx, task, currentTaskCancel)
+				close(currentTaskDone)
+			}()
 		}
 		if response.GetReconnect() != nil {
+			if taskDone != nil {
+				select {
+				case <-taskDone:
+				case <-ctx.Done():
+				}
+			}
 			return
 		}
 	}
@@ -217,6 +369,11 @@ func (adapter *pullAdapterStream) relayWaitFor(ctx context.Context, taskID strin
 		}
 		if err != nil {
 			return err
+		}
+		for _, condition := range output.GetResult().GetWaitingCondition().GetSubFlowConditions() {
+			if err := adapter.adapter.registerFlowType(adapter.test, adapter.serverAddress, condition.GetSubFlowType()); err != nil {
+				return err
+			}
 		}
 		if err := adapter.sendTaskFrame(&dexpb.PollWorkerTaskFrame{TaskId: taskID, Output: &dexpb.PollWorkerTaskFrame_WaitFor{WaitFor: output}}); err != nil {
 			return err

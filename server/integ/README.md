@@ -19,6 +19,17 @@ empty service name before making FlowService calls. Configuration supported by
 the binary is written to a temporary YAML file. Tests requiring Go Server
 settings or direct Temporal state are skipped with a specific reason.
 
+The adapter opens four Flow type streams and four sticky streams per registered
+Flow type. Scenarios with more blocking Worker tasks than those streams can
+exhaust this test capacity. Pull Worker errors are reported as Worker errors;
+push mode can classify the same transport error as a Server error. The
+Worker-address switching scenario remains push-only.
+
+Binary mode applies the harness's 12-second WaitForFlow limit in its client and
+adds SYNC durability to StartFlow requests. The Go Server's 2-second minimum
+Step heartbeat timeout has no binary equivalent; tests that rely on it start
+the in-process Go Server and are skipped in binary mode.
+
 ```shell
 cd server
 go test ./integ -dex-server-binary=/path/to/dex-server-zd -dex-server-engine=zd -run 'TestBasicFlowTemporal'

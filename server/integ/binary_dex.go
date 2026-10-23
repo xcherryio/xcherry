@@ -36,13 +36,18 @@ type binaryDexProcess struct {
 	waitErr error
 }
 
+var binaryDexTerminationGracePeriod = 10 * time.Second
+
 type temporalOnlyUnifiedClient struct {
 	uclient.UnifiedClient
 	test *testing.T
 }
 
+var errTemporalOnlyInBinaryMode = errors.New("Temporal-only operation in binary mode")
+
 func startBinaryDexService(t *testing.T, testConfig DexServiceTestConfig) *integRuntime {
 	t.Helper()
+	requireTemporalOnlyScenario(t)
 	require.Equal(t, "zd", *dexServerEngine, "dex-server-engine must be zd in binary mode")
 	if testConfig.BackendType != service.BackendTypeTemporal {
 		t.Skip("server-zd does not support Cadence")
@@ -67,6 +72,7 @@ func startBinaryDexService(t *testing.T, testConfig DexServiceTestConfig) *integ
 	outputFile, err := os.Create(outputPath)
 	require.NoError(t, err)
 	command := exec.Command(*dexServerBinary, arguments...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Stdout = outputFile
 	command.Stderr = outputFile
 	require.NoError(t, command.Start())
@@ -79,7 +85,15 @@ func startBinaryDexService(t *testing.T, testConfig DexServiceTestConfig) *integ
 		process.stop(t)
 		require.NoError(t, outputFile.Close())
 	})
-	require.NoError(t, waitForBinaryDex(address, process, 15*time.Second), "server log: %s", outputPath)
+	if readinessErr := waitForBinaryDex(address, process, 15*time.Second); readinessErr != nil {
+		output, readErr := os.ReadFile(outputPath)
+		if readErr != nil {
+			t.Logf("read Dex Server log: %v", readErr)
+		} else {
+			t.Logf("Dex Server log:\n%s", output)
+		}
+		require.NoError(t, readinessErr)
+	}
 	connection, err := newDexClientConnection(address, config.DefaultGrpcMaxMessageBytes)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
@@ -301,13 +315,13 @@ func (process *binaryDexProcess) stop(t *testing.T) {
 		return
 	default:
 	}
-	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := syscall.Kill(-process.command.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		t.Errorf("terminate Dex Server: %v", err)
 	}
 	select {
 	case <-process.done:
-	case <-time.After(10 * time.Second):
-		if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	case <-time.After(binaryDexTerminationGracePeriod):
+		if err := syscall.Kill(-process.command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			t.Errorf("kill Dex Server: %v", err)
 		}
 		<-process.done
@@ -328,67 +342,66 @@ func requireTemporalOnly(t *testing.T) {
 	}
 }
 
+func (client *temporalOnlyUnifiedClient) unsupported(method string) error {
+	client.reportUnsupported(method)
+	return fmt.Errorf("%w: %s", errTemporalOnlyInBinaryMode, method)
+}
+
+func (client *temporalOnlyUnifiedClient) reportUnsupported(method string) {
+	client.test.Errorf("missing requireTemporalOnly: %s", method)
+}
+
 func (client *temporalOnlyUnifiedClient) QueryWorkflow(context.Context, interface{}, string, string, string, ...interface{}) error {
-	requireTemporalOnly(client.test)
-	return nil
+	return client.unsupported("QueryWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) DescribeWorkflowExecution(context.Context, string, string, map[string]dexpb.IndexType) (*uclient.DescribeWorkflowExecutionResponse, error) {
-	requireTemporalOnly(client.test)
-	return nil, nil
+	return nil, client.unsupported("DescribeWorkflowExecution")
 }
 
 func (client *temporalOnlyUnifiedClient) GetWorkflowHistory(context.Context, *uclient.GetWorkflowHistoryRequest) (*uclient.WorkflowHistory, error) {
-	requireTemporalOnly(client.test)
-	return nil, nil
+	return nil, client.unsupported("GetWorkflowHistory")
 }
 
 func (client *temporalOnlyUnifiedClient) GetBackendType() service.BackendType {
-	requireTemporalOnly(client.test)
+	client.reportUnsupported("GetBackendType")
 	return ""
 }
 
 func (client *temporalOnlyUnifiedClient) GetApiService() interface{} {
-	requireTemporalOnly(client.test)
+	client.reportUnsupported("GetApiService")
 	return nil
 }
 
 func (client *temporalOnlyUnifiedClient) StartBlobStoreCleanupWorkflow(context.Context, string, string, string, string) error {
-	requireTemporalOnly(client.test)
-	return nil
+	return client.unsupported("StartBlobStoreCleanupWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) GetWorkflowResult(context.Context, interface{}, string, string) (dexpb.FlowStatus, error) {
-	requireTemporalOnly(client.test)
-	return dexpb.FlowStatus_FLOW_STATUS_UNSPECIFIED, nil
+	return dexpb.FlowStatus_FLOW_STATUS_UNSPECIFIED, client.unsupported("GetWorkflowResult")
 }
 
 func (client *temporalOnlyUnifiedClient) StartInterpreterWorkflow(context.Context, uclient.StartWorkflowOptions, ...interface{}) (string, error) {
-	requireTemporalOnly(client.test)
-	return "", nil
+	return "", client.unsupported("StartInterpreterWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) SignalWorkflow(context.Context, string, string, string, interface{}) error {
-	requireTemporalOnly(client.test)
-	return nil
+	return client.unsupported("SignalWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) TerminateWorkflow(context.Context, string, string, string) error {
-	requireTemporalOnly(client.test)
-	return nil
+	return client.unsupported("TerminateWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) SynchronousUpdateWorkflow(context.Context, interface{}, string, string, string, string, interface{}) error {
-	requireTemporalOnly(client.test)
-	return nil
+	return client.unsupported("SynchronousUpdateWorkflow")
 }
 
 func (client *temporalOnlyUnifiedClient) ListAttributeIndexes(context.Context) (map[string]dexpb.IndexType, error) {
-	requireTemporalOnly(client.test)
-	return nil, nil
+	return nil, client.unsupported("ListAttributeIndexes")
 }
 
 func (client *temporalOnlyUnifiedClient) NormalizeAttributeIndexType(dexpb.IndexType) dexpb.IndexType {
-	requireTemporalOnly(client.test)
+	client.reportUnsupported("NormalizeAttributeIndexType")
 	return dexpb.IndexType_INDEX_TYPE_UNSPECIFIED
 }
