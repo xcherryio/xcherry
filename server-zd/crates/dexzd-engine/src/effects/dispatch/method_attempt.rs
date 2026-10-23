@@ -125,7 +125,7 @@ impl MethodAttempt {
                 ),
             ))
         } else {
-            self.dispatch_and_follow(&state, request, urgency).await
+            self.dispatch_and_follow(&state, request).await
         };
         let sticky_app_worker_id = state.run_record.sticky_app_worker_id.clone();
         match end {
@@ -190,7 +190,6 @@ impl MethodAttempt {
         &self,
         state: &MethodAttemptState,
         request: MethodRequest,
-        urgency: CommitUrgency,
     ) -> AttemptEnd {
         let (method_timeout, heartbeat_timeout) = method_timeouts(state, self.key.method);
         let started = Instant::now();
