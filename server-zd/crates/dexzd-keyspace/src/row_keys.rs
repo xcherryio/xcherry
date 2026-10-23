@@ -14,8 +14,14 @@ use crate::{
     partition_index_prefix, run_key,
 };
 
-/// Separator between a variable-length name and the rest of a key. Names never contain NUL.
-pub const NAME_SEPARATOR: u8 = 0x00;
+/// Encodes a variable-length name as a 2-byte big-endian length and its UTF-8 bytes, so one
+/// name is never a prefix match for another.
+pub fn length_prefixed_name(name: &str) -> Vec<u8> {
+    let length = u16::try_from(name.len()).unwrap_or(u16::MAX);
+    let mut encoded = length.to_be_bytes().to_vec();
+    encoded.extend_from_slice(&name.as_bytes()[..usize::from(length)]);
+    encoded
+}
 
 /// Hard-delete table sub-key kind for the current object of an Attribute.
 pub const HARD_DELETE_CURRENT_OBJECT: u8 = 0x00;
@@ -53,7 +59,7 @@ pub fn run_named_key(flow_hash: FlowHash, run_id: RunId, table: RunTable, name: 
     run_key(flow_hash, run_id, table, name.as_bytes())
 }
 
-/// Key of a pending Channel message: channel name, NUL, enqueue seq.
+/// Key of a pending Channel message: length-prefixed channel name, enqueue seq.
 pub fn channel_message_key(
     flow_hash: FlowHash,
     run_id: RunId,
@@ -65,14 +71,12 @@ pub fn channel_message_key(
     run_key(flow_hash, run_id, RunTable::ChannelMessage, &suffix)
 }
 
-/// Suffix prefix of every message of one channel.
+/// Suffix prefix of every message (or waiter) of one channel.
 pub fn channel_name_prefix(channel_name: &str) -> Vec<u8> {
-    let mut suffix = channel_name.as_bytes().to_vec();
-    suffix.push(NAME_SEPARATOR);
-    suffix
+    length_prefixed_name(channel_name)
 }
 
-/// Key of a channel waiter: channel name, NUL, Step execution ID.
+/// Key of a channel waiter: length-prefixed channel name, Step execution ID.
 pub fn channel_waiter_key(
     flow_hash: FlowHash,
     run_id: RunId,
@@ -256,7 +260,7 @@ pub fn decode_timer_index_key(key: &[u8]) -> Option<TimerIndexEntry> {
     })
 }
 
-/// Flow list index key: tenant, Flow type, NUL, status, Flow hash, run ID.
+/// Flow list index key: tenant, length-prefixed Flow type, status, Flow hash, run ID.
 pub fn flow_list_index_key(
     partition: PartitionId,
     tenant_id: TenantId,
@@ -266,8 +270,7 @@ pub fn flow_list_index_key(
     run_id: RunId,
 ) -> Vec<u8> {
     let mut rest = tenant_id.to_be_bytes().to_vec();
-    rest.extend_from_slice(flow_type.as_bytes());
-    rest.push(NAME_SEPARATOR);
+    rest.extend_from_slice(&length_prefixed_name(flow_type));
     rest.push(status);
     rest.extend_from_slice(&flow_run_suffix(flow_hash, run_id));
     partition_index_key(partition, IndexKind::FlowList, &rest)
@@ -358,8 +361,8 @@ pub fn prefix_range(prefix: &[u8]) -> (Vec<u8>, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_timer_index_key, ordered_timestamp_bytes, prefix_range, timer_index_key,
-        timestamp_from_ordered_bytes,
+        channel_name_prefix, decode_timer_index_key, ordered_timestamp_bytes, prefix_range,
+        timer_index_key, timestamp_from_ordered_bytes,
     };
     use crate::{FlowHash, PartitionId, RunId};
 
@@ -391,6 +394,13 @@ mod tests {
         assert_eq!(entry.flow_hash, FlowHash(9));
         assert_eq!(entry.run_id, RunId([4; 16]));
         assert_eq!(entry.encoded_timer_id, b"tid");
+    }
+
+    #[test]
+    fn channel_prefixes_never_match_longer_names() {
+        let short = channel_name_prefix("a");
+        let longer = channel_name_prefix("a\u{0}b");
+        assert!(!longer.starts_with(&short));
     }
 
     #[test]
