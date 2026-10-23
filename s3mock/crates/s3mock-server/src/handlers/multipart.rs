@@ -186,17 +186,20 @@ pub(crate) async fn complete_multipart_upload(
         .children_named("Part")
         .map(|part| {
             let part_number = part
-                .child_text("PartNumber")
+                .child_text("PartNumber")?
                 .and_then(|value| value.trim().parse::<u32>().ok())
                 .ok_or_else(|| S3Error::malformed_xml("every Part needs a numeric PartNumber"))?;
             let etag = part
-                .child_text("ETag")
+                .child_text("ETag")?
                 .map(str::to_owned)
                 .ok_or_else(|| S3Error::malformed_xml("every Part needs an ETag"))?;
-            let checksum_base64 = ChecksumAlgorithm::ALL.into_iter().find_map(|algorithm| {
-                part.child_text(algorithm.xml_element_name())
-                    .map(str::to_owned)
-            });
+            let mut checksum_base64 = None;
+            for algorithm in ChecksumAlgorithm::ALL {
+                if let Some(value) = part.child_text(algorithm.xml_element_name())? {
+                    checksum_base64 = Some(value.to_owned());
+                    break;
+                }
+            }
             Ok(CompletedPart {
                 part_number,
                 etag,

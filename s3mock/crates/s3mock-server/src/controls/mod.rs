@@ -10,6 +10,9 @@
 
 mod admin;
 mod observation;
+mod operation;
+
+use operation::S3OperationName;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
@@ -24,46 +27,35 @@ pub(crate) use observation::{ObservedBody, RequestObservation};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FaultRule {
-    pub(crate) operation: Option<String>,
+    pub(crate) operation: Option<S3OperationName>,
     pub(crate) bucket: Option<String>,
     pub(crate) key_prefix: Option<String>,
     pub(crate) has_conditional_header: Option<bool>,
-    #[serde(default = "certain")]
+    #[serde(default = "default_probability")]
     pub(crate) probability: f64,
     pub(crate) action: FaultAction,
 }
 
-fn certain() -> f64 {
+fn default_probability() -> f64 {
     1.0
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum FaultAction {
-    CommitThenDrop,
+    CommitThenDrop {},
     Delay { milliseconds: u64 },
     Error { status: u16 },
-    FailBeforeCommit,
-    CorruptBody,
-    TruncateResponse,
+    FailBeforeCommit {},
+    CorruptBody {},
+    TruncateResponse {},
 }
 
 impl FaultAction {
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Self::CommitThenDrop => "commit_then_drop",
-            Self::Delay { .. } => "delay",
-            Self::Error { .. } => "error",
-            Self::FailBeforeCommit => "fail_before_commit",
-            Self::CorruptBody => "corrupt_body",
-            Self::TruncateResponse => "truncate_response",
-        }
-    }
-
     pub(crate) fn error(&self) -> Option<S3Error> {
         let status = match self {
             Self::Error { status } => *status,
-            Self::FailBeforeCommit => 500,
+            Self::FailBeforeCommit {} => 500,
             _ => return None,
         };
         let (status, code) = match status {
@@ -84,13 +76,14 @@ pub(crate) struct RequestCounter {
 
 #[derive(Default, Serialize)]
 pub(crate) struct Counters {
-    by_operation: BTreeMap<String, RequestCounter>,
+    by_operation: BTreeMap<S3OperationName, RequestCounter>,
     by_prefix: BTreeMap<String, BTreeMap<String, RequestCounter>>,
 }
 
 pub(crate) struct Controls {
     pub(crate) config: ServerConfig,
     state: Mutex<ControlState>,
+    pub(crate) fault_reset: tokio::sync::watch::Sender<u64>,
 }
 
 struct ControlState {
@@ -109,6 +102,7 @@ impl Controls {
                 counters: Counters::default(),
                 requests: VecDeque::new(),
             }),
+            fault_reset: tokio::sync::watch::channel(0).0,
             config,
         }
     }
@@ -159,7 +153,7 @@ impl Controls {
             bytes_received = request.bytes_received, bytes_sent = request.bytes_sent,
             injected_fault = ?request.injected_fault, "S3 request"
         );
-        let prefix = request
+        let mut prefix = request
             .key
             .split('/')
             .take(self.config.counter_prefix_depth)
@@ -170,20 +164,35 @@ impl Controls {
             state
                 .counters
                 .by_operation
-                .entry(request.operation.clone())
+                .entry(request.operation)
                 .or_default(),
             &request,
         );
-        add_counter(
-            state
+        let group_count: usize = state.counters.by_prefix.values().map(BTreeMap::len).sum();
+        let bucket = if group_count >= 1024
+            && !state
                 .counters
                 .by_prefix
-                .entry(request.bucket.clone())
-                .or_default()
-                .entry(prefix)
-                .or_default(),
-            &request,
-        );
+                .get(&request.bucket)
+                .is_some_and(|groups| groups.contains_key(&prefix))
+        {
+            prefix = "<overflow>".into();
+            "<overflow>".to_owned()
+        } else {
+            request.bucket.clone()
+        };
+        if request.has_existing_bucket && request.operation != S3OperationName::Unsupported {
+            add_counter(
+                state
+                    .counters
+                    .by_prefix
+                    .entry(bucket)
+                    .or_default()
+                    .entry(prefix)
+                    .or_default(),
+                &request,
+            );
+        }
         if self.config.request_log_capacity > 0 {
             if state.requests.len() == self.config.request_log_capacity {
                 state.requests.pop_front();

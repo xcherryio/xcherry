@@ -54,6 +54,15 @@ pub struct ServerConfig {
     /// Default s3mock; HMAC secret used in strict mode. Use test credentials only; never production credentials.
     #[arg(long, env = "S3MOCK_SECRET_ACCESS_KEY", default_value = "s3mock")]
     pub secret_access_key: String,
+    /// Seconds between lifecycle passes. Default `60`; `0` disables the background pass. Each pass
+    /// removes everything due at the lifecycle clock, so expiration happens within one interval of
+    /// its due time rather than on S3's daily schedule.
+    #[arg(
+        long,
+        env = "S3MOCK_LIFECYCLE_SCAN_INTERVAL_SECONDS",
+        default_value_t = 60
+    )]
+    pub lifecycle_scan_interval_seconds: u64,
 }
 
 /// Command-line spelling of [`Durability`].
@@ -97,19 +106,9 @@ impl From<EtagModeFlag> for s3mock::EtagMode {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self {
-            listen_address: "127.0.0.1:9000"
-                .parse()
-                .expect("the default listener is valid"),
-            data_directory: PathBuf::from("s3mock-data"),
-            durability: DurabilityFlag::Strict,
-            fault_seed: 0,
-            counter_prefix_depth: 1,
-            request_log_capacity: 1024,
-            etag_mode: EtagModeFlag::Md5,
-            signature_verification: SignatureVerification::Off,
-            access_key_id: "s3mock".into(),
-            secret_access_key: "s3mock".into(),
-        }
+        let command = <Self as clap::CommandFactory>::command()
+            .mut_args(|argument| argument.env(None::<&str>));
+        <Self as clap::FromArgMatches>::from_arg_matches(&command.get_matches_from(["s3mock"]))
+            .expect("clap defaults form valid server configuration")
     }
 }

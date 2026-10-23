@@ -153,7 +153,7 @@ async fn strict_rejects_unsigned_and_presigned_requests_and_changed_plain_payloa
     let headers = signed_headers(
         &server,
         "PUT",
-        "/testing/encoded%2Fslash",
+        "/testing/encoded/slash",
         &hash(b"encoded"),
         BTreeMap::new(),
     )
@@ -179,6 +179,17 @@ async fn signed_chunks_and_trailers_are_verified_before_commit() {
         };
         let (headers, body) = signed_stream(&server, path, with_trailer);
         assert_status(&server.raw("PUT", path, &headers, &body).await, 200);
+        if !with_trailer {
+            assert_status(
+                &server
+                    .raw("PUT", path, &headers, &body[..body.len() - 2])
+                    .await,
+                200,
+            );
+        }
+        let malformed = body[..body.len() - 3].to_vec();
+        assert_status(&server.raw("PUT", path, &headers, &malformed).await, 400);
+
         assert_eq!(
             server
                 .get(
@@ -226,7 +237,7 @@ async fn signed_chunks_and_trailers_are_verified_before_commit() {
                 .expect("the controls integration fixture succeeds");
             let mut missing = body[..truncated].to_vec();
             missing.extend_from_slice(b"\r\n");
-            assert_status(&server.raw("PUT", path, &headers, &missing).await, 403);
+            assert_status(&server.raw("PUT", path, &headers, &missing).await, 400);
         }
     }
     assert_eq!(server.get("chunk").await, b"hello");
@@ -340,4 +351,92 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
         Hmac::<Sha256>::new_from_slice(key).expect("the controls integration fixture succeeds");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
+}
+
+#[tokio::test]
+async fn strict_rejects_unsigned_amz_headers_and_canonicalizes_paths() {
+    let server = RunningServer::start(&["--signature-verification", "strict"]).await;
+    for header in [
+        "x-amz-meta-evil: injected",
+        "x-amz-storage-class: GLACIER",
+        "x-amz-checksum-crc32: NhCmhg==",
+        "x-amz-trailer: x-amz-checksum-crc32",
+    ] {
+        let (mut headers, _) = signed_headers(
+            &server,
+            "PUT",
+            "/testing/key",
+            &hash(b"hello"),
+            BTreeMap::new(),
+        );
+        headers.push_str(&format!("{header}\r\n"));
+        assert_status(
+            &server.raw("PUT", "/testing/key", &headers, b"hello").await,
+            403,
+        );
+    }
+    for (wire, canonical) in [
+        ("/testing/a%2fb", "/testing/a/b"),
+        ("/testing/k!", "/testing/k%21"),
+        ("/testing/k%21", "/testing/k%21"),
+    ] {
+        let (headers, _) =
+            signed_headers(&server, "PUT", canonical, &hash(b"hello"), BTreeMap::new());
+        assert_status(&server.raw("PUT", wire, &headers, b"hello").await, 200);
+    }
+    let (headers, _) = signed_headers(
+        &server,
+        "PUT",
+        "/testing/key",
+        &hash(b"hello"),
+        BTreeMap::new(),
+    );
+    let wrong_region = headers.replace("/us-east-1/", "/mars-1/");
+    let response = server
+        .raw("PUT", "/testing/key", &wrong_region, b"hello")
+        .await;
+    assert_status(&response, 400);
+    assert!(String::from_utf8_lossy(&response).contains("AuthorizationHeaderMalformed"));
+    let invalid_date = headers.replace(TIMESTAMP, "20261023TabcdefZ");
+    assert_status(
+        &server
+            .raw("PUT", "/testing/key", &invalid_date, b"hello")
+            .await,
+        403,
+    );
+    server.server.shutdown().await;
+}
+
+#[tokio::test]
+async fn strict_bodiless_reads_do_not_spool_and_uploads_use_store_tmp() {
+    let server = RunningServer::start(&["--signature-verification", "strict"]).await;
+    server.put("object", "stored").await;
+    let temporary_directory = server.directory.path().join("tmp");
+    let moved_directory = server.directory.path().join("moved-tmp");
+    std::fs::rename(&temporary_directory, &moved_directory).expect("tmp directory moves");
+    assert_eq!(server.get("object").await, b"stored");
+    server
+        .client
+        .head_object()
+        .bucket("testing")
+        .key("object")
+        .send()
+        .await
+        .expect("bodiless HEAD avoids spooling");
+    let (headers, _) = signed_headers(
+        &server,
+        "PUT",
+        "/testing/spooled",
+        &hash(b"body"),
+        BTreeMap::new(),
+    );
+    let response = server
+        .raw("PUT", "/testing/spooled", &headers, b"body")
+        .await;
+    assert_status(&response, 500);
+    assert!(String::from_utf8_lossy(&response).contains("create signature spool file"));
+    std::fs::rename(&moved_directory, &temporary_directory).expect("tmp directory restores");
+    server.put("spooled", "body").await;
+    assert_eq!(server.get("spooled").await, b"body");
+    server.server.shutdown().await;
 }

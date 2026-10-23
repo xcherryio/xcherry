@@ -134,6 +134,11 @@ impl From<StoreError> for S3Error {
                 "ObjectLockConfigurationNotFoundError",
                 message,
             ),
+            StoreError::NoSuchLifecycleConfiguration(_) => S3Error::new(
+                StatusCode::NOT_FOUND,
+                "NoSuchLifecycleConfiguration",
+                message,
+            ),
             StoreError::NoSuchUpload { .. } => {
                 S3Error::new(StatusCode::NOT_FOUND, "NoSuchUpload", message)
             }

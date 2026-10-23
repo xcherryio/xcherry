@@ -21,14 +21,16 @@ use http::{HeaderMap, Method, Uri};
 use http_body::{Body, Frame, SizeHint};
 use serde::Serialize;
 
-use super::{Controls, FaultAction};
+use super::{Controls, FaultAction, S3OperationName};
 use crate::routing::{self, S3Operation};
 use crate::server::ResponseBody;
 
 #[derive(Clone, Serialize)]
 pub(crate) struct RequestObservation {
-    pub(crate) operation: String,
+    pub(crate) operation: S3OperationName,
     pub(crate) bucket: String,
+    #[serde(skip)]
+    pub(crate) has_existing_bucket: bool,
     pub(crate) key: String,
     pub(crate) if_match: Option<String>,
     pub(crate) if_none_match: Option<String>,
@@ -38,72 +40,107 @@ pub(crate) struct RequestObservation {
     pub(crate) duration_ms: u64,
     pub(crate) bytes_received: u64,
     pub(crate) bytes_sent: u64,
-    pub(crate) injected_fault: Option<String>,
+    #[serde(serialize_with = "serialize_fault_name")]
+    pub(crate) injected_fault: Option<FaultAction>,
 }
 
 impl RequestObservation {
     pub(crate) fn new(method: &Method, uri: &Uri, headers: &HeaderMap) -> Self {
         let operation = routing::route(method, uri);
         let (name, bucket, key) = match &operation {
-            Ok(S3Operation::ListBuckets) => ("ListBuckets", "", ""),
-            Ok(S3Operation::GetObjectLockConfiguration { bucket }) => {
-                ("GetObjectLockConfiguration", bucket.as_str(), "")
+            Ok(S3Operation::ListBuckets) => (S3OperationName::ListBuckets, "", ""),
+            Ok(S3Operation::GetObjectLockConfiguration { bucket }) => (
+                S3OperationName::GetObjectLockConfiguration,
+                bucket.as_str(),
+                "",
+            ),
+            Ok(S3Operation::PutObjectLockConfiguration { bucket }) => (
+                S3OperationName::PutObjectLockConfiguration,
+                bucket.as_str(),
+                "",
+            ),
+            Ok(S3Operation::DeleteObjects { bucket }) => {
+                (S3OperationName::DeleteObjects, bucket.as_str(), "")
             }
-            Ok(S3Operation::PutObjectLockConfiguration { bucket }) => {
-                ("PutObjectLockConfiguration", bucket.as_str(), "")
-            }
-            Ok(S3Operation::DeleteObjects { bucket }) => ("DeleteObjects", bucket.as_str(), ""),
             Ok(S3Operation::ListMultipartUploads { bucket, .. }) => {
-                ("ListMultipartUploads", bucket.as_str(), "")
+                (S3OperationName::ListMultipartUploads, bucket.as_str(), "")
             }
-            Ok(S3Operation::CreateMultipartUpload { bucket, key, .. }) => {
-                ("CreateMultipartUpload", bucket.as_str(), key.as_str())
-            }
+            Ok(S3Operation::CreateMultipartUpload { bucket, key, .. }) => (
+                S3OperationName::CreateMultipartUpload,
+                bucket.as_str(),
+                key.as_str(),
+            ),
             Ok(S3Operation::UploadPart { bucket, key, .. }) => {
-                ("UploadPart", bucket.as_str(), key.as_str())
+                (S3OperationName::UploadPart, bucket.as_str(), key.as_str())
             }
-            Ok(S3Operation::CompleteMultipartUpload { bucket, key, .. }) => {
-                ("CompleteMultipartUpload", bucket.as_str(), key.as_str())
-            }
-            Ok(S3Operation::AbortMultipartUpload { bucket, key, .. }) => {
-                ("AbortMultipartUpload", bucket.as_str(), key.as_str())
-            }
+            Ok(S3Operation::CompleteMultipartUpload { bucket, key, .. }) => (
+                S3OperationName::CompleteMultipartUpload,
+                bucket.as_str(),
+                key.as_str(),
+            ),
+            Ok(S3Operation::AbortMultipartUpload { bucket, key, .. }) => (
+                S3OperationName::AbortMultipartUpload,
+                bucket.as_str(),
+                key.as_str(),
+            ),
             Ok(S3Operation::ListParts { bucket, key, .. }) => {
-                ("ListParts", bucket.as_str(), key.as_str())
+                (S3OperationName::ListParts, bucket.as_str(), key.as_str())
             }
-            Ok(S3Operation::CreateBucket { bucket }) => ("CreateBucket", bucket.as_str(), ""),
-            Ok(S3Operation::HeadBucket { bucket }) => ("HeadBucket", bucket.as_str(), ""),
-            Ok(S3Operation::DeleteBucket { bucket }) => ("DeleteBucket", bucket.as_str(), ""),
+            Ok(S3Operation::CreateBucket { bucket }) => {
+                (S3OperationName::CreateBucket, bucket.as_str(), "")
+            }
+            Ok(S3Operation::HeadBucket { bucket }) => {
+                (S3OperationName::HeadBucket, bucket.as_str(), "")
+            }
+            Ok(S3Operation::DeleteBucket { bucket }) => {
+                (S3OperationName::DeleteBucket, bucket.as_str(), "")
+            }
             Ok(S3Operation::GetBucketLocation { bucket }) => {
-                ("GetBucketLocation", bucket.as_str(), "")
+                (S3OperationName::GetBucketLocation, bucket.as_str(), "")
             }
             Ok(S3Operation::GetBucketVersioning { bucket }) => {
-                ("GetBucketVersioning", bucket.as_str(), "")
+                (S3OperationName::GetBucketVersioning, bucket.as_str(), "")
             }
             Ok(S3Operation::PutBucketVersioning { bucket }) => {
-                ("PutBucketVersioning", bucket.as_str(), "")
+                (S3OperationName::PutBucketVersioning, bucket.as_str(), "")
             }
-            Ok(S3Operation::ListObjectsV2 { bucket, .. }) => ("ListObjectsV2", bucket.as_str(), ""),
+            Ok(S3Operation::ListObjectsV2 { bucket, .. }) => {
+                (S3OperationName::ListObjectsV2, bucket.as_str(), "")
+            }
             Ok(S3Operation::ListObjectVersions { bucket, .. }) => {
-                ("ListObjectVersions", bucket.as_str(), "")
+                (S3OperationName::ListObjectVersions, bucket.as_str(), "")
             }
             Ok(S3Operation::PutObject { bucket, key }) => {
-                ("PutObject", bucket.as_str(), key.as_str())
+                (S3OperationName::PutObject, bucket.as_str(), key.as_str())
             }
             Ok(S3Operation::GetObject { bucket, key, .. }) => {
-                ("GetObject", bucket.as_str(), key.as_str())
+                (S3OperationName::GetObject, bucket.as_str(), key.as_str())
             }
             Ok(S3Operation::HeadObject { bucket, key, .. }) => {
-                ("HeadObject", bucket.as_str(), key.as_str())
+                (S3OperationName::HeadObject, bucket.as_str(), key.as_str())
             }
             Ok(S3Operation::DeleteObject { bucket, key, .. }) => {
-                ("DeleteObject", bucket.as_str(), key.as_str())
+                (S3OperationName::DeleteObject, bucket.as_str(), key.as_str())
             }
-            Err(_) => ("Unsupported", "", ""),
+            Ok(S3Operation::GetBucketLifecycleConfiguration { bucket }) => (
+                S3OperationName::GetBucketLifecycleConfiguration,
+                bucket.as_str(),
+                "",
+            ),
+            Ok(S3Operation::PutBucketLifecycleConfiguration { bucket }) => (
+                S3OperationName::PutBucketLifecycleConfiguration,
+                bucket.as_str(),
+                "",
+            ),
+            Ok(S3Operation::DeleteBucketLifecycle { bucket }) => {
+                (S3OperationName::DeleteBucketLifecycle, bucket.as_str(), "")
+            }
+            Err(_) => (S3OperationName::Unsupported, "", ""),
         };
         Self {
-            operation: name.into(),
+            operation: name,
             bucket: bucket.into(),
+            has_existing_bucket: false,
             key: key.into(),
             if_match: header_value(headers, "if-match"),
             if_none_match: header_value(headers, "if-none-match"),
@@ -152,14 +189,17 @@ impl ObservedBody {
         started: Instant,
         fault: Option<&FaultAction>,
     ) -> Self {
+        let is_successful_body = matches!(observation.status, 200 | 206);
         Self {
             body,
             controls,
             observation,
             received,
             started,
-            should_corrupt: matches!(fault, Some(FaultAction::CorruptBody)),
-            should_truncate: matches!(fault, Some(FaultAction::TruncateResponse)),
+            should_corrupt: is_successful_body
+                && matches!(fault, Some(FaultAction::CorruptBody {})),
+            should_truncate: is_successful_body
+                && matches!(fault, Some(FaultAction::TruncateResponse {})),
             has_truncated: false,
             flush_delay: None,
         }
@@ -240,6 +280,22 @@ impl Drop for ObservedBody {
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
+        if self.has_truncated && self.observation.bytes_sent == 0 {
+            self.observation.status = 0;
+        }
         self.controls.record(self.observation.clone());
+    }
+}
+
+fn serialize_fault_name<S: serde::Serializer>(
+    fault: &Option<FaultAction>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match fault {
+        Some(action) => {
+            let value = serde_json::to_value(action).map_err(serde::ser::Error::custom)?;
+            value["type"].serialize(serializer)
+        }
+        None => serializer.serialize_none(),
     }
 }

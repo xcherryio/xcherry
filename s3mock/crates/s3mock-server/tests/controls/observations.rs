@@ -67,6 +67,12 @@ async fn invalid_fault_replacement_preserves_installed_rules() {
         json!({"action":{"type":"corrupt_body"}}),
         json!({"operation":"GetObject","action":{"type":"commit_then_drop"}}),
         json!({"action":{"type":"unknown"}}),
+        json!({"operation":"PutObjct","action":{"type":"fail_before_commit"}}),
+        json!({"action":{"type":"fail_before_commit","milliseconds":5}}),
+        json!({"operation":"GetObject","action":{"type":"corrupt_body","probability":0.1}}),
+        json!({"action":{"type":"delay","milliseconds":600001}}),
+        json!({"operation":"PutObject","action":{"type":"truncate_response"}}),
+        json!({"operation":"HeadObject","action":{"type":"truncate_response"}}),
     ] {
         assert_eq!(
             server
@@ -208,4 +214,31 @@ async fn opaque_etags_survive_a_store_restart() {
         b"abc"
     );
     restarted.shutdown().await;
+}
+
+#[tokio::test]
+async fn prefix_groups_are_bounded_and_missing_buckets_create_none() {
+    let server = RunningServer::start(&["--request-log-capacity", "0"]).await;
+    for index in 0..1100 {
+        server
+            .raw("GET", &format!("/testing/unique-{index}/key"), "", b"")
+            .await;
+    }
+    for index in 0..50 {
+        server
+            .raw("GET", &format!("/missing-{index}/key"), "", b"")
+            .await;
+    }
+    let (_, counters) = server.admin("GET", "counters", json!(null)).await;
+    let buckets = counters["counters"]["by_prefix"]
+        .as_object()
+        .expect("prefix map exists");
+    assert_eq!(buckets.len(), 2);
+    let count: usize = buckets
+        .values()
+        .map(|groups| groups.as_object().expect("groups exist").len())
+        .sum();
+    assert_eq!(count, 1025);
+    assert_eq!(buckets["<overflow>"]["<overflow>"]["requests"], 76);
+    server.server.shutdown().await;
 }

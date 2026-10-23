@@ -257,3 +257,52 @@ async fn truncated_response_sends_headers_and_a_partial_body() {
     assert!(response.len() < boundary + 4 + b"original object body".len());
     server.server.shutdown().await;
 }
+
+#[tokio::test]
+async fn corruption_preserves_error_responses_and_reset_releases_delays() {
+    use aws_sdk_s3::error::ProvideErrorMetadata;
+    let server = RunningServer::start(&[]).await;
+    server
+        .rules(json!([{"operation":"GetObject","action":{"type":"corrupt_body"}}]))
+        .await;
+    let error = server
+        .client
+        .get_object()
+        .bucket("testing")
+        .key("missing")
+        .send()
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .as_service_error()
+            .expect("error XML remains readable")
+            .code(),
+        Some("NoSuchKey")
+    );
+    server
+        .rules(json!([{"operation":"GetObject","action":{"type":"delay","milliseconds":600000}}]))
+        .await;
+    {
+        let request = server.raw("GET", "/testing/missing", "", b"");
+        tokio::pin!(request);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            tokio::select! {
+                response = &mut request => panic!("delay ended before reset: {response:?}"),
+                () = tokio::task::yield_now() => {},
+            }
+            let (_, faults) = server.admin("GET", "faults", json!(null)).await;
+            assert_eq!(faults["rules"][0]["action"]["milliseconds"], 600000);
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        server.admin("DELETE", "faults", json!(null)).await;
+        let response = tokio::time::timeout(Duration::from_secs(2), &mut request)
+            .await
+            .expect("reset releases sleeping request");
+        assert!(response.starts_with(b"HTTP/1.1 404"));
+    }
+    server.server.shutdown().await;
+}

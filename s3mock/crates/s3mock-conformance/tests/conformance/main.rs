@@ -12,6 +12,7 @@ mod buckets;
 mod conditions;
 mod delete_objects;
 mod durability;
+mod lifecycle;
 mod listing;
 mod multipart;
 mod multipart_validation;

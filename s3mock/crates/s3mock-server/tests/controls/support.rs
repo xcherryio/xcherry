@@ -63,12 +63,30 @@ impl RunningServer {
         headers: &str,
         body: &[u8],
     ) -> Vec<u8> {
+        self.raw_with_host(
+            method,
+            path,
+            headers,
+            body,
+            &self.server.local_address().to_string(),
+        )
+        .await
+    }
+
+    pub(crate) async fn raw_with_host(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &str,
+        body: &[u8],
+        host: &str,
+    ) -> Vec<u8> {
         let mut stream = TcpStream::connect(self.server.local_address())
             .await
             .expect("the controls integration fixture succeeds");
         let head = format!(
             "{method} {path} HTTP/1.1\r\nhost: {}\r\nconnection: close\r\ncontent-length: {}\r\n{headers}\r\n",
-            self.server.local_address(),
+            host,
             body.len()
         );
         stream
@@ -80,10 +98,30 @@ impl RunningServer {
             .await
             .expect("the controls integration fixture succeeds");
         let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut response))
-            .await
-            .expect("the controls integration fixture succeeds")
-            .expect("the controls integration fixture succeeds");
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut response))
+                .await
+                .expect("the controls integration fixture succeeds");
+        if let Err(error) = result {
+            // Early header rejection can close with unread request bytes after sending a complete response.
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            let boundary = response
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("response headers arrived before reset");
+            let headers = String::from_utf8_lossy(&response[..boundary]);
+            let length: usize = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .expect("error response has content length")
+                .parse()
+                .expect("content length is numeric");
+            assert_eq!(
+                response.len() - boundary - 4,
+                length,
+                "error response is complete"
+            );
+        }
         response
     }
 

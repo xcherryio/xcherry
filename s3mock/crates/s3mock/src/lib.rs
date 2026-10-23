@@ -19,15 +19,16 @@ pub use checksum::{ChecksumAlgorithm, ChecksumType, ObjectChecksum, decode_base6
 pub use data_file::{ObjectWriter, StagedObject, UploadChecksumExpectations};
 pub use error::StoreError;
 pub use record::{
-    BucketRecord, ContentHeaders, DefaultRetention, ObjectLockConfiguration, PartRecord,
-    RetentionMode, UploadRecord, VersionRecord, VersioningState,
+    BucketRecord, ContentHeaders, DefaultRetention, LifecycleConfiguration, LifecycleRule,
+    ObjectLockConfiguration, PartRecord, RetentionMode, UploadRecord, VersionRecord,
+    VersioningState,
 };
 pub use store::{
     ByteRangeRequest, CompleteMultipartUploadRequest, CompletedPart, CreateMultipartUploadRequest,
-    DeleteObjectOutcome, DeleteObjectRequest, Durability, EtagMode, ListMultipartUploadsRequest,
-    ListObjectVersionsPage, ListObjectVersionsRequest, ListObjectsPage, ListObjectsRequest,
-    ListPartsRequest, ListedObject, ListedVersion, MAX_KEYS_LIMIT, MAX_PART_NUMBER,
-    MultipartUploadsPage, ObjectBody, ObjectReadRequest, ObjectSelection, OrphanCollection,
-    PartsPage, PutObjectOutcome, PutObjectRequest, ReadConditions, ResolvedRange, Store,
-    StoreConfig, WriteCondition,
+    DeleteObjectOutcome, DeleteObjectRequest, Durability, EtagMode, LifecycleRun,
+    ListMultipartUploadsRequest, ListObjectVersionsPage, ListObjectVersionsRequest,
+    ListObjectsPage, ListObjectsRequest, ListPartsRequest, ListedObject, ListedVersion,
+    MAX_KEYS_LIMIT, MAX_PART_NUMBER, MultipartUploadsPage, ObjectBody, ObjectReadRequest,
+    ObjectSelection, OrphanCollection, PartsPage, PutObjectOutcome, PutObjectRequest,
+    ReadConditions, ResolvedRange, Store, StoreConfig, WriteCondition,
 };

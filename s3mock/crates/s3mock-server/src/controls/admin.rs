@@ -16,7 +16,7 @@ use s3mock::Store;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{Controls, Counters, FaultAction, FaultRule};
+use super::{Controls, Counters, FaultAction, FaultRule, S3OperationName};
 use crate::server::{RequestBody, S3Response, full_body, run_store_operation};
 
 impl Controls {
@@ -69,23 +69,54 @@ impl Controls {
                             "error status must be 409, 500, or 503".into(),
                         ));
                     }
-                    if matches!(rule.action, FaultAction::CorruptBody)
-                        && rule.operation.as_deref() != Some("GetObject")
+                    if matches!(rule.action, FaultAction::CorruptBody {})
+                        && rule.operation != Some(S3OperationName::GetObject)
                     {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             "corrupt_body requires operation GetObject".into(),
                         ));
                     }
-                    if matches!(rule.action, FaultAction::CommitThenDrop)
+                    if matches!(rule.action, FaultAction::CommitThenDrop {})
                         && !matches!(
-                            rule.operation.as_deref(),
-                            Some("PutObject" | "UploadPart" | "CompleteMultipartUpload")
+                            rule.operation,
+                            Some(
+                                S3OperationName::PutObject
+                                    | S3OperationName::UploadPart
+                                    | S3OperationName::CompleteMultipartUpload
+                            )
                         )
                     {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             "commit_then_drop requires operation PutObject, UploadPart, or CompleteMultipartUpload".into(),
+                        ));
+                    }
+                }
+                for rule in &replacement.rules {
+                    if matches!(rule.action, FaultAction::Delay { milliseconds } if milliseconds > 600_000)
+                    {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            "delay must not exceed 600000 milliseconds".into(),
+                        ));
+                    }
+                    if matches!(rule.action, FaultAction::TruncateResponse {})
+                        && !matches!(
+                            rule.operation,
+                            Some(
+                                S3OperationName::GetObject
+                                    | S3OperationName::ListBuckets
+                                    | S3OperationName::ListObjectsV2
+                                    | S3OperationName::ListObjectVersions
+                                    | S3OperationName::ListParts
+                                    | S3OperationName::ListMultipartUploads
+                            )
+                        )
+                    {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            "truncate_response requires GetObject or a List operation".into(),
                         ));
                     }
                 }
@@ -97,6 +128,8 @@ impl Controls {
             (&Method::DELETE, "/_s3mock/faults") => {
                 let mut state = self.state.lock().expect("control operations cannot panic");
                 state.rules.clear();
+                self.fault_reset
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
                 state.random_state = self.config.fault_seed;
                 Ok(json!({"rules": []}))
             }

@@ -93,9 +93,16 @@ impl XmlElement {
         self.children.iter().filter(move |child| child.name == name)
     }
 
-    /// Returns the untrimmed text of the first direct child named `name`.
-    pub(crate) fn child_text(&self, name: &str) -> Option<&str> {
-        self.child(name).map(|child| child.text.as_str())
+    /// Returns the untrimmed text of the first direct child named `name`, which must be a leaf.
+    pub(crate) fn child_text(&self, name: &str) -> Result<Option<&str>, S3Error> {
+        match self.child(name) {
+            None => Ok(None),
+            Some(child) if child.children.is_empty() => Ok(Some(child.text.as_str())),
+            Some(child) => Err(S3Error::malformed_xml(format!(
+                "{} must contain text, not elements",
+                child.name
+            ))),
+        }
     }
 }
 

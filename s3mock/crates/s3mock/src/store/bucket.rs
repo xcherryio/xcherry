@@ -16,7 +16,9 @@ use redb::{ReadableDatabase, ReadableTable};
 use super::{BUCKETS, PARTS, Store, UPLOADS, VERSIONS, decode_json, encode_json, require_bucket};
 use crate::error::StoreError;
 use crate::key_codec::{encode_bucket_prefix, prefix_successor};
-use crate::record::{BucketRecord, ObjectLockConfiguration, VersioningState};
+use crate::record::{
+    BucketRecord, LifecycleConfiguration, ObjectLockConfiguration, VersioningState,
+};
 
 impl Store {
     /// Creates an empty bucket; Object Lock also enables versioning, as in S3.
@@ -38,6 +40,7 @@ impl Store {
                 VersioningState::Unversioned
             },
             object_lock: is_object_lock_enabled.then(ObjectLockConfiguration::default),
+            lifecycle: None,
         };
         let transaction = self.begin_write()?;
         {
@@ -169,6 +172,33 @@ impl Store {
         self.bucket(bucket)?
             .object_lock
             .ok_or_else(|| StoreError::ObjectLockConfigurationNotFound(bucket.to_owned()))
+    }
+
+    /// Replaces the bucket lifecycle configuration; `None` deletes it.
+    pub fn put_lifecycle_configuration(
+        &self,
+        bucket: &str,
+        configuration: Option<LifecycleConfiguration>,
+    ) -> Result<(), StoreError> {
+        let transaction = self.begin_write()?;
+        {
+            let mut buckets = transaction.open_table(BUCKETS)?;
+            let mut record = require_bucket(&buckets, bucket)?;
+            record.lifecycle = configuration;
+            buckets.insert(bucket, encode_json(&record)?.as_slice())?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns the lifecycle configuration, or `NoSuchLifecycleConfiguration`.
+    pub fn lifecycle_configuration(
+        &self,
+        bucket: &str,
+    ) -> Result<LifecycleConfiguration, StoreError> {
+        self.bucket(bucket)?
+            .lifecycle
+            .ok_or_else(|| StoreError::NoSuchLifecycleConfiguration(bucket.to_owned()))
     }
 }
 

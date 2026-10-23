@@ -44,6 +44,7 @@ ulid.workspace = true
 
 [dev-dependencies]
 aws-sdk-s3.workspace = true
+tokio = { workspace = true, features = ["process"] }
 
 [lints]
 workspace = true

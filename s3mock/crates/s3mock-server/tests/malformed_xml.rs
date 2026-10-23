@@ -160,3 +160,50 @@ async fn mixed_content_is_rejected() {
     assert!(exists(&server, "foobar"));
     server.server.shutdown().await;
 }
+
+#[tokio::test]
+async fn unsupported_lifecycle_filters_fail_without_replacing_the_configuration() {
+    let server = start_with_objects(&[]).await;
+    let supported = "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>3</Days></Expiration></Rule></LifecycleConfiguration>";
+    assert_eq!(
+        send_with_md5(&server, "PUT /raw?lifecycle", supported)
+            .await
+            .0,
+        200
+    );
+    for filter in [
+        "<Tag><Key>archive</Key><Value>yes</Value></Tag>",
+        "<And><Prefix>logs/</Prefix><Tag><Key>archive</Key><Value>yes</Value></Tag></And>",
+        "<ObjectSizeGreaterThan>10</ObjectSizeGreaterThan>",
+    ] {
+        let body = format!(
+            "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter>{filter}</Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>"
+        );
+        assert_eq!(
+            send_with_md5(&server, "PUT /raw?lifecycle", &body).await.0,
+            501,
+            "{filter}"
+        );
+    }
+    let misnested = "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>keep/</Prefix><Days>1</Days></Filter></Rule></LifecycleConfiguration>";
+    let nested_prefix = "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix><Prefix>logs/</Prefix></Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>";
+    assert_eq!(
+        send_with_md5(&server, "PUT /raw?lifecycle", nested_prefix)
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        send_with_md5(&server, "PUT /raw?lifecycle", misnested)
+            .await
+            .0,
+        400
+    );
+    let stored = server
+        .store
+        .lifecycle_configuration("raw")
+        .expect("the first configuration remains");
+    assert_eq!(stored.rules[0].prefix, "logs/");
+    assert_eq!(stored.rules[0].expiration_days, Some(3));
+    server.server.shutdown().await;
+}

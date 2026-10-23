@@ -38,12 +38,14 @@ pub(super) fn verify(mut file: File, mut context: SignatureContext) -> Result<Fi
 fn verify_chunks(reader: &mut impl BufRead, context: &mut SignatureContext) -> Result<(), S3Error> {
     loop {
         let line = read_line(reader)?;
-        let (size, signature) = line.split_once(";chunk-signature=").ok_or_else(mismatch)?;
-        let size = u64::from_str_radix(size, 16).map_err(|_| mismatch())?;
+        let (size, signature) = line
+            .split_once(";chunk-signature=")
+            .ok_or_else(framing_error)?;
+        let size = u64::from_str_radix(size, 16).map_err(|_| framing_error())?;
         let mut chunk = reader.take(size);
         let digest = digest_reader(&mut chunk)?;
         if chunk.limit() != 0 {
-            return Err(mismatch());
+            return Err(framing_error());
         }
         let message = format!(
             "AWS4-HMAC-SHA256-PAYLOAD\n{}\n{}\n{}\n{}\n{digest}",
@@ -58,16 +60,18 @@ fn verify_chunks(reader: &mut impl BufRead, context: &mut SignatureContext) -> R
             break;
         }
         if !read_line(reader)?.is_empty() {
-            return Err(mismatch());
+            return Err(framing_error());
         }
     }
     if context.payload_hash.ends_with("-TRAILER") {
         verify_trailers(reader, context)?;
-    } else if !read_line(reader)?.is_empty() {
-        return Err(mismatch());
+    } else if !reader.fill_buf().map_err(|_| framing_error())?.is_empty()
+        && !read_line(reader)?.is_empty()
+    {
+        return Err(framing_error());
     }
-    if !reader.fill_buf().map_err(|_| mismatch())?.is_empty() {
-        return Err(mismatch());
+    if !reader.fill_buf().map_err(|_| framing_error())?.is_empty() {
+        return Err(framing_error());
     }
     Ok(())
 }
@@ -79,22 +83,22 @@ fn verify_trailers(reader: &mut impl BufRead, context: &SignatureContext) -> Res
         if line.is_empty() {
             break;
         }
-        let (name, value) = line.split_once(':').ok_or_else(mismatch)?;
+        let (name, value) = line.split_once(':').ok_or_else(framing_error)?;
         if trailers.len() >= 8
             || trailers
                 .insert(name.to_ascii_lowercase(), value.trim().to_owned())
                 .is_some()
         {
-            return Err(mismatch());
+            return Err(framing_error());
         }
     }
     let signature = trailers
         .remove("x-amz-trailer-signature")
-        .ok_or_else(mismatch)?;
+        .ok_or_else(framing_error)?;
     let mut declared = context.trailer_names.clone();
     declared.sort();
     if declared != trailers.keys().cloned().collect::<Vec<_>>() {
-        return Err(mismatch());
+        return Err(framing_error());
     }
     let canonical = trailers
         .iter()
@@ -112,15 +116,23 @@ fn verify_trailers(reader: &mut impl BufRead, context: &SignatureContext) -> Res
 
 fn read_line(reader: &mut impl BufRead) -> Result<String, S3Error> {
     let mut line = Vec::new();
-    reader
-        .take(4097)
-        .read_until(b'\n', &mut line)
-        .map_err(|_| mismatch())?;
+    loop {
+        let count = reader
+            .take((4097 - line.len()) as u64)
+            .read_until(b'\n', &mut line)
+            .map_err(|_| framing_error())?;
+        if count == 0 || line.len() > 4096 || line.ends_with(b"\r\n") {
+            break;
+        }
+    }
     if line.len() > 4096 || !line.ends_with(b"\r\n") {
-        return Err(mismatch());
+        return Err(framing_error());
     }
     line.truncate(line.len() - 2);
-    String::from_utf8(line).map_err(|_| mismatch())
+    if line.ends_with(b"\n") {
+        line.pop();
+    }
+    String::from_utf8(line).map_err(|_| framing_error())
 }
 
 fn digest_reader(reader: &mut impl Read) -> Result<String, S3Error> {
@@ -136,4 +148,8 @@ fn digest_reader(reader: &mut impl Read) -> Result<String, S3Error> {
         digest.update(&buffer[..length]);
     }
     Ok(hex::encode(digest.finalize()))
+}
+
+fn framing_error() -> S3Error {
+    S3Error::incomplete_body("invalid signed aws-chunked framing")
 }

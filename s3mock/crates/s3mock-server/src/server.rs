@@ -174,15 +174,34 @@ async fn handle_request(
         })
         .boxed()
     });
-    let verified = crate::signature::verify_request(request, &controls.config).await;
+    let verified =
+        crate::signature::verify_request(request, &controls.config, store.temporary_directory())
+            .await;
+    let mut fault_reset = controls.fault_reset.subscribe();
+    observation.has_existing_bucket = match run_store_operation(&store, {
+        let bucket = observation.bucket.clone();
+        move |store| store.bucket(&bucket)
+    })
+    .await
+    {
+        Ok(_) => true,
+        Err(error) if error.code == "NoSuchBucket" => false,
+        Err(error) => {
+            tracing::warn!(?error, "failed to resolve bucket for prefix counters");
+            false
+        }
+    };
     let fault = if verified.is_ok() {
         controls.select_fault(&observation)
     } else {
         None
     };
-    observation.injected_fault = fault.as_ref().map(|action| action.name().to_owned());
+    observation.injected_fault = fault.clone();
     if let Some(FaultAction::Delay { milliseconds }) = fault {
-        tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(milliseconds)) => {},
+            result = fault_reset.changed() => { if let Err(error) = result { tracing::debug!(%error, "fault reset sender closed"); } },
+        }
     }
     let result = match verified {
         Err(error) => Err(error),
@@ -191,7 +210,7 @@ async fn handle_request(
             None => dispatch(store, request).await,
         },
     };
-    if matches!(fault, Some(FaultAction::CommitThenDrop))
+    if matches!(fault, Some(FaultAction::CommitThenDrop {}))
         && result
             .as_ref()
             .is_ok_and(|response| response.status().is_success())
@@ -236,6 +255,15 @@ async fn dispatch(store: Arc<Store>, request: Request<RequestBody>) -> Result<S3
         S3Operation::ListBuckets => handlers::list_buckets(store).await,
         S3Operation::CreateBucket { bucket } => {
             handlers::create_bucket(store, bucket, &parts.headers).await
+        }
+        S3Operation::GetBucketLifecycleConfiguration { bucket } => {
+            handlers::get_bucket_lifecycle_configuration(store, bucket).await
+        }
+        S3Operation::PutBucketLifecycleConfiguration { bucket } => {
+            handlers::put_bucket_lifecycle_configuration(store, bucket, &parts.headers, body).await
+        }
+        S3Operation::DeleteBucketLifecycle { bucket } => {
+            handlers::delete_bucket_lifecycle(store, bucket).await
         }
         S3Operation::GetObjectLockConfiguration { bucket } => {
             handlers::get_object_lock_configuration(store, bucket).await

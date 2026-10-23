@@ -12,10 +12,12 @@ mod payload;
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::Path;
 
 use futures_util::{StreamExt, TryStreamExt};
 use hmac::{Hmac, Mac};
 use http::{Request, StatusCode};
+use http_body::Body;
 use http_body_util::{BodyExt, StreamBody};
 use hyper::body::Frame;
 use percent_encoding::percent_decode_str;
@@ -39,26 +41,46 @@ pub(crate) struct SignatureContext {
 pub(crate) async fn verify_request(
     request: Request<RequestBody>,
     config: &ServerConfig,
+    spool_directory: &Path,
 ) -> Result<Request<RequestBody>, S3Error> {
     if config.signature_verification == SignatureVerification::Off {
         return Ok(request);
     }
     let context = verify_headers(&request, config)?;
+    if request.body().is_end_stream() {
+        if !matches!(context.payload_hash.as_str(), "UNSIGNED-PAYLOAD")
+            && context.payload_hash != hash(b"")
+        {
+            return Err(mismatch());
+        }
+        return Ok(request);
+    }
+    let spool_directory = spool_directory.to_owned();
     let (parts, mut body) = request.into_parts();
-    let file = tokio::task::spawn_blocking(tempfile::tempfile)
+    let file = tokio::task::spawn_blocking(move || tempfile::tempfile_in(spool_directory))
         .await
         .map_err(|error| S3Error::internal(format!("create signature spool task: {error}")))?
         .map_err(|error| S3Error::internal(format!("create signature spool file: {error}")))?;
     let mut file = tokio::fs::File::from_std(file);
     let mut trailers = None;
+    let mut bytes_received = 0_u64;
     while let Some(frame) = body.frame().await {
         let frame = frame
             .map_err(|error| S3Error::incomplete_body(format!("read signed body: {error}")))?;
         match frame.into_data() {
-            Ok(data) => file
-                .write_all(&data)
-                .await
-                .map_err(|error| S3Error::internal(format!("spool signed body: {error}")))?,
+            Ok(data) => {
+                bytes_received += data.len() as u64;
+                if bytes_received > 6 * 1024 * 1024 * 1024 {
+                    return Err(S3Error::new(
+                        StatusCode::BAD_REQUEST,
+                        "EntityTooLarge",
+                        "signed body exceeds the 6 GiB encoded body limit",
+                    ));
+                }
+                file.write_all(&data)
+                    .await
+                    .map_err(|error| S3Error::internal(format!("spool signed body: {error}")))?;
+            }
             Err(frame) => {
                 if let Ok(headers) = frame.into_trailers() {
                     trailers = Some(headers);
@@ -124,15 +146,25 @@ fn verify_headers(
         || components[0] != config.access_key_id
         || components[3] != "s3"
         || components[4] != "aws4_request"
-        || components[2].is_empty()
     {
         return Err(access_denied());
+    }
+    if components[2] != "us-east-1" {
+        return Err(S3Error::new(
+            StatusCode::BAD_REQUEST,
+            "AuthorizationHeaderMalformed",
+            "the credential region must be us-east-1",
+        ));
     }
     let timestamp = header("x-amz-date")?;
     if timestamp.len() != 16
         || timestamp.get(..8) != Some(components[1])
         || timestamp.as_bytes()[8] != b'T'
         || !timestamp.ends_with('Z')
+        || !timestamp.as_bytes()[..8]
+            .iter()
+            .chain(&timestamp.as_bytes()[9..15])
+            .all(u8::is_ascii_digit)
     {
         return Err(access_denied());
     }
@@ -142,6 +174,13 @@ fn verify_headers(
         || !names.contains(&"x-amz-date")
         || names.windows(2).any(|pair| pair[0] >= pair[1])
     {
+        return Err(access_denied());
+    }
+    if request.headers().keys().any(|name| {
+        name.as_str().starts_with("x-amz-")
+            && name.as_str() != "x-amz-content-sha256"
+            && !names.contains(&name.as_str())
+    }) {
         return Err(access_denied());
     }
     let mut canonical_headers = String::new();
@@ -186,7 +225,10 @@ fn verify_headers(
         .map(|(name, value)| format!("{name}={value}"))
         .collect::<Vec<_>>()
         .join("&");
-    let path = request.uri().path();
+    let path = encode(
+        &percent_decode_str(request.uri().path()).collect::<Vec<_>>(),
+        true,
+    );
     let canonical = format!(
         "{}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}",
         request.method()
