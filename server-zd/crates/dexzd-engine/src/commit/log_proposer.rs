@@ -96,6 +96,11 @@ fn proposal_failure_reason(
     match result {
         Ok(Ok(_seq)) => None,
         Ok(Err(ProposalFailure::Fenced)) => Some(NodeStopReason::Fenced),
+        Ok(Err(ProposalFailure::Restart)) => Some(NodeStopReason::CommitPipelineFailed {
+            detail:
+                "an unacknowledged batch of an earlier epoch holds the next seq; recovery voids it"
+                    .to_owned(),
+        }),
         Ok(Err(ProposalFailure::Unavailable)) => Some(NodeStopReason::CommitPipelineFailed {
             detail: "object storage did not accept a log batch before its deadline".to_owned(),
         }),

@@ -130,6 +130,7 @@ impl EngineNode {
             state.clone(),
             tasks.cancellation.clone(),
         ));
+        let node_meta_lock = Arc::new(std::sync::Mutex::new(()));
         let (proposal_sender, proposal_receiver) = mpsc::unbounded_channel();
         let committer = CommandCommitter::new(CommandCommitterParts {
             state: state.clone(),
@@ -144,6 +145,7 @@ impl EngineNode {
         let runtime = runtime_factory(EngineServices {
             committer: committer.clone(),
             partition_hasher: metadata.cluster.partition_hasher.clone(),
+            node_meta_lock: node_meta_lock.clone(),
         });
         let appliers = Arc::new(PartitionApplierPool::start(
             FrameApplier {
@@ -229,6 +231,7 @@ impl EngineNode {
             },
             cluster_id: metadata.cluster_id()?,
             epoch,
+            node_meta_lock,
             config: config.snapshots.clone(),
             snapshot_lock: tokio::sync::Mutex::new(()),
         });

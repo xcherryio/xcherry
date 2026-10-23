@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use dexzd_keyspace::{PartitionHasher, PartitionId};
 use futures::future::BoxFuture;
@@ -20,6 +20,8 @@ pub struct EngineServices {
     pub committer: CommandCommitter,
     /// Computes Flow hashes and partitions with the cluster's key.
     pub partition_hasher: PartitionHasher,
+    /// Hold it around every read-modify-write of the local store's NodeMeta.
+    pub node_meta_lock: Arc<Mutex<()>>,
 }
 
 /// What the runtime factory returns: where committed commands go and how partitions rebuild.
