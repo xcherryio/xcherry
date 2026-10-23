@@ -109,16 +109,28 @@ public interface FlowStartedOrContinuedHistoryEventOrBuilder extends
   io.superdurable.gen.FlowInitialStartOrBuilder getInitialStartOrBuilder();
 
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    * @return Whether the continuedStart field is set.
    */
   boolean hasContinuedStart();
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    * @return The continuedStart.
    */
   io.superdurable.gen.FlowContinuedStart getContinuedStart();
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.FlowContinuedStart continued_start = 11;</code>
    */
   io.superdurable.gen.FlowContinuedStartOrBuilder getContinuedStartOrBuilder();

@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  *
  * Protobuf type {@code dex.DispatchTaskResponse}
@@ -728,6 +729,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    *
    * Protobuf type {@code dex.DispatchTaskResponse}

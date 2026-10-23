@@ -6,6 +6,10 @@
 package io.superdurable.gen;
 
 /**
+ * <pre>
+ * server-zd does not support Flow retry and rejects a set policy with INVALID_ARGUMENT.
+ * </pre>
+ *
  * Protobuf type {@code dex.FlowRetryPolicy}
  */
 @com.google.protobuf.Generated
@@ -289,6 +293,10 @@ private static final long serialVersionUID = 0L;
     return builder;
   }
   /**
+   * <pre>
+   * server-zd does not support Flow retry and rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * Protobuf type {@code dex.FlowRetryPolicy}
    */
   public static final class Builder extends
