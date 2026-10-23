@@ -23,6 +23,7 @@ import {
   acquireIntegEnvironment,
   releaseIntegEnvironment,
 } from "./environment.js";
+import { skipWhenServerZd } from "../server-zd.js";
 
 test.before(async () => {
   await acquireIntegEnvironment();
@@ -32,7 +33,7 @@ test.after(async () => {
   await releaseIntegEnvironment();
 });
 
-test("moneyTransferStart", async () => {
+test("moneyTransferStart", { skip: skipWhenServerZd("failure policies") }, async () => {
   const environment = await acquireIntegEnvironment();
   const flowId = environment.newFlowId("money-transfer");
   const runId = await environment.client.startFlow(

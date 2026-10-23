@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod worker_harness;
+
 use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -57,12 +59,14 @@ use dex_examples_rust::products::subscription::{
     CANCEL_SUBSCRIPTION, DESCRIBE_SUBSCRIPTION, SubscriptionFlow, SubscriptionRequest,
     SubscriptionState, UPDATE_SUBSCRIPTION_CHARGE,
 };
+use dex_examples_rust::shared::{WorkerMode, example_pull_worker_options};
 use dex_sdk::{
     AttributeMatch, BlobCache, BlobCacheConfig, Client, ClientOptions, FlowStatus, SdkError,
     SdkResult, StepExecutionId, StopFlowOptions, TimerId, WaitForAttributeOptions,
     WaitForStepCompletionOptions, Worker, WorkerOptions,
 };
 use tempfile::TempDir;
+use worker_harness::{await_pull_registration, read_worker_mode, should_skip_on_server_zd};
 
 struct DexEnvironment {
     client: Client,
@@ -90,22 +94,28 @@ impl DexEnvironment {
             )
             .expect("open Rust examples cache"),
         );
+        let worker_mode = read_worker_mode();
+        let worker_options = match worker_mode {
+            WorkerMode::Push => WorkerOptions::new()
+                .server_address(&server_address)
+                .bind_address(&worker_address),
+            WorkerMode::Pull => WorkerOptions::new()
+                .server_address(&server_address)
+                .pull(example_pull_worker_options()),
+        };
         let worker = Arc::new(
-            Worker::try_new(
-                registry.clone(),
-                Arc::clone(&cache),
-                WorkerOptions::new()
-                    .server_address(&server_address)
-                    .bind_address(&worker_address),
-            )
-            .expect("create Rust examples Worker"),
+            Worker::try_new(registry.clone(), Arc::clone(&cache), worker_options)
+                .expect("create Rust examples Worker"),
         );
         let thread_worker = Arc::clone(&worker);
         let worker_thread = thread::Builder::new()
             .name("dex-rust-examples-worker".to_string())
             .spawn(move || thread_worker.start())
             .expect("start Rust examples Worker thread");
-        await_worker(worker_port, &worker_thread);
+        match worker_mode {
+            WorkerMode::Push => await_worker(worker_port, &worker_thread),
+            WorkerMode::Pull => await_pull_registration(&worker),
+        }
         let client = Client::try_new(
             registry,
             Arc::clone(&cache),
@@ -320,6 +330,9 @@ fn channel_message_can_be_moved_by_id() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn money_transfer_completes_with_released_sdk() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow = MoneyTransferFlow::default();
     let flow_id = unique_flow_id("money-transfer");
@@ -545,6 +558,9 @@ fn stream_resumes_after_step_and_client_writes() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_happy_path() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing");
     start_order_processing(&environment, &flow_id, false);
@@ -573,6 +589,9 @@ fn order_processing_happy_path() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_reminder_then_ship() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing-reminder");
     start_order_processing(&environment, &flow_id, false);
@@ -610,6 +629,9 @@ fn order_processing_reminder_then_ship() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_ship_failure_refunds() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing-refund");
     start_order_processing(&environment, &flow_id, true);
@@ -879,6 +901,9 @@ fn subscription_updates_charge_and_cancels() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn failure_recovery_retries_and_compensates() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow = FailureRecoveryFlow::default();
     let flow_id = unique_flow_id("failure-recovery");
@@ -908,6 +933,9 @@ fn failure_recovery_retries_and_compensates() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn polling_streams_job_progress_and_completes_with_job_result() {
+    if should_skip_on_server_zd("failure policies") {
+        return;
+    }
     let environment = DexEnvironment::start();
     let flow = PollingFlow::new(Arc::clone(&environment.polling_jobs));
     let flow_id = unique_flow_id("pattern-polling");

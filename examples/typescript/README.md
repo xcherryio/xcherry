@@ -58,6 +58,10 @@ Use Node.js 22 or 24. Defaults connect to Dex at `localhost:8801`. Override with
 `DEX_FLOW_SERVICE_ADDRESS`, `DEX_WORKER_BIND_ADDRESS`, `DEX_WORKER_TARGET`,
 `DEX_EXAMPLES_HTTP_ADDRESS`, `DEX_BLOB_CACHE_DIR`.
 
+Set `DEX_EXAMPLES_WORKER_MODE` to `push` (default) to listen on the Worker bind
+address. Set it to `pull` to connect to Dex as a pull Worker. Pull mode ignores
+the bind address and target, and starts Flows with the pull Worker target.
+
 ## Verify
 
 ```bash
@@ -69,6 +73,12 @@ npm run smoke            # every product + pattern HTTP route
 
 The integration suite starts and verifies Money Transfer, Order Processing,
 Engagement, Microservice, Subscription, and Failure Recovery Flows.
+
+Set `DEX_EXAMPLES_WORKER_MODE=pull` to run the same tests with pull Workers.
+Set `DEX_INTEG_ENGINE=zd` to run them against server-zd. That mode defaults to
+pull Workers, does not start the entity store, and skips samples that use
+failure policies, start delay, Flow retry, or Attribute Store sync. Set
+`DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 The Go examples support `./run-e2e-tests.sh --keep-running` to leave Dex running
 after E2E tests for manual HTTP exploration.

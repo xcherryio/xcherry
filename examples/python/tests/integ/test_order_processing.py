@@ -23,7 +23,7 @@ import pytest
 from dex_examples.app import ExampleApp
 from dex_examples.config import start_options
 from dex_examples.products.order_processing.order_request import OrderRequest
-from tests.integ.conftest import WAIT_TIMEOUT
+from tests.integ.conftest import WAIT_TIMEOUT, skip_when_server_zd
 
 from dex import AsyncClient, StepExecutionId, TimerId, WaitForStepCompletionOptions
 
@@ -56,6 +56,7 @@ async def test_order_processing_happy_path(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("order-processing")
     request = OrderRequest(flow_id, "buyer@example.com", "customer-1", 42)
     await client.start_flow(app.order_processing, flow_id, request, start_options())
@@ -74,6 +75,7 @@ async def test_order_processing_reminder_then_ship(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("order-processing-reminder")
     request = OrderRequest(flow_id, "buyer@example.com", "customer-1", 42)
     await client.start_flow(app.order_processing, flow_id, request, start_options())
@@ -98,6 +100,7 @@ async def test_order_processing_ship_failure_refunds(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("order-processing-refund")
     request = OrderRequest(flow_id, "buyer@example.com", "customer-1", 42, True)
     await client.start_flow(app.order_processing, flow_id, request, start_options())

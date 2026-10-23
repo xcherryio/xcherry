@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod common;
+mod worker_harness;
 
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
@@ -26,12 +27,14 @@ use common::{
 };
 use dex_examples_rust::patterns::polling::FakeJobService;
 use dex_examples_rust::server::build_router;
+use dex_examples_rust::shared::{WorkerMode, example_pull_worker_options};
 use dex_examples_rust::{create_example_registry, create_worker_registry};
 use dex_sdk::{
     BlobCache, BlobCacheConfig, Client, ClientOptions, SdkResult, Worker, WorkerOptions,
     WorkerTarget,
 };
 use tempfile::TempDir;
+use worker_harness::{await_pull_registration, read_worker_mode, should_skip_on_server_zd};
 
 struct FlowSmokeEnvironment {
     _client: Arc<Client>,
@@ -58,7 +61,11 @@ impl FlowSmokeEnvironment {
             .expect("open Rust flow smoke cache"),
         );
         let polling_jobs = Arc::new(FakeJobService::default());
-        let worker_target = WorkerTarget::new(worker_address.clone());
+        let worker_mode = read_worker_mode();
+        let worker_target = match worker_mode {
+            WorkerMode::Push => WorkerTarget::new(worker_address.clone()),
+            WorkerMode::Pull => WorkerTarget::pull(),
+        };
         let client = Arc::new(
             Client::try_new(
                 create_example_registry(Arc::clone(&polling_jobs))
@@ -70,15 +77,21 @@ impl FlowSmokeEnvironment {
             )
             .expect("create Rust flow smoke Client"),
         );
+        let worker_options = match worker_mode {
+            WorkerMode::Push => WorkerOptions::new()
+                .server_address(&server_address)
+                .bind_address(&worker_address)
+                .worker_target(worker_target),
+            WorkerMode::Pull => WorkerOptions::new()
+                .server_address(&server_address)
+                .pull(example_pull_worker_options()),
+        };
         let worker = Arc::new(
             Worker::try_new(
                 create_worker_registry(Arc::clone(&client), Arc::clone(&polling_jobs))
                     .expect("register Rust Worker examples"),
                 Arc::clone(&cache),
-                WorkerOptions::new()
-                    .server_address(&server_address)
-                    .bind_address(&worker_address)
-                    .worker_target(worker_target),
+                worker_options,
             )
             .expect("create Rust flow smoke Worker"),
         );
@@ -87,7 +100,10 @@ impl FlowSmokeEnvironment {
             .name("dex-rust-flow-smoke-worker".to_string())
             .spawn(move || thread_worker.start())
             .expect("start Rust flow smoke Worker thread");
-        await_worker(worker_port, &worker_thread);
+        match worker_mode {
+            WorkerMode::Push => await_worker(worker_port, &worker_thread),
+            WorkerMode::Pull => await_pull_registration(&worker),
+        }
         client.health_check().expect("Dex health check");
 
         let http_port = available_worker_port();
@@ -127,12 +143,14 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
             path: "/products/engagement/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "products/microservices",
             path: "/products/microservices/start",
             query: query(&client.new_flow_id("microservices")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "products/money-transfer",
@@ -144,96 +162,112 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 ("notes".into(), "smoke".into()),
             ]),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         FlowSmokeEntry {
             name: "products/order-processing",
             path: "/products/order-processing/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         FlowSmokeEntry {
             name: "products/subscription",
             path: "/products/subscription/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "products/signup",
             path: "/products/signup/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "products/job-post",
             path: "/products/job-post/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/polling",
             path: "/patterns/polling/start",
             query: query(&client.new_flow_id("pattern-polling")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         FlowSmokeEntry {
             name: "patterns/interruptible",
             path: "/patterns/interruptible/start",
             query: query(&client.new_flow_id("interruptible")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/reminders",
             path: "/patterns/reminders/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/entity-store",
             path: "/patterns/entity-store/start",
             query: HashMap::new(),
             flags: FlowSmokeFlags::NO_START_STEP,
+            server_zd_unsupported_feature: Some("Attribute Store sync"),
         },
         FlowSmokeEntry {
             name: "patterns/manual-recovery",
             path: "/patterns/manual-recovery/start",
             query: query(&client.new_flow_id("manual-recovery")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         FlowSmokeEntry {
             name: "patterns/inactiveness-tracker-timer",
             path: "/patterns/inactiveness-tracker-timer/start",
             query: query(&client.new_flow_id("inactiveness-tracker-timer")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/parallel/static",
             path: "/patterns/parallel/start/static",
             query: query(&client.new_flow_id("parallel-static")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/parallel/dynamic",
             path: "/patterns/parallel/start/dynamic",
             query: query(&client.new_flow_id("parallel-dynamic")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/parallel/await",
             path: "/patterns/parallel/start/await",
             query: query(&client.new_flow_id("parallel-await")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/parallel/first-win",
             path: "/patterns/parallel/start/first-win",
             query: query(&client.new_flow_id("parallel-first-win")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/recovery",
             path: "/patterns/recovery/start",
             query: query_with(&client.new_flow_id("recovery"), &[("itemName", "widget")]),
             flags: FlowSmokeFlags::STEP_START_MAY_FAIL,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         parallel_subflows_entry(client, "basic", "/patterns/parallel-subflows/start/basic"),
         parallel_subflows_entry(
@@ -256,18 +290,21 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
             path: "/patterns/drain-channels/internal/start",
             query: query(&client.new_flow_id("drain-internal")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/drain-channels/external-publishing",
             path: "/patterns/drain-channels/external-publishing/start-or-publish",
             query: query(&client.new_flow_id("drain-external")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/wait-for-step-completion",
             path: "/patterns/wait-for-step-completion/start",
             query: query(&client.new_flow_id("wait-for-state")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "patterns/timeout",
@@ -277,12 +314,14 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("successfulWorkflow", "true")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step",
             path: "/primitives/step/start",
             query: query_with(&client.new_flow_id("primitive-step"), &[("inputNum", "1")]),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/retry",
@@ -292,6 +331,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("readyAfterAttempt", "2")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/custom-retry",
@@ -301,6 +341,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("readyAfterAttempt", "1")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/durability",
@@ -310,6 +351,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("mode", "sync")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/heartbeat",
@@ -319,6 +361,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("batches", "0")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/options-override",
@@ -328,6 +371,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("input", "smoke")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: Some("failure policies"),
         },
         FlowSmokeEntry {
             name: "primitives/step/step-decision",
@@ -337,6 +381,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("mode", "graceful")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/step/wait-types",
@@ -346,6 +391,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("mode", "any"), ("timeoutSeconds", "1")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/attribute",
@@ -355,6 +401,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("message", "smoke")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/channel",
@@ -364,6 +411,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("inputNum", "1")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/stream",
@@ -373,18 +421,21 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("input", "smoke")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/timer",
             path: "/primitives/timer/start",
             query: query_with(&client.new_flow_id("primitive-timer"), &[("seconds", "1")]),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/rpc",
             path: "/primitives/rpc/start",
             query: query(&client.new_flow_id("primitive-rpc")),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/subflow",
@@ -394,6 +445,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("inputNum", "1")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
         FlowSmokeEntry {
             name: "primitives/client-apis",
@@ -403,6 +455,7 @@ fn flow_smoke_catalog(client: &mut FlowSmokeHttpClient) -> Vec<FlowSmokeEntry> {
                 &[("keyword", "smoke")],
             ),
             flags: FlowSmokeFlags::NONE,
+            server_zd_unsupported_feature: None,
         },
     ]
 }
@@ -424,6 +477,7 @@ fn parallel_subflows_entry(
         path,
         query: query(&client.new_flow_id(&format!("parallel-subflows-{kind}"))),
         flags: FlowSmokeFlags::NONE,
+        server_zd_unsupported_feature: None,
     }
 }
 
@@ -435,6 +489,11 @@ fn flow_smoke_all_registered_flows_via_controller() {
     let catalog = flow_smoke_catalog(&mut http_client);
     assert!(!catalog.is_empty(), "flow smoke catalog is empty");
     for entry in catalog {
+        if let Some(feature) = entry.server_zd_unsupported_feature
+            && should_skip_on_server_zd(feature)
+        {
+            continue;
+        }
         let result = http_client.trigger_get(entry.path, &entry.query);
         assert!(
             !result.flow_id.is_empty(),
@@ -459,6 +518,7 @@ fn flow_smoke_all_registered_flows_via_controller() {
             path,
             query: HashMap::new(),
             flags: FlowSmokeFlags::NO_START_STEP,
+            server_zd_unsupported_feature: None,
         };
         let result = http_client.trigger_post(entry.path);
         assert!(

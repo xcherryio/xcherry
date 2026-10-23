@@ -33,9 +33,14 @@ def main() -> None:
     app_state.start_worker()
     try:
         host, port = parse_http_address(config.http_address)
+        worker_description = (
+            "pull Worker"
+            if config.worker_mode.is_pull
+            else f"Worker {app_state.worker.worker_target.address}"
+        )
         print(
             f"Dex Python sync examples listening on http://{config.http_address} "
-            f"(Worker {app_state.worker.worker_target.address})"
+            f"({worker_description})"
         )
         create_app(app_state).run(host=host, port=port, threaded=True)
     finally:

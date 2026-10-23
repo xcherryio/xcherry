@@ -126,6 +126,10 @@ from dex_examples.products.order_processing.order_processing_flow import OrderPr
 from dex_examples.products.signup.user_signup_flow import UserOnboardingFlow
 from dex_examples.products.subscription.subscription_flow import SubscriptionFlow
 from dex_examples.shared.my_dependency_service import MyDependencyService
+from dex_examples.shared.worker_mode import (
+    PULL_REGISTRATION_TIMEOUT_SECONDS,
+    new_example_pull_worker_options,
+)
 
 
 class ExampleApp:
@@ -270,16 +274,9 @@ class ExampleApp:
         self.blob_cache = open_blob_cache(
             BlobCacheConfig(str(config.blob_cache_dir), 1 << 30)
         )
-        worker_options = WorkerOptions(
-            bind_address=config.worker_bind_address,
-            server_address=config.server_address,
-            worker_target=(
-                WorkerTarget(config.worker_target)
-                if config.worker_target
-                else None
-            ),
+        self.worker = AsyncWorker(
+            self.registry, self.blob_cache, _new_worker_options(config)
         )
-        self.worker = AsyncWorker(self.registry, self.blob_cache, worker_options)
         self._client = AsyncClient(
             self.registry,
             self.blob_cache,
@@ -304,6 +301,11 @@ class ExampleApp:
             return
         await self.mcp_registry.start()
         self._worker_task = asyncio.create_task(self.worker.start())
+        if self.config.worker_mode.is_pull:
+            await self.worker.wait_pull_registered(
+                timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
+            )
+            return
         await _await_worker(self.worker.worker_target.address, self._worker_task)
 
     async def close(self) -> None:
@@ -319,6 +321,23 @@ class ExampleApp:
             self._worker_task = None
         await self.mcp_registry.close()
         self.blob_cache.close()
+
+
+def _new_worker_options(config: ExamplesConfig) -> WorkerOptions:
+    if config.worker_mode.is_pull:
+        return WorkerOptions(
+            server_address=config.server_address,
+            pull=new_example_pull_worker_options(),
+        )
+    return WorkerOptions(
+        bind_address=config.worker_bind_address,
+        server_address=config.server_address,
+        worker_target=(
+            WorkerTarget(config.worker_target)
+            if config.worker_target
+            else None
+        ),
+    )
 
 
 async def _await_worker(address: str, worker_task: asyncio.Task[None]) -> None:
