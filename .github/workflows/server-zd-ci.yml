@@ -52,3 +52,39 @@ jobs:
         run: make clippy
       - name: Run tests
         run: make test
+
+  paradedb:
+    name: ParadeDB visibility parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: server-zd
+    services:
+      paradedb:
+        image: paradedb/paradedb:0.26.1
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dexzd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dexzd"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEX_ZD_PARADEDB_URL: postgres://postgres:postgres@localhost:5432/dexzd
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Install libclang for the RocksDB bindings
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-zd
+      - name: Compare ParadeDB and builtin search
+        run: cargo test -p dexzd-search paradedb::integration::paradedb_matches_builtin_evaluator -- --exact
