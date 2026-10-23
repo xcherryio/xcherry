@@ -1,0 +1,18 @@
+[package]
+name = "dexzd-keyspace"
+description = "Identifiers, partition hashing, RocksDB key encodings, and value references shared by every server-zd crate"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-protocol.workspace = true
+siphasher.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
