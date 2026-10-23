@@ -95,8 +95,7 @@ impl CommitTicket {
 impl CommitTicketSender {
     /// Resolves the ticket. A ticket whose waiter is gone is resolved silently.
     pub fn resolve(self, result: Result<CommittedCommand, CommitError>) {
-        // A dropped ticket means nobody waits for this command; the outcome stream still
-        // carries it, so there is nothing to report.
+        // Nobody waits; the outcome stream still carries the command.
         if self.sender.send(result).is_err() {
             tracing::trace!("commit ticket waiter is gone");
         }
@@ -105,6 +104,13 @@ impl CommitTicketSender {
 
 /// The commit pipeline as the runtime uses it. `CommandCommitter` implements it; tests inject
 /// fakes.
+///
+/// Lock contract: the runtime calls [`Self::submit`] and [`Self::committed_view`] while it holds
+/// the Flow's lock, and `FlowRuntimeRegistry::apply_committed` takes that lock. Therefore both
+/// methods must return without blocking or waiting for backpressure, and must not take any lock
+/// that the pipeline holds while it calls `apply_committed`. The pipeline calls
+/// `apply_committed` only after the command's writes are in the local store, never from inside
+/// `submit`.
 pub trait FlowCommandCommitter: Send + Sync + 'static {
     /// Stamps the command (epoch, behavior version, command ID, proposed_at_micros) and
     /// enqueues it in the commit pipeline in one step, so log order equals stamp order within

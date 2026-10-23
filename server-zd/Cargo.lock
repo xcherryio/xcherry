@@ -1023,6 +1023,7 @@ dependencies = [
  "dexzd-worker-dispatch",
  "futures",
  "prost",
+ "prost-types",
  "tempfile",
  "thiserror",
  "tokio",
