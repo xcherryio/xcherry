@@ -152,6 +152,7 @@ impl RunCursor {
             events.push(FlowHistoryEvent {
                 event_id,
                 event_time: Some(event_time),
+                run_attempt: i32::try_from(self.record.current_attempt).unwrap_or(i32::MAX),
                 payload: Some(payload),
             });
         }
