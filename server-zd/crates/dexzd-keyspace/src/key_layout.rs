@@ -9,8 +9,10 @@
 //! RocksDB key layout, version [`crate::KEY_LAYOUT_VERSION`].
 //!
 //! Flow-scoped column families (`flow`, `history`, `value`) start every key with the 8-byte
-//! [`FlowHash`], so one partition is one contiguous key range. Partition-scoped column families
-//! (`partition_index`, `partition_meta`) start with the 2-byte [`PartitionId`].
+//! [`FlowHash`]. One partition is therefore one contiguous key range.
+//!
+//! Partition-scoped column families (`partition_index`, `partition_meta`) start with the 2-byte
+//! [`PartitionId`].
 
 use crate::{FlowHash, PartitionId, RunId, TenantId};
 
@@ -32,6 +34,14 @@ pub enum KeyLayoutError {
         kind: &'static str,
         /// The byte value.
         value: u8,
+    },
+    /// A partition number is outside the cluster's partition count.
+    #[error("partition {partition} is invalid for {partition_bits} partition bits")]
+    InvalidPartition {
+        /// The rejected partition.
+        partition: u16,
+        /// Partition bits of the cluster.
+        partition_bits: u32,
     },
 }
 
@@ -191,9 +201,9 @@ impl RunTable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum IndexKind {
-    /// `fire_at_micros(8) ‖ flow_hash(8) ‖ run_id(16) ‖ timer_id`.
+    /// `fire_at(8) ‖ flow_hash(8) ‖ run_id(16) ‖ timer_id`; times are sign-biased big-endian.
     Timer = 0x01,
-    /// `tenant_id(8) ‖ flow_type ‖ 0x00 ‖ status(1) ‖ flow_hash(8) ‖ run_id(16)`.
+    /// `tenant_id(8) ‖ type_length(2) ‖ flow_type ‖ status(1) ‖ flow_hash(8) ‖ run_id(16)`.
     FlowList = 0x02,
     /// `tenant_id(8) ‖ flow_hash(8) ‖ run_id(16)`; value is the search document version.
     SearchDocument = 0x03,
@@ -203,7 +213,7 @@ pub enum IndexKind {
     OutboxPending = 0x05,
     /// `flow_hash(8) ‖ run_id(16) ‖ object_id`.
     HardDeletePending = 0x06,
-    /// `delete_at_micros(8) ‖ flow_hash(8) ‖ run_id(16)`.
+    /// `delete_at(8) ‖ flow_hash(8) ‖ run_id(16)`; times are sign-biased big-endian.
     Retention = 0x07,
     /// `flow_hash(8) ‖ run_id(16)`: runs with pending or running method calls, for recovery.
     ActiveWork = 0x08,
@@ -330,20 +340,32 @@ pub fn decode_partition_meta_key(key: &[u8]) -> Result<PartitionId, KeyLayoutErr
     Ok(PartitionId(u16::from_be_bytes(bytes)))
 }
 
+/// A Flow-scoped key range: `start` inclusive, `end` exclusive (`None` means unbounded).
+pub type FlowKeyRange = (Vec<u8>, Option<Vec<u8>>);
+
 /// Returns the `[start, end)` range of Flow-scoped keys that belong to `partition`; `end` is
 /// `None` for the last partition.
+///
+/// Returns an error when `partition_bits` exceeds 16 or `partition` is outside the cluster.
+/// A corrupt partition number must never select another partition's keys.
 pub fn partition_key_range(
     partition: PartitionId,
     partition_bits: u32,
-) -> (Vec<u8>, Option<Vec<u8>>) {
+) -> Result<FlowKeyRange, KeyLayoutError> {
+    if partition_bits > 16 || u32::from(partition.0) >= (1_u32 << partition_bits) {
+        return Err(KeyLayoutError::InvalidPartition {
+            partition: partition.0,
+            partition_bits,
+        });
+    }
     if partition_bits == 0 {
-        return (Vec::new(), None);
+        return Ok((Vec::new(), None));
     }
     let shift = 64 - partition_bits;
     let start = u64::from(partition.0) << shift;
     let next = u64::from(partition.0) + 1;
     let end = (next < (1_u64 << partition_bits)).then(|| (next << shift).to_be_bytes().to_vec());
-    (start.to_be_bytes().to_vec(), end)
+    Ok((start.to_be_bytes().to_vec(), end))
 }
 
 #[cfg(test)]
@@ -381,7 +403,7 @@ mod tests {
         for flow_id in ["a", "order-17", "SubFlow:x-S-1-0"] {
             let hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
             let partition = hasher.partition_of(hash);
-            let (start, end) = partition_key_range(partition, hasher.partition_bits());
+            let (start, end) = partition_key_range(partition, hasher.partition_bits()).unwrap();
             let key = flow_directory_key(hash, TenantId::DEFAULT, flow_id);
             assert!(key.as_slice() >= start.as_slice());
             if let Some(end) = end {
@@ -392,11 +414,28 @@ mod tests {
 
     #[test]
     fn last_partition_range_is_unbounded() {
-        let (start, end) = partition_key_range(PartitionId(1023), 10);
+        let (start, end) = partition_key_range(PartitionId(1023), 10).unwrap();
         assert_eq!(start, (1023_u64 << 54).to_be_bytes().to_vec());
         assert!(end.is_none());
-        let (_, end) = partition_key_range(PartitionId(0), 10);
+        let (_, end) = partition_key_range(PartitionId(0), 10).unwrap();
         assert_eq!(end.unwrap(), (1_u64 << 54).to_be_bytes().to_vec());
+    }
+
+    #[test]
+    fn invalid_partitions_are_rejected() {
+        assert!(partition_key_range(PartitionId(2), 1).is_err());
+        assert!(partition_key_range(PartitionId(1), 0).is_err());
+        assert!(partition_key_range(PartitionId(0), 17).is_err());
+        assert_eq!(
+            partition_key_range(PartitionId(0), 0).unwrap(),
+            (Vec::new(), None)
+        );
+        assert!(
+            partition_key_range(PartitionId(65_535), 16)
+                .unwrap()
+                .1
+                .is_none()
+        );
     }
 
     #[test]
