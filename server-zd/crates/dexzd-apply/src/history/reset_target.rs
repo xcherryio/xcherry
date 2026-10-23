@@ -86,7 +86,9 @@ pub(crate) fn resolve_target(
             })
         }
         FlowResetType::Unspecified => {
-            return Ok(Err(invalid_argument("time travel type is required".to_owned())));
+            return Ok(Err(invalid_argument(
+                "time travel type is required".to_owned(),
+            )));
         }
     };
     let Some(selected) = selection else {
@@ -274,8 +276,14 @@ mod tests {
         );
         assert_eq!(parse_reset_time("1970-01-01T00:00:00Z", 0), Ok(0));
         assert_eq!(parse_reset_time("42", 0), Ok(42));
-        assert_eq!(parse_reset_time("3d", 5 * 86_400_000_000), Ok(2 * 86_400_000_000_000));
-        assert_eq!(parse_reset_time("2minute", 600_000_000), Ok(480_000_000_000));
+        assert_eq!(
+            parse_reset_time("3d", 5 * 86_400_000_000),
+            Ok(2 * 86_400_000_000_000)
+        );
+        assert_eq!(
+            parse_reset_time("2minute", 600_000_000),
+            Ok(480_000_000_000)
+        );
         assert_eq!(parse_reset_time("1000y", 1_000_000), Ok(0));
         assert!(parse_reset_time("0d", 0).is_err());
         assert!(parse_reset_time("3x", 0).is_err());

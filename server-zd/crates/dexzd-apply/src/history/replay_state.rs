@@ -51,8 +51,10 @@ impl<'base> ReplayState<'base> {
         run_record: &RunRecord,
     ) -> Self {
         let table_prefix = |table| run_table_prefix(rows.flow_hash, rows.run_id, table);
-        let mut masked_prefixes: Vec<Vec<u8>> =
-            ATTEMPT_SCOPED_TABLES.iter().map(|table| table_prefix(*table)).collect();
+        let mut masked_prefixes: Vec<Vec<u8>> = ATTEMPT_SCOPED_TABLES
+            .iter()
+            .map(|table| table_prefix(*table))
+            .collect();
         masked_prefixes.extend(
             [
                 RunTable::RequestDedup,

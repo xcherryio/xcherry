@@ -95,7 +95,8 @@ fn apply_in_scope(
                             command: Some(failure_command.clone()),
                             ..command.clone()
                         };
-                        let mut failure_scope = CommandScope::new(&recorded_failure, behavior_version);
+                        let mut failure_scope =
+                            CommandScope::new(&recorded_failure, behavior_version);
                         failure_scope.is_replay = scope.is_replay;
                         let cursor = match with_run(&transaction, &failure_scope)? {
                             Ok(cursor) => cursor,

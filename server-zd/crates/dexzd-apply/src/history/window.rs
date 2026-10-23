@@ -124,8 +124,11 @@ fn delete_unneeded_history(
     for attempt in 1..=cursor.record.current_attempt {
         let mut attempt_record = required_attempt_record(transaction, rows, attempt)?;
         let is_kept = |seq: &u64| *seq >= keep_from || (attempt == 1 && *seq == genesis);
-        let (kept, deleted): (Vec<u64>, Vec<u64>) =
-            attempt_record.checkpoint_seqs.iter().copied().partition(is_kept);
+        let (kept, deleted): (Vec<u64>, Vec<u64>) = attempt_record
+            .checkpoint_seqs
+            .iter()
+            .copied()
+            .partition(is_kept);
         if deleted.is_empty() {
             continue;
         }

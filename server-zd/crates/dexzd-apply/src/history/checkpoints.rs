@@ -70,8 +70,9 @@ pub(crate) fn after_command(
 ) -> Result<(), ApplyError> {
     let written_bytes = attempt_write_bytes(transaction, cursor);
     let record = &mut cursor.record;
-    record.written_bytes_since_checkpoint =
-        record.written_bytes_since_checkpoint.saturating_add(written_bytes);
+    record.written_bytes_since_checkpoint = record
+        .written_bytes_since_checkpoint
+        .saturating_add(written_bytes);
     let settings = record.settings.unwrap_or_default();
     let is_attempt_start = cursor.starts_attempt || record.last_checkpoint_seq == 0;
     let has_enough_commands = settings.checkpoint_max_commands > 0
@@ -137,8 +138,8 @@ fn attempt_write_bytes(transaction: &FlowTransaction<'_>, cursor: &RunCursor) ->
         .buffered_puts(ColumnFamily::Flow)
         .filter_map(|(key, value)| {
             let parsed = parse_run_key(key).ok()?;
-            let is_attempt_row = parsed.run_id == cursor.run_id()
-                && ATTEMPT_SCOPED_TABLES.contains(&parsed.table);
+            let is_attempt_row =
+                parsed.run_id == cursor.run_id() && ATTEMPT_SCOPED_TABLES.contains(&parsed.table);
             is_attempt_row.then(|| u64::try_from(key.len() + value.len()).unwrap_or(u64::MAX))
         })
         .fold(0, u64::saturating_add)

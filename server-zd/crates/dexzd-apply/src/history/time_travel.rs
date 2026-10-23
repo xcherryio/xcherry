@@ -61,8 +61,7 @@ pub(crate) fn apply_time_travel(
         }
     };
     let lineage = Lineage::of_attempt(transaction, cursor.rows, selected_attempt)?;
-    let target = match resolve_target(transaction, &cursor, scope.now_micros, &request, &lineage)?
-    {
+    let target = match resolve_target(transaction, &cursor, scope.now_micros, &request, &lineage)? {
         Ok(target) => target,
         Err(reply) => return Ok(HandlerResult::Rejected(reply)),
     };
@@ -84,8 +83,7 @@ pub(crate) fn apply_time_travel(
     } else {
         Vec::new()
     };
-    let rebuilt =
-        rebuild_attempt_state(transaction, cursor.rows, &cursor.record, target.point)?;
+    let rebuilt = rebuild_attempt_state(transaction, cursor.rows, &cursor.record, target.point)?;
     let previous_rows = read_attempt_rows(transaction, cursor.rows)?;
     let was_running = cursor.record.status == FlowStatus::Running as i32;
     cancel_running_invocations(&mut cursor, &previous_rows)?;
@@ -105,7 +103,13 @@ pub(crate) fn apply_time_travel(
     cursor.record.current_attempt = new_attempt;
     set_run_status(&mut cursor.record, &rebuilt.run_status);
     cursor.starts_attempt = true;
-    replace_attempt_rows(transaction, &mut cursor, scope, &previous_rows, rebuilt.rows)?;
+    replace_attempt_rows(
+        transaction,
+        &mut cursor,
+        scope,
+        &previous_rows,
+        rebuilt.rows,
+    )?;
     update_run_lifecycle(transaction, &mut cursor, scope, was_running)?;
     apply_received_child_results(transaction, &mut cursor, scope)?;
     let restored_rows = read_attempt_rows(transaction, cursor.rows)?;

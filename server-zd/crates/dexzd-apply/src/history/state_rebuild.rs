@@ -14,8 +14,8 @@ use dexzd_keyspace::ColumnFamily;
 use dexzd_keyspace::row_keys::checkpoint_key;
 use dexzd_protocol::dex::{StopFlowRequest, StopType};
 use dexzd_protocol::dexzd::v1::{
-    CheckpointRecord, CheckpointRunStatus, FlowCommand, FlowStopCommand, HistoryRecord,
-    RunRecord, TimersFiredCommand, flow_command::Command,
+    CheckpointRecord, CheckpointRunStatus, FlowCommand, FlowStopCommand, HistoryRecord, RunRecord,
+    TimersFiredCommand, flow_command::Command,
 };
 
 use crate::history::attempt_scope::{AttemptRow, read_attempt_rows, run_status_of, set_run_status};

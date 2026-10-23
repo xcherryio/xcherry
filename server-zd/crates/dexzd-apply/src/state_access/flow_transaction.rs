@@ -178,9 +178,7 @@ impl<'reader> FlowTransaction<'reader> {
         self.rows
             .range((column_family, Vec::new())..)
             .take_while(move |((family, _), _)| *family == column_family)
-            .filter_map(|((_, key), value)| {
-                value.as_deref().map(|value| (key.as_slice(), value))
-            })
+            .filter_map(|((_, key), value)| value.as_deref().map(|value| (key.as_slice(), value)))
     }
 
     /// Returns the buffered writes in deterministic order.
