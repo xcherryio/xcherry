@@ -132,10 +132,20 @@ func (s *serviceImpl) GetServerInfo(
 	context.Context,
 	*emptypb.Empty,
 ) (*dexpb.ServerInfo, error) {
+	var serverEngine dexpb.ServerEngine
+	switch s.client.GetBackendType() {
+	case service.BackendTypeTemporal:
+		serverEngine = dexpb.ServerEngine_SERVER_ENGINE_TEMPORAL
+	case service.BackendTypeCadence:
+		serverEngine = dexpb.ServerEngine_SERVER_ENGINE_CADENCE
+	default:
+		panic("unsupported backend type")
+	}
 	return &dexpb.ServerInfo{
 		ServerVersion:                   service.DexServerVersion,
 		MinimumSupportedProtocolVersion: service.MinimumSupportedProtocolVersion,
 		CurrentProtocolVersion:          service.CurrentProtocolVersion,
+		ServerEngine:                    serverEngine,
 	}, nil
 }
 

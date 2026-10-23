@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * PendingStepMethodPhase reports the latest persisted backend lifecycle event.
+ * On server-zd, SCHEDULED waits for locks or dispatch. STARTED means an attempt is running.
  * </pre>
  *
  * Protobuf enum {@code dex.PendingStepMethodPhase}
@@ -110,7 +111,7 @@ public enum PendingStepMethodPhase
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(12);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(13);
   }
 
   private static final PendingStepMethodPhase[] VALUES = values();

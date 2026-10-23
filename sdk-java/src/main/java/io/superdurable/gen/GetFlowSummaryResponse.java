@@ -83,6 +83,10 @@ private static final long serialVersionUID = 0L;
   @SuppressWarnings("serial")
   private volatile java.lang.Object firstRunId_ = "";
   /**
+   * <pre>
+   * On server-zd this always equals run_id.
+   * </pre>
+   *
    * <code>string first_run_id = 2;</code>
    * @return The firstRunId.
    */
@@ -100,6 +104,10 @@ private static final long serialVersionUID = 0L;
     }
   }
   /**
+   * <pre>
+   * On server-zd this always equals run_id.
+   * </pre>
+   *
    * <code>string first_run_id = 2;</code>
    * @return The bytes for firstRunId.
    */
@@ -266,6 +274,21 @@ private static final long serialVersionUID = 0L;
     return closeTime_ == null ? com.google.protobuf.Timestamp.getDefaultInstance() : closeTime_;
   }
 
+  public static final int RUN_ATTEMPT_FIELD_NUMBER = 8;
+  private int runAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: the current run attempt of this run.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 8;</code>
+   * @return The runAttempt.
+   */
+  @java.lang.Override
+  public int getRunAttempt() {
+    return runAttempt_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -301,6 +324,9 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000004) != 0)) {
       output.writeMessage(7, getCloseTime());
     }
+    if (runAttempt_ != 0) {
+      output.writeInt32(8, runAttempt_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -329,6 +355,10 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000004) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(7, getCloseTime());
+    }
+    if (runAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(8, runAttempt_);
     }
     return size;
   }
@@ -376,6 +406,8 @@ private static final long serialVersionUID = 0L;
       if (!getCloseTime()
           .equals(other.getCloseTime())) return false;
     }
+    if (getRunAttempt()
+        != other.getRunAttempt()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -407,6 +439,8 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + CLOSE_TIME_FIELD_NUMBER;
       hash = (53 * hash) + getCloseTime().hashCode();
     }
+    hash = (37 * hash) + RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getRunAttempt();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -565,6 +599,7 @@ private static final long serialVersionUID = 0L;
         closeTimeBuilder_.dispose();
         closeTimeBuilder_ = null;
       }
+      runAttempt_ = 0;
       return this;
     }
 
@@ -629,6 +664,9 @@ private static final long serialVersionUID = 0L;
             : closeTimeBuilder_.build();
         to_bitField0_ |= 0x00000004;
       }
+      if (((from_bitField0_ & 0x00000080) != 0)) {
+        result.runAttempt_ = runAttempt_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -670,6 +708,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.hasCloseTime()) {
         mergeCloseTime(other.getCloseTime());
+      }
+      if (other.getRunAttempt() != 0) {
+        setRunAttempt(other.getRunAttempt());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -738,6 +779,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000040;
               break;
             } // case 58
+            case 64: {
+              runAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000080;
+              break;
+            } // case 64
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -878,6 +924,10 @@ private static final long serialVersionUID = 0L;
 
     private java.lang.Object firstRunId_ = "";
     /**
+     * <pre>
+     * On server-zd this always equals run_id.
+     * </pre>
+     *
      * <code>string first_run_id = 2;</code>
      * @return The firstRunId.
      */
@@ -894,6 +944,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * On server-zd this always equals run_id.
+     * </pre>
+     *
      * <code>string first_run_id = 2;</code>
      * @return The bytes for firstRunId.
      */
@@ -911,6 +965,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * On server-zd this always equals run_id.
+     * </pre>
+     *
      * <code>string first_run_id = 2;</code>
      * @param value The firstRunId to set.
      * @return This builder for chaining.
@@ -924,6 +982,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * On server-zd this always equals run_id.
+     * </pre>
+     *
      * <code>string first_run_id = 2;</code>
      * @return This builder for chaining.
      */
@@ -934,6 +996,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * On server-zd this always equals run_id.
+     * </pre>
+     *
      * <code>string first_run_id = 2;</code>
      * @param value The bytes for firstRunId to set.
      * @return This builder for chaining.
@@ -1384,6 +1450,50 @@ private static final long serialVersionUID = 0L;
         closeTime_ = null;
       }
       return closeTimeBuilder_;
+    }
+
+    private int runAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: the current run attempt of this run.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 8;</code>
+     * @return The runAttempt.
+     */
+    @java.lang.Override
+    public int getRunAttempt() {
+      return runAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the current run attempt of this run.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 8;</code>
+     * @param value The runAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRunAttempt(int value) {
+
+      runAttempt_ = value;
+      bitField0_ |= 0x00000080;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the current run attempt of this run.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000080);
+      runAttempt_ = 0;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.GetFlowSummaryResponse)
