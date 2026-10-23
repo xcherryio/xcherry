@@ -16,7 +16,7 @@ use crate::runtime::CommittedFlowCommand;
 
 /// Engine services handed to the runtime factory before the log is replayed.
 pub struct EngineServices {
-    /// Submits commands. It returns [`crate::CommitError::Unavailable`] until recovery ends.
+    /// Submits commands; returns [`crate::CommitError::Unavailable`] until the log is replayed.
     pub committer: CommandCommitter,
     /// Computes Flow hashes and partitions with the cluster's key.
     pub partition_hasher: PartitionHasher,
@@ -30,23 +30,15 @@ pub struct EngineRuntimeHooks {
     pub rebuilder: Arc<dyn PartitionRuntimeRebuilder>,
 }
 
-/// Receives committed commands in log order per partition.
-///
-/// The Flow runtime registry implements it to drop overlay entries, run effects, and wake
-/// long-poll waiters.
+/// Receives committed commands in log order per partition; the Flow runtime registry implements it.
 pub trait CommittedCommandSink: Send + Sync + 'static {
-    /// Handles one committed and applied command.
+    /// Handles one applied command without blocking.
     ///
-    /// Partition appliers call it on their threads, in log order per partition, after the
-    /// command's state is in the local store. It must not block. During recovery it also
-    /// receives commands that a previous process proposed.
+    /// Replayed commands arrive before rebuild with an older epoch; rebuild owns their effects.
     fn apply_committed(&self, committed: CommittedFlowCommand);
 }
 
-/// Rebuilds a partition's runtime work from committed state after recovery.
-///
-/// The engine calls it once per running partition after replaying the log and before
-/// serving, so pending invocations, timers, outbox deliveries, and deletions resume.
+/// Rebuilds a partition's runtime work from committed state; the node already accepts commands.
 pub trait PartitionRuntimeRebuilder: Send + Sync + 'static {
     /// Rebuilds the runtime work of `partition`.
     fn rebuild_partition(

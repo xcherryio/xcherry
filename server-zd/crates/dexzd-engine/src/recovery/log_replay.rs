@@ -38,8 +38,7 @@ pub(crate) struct LogReplay<'a> {
 }
 
 impl LogReplay<'_> {
-    /// Applies every committed batch after the local store's applied positions, writes
-    /// EpochStart for `epoch`, and marks every partition applied through it.
+    /// Replays committed batches after the applied positions and writes EpochStart for `epoch`.
     pub(crate) async fn run(&self) -> Result<ReplayedLog, EngineStartError> {
         let (last_applied_seq, last_applied_epoch) =
             lowest_applied_position(self.store, self.state.partition_count())?;

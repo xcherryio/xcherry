@@ -24,9 +24,7 @@ use crate::commit::partition_applier::{PartitionApplierPool, PartitionFrame};
 
 const PROPOSAL_RETRY_DELAY: Duration = Duration::from_millis(10);
 
-/// Feeds submitted records to the commit pipeline in submission order.
-///
-/// Owns the pipeline: returning drops it, which stops its writer task.
+/// Feeds submitted records to the pipeline in order; returning drops and stops the pipeline.
 pub(crate) async fn run_log_proposer(
     pipeline: CommitPipeline,
     mut proposals: mpsc::UnboundedReceiver<LogProposal>,

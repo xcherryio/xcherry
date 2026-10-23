@@ -64,11 +64,7 @@ pub struct EngineNodeDependencies {
     pub applier: Arc<dyn CommandApplier>,
 }
 
-/// A running engine node that owns the log stream of its node ID.
-///
-/// A lost lease, a failed commit pipeline, or a failed local store write stops serving at
-/// once; [`EngineNode::wait_for_stop`] then returns the reason, and the process must call
-/// [`EngineNode::shutdown`] and exit with a non-zero status.
+/// A node serving its log stream. After a fatal failure it stops serving; then exit non-zero.
 pub struct EngineNode {
     committer: CommandCommitter,
     state: Arc<CommitState>,
@@ -79,12 +75,7 @@ pub struct EngineNode {
 }
 
 impl EngineNode {
-    /// Recovers the node and starts serving.
-    ///
-    /// Opens or restores the local store, bootstraps or validates the cluster metadata,
-    /// acquires the lease (raising the epoch), calls `runtime_factory`, replays the log
-    /// through the partition appliers, writes EpochStart, starts the commit pipeline, and
-    /// rebuilds every running partition's runtime before serving.
+    /// Restores state, replays the log, starts serving, and rebuilds every running partition's runtime.
     pub async fn start<F>(
         config: &EngineNodeConfig,
         dependencies: EngineNodeDependencies,
@@ -206,6 +197,12 @@ impl EngineNode {
             }
             .run(committed_batches, tasks.cancellation.clone()),
         );
+        // Rebuilt work may submit at once, so commands are accepted before rebuilding.
+        if !state.start_serving() {
+            return Err(EngineStartError::Stopped {
+                reason: state.stop_reason().unwrap_or(NodeStopReason::Shutdown),
+            });
+        }
         for partition in 0..partition_count {
             let partition = PartitionId(
                 u16::try_from(partition).expect("the manifest limits partitions to u16"),
@@ -236,11 +233,6 @@ impl EngineNode {
             snapshot_lock: tokio::sync::Mutex::new(()),
         });
         tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
-        if !state.start_serving() {
-            return Err(EngineStartError::Stopped {
-                reason: state.stop_reason().unwrap_or(NodeStopReason::Shutdown),
-            });
-        }
         tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");
         Ok(Self {
             committer,

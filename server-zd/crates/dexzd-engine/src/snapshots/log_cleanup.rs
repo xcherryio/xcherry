@@ -29,8 +29,9 @@ pub(crate) struct LogCleanup {
 }
 
 impl LogCleanup {
-    /// Deletes batches below the bound and returns the first retained seq, or `None` when no
-    /// snapshot is old enough to cover every partition.
+    /// Deletes covered batches.
+    ///
+    /// Returns the first retained seq, or `None` when no snapshot is old enough.
     pub(crate) async fn run_once(&self, lineage: &str) -> Result<Option<u64>, SnapshotError> {
         let Some(first_retained_seq) = self.covered_bound(lineage).await? else {
             return Ok(None);

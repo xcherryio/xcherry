@@ -14,9 +14,7 @@ use dexzd_storage::{LocalReadView, ScanDirection, StorageError};
 
 use crate::commit::EngineLocalStore;
 
-/// Read view of committed state in the local store; implements [`FlowStateReader`].
-///
-/// Every read is a synchronous local store call, so use the view from a blocking-pool thread.
+/// Committed state in the local store. Reads block, so use it on a blocking-pool thread.
 #[derive(Clone)]
 pub struct CommittedStateView {
     store: Arc<EngineLocalStore>,

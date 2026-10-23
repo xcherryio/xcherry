@@ -171,17 +171,14 @@ impl CommandCommitter {
         Ok((command, ticket))
     }
 
-    /// A consistent read view of committed state (local store snapshot) for any Flow.
-    ///
-    /// Reads are synchronous local store calls; use the view from a blocking-pool thread.
+    /// Returns a view of committed state. Reads block, so use it on a blocking-pool thread.
     pub fn committed_view(&self) -> CommittedStateView {
         CommittedStateView::new(self.inner.store.clone())
     }
 
-    /// Compares the speculative outcome of a command with its committed outcome when debug
-    /// replay checks are enabled; otherwise returns `Ok` without comparing.
+    /// Compares speculative and committed outcomes when debug replay checks are on.
     ///
-    /// A mismatch is a determinism bug: the partition stops and the mismatch is returned.
+    /// Returns the mismatch after stopping the partition.
     pub fn check_speculative_outcome(
         &self,
         partition: PartitionId,

@@ -102,9 +102,7 @@ impl PartitionApplierPool {
             .map_err(|_| ApplierPoolClosed)
     }
 
-    /// Records `position` as applied for every running partition whose applied position is
-    /// older, after the frames queued before the call. Call it only when every batch up to
-    /// `position` is queued, so partitions without records there have nothing to apply.
+    /// Marks running partitions applied through `position`. Call it after every batch up to it is queued.
     pub(crate) async fn advance_applied_position(
         &self,
         position: &LogPosition,
@@ -128,8 +126,7 @@ impl PartitionApplierPool {
         Ok(())
     }
 
-    /// Stops every lane after its current frame and joins it. Queued frames stay committed
-    /// in the log and are applied by recovery.
+    /// Stops every lane after its current frame; recovery applies the queued frames.
     pub(crate) async fn shutdown(&self) {
         self.cancellation.cancel();
         let tasks =
