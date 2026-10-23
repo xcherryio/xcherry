@@ -14,9 +14,11 @@
 //! Every server-zd commit depends on conditional writes, so implementations must honor
 //! [`WriteCondition`] exactly.
 
+mod file_download;
 mod in_memory;
 mod object_store_error;
 mod s3;
+mod s3_error;
 mod startup_self_check;
 
 use std::path::Path;

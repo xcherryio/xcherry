@@ -197,6 +197,14 @@ async fn check_store(store: &dyn ObjectStore) {
             .expect("the conformance operation succeeds"),
         b"from-file"
     );
+    assert!(store.get_to_file("file", &output).await.is_err());
+    assert_eq!(
+        tokio::fs::read(&output)
+            .await
+            .expect("the existing download remains intact"),
+        b"from-file"
+    );
+    assert_no_temporary_downloads(directory.path());
     let absent_path = directory.path().join("absent");
     assert_eq!(
         store
@@ -206,6 +214,7 @@ async fn check_store(store: &dyn ObjectStore) {
         None
     );
     assert!(!absent_path.exists());
+    assert_no_temporary_downloads(directory.path());
     store
         .delete_many(&[
             "objects/a".to_owned(),
@@ -299,6 +308,13 @@ async fn check_store(store: &dyn ObjectStore) {
     startup_self_check(store)
         .await
         .expect("the conformance operation succeeds");
+}
+
+fn assert_no_temporary_downloads(directory: &std::path::Path) {
+    for entry in std::fs::read_dir(directory).expect("the download directory is readable") {
+        let entry = entry.expect("the download directory entry is readable");
+        assert!(!entry.file_name().to_string_lossy().contains(".dexzd-"));
+    }
 }
 
 #[tokio::test]
@@ -402,6 +418,26 @@ async fn in_memory_faults_and_counters() {
             .expect("the conformance operation succeeds")
             .is_none()
     );
+    faults.push(FaultAction::ConditionalRequestConflict);
+    assert_eq!(
+        store
+            .put(
+                "cost/a",
+                Bytes::from_static(b"one"),
+                WriteCondition::CreateOnly
+            )
+            .await
+            .expect_err("the injected concurrent write conflicts")
+            .kind,
+        ObjectStoreErrorKind::Transient
+    );
+    assert!(
+        store
+            .head("cost/a")
+            .await
+            .expect("the key remains absent")
+            .is_none()
+    );
     faults.push(FaultAction::ApplyThenOutcomeUnknown);
     assert_eq!(
         store
@@ -451,7 +487,7 @@ async fn in_memory_faults_and_counters() {
             .expect("the conformance operation succeeds")
             .is_some()
     );
-    assert_eq!(store.call_count(ObjectStoreOperation::Put, "cost/"), 2);
+    assert_eq!(store.call_count(ObjectStoreOperation::Put, "cost/"), 3);
     assert_eq!(store.call_count(ObjectStoreOperation::Put, "other/"), 0);
     assert_eq!(store.call_count(ObjectStoreOperation::Get, "cost/"), 3);
 }
@@ -603,23 +639,47 @@ async fn set_s3mock_fault(address: std::net::SocketAddr, rule: &str) {
     );
 }
 
+async fn s3mock_request_log(address: std::net::SocketAddr) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("the admin endpoint is reachable");
+    stream
+        .write_all(
+            format!(
+                "GET /_s3mock/requests HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("the admin request is sent");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("the admin response is complete");
+    String::from_utf8(response).expect("the admin response is UTF-8")
+}
+
 #[tokio::test]
 async fn s3_conflicts_and_ambiguous_writes() {
     use dexzd_object_store::ObjectStoreErrorKind;
     let directory = TempDir::new().expect("the conformance operation succeeds");
-    let store = Store::open(&StoreConfig {
-        root_directory: directory.path().to_path_buf(),
-        durability: Durability::Relaxed,
-        etag_mode: EtagMode::Opaque,
-    })
-    .expect("the conformance operation succeeds");
+    let store = Arc::new(
+        Store::open(&StoreConfig {
+            root_directory: directory.path().to_path_buf(),
+            durability: Durability::Relaxed,
+            etag_mode: EtagMode::Opaque,
+        })
+        .expect("the conformance operation succeeds"),
+    );
     store
         .create_bucket("fault-bucket", false)
         .expect("the conformance operation succeeds");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("the conformance operation succeeds");
-    let server = s3mock_server::start(Arc::new(store), listener)
+    let server = s3mock_server::start(Arc::clone(&store), listener)
         .expect("the conformance operation succeeds");
     let mut config = S3ObjectStoreConfig::new("us-east-1", "fault-bucket");
     config.endpoint = Some(format!("http://{}", server.local_address()));
@@ -641,9 +701,79 @@ async fn s3_conflicts_and_ambiguous_writes() {
                 WriteCondition::CreateOnly
             )
             .await
-            .expect("the conformance operation succeeds"),
-        WriteOutcome::PreconditionFailed
+            .expect_err("persistent HTTP 409 remains retryable")
+            .kind,
+        ObjectStoreErrorKind::Transient
     );
+    assert!(
+        object_store
+            .head("conflict/key")
+            .await
+            .expect("the key can be read")
+            .is_none()
+    );
+    let conflict_request_log = s3mock_request_log(server.local_address()).await;
+    assert_eq!(
+        conflict_request_log
+            .matches("\"key\":\"conflict/key\",\"operation\":\"PutObject\",\"status\":409")
+            .count(),
+        3,
+        "{conflict_request_log}"
+    );
+    set_s3mock_fault(server.local_address(), r#"{"operation":"CompleteMultipartUpload","bucket":"fault-bucket","key_prefix":"multipart-conflict/","has_conditional_header":true,"action":{"type":"error","status":409}}"#).await;
+    assert_eq!(
+        object_store
+            .put(
+                "multipart-conflict/bytes",
+                Bytes::from(vec![42; 9 * 1024 * 1024]),
+                WriteCondition::CreateOnly
+            )
+            .await
+            .expect_err("persistent multipart HTTP 409 remains retryable")
+            .kind,
+        ObjectStoreErrorKind::Transient
+    );
+    let file_directory = TempDir::new().expect("the multipart fixture directory is available");
+    let file_path = file_directory.path().join("payload");
+    tokio::fs::write(&file_path, vec![7; 9 * 1024 * 1024])
+        .await
+        .expect("the multipart fixture is written");
+    assert_eq!(
+        object_store
+            .put_file(
+                "multipart-conflict/file",
+                &file_path,
+                WriteCondition::CreateOnly
+            )
+            .await
+            .expect_err("persistent multipart file HTTP 409 remains retryable")
+            .kind,
+        ObjectStoreErrorKind::Transient
+    );
+    let uploads = store
+        .list_multipart_uploads(
+            "fault-bucket",
+            &s3mock::ListMultipartUploadsRequest {
+                prefix: "multipart-conflict/".to_owned(),
+                delimiter: String::new(),
+                key_marker: None,
+                upload_id_marker: None,
+                max_uploads: 1000,
+            },
+        )
+        .expect("multipart uploads can be inspected");
+    assert!(uploads.uploads.is_empty());
+    let request_log = s3mock_request_log(server.local_address()).await;
+    for key in ["multipart-conflict/bytes", "multipart-conflict/file"] {
+        assert_eq!(
+            request_log
+                .matches(&format!(
+                    "\"key\":\"{key}\",\"operation\":\"CompleteMultipartUpload\",\"status\":409"
+                ))
+                .count(),
+            3
+        );
+    }
     set_s3mock_fault(server.local_address(), r#"{"operation":"PutObject","bucket":"fault-bucket","key_prefix":"failed/","action":{"type":"error","status":500}}"#).await;
     assert_eq!(
         object_store
@@ -689,6 +819,19 @@ async fn s3_conflicts_and_ambiguous_writes() {
             .kind,
         ObjectStoreErrorKind::Transient
     );
+    set_s3mock_fault(server.local_address(), r#"{"operation":"GetObject","bucket":"fault-bucket","key_prefix":"committed/","action":{"type":"truncate_response"}}"#).await;
+    let download_directory = TempDir::new().expect("the download fixture directory is available");
+    let target = download_directory.path().join("incomplete");
+    assert_eq!(
+        object_store
+            .get_to_file("committed/key", &target)
+            .await
+            .expect_err("a truncated download fails")
+            .kind,
+        ObjectStoreErrorKind::Transient
+    );
+    assert!(!target.exists());
+    assert_no_temporary_downloads(download_directory.path());
     server.shutdown().await;
 }
 

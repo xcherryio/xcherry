@@ -14,6 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 
+use crate::file_download::TemporaryDownloadFile;
 use crate::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
@@ -26,6 +27,8 @@ pub enum FaultAction {
     Proceed,
     /// Return a transient error without applying the operation.
     FailBeforeEffect,
+    /// Report a concurrent conditional-write conflict without applying the operation.
+    ConditionalRequestConflict,
     /// Apply the operation, then report an unknown outcome.
     ApplyThenOutcomeUnknown,
     /// Wait before running the operation. Tokio's paused clock controls the wait.
@@ -113,6 +116,12 @@ impl InMemoryObjectStore {
                 key,
                 ObjectStoreErrorKind::Transient,
                 "injected failure before effect",
+            )),
+            FaultAction::ConditionalRequestConflict => Err(ObjectStoreError::new(
+                operation,
+                key,
+                ObjectStoreErrorKind::Transient,
+                "injected conditional request conflict (HTTP 409)",
             )),
             FaultAction::Delay(duration) => {
                 tokio::time::sleep(duration).await;
@@ -271,28 +280,9 @@ impl ObjectStore for InMemoryObjectStore {
         let Some(content) = self.get(key).await? else {
             return Ok(None);
         };
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .await
-            .map_err(|error| {
-                ObjectStoreError::new(
-                    ObjectStoreOperation::Get,
-                    key,
-                    ObjectStoreErrorKind::Permanent,
-                    format!("creating {}: {error}", path.display()),
-                )
-            })?;
-        use tokio::io::AsyncWriteExt;
-        file.write_all(&content.bytes).await.map_err(|error| {
-            ObjectStoreError::new(
-                ObjectStoreOperation::Get,
-                key,
-                ObjectStoreErrorKind::Permanent,
-                format!("writing {}: {error}", path.display()),
-            )
-        })?;
+        let mut download = TemporaryDownloadFile::create(key, path).await?;
+        download.write_all(&content.bytes).await?;
+        download.commit().await?;
         Ok(Some(content.object_size))
     }
 
