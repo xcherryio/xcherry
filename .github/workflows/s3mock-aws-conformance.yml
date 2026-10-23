@@ -4,9 +4,8 @@ name: S3mock AWS conformance
 # Configure the repository variable S3MOCK_CONFORMANCE_AWS_ROLE_ARN (an IAM role trusted for
 # GitHub OIDC with full S3 access to buckets named s3mock-conformance-*) to enable it.
 
+# Runs only on demand; there is no schedule, so it costs nothing unless someone starts it.
 on:
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
 
 permissions:
