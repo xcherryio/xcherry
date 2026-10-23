@@ -146,6 +146,7 @@ impl EngineNode {
             committer: committer.clone(),
             partition_hasher: metadata.cluster.partition_hasher.clone(),
             node_meta_lock: node_meta_lock.clone(),
+            local_store: store.clone(),
         });
         let appliers = Arc::new(PartitionApplierPool::start(
             FrameApplier {

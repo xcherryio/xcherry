@@ -220,4 +220,16 @@ impl FlowCommandCommitter for CommandCommitter {
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
         Ok(Box::new(CommandCommitter::committed_view(self)))
     }
+
+    fn check_speculative_outcome(
+        &self,
+        partition: PartitionId,
+        speculative: &ApplyOutcome,
+        committed: &CommittedCommand,
+    ) -> Result<(), crate::runtime::ReplayMismatch> {
+        CommandCommitter::check_speculative_outcome(self, partition, speculative, committed)
+            .map_err(|mismatch| crate::runtime::ReplayMismatch {
+                detail: mismatch.to_string(),
+            })
+    }
 }

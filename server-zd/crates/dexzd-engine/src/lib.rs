@@ -35,12 +35,12 @@ pub use recovery::{
     CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     PartitionRuntimeRebuilder, RuntimeRebuildError,
 };
+pub use runtime::ReplayMismatch as SpeculativeOutcomeMismatch;
 pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
     FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, PendingInvocation,
-    ProposalResult, ReplayMismatch, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig,
-    RuntimeEffectSink, RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings,
-    grpc_code,
+    ProposalResult, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink,
+    RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
 };
 pub use snapshots::{SnapshotConfig, SnapshotError};

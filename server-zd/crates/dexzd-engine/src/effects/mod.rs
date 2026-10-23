@@ -20,6 +20,7 @@ mod method_request;
 mod object_deletions;
 mod outbox_delivery;
 mod partition_rebuild;
+mod registry_effect_runtime;
 mod state_reads;
 mod timer_service;
 
