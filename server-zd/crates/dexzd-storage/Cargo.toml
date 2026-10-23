@@ -1,0 +1,28 @@
+[package]
+name = "dexzd-storage"
+description = "Local RocksDB state store for server-zd, including atomic batch writes, state views, and snapshot upload and restore"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-apply.workspace = true
+dexzd-keyspace.workspace = true
+dexzd-object-store.workspace = true
+dexzd-protocol.workspace = true
+prost.workspace = true
+rocksdb.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

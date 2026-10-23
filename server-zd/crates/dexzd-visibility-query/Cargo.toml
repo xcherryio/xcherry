@@ -1,0 +1,17 @@
+[package]
+name = "dexzd-visibility-query"
+description = "Parser, syntax tree, and type checker for the visibility query language accepted by server-zd SearchFlows"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-protocol.workspace = true
+thiserror.workspace = true
+time.workspace = true
+
+[lints]
+workspace = true
