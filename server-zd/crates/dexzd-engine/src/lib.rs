@@ -17,6 +17,7 @@ pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
     FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, PendingInvocation,
-    ProposalResult, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink,
-    RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
+    ProposalResult, ReplayMismatch, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig,
+    RuntimeEffectSink, RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings,
+    grpc_code,
 };

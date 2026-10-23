@@ -35,7 +35,7 @@ impl OverlayEntry {
 }
 
 /// Speculative outcomes of uncommitted commands, oldest first.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct SpeculativeOverlay {
     entries: VecDeque<OverlayEntry>,
     total_bytes: usize,
@@ -249,6 +249,36 @@ impl FlowStateReader for OverlayStateReader<'_> {
             rows.push(row);
         }
         Ok(rows)
+    }
+}
+
+/// A copy of a Flow's overlay over its own committed view, usable without the Flow's lock.
+pub(crate) struct OwnedOverlayView {
+    pub(crate) committed: Box<dyn FlowStateReader + Send>,
+    pub(crate) overlay: SpeculativeOverlay,
+}
+
+impl FlowStateReader for OwnedOverlayView {
+    fn get(
+        &self,
+        column_family: ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StateReadError> {
+        self.overlay
+            .reader(self.committed.as_ref())
+            .get(column_family, key)
+    }
+
+    fn scan(
+        &self,
+        column_family: ColumnFamily,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+    ) -> Result<Vec<StateRow>, StateReadError> {
+        self.overlay
+            .reader(self.committed.as_ref())
+            .scan(column_family, start, end, limit)
     }
 }
 

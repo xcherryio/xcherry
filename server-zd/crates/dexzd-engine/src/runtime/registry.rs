@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader};
 use dexzd_keyspace::{PartitionHasher, RunId, TenantId};
-use dexzd_protocol::dexzd::v1::{FlowCommand, StepInvocationKey};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, StepInvocationKey, flow_command, inbox_message_command,
+};
 use prost::Message;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +28,7 @@ use crate::runtime::flow_runtime::{FlowRuntime, FlowRuntimeState};
 use crate::runtime::rpc_locks::{
     LockBlocker, RpcLockTable, find_invocation_lock_blocker, find_rpc_lock_blocker,
 };
-use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry};
+use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry, OwnedOverlayView};
 use crate::runtime::{
     CommitTicket, CommitUrgency, CommittedFlowCommand, FlowAddress, FlowCommandCommitter,
     HardDeleteValueReader, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, RuntimeError,
@@ -225,7 +227,8 @@ impl FlowRuntimeRegistry {
     ///
     /// Drops the command's overlay entry and compares its speculative outcome with the
     /// committed one byte for byte; a mismatch halts the registry. Then forwards the committed
-    /// effects and wakes long-poll waiters. Never blocks on I/O.
+    /// effects and wakes long-poll waiters. Replayed commands, which have no overlay entry, only
+    /// wake waiters: partition rebuild owns their effects. Never blocks on I/O.
     pub fn apply_committed(&self, committed: CommittedFlowCommand) {
         if self.inner.halted.is_cancelled() {
             return;
@@ -235,38 +238,52 @@ impl FlowRuntimeRegistry {
             committed.command.flow_id.clone(),
         );
         let outcome = &committed.committed.outcome;
+        let mut speculative = None;
         if let Some(lease) = self.inner.lease_existing(&flow) {
             let runtime = lease.runtime();
             let mut state = runtime.lock_state();
-            let matched = state.overlay.take_committed(&committed.command.command_id);
-            let failure = match matched {
+            let mut is_out_of_order = false;
+            match state.overlay.take_committed(&committed.command.command_id) {
                 CommittedMatch::Head(entry) => {
                     self.inner.release_bytes(entry.size_bytes);
                     state.record_settled(1);
-                    (!is_same_outcome(&entry.outcome, outcome)).then(|| {
-                        format!(
-                            "speculative and committed outcomes differ for Flow {}",
-                            flow.flow_id
-                        )
-                    })
+                    speculative = Some(entry.outcome);
                 }
-                CommittedMatch::Foreign => None,
-                CommittedMatch::OutOfOrder => Some(format!(
-                    "commands of Flow {} committed out of proposal order",
-                    flow.flow_id
-                )),
-            };
+                CommittedMatch::Foreign => {}
+                CommittedMatch::OutOfOrder => is_out_of_order = true,
+            }
             runtime.publish_settled(&state);
             drop(state);
-            if let Some(reason) = failure {
-                self.halt(reason);
+            if is_out_of_order {
+                self.halt(format!(
+                    "commands of Flow {} committed out of proposal order",
+                    flow.flow_id
+                ));
                 return;
             }
         }
-        self.inner
-            .dependencies
-            .effects
-            .handle(&flow, &outcome.effects, true);
+        // Commands this registry never proposed are replays; partition rebuild owns their effects.
+        if let Some(speculative) = speculative {
+            if !is_same_outcome(&speculative, outcome) {
+                self.halt(format!(
+                    "speculative and committed outcomes differ for Flow {}",
+                    flow.flow_id
+                ));
+                return;
+            }
+            if let Err(mismatch) = self.inner.dependencies.committer.check_speculative_outcome(
+                committed.context.partition,
+                &speculative,
+                &committed.committed,
+            ) {
+                self.halt(mismatch.to_string());
+                return;
+            }
+            self.inner
+                .dependencies
+                .effects
+                .handle(&flow, &outcome.effects, true);
+        }
         for effect in &outcome.effects {
             if let ApplyEffect::WakeWaiters { change, .. } = effect {
                 self.inner.waiters.wake(&flow, change);
@@ -386,6 +403,7 @@ impl FlowRuntimeRegistry {
         let Some((command, extra)) = built else {
             return Ok(None);
         };
+        let command = self.resolve_child_start(command);
         let (stamped, ticket) = dependencies
             .committer
             .submit(runtime.context, command, urgency)?;
@@ -416,6 +434,45 @@ impl FlowRuntimeRegistry {
             },
             extra,
         )))
+    }
+
+    /// Gives a child Flow start its new run ID and run settings, as FlowStart gets them.
+    fn resolve_child_start(&self, mut command: FlowCommand) -> FlowCommand {
+        if let Some(flow_command::Command::InboxMessage(inbox)) = command.command.as_mut()
+            && matches!(
+                inbox.payload,
+                Some(inbox_message_command::Payload::ChildStart(_))
+            )
+        {
+            if inbox.new_run_id.is_empty() {
+                inbox.new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+            }
+            if inbox.settings.is_none() {
+                inbox.settings = Some(self.inner.config.run_settings);
+            }
+        }
+        command
+    }
+
+    /// Returns a read view of a Flow's committed state, plus its uncommitted commands when
+    /// `include_speculative` is true. The view is a snapshot and holds no lock.
+    ///
+    /// Returns an error when the committed view cannot be opened.
+    pub fn flow_state_reader(
+        &self,
+        flow: &FlowAddress,
+        include_speculative: bool,
+    ) -> Result<Box<dyn FlowStateReader + Send>, RuntimeError> {
+        self.check_running()?;
+        let committed = self.inner.dependencies.committer.committed_view()?;
+        if !include_speculative {
+            return Ok(committed);
+        }
+        let Some(lease) = self.inner.lease_existing(flow) else {
+            return Ok(committed);
+        };
+        let overlay = lease.runtime().lock_state().overlay.clone();
+        Ok(Box::new(OwnedOverlayView { committed, overlay }))
     }
 
     /// Runs `inspect` under the Flow's lock with the speculative view and the RPC locks.

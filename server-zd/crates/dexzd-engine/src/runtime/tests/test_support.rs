@@ -17,7 +17,7 @@ use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateReadError, StateRow,
     StateWrite,
 };
-use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId};
+use dexzd_keyspace::{ColumnFamily, PartitionHasher, PartitionId, RunId};
 use dexzd_protocol::dex::Value;
 use dexzd_protocol::dexzd::v1::{FlowCommand, HardDeleteObjectReference, LogPosition};
 use futures::future::BoxFuture;
@@ -28,8 +28,9 @@ use crate::runtime::tests::model_applier::ModelApplier;
 use crate::runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
-    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, RpcInvokeError,
-    RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, WorkerRpcInvocation, WorkerRpcResult,
+    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, ReplayMismatch,
+    RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, WorkerRpcInvocation,
+    WorkerRpcResult,
 };
 
 type Rows = BTreeMap<(ColumnFamily, Vec<u8>), Vec<u8>>;
@@ -137,6 +138,7 @@ pub(crate) struct FakeCommitter {
     next_command_number: AtomicU64,
     pub(crate) submit_errors: Mutex<VecDeque<CommitError>>,
     pub(crate) submitted_commands: Mutex<Vec<FlowCommand>>,
+    pub(crate) replay_mismatch: Mutex<Option<ReplayMismatch>>,
 }
 
 impl FakeCommitter {
@@ -148,6 +150,7 @@ impl FakeCommitter {
             next_command_number: AtomicU64::new(0),
             submit_errors: Mutex::new(VecDeque::new()),
             submitted_commands: Mutex::new(Vec::new()),
+            replay_mismatch: Mutex::new(None),
         }
     }
 
@@ -191,6 +194,19 @@ impl FlowCommandCommitter for FakeCommitter {
 
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
         Ok(Box::new(self.store.view()))
+    }
+
+    fn check_speculative_outcome(
+        &self,
+        _partition: PartitionId,
+        _speculative: &ApplyOutcome,
+        _committed: &CommittedCommand,
+    ) -> Result<(), ReplayMismatch> {
+        self.replay_mismatch
+            .lock()
+            .unwrap()
+            .clone()
+            .map_or(Ok(()), Err)
     }
 }
 
