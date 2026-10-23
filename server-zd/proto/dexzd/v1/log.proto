@@ -13,6 +13,7 @@ syntax = "proto3";
 package dexzd.v1;
 
 // Header of one log batch object, stored at <prefix>/log/<node_id>/<incarnation:010>/<seq:020>.
+// Node IDs match ^[a-z0-9][a-z0-9-]{0,62}$ so they never contain a key separator.
 //
 // Object layout (all integers little-endian):
 //   magic "DEXZDLOG" (8 bytes) | format_version u16 | header_length u32 | LogBatchHeader bytes |

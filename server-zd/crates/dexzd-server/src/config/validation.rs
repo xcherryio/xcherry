@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use dexzd_keyspace::validate_node_identifier;
+
 use super::{Config, ConfigError, CredentialSource, SearchBackend};
 
 impl Config {
@@ -22,15 +24,15 @@ impl Config {
     }
 
     fn validate_cluster_and_storage(&self) -> Result<(), ConfigError> {
+        validate_node_identifier(&self.cluster.node_id).map_err(|error| ConfigError::Invalid {
+            field: "cluster.nodeId",
+            message: error.to_string(),
+        })?;
         ensure(
-            !self.cluster.node_id.trim().is_empty(),
-            "cluster.nodeId",
-            "must identify one node",
-        )?;
-        ensure(
-            self.cluster.partition_count.is_power_of_two(),
+            self.cluster.partition_count.is_power_of_two()
+                && self.cluster.partition_count <= 65_536,
             "cluster.partitionCount",
-            "must be a positive power of two",
+            "must be a power of two between 1 and 65536",
         )?;
         ensure(
             !self.object_store.region.trim().is_empty(),
@@ -127,11 +129,6 @@ impl Config {
             "must be positive",
         )?;
         ensure(
-            self.lease.duration > self.commit.batch_window.saturating_mul(3),
-            "lease.duration",
-            "must exceed three commit batch windows for renewal headroom",
-        )?;
-        ensure(
             self.snapshot.log_threshold_bytes > 0,
             "snapshot.logThresholdBytes",
             "must be positive",
@@ -213,7 +210,7 @@ impl Config {
             "must exceed values.maxValueBytes for the request envelope",
         )?;
         ensure(
-            self.api.max_wait_seconds > Duration::ZERO,
+            self.api.max_wait_seconds > 0,
             "api.maxWaitSeconds",
             "must be positive",
         )?;
@@ -290,6 +287,11 @@ impl Config {
         ensure(
             self.stream_store.background_trim_batch_size > 0,
             "streamStore.backgroundTrimBatchSize",
+            "must be positive",
+        )?;
+        ensure(
+            self.stream_store.trim_batch_yield_time > Duration::ZERO,
+            "streamStore.trimBatchYieldTime",
             "must be positive",
         )?;
         ensure(

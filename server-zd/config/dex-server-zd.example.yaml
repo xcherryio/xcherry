@@ -42,7 +42,7 @@ retention:
 api:
   listen: "0.0.0.0:8801"
   grpcMaxMessageBytes: 33554432
-  maxWaitSeconds: 60s
+  maxWaitSeconds: 60
   defaultRpcTimeout: 60s
 matching:
   dispatchWait: 10s
@@ -61,6 +61,7 @@ streamStore:
   trimTriggerPercent: 90
   trimTargetPercent: 80
   backgroundTrimBatchSize: 256
+  trimBatchYieldTime: 1ms
   trimWorkers: 4
 search:
   backend: builtin
