@@ -1173,6 +1173,7 @@ name = "dexzd-stream-store"
 version = "0.1.0"
 dependencies = [
  "dexzd-protocol",
+ "prost",
  "thiserror",
  "tokio",
  "tracing",
