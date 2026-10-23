@@ -1,0 +1,30 @@
+[package]
+name = "dexzd-api"
+description = "FlowService gRPC handlers for server-zd: request validation, routing to the engine, long polling, and error mapping"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-engine.workspace = true
+dexzd-protocol.workspace = true
+dexzd-search.workspace = true
+dexzd-stream-store.workspace = true
+dexzd-worker-dispatch.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

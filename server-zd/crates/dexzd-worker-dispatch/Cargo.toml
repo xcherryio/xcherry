@@ -1,0 +1,26 @@
+[package]
+name = "dexzd-worker-dispatch"
+description = "Pull Worker protocol server for server-zd: Worker registration, task queues, matching, cancellation, and keepalive"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-clock.workspace = true
+dexzd-protocol.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

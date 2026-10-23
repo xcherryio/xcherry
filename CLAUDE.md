@@ -529,3 +529,20 @@ are excluded from structural counts. Inline test modules still count toward a
 production file's size. The baseline may only shrink against origin/main:
 never add an entry or increase its ceiling. Remove an entry as soon as the
 file or directory meets its limit; stale entries fail the check.
+
+## server-zd Engine Rules (`server-zd/**`)
+
+- `dexzd-apply` is a deterministic state machine. It never reads clocks,
+  random numbers, configuration, the environment, files, or the network, and
+  it never iterates a hash map. Values that change an apply result come from
+  the command or from persisted state. Its `clippy.toml` bans the common
+  offenders; keep that file's frozen test settings identical to the workspace.
+- A change to the result of applying an already committed command needs a new
+  behavior version with a named predicate. Never change the behavior of an
+  existing version.
+- Persistent formats (`server-zd/proto/dexzd/`, the RocksDB key layout, the
+  object storage layout, and snapshots) follow the protobuf compatibility
+  rules: additive only; never renumber or reuse field numbers or names.
+- Generated protobuf maps use `BTreeMap`.
+- Local tests use the in-process s3mock or the in-memory object store, never
+  MinIO.
