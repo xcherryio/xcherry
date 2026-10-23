@@ -169,18 +169,21 @@ fn remove_timer_indexes(
     let timers: Vec<(Vec<u8>, TimerRecord)> =
         transaction.scan_messages(ColumnFamily::Flow, &start, &end, usize::MAX, "timer")?;
     for (_, timer) in timers {
-        if let Some(timer_id) = timer.timer_id {
-            transaction.delete(
-                ColumnFamily::PartitionIndex,
-                timer_index_key(
-                    transaction.context().partition,
-                    timer.fire_at_micros,
-                    rows.flow_hash,
-                    rows.run_id,
-                    &timer_id.encode_to_vec(),
-                ),
-            );
-        }
+        let timer_id = timer
+            .timer_id
+            .ok_or_else(|| ApplyError::InvariantViolation {
+                detail: "stored timer has no ID during run purge".to_owned(),
+            })?;
+        transaction.delete(
+            ColumnFamily::PartitionIndex,
+            timer_index_key(
+                transaction.context().partition,
+                timer.fire_at_micros,
+                rows.flow_hash,
+                rows.run_id,
+                &timer_id.encode_to_vec(),
+            ),
+        );
     }
     Ok(())
 }
@@ -225,18 +228,21 @@ fn remove_hard_delete_indexes(
         "hard-delete pending",
     )?;
     for (_, object) in objects {
-        if let Some(reference) = object.object {
-            transaction.delete(
-                ColumnFamily::PartitionIndex,
-                run_item_index_key(
-                    transaction.context().partition,
-                    IndexKind::HardDeletePending,
-                    rows.flow_hash,
-                    rows.run_id,
-                    reference.object_id.as_bytes(),
-                ),
-            );
-        }
+        let reference = object
+            .object
+            .ok_or_else(|| ApplyError::InvariantViolation {
+                detail: "pending hard-delete row has no object during run purge".to_owned(),
+            })?;
+        transaction.delete(
+            ColumnFamily::PartitionIndex,
+            run_item_index_key(
+                transaction.context().partition,
+                IndexKind::HardDeletePending,
+                rows.flow_hash,
+                rows.run_id,
+                reference.object_id.as_bytes(),
+            ),
+        );
     }
     Ok(())
 }

@@ -14,8 +14,8 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, ChildFlowStartMessage, CrossFlowEndpoint, InboxDedupRecord,
-    InboxMessageCommand, StoredFlowResult, StoredStepCompletionOutput, SubFlowResultRecord,
-    inbox_message_command,
+    InboxMessageCommand, ParentFlowReference, StoredFlowResult, StoredStepCompletionOutput,
+    SubFlowResultRecord, inbox_message_command,
 };
 
 use crate::ApplyError;
@@ -70,6 +70,11 @@ fn apply_child_start(
     if parent.parent.as_ref() != Some(source) {
         return Ok(reject_child_start(
             "child start source does not match its parent",
+        ));
+    }
+    if start.child_flow_id != expected_child_flow_id(parent, &source.flow_id) {
+        return Ok(reject_child_start(
+            "child Flow ID does not match its parent Step",
         ));
     }
     let condition = start.condition.clone().unwrap_or_default();
@@ -206,11 +211,12 @@ fn apply_child_completed(
     source: &CrossFlowEndpoint,
     completed: &ChildFlowCompletedMessage,
 ) -> Result<HandlerResult, ApplyError> {
-    let Some(parent) = completed
-        .parent
-        .as_ref()
-        .and_then(|parent| parent.parent.as_ref())
-    else {
+    let Some(parent_reference) = completed.parent.as_ref() else {
+        return Ok(reject_child_start(
+            "child completion has no parent reference",
+        ));
+    };
+    let Some(parent) = parent_reference.parent.as_ref() else {
         return Ok(reject_child_start(
             "child completion has no parent endpoint",
         ));
@@ -218,8 +224,11 @@ fn apply_child_completed(
     if parent.tenant_id != scope.tenant_id.0
         || parent.flow_id != scope.flow_id()
         || parent.run_id != scope.command.run_id
+        || source.tenant_id != scope.tenant_id.0
         || source.flow_id != completed.child_flow_id
         || source.run_id != completed.child_run_id
+        || source.run_attempt != completed.child_run_attempt
+        || completed.child_flow_id != expected_child_flow_id(parent_reference, scope.flow_id())
     {
         return Ok(reject_child_start(
             "child completion source or target does not match",
@@ -371,6 +380,13 @@ fn run_id_from_directory(bytes: &[u8]) -> Result<RunId, ApplyError> {
     RunId::from_slice(bytes).map_err(|_| ApplyError::InvariantViolation {
         detail: "Flow directory has a malformed run ID".to_owned(),
     })
+}
+
+fn expected_child_flow_id(parent: &ParentFlowReference, parent_flow_id: &str) -> String {
+    format!(
+        "SubFlow:{parent_flow_id}-{}-{}",
+        parent.step_execution_id, parent.sub_flow_index
+    )
 }
 
 fn reject_child_start(detail: impl Into<String>) -> HandlerResult {

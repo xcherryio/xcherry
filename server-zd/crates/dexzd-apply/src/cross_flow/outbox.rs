@@ -11,8 +11,8 @@ use dexzd_keyspace::{ColumnFamily, IndexKind};
 use dexzd_protocol::dex::{FlowConfig, FlowResult, StepCompletionOutput, SubFlowCondition, Value};
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, ChildFlowStartMessage, CrossFlowEndpoint, OutboxAckCommand,
-    OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, StepExecutionRecord, StoredValue,
-    TimerId, outbox_record, timer_id,
+    OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, StoredValue, TimerId, outbox_record,
+    timer_id,
 };
 
 use crate::ApplyEffect;
@@ -34,17 +34,18 @@ pub(crate) fn start_child_flows(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
     scope: &CommandScope<'_>,
-    step: &mut StepExecutionRecord,
+    step_execution_id: &str,
     sub_flow_conditions: &[SubFlowCondition],
+    child_ids: &[String],
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
-    let mut child_ids = Vec::with_capacity(sub_flow_conditions.len());
+    if child_ids.len() != sub_flow_conditions.len() {
+        return Err(ApplyError::InvariantViolation {
+            detail: "SubFlow condition and child ID counts differ".to_owned(),
+        });
+    }
     for (condition_index, condition) in sub_flow_conditions.iter().enumerate() {
         let sub_flow_index = i32::try_from(condition_index).unwrap_or(i32::MAX);
-        let child_flow_id = format!(
-            "SubFlow:{}-{}-{sub_flow_index}",
-            scope.flow_id(),
-            step.step_execution_id
-        );
+        let child_flow_id = child_ids[condition_index].clone();
         let message_id = message_id(
             cursor.seq,
             u64::try_from(condition_index).unwrap_or(u64::MAX),
@@ -89,7 +90,7 @@ pub(crate) fn start_child_flows(
                 run_id: cursor.run_id().as_bytes().to_vec(),
                 run_attempt: cursor.attempt(),
             }),
-            step_execution_id: step.step_execution_id.clone(),
+            step_execution_id: step_execution_id.to_owned(),
             sub_flow_index,
             condition_id: condition.condition_id.clone(),
         };
@@ -97,7 +98,7 @@ pub(crate) fn start_child_flows(
             "{}:{}:{}:{sub_flow_index}",
             cursor.run_id(),
             cursor.attempt(),
-            step.step_execution_id
+            step_execution_id
         );
         let flow_config = effective_flow_config(
             cursor.record.flow_config.as_ref(),
@@ -125,15 +126,14 @@ pub(crate) fn start_child_flows(
             }),
             held_values,
         );
-        child_ids.push(child_flow_id);
-    }
-    if let Some(wait) = step.wait.as_mut() {
-        wait.sub_flow_child_ids = child_ids;
     }
     Ok(Ok(()))
 }
 
-#[expect(dead_code, reason = "A3 calls the child-start path after its wait engine lands.")]
+#[expect(
+    dead_code,
+    reason = "A3 calls the child-start path after its wait engine lands."
+)]
 fn pin_complete_value(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
@@ -165,7 +165,10 @@ fn pin_complete_value(
     Ok(Ok(complete))
 }
 
-#[expect(dead_code, reason = "A3 calls the child-start path after its wait engine lands.")]
+#[expect(
+    dead_code,
+    reason = "A3 calls the child-start path after its wait engine lands."
+)]
 fn effective_flow_config(
     parent: Option<&FlowConfig>,
     override_config: Option<&FlowConfig>,
