@@ -244,9 +244,13 @@ impl FlowRuntimeRegistry {
             })
             .await?;
         match (reply, target_run_id) {
-            (command_reply::Reply::TimeTravel(_), Some(run_id)) => Ok(ResetFlowResponse {
-                run_id: run_id.to_string(),
-            }),
+            (command_reply::Reply::TimeTravel(time_travel), Some(run_id)) => {
+                Ok(ResetFlowResponse {
+                    run_id: run_id.to_string(),
+                    run_attempt: i32::try_from(time_travel.run_attempt)
+                        .map_err(|error| RuntimeError::corrupt_row("time travel reply", error))?,
+                })
+            }
             (other, _) => Err(unexpected_reply("ResetFlow", &other)),
         }
     }

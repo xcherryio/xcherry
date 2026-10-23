@@ -304,6 +304,7 @@ async fn get_flow_summary_reports_run_identity_status_and_times() {
     assert_eq!(response.flow_status, FlowStatus::Running as i32);
     assert_eq!(response.start_time.unwrap().seconds, 1);
     assert!(response.close_time.is_none());
+    assert_eq!(response.run_attempt, 1);
 }
 
 #[tokio::test(start_paused = true)]

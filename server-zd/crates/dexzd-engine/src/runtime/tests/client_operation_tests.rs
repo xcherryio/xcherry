@@ -236,6 +236,7 @@ async fn reset_returns_the_unchanged_run_id() {
         .await
         .unwrap();
     assert_eq!(response.run_id, run_id.to_string());
+    assert_eq!(response.run_attempt, 2);
 }
 
 fn rpc_request(flow_id: &str) -> InvokeRpcRequest {
