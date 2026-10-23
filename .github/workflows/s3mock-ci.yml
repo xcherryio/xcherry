@@ -1,0 +1,44 @@
+name: S3mock CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "s3mock/**"
+      - ".github/workflows/s3mock-ci.yml"
+  pull_request:
+    paths:
+      - "s3mock/**"
+      - ".github/workflows/s3mock-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s3mock-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RUSTUP_TOOLCHAIN: "1.97.1"
+
+jobs:
+  quality:
+    name: Format, Clippy, unit tests, and conformance suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: s3mock
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Check formatting
+        run: make fmt-check
+      - name: Run Clippy
+        run: make clippy
+      - name: Run unit tests and the conformance suite against s3mock
+        run: make test

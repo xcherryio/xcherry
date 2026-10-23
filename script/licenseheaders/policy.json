@@ -13,11 +13,13 @@
     "sdk-rust",
     "sdk-typescript",
     "protos",
+    "s3mock",
     "script"
   ],
   "forced_new_prefixes": [
     "blob-cache-go",
     "protos",
+    "s3mock",
     "sdk-rust",
     "sdk-typescript",
     "web"

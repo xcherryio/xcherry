@@ -35,6 +35,7 @@ jobs:
             examples-typescript-ci.yml
             generated-code-ci.yml
             release-tooling-ci.yml
+            s3mock-ci.yml
             sdk-go-ci.yml
             sdk-java-ci.yml
             sdk-python-ci.yml
