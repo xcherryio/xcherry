@@ -57,7 +57,7 @@ impl MethodResult {
 /// Outcome of checking a Worker's final frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum WorkerResultCheck {
-    Valid(MethodResult),
+    Valid(Box<MethodResult>),
     Invalid {
         kind: StepAttemptFailureKind,
         detail: String,
@@ -133,7 +133,7 @@ pub(crate) fn check_worker_result(
             is_non_retryable: true,
         };
     }
-    WorkerResultCheck::Valid(result)
+    WorkerResultCheck::Valid(Box::new(result))
 }
 
 fn invalid_shape(detail: &str) -> WorkerResultCheck {

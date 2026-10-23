@@ -250,7 +250,7 @@ impl MethodAttempt {
                 }
                 () = sleep_until_optional(flush_at) => {
                     if let Some(checkpoint) = checkpoints.take_pending() {
-                        self.propose_heartbeat(checkpoint, urgency).await;
+                        self.propose_heartbeat(checkpoint).await;
                     }
                 }
                 event = session.next_event() => {
@@ -269,7 +269,7 @@ impl MethodAttempt {
                         }
                         Some(DispatchEvent::Completed(outcome)) => {
                             if let Some(checkpoint) = checkpoints.take_pending() {
-                                self.propose_heartbeat(checkpoint, urgency).await;
+                                self.propose_heartbeat(checkpoint).await;
                             }
                             return attempt_end(outcome);
                         }
@@ -279,7 +279,7 @@ impl MethodAttempt {
         }
     }
 
-    async fn propose_heartbeat(&self, checkpoint: Option<Value>, urgency: CommitUrgency) {
+    async fn propose_heartbeat(&self, checkpoint: Option<Value>) {
         let checkpoint = match checkpoint {
             Some(value) => step_attempt_heartbeat_command::Checkpoint::Value(value),
             None => step_attempt_heartbeat_command::Checkpoint::IsCleared(true),
@@ -295,7 +295,7 @@ impl MethodAttempt {
         if let Err(error) = self
             .context
             .runtime
-            .propose_speculative(&self.flow, command, urgency)
+            .propose_speculative(&self.flow, command, CommitUrgency::Batched)
             .await
         {
             tracing::warn!(%error, run_id = %self.key.run_id, "proposing a heartbeat failed");
@@ -323,7 +323,7 @@ impl MethodAttempt {
             max_value_bytes,
         );
         let mut result = match check {
-            WorkerResultCheck::Valid(result) => result,
+            WorkerResultCheck::Valid(result) => *result,
             WorkerResultCheck::Invalid {
                 kind,
                 detail,

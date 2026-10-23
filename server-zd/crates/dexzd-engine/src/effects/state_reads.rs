@@ -8,7 +8,7 @@
 
 //! Decoding of committed state rows and partition index keys that the effect runner reads.
 
-use dexzd_apply::FlowStateReader;
+use dexzd_apply::{FlowStateReader, StateRow};
 use dexzd_keyspace::row_keys::{
     decode_timer_index_key, ordered_timestamp_bytes, run_named_key, run_singleton_key,
     timestamp_from_ordered_bytes,
@@ -92,7 +92,7 @@ pub(crate) fn scan_all(
     reader: &dyn FlowStateReader,
     column_family: ColumnFamily,
     prefix: &[u8],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EffectError> {
+) -> Result<Vec<StateRow>, EffectError> {
     let end = prefix_successor(prefix);
     let mut rows = Vec::new();
     let mut start = prefix.to_vec();
@@ -166,11 +166,11 @@ pub(crate) fn timer_index_start_key(partition: PartitionId, fire_at_micros: i64)
 
 /// Parses an index key whose suffix is `flow_hash(8) ‖ run_id(16) ‖ item`, returning the run
 /// and the item bytes.
-pub(crate) fn parse_run_item_index_key<'a>(
+pub(crate) fn parse_run_item_index_key(
     partition: PartitionId,
     kind: IndexKind,
-    key: &'a [u8],
-) -> Result<(RunLocation, &'a [u8]), EffectError> {
+    key: &[u8],
+) -> Result<(RunLocation, &[u8]), EffectError> {
     let rest = strip_index_prefix(partition, kind, key)?;
     if rest.len() < 24 {
         return Err(corrupt_index("run item", key, "key is too short"));
@@ -191,11 +191,11 @@ pub(crate) fn parse_retention_index_key(
     Ok((delete_at_micros, parse_run_location(&rest[8..])))
 }
 
-fn strip_index_prefix<'a>(
+fn strip_index_prefix(
     partition: PartitionId,
     kind: IndexKind,
-    key: &'a [u8],
-) -> Result<&'a [u8], EffectError> {
+    key: &[u8],
+) -> Result<&[u8], EffectError> {
     let prefix = partition_index_prefix(partition, kind);
     key.strip_prefix(prefix.as_slice())
         .ok_or_else(|| corrupt_index("partition index", key, "key has another prefix"))
