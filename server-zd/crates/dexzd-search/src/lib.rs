@@ -12,5 +12,8 @@ mod search_backend;
 
 pub use search_backend::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
+/// Builtin SearchFlows over committed local run documents.
+pub mod builtin;
+
 /// ParadeDB schema, projection rows, and visibility query translation.
 pub mod paradedb;
