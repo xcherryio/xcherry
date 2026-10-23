@@ -14,10 +14,6 @@ use crate::{ApplyEffect, ApplyOutcome, BehaviorVersion, StateWrite};
 /// Read-only facts of the command being applied.
 pub(crate) struct CommandScope<'command> {
     pub(crate) command: &'command FlowCommand,
-    #[expect(
-        dead_code,
-        reason = "Behavior-version predicates are added with the first behavior change."
-    )]
     pub(crate) behavior_version: BehaviorVersion,
     pub(crate) tenant_id: TenantId,
     /// The only time apply may use.

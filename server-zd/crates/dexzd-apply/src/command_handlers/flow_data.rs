@@ -56,6 +56,14 @@ pub(crate) fn apply_attribute_writes(
         if let Err(rejection) = outcome {
             return Ok(Err(rejection));
         }
+        if !write.is_hard_delete_on_null
+            && write
+                .index_config
+                .as_ref()
+                .is_some_and(|config| config.enable)
+        {
+            cursor.indexed_attribute_writes.push(write.clone());
+        }
         changed_keys.push(write.key.clone());
     }
     if let Some(mappings) = permission_mappings {

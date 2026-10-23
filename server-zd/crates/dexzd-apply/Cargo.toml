@@ -13,7 +13,9 @@ dexzd-keyspace.workspace = true
 dexzd-protocol.workspace = true
 prost.workspace = true
 prost-types.workspace = true
+serde_json = "1"
 thiserror.workspace = true
+time.workspace = true
 
 [dev-dependencies]
 uuid.workspace = true

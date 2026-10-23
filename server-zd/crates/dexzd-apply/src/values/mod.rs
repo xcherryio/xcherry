@@ -241,10 +241,6 @@ pub(crate) fn wire_value(rows: RunRows, stored: &StoredValue) -> Value {
 }
 
 /// Reads the complete value, or `None` if a table value was already collected.
-#[expect(
-    dead_code,
-    reason = "Used by the read model and cross-Flow copies (tasks A6 and A7)."
-)]
 pub(crate) fn load_stored_value(
     transaction: &FlowTransaction<'_>,
     rows: RunRows,
