@@ -8,13 +8,14 @@
 
 use bytes::Bytes;
 use dexzd_clock::WallClock;
+use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use dexzd_protocol::dexzd::v1::{
     LogSegment, Manifest, ManifestNode, PartitionAssignment, SnapshotReference, VersionBarrier,
 };
 use prost::Message;
 
-use crate::{METADATA_FORMAT_VERSION, MIN_BEHAVIOR_VERSION, MetadataError};
+use crate::{MAX_BEHAVIOR_VERSION, METADATA_FORMAT_VERSION, MIN_BEHAVIOR_VERSION, MetadataError};
 
 const MANIFEST_KEY: &str = "manifest";
 
@@ -31,7 +32,7 @@ pub struct NodeConfig {
 
 /// Whether a manifest edit changed its content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Change {
+pub enum ManifestChange {
     /// Persist the edited manifest.
     Changed,
     /// Return the current manifest without a write.
@@ -59,15 +60,10 @@ pub async fn create_initial_manifest(
     partition_count: u32,
     node: &NodeConfig,
 ) -> Result<Manifest, MetadataError> {
-    if node.node_id.is_empty() || node.node_id.contains('/') {
-        return Err(MetadataError::InvalidMetadata {
-            key: MANIFEST_KEY,
-            detail: "node ID must be nonempty and contain no slash".to_owned(),
-        });
-    }
+    validate_node_identifier(&node.node_id)?;
     if !partition_count.is_power_of_two() || partition_count > 65_536 {
-        return Err(MetadataError::InvalidMetadata {
-            key: MANIFEST_KEY,
+        return Err(MetadataError::InvalidConfig {
+            field: "partition count",
             detail: format!("invalid partition count {partition_count}"),
         });
     }
@@ -108,23 +104,30 @@ pub async fn create_initial_manifest(
         controller_lease: None,
         updated_at_unix_micros: now,
     };
-    let manifest = match store
-        .put(
-            MANIFEST_KEY,
-            Bytes::from(initial_manifest.encode_to_vec()),
-            WriteCondition::CreateOnly,
-        )
-        .await
-    {
-        Ok(WriteOutcome::Written { .. }) => initial_manifest,
-        Ok(WriteOutcome::PreconditionFailed) => read_manifest(store)
-            .await?
-            .ok_or(MetadataError::Missing { key: MANIFEST_KEY })?,
-        Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => read_manifest(store)
-            .await?
-            .ok_or(MetadataError::Store(error))?,
-        Err(error) => return Err(error.into()),
+    let manifest = loop {
+        let write_result = store
+            .put(
+                MANIFEST_KEY,
+                Bytes::from(initial_manifest.encode_to_vec()),
+                WriteCondition::CreateOnly,
+            )
+            .await;
+        match write_result {
+            Ok(WriteOutcome::Written { .. }) => break initial_manifest,
+            Ok(WriteOutcome::PreconditionFailed) => {
+                if let Some(existing) = read_manifest(store).await? {
+                    break existing;
+                }
+            }
+            Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
+                if let Some(existing) = read_manifest(store).await? {
+                    break existing;
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
+    ensure_version_barrier_supported(&manifest)?;
     if manifest.partition_count != partition_count
         || manifest.partitions.len() != partition_count as usize
     {
@@ -143,8 +146,9 @@ pub async fn update_manifest<F>(
     mut edit: F,
 ) -> Result<Manifest, MetadataError>
 where
-    F: FnMut(&mut Manifest) -> Result<Change, MetadataError>,
+    F: FnMut(&mut Manifest) -> Result<ManifestChange, MetadataError>,
 {
+    // Ambiguous writes followed by another update can apply an edit again.
     loop {
         let current_object = store
             .get(MANIFEST_KEY)
@@ -155,8 +159,9 @@ where
                 key: MANIFEST_KEY,
                 source,
             })?;
+        ensure_version_barrier_supported(&current)?;
         let mut proposed = current.clone();
-        if edit(&mut proposed)? == Change::Unchanged {
+        if edit(&mut proposed)? == ManifestChange::Unchanged {
             return Ok(current);
         }
         proposed.version = current
@@ -199,6 +204,7 @@ pub async fn bump_node_epoch(
     clock: &dyn WallClock,
     node: &NodeConfig,
 ) -> Result<u64, MetadataError> {
+    validate_node_identifier(&node.node_id)?;
     let manifest = update_manifest(store, clock, |manifest| {
         let now = clock.now_unix_micros();
         let node_entry = manifest
@@ -226,10 +232,14 @@ pub async fn bump_node_epoch(
                 partition.owner_epoch = node_entry.epoch;
             }
         }
-        Ok(Change::Changed)
+        Ok(ManifestChange::Changed)
     })
     .await?;
-    Ok(manifest.nodes[&node.node_id].epoch)
+    Ok(manifest
+        .nodes
+        .get(&node.node_id)
+        .expect("bump_node_epoch inserted the node")
+        .epoch)
 }
 
 /// Raises the behavior and format barrier without lowering either version.
@@ -239,19 +249,38 @@ pub async fn raise_version_barrier(
     behavior_version: u32,
     format_version: u32,
 ) -> Result<Manifest, MetadataError> {
+    if behavior_version > MAX_BEHAVIOR_VERSION || format_version > METADATA_FORMAT_VERSION {
+        return Err(MetadataError::UnsupportedVersionBarrier {
+            behavior_version,
+            format_version,
+        });
+    }
     update_manifest(store, clock, |manifest| {
         let barrier = manifest
             .version_barrier
             .get_or_insert(VersionBarrier::default());
         if barrier.behavior_version >= behavior_version && barrier.format_version >= format_version
         {
-            return Ok(Change::Unchanged);
+            return Ok(ManifestChange::Unchanged);
         }
         barrier.behavior_version = barrier.behavior_version.max(behavior_version);
         barrier.format_version = barrier.format_version.max(format_version);
-        Ok(Change::Changed)
+        Ok(ManifestChange::Changed)
     })
     .await
+}
+
+fn ensure_version_barrier_supported(manifest: &Manifest) -> Result<(), MetadataError> {
+    if let Some(barrier) = &manifest.version_barrier
+        && (barrier.behavior_version > MAX_BEHAVIOR_VERSION
+            || barrier.format_version > METADATA_FORMAT_VERSION)
+    {
+        return Err(MetadataError::UnsupportedVersionBarrier {
+            behavior_version: barrier.behavior_version,
+            format_version: barrier.format_version,
+        });
+    }
+    Ok(())
 }
 
 /// Changes one partition's complete snapshot reference.
@@ -275,10 +304,10 @@ pub async fn update_partition_snapshot(
             });
         }
         if assignment.snapshot.as_ref() == Some(&snapshot) {
-            return Ok(Change::Unchanged);
+            return Ok(ManifestChange::Unchanged);
         }
         assignment.snapshot = Some(snapshot.clone());
-        Ok(Change::Changed)
+        Ok(ManifestChange::Changed)
     })
     .await
 }
