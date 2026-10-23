@@ -100,6 +100,51 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int PREVIOUS_RUN_ATTEMPT_FIELD_NUMBER = 2;
+  private int previousRunAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: the run attempt that was current before this time travel.
+   * </pre>
+   *
+   * <code>int32 previous_run_attempt = 2;</code>
+   * @return The previousRunAttempt.
+   */
+  @java.lang.Override
+  public int getPreviousRunAttempt() {
+    return previousRunAttempt_;
+  }
+
+  public static final int TARGET_RUN_ATTEMPT_FIELD_NUMBER = 3;
+  private int targetRunAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: the run attempt of the point this time travel returned to.
+   * </pre>
+   *
+   * <code>int32 target_run_attempt = 3;</code>
+   * @return The targetRunAttempt.
+   */
+  @java.lang.Override
+  public int getTargetRunAttempt() {
+    return targetRunAttempt_;
+  }
+
+  public static final int TARGET_EVENT_ID_FIELD_NUMBER = 4;
+  private long targetEventId_ = 0L;
+  /**
+   * <pre>
+   * server-zd only: the event ID of the point this time travel returned to.
+   * </pre>
+   *
+   * <code>int64 target_event_id = 4;</code>
+   * @return The targetEventId.
+   */
+  @java.lang.Override
+  public long getTargetEventId() {
+    return targetEventId_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -117,12 +162,33 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(previousRunId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 1, previousRunId_);
     }
+    if (previousRunAttempt_ != 0) {
+      output.writeInt32(2, previousRunAttempt_);
+    }
+    if (targetRunAttempt_ != 0) {
+      output.writeInt32(3, targetRunAttempt_);
+    }
+    if (targetEventId_ != 0L) {
+      output.writeInt64(4, targetEventId_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
     int size = 0;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(previousRunId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(1, previousRunId_);
+    }
+    if (previousRunAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(2, previousRunAttempt_);
+    }
+    if (targetRunAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(3, targetRunAttempt_);
+    }
+    if (targetEventId_ != 0L) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt64Size(4, targetEventId_);
     }
     return size;
   }
@@ -150,6 +216,12 @@ private static final long serialVersionUID = 0L;
 
     if (!getPreviousRunId()
         .equals(other.getPreviousRunId())) return false;
+    if (getPreviousRunAttempt()
+        != other.getPreviousRunAttempt()) return false;
+    if (getTargetRunAttempt()
+        != other.getTargetRunAttempt()) return false;
+    if (getTargetEventId()
+        != other.getTargetEventId()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -163,6 +235,13 @@ private static final long serialVersionUID = 0L;
     hash = (19 * hash) + getDescriptor().hashCode();
     hash = (37 * hash) + PREVIOUS_RUN_ID_FIELD_NUMBER;
     hash = (53 * hash) + getPreviousRunId().hashCode();
+    hash = (37 * hash) + PREVIOUS_RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getPreviousRunAttempt();
+    hash = (37 * hash) + TARGET_RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getTargetRunAttempt();
+    hash = (37 * hash) + TARGET_EVENT_ID_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+        getTargetEventId());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -299,6 +378,9 @@ private static final long serialVersionUID = 0L;
       super.clear();
       bitField0_ = 0;
       previousRunId_ = "";
+      previousRunAttempt_ = 0;
+      targetRunAttempt_ = 0;
+      targetEventId_ = 0L;
       return this;
     }
 
@@ -335,6 +417,15 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000001) != 0)) {
         result.previousRunId_ = previousRunId_;
       }
+      if (((from_bitField0_ & 0x00000002) != 0)) {
+        result.previousRunAttempt_ = previousRunAttempt_;
+      }
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.targetRunAttempt_ = targetRunAttempt_;
+      }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.targetEventId_ = targetEventId_;
+      }
     }
 
     @java.lang.Override
@@ -353,6 +444,15 @@ private static final long serialVersionUID = 0L;
         previousRunId_ = other.previousRunId_;
         bitField0_ |= 0x00000001;
         onChanged();
+      }
+      if (other.getPreviousRunAttempt() != 0) {
+        setPreviousRunAttempt(other.getPreviousRunAttempt());
+      }
+      if (other.getTargetRunAttempt() != 0) {
+        setTargetRunAttempt(other.getTargetRunAttempt());
+      }
+      if (other.getTargetEventId() != 0L) {
+        setTargetEventId(other.getTargetEventId());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -385,6 +485,21 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000001;
               break;
             } // case 10
+            case 16: {
+              previousRunAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000002;
+              break;
+            } // case 16
+            case 24: {
+              targetRunAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 24
+            case 32: {
+              targetEventId_ = input.readInt64();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 32
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -490,6 +605,138 @@ private static final long serialVersionUID = 0L;
       checkByteStringIsUtf8(value);
       previousRunId_ = value;
       bitField0_ |= 0x00000001;
+      onChanged();
+      return this;
+    }
+
+    private int previousRunAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: the run attempt that was current before this time travel.
+     * </pre>
+     *
+     * <code>int32 previous_run_attempt = 2;</code>
+     * @return The previousRunAttempt.
+     */
+    @java.lang.Override
+    public int getPreviousRunAttempt() {
+      return previousRunAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that was current before this time travel.
+     * </pre>
+     *
+     * <code>int32 previous_run_attempt = 2;</code>
+     * @param value The previousRunAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPreviousRunAttempt(int value) {
+
+      previousRunAttempt_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that was current before this time travel.
+     * </pre>
+     *
+     * <code>int32 previous_run_attempt = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPreviousRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      previousRunAttempt_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private int targetRunAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: the run attempt of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int32 target_run_attempt = 3;</code>
+     * @return The targetRunAttempt.
+     */
+    @java.lang.Override
+    public int getTargetRunAttempt() {
+      return targetRunAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int32 target_run_attempt = 3;</code>
+     * @param value The targetRunAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTargetRunAttempt(int value) {
+
+      targetRunAttempt_ = value;
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int32 target_run_attempt = 3;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTargetRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      targetRunAttempt_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private long targetEventId_ ;
+    /**
+     * <pre>
+     * server-zd only: the event ID of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int64 target_event_id = 4;</code>
+     * @return The targetEventId.
+     */
+    @java.lang.Override
+    public long getTargetEventId() {
+      return targetEventId_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the event ID of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int64 target_event_id = 4;</code>
+     * @param value The targetEventId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTargetEventId(long value) {
+
+      targetEventId_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the event ID of the point this time travel returned to.
+     * </pre>
+     *
+     * <code>int64 target_event_id = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTargetEventId() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      targetEventId_ = 0L;
       onChanged();
       return this;
     }

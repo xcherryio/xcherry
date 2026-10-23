@@ -341,6 +341,22 @@ private static final long serialVersionUID = 0L;
     return result == null ? io.superdurable.gen.FlowResetStepMethod.UNRECOGNIZED : result;
   }
 
+  public static final int RUN_ATTEMPT_FIELD_NUMBER = 10;
+  private int runAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: selects the run attempt whose history is searched for the reset point.
+   * Zero selects the current run attempt.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 10;</code>
+   * @return The runAttempt.
+   */
+  @java.lang.Override
+  public int getRunAttempt() {
+    return runAttempt_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -382,6 +398,9 @@ private static final long serialVersionUID = 0L;
     if (stepMethod_ != io.superdurable.gen.FlowResetStepMethod.FLOW_RESET_STEP_METHOD_UNSPECIFIED.getNumber()) {
       output.writeEnum(9, stepMethod_);
     }
+    if (runAttempt_ != 0) {
+      output.writeInt32(10, runAttempt_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -415,6 +434,10 @@ private static final long serialVersionUID = 0L;
     if (stepMethod_ != io.superdurable.gen.FlowResetStepMethod.FLOW_RESET_STEP_METHOD_UNSPECIFIED.getNumber()) {
       size += com.google.protobuf.CodedOutputStream
         .computeEnumSize(9, stepMethod_);
+    }
+    if (runAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(10, runAttempt_);
     }
     return size;
   }
@@ -456,6 +479,8 @@ private static final long serialVersionUID = 0L;
     if (getSkipWritesReapply()
         != other.getSkipWritesReapply()) return false;
     if (stepMethod_ != other.stepMethod_) return false;
+    if (getRunAttempt()
+        != other.getRunAttempt()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -486,6 +511,8 @@ private static final long serialVersionUID = 0L;
         getSkipWritesReapply());
     hash = (37 * hash) + STEP_METHOD_FIELD_NUMBER;
     hash = (53 * hash) + stepMethod_;
+    hash = (37 * hash) + RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getRunAttempt();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -626,6 +653,7 @@ private static final long serialVersionUID = 0L;
       stepExecutionId_ = "";
       skipWritesReapply_ = false;
       stepMethod_ = 0;
+      runAttempt_ = 0;
       return this;
     }
 
@@ -686,6 +714,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000100) != 0)) {
         result.stepMethod_ = stepMethod_;
       }
+      if (((from_bitField0_ & 0x00000200) != 0)) {
+        result.runAttempt_ = runAttempt_;
+      }
     }
 
     @java.lang.Override
@@ -738,6 +769,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.stepMethod_ != 0) {
         setStepMethodValue(other.getStepMethodValue());
+      }
+      if (other.getRunAttempt() != 0) {
+        setRunAttempt(other.getRunAttempt());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -810,6 +844,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000100;
               break;
             } // case 72
+            case 80: {
+              runAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000200;
+              break;
+            } // case 80
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1403,6 +1442,53 @@ private static final long serialVersionUID = 0L;
     public Builder clearStepMethod() {
       bitField0_ = (bitField0_ & ~0x00000100);
       stepMethod_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private int runAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose history is searched for the reset point.
+     * Zero selects the current run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @return The runAttempt.
+     */
+    @java.lang.Override
+    public int getRunAttempt() {
+      return runAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose history is searched for the reset point.
+     * Zero selects the current run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @param value The runAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRunAttempt(int value) {
+
+      runAttempt_ = value;
+      bitField0_ |= 0x00000200;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose history is searched for the reset point.
+     * Zero selects the current run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000200);
+      runAttempt_ = 0;
       onChanged();
       return this;
     }

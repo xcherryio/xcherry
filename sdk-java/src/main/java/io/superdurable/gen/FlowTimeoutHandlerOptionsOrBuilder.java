@@ -49,11 +49,21 @@ public interface FlowTimeoutHandlerOptionsOrBuilder extends
   io.superdurable.gen.ExecuteMethodFailurePolicy getFailurePolicy();
 
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string failure_proceed_step_type = 5;</code>
    * @return The failureProceedStepType.
    */
   java.lang.String getFailureProceedStepType();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string failure_proceed_step_type = 5;</code>
    * @return The bytes for failureProceedStepType.
    */
@@ -61,16 +71,31 @@ public interface FlowTimeoutHandlerOptionsOrBuilder extends
       getFailureProceedStepTypeBytes();
 
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    * @return Whether the failureProceedStepOptions field is set.
    */
   boolean hasFailureProceedStepOptions();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    * @return The failureProceedStepOptions.
    */
   io.superdurable.gen.StepOptions getFailureProceedStepOptions();
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    */
   io.superdurable.gen.StepOptionsOrBuilder getFailureProceedStepOptionsOrBuilder();

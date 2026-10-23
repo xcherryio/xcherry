@@ -47,3 +47,58 @@ pub struct DevCommandOptions {
     #[arg(long)]
     pub config: Option<PathBuf>,
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{CommandLineOptions, ServerCommand};
+
+    #[test]
+    fn dev_command_accepts_the_flags_dexcli_passes() {
+        let options = CommandLineOptions::try_parse_from([
+            "dex-server-zd",
+            "dev",
+            "--data-dir",
+            "/tmp/zd",
+            "--listen",
+            "127.0.0.1:9901",
+            "--log-dir",
+            "/tmp/zd-logs",
+            "--config",
+            "/tmp/zd.yaml",
+        ])
+        .unwrap();
+        let ServerCommand::Dev(dev) = options.command;
+        assert_eq!(dev.data_dir.to_str(), Some("/tmp/zd"));
+        assert_eq!(dev.listen.to_string(), "127.0.0.1:9901");
+        assert_eq!(dev.log_dir.unwrap().to_str(), Some("/tmp/zd-logs"));
+        assert_eq!(dev.config.unwrap().to_str(), Some("/tmp/zd.yaml"));
+    }
+
+    #[test]
+    fn dev_command_defaults_the_listen_address() {
+        let options =
+            CommandLineOptions::try_parse_from(["dex-server-zd", "dev", "--data-dir", "/tmp/zd"])
+                .unwrap();
+        let ServerCommand::Dev(dev) = options.command;
+        assert_eq!(dev.listen.to_string(), "127.0.0.1:8801");
+        assert!(dev.log_dir.is_none());
+    }
+
+    #[test]
+    fn dev_command_rejects_missing_data_dir_and_bad_listen_address() {
+        assert!(CommandLineOptions::try_parse_from(["dex-server-zd", "dev"]).is_err());
+        assert!(
+            CommandLineOptions::try_parse_from([
+                "dex-server-zd",
+                "dev",
+                "--data-dir",
+                "/tmp/zd",
+                "--listen",
+                "localhost",
+            ])
+            .is_err()
+        );
+    }
+}

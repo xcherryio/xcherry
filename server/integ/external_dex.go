@@ -120,6 +120,7 @@ func connectToExternalDexService(t *testing.T, testConfig DexServiceTestConfig) 
 		require.NoError(t, connection.Close())
 	})
 	return &integRuntime{
+		PublicAddress: *dexServerAddress,
 		FlowClient: &externalDexFlowClient{
 			FlowServiceClient: dexpb.NewFlowServiceClient(connection),
 			maxWaitSeconds:    int32(cfg.Api.EffectiveMaxWaitSeconds()),

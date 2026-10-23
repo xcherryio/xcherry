@@ -12,14 +12,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { StepExecutionId, stringCodec } from "../../src/index.js";
-import { flowId, withEnvironment } from "./environment.js";
+import { flowId, skipIfServerZD, withEnvironment } from "./environment.js";
 import {
   StepCancellationFlow,
   cancellationScenarios,
 } from "./step_cancellation_flow.js";
 
 for (const scenario of cancellationScenarios) {
-  test(`Step cancellation ${scenario}`, async () => {
+  test(`Step cancellation ${scenario}`, async (context) => {
+    if (scenario !== "global-selector" && scenario !== "sibling-selector") {
+      if (await skipIfServerZD(context, "Step failure policies")) return;
+    }
     const flow = new StepCancellationFlow(scenario);
     await withEnvironment([flow], async ({ client }) => {
       const id = flowId(`typescript-cancellation-${scenario}`);

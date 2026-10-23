@@ -151,7 +151,7 @@ public enum PollWorkerTaskRejectReason
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(0);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(1);
   }
 
   private static final PollWorkerTaskRejectReason[] VALUES = values();

@@ -20,6 +20,11 @@ public enum ExecuteMethodFailurePolicy
    */
   EXECUTE_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_EXECUTE_METHOD_FAILURE(1),
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP = 2;</code>
    */
   EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP(2),
@@ -44,6 +49,11 @@ public enum ExecuteMethodFailurePolicy
    */
   public static final int EXECUTE_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_EXECUTE_METHOD_FAILURE_VALUE = 1;
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP = 2;</code>
    */
   public static final int EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP_VALUE = 2;
@@ -106,7 +116,7 @@ public enum ExecuteMethodFailurePolicy
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(4);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(5);
   }
 
   private static final ExecuteMethodFailurePolicy[] VALUES = values();

@@ -12,7 +12,14 @@ package integ
 
 import (
 	"flag"
+	"os"
 )
+
+var integWorkerMode = flag.String("integ-worker-mode", os.Getenv("DEX_INTEG_WORKER_MODE"), "integration Worker mode: push or pull")
+
+var dexServerBinary = flag.String("dex-server-binary", os.Getenv("DEX_SERVER_BINARY"), "Dex Server binary to launch per test")
+
+var dexServerEngine = flag.String("dex-server-engine", os.Getenv("DEX_SERVER_ENGINE"), "engine of the launched Dex Server binary")
 
 var repeatIntegTest = flag.Int("repeat", 1, "the number of repeat")
 

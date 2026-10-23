@@ -35,7 +35,7 @@ import {
   type StepDecision,
 } from "../../src/index.js";
 import { WorkerPortReservation } from "../worker-port-reservation.js";
-import { flowId } from "./environment.js";
+import { flowId, skipIfServerZD } from "./environment.js";
 
 interface Observation {
   readonly workerID: string;
@@ -184,6 +184,7 @@ class PullOverrideParentFlow implements Flow<string> {
 }
 
 test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and coexists with push", async (context) => {
+  if (await skipIfServerZD(context, "push Workers")) return;
   const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
   const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-pull-cache-"));
   const cache: BlobCache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1_024 * 1_024 });
