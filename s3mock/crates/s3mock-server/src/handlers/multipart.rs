@@ -11,7 +11,6 @@
 use std::sync::Arc;
 
 use http::{HeaderMap, StatusCode};
-use hyper::body::Incoming;
 use s3mock::{
     ChecksumAlgorithm, ChecksumType, CompleteMultipartUploadRequest, CompletedPart,
     CreateMultipartUploadRequest, ListMultipartUploadsRequest, ListPartsRequest, MAX_KEYS_LIMIT,
@@ -95,7 +94,7 @@ pub(crate) async fn upload_part(
     key: String,
     query: QueryParameters,
     headers: HeaderMap,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     if headers.contains_key("x-amz-copy-source") {
         return Err(S3Error::not_implemented("UploadPartCopy"));
@@ -157,7 +156,7 @@ pub(crate) async fn complete_multipart_upload(
     key: String,
     query: QueryParameters,
     headers: &HeaderMap,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     let upload_id = required_upload_id(&query)?;
     let write_condition = write_condition(headers)?;

@@ -29,6 +29,7 @@ async fn start_with_objects(keys: &[&str]) -> RunningServer {
         Store::open(&StoreConfig {
             root_directory: directory.path().to_path_buf(),
             durability: Durability::Relaxed,
+            etag_mode: s3mock::EtagMode::Md5,
         })
         .expect("the store opens in a fresh directory"),
     );

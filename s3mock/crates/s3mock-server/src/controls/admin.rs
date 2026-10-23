@@ -78,11 +78,14 @@ impl Controls {
                         ));
                     }
                     if matches!(rule.action, FaultAction::CommitThenDrop)
-                        && rule.operation.as_deref() != Some("PutObject")
+                        && !matches!(
+                            rule.operation.as_deref(),
+                            Some("PutObject" | "UploadPart" | "CompleteMultipartUpload")
+                        )
                     {
                         return Err((
                             StatusCode::BAD_REQUEST,
-                            "commit_then_drop requires operation PutObject".into(),
+                            "commit_then_drop requires operation PutObject, UploadPart, or CompleteMultipartUpload".into(),
                         ));
                     }
                 }

@@ -10,6 +10,7 @@
 
 mod configuration;
 mod faults;
+mod multipart;
 mod observations;
 mod signatures;
 mod support;

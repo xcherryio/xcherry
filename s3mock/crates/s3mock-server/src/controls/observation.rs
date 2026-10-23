@@ -46,6 +46,31 @@ impl RequestObservation {
         let operation = routing::route(method, uri);
         let (name, bucket, key) = match &operation {
             Ok(S3Operation::ListBuckets) => ("ListBuckets", "", ""),
+            Ok(S3Operation::GetObjectLockConfiguration { bucket }) => {
+                ("GetObjectLockConfiguration", bucket.as_str(), "")
+            }
+            Ok(S3Operation::PutObjectLockConfiguration { bucket }) => {
+                ("PutObjectLockConfiguration", bucket.as_str(), "")
+            }
+            Ok(S3Operation::DeleteObjects { bucket }) => ("DeleteObjects", bucket.as_str(), ""),
+            Ok(S3Operation::ListMultipartUploads { bucket, .. }) => {
+                ("ListMultipartUploads", bucket.as_str(), "")
+            }
+            Ok(S3Operation::CreateMultipartUpload { bucket, key, .. }) => {
+                ("CreateMultipartUpload", bucket.as_str(), key.as_str())
+            }
+            Ok(S3Operation::UploadPart { bucket, key, .. }) => {
+                ("UploadPart", bucket.as_str(), key.as_str())
+            }
+            Ok(S3Operation::CompleteMultipartUpload { bucket, key, .. }) => {
+                ("CompleteMultipartUpload", bucket.as_str(), key.as_str())
+            }
+            Ok(S3Operation::AbortMultipartUpload { bucket, key, .. }) => {
+                ("AbortMultipartUpload", bucket.as_str(), key.as_str())
+            }
+            Ok(S3Operation::ListParts { bucket, key, .. }) => {
+                ("ListParts", bucket.as_str(), key.as_str())
+            }
             Ok(S3Operation::CreateBucket { bucket }) => ("CreateBucket", bucket.as_str(), ""),
             Ok(S3Operation::HeadBucket { bucket }) => ("HeadBucket", bucket.as_str(), ""),
             Ok(S3Operation::DeleteBucket { bucket }) => ("DeleteBucket", bucket.as_str(), ""),

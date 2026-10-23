@@ -116,7 +116,7 @@ concurrent scheduling can change that order. An SDK retry is a separate request 
 
 | Action JSON | Behavior |
 | --- | --- |
-| `{"type":"commit_then_drop"}` | Requires `operation: "PutObject"`. A successful store commit closes the connection without a response; an unsuccessful condition still returns its normal error. |
+| `{"type":"commit_then_drop"}` | Requires `operation` to be `PutObject`, `UploadPart`, or `CompleteMultipartUpload`. A successful store commit closes the connection without a response; an unsuccessful condition still returns its normal error. |
 | `{"type":"delay","milliseconds":100}` | Waits before invoking the S3 handler. |
 | `{"type":"error","status":500}` | Returns `InternalError` without invoking the store. Status 503 returns `SlowDown`; 409 returns `ConditionalRequestConflict`. Other statuses are rejected. |
 | `{"type":"fail_before_commit"}` | Returns `500 InternalError` without invoking the store. |

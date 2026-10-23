@@ -41,7 +41,7 @@ impl RunningServer {
         })
         .expect("the controls integration fixture succeeds");
         store
-            .create_bucket("testing")
+            .create_bucket("testing", false)
             .expect("the controls integration fixture succeeds");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
