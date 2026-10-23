@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 
 use dexzd_keyspace::ValueId;
+use dexzd_protocol::dexzd::v1::StepExecutionPhase;
 
 use crate::state_view::RunView;
 
@@ -58,7 +59,7 @@ fn is_leaked_checkpoint_holder(run: &RunView, holder: &[u8]) -> bool {
     }
     first_name(holder)
         .and_then(|step_execution_id| run.step_executions.get(&step_execution_id))
-        .is_some_and(|step| step.invocation.is_none())
+        .is_some_and(|step| step.phase == StepExecutionPhase::Failed as i32)
 }
 
 /// Defect 3: rewriting an Attribute with a reference to its own, older value drops its holder.

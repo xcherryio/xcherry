@@ -59,6 +59,8 @@ pub struct SimulationFailure {
     pub command_index: usize,
     /// The broken invariant.
     pub violation: InvariantViolation,
+    /// Whether known apply defects were tolerated.
+    pub tolerance: DefectTolerance,
     /// The shortest command sequence found that breaks the same invariant; its last command
     /// is the one that broke it.
     pub minimal_reproduction: Vec<FlowCommand>,
@@ -73,12 +75,19 @@ impl fmt::Display for SimulationFailure {
         )?;
         writeln!(
             formatter,
-            "reproduce with: DEXZD_SIMULATION_SEED={} cargo test -p dexzd-simulation",
-            self.seed
+            "reproduce with: DEXZD_SIMULATION_SEED={} DEXZD_SIMULATION_COMMANDS={}{} cargo test -p \
+             dexzd-simulation",
+            self.seed,
+            self.command_index + 1,
+            if self.tolerance == DefectTolerance::Strict {
+                " DEXZD_SIMULATION_STRICT=1"
+            } else {
+                ""
+            }
         )?;
         writeln!(
             formatter,
-            "minimal reproduction ({} commands, replay with replay_commands):",
+            "minimal reproduction ({} commands):",
             self.minimal_reproduction.len()
         )?;
         for (index, command) in self.minimal_reproduction.iter().enumerate() {
@@ -150,6 +159,7 @@ fn failure(
         seed,
         command_index,
         violation,
+        tolerance,
         minimal_reproduction,
     })
 }
