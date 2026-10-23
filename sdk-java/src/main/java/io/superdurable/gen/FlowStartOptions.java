@@ -72,6 +72,10 @@ private static final long serialVersionUID = 0L;
   public static final int FLOW_START_DELAY_SECONDS_FIELD_NUMBER = 2;
   private int flowStartDelaySeconds_ = 0;
   /**
+   * <pre>
+   * server-zd rejects a positive start delay with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>int32 flow_start_delay_seconds = 2;</code>
    * @return The flowStartDelaySeconds.
    */
@@ -83,6 +87,10 @@ private static final long serialVersionUID = 0L;
   public static final int RETRY_POLICY_FIELD_NUMBER = 3;
   private io.superdurable.gen.FlowRetryPolicy retryPolicy_;
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
    * @return Whether the retryPolicy field is set.
    */
@@ -91,6 +99,10 @@ private static final long serialVersionUID = 0L;
     return ((bitField0_ & 0x00000001) != 0);
   }
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
    * @return The retryPolicy.
    */
@@ -99,6 +111,10 @@ private static final long serialVersionUID = 0L;
     return retryPolicy_ == null ? io.superdurable.gen.FlowRetryPolicy.getDefaultInstance() : retryPolicy_;
   }
   /**
+   * <pre>
+   * server-zd rejects a set policy with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
    */
   @java.lang.Override
@@ -835,6 +851,10 @@ private static final long serialVersionUID = 0L;
 
     private int flowStartDelaySeconds_ ;
     /**
+     * <pre>
+     * server-zd rejects a positive start delay with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>int32 flow_start_delay_seconds = 2;</code>
      * @return The flowStartDelaySeconds.
      */
@@ -843,6 +863,10 @@ private static final long serialVersionUID = 0L;
       return flowStartDelaySeconds_;
     }
     /**
+     * <pre>
+     * server-zd rejects a positive start delay with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>int32 flow_start_delay_seconds = 2;</code>
      * @param value The flowStartDelaySeconds to set.
      * @return This builder for chaining.
@@ -855,6 +879,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd rejects a positive start delay with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>int32 flow_start_delay_seconds = 2;</code>
      * @return This builder for chaining.
      */
@@ -869,6 +897,10 @@ private static final long serialVersionUID = 0L;
     private com.google.protobuf.SingleFieldBuilder<
         io.superdurable.gen.FlowRetryPolicy, io.superdurable.gen.FlowRetryPolicy.Builder, io.superdurable.gen.FlowRetryPolicyOrBuilder> retryPolicyBuilder_;
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      * @return Whether the retryPolicy field is set.
      */
@@ -876,6 +908,10 @@ private static final long serialVersionUID = 0L;
       return ((bitField0_ & 0x00000004) != 0);
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      * @return The retryPolicy.
      */
@@ -887,6 +923,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public Builder setRetryPolicy(io.superdurable.gen.FlowRetryPolicy value) {
@@ -903,6 +943,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public Builder setRetryPolicy(
@@ -917,6 +961,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public Builder mergeRetryPolicy(io.superdurable.gen.FlowRetryPolicy value) {
@@ -938,6 +986,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public Builder clearRetryPolicy() {
@@ -951,6 +1003,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public io.superdurable.gen.FlowRetryPolicy.Builder getRetryPolicyBuilder() {
@@ -959,6 +1015,10 @@ private static final long serialVersionUID = 0L;
       return internalGetRetryPolicyFieldBuilder().getBuilder();
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     public io.superdurable.gen.FlowRetryPolicyOrBuilder getRetryPolicyOrBuilder() {
@@ -970,6 +1030,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd rejects a set policy with INVALID_ARGUMENT.
+     * </pre>
+     *
      * <code>.dex.FlowRetryPolicy retry_policy = 3;</code>
      */
     private com.google.protobuf.SingleFieldBuilder<

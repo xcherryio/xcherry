@@ -13,6 +13,13 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class ServerEngine(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SERVER_ENGINE_UNSPECIFIED: _ClassVar[ServerEngine]
+    SERVER_ENGINE_TEMPORAL: _ClassVar[ServerEngine]
+    SERVER_ENGINE_CADENCE: _ClassVar[ServerEngine]
+    SERVER_ENGINE_ZD: _ClassVar[ServerEngine]
+
 class PollWorkerTaskRejectReason(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED: _ClassVar[PollWorkerTaskRejectReason]
@@ -211,6 +218,10 @@ class SubFlowCompletionDeliveryStatus(int, metaclass=_enum_type_wrapper.EnumType
     SUB_FLOW_COMPLETION_DELIVERY_STATUS_UNSPECIFIED: _ClassVar[SubFlowCompletionDeliveryStatus]
     SUB_FLOW_COMPLETION_DELIVERY_STATUS_DELIVERED: _ClassVar[SubFlowCompletionDeliveryStatus]
     SUB_FLOW_COMPLETION_DELIVERY_STATUS_PARENT_CLOSED_OR_NOT_FOUND: _ClassVar[SubFlowCompletionDeliveryStatus]
+SERVER_ENGINE_UNSPECIFIED: ServerEngine
+SERVER_ENGINE_TEMPORAL: ServerEngine
+SERVER_ENGINE_CADENCE: ServerEngine
+SERVER_ENGINE_ZD: ServerEngine
 POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED: PollWorkerTaskRejectReason
 POLL_WORKER_TASK_REJECT_REASON_NO_CAPACITY: PollWorkerTaskRejectReason
 POLL_WORKER_TASK_REJECT_REASON_UNKNOWN_STEP: PollWorkerTaskRejectReason
@@ -334,14 +345,16 @@ SUB_FLOW_COMPLETION_DELIVERY_STATUS_DELIVERED: SubFlowCompletionDeliveryStatus
 SUB_FLOW_COMPLETION_DELIVERY_STATUS_PARENT_CLOSED_OR_NOT_FOUND: SubFlowCompletionDeliveryStatus
 
 class ServerInfo(_message.Message):
-    __slots__ = ("server_version", "minimum_supported_protocol_version", "current_protocol_version")
+    __slots__ = ("server_version", "minimum_supported_protocol_version", "current_protocol_version", "server_engine")
     SERVER_VERSION_FIELD_NUMBER: _ClassVar[int]
     MINIMUM_SUPPORTED_PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     CURRENT_PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SERVER_ENGINE_FIELD_NUMBER: _ClassVar[int]
     server_version: str
     minimum_supported_protocol_version: int
     current_protocol_version: int
-    def __init__(self, server_version: _Optional[str] = ..., minimum_supported_protocol_version: _Optional[int] = ..., current_protocol_version: _Optional[int] = ...) -> None: ...
+    server_engine: ServerEngine
+    def __init__(self, server_version: _Optional[str] = ..., minimum_supported_protocol_version: _Optional[int] = ..., current_protocol_version: _Optional[int] = ..., server_engine: _Optional[_Union[ServerEngine, str]] = ...) -> None: ...
 
 class PollWorkerTaskRequest(_message.Message):
     __slots__ = ("register", "task_frame", "reject", "pong")
@@ -592,7 +605,7 @@ class IndexConfig(_message.Message):
     def __init__(self, enable: _Optional[bool] = ..., type: _Optional[_Union[IndexType, str]] = ..., index_key: _Optional[str] = ...) -> None: ...
 
 class Context(_message.Message):
-    __slots__ = ("flow_id", "run_id", "flow_started_timestamp", "step_execution_id", "first_attempt_timestamp", "attempt", "from_step_execution_id", "recovery_error", "last_heartbeat_value")
+    __slots__ = ("flow_id", "run_id", "flow_started_timestamp", "step_execution_id", "first_attempt_timestamp", "attempt", "from_step_execution_id", "recovery_error", "last_heartbeat_value", "run_attempt")
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_STARTED_TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
@@ -602,6 +615,7 @@ class Context(_message.Message):
     FROM_STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     RECOVERY_ERROR_FIELD_NUMBER: _ClassVar[int]
     LAST_HEARTBEAT_VALUE_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     flow_id: str
     run_id: str
     flow_started_timestamp: int
@@ -611,7 +625,8 @@ class Context(_message.Message):
     from_step_execution_id: str
     recovery_error: RecoveryErrorInfo
     last_heartbeat_value: Value
-    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., flow_started_timestamp: _Optional[int] = ..., step_execution_id: _Optional[str] = ..., first_attempt_timestamp: _Optional[int] = ..., attempt: _Optional[int] = ..., from_step_execution_id: _Optional[str] = ..., recovery_error: _Optional[_Union[RecoveryErrorInfo, _Mapping]] = ..., last_heartbeat_value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
+    run_attempt: int
+    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., flow_started_timestamp: _Optional[int] = ..., step_execution_id: _Optional[str] = ..., first_attempt_timestamp: _Optional[int] = ..., attempt: _Optional[int] = ..., from_step_execution_id: _Optional[str] = ..., recovery_error: _Optional[_Union[RecoveryErrorInfo, _Mapping]] = ..., last_heartbeat_value: _Optional[_Union[Value, _Mapping]] = ..., run_attempt: _Optional[int] = ...) -> None: ...
 
 class LocalActivityMetadata(_message.Message):
     __slots__ = ("current_step_execution_id", "from_step_execution_id")
@@ -1106,7 +1121,7 @@ class GetFlowSummaryRequest(_message.Message):
     def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ...) -> None: ...
 
 class GetFlowSummaryResponse(_message.Message):
-    __slots__ = ("flow_execution_id", "first_run_id", "request_id", "flow_type", "flow_status", "start_time", "close_time")
+    __slots__ = ("flow_execution_id", "first_run_id", "request_id", "flow_type", "flow_status", "start_time", "close_time", "run_attempt")
     FLOW_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     FIRST_RUN_ID_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1114,6 +1129,7 @@ class GetFlowSummaryResponse(_message.Message):
     FLOW_STATUS_FIELD_NUMBER: _ClassVar[int]
     START_TIME_FIELD_NUMBER: _ClassVar[int]
     CLOSE_TIME_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     flow_execution_id: FlowExecutionID
     first_run_id: str
     request_id: str
@@ -1121,7 +1137,8 @@ class GetFlowSummaryResponse(_message.Message):
     flow_status: FlowStatus
     start_time: _timestamp_pb2.Timestamp
     close_time: _timestamp_pb2.Timestamp
-    def __init__(self, flow_execution_id: _Optional[_Union[FlowExecutionID, _Mapping]] = ..., first_run_id: _Optional[str] = ..., request_id: _Optional[str] = ..., flow_type: _Optional[str] = ..., flow_status: _Optional[_Union[FlowStatus, str]] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., close_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    run_attempt: int
+    def __init__(self, flow_execution_id: _Optional[_Union[FlowExecutionID, _Mapping]] = ..., first_run_id: _Optional[str] = ..., request_id: _Optional[str] = ..., flow_type: _Optional[str] = ..., flow_status: _Optional[_Union[FlowStatus, str]] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., close_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., run_attempt: _Optional[int] = ...) -> None: ...
 
 class InternalAsyncStepInputSnapshot(_message.Message):
     __slots__ = ("method_options", "wait_for_request", "execute_request")
@@ -1142,18 +1159,20 @@ class InternalLocalActivityInput(_message.Message):
     def __init__(self, current_run_started_timestamp: _Optional[int] = ..., method_options: _Optional[_Union[StepMethodOptions, _Mapping]] = ...) -> None: ...
 
 class GetHistoryEventsRequest(_message.Message):
-    __slots__ = ("flow_id", "run_id", "start_internal_event_id", "estimate_page_size", "next_page_token")
+    __slots__ = ("flow_id", "run_id", "start_internal_event_id", "estimate_page_size", "next_page_token", "run_attempt")
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     START_INTERNAL_EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     ESTIMATE_PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     NEXT_PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     flow_id: str
     run_id: str
     start_internal_event_id: int
     estimate_page_size: int
     next_page_token: bytes
-    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., start_internal_event_id: _Optional[int] = ..., estimate_page_size: _Optional[int] = ..., next_page_token: _Optional[bytes] = ...) -> None: ...
+    run_attempt: int
+    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., start_internal_event_id: _Optional[int] = ..., estimate_page_size: _Optional[int] = ..., next_page_token: _Optional[bytes] = ..., run_attempt: _Optional[int] = ...) -> None: ...
 
 class GetHistoryEventsResponse(_message.Message):
     __slots__ = ("events", "next_page_token", "next_internal_event_id")
@@ -1166,9 +1185,10 @@ class GetHistoryEventsResponse(_message.Message):
     def __init__(self, events: _Optional[_Iterable[_Union[FlowHistoryEvent, _Mapping]]] = ..., next_page_token: _Optional[bytes] = ..., next_internal_event_id: _Optional[int] = ...) -> None: ...
 
 class FlowHistoryEvent(_message.Message):
-    __slots__ = ("event_id", "event_time", "flow_started_or_continued", "flow_closed", "step_wait_for_completed", "step_wait_for_failed", "step_execute_completed", "step_execute_failed", "rpc_execution_completed", "channel_external_publish", "step_wait_for_pending", "step_execute_pending", "time_travel_fork", "channel_external_delete")
+    __slots__ = ("event_id", "event_time", "run_attempt", "flow_started_or_continued", "flow_closed", "step_wait_for_completed", "step_wait_for_failed", "step_execute_completed", "step_execute_failed", "rpc_execution_completed", "channel_external_publish", "step_wait_for_pending", "step_execute_pending", "time_travel_fork", "channel_external_delete")
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     EVENT_TIME_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     FLOW_STARTED_OR_CONTINUED_FIELD_NUMBER: _ClassVar[int]
     FLOW_CLOSED_FIELD_NUMBER: _ClassVar[int]
     STEP_WAIT_FOR_COMPLETED_FIELD_NUMBER: _ClassVar[int]
@@ -1183,6 +1203,7 @@ class FlowHistoryEvent(_message.Message):
     CHANNEL_EXTERNAL_DELETE_FIELD_NUMBER: _ClassVar[int]
     event_id: int
     event_time: _timestamp_pb2.Timestamp
+    run_attempt: int
     flow_started_or_continued: FlowStartedOrContinuedHistoryEvent
     flow_closed: FlowClosedHistoryEvent
     step_wait_for_completed: StepWaitForCompletedEvent
@@ -1195,13 +1216,19 @@ class FlowHistoryEvent(_message.Message):
     step_execute_pending: StepMethodPendingEvent
     time_travel_fork: TimeTravelForkHistoryEvent
     channel_external_delete: ChannelExternalDeleteEvent
-    def __init__(self, event_id: _Optional[int] = ..., event_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., flow_started_or_continued: _Optional[_Union[FlowStartedOrContinuedHistoryEvent, _Mapping]] = ..., flow_closed: _Optional[_Union[FlowClosedHistoryEvent, _Mapping]] = ..., step_wait_for_completed: _Optional[_Union[StepWaitForCompletedEvent, _Mapping]] = ..., step_wait_for_failed: _Optional[_Union[StepWaitForFailedEvent, _Mapping]] = ..., step_execute_completed: _Optional[_Union[StepExecuteCompletedEvent, _Mapping]] = ..., step_execute_failed: _Optional[_Union[StepExecuteFailedEvent, _Mapping]] = ..., rpc_execution_completed: _Optional[_Union[RpcExecutionCompletedEvent, _Mapping]] = ..., channel_external_publish: _Optional[_Union[ChannelExternalPublishEvent, _Mapping]] = ..., step_wait_for_pending: _Optional[_Union[StepMethodPendingEvent, _Mapping]] = ..., step_execute_pending: _Optional[_Union[StepMethodPendingEvent, _Mapping]] = ..., time_travel_fork: _Optional[_Union[TimeTravelForkHistoryEvent, _Mapping]] = ..., channel_external_delete: _Optional[_Union[ChannelExternalDeleteEvent, _Mapping]] = ...) -> None: ...
+    def __init__(self, event_id: _Optional[int] = ..., event_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., run_attempt: _Optional[int] = ..., flow_started_or_continued: _Optional[_Union[FlowStartedOrContinuedHistoryEvent, _Mapping]] = ..., flow_closed: _Optional[_Union[FlowClosedHistoryEvent, _Mapping]] = ..., step_wait_for_completed: _Optional[_Union[StepWaitForCompletedEvent, _Mapping]] = ..., step_wait_for_failed: _Optional[_Union[StepWaitForFailedEvent, _Mapping]] = ..., step_execute_completed: _Optional[_Union[StepExecuteCompletedEvent, _Mapping]] = ..., step_execute_failed: _Optional[_Union[StepExecuteFailedEvent, _Mapping]] = ..., rpc_execution_completed: _Optional[_Union[RpcExecutionCompletedEvent, _Mapping]] = ..., channel_external_publish: _Optional[_Union[ChannelExternalPublishEvent, _Mapping]] = ..., step_wait_for_pending: _Optional[_Union[StepMethodPendingEvent, _Mapping]] = ..., step_execute_pending: _Optional[_Union[StepMethodPendingEvent, _Mapping]] = ..., time_travel_fork: _Optional[_Union[TimeTravelForkHistoryEvent, _Mapping]] = ..., channel_external_delete: _Optional[_Union[ChannelExternalDeleteEvent, _Mapping]] = ...) -> None: ...
 
 class TimeTravelForkHistoryEvent(_message.Message):
-    __slots__ = ("previous_run_id",)
+    __slots__ = ("previous_run_id", "previous_run_attempt", "target_run_attempt", "target_event_id")
     PREVIOUS_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    PREVIOUS_RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    TARGET_RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    TARGET_EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     previous_run_id: str
-    def __init__(self, previous_run_id: _Optional[str] = ...) -> None: ...
+    previous_run_attempt: int
+    target_run_attempt: int
+    target_event_id: int
+    def __init__(self, previous_run_id: _Optional[str] = ..., previous_run_attempt: _Optional[int] = ..., target_run_attempt: _Optional[int] = ..., target_event_id: _Optional[int] = ...) -> None: ...
 
 class FlowStartedOrContinuedHistoryEvent(_message.Message):
     __slots__ = ("flow_execution_id", "flow_type", "flow_config", "flow_timeout", "flow_timeout_policy", "timeout_handler_options", "initial_start", "continued_start")
@@ -1552,7 +1579,7 @@ class GetFlowStateResponse(_message.Message):
     def __init__(self, flow_config: _Optional[_Union[FlowConfig, _Mapping]] = ..., attributes: _Optional[_Iterable[_Union[KV, _Mapping]]] = ..., active_step_executions: _Optional[_Iterable[_Union[ActiveStepExecutionState, _Mapping]]] = ..., queued_steps: _Optional[_Iterable[_Union[StepMovement, _Mapping]]] = ..., pending_channel_messages: _Optional[_Mapping[str, ChannelValues]] = ..., completed_steps: _Optional[_Iterable[_Union[StepCompletionOutput, _Mapping]]] = ..., sticky_app_worker_id: _Optional[str] = ...) -> None: ...
 
 class ResetFlowRequest(_message.Message):
-    __slots__ = ("flow_id", "run_id", "reset_type", "reason", "history_event_time", "step_type", "step_execution_id", "skip_writes_reapply", "step_method")
+    __slots__ = ("flow_id", "run_id", "reset_type", "reason", "history_event_time", "step_type", "step_execution_id", "skip_writes_reapply", "step_method", "run_attempt")
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     RESET_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -1562,6 +1589,7 @@ class ResetFlowRequest(_message.Message):
     STEP_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     SKIP_WRITES_REAPPLY_FIELD_NUMBER: _ClassVar[int]
     STEP_METHOD_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     flow_id: str
     run_id: str
     reset_type: FlowResetType
@@ -1571,13 +1599,16 @@ class ResetFlowRequest(_message.Message):
     step_execution_id: str
     skip_writes_reapply: bool
     step_method: FlowResetStepMethod
-    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., reset_type: _Optional[_Union[FlowResetType, str]] = ..., reason: _Optional[str] = ..., history_event_time: _Optional[str] = ..., step_type: _Optional[str] = ..., step_execution_id: _Optional[str] = ..., skip_writes_reapply: _Optional[bool] = ..., step_method: _Optional[_Union[FlowResetStepMethod, str]] = ...) -> None: ...
+    run_attempt: int
+    def __init__(self, flow_id: _Optional[str] = ..., run_id: _Optional[str] = ..., reset_type: _Optional[_Union[FlowResetType, str]] = ..., reason: _Optional[str] = ..., history_event_time: _Optional[str] = ..., step_type: _Optional[str] = ..., step_execution_id: _Optional[str] = ..., skip_writes_reapply: _Optional[bool] = ..., step_method: _Optional[_Union[FlowResetStepMethod, str]] = ..., run_attempt: _Optional[int] = ...) -> None: ...
 
 class ResetFlowResponse(_message.Message):
-    __slots__ = ("run_id",)
+    __slots__ = ("run_id", "run_attempt")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     run_id: str
-    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+    run_attempt: int
+    def __init__(self, run_id: _Optional[str] = ..., run_attempt: _Optional[int] = ...) -> None: ...
 
 class InvokeRPCRequest(_message.Message):
     __slots__ = ("flow_id", "run_id", "rpc_name", "input", "timeout_seconds", "lock_attribute_keys", "request_id", "is_transactional", "load_attribute_map_instances", "load_channel_names", "load_channel_map_instances")
