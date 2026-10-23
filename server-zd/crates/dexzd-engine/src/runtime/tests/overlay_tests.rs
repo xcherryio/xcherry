@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use dexzd_apply::{ApplyOutcome, FlowStateReader, StateWrite};
 use dexzd_keyspace::ColumnFamily;
+use dexzd_protocol::dexzd::v1::FlowCommand;
 
 use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry, SpeculativeOverlay};
 use crate::runtime::tests::model_applier::ok_reply;
@@ -46,7 +47,10 @@ fn delete_range(start: &str, end: &str) -> StateWrite {
 
 fn entry(command_number: u8, writes: Vec<StateWrite>) -> OverlayEntry {
     OverlayEntry::new(
-        vec![command_number],
+        &FlowCommand {
+            command_id: vec![command_number],
+            ..FlowCommand::default()
+        },
         ApplyOutcome {
             writes,
             effects: Vec::new(),

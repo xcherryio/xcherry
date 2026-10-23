@@ -463,7 +463,7 @@ async fn speculative_apply_error_halts_the_registry() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn failed_commit_discards_the_overlay_and_fails_the_client() {
+async fn failed_commit_halts_the_registry_and_fails_the_client() {
     let harness = RuntimeHarness::new();
     started(&harness, "order-1").await;
     let address = flow("order-1");
@@ -488,8 +488,68 @@ async fn failed_commit_discards_the_overlay_and_fails_the_client() {
         matches!(error, RuntimeError::NodeStopping { .. }),
         "{error:?}"
     );
-    assert_eq!(harness.registry.uncommitted_bytes(), 0);
-    harness.registry.sync_barrier(&address).await.unwrap();
+    assert!(harness.registry.halted().is_cancelled());
+    let barrier_error = harness.registry.sync_barrier(&address).await.unwrap_err();
+    assert!(
+        matches!(barrier_error, RuntimeError::NodeStopping { .. }),
+        "{barrier_error:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_commit_never_lets_a_queued_later_command_settle_as_foreign() {
+    let harness = RuntimeHarness::new();
+    let run_id = started(&harness, "order-1").await;
+    let address = flow("order-1");
+    let mut proposals = Vec::new();
+    for number in 1..=2 {
+        proposals.push(
+            harness
+                .registry
+                .propose(
+                    address.clone(),
+                    attribute_command("order-1", run_id, "count", number),
+                    CommitUrgency::Batched,
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    assert!(harness.fail_next(CommitError::Unavailable {
+        detail: "object storage outage".to_owned(),
+    }));
+    let first = proposals.remove(0);
+    let error = harness
+        .registry
+        .wait_for_commit(&address, first.ticket)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, RuntimeError::Unavailable { .. }),
+        "{error:?}"
+    );
+    assert!(harness.registry.halted().is_cancelled());
+    let barrier_error = harness.registry.sync_barrier(&address).await.unwrap_err();
+    assert!(
+        matches!(barrier_error, RuntimeError::NodeStopping { .. }),
+        "{barrier_error:?}"
+    );
+
+    let committed_effects_before = committed_effect_count(&harness);
+    assert!(harness.commit_next(), "the second command was queued");
+    assert_eq!(
+        committed_effect_count(&harness),
+        committed_effects_before,
+        "a halted registry runs no committed effects"
+    );
+}
+
+fn committed_effect_count(harness: &RuntimeHarness) -> usize {
+    harness
+        .effect_calls()
+        .iter()
+        .filter(|(_, _, is_committed)| *is_committed)
+        .count()
 }
 
 #[tokio::test(start_paused = true)]

@@ -139,6 +139,8 @@ pub(crate) struct FakeCommitter {
     pub(crate) submit_errors: Mutex<VecDeque<CommitError>>,
     pub(crate) submitted_commands: Mutex<Vec<FlowCommand>>,
     pub(crate) replay_mismatch: Mutex<Option<ReplayMismatch>>,
+    /// Runs once, right after the next committed view captured its snapshot.
+    pub(crate) view_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl FakeCommitter {
@@ -151,6 +153,7 @@ impl FakeCommitter {
             submit_errors: Mutex::new(VecDeque::new()),
             submitted_commands: Mutex::new(Vec::new()),
             replay_mismatch: Mutex::new(None),
+            view_hook: Mutex::new(None),
         }
     }
 
@@ -193,7 +196,12 @@ impl FlowCommandCommitter for FakeCommitter {
     }
 
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
-        Ok(Box::new(self.store.view()))
+        let view = self.store.view();
+        let hook = self.view_hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(Box::new(view))
     }
 
     fn check_speculative_outcome(

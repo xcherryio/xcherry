@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 mod client_operation_tests;
+mod concurrency_tests;
 mod fixtures;
 mod lock_tests;
 mod long_poll_tests;

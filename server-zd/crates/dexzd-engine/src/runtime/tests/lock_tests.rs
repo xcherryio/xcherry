@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
 use dexzd_protocol::dex::{InvokeRpcRequest, InvokeWorkerRpcResponse};
@@ -286,4 +287,90 @@ async fn invocation_start_is_blocked_by_an_rpc_lock_and_proposes_once_free() {
             .unwrap(),
         "the speculative holder blocks other invocations"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_worker_rpc_ends_at_its_deadline_and_releases_its_locks() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    *harness.rpc_invoker.gate.lock().unwrap() = Some(Arc::new(Notify::new()));
+    let mut request = rpc_request("order-1", &["balance"]);
+    request.timeout_seconds = 1;
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.registry.invoke_rpc(TENANT, request),
+    )
+    .await
+    .expect("the RPC ends at its deadline")
+    .unwrap_err();
+    assert_eq!(error.grpc_code(), grpc_code::DEADLINE_EXCEEDED, "{error:?}");
+
+    let lock_keys = vec!["balance".to_owned()];
+    let started = harness
+        .registry
+        .propose_invocation_start(
+            &flow("order-1"),
+            &pending(run_id, &locking_invocation("balance"), &lock_keys, 1),
+            locking_attempt_command("order-1", run_id, "balance"),
+            CommitUrgency::Prompt,
+        )
+        .await
+        .unwrap();
+    assert!(started.is_some(), "the expired RPC released its lock");
+}
+
+#[tokio::test(start_paused = true)]
+async fn equal_sequence_waiters_start_in_queue_order() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    let first = locking_invocation("balance");
+    let second = waiter_invocation("Second-1");
+    seed_lock_record(
+        &harness,
+        run_id,
+        "balance",
+        &LockRecord {
+            holder: None,
+            holder_attempt: 0,
+            waiters: vec![
+                LockWaiterRecord {
+                    invocation: Some(first.clone()),
+                    pending_since_seq: 7,
+                },
+                LockWaiterRecord {
+                    invocation: Some(second.clone()),
+                    pending_since_seq: 7,
+                },
+            ],
+        },
+    );
+    let address = flow("order-1");
+    let lock_keys = vec!["balance".to_owned()];
+
+    let blocked = harness
+        .registry
+        .propose_invocation_start(
+            &address,
+            &pending(run_id, &second, &lock_keys, 7),
+            locking_attempt_command("order-1", run_id, "balance"),
+            CommitUrgency::Prompt,
+        )
+        .await
+        .unwrap();
+    assert!(
+        blocked.is_none(),
+        "the second queued waiter cannot pass the first"
+    );
+    let started = harness
+        .registry
+        .propose_invocation_start(
+            &address,
+            &pending(run_id, &first, &lock_keys, 7),
+            locking_attempt_command("order-1", run_id, "balance"),
+            CommitUrgency::Prompt,
+        )
+        .await
+        .unwrap();
+    assert!(started.is_some());
 }

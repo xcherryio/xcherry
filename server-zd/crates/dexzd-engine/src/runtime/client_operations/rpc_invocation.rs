@@ -93,7 +93,8 @@ impl FlowRuntimeRegistry {
         } else {
             self.inner.config.rpc_default_timeout
         };
-        let result = self
+        let deadline = tokio::time::Instant::now() + timeout;
+        let call = self
             .inner
             .dependencies
             .rpc_invoker
@@ -103,9 +104,12 @@ impl FlowRuntimeRegistry {
                 flow_type: run.record.flow_type.clone(),
                 sticky_app_worker_id: run.record.sticky_app_worker_id.clone(),
                 request: worker_request,
-                deadline: tokio::time::Instant::now() + timeout,
-            })
+                deadline,
+            });
+        // A stalled invoker must not hold the RPC locks past the deadline (plan 8.3).
+        let result = tokio::time::timeout_at(deadline, call)
             .await
+            .unwrap_or(Err(RpcInvokeError::DeadlineExceeded))
             .map_err(rpc_invoke_error)?;
         validate_worker_response(
             WorkerResponse::Rpc(Some(&result.response)),
@@ -183,9 +187,8 @@ impl FlowRuntimeRegistry {
             // Apply rejects the commit when time travel replaced the attempt the snapshot read.
             command.expected_run_attempt = run.record.current_attempt;
         }
-        let mut command = Some(command);
         let reply = self
-            .propose_client_command(flow, |_| Ok(command.take().expect("built once")))
+            .propose_client_command(flow, |_| Ok(command.clone()))
             .await?;
         let command_reply::Reply::Rpc(rpc_reply) = reply else {
             return Err(RuntimeError::Internal {

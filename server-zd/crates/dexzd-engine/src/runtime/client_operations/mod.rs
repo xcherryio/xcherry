@@ -65,13 +65,9 @@ impl FlowRuntimeRegistry {
             }),
             hard_delete_objects: Vec::new(),
         };
-        let mut command = Some(unstamped_flow_command(
-            &flow,
-            None,
-            flow_command::Command::FlowStart(start),
-        ));
+        let command = unstamped_flow_command(&flow, None, flow_command::Command::FlowStart(start));
         let reply = self
-            .propose_client_command(&flow, |_| Ok(command.take().expect("built once")))
+            .propose_client_command(&flow, |_| Ok(command.clone()))
             .await?;
         match reply {
             command_reply::Reply::StartFlow(started) => {
@@ -293,8 +289,12 @@ impl FlowRuntimeRegistry {
         }
     }
 
-    /// Waits for a commit; a failed commit discards the Flow's overlay, which was built on it.
-    pub(crate) async fn wait_for_commit(
+    /// Waits for a proposed command's commit.
+    ///
+    /// A failed commit halts the registry: later commands, possibly already queued, were built
+    /// on the failed command's speculative outcome (plan 8.2). Returns the committed command,
+    /// the commit error after halting, or `NodeStopping` when the registry halts while waiting.
+    pub async fn wait_for_commit(
         &self,
         flow: &FlowAddress,
         ticket: CommitTicket,
@@ -307,7 +307,10 @@ impl FlowRuntimeRegistry {
             }
         };
         result.map_err(|error| {
-            self.discard_overlay(flow);
+            self.halt(format!(
+                "commit of a command of Flow {} failed: {error}",
+                flow.flow_id
+            ));
             RuntimeError::from(error)
         })
     }

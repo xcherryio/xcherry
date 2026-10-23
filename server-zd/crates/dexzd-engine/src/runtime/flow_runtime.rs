@@ -20,7 +20,7 @@ pub(crate) struct FlowRuntime {
     pub(crate) address: FlowAddress,
     pub(crate) context: ApplyContext,
     state: Mutex<FlowRuntimeState>,
-    /// Number of overlay entries settled (committed or discarded) so far.
+    /// Number of overlay entries settled (committed) so far.
     settled_count: watch::Sender<u64>,
 }
 
