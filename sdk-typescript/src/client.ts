@@ -823,6 +823,7 @@ export class Client {
           stepExecutionId: options.stepExecutionId ?? "",
           skipWritesReapply: options.skipWritesReapply ?? false,
           stepMethod: mapTimeTravelStepMethod(options.stepMethod),
+          runAttempt: 0,
         },
         callback,
       ),

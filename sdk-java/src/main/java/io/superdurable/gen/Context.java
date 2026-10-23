@@ -314,6 +314,23 @@ private static final long serialVersionUID = 0L;
     return lastHeartbeatValue_ == null ? io.superdurable.gen.Value.getDefaultInstance() : lastHeartbeatValue_;
   }
 
+  public static final int RUN_ATTEMPT_FIELD_NUMBER = 10;
+  private int runAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+   * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+   * so combine both when an idempotency key must change after time travel.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 10;</code>
+   * @return The runAttempt.
+   */
+  @java.lang.Override
+  public int getRunAttempt() {
+    return runAttempt_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -355,6 +372,9 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000002) != 0)) {
       output.writeMessage(9, getLastHeartbeatValue());
     }
+    if (runAttempt_ != 0) {
+      output.writeInt32(10, runAttempt_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -390,6 +410,10 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000002) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(9, getLastHeartbeatValue());
+    }
+    if (runAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(10, runAttempt_);
     }
     return size;
   }
@@ -439,6 +463,8 @@ private static final long serialVersionUID = 0L;
       if (!getLastHeartbeatValue()
           .equals(other.getLastHeartbeatValue())) return false;
     }
+    if (getRunAttempt()
+        != other.getRunAttempt()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -474,6 +500,8 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + LAST_HEARTBEAT_VALUE_FIELD_NUMBER;
       hash = (53 * hash) + getLastHeartbeatValue().hashCode();
     }
+    hash = (37 * hash) + RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getRunAttempt();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -629,6 +657,7 @@ private static final long serialVersionUID = 0L;
         lastHeartbeatValueBuilder_.dispose();
         lastHeartbeatValueBuilder_ = null;
       }
+      runAttempt_ = 0;
       return this;
     }
 
@@ -696,6 +725,9 @@ private static final long serialVersionUID = 0L;
             : lastHeartbeatValueBuilder_.build();
         to_bitField0_ |= 0x00000002;
       }
+      if (((from_bitField0_ & 0x00000200) != 0)) {
+        result.runAttempt_ = runAttempt_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -745,6 +777,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.hasLastHeartbeatValue()) {
         mergeLastHeartbeatValue(other.getLastHeartbeatValue());
+      }
+      if (other.getRunAttempt() != 0) {
+        setRunAttempt(other.getRunAttempt());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -821,6 +856,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000100;
               break;
             } // case 74
+            case 80: {
+              runAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000200;
+              break;
+            } // case 80
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1518,6 +1558,56 @@ private static final long serialVersionUID = 0L;
         lastHeartbeatValue_ = null;
       }
       return lastHeartbeatValueBuilder_;
+    }
+
+    private int runAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+     * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+     * so combine both when an idempotency key must change after time travel.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @return The runAttempt.
+     */
+    @java.lang.Override
+    public int getRunAttempt() {
+      return runAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+     * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+     * so combine both when an idempotency key must change after time travel.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @param value The runAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRunAttempt(int value) {
+
+      runAttempt_ = value;
+      bitField0_ |= 0x00000200;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+     * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+     * so combine both when an idempotency key must change after time travel.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000200);
+      runAttempt_ = 0;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:dex.Context)

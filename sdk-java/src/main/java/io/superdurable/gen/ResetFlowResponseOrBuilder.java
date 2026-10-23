@@ -21,4 +21,14 @@ public interface ResetFlowResponseOrBuilder extends
    */
   com.google.protobuf.ByteString
       getRunIdBytes();
+
+  /**
+   * <pre>
+   * server-zd only: the run attempt created by this time travel. run_id does not change there.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 2;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
 }

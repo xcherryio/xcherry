@@ -456,6 +456,7 @@ async function startFakeFlowService(
         serverVersion: "test",
         minimumSupportedProtocolVersion: 1,
         currentProtocolVersion,
+        serverEngine: 0,
       });
     },
     startFlow(call, callback: sendUnaryData<StartFlowResponse>) {

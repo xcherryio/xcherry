@@ -288,7 +288,7 @@ async function startServer() {
     },
     getServerInfo(call, callback) {
       flowHeaders.push(call.metadata.get("authorization")[0]?.toString());
-      callback(null, { serverVersion: "test", minimumSupportedProtocolVersion: 1, currentProtocolVersion: 1 });
+      callback(null, { serverVersion: "test", minimumSupportedProtocolVersion: 1, currentProtocolVersion: 1, serverEngine: 0 });
     },
     syncAttributeIndexes(call, callback) {
       flowHeaders.push(call.metadata.get("authorization")[0]?.toString());

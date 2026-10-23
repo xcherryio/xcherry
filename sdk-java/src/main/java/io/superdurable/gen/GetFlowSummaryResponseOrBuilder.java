@@ -26,11 +26,19 @@ public interface GetFlowSummaryResponseOrBuilder extends
   io.superdurable.gen.FlowExecutionIDOrBuilder getFlowExecutionIdOrBuilder();
 
   /**
+   * <pre>
+   * On server-zd this always equals run_id.
+   * </pre>
+   *
    * <code>string first_run_id = 2;</code>
    * @return The firstRunId.
    */
   java.lang.String getFirstRunId();
   /**
+   * <pre>
+   * On server-zd this always equals run_id.
+   * </pre>
+   *
    * <code>string first_run_id = 2;</code>
    * @return The bytes for firstRunId.
    */
@@ -101,4 +109,14 @@ public interface GetFlowSummaryResponseOrBuilder extends
    * <code>.google.protobuf.Timestamp close_time = 7;</code>
    */
   com.google.protobuf.TimestampOrBuilder getCloseTimeOrBuilder();
+
+  /**
+   * <pre>
+   * server-zd only: the current run attempt of this run.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 8;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
 }
