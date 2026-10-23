@@ -62,6 +62,7 @@ impl SpeculativeOverlay {
         self.entries.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn total_bytes(&self) -> usize {
         self.total_bytes
     }

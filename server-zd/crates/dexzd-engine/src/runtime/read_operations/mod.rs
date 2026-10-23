@@ -360,7 +360,7 @@ fn permission_attribute_record(permissions: &[String]) -> AttributeRecord {
                 Value {
                     kind: Some(value::Kind::ObjValue(EncodedObject {
                         encoding: "json".to_owned(),
-                        payload: permission_json::encode_string_array(permissions).into(),
+                        payload: permission_json::encode_string_array(permissions),
                     })),
                 },
             )),

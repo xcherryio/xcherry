@@ -28,7 +28,9 @@ pub use commit_port::{
     CommittedFlowCommand, FlowCommandCommitter,
 };
 pub use flow_address::FlowAddress;
-pub use registry::{FlowRuntimeDependencies, FlowRuntimeRegistry, ProposalResult};
+pub use registry::{
+    FlowRuntimeDependencies, FlowRuntimeRegistry, PendingInvocation, ProposalResult,
+};
 pub use runtime_config::{RuntimeConfig, default_run_settings};
 pub use runtime_error::{RuntimeError, grpc_code};
 pub use runtime_ports::{

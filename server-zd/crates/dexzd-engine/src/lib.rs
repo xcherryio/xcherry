@@ -16,7 +16,7 @@ pub use command_applier::CommandApplier;
 pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
-    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, ProposalResult,
-    RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, RuntimeError,
-    WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
+    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, PendingInvocation,
+    ProposalResult, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink,
+    RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
 };

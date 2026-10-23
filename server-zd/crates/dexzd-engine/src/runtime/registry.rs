@@ -49,6 +49,19 @@ pub struct FlowRuntimeDependencies {
     pub hard_delete_reader: Arc<dyn HardDeleteValueReader>,
 }
 
+/// A pending method call that waits for its locks (plan 8.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInvocation {
+    /// Run of the call.
+    pub run_id: RunId,
+    /// The call.
+    pub invocation: StepInvocationKey,
+    /// Lock keys the call needs.
+    pub lock_keys: Vec<String>,
+    /// Seq at which the attempt became pending; orders the per-key FIFO.
+    pub pending_since_seq: u64,
+}
+
 /// Outcome of a proposal.
 #[derive(Debug)]
 pub struct ProposalResult {
@@ -156,10 +169,7 @@ impl FlowRuntimeRegistry {
     pub fn can_start_invocation(
         &self,
         flow: &FlowAddress,
-        run_id: RunId,
-        invocation: &StepInvocationKey,
-        lock_keys: &[String],
-        pending_since_seq: u64,
+        pending: &PendingInvocation,
     ) -> Result<bool, RuntimeError> {
         self.check_running()?;
         let lease = self.inner.lease(flow);
@@ -171,10 +181,10 @@ impl FlowRuntimeRegistry {
             &reader,
             &state.rpc_locks,
             runtime.context.flow_hash,
-            run_id,
-            invocation,
-            lock_keys,
-            pending_since_seq,
+            pending.run_id,
+            &pending.invocation,
+            &pending.lock_keys,
+            pending.pending_since_seq,
         )?;
         Ok(blocker.is_none())
     }
@@ -186,10 +196,7 @@ impl FlowRuntimeRegistry {
     pub async fn propose_invocation_start(
         &self,
         flow: &FlowAddress,
-        run_id: RunId,
-        invocation: &StepInvocationKey,
-        lock_keys: &[String],
-        pending_since_seq: u64,
+        pending: &PendingInvocation,
         command: FlowCommand,
         urgency: CommitUrgency,
     ) -> Result<Option<ProposalResult>, RuntimeError> {
@@ -200,10 +207,10 @@ impl FlowRuntimeRegistry {
                     scope.state,
                     scope.rpc_locks,
                     scope.context.flow_hash,
-                    run_id,
-                    invocation,
-                    lock_keys,
-                    pending_since_seq,
+                    pending.run_id,
+                    &pending.invocation,
+                    &pending.lock_keys,
+                    pending.pending_since_seq,
                 )?;
                 if blocker.is_some() {
                     return Ok(None);

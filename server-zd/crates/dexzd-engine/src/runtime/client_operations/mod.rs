@@ -56,7 +56,7 @@ impl FlowRuntimeRegistry {
             new_run_id: uuid::Uuid::now_v7().as_bytes().to_vec(),
             request_fingerprint: request_fingerprint(&request),
             request: Some(request),
-            settings: Some(self.inner.config.run_settings.clone()),
+            settings: Some(self.inner.config.run_settings),
             resolved_timeout_policy,
             // Validation accepted only pull targets, which normalize to this value.
             worker_target: Some(WorkerTarget {
