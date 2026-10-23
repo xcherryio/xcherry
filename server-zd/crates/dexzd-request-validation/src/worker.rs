@@ -9,21 +9,27 @@
 use std::collections::HashSet;
 
 use dexzd_protocol::dex::{
-    self, AttributeWrite, ChannelMessage, ChannelMessageDeletion, CloseDecision,
-    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, InvokeWorkerRpcResponse,
+    self, AttributeWrite, ChannelMessage, ChannelMessageDeletion, CloseDecision, CloseDecisionType,
+    FlowConfig, InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, InvokeWorkerRpcResponse,
     StepDecision, value,
 };
 
 use crate::shared::{
     ValidationCategory, ValidationConfig, ValidationError, invalid, validate_action_permissions,
-    validate_blob_value, validate_identifier, validate_kv_blob_values, validate_step_options,
+    validate_blob_value, validate_hard_delete_write, validate_identifier, validate_kv_blob_values,
+    validate_step_options,
 };
 use crate::waiting::validate_waiting_condition;
 
 /// A Worker result to validate before the engine proposes a command.
 pub enum WorkerResponse<'a> {
     /// Result of a Step WaitFor method.
-    WaitFor(Option<&'a InvokeWaitForMethodResponse>),
+    WaitFor {
+        /// Response returned by the Worker.
+        response: Option<&'a InvokeWaitForMethodResponse>,
+        /// Parent Flow's effective configuration inherited by SubFlows.
+        parent_flow_config: &'a FlowConfig,
+    },
     /// Result of a Step Execute method.
     Execute(Option<&'a InvokeExecuteMethodResponse>),
     /// Result of a Flow RPC method.
@@ -36,7 +42,10 @@ pub fn validate_worker_response(
     config: &ValidationConfig,
 ) -> Result<(), ValidationError> {
     let result = match response {
-        WorkerResponse::WaitFor(response) => validate_wait_for(response, config),
+        WorkerResponse::WaitFor {
+            response,
+            parent_flow_config,
+        } => validate_wait_for(response, parent_flow_config, config),
         WorkerResponse::Execute(response) => validate_execute(response, config),
         WorkerResponse::Rpc(response) => validate_rpc(response, config),
     };
@@ -50,11 +59,16 @@ pub fn validate_worker_response(
 
 fn validate_wait_for(
     response: Option<&InvokeWaitForMethodResponse>,
+    parent_flow_config: &FlowConfig,
     config: &ValidationConfig,
 ) -> Result<(), ValidationError> {
     let response =
         response.ok_or_else(|| invalid("response", "nil InvokeWaitForMethodResponse"))?;
-    validate_waiting_condition(response.waiting_condition.as_ref(), config)?;
+    validate_waiting_condition(
+        response.waiting_condition.as_ref(),
+        parent_flow_config,
+        config,
+    )?;
     validate_common_response(
         &response.upsert_attributes,
         &response.record_events,
@@ -145,59 +159,7 @@ fn validate_common_response(
                 "DexWorkQueuePermissions is managed by the Server",
             ));
         }
-        if write.is_hard_delete_on_null {
-            match write.value.as_ref().and_then(|value| value.kind.as_ref()) {
-                None if write.value.is_none() => {}
-                None => {
-                    return Err(invalid(
-                        path.clone(),
-                        format!(
-                            "hard-delete attribute {:?} has an empty value; use null to delete it",
-                            write.key
-                        ),
-                    ));
-                }
-                Some(
-                    value::Kind::NullValue(_)
-                    | value::Kind::StringValue(_)
-                    | value::Kind::ObjValue(_),
-                ) => {}
-                Some(_) => {
-                    return Err(invalid(
-                        path.clone(),
-                        format!(
-                            "hard-delete attribute {:?} must be a string, an object, or null",
-                            write.key
-                        ),
-                    ));
-                }
-            }
-            if write
-                .index_config
-                .as_ref()
-                .is_some_and(|index| index.enable)
-            {
-                return Err(invalid(
-                    path.clone(),
-                    format!("hard-delete attribute {:?} must not be indexed", write.key),
-                ));
-            }
-            if write.sync_config.as_ref().is_some_and(|sync| sync.enabled) {
-                return Err(invalid(
-                    path,
-                    format!(
-                        "hard-delete attribute {:?} must not sync to an Attribute Store",
-                        write.key
-                    ),
-                ));
-            }
-            if !config.has_blob_store {
-                return Err(invalid(
-                    format!("upsert_attributes[{index}]"),
-                    "hard-delete Attributes require an enabled blob store",
-                ));
-            }
-        }
+        validate_hard_delete_write(&path, write, config, true)?;
     }
     validate_action_permissions("action_permission_mappings", permissions)?;
     validate_kv_blob_values("record_events", events)?;
@@ -296,7 +258,7 @@ fn validate_close_decision(
     next_step_count: usize,
 ) -> Result<(), ValidationError> {
     let close_type = close.close_decision_type;
-    if close_type != 1 {
+    if close_type != CloseDecisionType::ForceCompleteOnChannelsEmpty as i32 {
         if next_step_count > 0 {
             return Err(invalid(
                 "step_decision.close_decision",
@@ -310,8 +272,8 @@ fn validate_close_decision(
             ));
         }
     }
-    match close_type {
-        1 => {
+    match CloseDecisionType::try_from(close_type) {
+        Ok(CloseDecisionType::ForceCompleteOnChannelsEmpty) => {
             if next_step_count == 0 {
                 return Err(invalid(
                     "step_decision.close_decision",
@@ -339,8 +301,8 @@ fn validate_close_decision(
                 }
             }
         }
-        2 | 3 => {}
-        4 => {
+        Ok(CloseDecisionType::GracefulComplete | CloseDecisionType::ForceComplete) => {}
+        Ok(CloseDecisionType::ForceFail) => {
             if close
                 .close_input
                 .as_ref()
@@ -352,7 +314,7 @@ fn validate_close_decision(
                 ));
             }
         }
-        5 => {
+        Ok(CloseDecisionType::DeadEnd) => {
             if close.close_input.is_some() {
                 return Err(invalid(
                     "step_decision.close_decision.close_input",
