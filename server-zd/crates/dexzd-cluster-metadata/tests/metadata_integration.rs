@@ -25,7 +25,9 @@ use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
-use dexzd_protocol::dexzd::v1::{ClusterObject, ControllerLease, Manifest, SnapshotReference};
+use dexzd_protocol::dexzd::v1::{
+    ClusterObject, ControllerLease, Manifest, NodeLease, SnapshotReference,
+};
 use prost::Message;
 use tokio::sync::Barrier;
 use tokio::time::Instant;
@@ -575,7 +577,7 @@ async fn lease_takeover_after_expiry_and_grace() {
     let first = acquire_lease(store.clone(), clock.clone(), &node(), &config)
         .await
         .unwrap();
-    first.shutdown().await;
+    drop(first);
     tokio::time::advance(Duration::from_secs(12)).await;
     let second = acquire_lease(store.clone(), clock.clone(), &node(), &config)
         .await
@@ -603,7 +605,7 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
     )
     .await
     .unwrap();
-    first.shutdown().await;
+    drop(first);
     let second_store = Arc::clone(&store);
     let second_clock = Arc::clone(&clock);
     let waiter = tokio::spawn(async move {
@@ -615,6 +617,67 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
     tokio::time::advance(Duration::from_secs(1)).await;
     let second = waiter.await.unwrap().unwrap();
     second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lease_release_allows_immediate_reacquire() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let first = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    let first_epoch = first.epoch();
+    let original = store.get("lease/node-a").await.unwrap().unwrap();
+    let original_lease = NodeLease::decode(original.bytes).unwrap();
+    first.shutdown().await;
+    let released = store.get("lease/node-a").await.unwrap().unwrap();
+    let released_lease = NodeLease::decode(released.bytes).unwrap();
+    assert_eq!(released_lease.expires_at_unix_micros, i64::MIN);
+    assert_eq!(released_lease.version, original_lease.version + 1);
+    assert_eq!(
+        released_lease.holder_process_id,
+        original_lease.holder_process_id
+    );
+    let second = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    assert_eq!(second.epoch(), first_epoch + 1);
+    second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_after_takeover_preserves_new_holder() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let old_holder = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    clock.offset_micros.store(12_000_000, Ordering::SeqCst);
+    let new_holder = acquire_lease(store.clone(), clock, &node(), &config)
+        .await
+        .unwrap();
+    let before = store.get("lease/node-a").await.unwrap().unwrap();
+    old_holder.shutdown().await;
+    let after = store.get("lease/node-a").await.unwrap().unwrap();
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(after.bytes, before.bytes);
+    assert!(matches!(
+        *new_holder.subscribe().borrow(),
+        LeaseStatus::ValidUntil(_)
+    ));
+    new_holder.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
