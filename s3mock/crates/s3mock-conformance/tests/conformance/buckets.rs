@@ -31,17 +31,14 @@ async fn bucket_lifecycle() {
             .any(|listed| listed.name() == Some(bucket.as_str()))
     );
 
-    let duplicate = target
+    // In us-east-1, creating a bucket the caller already owns succeeds (verified against AWS S3).
+    target
         .client
         .create_bucket()
         .bucket(&bucket)
         .send()
         .await
-        .unwrap_err();
-    assert_eq!(
-        error_code_and_status(&duplicate).0.as_deref(),
-        Some("BucketAlreadyOwnedByYou")
-    );
+        .unwrap();
 
     target
         .client

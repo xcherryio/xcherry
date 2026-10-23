@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use http::{HeaderMap, Response, StatusCode};
 use http_body_util::{BodyExt, Limited};
-use s3mock::{DefaultRetention, ObjectLockConfiguration, RetentionMode, Store, VersioningState};
+use s3mock::{
+    DefaultRetention, ObjectLockConfiguration, RetentionMode, Store, StoreError, VersioningState,
+};
 
 use super::OWNER_ID;
 use super::request_body::read_small_body;
@@ -54,8 +56,12 @@ pub(crate) async fn create_bucket(
     let location = format!("/{bucket}");
     let is_object_lock_enabled = header_text(headers, "x-amz-bucket-object-lock-enabled")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+    // s3mock reports us-east-1, where S3 answers 200 when the caller already owns the bucket.
     run_store_operation(&store, move |store| {
-        store.create_bucket(&bucket, is_object_lock_enabled)
+        match store.create_bucket(&bucket, is_object_lock_enabled) {
+            Ok(_) | Err(StoreError::BucketAlreadyOwnedByYou(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
     })
     .await?;
     status_response(StatusCode::OK, &[("location", location.as_str())])

@@ -312,6 +312,7 @@ fn version_id_for(versioning: VersioningState, internal_version: Ulid) -> Option
     match versioning {
         VersioningState::Unversioned => None,
         VersioningState::Enabled => Some(internal_version.to_string()),
-        VersioningState::Suspended => Some(super::NULL_VERSION_ID.to_owned()),
+        // S3 omits x-amz-version-id for writes to a suspended bucket, even though they create the null version.
+        VersioningState::Suspended => None,
     }
 }

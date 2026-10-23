@@ -177,7 +177,8 @@ async fn suspended_versioning_overwrites_the_null_version() {
         .send()
         .await
         .unwrap();
-    assert_eq!(suspended.version_id(), Some("null"));
+    // S3 omits the version ID for writes to a suspended bucket (verified against AWS S3).
+    assert_eq!(suspended.version_id(), None);
 
     let versions = target
         .client

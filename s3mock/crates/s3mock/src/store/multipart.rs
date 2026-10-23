@@ -22,7 +22,7 @@ use super::object_listing::{
 };
 use super::object_write::CompletedUpload;
 use super::{
-    BUCKETS, MAX_KEYS_LIMIT, PARTS, Store, UPLOADS, UPLOADS_DIRECTORY_NAME,
+    ABORTED_UPLOADS, BUCKETS, MAX_KEYS_LIMIT, PARTS, Store, UPLOADS, UPLOADS_DIRECTORY_NAME,
     create_directory_durably, decode_json, encode_json, require_bucket, validate_object_key,
 };
 use crate::checksum::{ChecksumAlgorithm, ChecksumType};
@@ -234,7 +234,7 @@ impl Store {
         Ok(replaced)
     }
 
-    /// Deletes an upload and its parts.
+    /// Deletes an upload and its parts. Aborting an already aborted upload succeeds again, as in S3.
     pub fn abort_multipart_upload(
         &self,
         bucket: &str,
@@ -252,7 +252,18 @@ impl Store {
                 upload_id: upload_id.to_owned(),
                 assembled_parts: Vec::new(),
             };
-            remove_upload(&mut uploads, &mut parts, &upload)?;
+            let mut aborted = transaction.open_table(ABORTED_UPLOADS)?;
+            match remove_upload(&mut uploads, &mut parts, &upload) {
+                Ok(()) => {
+                    aborted.insert(upload.upload_key.as_slice(), [].as_slice())?;
+                }
+                Err(StoreError::NoSuchUpload { .. })
+                    if aborted.get(upload.upload_key.as_slice())?.is_some() =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
             self.upload_directory(&bucket_record, upload_id)
         };
         transaction.commit()?;

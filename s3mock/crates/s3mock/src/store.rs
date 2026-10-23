@@ -58,6 +58,8 @@ const VERSIONS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("versions")
 const LATEST: TableDefinition<&[u8], &[u8]> = TableDefinition::new("latest");
 /// In-progress multipart uploads, keyed by `encode_upload_key`.
 const UPLOADS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("uploads");
+/// Uploads aborted by AbortMultipartUpload, keyed like `UPLOADS`; S3 accepts a repeated abort.
+const ABORTED_UPLOADS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("aborted_uploads");
 /// Uploaded parts, keyed by `encode_part_key`.
 const PARTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("parts");
 /// Bucket subdirectory holding one directory of part files per upload.
@@ -161,6 +163,7 @@ impl Store {
         transaction.open_table(LATEST)?;
         transaction.open_table(UPLOADS)?;
         transaction.open_table(PARTS)?;
+        transaction.open_table(ABORTED_UPLOADS)?;
         transaction.commit()?;
         Ok(())
     }
