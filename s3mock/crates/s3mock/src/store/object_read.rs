@@ -21,7 +21,7 @@ use super::{
 use crate::data_file;
 use crate::error::StoreError;
 use crate::key_codec::encode_object_key;
-use crate::record::VersionRecord;
+use crate::record::{VersionRecord, VersioningState};
 
 /// A reader retries when an overwrite removed the data file between lookup and open.
 const MAX_READ_ATTEMPTS: usize = 3;
@@ -75,8 +75,8 @@ pub struct ObjectSelection {
     pub record: VersionRecord,
     /// `None` serves the whole object.
     pub range: Option<ResolvedRange>,
-    /// Whether the version was addressed by version ID, which S3 echoes back.
-    pub is_version_addressed: bool,
+    /// Versioning state of the bucket; S3 omits `x-amz-version-id` for unversioned buckets.
+    pub bucket_versioning: VersioningState,
 }
 
 /// A selected version with its data file opened at the first served byte.
@@ -188,7 +188,7 @@ impl Store {
             ObjectSelection {
                 record,
                 range,
-                is_version_addressed: request.version_id.is_some(),
+                bucket_versioning: bucket_record.versioning,
             },
             path,
         ))

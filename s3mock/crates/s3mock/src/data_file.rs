@@ -102,6 +102,13 @@ impl ObjectWriter {
         Ok(())
     }
 
+    /// Deletes the temporary file of an upload that will not be committed.
+    pub fn abandon(self) {
+        if let Err(error) = fs::remove_file(&self.temporary_path) {
+            tracing::warn!(path = %self.temporary_path.display(), %error, "failed to remove abandoned upload");
+        }
+    }
+
     /// Returns the checksum algorithm this writer computes.
     pub fn checksum_algorithm(&self) -> ChecksumAlgorithm {
         self.checksum_algorithm
@@ -123,17 +130,13 @@ impl ObjectWriter {
             checksum,
         };
         if let Some(content_md5) = &expectations.content_md5_base64 {
-            let declared = decode_base64(content_md5).ok_or_else(|| {
-                StoreError::InvalidRequest("Content-MD5 is not valid base64".to_owned())
-            });
-            let mismatch = match declared {
-                Ok(declared) => declared.as_slice() != md5_bytes.as_slice(),
-                Err(error) => {
-                    staged.discard();
-                    return Err(error);
-                }
+            let Some(declared) =
+                decode_base64(content_md5).filter(|declared| declared.len() == md5_bytes.len())
+            else {
+                staged.discard();
+                return Err(StoreError::InvalidDigest);
             };
-            if mismatch {
+            if declared.as_slice() != md5_bytes.as_slice() {
                 staged.discard();
                 return Err(StoreError::BadDigest { algorithm: "MD5" });
             }

@@ -8,8 +8,32 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "s3mock_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "s3mock"
+path = "src/main.rs"
+
 [dependencies]
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+httpdate.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+percent-encoding.workspace = true
+quick-xml.workspace = true
 s3mock.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ulid.workspace = true
 
 [lints]
 workspace = true

@@ -41,6 +41,8 @@ pub enum StoreError {
     InvalidRequest(String),
     #[error("an argument is invalid: {0}")]
     InvalidArgument(String),
+    #[error("the Content-MD5 header is not valid base64-encoded MD5")]
+    InvalidDigest,
     #[error("data file {path:?} is corrupt: {reason}")]
     CorruptDataFile { path: String, reason: String },
     #[error("metadata store error: {0}")]
