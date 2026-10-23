@@ -10,10 +10,9 @@ use std::collections::BTreeMap;
 
 use dexzd_protocol::dex::{self, FlowStatus, IndexType};
 use serde_json::Value as JsonValue;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio_postgres::Row;
 
+use super::wire_value::decode_wire_value;
 use crate::SearchError;
 
 pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry, SearchError> {
@@ -41,7 +40,14 @@ pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry,
     let number_types = read_bucket(row, "sa_number_types")?;
     let datetime = read_bucket(row, "sa_datetime")?;
     let boolean = read_bucket(row, "sa_bool")?;
-    let mut indexed_values = BTreeMap::new();
+    let wire = read_bucket(row, "sa_wire")?;
+    let mut indexed_values = wire
+        .into_iter()
+        .map(|(field, value)| {
+            let decoded = decode_wire_value(&field, &value)?;
+            Ok((field, decoded))
+        })
+        .collect::<Result<BTreeMap<_, _>, SearchError>>()?;
     indexed_values.insert("FlowType".to_owned(), string_value(flow_type.clone()));
     if let Some(parent_flow_id) = read::<Option<String>>(row, "dex_parent_flow_id")? {
         indexed_values.insert("DexParentFlowID".to_owned(), string_value(parent_flow_id));
@@ -50,10 +56,13 @@ pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry,
         ("ActiveStepTypes", "active_step_types"),
         ("DexWorkQueuePermissions", "dex_work_queue_permissions"),
     ] {
-        if let Some(values) = read::<Option<Vec<String>>>(row, column)?
-            && !values.is_empty()
-        {
-            indexed_values.insert(name.to_owned(), string_array_value(&values)?);
+        match read::<Option<Vec<String>>>(row, column)? {
+            Some(values) if !values.is_empty() => {
+                indexed_values.insert(name.to_owned(), string_array_value(&values)?);
+            }
+            _ => {
+                indexed_values.remove(name);
+            }
         }
     }
     for (field, value) in keyword {
@@ -62,7 +71,9 @@ pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry,
             JsonValue::Array(_) => IndexType::KeywordArray,
             _ => return Err(invalid_attribute(&field)),
         };
-        indexed_values.insert(field.clone(), attribute_value(&field, index_type, &value)?);
+        indexed_values
+            .entry(field.clone())
+            .or_insert(attribute_value(&field, index_type, &value)?);
     }
     for (bucket, index_type) in [
         (text, IndexType::Text),
@@ -70,7 +81,9 @@ pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry,
         (boolean, IndexType::Bool),
     ] {
         for (field, value) in bucket {
-            indexed_values.insert(field.clone(), attribute_value(&field, index_type, &value)?);
+            indexed_values
+                .entry(field.clone())
+                .or_insert(attribute_value(&field, index_type, &value)?);
         }
     }
     for (field, value) in number {
@@ -84,7 +97,9 @@ pub(super) fn response_entry(row: &Row) -> Result<dex::SearchFlowsResponseEntry,
         if !matches!(index_type, IndexType::Int | IndexType::Double) {
             return Err(invalid_attribute(&field));
         }
-        indexed_values.insert(field.clone(), attribute_value(&field, index_type, &value)?);
+        indexed_values
+            .entry(field.clone())
+            .or_insert(attribute_value(&field, index_type, &value)?);
     }
     Ok(dex::SearchFlowsResponseEntry {
         flow_id: read(row, "workflow_id")?,
@@ -143,11 +158,7 @@ fn attribute_value(
         }
         (IndexType::Datetime, JsonValue::Number(value)) => {
             let nanos = value.as_i64().ok_or_else(|| invalid_attribute(field))?;
-            let formatted = OffsetDateTime::from_unix_timestamp_nanos(i128::from(nanos))
-                .map_err(|_| invalid_attribute(field))?
-                .format(&Rfc3339)
-                .map_err(|_| invalid_attribute(field))?;
-            Kind::StringValue(formatted)
+            Kind::IntValue(nanos)
         }
         (IndexType::Bool, JsonValue::Bool(value)) => Kind::BoolValue(*value),
         _ => return Err(invalid_attribute(field)),

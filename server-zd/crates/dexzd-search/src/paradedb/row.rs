@@ -8,9 +8,14 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_keyspace::TenantId;
 use dexzd_protocol::dex::IndexType;
+use dexzd_protocol::dexzd::v1::SearchAttributeValue;
 use dexzd_visibility_query::{SearchDocument, SearchValue};
 use thiserror::Error;
+
+use super::tenant_column_value;
+use super::wire_value::encode_wire_value;
 
 /// A document ready for a versioned ParadeDB upsert.
 #[derive(Debug, Clone)]
@@ -51,6 +56,8 @@ pub struct SearchRow {
     pub sa_datetime: BTreeMap<String, SearchValue>,
     /// Boolean application attributes.
     pub sa_bool: BTreeMap<String, SearchValue>,
+    /// Original encoded attribute values for response fidelity.
+    pub sa_wire: BTreeMap<String, SearchValue>,
 }
 
 /// Invalid projection input that cannot be stored as a ParadeDB row.
@@ -72,25 +79,21 @@ pub enum SearchRowError {
     /// A registered application field attempts to shadow a system field.
     #[error("application field {field} shadows a system field")]
     SystemFieldCollision { field: String },
-    /// A projection has no tenant ID.
-    #[error("tenant ID must not be empty")]
-    EmptyTenantId,
+    /// A projected attribute lacks its stored wire value.
+    #[error("search field {field} has no stored wire value")]
+    MissingWireValue { field: String },
 }
 
 impl SearchRow {
     /// Maps a typed search document and application field definitions into one versioned row.
     pub fn from_document(
-        tenant_id: impl Into<String>,
+        tenant_id: TenantId,
         version: i64,
         document: &impl SearchDocument,
         application_fields: &[(String, IndexType)],
     ) -> Result<Self, SearchRowError> {
-        let tenant_id = tenant_id.into();
-        if tenant_id.is_empty() {
-            return Err(SearchRowError::EmptyTenantId);
-        }
         let mut row = Self {
-            tenant_id,
+            tenant_id: tenant_column_value(tenant_id),
             run_id: required_string(document, "RunId")?,
             workflow_id: required_string(document, "WorkflowId")?,
             workflow_type: required_string(document, "WorkflowType")?,
@@ -108,6 +111,7 @@ impl SearchRow {
             sa_number_types: BTreeMap::new(),
             sa_datetime: BTreeMap::new(),
             sa_bool: BTreeMap::new(),
+            sa_wire: BTreeMap::new(),
         };
         for (field, index_type) in application_fields {
             if is_system_field(field) {
@@ -155,6 +159,25 @@ impl SearchRow {
             }
         }
         Ok(row)
+    }
+
+    /// Preserves original values when projecting a stored search document record.
+    pub fn with_wire_attributes(
+        mut self,
+        attributes: &[SearchAttributeValue],
+    ) -> Result<Self, SearchRowError> {
+        for attribute in attributes {
+            let value =
+                attribute
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| SearchRowError::MissingWireValue {
+                        field: attribute.index_key.clone(),
+                    })?;
+            self.sa_wire
+                .insert(attribute.index_key.clone(), encode_wire_value(value));
+        }
+        Ok(self)
     }
 }
 

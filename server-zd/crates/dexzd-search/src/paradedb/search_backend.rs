@@ -8,16 +8,18 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dexzd_keyspace::{RunId, TenantId};
 use dexzd_visibility_query::parse_and_check;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio_postgres::{Client, Config, NoTls};
+use tokio_postgres::{Client, Config, NoTls, Row};
 
-use super::{PageCursor, SqlTranslationError, translate_query};
-use crate::builtin::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
+use super::{PageCursor, SqlStatement, SqlTranslationError, tenant_column_value, translate_query};
 use crate::page_token::PagePosition;
+use crate::search_backend::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 use super::search_result::response_entry;
@@ -31,56 +33,102 @@ pub trait ProjectionVisibilityWait: Send + Sync {
 
 /// Searches tenant runs through a bounded pool of ParadeDB connections.
 pub struct ParadeDbSearchBackend {
-    clients: Vec<Client>,
-    connection_tasks: Vec<JoinHandle<()>>,
-    next_client: AtomicUsize,
+    configuration: Config,
+    slots: Vec<Mutex<ConnectionSlot>>,
+    next_slot: AtomicUsize,
     visibility_wait: Option<Arc<dyn ProjectionVisibilityWait>>,
+    visibility_wait_timeout: Duration,
 }
 
 impl ParadeDbSearchBackend {
-    /// Opens a fixed-size pool; the caller owns the database configuration and optional write barrier.
+    /// Opens a fixed pool with a positive projection wait cap and an optional write barrier.
     pub async fn connect(
         configuration: &Config,
         pool_size: usize,
         visibility_wait: Option<Arc<dyn ProjectionVisibilityWait>>,
+        visibility_wait_timeout: Duration,
     ) -> Result<Self, SearchError> {
-        if pool_size == 0 {
+        if pool_size == 0 || visibility_wait_timeout.is_zero() {
             return Err(SearchError::Internal(
-                "ParadeDB search pool size must be positive".into(),
+                "ParadeDB search pool size and visibility wait timeout must be positive".into(),
             ));
         }
         let mut backend = Self {
-            clients: Vec::with_capacity(pool_size),
-            connection_tasks: Vec::with_capacity(pool_size),
-            next_client: AtomicUsize::new(0),
+            configuration: configuration.clone(),
+            slots: Vec::with_capacity(pool_size),
+            next_slot: AtomicUsize::new(0),
             visibility_wait,
+            visibility_wait_timeout,
         };
         for _ in 0..pool_size {
-            let (client, connection) = configuration.connect(NoTls).await.map_err(|error| {
-                SearchError::Unavailable(format!("connect to ParadeDB: {error}"))
-            })?;
-            let connection_task = tokio::spawn(async move {
-                if let Err(error) = connection.await {
-                    tracing::error!(%error, "ParadeDB search connection closed");
-                }
-            });
-            backend.clients.push(client);
-            backend.connection_tasks.push(connection_task);
+            backend
+                .slots
+                .push(Mutex::new(ConnectionSlot::open(configuration).await?));
         }
         Ok(backend)
     }
 
-    fn client(&self) -> &Client {
-        let index = self.next_client.fetch_add(1, Ordering::Relaxed) % self.clients.len();
-        &self.clients[index]
+    async fn query(&self, statement: &SqlStatement) -> Result<Vec<Row>, SearchError> {
+        let index = self.next_slot.fetch_add(1, Ordering::Relaxed) % self.slots.len();
+        let mut slot = self.slots[index].lock().await;
+        if slot.client.is_closed() {
+            slot.reconnect(&self.configuration).await?;
+        }
+        match slot
+            .client
+            .query(&statement.sql, &statement.parameter_refs())
+            .await
+        {
+            Ok(rows) => Ok(rows),
+            Err(error) if is_connection_error(&error) => {
+                slot.reconnect(&self.configuration).await?;
+                slot.client
+                    .query(&statement.sql, &statement.parameter_refs())
+                    .await
+                    .map_err(|error| {
+                        classify_database_error("query ParadeDB visibility runs", error)
+                    })
+            }
+            Err(error) => Err(classify_database_error(
+                "query ParadeDB visibility runs",
+                error,
+            )),
+        }
     }
 }
 
-impl Drop for ParadeDbSearchBackend {
+struct ConnectionSlot {
+    client: Client,
+    connection_task: JoinHandle<()>,
+}
+
+impl ConnectionSlot {
+    async fn open(configuration: &Config) -> Result<Self, SearchError> {
+        let (client, connection) = configuration
+            .connect(NoTls)
+            .await
+            .map_err(|error| classify_database_error("connect to ParadeDB", error))?;
+        let connection_task = tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::error!(%error, "ParadeDB search connection closed");
+            }
+        });
+        Ok(Self {
+            client,
+            connection_task,
+        })
+    }
+
+    async fn reconnect(&mut self, configuration: &Config) -> Result<(), SearchError> {
+        let replacement = Self::open(configuration).await?;
+        *self = replacement;
+        Ok(())
+    }
+}
+
+impl Drop for ConnectionSlot {
     fn drop(&mut self) {
-        for connection_task in &self.connection_tasks {
-            connection_task.abort();
-        }
+        self.connection_task.abort();
     }
 }
 
@@ -104,29 +152,28 @@ impl SearchBackend for ParadeDbSearchBackend {
             start_time_ns: position.start_time_ns,
             run_id: position.run_id.to_string(),
         });
-        let limit = page_size.checked_add(1).ok_or_else(|| {
-            SearchError::InvalidArgument("SearchFlows page size is too large".into())
-        })?;
-        let limit = i64::try_from(limit).map_err(|_| {
-            SearchError::InvalidArgument("SearchFlows page size is too large".into())
-        })?;
+        let limit = (page_size + 1) as i64;
         let statement = translate_query(
             &query,
-            &request.tenant_id.0.to_string(),
+            &tenant_column_value(request.tenant_id),
             limit,
             cursor.as_ref(),
         )
         .map_err(translation_error)?;
         if let Some(visibility_wait) = &self.visibility_wait {
-            visibility_wait.wait_until_visible(request).await?;
-        }
-        let mut rows = self
-            .client()
-            .query(&statement.sql, &statement.parameter_refs())
+            tokio::time::timeout(
+                self.visibility_wait_timeout,
+                visibility_wait.wait_until_visible(request),
+            )
             .await
-            .map_err(|error| {
-                SearchError::Unavailable(format!("query ParadeDB visibility runs: {error}"))
-            })?;
+            .map_err(|_| {
+                SearchError::Unavailable(format!(
+                    "wait for ParadeDB projection visibility timed out after {:?}",
+                    self.visibility_wait_timeout
+                ))
+            })??;
+        }
+        let mut rows = self.query(&statement).await?;
         let has_next_page = rows.len() > page_size;
         if has_next_page {
             rows.truncate(page_size);
@@ -177,4 +224,24 @@ fn row_position(
 
 fn translation_error(error: SqlTranslationError) -> SearchError {
     SearchError::InvalidArgument(error.to_string())
+}
+
+fn is_connection_error(error: &tokio_postgres::Error) -> bool {
+    error.is_closed()
+        || error.as_db_error().is_some_and(|database_error| {
+            let sqlstate = database_error.code().code();
+            sqlstate.starts_with("08") || sqlstate.starts_with("57P0")
+        })
+}
+
+fn classify_database_error(operation: &str, error: tokio_postgres::Error) -> SearchError {
+    let sqlstate = error
+        .as_db_error()
+        .map_or("none", |database_error| database_error.code().code());
+    let message = format!("{operation} (SQLSTATE {sqlstate}): {error}");
+    if is_connection_error(&error) {
+        SearchError::Unavailable(message)
+    } else {
+        SearchError::Internal(message)
+    }
 }

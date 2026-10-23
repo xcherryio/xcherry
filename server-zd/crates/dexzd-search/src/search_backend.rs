@@ -12,6 +12,9 @@ use dexzd_protocol::dex::SearchFlowsResponseEntry;
 use dexzd_visibility_query::FieldRegistry;
 use thiserror::Error;
 
+pub(crate) const DEFAULT_PAGE_SIZE: usize = 1_000;
+pub(crate) const MAX_PAGE_SIZE: usize = 1_000;
+
 /// Inputs to one tenant-scoped SearchFlows page.
 #[derive(Debug, Clone, Copy)]
 pub struct SearchRequest<'a> {

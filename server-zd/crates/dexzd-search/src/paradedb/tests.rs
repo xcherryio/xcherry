@@ -8,9 +8,12 @@
 
 use std::collections::BTreeMap;
 
-use dexzd_protocol::dex::IndexType;
+use dexzd_keyspace::TenantId;
+use dexzd_protocol::dex::{self, IndexType};
+use dexzd_protocol::dexzd::v1::SearchAttributeValue;
 use dexzd_visibility_query::{SearchDocument, SearchValue};
 
+use super::wire_value::{decode_wire_value, encode_wire_value};
 use super::{MIGRATION_SQL, SearchRow, SearchRowError, SqlValue, upsert_statement};
 
 #[derive(Default)]
@@ -53,6 +56,7 @@ fn migration_has_tenant_first_and_versioned_documents() {
         "sa_number_types",
         "sa_datetime",
         "sa_bool",
+        "sa_wire",
     ] {
         assert!(MIGRATION_SQL.contains(bucket));
     }
@@ -78,7 +82,8 @@ fn maps_typed_attributes_and_binds_upsert_values() {
         ("datetime".into(), IndexType::Datetime),
         ("flag".into(), IndexType::Bool),
     ];
-    let row = SearchRow::from_document("tenant-1", 7, &document, &fields).expect("typed document");
+    let row = SearchRow::from_document(TenantId(1), 7, &document, &fields).expect("typed document");
+    assert_eq!(row.tenant_id, "1");
     assert_eq!(row.sa_keyword.len(), 2);
     assert_eq!(row.sa_text.len(), 1);
     assert_eq!(row.sa_number.len(), 2);
@@ -93,6 +98,7 @@ fn maps_typed_attributes_and_binds_upsert_values() {
     );
     assert_eq!(row.sa_datetime.len(), 1);
     assert_eq!(row.sa_bool.len(), 1);
+    assert!(row.sa_wire.is_empty());
     let statement = upsert_statement(&row);
     assert!(
         statement
@@ -114,13 +120,66 @@ fn maps_typed_attributes_and_binds_upsert_values() {
 }
 
 #[test]
+fn preserves_original_datetime_and_null_wire_values() {
+    let original_datetime = dex::Value {
+        kind: Some(dex::value::Kind::StringValue(
+            "1970-01-01T01:00:01+01:00".into(),
+        )),
+    };
+    let original_null = dex::Value {
+        kind: Some(dex::value::Kind::NullValue(0)),
+    };
+    let row = SearchRow::from_document(TenantId(1), 1, &document(), &[])
+        .expect("typed row")
+        .with_wire_attributes(&[
+            SearchAttributeValue {
+                index_key: "When".into(),
+                index_type: IndexType::Datetime.into(),
+                value: Some(original_datetime.clone()),
+            },
+            SearchAttributeValue {
+                index_key: "Missing".into(),
+                index_type: IndexType::Keyword.into(),
+                value: Some(original_null.clone()),
+            },
+        ])
+        .expect("stored wire values");
+    for (field, expected) in [("When", original_datetime), ("Missing", original_null)] {
+        let Some(SearchValue::String(encoded)) = row.sa_wire.get(field) else {
+            panic!("missing stored wire value for {field}");
+        };
+        assert_eq!(
+            decode_wire_value(field, &serde_json::json!(encoded)).expect("decode wire value"),
+            expected
+        );
+        assert_eq!(
+            encode_wire_value(&expected),
+            SearchValue::String(encoded.clone())
+        );
+    }
+    let error = row
+        .with_wire_attributes(&[SearchAttributeValue {
+            index_key: "Bad".into(),
+            index_type: IndexType::Keyword.into(),
+            value: None,
+        }])
+        .expect_err("missing wire value");
+    assert_eq!(
+        error,
+        SearchRowError::MissingWireValue {
+            field: "Bad".into()
+        }
+    );
+}
+
+#[test]
 fn rejects_missing_and_wrongly_typed_projection_fields() {
-    let missing = SearchRow::from_document("tenant", 1, &Document::default(), &[])
+    let missing = SearchRow::from_document(TenantId(1), 1, &Document::default(), &[])
         .expect_err("missing run ID");
     assert_eq!(missing, SearchRowError::MissingField { field: "RunId" });
     let wrong = document().with("keyword", SearchValue::Int(3));
     let mismatch = SearchRow::from_document(
-        "tenant",
+        TenantId(1),
         1,
         &wrong,
         &[("keyword".into(), IndexType::Keyword)],
@@ -134,7 +193,7 @@ fn rejects_missing_and_wrongly_typed_projection_fields() {
         }
     );
     let collision = SearchRow::from_document(
-        "tenant",
+        TenantId(1),
         1,
         &document(),
         &[("RunId".into(), IndexType::Keyword)],
@@ -149,7 +208,7 @@ fn rejects_missing_and_wrongly_typed_projection_fields() {
     let invalid = document().with("double", SearchValue::Double(f64::NAN));
     assert_eq!(
         SearchRow::from_document(
-            "tenant",
+            TenantId(1),
             1,
             &invalid,
             &[("double".into(), IndexType::Double)]

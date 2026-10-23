@@ -9,11 +9,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use dexzd_keyspace::TenantId;
-use dexzd_protocol::dex::IndexType;
+use dexzd_protocol::dex::{self, IndexType};
+use dexzd_protocol::dexzd::v1::SearchAttributeValue;
 use dexzd_visibility_query::{
     FieldRegistry, SearchDocument, SearchValue, compare_documents, evaluate, parse_and_check,
 };
@@ -21,17 +22,26 @@ use tokio_postgres::NoTls;
 
 use super::{
     MIGRATION_SQL, PageCursor, ParadeDbSearchBackend, ProjectionVisibilityWait, SearchRow,
-    translate_query, upsert_statement,
+    tenant_column_value, translate_query, upsert_statement,
 };
 use crate::{SearchBackend, SearchError, SearchRequest};
 
 struct CountVisibilityWait(AtomicUsize);
+
+struct NeverVisibilityWait;
 
 #[async_trait]
 impl ProjectionVisibilityWait for CountVisibilityWait {
     async fn wait_until_visible(&self, _request: SearchRequest<'_>) -> Result<(), SearchError> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ProjectionVisibilityWait for NeverVisibilityWait {
+    async fn wait_until_visible(&self, _request: SearchRequest<'_>) -> Result<(), SearchError> {
+        std::future::pending().await
     }
 }
 
@@ -60,6 +70,7 @@ fn fields() -> (FieldRegistry, Vec<(String, IndexType)>) {
         ("double".to_owned(), IndexType::Double),
         ("flag".to_owned(), IndexType::Bool),
         ("datetime".to_owned(), IndexType::Datetime),
+        ("nullable".to_owned(), IndexType::Keyword),
     ];
     let mut registry = FieldRegistry::new();
     for (field, index_type) in &application_fields {
@@ -142,7 +153,7 @@ async fn paradedb_matches_builtin_evaluator() {
             )
             .with("text", SearchValue::String("Rust Backend".into()))
             .with("number", SearchValue::Int(5))
-            .with("double", SearchValue::Double(2.0))
+            .with("double", SearchValue::Double(2.5))
             .with("flag", SearchValue::Bool(true)),
         run(
             "r4",
@@ -154,9 +165,11 @@ async fn paradedb_matches_builtin_evaluator() {
         .with("tags", SearchValue::StringArray(Vec::new())),
     ];
     let (registry, application_fields) = fields();
+    let tenant_id = TenantId(1);
+    let tenant_column = tenant_column_value(tenant_id);
     let mut rows = BTreeMap::new();
     for document in &documents {
-        let row = SearchRow::from_document("tenant-a", 1, document, &application_fields)
+        let row = SearchRow::from_document(tenant_id, 1, document, &application_fields)
             .expect("map document");
         let statement = upsert_statement(&row);
         client
@@ -172,7 +185,7 @@ async fn paradedb_matches_builtin_evaluator() {
         1_000_000_000,
         Some(2_000_000_000),
     );
-    let other_row = SearchRow::from_document("tenant-b", 1, &other_tenant, &application_fields)
+    let other_row = SearchRow::from_document(TenantId(2), 1, &other_tenant, &application_fields)
         .expect("map other tenant");
     let statement = upsert_statement(&other_row);
     client
@@ -193,8 +206,8 @@ async fn paradedb_matches_builtin_evaluator() {
             .expect("stale upsert");
     }
     let keyword: String = client.query_one(
-        "SELECT sa_keyword ->> 'keyword' FROM dexzd_visibility_runs WHERE tenant_id = 'tenant-a' AND run_id = 'r1'",
-        &[],
+        "SELECT sa_keyword ->> 'keyword' FROM dexzd_visibility_runs WHERE tenant_id = $1::text AND run_id = 'r1'",
+        &[&tenant_column],
     ).await.expect("read guarded row").get(0);
     assert_eq!(keyword, "red");
 
@@ -242,7 +255,7 @@ async fn paradedb_matches_builtin_evaluator() {
             })
             .collect();
         let statement =
-            translate_query(&query, "tenant-a", 100, None).expect("translate checked query");
+            translate_query(&query, &tenant_column, 100, None).expect("translate checked query");
         let actual = client
             .query(&statement.sql, &statement.parameter_refs())
             .await
@@ -265,7 +278,7 @@ async fn paradedb_matches_builtin_evaluator() {
                 _ => panic!("test run must have an ID"),
             })
             .collect();
-        let first = translate_query(&query, "tenant-a", 2, None).expect("first page");
+        let first = translate_query(&query, &tenant_column, 2, None).expect("first page");
         let first_page = client
             .query(&first.sql, &first.parameter_refs())
             .await
@@ -273,7 +286,7 @@ async fn paradedb_matches_builtin_evaluator() {
         assert_eq!(first_page.len(), 2);
         let last_id: String = first_page[1].get("run_id");
         let cursor = PageCursor::from_row(rows.get(&last_id).expect("cursor row"));
-        let next = translate_query(&query, "tenant-a", 2, Some(&cursor)).expect("next page");
+        let next = translate_query(&query, &tenant_column, 2, Some(&cursor)).expect("next page");
         let next_page = client
             .query(&next.sql, &next.parameter_refs())
             .await
@@ -294,7 +307,7 @@ async fn paradedb_matches_builtin_evaluator() {
             .with("tags", SearchValue::StringArray(vec!["urgent".into()]))
             .with("text", SearchValue::String("Rust Engineer".into()))
             .with("number", SearchValue::Int(7))
-            .with("double", SearchValue::Double(2.5))
+            .with("double", SearchValue::Double(2.0))
             .with("flag", SearchValue::Bool(true))
             .with("datetime", SearchValue::Datetime(1_000_000_000)),
         run(
@@ -305,10 +318,34 @@ async fn paradedb_matches_builtin_evaluator() {
             Some(3_000_000_000),
         )
         .with("keyword", SearchValue::String("blue".into()))
-        .with("number", SearchValue::Int(9)),
+        .with("number", SearchValue::Int(9))
+        .with("datetime", SearchValue::Datetime(2_000_000_000)),
     ] {
-        let row = SearchRow::from_document("1", 1, &document, &application_fields)
+        let row = SearchRow::from_document(tenant_id, 1, &document, &application_fields)
             .expect("map backend fixture");
+        let row = if row.run_id == first_run_id {
+            row.with_wire_attributes(&[
+                SearchAttributeValue {
+                    index_key: "datetime".into(),
+                    index_type: IndexType::Datetime.into(),
+                    value: Some(dex::Value {
+                        kind: Some(dex::value::Kind::StringValue(
+                            "1970-01-01T01:00:01+01:00".into(),
+                        )),
+                    }),
+                },
+                SearchAttributeValue {
+                    index_key: "nullable".into(),
+                    index_type: IndexType::Keyword.into(),
+                    value: Some(dex::Value {
+                        kind: Some(dex::value::Kind::NullValue(0)),
+                    }),
+                },
+            ])
+            .expect("preserve backend wire attributes")
+        } else {
+            row
+        };
         let statement = upsert_statement(&row);
         client
             .execute(&statement.sql, &statement.parameter_refs())
@@ -318,10 +355,16 @@ async fn paradedb_matches_builtin_evaluator() {
     let mut configuration: tokio_postgres::Config =
         database_url.parse().expect("parse CI ParadeDB URL");
     configuration.options(format!("-c search_path={schema_name},public,pdb"));
+    configuration.application_name(&schema_name);
     let visibility_wait = Arc::new(CountVisibilityWait(AtomicUsize::new(0)));
-    let backend = ParadeDbSearchBackend::connect(&configuration, 2, Some(visibility_wait.clone()))
-        .await
-        .expect("connect backend pool");
+    let backend = ParadeDbSearchBackend::connect(
+        &configuration,
+        2,
+        Some(visibility_wait.clone()),
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("connect backend pool");
     let first_page = backend
         .search(SearchRequest {
             tenant_id: TenantId(1),
@@ -340,7 +383,7 @@ async fn paradedb_matches_builtin_evaluator() {
         .map(|attribute| (attribute.key.as_str(), attribute.value.as_ref()))
         .collect();
     for attribute in [
-        "FlowType", "keyword", "tags", "text", "number", "double", "flag", "datetime",
+        "FlowType", "keyword", "tags", "text", "number", "double", "flag", "datetime", "nullable",
     ] {
         assert!(
             returned_attributes
@@ -381,7 +424,11 @@ async fn paradedb_matches_builtin_evaluator() {
     ));
     assert!(matches!(
         returned_attributes["datetime"].and_then(|value| value.kind.as_ref()),
-        Some(Kind::StringValue(value)) if value == "1970-01-01T00:00:01Z"
+        Some(Kind::StringValue(value)) if value == "1970-01-01T01:00:01+01:00"
+    ));
+    assert!(matches!(
+        returned_attributes["nullable"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::NullValue(0))
     ));
     let token = first_page.next_page_token.expect("second backend page");
     let second_page = backend
@@ -396,6 +443,16 @@ async fn paradedb_matches_builtin_evaluator() {
         .expect("second backend page");
     assert_eq!(second_page.entries[0].run_id, second_run_id);
     assert!(second_page.next_page_token.is_none());
+    let second_datetime = second_page.entries[0]
+        .indexed_attributes
+        .iter()
+        .find(|attribute| attribute.key == "datetime")
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| value.kind.as_ref());
+    assert!(matches!(
+        second_datetime,
+        Some(Kind::IntValue(2_000_000_000))
+    ));
     assert_eq!(visibility_wait.0.load(Ordering::Relaxed), 2);
     for (query, expected_run_id) in [
         ("keyword = 'red'", first_run_id),
@@ -477,6 +534,103 @@ async fn paradedb_matches_builtin_evaluator() {
         .await
         .expect("other tenant page");
     assert!(other_tenant.entries.is_empty());
+
+    let stalled_backend = ParadeDbSearchBackend::connect(
+        &configuration,
+        1,
+        Some(Arc::new(NeverVisibilityWait)),
+        Duration::from_millis(50),
+    )
+    .await
+    .expect("connect stalled backend");
+    let stalled_error = stalled_backend
+        .search(SearchRequest {
+            tenant_id,
+            query: "",
+            page_size: 1,
+            page_token: None,
+            field_registry: &registry,
+        })
+        .await
+        .expect_err("stalled visibility wait");
+    assert!(
+        matches!(stalled_error, SearchError::Unavailable(message) if message.contains("timed out"))
+    );
+    drop(stalled_backend);
+
+    let tied_run_id = "00000000-0000-0000-0000-000000000003";
+    let tied_document = run(
+        tied_run_id,
+        "third",
+        "Completed",
+        2_000_000_000,
+        Some(3_000_000_000),
+    );
+    let tied_row = SearchRow::from_document(tenant_id, 1, &tied_document, &application_fields)
+        .expect("map tied backend run");
+    let tied_statement = upsert_statement(&tied_row);
+    client
+        .execute(&tied_statement.sql, &tied_statement.parameter_refs())
+        .await
+        .expect("insert tied backend run");
+    let ordered_query = "ORDER BY CloseTime ASC";
+    let mut ordered_token = None;
+    let mut ordered_ids = Vec::new();
+    loop {
+        let page = backend
+            .search(SearchRequest {
+                tenant_id,
+                query: ordered_query,
+                page_size: 1,
+                page_token: ordered_token.as_deref(),
+                field_registry: &registry,
+            })
+            .await
+            .expect("ordered backend page");
+        ordered_ids.extend(page.entries.into_iter().map(|entry| entry.run_id));
+        ordered_token = page.next_page_token;
+        if ordered_token.is_none() {
+            break;
+        }
+    }
+    assert_eq!(ordered_ids, [second_run_id, tied_run_id, first_run_id]);
+
+    let terminated = client
+        .query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1::text AND pid <> pg_backend_pid()",
+            &[&schema_name],
+        )
+        .await
+        .expect("terminate backend pool connections");
+    assert!(terminated.len() >= 2);
+    assert!(terminated.iter().all(|row| row.get::<_, bool>(0)));
+    let recovered = backend
+        .search(SearchRequest {
+            tenant_id,
+            query: "",
+            page_size: 10,
+            page_token: None,
+            field_registry: &registry,
+        })
+        .await
+        .expect("reconnect terminated backend connection");
+    assert_eq!(recovered.entries.len(), 3);
+
+    client
+        .batch_execute("DROP TABLE dexzd_visibility_runs")
+        .await
+        .expect("remove visibility table");
+    let database_error = backend
+        .search(SearchRequest {
+            tenant_id,
+            query: "",
+            page_size: 1,
+            page_token: None,
+            field_registry: &registry,
+        })
+        .await
+        .expect_err("missing visibility table");
+    assert!(matches!(database_error, SearchError::Internal(message) if message.contains("42P01")));
     drop(backend);
 
     client

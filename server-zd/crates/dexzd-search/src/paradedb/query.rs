@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::{SearchRow, SqlStatement, SqlValue};
 
-pub(super) const SELECT_COLUMNS: &str = "tenant_id, run_id, workflow_id, workflow_type, flow_type, execution_status, start_time_ns, close_time_ns, dex_parent_flow_id, active_step_types, dex_work_queue_permissions, version, sa_keyword::text AS sa_keyword, sa_text::text AS sa_text, sa_number::text AS sa_number, sa_number_types::text AS sa_number_types, sa_datetime::text AS sa_datetime, sa_bool::text AS sa_bool";
+pub(super) const SELECT_COLUMNS: &str = "tenant_id, run_id, workflow_id, workflow_type, flow_type, execution_status, start_time_ns, close_time_ns, dex_parent_flow_id, active_step_types, dex_work_queue_permissions, version, sa_keyword::text AS sa_keyword, sa_text::text AS sa_text, sa_number::text AS sa_number, sa_number_types::text AS sa_number_types, sa_datetime::text AS sa_datetime, sa_bool::text AS sa_bool, sa_wire::text AS sa_wire";
 pub(super) const DEFAULT_ORDER: &str = "ORDER BY is_running DESC, close_time_ns DESC NULLS LAST, start_time_ns DESC, run_id COLLATE \"C\" ASC";
 
 /// Keyset position for one returned run.
@@ -86,7 +86,7 @@ pub fn translate_query(
         sql.push_str(" AND tenant_id @@@ pdb.term($1::text)");
     }
     if let Some(cursor) = cursor {
-        let cursor_sql = renderer.render_cursor(query, cursor);
+        let cursor_sql = renderer.render_cursor(query, cursor)?;
         sql.push_str(" AND (");
         sql.push_str(&cursor_sql);
         sql.push(')');
@@ -375,16 +375,20 @@ impl Renderer {
         }
     }
 
-    fn render_cursor(&mut self, query: &Query, cursor: &PageCursor) -> String {
+    fn render_cursor(
+        &mut self,
+        query: &Query,
+        cursor: &PageCursor,
+    ) -> Result<String, SqlTranslationError> {
         let run_id = self.bind(SqlValue::Text(cursor.run_id.clone()), "text");
         match query.order_by() {
             None => {
                 let running = self.bind(SqlValue::Bool(cursor.is_running), "boolean");
                 let close = self.bind(SqlValue::OptionalInt(cursor.close_time_ns), "bigint");
                 let start = self.bind(SqlValue::Int(cursor.start_time_ns), "bigint");
-                format!(
+                Ok(format!(
                     "is_running < {running} OR (is_running = {running} AND ((close_time_ns IS NULL AND {close} IS NOT NULL) OR close_time_ns < {close} OR (close_time_ns IS NOT DISTINCT FROM {close} AND (start_time_ns < {start} OR (start_time_ns = {start} AND run_id COLLATE \"C\" > {run_id})))))"
-                )
+                ))
             }
             Some(("StartTime", direction)) => {
                 let start = self.bind(SqlValue::Int(cursor.start_time_ns), "bigint");
@@ -393,9 +397,9 @@ impl Renderer {
                 } else {
                     "<"
                 };
-                format!(
+                Ok(format!(
                     "start_time_ns {operator} {start} OR (start_time_ns = {start} AND run_id COLLATE \"C\" > {run_id})"
-                )
+                ))
             }
             Some(("CloseTime", direction)) => {
                 let close = self.bind(SqlValue::OptionalInt(cursor.close_time_ns), "bigint");
@@ -404,11 +408,13 @@ impl Renderer {
                 } else {
                     "<"
                 };
-                format!(
+                Ok(format!(
                     "(close_time_ns IS NULL AND {close} IS NOT NULL) OR (close_time_ns {operator} {close}) OR (close_time_ns IS NOT DISTINCT FROM {close} AND run_id COLLATE \"C\" > {run_id})"
-                )
+                ))
             }
-            Some(_) => unreachable!("checked queries only sort by StartTime or CloseTime"),
+            Some((field, _)) => Err(SqlTranslationError::Unsupported {
+                feature: format!("ORDER BY {field}"),
+            }),
         }
     }
 }

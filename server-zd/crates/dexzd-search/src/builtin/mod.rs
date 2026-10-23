@@ -28,14 +28,11 @@ use dexzd_visibility_query::{
 
 use self::document::IndexedDocument;
 use crate::page_token::PagePosition;
+use crate::search_backend::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 /// Default maximum number of indexed documents examined by one builtin search.
 pub const DEFAULT_SCAN_BUDGET: usize = 100_000;
-/// Default SearchFlows page size when the caller supplies zero.
-pub const DEFAULT_PAGE_SIZE: usize = 1_000;
-/// Largest SearchFlows page the builtin backend will allocate.
-pub const MAX_PAGE_SIZE: usize = 1_000;
 
 /// Opens a consistent committed state view for each SearchFlows request.
 pub trait CommittedSearchViewProvider: Send + Sync {
