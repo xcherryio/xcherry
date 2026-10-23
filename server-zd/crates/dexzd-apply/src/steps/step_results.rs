@@ -247,6 +247,7 @@ pub(crate) fn apply_attempt_failed(
             step.phase = StepExecutionPhase::Failed as i32;
             step.completed_seq = cursor.seq;
             step.invocation = None;
+            wait_conditions::release_condition_results(transaction, cursor, &mut step)?;
             cursor.rows.put_step_execution(transaction, &step);
             let message = format!(
                 "Step execution {} failed after {} attempts: {}",
@@ -426,6 +427,7 @@ pub(crate) fn apply_method_completed(
                 cursor,
                 &mut step,
                 &effects,
+                scope.now_micros,
             )? {
                 return Ok(StepCommandOutcome::RejectedResult(rejection));
             }
@@ -451,6 +453,7 @@ pub(crate) fn apply_method_completed(
                 cursor,
                 &mut step,
                 &effects,
+                scope.now_micros,
             )? {
                 return Ok(StepCommandOutcome::RejectedResult(rejection));
             }

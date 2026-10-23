@@ -22,18 +22,19 @@ use dexzd_keyspace::{
 };
 use dexzd_protocol::dex::{
     CloseDecision, CloseDecisionType, FlowConfig, FlowStatus, FlowTimeoutPolicy,
-    InvokeExecuteMethodResponse, StartFlowRequest, StepDecision, StepOptions, StopFlowRequest,
-    StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, Value, WorkerTarget, value,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, StartFlowRequest, StepDecision,
+    StepOptions, StopFlowRequest, StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy,
+    Value, WaitingCondition, WaitingConditionType, WorkerTarget, value,
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand, FlowStartCommand, FlowStopCommand,
     FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
     HardDeleteObjectsDeletedCommand, InboxMessageCommand, OutboxAckCommand, OutboxRecord,
     OutboxRetentionTimerId, ParentFlowReference, RunPurgeCommand, RunRecord, RunSettings,
-    StepAttemptFailedCommand, StepAttemptStartedCommand, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, SubFlowResultRecord, TimerId, TimersFiredCommand, command_reply,
-    flow_command::Command, inbox_message_command, outbox_record, step_method_completed_command,
-    timer_id,
+    StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord,
+    StepInvocationKey, StepMethod, StepMethodCompletedCommand, SubFlowResultRecord, TimerId,
+    TimersFiredCommand, command_reply, flow_command::Command, inbox_message_command, outbox_record,
+    step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -237,6 +238,27 @@ impl Harness {
         RunRecord::decode(bytes.as_slice()).expect("run decodes")
     }
 
+    fn step(
+        &self,
+        flow_id: &str,
+        run_id: [u8; 16],
+        step_execution_id: &str,
+    ) -> StepExecutionRecord {
+        let flow_hash = self.hasher.flow_hash(TenantId::DEFAULT, flow_id);
+        let key = run_named_key(
+            flow_hash,
+            RunId(run_id),
+            RunTable::StepExecution,
+            step_execution_id,
+        );
+        let bytes = self
+            .state
+            .get(ColumnFamily::Flow, &key)
+            .expect("memory reads")
+            .expect("Step exists");
+        StepExecutionRecord::decode(bytes.as_slice()).expect("Step decodes")
+    }
+
     fn outbox(&self, flow_id: &str, run_id: [u8; 16]) -> Vec<OutboxRecord> {
         let flow_hash = self.hasher.flow_hash(TenantId::DEFAULT, flow_id);
         let prefix = run_table_prefix(flow_hash, RunId(run_id), RunTable::Outbox);
@@ -247,6 +269,17 @@ impl Harness {
             .into_iter()
             .map(|(_, bytes)| OutboxRecord::decode(bytes.as_slice()).expect("outbox decodes"))
             .collect()
+    }
+
+    fn has_holder_kind(&self, flow_id: &str, run_id: [u8; 16], holder_kind: u8) -> bool {
+        let flow_hash = self.hasher.flow_hash(TenantId::DEFAULT, flow_id);
+        let prefix = run_table_prefix(flow_hash, RunId(run_id), RunTable::ValueHolder);
+        let (start, end) = prefix_range(&prefix);
+        self.state
+            .scan(ColumnFamily::Flow, &start, &end, usize::MAX)
+            .expect("memory reads")
+            .iter()
+            .any(|(key, _)| key[prefix.len() + 12] == holder_kind)
     }
 
     fn deliver_completion(&mut self, outbox: &OutboxRecord) -> ApplyOutcome {
@@ -309,6 +342,151 @@ fn assert_ok(outcome: &ApplyOutcome) {
         outcome.reply.reply,
         Some(command_reply::Reply::Ok(_))
     ));
+}
+
+#[test]
+fn wait_for_starts_child_and_completion_wakes_parent() {
+    let mut harness = Harness::new();
+    harness.start_parent();
+    let step_execution_id = "StartStep-1";
+    let invocation = StepInvocationKey {
+        step_execution_id: step_execution_id.to_owned(),
+        method: StepMethod::WaitFor as i32,
+    };
+    assert_ok(&harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::StepAttemptStarted(StepAttemptStartedCommand {
+            invocation: Some(invocation.clone()),
+            attempt: 1,
+            task_id: vec![9; 16],
+        }),
+    ));
+    let input_text = "child input".repeat(100);
+    let wait = harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::StepMethodCompleted(StepMethodCompletedCommand {
+            invocation: Some(invocation),
+            attempt: 1,
+            response: Some(step_method_completed_command::Response::WaitFor(
+                InvokeWaitForMethodResponse {
+                    waiting_condition: Some(WaitingCondition {
+                        waiting_condition_type: WaitingConditionType::AllCompleted as i32,
+                        sub_flow_conditions: vec![SubFlowCondition {
+                            condition_id: "child".to_owned(),
+                            sub_flow_type: "ChildFlow".to_owned(),
+                            start_step_type: "ChildStep".to_owned(),
+                            step_input: Some(Value {
+                                kind: Some(value::Kind::StringValue(input_text.clone())),
+                            }),
+                            step_options: Some(StepOptions {
+                                skip_wait_for: true,
+                                ..StepOptions::default()
+                            }),
+                            ..SubFlowCondition::default()
+                        }],
+                        ..WaitingCondition::default()
+                    }),
+                    ..InvokeWaitForMethodResponse::default()
+                },
+            )),
+            ..StepMethodCompletedCommand::default()
+        }),
+    );
+    assert_ok(&wait);
+    let mut starts = harness.outbox("parent", PARENT_RUN);
+    assert_eq!(starts.len(), 1);
+    let start = starts.remove(0);
+    assert_eq!(start.message_id.len(), 16);
+    let outbox_record::Payload::ChildStart(start_message) = start.payload.clone().expect("payload")
+    else {
+        panic!("WaitFor writes a child start")
+    };
+    assert_eq!(start_message.child_flow_id, CHILD_ID);
+    assert_eq!(
+        start_message.request_id,
+        format!("{}:1:StartStep-1:0", RunId(PARENT_RUN))
+    );
+    assert_eq!(start_message.parent, Some(parent_reference()));
+    assert_eq!(
+        start_message
+            .flow_config
+            .as_ref()
+            .and_then(|config| config.worker_target.as_ref()),
+        Some(&pull_worker())
+    );
+    assert_eq!(
+        start_message
+            .condition
+            .as_ref()
+            .and_then(|condition| condition.step_input.as_ref()),
+        Some(&Value {
+            kind: Some(value::Kind::StringValue(input_text)),
+        })
+    );
+    assert_eq!(start.held_values.len(), 1);
+    let delivered = harness.apply(
+        CHILD_ID,
+        &[],
+        Command::InboxMessage(InboxMessageCommand {
+            message_id: start.message_id.clone(),
+            source: start_message
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.parent.clone()),
+            payload: Some(inbox_message_command::Payload::ChildStart(start_message)),
+            new_run_id: FIRST_CHILD_RUN.to_vec(),
+            settings: Some(settings()),
+        }),
+    );
+    assert!(matches!(
+        delivered.reply.reply,
+        Some(command_reply::Reply::StartFlow(_))
+    ));
+    harness.apply(
+        CHILD_ID,
+        &FIRST_CHILD_RUN,
+        Command::FlowStop(FlowStopCommand {
+            request: Some(StopFlowRequest {
+                stop_type: StopType::Terminate as i32,
+                ..StopFlowRequest::default()
+            }),
+        }),
+    );
+    let completed = harness.outbox(CHILD_ID, FIRST_CHILD_RUN);
+    assert_eq!(completed.len(), 1);
+    assert_ok(&harness.deliver_completion(&completed[0]));
+    let step = harness.step("parent", PARENT_RUN, step_execution_id);
+    assert_eq!(step.phase, StepExecutionPhase::Execute as i32);
+    let results = step.condition_results.expect("wait completed");
+    assert_eq!(results.sub_flow_results.len(), 1);
+    assert_eq!(
+        results.sub_flow_results[0].flow_status,
+        FlowStatus::Terminated as i32
+    );
+    assert!(harness.has_holder_kind("parent", PARENT_RUN, 0x0c));
+    assert_ok(&harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::OutboxAck(OutboxAckCommand {
+            message_ids: vec![start.message_id.clone()],
+        }),
+    ));
+    harness.now_micros += 24 * 3600 * SECOND;
+    assert_ok(&harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::TimersFired(TimersFiredCommand {
+            timers: vec![TimerId {
+                run_attempt: 0,
+                kind: Some(timer_id::Kind::OutboxRetention(OutboxRetentionTimerId {
+                    message_id: start.message_id,
+                })),
+            }],
+        }),
+    ));
+    assert!(!harness.has_holder_kind("parent", PARENT_RUN, 0x0c));
 }
 
 #[test]

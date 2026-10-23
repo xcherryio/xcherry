@@ -311,6 +311,12 @@ fn apply_child_completed(
         },
     );
     put_inbox_dedup(transaction, rows, source, &command.message_id, cursor.seq);
+    crate::steps::wait_conditions::on_child_result(
+        transaction,
+        &mut cursor,
+        scope,
+        &completed.child_flow_id,
+    )?;
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,
         scope,

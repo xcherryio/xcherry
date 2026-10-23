@@ -17,7 +17,7 @@ pub(crate) mod flow_close;
 pub(crate) mod flow_data;
 pub(crate) mod flow_start;
 pub(crate) mod run_cursor;
-mod step_commands;
+pub(crate) mod step_commands;
 
 pub(crate) use command_replies::unimplemented_reply;
 pub(crate) use command_scope::{CommandScope, HandlerOutput};
@@ -144,7 +144,10 @@ fn apply_run_command(
                 deleted,
             )
         }
-        Command::RpcCommitted(_) | Command::TimerSkip(_) | Command::TimeTravel(_) => {
+        Command::TimerSkip(skip) => {
+            crate::steps::wait_conditions::apply_timer_skip(transaction, cursor, scope, skip)
+        }
+        Command::RpcCommitted(_) | Command::TimeTravel(_) => {
             Ok(HandlerResult::Rejected(unimplemented_reply(scope)))
         }
         Command::InboxMessage(_) | Command::RunPurge(_) => Err(ApplyError::InvariantViolation {
