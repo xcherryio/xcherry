@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use dexzd_clock::WallClock;
+use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use tokio::time::{Instant, sleep, timeout_at};
 use xxhash_rust::xxh3::xxh3_128;
@@ -70,6 +71,8 @@ pub async fn recover_stream_from(
             "invalid stream position, epoch, or writer process ID".into(),
         ));
     }
+    validate_node_identifier(&stream.node_id)
+        .map_err(|error| LogError::Invalid(error.to_string()))?;
     if effective_epoch_at_start >= new_epoch {
         return Err(LogError::Fenced);
     }
@@ -98,35 +101,45 @@ pub async fn recover_stream_from(
     }
     let deadline = Instant::now() + RECOVERY_WRITE_DEADLINE;
     let mut backoff = Duration::from_millis(10);
+    let mut encoded_seq = 0;
+    let mut body = bytes::Bytes::new();
+    let mut ours = 0;
     loop {
         if Instant::now() >= deadline {
             return Err(LogError::Deadline);
         }
         let key = stream.batch_key(seq);
-        let epoch_start = BatchContent {
-            stream: stream.clone(),
-            epoch: new_epoch,
-            seq,
-            sealed_at_unix_micros: clock.now_unix_micros(),
-            records: Vec::new(),
-            epoch_start_writer: Some(writer_process_id.to_owned()),
-        };
-        let body = encode_batch(&epoch_start)?;
-        let ours = xxh3_128(&body[..body.len() - 16]);
-        let should_read_back =
-            match timeout_at(deadline, store.put(&key, body, WriteCondition::CreateOnly)).await {
-                Err(_) => return Err(LogError::Deadline),
-                Ok(write_result) => match write_result {
-                    Ok(WriteOutcome::Written { .. }) => {
-                        result.epoch_start_seq = seq;
-                        return finish_epoch_start(store, stream, new_epoch, result).await;
-                    }
-                    Ok(WriteOutcome::PreconditionFailed) => true,
-                    Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => true,
-                    Err(error) if error.kind == ObjectStoreErrorKind::Transient => false,
-                    Err(error) => return Err(error.into()),
-                },
+        if encoded_seq != seq {
+            let epoch_start = BatchContent {
+                stream: stream.clone(),
+                epoch: new_epoch,
+                seq,
+                sealed_at_unix_micros: clock.now_unix_micros(),
+                records: Vec::new(),
+                epoch_start_writer: Some(writer_process_id.to_owned()),
             };
+            body = encode_batch(&epoch_start)?;
+            ours = xxh3_128(&body[..body.len() - 16]);
+            encoded_seq = seq;
+        }
+        let should_read_back = match timeout_at(
+            deadline,
+            store.put(&key, body.clone(), WriteCondition::CreateOnly),
+        )
+        .await
+        {
+            Err(_) => return Err(LogError::Deadline),
+            Ok(write_result) => match write_result {
+                Ok(WriteOutcome::Written { .. }) => {
+                    result.epoch_start_seq = seq;
+                    return finish_epoch_start(store, stream, new_epoch, result).await;
+                }
+                Ok(WriteOutcome::PreconditionFailed) => true,
+                Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => true,
+                Err(error) if error.kind == ObjectStoreErrorKind::Transient => false,
+                Err(error) => return Err(error.into()),
+            },
+        };
         if should_read_back {
             match timeout_at(deadline, store.get(&key)).await {
                 Err(_) => return Err(LogError::Deadline),

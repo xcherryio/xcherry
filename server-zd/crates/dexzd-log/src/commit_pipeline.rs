@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_clock::WallClock;
+use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -20,7 +21,8 @@ use tokio::time::{Instant, sleep, sleep_until, timeout, timeout_at};
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::batch_codec::{
-    BatchContent, BatchRecord, LogError, StreamIdentity, decode_batch, encode_batch,
+    BatchContent, BatchRecord, LogError, MAX_RECORD_LENGTH, MAX_UNCOMPRESSED_FRAME_LENGTH,
+    StreamIdentity, decode_batch, encode_batch, encoded_record_length,
 };
 use crate::stream_recovery::validate_batch_identity;
 
@@ -57,8 +59,11 @@ pub struct ProposalTicket {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProposalFailure {
+    /// A newer writer owns the stream.
     Fenced,
+    /// An older writer raced with this batch; recover before retrying.
     Restart,
+    /// The write outcome may be unknown; recover before retrying.
     Unavailable,
 }
 
@@ -98,6 +103,8 @@ impl CommitPipeline {
                 "invalid commit pipeline configuration".into(),
             ));
         }
+        validate_node_identifier(&stream.node_id)
+            .map_err(|error| LogError::Invalid(error.to_string()))?;
         let (proposals, receiver) = mpsc::channel(config.max_in_flight * 2);
         let (committed_sender, committed_receiver) = mpsc::channel(config.max_in_flight * 2);
         let admission = Arc::new(Semaphore::new(config.max_pending_bytes as usize));
@@ -128,9 +135,15 @@ impl CommitPipeline {
         record: Bytes,
         waits_for_commit: bool,
     ) -> Result<ProposalTicket, LogError> {
-        let requested = u32::try_from(record.len().max(1)).map_err(|_| LogError::Retryable)?;
+        if record.len() > MAX_RECORD_LENGTH {
+            return Err(LogError::Invalid("record exceeds maximum length".into()));
+        }
+        let requested = u32::try_from(record.len().max(1))
+            .map_err(|_| LogError::Invalid("record exceeds maximum length".into()))?;
         if requested > self.config.max_pending_bytes {
-            return Err(LogError::Retryable);
+            return Err(LogError::Invalid(
+                "record exceeds pending byte capacity".into(),
+            ));
         }
         let permit = timeout(
             self.config.admission_timeout,
@@ -177,12 +190,26 @@ struct PendingBatch {
     proposals: Vec<Proposal>,
     bytes: usize,
     has_waiter: bool,
+    partition_frame_bytes: BTreeMap<u32, usize>,
 }
 
 impl PendingBatch {
+    fn can_accept(&self, proposal: &Proposal) -> bool {
+        self.partition_frame_bytes
+            .get(&proposal.partition)
+            .copied()
+            .unwrap_or(0)
+            + encoded_record_length(proposal.record.len())
+            <= MAX_UNCOMPRESSED_FRAME_LENGTH
+    }
+
     fn add(&mut self, proposal: Proposal) {
         self.bytes += proposal.record.len();
         self.has_waiter |= proposal.waits_for_commit;
+        *self
+            .partition_frame_bytes
+            .entry(proposal.partition)
+            .or_default() += encoded_record_length(proposal.record.len());
         self.proposals.push(proposal);
     }
 
@@ -301,6 +328,12 @@ async fn run_pipeline(
             maybe_proposal = receiver.recv(), if !receiver_closed => {
                 match maybe_proposal {
                     Some(proposal) => {
+                        if !open.is_empty() && (!open.can_accept(&proposal)
+                            || open.bytes.saturating_add(proposal.record.len()) > config.target_batch_bytes)
+                        {
+                            ready.push_back(std::mem::take(&mut open));
+                            open_deadline = None;
+                        }
                         if open.is_empty() { open_deadline = Some(Instant::now() + config.batch_window); }
                         open.add(proposal);
                     }
@@ -368,7 +401,12 @@ async fn run_pipeline(
                         return;
                     }
                     for proposal in finished.batch.proposals {
-                        let _send_result = proposal.sender.send(Ok(seq));
+                        if proposal.sender.send(Ok(seq)).is_err() {
+                            tracing::debug!(
+                                ticket_id = proposal.id,
+                                "proposal ticket receiver dropped"
+                            );
+                        }
                         drop(proposal.permit);
                     }
                 }
@@ -424,7 +462,9 @@ fn fail_all(
 
 fn fail_batch(batch: PendingBatch, failure: ProposalFailure) {
     for proposal in batch.proposals {
-        let _send_result = proposal.sender.send(Err(failure));
+        if proposal.sender.send(Err(failure)).is_err() {
+            tracing::debug!(ticket_id = proposal.id, "proposal ticket receiver dropped");
+        }
         drop(proposal.permit);
     }
 }
