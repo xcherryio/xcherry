@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::sync::RwLock;
 
 use dexzd_keyspace::ColumnFamily;
@@ -122,12 +123,14 @@ impl LocalReadView for InMemoryLocalStore {
 impl LocalStore for InMemoryLocalStore {
     fn write(&self, batch: WriteBatch) -> StorageResult<()> {
         for operation in batch.operations() {
-            if let WriteOperation::DeleteRange { start, end, .. } = operation
+            if let WriteOperation::DeleteRange { cf, start, end } = operation
                 && start >= end
             {
-                return Err(StorageError::Invalid(
-                    "range delete requires start < end".into(),
-                ));
+                return Err(StorageError::InvalidRange {
+                    cf: *cf,
+                    start: start.clone(),
+                    end: end.clone(),
+                });
             }
         }
         let mut maps = self
@@ -159,7 +162,7 @@ impl LocalStore for InMemoryLocalStore {
         Ok(())
     }
 
-    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + '_>> {
+    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + Send + Sync + '_>> {
         let maps = self
             .maps
             .read()
@@ -215,10 +218,12 @@ fn scan_map(
     direction: ScanDirection,
     limit: usize,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let rows = map.iter().filter(|(key, _)| {
-        start.is_none_or(|bound| key.as_slice() >= bound)
-            && end.is_none_or(|bound| key.as_slice() < bound)
-    });
+    if start.zip(end).is_some_and(|(start, end)| start >= end) {
+        return Vec::new();
+    }
+    let lower = start.map_or(Bound::Unbounded, |key| Bound::Included(key.to_vec()));
+    let upper = end.map_or(Bound::Unbounded, |key| Bound::Excluded(key.to_vec()));
+    let rows = map.range((lower, upper));
     match direction {
         ScanDirection::Forward => rows
             .take(limit)

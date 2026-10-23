@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use dexzd_keyspace::ColumnFamily;
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Direction,
-    IteratorMode, Options, Snapshot, WriteOptions,
+    IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
 };
 
 use crate::local_store::{
@@ -21,6 +21,7 @@ use crate::local_store::{
 
 #[derive(Debug, Clone, Copy)]
 pub struct RocksDbStoreOptions {
+    /// Shared LRU block-cache capacity across all column families; defaults to 128 MiB.
     pub block_cache_bytes: usize,
 }
 
@@ -47,30 +48,20 @@ impl RocksDbLocalStore {
         let mut db_options = Options::default();
         db_options.create_if_missing(true);
         db_options.create_missing_column_families(true);
-        let cache = Cache::new_lru_cache(options.block_cache_bytes);
-        let descriptors = ColumnFamily::ALL.into_iter().map(|cf| {
-            let mut cf_options = Options::default();
-            cf_options.set_compression_type(DBCompressionType::Lz4);
-            let mut block_options = BlockBasedOptions::default();
-            block_options.set_block_cache(&cache);
-            cf_options.set_block_based_table_factory(&block_options);
-            if cf == ColumnFamily::Value {
-                cf_options.set_enable_blob_files(true);
-                cf_options.set_min_blob_size(64 * 1024);
-                cf_options.set_enable_blob_gc(true);
-            }
-            ColumnFamilyDescriptor::new(cf.name(), cf_options)
-        });
-        let db = DB::open_cf_descriptors(&db_options, path.as_ref(), descriptors)?;
+        let db = DB::open_cf_descriptors(
+            &db_options,
+            path.as_ref(),
+            column_family_descriptors(options),
+        )?;
         let store = Self {
             db,
             path: path.as_ref().to_path_buf(),
         };
         if store.node_meta()?.is_none() {
             if !is_new_store {
-                return Err(StorageError::Invalid(
-                    "existing RocksDB has no node metadata".into(),
-                ));
+                return Err(StorageError::MissingNodeMetadata {
+                    path: path.as_ref().to_path_buf(),
+                });
             }
             store.put_node_meta(&new_node_meta())?;
         }
@@ -84,6 +75,20 @@ impl RocksDbLocalStore {
     pub(crate) fn checkpoint(&self, directory: &Path) -> StorageResult<()> {
         rocksdb::checkpoint::Checkpoint::new(&self.db)?.create_checkpoint(directory)?;
         Ok(())
+    }
+
+    pub(crate) fn open_checkpoint_read_view(
+        directory: &Path,
+    ) -> StorageResult<RocksCheckpointView> {
+        let db = DB::open_cf_descriptors_read_only(
+            &Options::default(),
+            directory,
+            column_family_descriptors(RocksDbStoreOptions {
+                block_cache_bytes: 1024 * 1024,
+            }),
+            false,
+        )?;
+        Ok(RocksCheckpointView { db })
     }
 
     fn cf_handle(&self, cf: ColumnFamily) -> &impl rocksdb::AsColumnFamilyRef {
@@ -107,10 +112,14 @@ impl LocalReadView for RocksDbLocalStore {
         limit: usize,
     ) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
         scan_rocksdb(
-            self.db
-                .iterator_cf(self.cf_handle(cf), iterator_mode(start, end, direction)),
+            self.db.iterator_cf_opt(
+                self.cf_handle(cf),
+                read_options(start, end),
+                iterator_mode(start, end, direction),
+            ),
             start,
             end,
+            direction,
             limit,
         )
     }
@@ -129,9 +138,11 @@ impl LocalStore for RocksDbLocalStore {
                 }
                 WriteOperation::DeleteRange { cf, start, end } => {
                     if start >= end {
-                        return Err(StorageError::Invalid(
-                            "range delete requires start < end".into(),
-                        ));
+                        return Err(StorageError::InvalidRange {
+                            cf: *cf,
+                            start: start.clone(),
+                            end: end.clone(),
+                        });
                     }
                     rocks_batch.delete_range_cf(self.cf_handle(*cf), start, end);
                 }
@@ -143,7 +154,7 @@ impl LocalStore for RocksDbLocalStore {
         Ok(())
     }
 
-    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + '_>> {
+    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + Send + Sync + '_>> {
         Ok(Box::new(RocksView {
             store: self,
             snapshot: self.db.snapshot(),
@@ -170,15 +181,87 @@ impl LocalReadView for RocksView<'_> {
         limit: usize,
     ) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
         scan_rocksdb(
-            self.snapshot.iterator_cf(
+            self.snapshot.iterator_cf_opt(
                 self.store.cf_handle(cf),
+                read_options(start, end),
                 iterator_mode(start, end, direction),
             ),
             start,
             end,
+            direction,
             limit,
         )
     }
+}
+
+pub(crate) struct RocksCheckpointView {
+    db: DB,
+}
+
+impl LocalReadView for RocksCheckpointView {
+    fn get(&self, cf: ColumnFamily, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        let handle = self
+            .db
+            .cf_handle(cf.name())
+            .expect("checkpoint column family exists");
+        Ok(self.db.get_cf(handle, key)?)
+    }
+
+    fn scan(
+        &self,
+        cf: ColumnFamily,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        direction: ScanDirection,
+        limit: usize,
+    ) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let handle = self
+            .db
+            .cf_handle(cf.name())
+            .expect("checkpoint column family exists");
+        scan_rocksdb(
+            self.db.iterator_cf_opt(
+                handle,
+                read_options(start, end),
+                iterator_mode(start, end, direction),
+            ),
+            start,
+            end,
+            direction,
+            limit,
+        )
+    }
+}
+
+fn column_family_descriptors(options: RocksDbStoreOptions) -> Vec<ColumnFamilyDescriptor> {
+    let cache = Cache::new_lru_cache(options.block_cache_bytes);
+    ColumnFamily::ALL
+        .into_iter()
+        .map(|cf| {
+            let mut cf_options = Options::default();
+            cf_options.set_compression_type(DBCompressionType::Lz4);
+            let mut block_options = BlockBasedOptions::default();
+            block_options.set_block_cache(&cache);
+            cf_options.set_block_based_table_factory(&block_options);
+            if cf == ColumnFamily::Value {
+                cf_options.set_enable_blob_files(true);
+                cf_options.set_min_blob_size(64 * 1024);
+                cf_options.set_enable_blob_gc(true);
+            }
+            ColumnFamilyDescriptor::new(cf.name(), cf_options)
+        })
+        .collect()
+}
+
+fn read_options(start: Option<&[u8]>, end: Option<&[u8]>) -> ReadOptions {
+    let mut options = ReadOptions::default();
+    if let Some(start) = start {
+        options.set_iterate_lower_bound(start);
+    }
+    if let Some(end) = end {
+        options.set_iterate_upper_bound(end);
+    }
+    options
 }
 
 fn iterator_mode<'a>(
@@ -200,6 +283,7 @@ fn scan_rocksdb(
     iterator: rocksdb::DBIterator<'_>,
     start: Option<&[u8]>,
     end: Option<&[u8]>,
+    direction: ScanDirection,
     limit: usize,
 ) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut rows = Vec::new();
@@ -208,9 +292,16 @@ fn scan_rocksdb(
     }
     for result in iterator {
         let (key, value) = result?;
-        if start.is_some_and(|bound| key.as_ref() < bound)
-            || end.is_some_and(|bound| key.as_ref() >= bound)
-        {
+        if start.is_some_and(|bound| key.as_ref() < bound) {
+            if direction == ScanDirection::Reverse {
+                break;
+            }
+            continue;
+        }
+        if end.is_some_and(|bound| key.as_ref() >= bound) {
+            if direction == ScanDirection::Forward {
+                break;
+            }
             continue;
         }
         rows.push((key.to_vec(), value.to_vec()));

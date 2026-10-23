@@ -8,17 +8,19 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use dexzd_keyspace::{ColumnFamily, PartitionId};
 use dexzd_object_store::{
-    ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreResult,
-    WriteCondition, WriteOutcome,
+    ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
+    ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
-use dexzd_protocol::dexzd::v1::{LogPosition, PartitionMeta};
+use dexzd_protocol::dexzd::v1::{LogPosition, PartitionMeta, PendingHardDeleteUpload};
+use prost::Message;
 
 use crate::{
     InMemoryLocalStore, LocalReadView, LocalStore, RestoredLocalStore, RocksDbLocalStore,
@@ -30,6 +32,10 @@ use crate::{
 struct TestObjectStore {
     objects: Mutex<BTreeMap<String, Vec<u8>>>,
     uploads: Mutex<Vec<String>>,
+    reads: AtomicUsize,
+    hidden_head_once: Mutex<Option<String>>,
+    unknown_put_once: Mutex<Option<String>>,
+    update_node_meta_once: Mutex<Option<Arc<InMemoryLocalStore>>>,
 }
 
 impl TestObjectStore {
@@ -47,6 +53,31 @@ impl TestObjectStore {
             .lock()
             .expect("test upload lock is not poisoned")
             .len()
+    }
+
+    fn object_reads(&self) -> usize {
+        self.reads.load(Ordering::Relaxed)
+    }
+
+    fn hide_head_once(&self, key: &str) {
+        *self
+            .hidden_head_once
+            .lock()
+            .expect("test fault lock is not poisoned") = Some(key.to_owned());
+    }
+
+    fn fail_put_after_write_once(&self, key: &str) {
+        *self
+            .unknown_put_once
+            .lock()
+            .expect("test fault lock is not poisoned") = Some(key.to_owned());
+    }
+
+    fn update_node_meta_on_next_file(&self, store: Arc<InMemoryLocalStore>) {
+        *self
+            .update_node_meta_once
+            .lock()
+            .expect("test fault lock is not poisoned") = Some(store);
     }
 }
 
@@ -89,11 +120,44 @@ impl ObjectStore for TestObjectStore {
                 .lock()
                 .expect("test upload lock is not poisoned")
                 .push(key.to_owned());
+            let update_store = self
+                .update_node_meta_once
+                .lock()
+                .expect("test fault lock is not poisoned")
+                .take();
+            if let Some(store) = update_store {
+                let mut meta = store
+                    .node_meta()
+                    .expect("node metadata reads")
+                    .expect("node metadata exists");
+                meta.pending_hard_delete_uploads
+                    .push(PendingHardDeleteUpload {
+                        object_key: "pending".into(),
+                        uploaded_at_unix_micros: 11,
+                    });
+                store
+                    .put_node_meta(&meta)
+                    .expect("node metadata update writes");
+            }
+            let mut unknown = self
+                .unknown_put_once
+                .lock()
+                .expect("test fault lock is not poisoned");
+            if unknown.as_deref() == Some(key) {
+                unknown.take();
+                return Err(ObjectStoreError::new(
+                    ObjectStoreOperation::Put,
+                    key,
+                    ObjectStoreErrorKind::OutcomeUnknown,
+                    "injected response loss",
+                ));
+            }
         }
         Ok(outcome)
     }
 
     async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
         Ok(self
             .objects
             .lock()
@@ -139,11 +203,25 @@ impl ObjectStore for TestObjectStore {
     }
 
     async fn head(&self, key: &str) -> ObjectStoreResult<Option<ObjectMetadata>> {
-        Ok(self.get(key).await?.map(|content| ObjectMetadata {
-            key: key.to_owned(),
-            size: content.object_size,
-            etag: content.etag,
-        }))
+        let mut hidden = self
+            .hidden_head_once
+            .lock()
+            .expect("test fault lock is not poisoned");
+        if hidden.as_deref() == Some(key) {
+            hidden.take();
+            return Ok(None);
+        }
+        drop(hidden);
+        Ok(self
+            .objects
+            .lock()
+            .expect("test object store lock is not poisoned")
+            .get(key)
+            .map(|value| ObjectMetadata {
+                key: key.to_owned(),
+                size: value.len() as u64,
+                etag: value.len().to_string(),
+            }))
     }
 
     async fn delete(&self, key: &str) -> ObjectStoreResult<()> {
@@ -204,6 +282,7 @@ fn exercise_store(store: &dyn LocalStore) {
         .lineage_id;
     assert_eq!(original_lineage.len(), 16);
     let mut batch = WriteBatch::new();
+    batch.put(ColumnFamily::Flow, b"0".to_vec(), b"before".to_vec());
     batch.put(ColumnFamily::Flow, b"a".to_vec(), b"one".to_vec());
     batch.put(ColumnFamily::History, b"a".to_vec(), b"history".to_vec());
     batch.put(ColumnFamily::Flow, b"b".to_vec(), b"two".to_vec());
@@ -211,6 +290,7 @@ fn exercise_store(store: &dyn LocalStore) {
     batch.put(ColumnFamily::Flow, b"pre/a".to_vec(), b"first".to_vec());
     batch.put(ColumnFamily::Flow, b"pre/b".to_vec(), b"second".to_vec());
     batch.put(ColumnFamily::Flow, b"pre/c".to_vec(), b"third".to_vec());
+    batch.put(ColumnFamily::Flow, b"z".to_vec(), b"after".to_vec());
     store
         .write(batch)
         .expect("multi-column-family batch writes");
@@ -257,6 +337,34 @@ fn exercise_store(store: &dyn LocalStore) {
                 .expect("reverse scan")
         ),
         vec![b"b".to_vec(), b"a".to_vec()]
+    );
+    assert_eq!(
+        keys(
+            store
+                .scan(
+                    ColumnFamily::Flow,
+                    Some(b"a"),
+                    Some(b"c"),
+                    ScanDirection::Forward,
+                    1
+                )
+                .expect("bounded forward scan")
+        ),
+        vec![b"a".to_vec()]
+    );
+    assert_eq!(
+        keys(
+            store
+                .scan(
+                    ColumnFamily::Flow,
+                    Some(b"a"),
+                    Some(b"c"),
+                    ScanDirection::Reverse,
+                    1
+                )
+                .expect("bounded reverse scan")
+        ),
+        vec![b"b".to_vec()]
     );
     assert_eq!(
         keys(
@@ -374,6 +482,7 @@ fn set_partition_meta(store: &impl LocalStore) {
             }),
             last_command_timestamp_micros: 20,
             last_behavior_version: 1,
+            applied_epoch: 3,
         })
         .expect("partition metadata writes");
     assert_eq!(
@@ -413,6 +522,7 @@ async fn rocksdb_snapshot_restores_all_column_families_and_changes_lineage() {
         .await
         .expect("snapshot uploads");
     assert_eq!(manifest.partition_positions.len(), 1);
+    assert_eq!(manifest.partition_positions[0].applied_epoch, 3);
     assert_eq!(
         manifest.partition_positions[0]
             .applied
@@ -448,6 +558,14 @@ async fn rocksdb_snapshot_restores_all_column_families_and_changes_lineage() {
         store
             .partition_meta(PartitionId(4))
             .expect("partition metadata reads")
+    );
+    assert_eq!(
+        restored
+            .partition_meta(PartitionId(4))
+            .expect("partition metadata reads")
+            .expect("partition metadata exists")
+            .applied_epoch,
+        3
     );
     assert_ne!(
         restored
@@ -501,6 +619,120 @@ async fn memory_snapshot_restores_and_changes_lineage() {
 }
 
 #[tokio::test]
+async fn snapshot_preserves_node_metadata_written_during_upload() {
+    let store = Arc::new(InMemoryLocalStore::new());
+    let object_store = TestObjectStore::default();
+    object_store.update_node_meta_on_next_file(Arc::clone(&store));
+    create_snapshot(store.as_ref(), &object_store, &identity(10), 1)
+        .await
+        .expect("snapshot uploads");
+    let meta = store
+        .node_meta()
+        .expect("node metadata reads")
+        .expect("node metadata exists");
+    assert_eq!(meta.last_snapshot_number, 1);
+    assert_eq!(meta.pending_hard_delete_uploads.len(), 1);
+    assert_eq!(meta.pending_hard_delete_uploads[0].object_key, "pending");
+}
+
+#[tokio::test]
+async fn snapshots_reject_invalid_node_identifiers() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let store = InMemoryLocalStore::new();
+    let object_store = TestObjectStore::default();
+    for node_id in ["A", "a.b"] {
+        let mut invalid_identity = identity(10);
+        invalid_identity.node_id = node_id.to_owned();
+        assert!(matches!(
+            create_snapshot(&store, &object_store, &invalid_identity, 1).await,
+            Err(crate::StorageError::NodeIdentifier(_))
+        ));
+    }
+    let lineage_id = store
+        .node_meta()
+        .expect("metadata reads")
+        .expect("metadata exists")
+        .lineage_id;
+    assert!(matches!(
+        retain_snapshots(&object_store, "a.b", &lineage_id, 3, Duration::ZERO, 10).await,
+        Err(crate::StorageError::NodeIdentifier(_))
+    ));
+    let (manifest_key, mut manifest) = create_snapshot(&store, &object_store, &identity(10), 1)
+        .await
+        .expect("valid snapshot uploads");
+    manifest.node_id = "a.b".into();
+    object_store
+        .objects
+        .lock()
+        .expect("test object store lock is not poisoned")
+        .insert(manifest_key.clone(), manifest.encode_to_vec());
+    assert!(matches!(
+        restore_snapshot(
+            &object_store,
+            &manifest_key,
+            &directory.path().join("invalid-node"),
+            RocksDbStoreOptions::default()
+        )
+        .await,
+        Err(crate::StorageError::NodeIdentifier(_))
+    ));
+}
+
+fn memory_snapshot_file(store: &InMemoryLocalStore, snapshot_number: u64) -> (String, Vec<u8>) {
+    let bytes = store.serialize().expect("memory snapshot serializes");
+    let lineage = store
+        .node_meta()
+        .expect("metadata reads")
+        .expect("metadata exists")
+        .lineage_id;
+    let lineage = uuid::Uuid::from_slice(&lineage).expect("lineage is UUID");
+    let file_name = format!("memory-{snapshot_number:020}.store");
+    let checksum = xxhash_rust::xxh3::xxh3_64(&bytes);
+    (
+        format!("snapshot/node-a/{lineage}/files/{file_name}.{checksum:016x}"),
+        bytes,
+    )
+}
+
+#[tokio::test]
+async fn create_snapshot_checks_conditional_write_races() {
+    let store = InMemoryLocalStore::new();
+    let object_store = TestObjectStore::default();
+    let (key, bytes) = memory_snapshot_file(&store, 1);
+    object_store
+        .objects
+        .lock()
+        .expect("test object store lock is not poisoned")
+        .insert(key.clone(), vec![0; bytes.len()]);
+    object_store.hide_head_once(&key);
+    assert!(matches!(
+        create_snapshot(&store, &object_store, &identity(10), 1).await,
+        Err(crate::StorageError::SnapshotObjectMismatch { .. })
+    ));
+
+    let identical_store = InMemoryLocalStore::new();
+    let identical_objects = TestObjectStore::default();
+    let (identical_key, identical_bytes) = memory_snapshot_file(&identical_store, 1);
+    identical_objects
+        .objects
+        .lock()
+        .expect("test object store lock is not poisoned")
+        .insert(identical_key.clone(), identical_bytes);
+    identical_objects.hide_head_once(&identical_key);
+    create_snapshot(&identical_store, &identical_objects, &identity(10), 1)
+        .await
+        .expect("identical object after 412 is accepted");
+
+    let unknown_store = InMemoryLocalStore::new();
+    let unknown_objects = TestObjectStore::default();
+    let (unknown_key, _) = memory_snapshot_file(&unknown_store, 1);
+    unknown_objects.fail_put_after_write_once(&unknown_key);
+    create_snapshot(&unknown_store, &unknown_objects, &identity(10), 1)
+        .await
+        .expect("unknown write outcome is reconciled");
+}
+
+#[tokio::test]
 async fn incremental_snapshot_reuses_files_and_rejects_corruption() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let store =
@@ -530,22 +762,90 @@ async fn incremental_snapshot_reuses_files_and_rejects_corruption() {
         .iter()
         .find(|file| file.relative_path.ends_with(".sst"))
         .expect("snapshot has SST file");
+    let original = object_store
+        .get(&corrupted_file.object_key)
+        .await
+        .expect("file reads")
+        .expect("file exists")
+        .bytes
+        .to_vec();
     object_store.corrupt(&corrupted_file.object_key);
     let manifest_key = format!(
         "snapshot/node-a/{}/manifest/{:020}",
         uuid::Uuid::from_slice(&second.lineage_id).expect("lineage is UUID"),
         second.snapshot_number
     );
+    let restore_directory = directory.path().join("corrupt-restore");
     assert!(
         restore_snapshot(
             &object_store,
             &manifest_key,
-            &directory.path().join("corrupt-restore"),
+            &restore_directory,
             RocksDbStoreOptions::default()
         )
         .await
         .is_err()
     );
+    object_store
+        .objects
+        .lock()
+        .expect("test object store lock is not poisoned")
+        .insert(corrupted_file.object_key.clone(), original);
+    let restored = restore_snapshot(
+        &object_store,
+        &manifest_key,
+        &restore_directory,
+        RocksDbStoreOptions::default(),
+    )
+    .await
+    .expect("retry restores after corruption is repaired");
+    assert!(matches!(restored, RestoredLocalStore::RocksDb(_)));
+}
+
+#[tokio::test]
+async fn repeated_rocksdb_snapshots_preserve_immutable_file_identity() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let store =
+        RocksDbLocalStore::open(directory.path().join("db"), RocksDbStoreOptions::default())
+            .expect("RocksDB opens");
+    let object_store = TestObjectStore::default();
+    for snapshot_number in 1..=20 {
+        let mut batch = WriteBatch::new();
+        for key_number in 0..2000 {
+            batch.put(
+                ColumnFamily::Flow,
+                format!("{snapshot_number:02}-{key_number:04}").into_bytes(),
+                vec![snapshot_number as u8; 128],
+            );
+        }
+        batch.put(
+            ColumnFamily::Value,
+            format!("value-{snapshot_number:02}").into_bytes(),
+            vec![snapshot_number as u8; 128 * 1024],
+        );
+        store.write(batch).expect("round writes");
+        let reads_before = object_store.object_reads();
+        let (_, manifest) = create_snapshot(
+            &store,
+            &object_store,
+            &identity(snapshot_number as i64),
+            snapshot_number,
+        )
+        .await
+        .expect("repeated snapshot uploads");
+        assert_eq!(object_store.object_reads(), reads_before);
+        for file in manifest.files.iter().filter(|file| {
+            file.relative_path.ends_with(".sst") || file.relative_path.ends_with(".blob")
+        }) {
+            let content = object_store
+                .get(&file.object_key)
+                .await
+                .expect("object read succeeds")
+                .expect("snapshot file exists");
+            assert_eq!(content.object_size, file.size_bytes);
+            assert_eq!(xxhash_rust::xxh3::xxh3_64(&content.bytes), file.xxh3_64);
+        }
+    }
 }
 
 #[tokio::test]
@@ -618,4 +918,75 @@ async fn retention_deletes_old_manifests_and_unreferenced_files_after_delay() {
                 .is_some()
         );
     }
+}
+
+#[tokio::test]
+async fn rocksdb_retention_preserves_shared_ssts_and_deletes_unreferenced_files() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let store =
+        RocksDbLocalStore::open(directory.path().join("db"), RocksDbStoreOptions::default())
+            .expect("RocksDB opens");
+    let object_store = TestObjectStore::default();
+    let mut batch = WriteBatch::new();
+    batch.put(ColumnFamily::Flow, b"stable".to_vec(), b"value".to_vec());
+    batch.put(ColumnFamily::History, b"old".to_vec(), b"history".to_vec());
+    store.write(batch).expect("state writes");
+    let mut manifests = Vec::new();
+    for snapshot_number in 1..=5 {
+        let (_, manifest) = create_snapshot(
+            &store,
+            &object_store,
+            &identity(snapshot_number as i64 * 10),
+            snapshot_number,
+        )
+        .await
+        .expect("snapshot uploads");
+        manifests.push(manifest);
+    }
+    let retained_files: std::collections::BTreeSet<&str> = manifests[2..]
+        .iter()
+        .flat_map(|manifest| manifest.files.iter().map(|file| file.object_key.as_str()))
+        .collect();
+    let shared_sst = manifests[0]
+        .files
+        .iter()
+        .find(|file| {
+            file.relative_path.ends_with(".sst")
+                && retained_files.contains(file.object_key.as_str())
+        })
+        .expect("stable SST remains referenced");
+    let obsolete_file = manifests[..2]
+        .iter()
+        .flat_map(|manifest| manifest.files.iter())
+        .find(|file| !retained_files.contains(file.object_key.as_str()))
+        .expect("old checkpoint file loses all references");
+    let lineage_id = store
+        .node_meta()
+        .expect("metadata reads")
+        .expect("metadata exists")
+        .lineage_id;
+    retain_snapshots(
+        &object_store,
+        "node-a",
+        &lineage_id,
+        3,
+        Duration::from_micros(20),
+        100,
+    )
+    .await
+    .expect("retention succeeds");
+    assert!(
+        object_store
+            .head(&shared_sst.object_key)
+            .await
+            .expect("head succeeds")
+            .is_some()
+    );
+    assert!(
+        object_store
+            .head(&obsolete_file.object_key)
+            .await
+            .expect("head succeeds")
+            .is_none()
+    );
 }
