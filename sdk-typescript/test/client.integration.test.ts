@@ -272,6 +272,7 @@ test("Client maps typed calls and hydrates blob-backed outputs", async () => {
       callback(null, {
         flowExecutionId: { flowId: "failed", runId: "run-failed" },
         firstRunId: "run-failed",
+        runAttempt: 0,
         requestId: "request-failed",
         flowType: "TestFlow",
         flowStatus: FlowStatus.FLOW_STATUS_FAILED,
