@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 bytes.workspace = true
+dexzd-clock.workspace = true
 dexzd-keyspace.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
@@ -21,6 +22,7 @@ xxhash-rust.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
