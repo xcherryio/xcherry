@@ -1,0 +1,87 @@
+# Set cluster.nodeId, objectStore.bucket, and localStorage.directory for production; dev flags supply local values.
+cluster:
+  nodeId: ""
+  partitionCount: 1024
+objectStore:
+  endpoint: ""
+  region: us-east-1
+  bucket: ""
+  prefix: ""
+  forcePathStyle: false
+  credentialsSource: defaultChain
+  hardDeleteStore: null
+localStorage:
+  directory: ""
+  blockCacheBytes: 268435456
+commit:
+  batchWindow: 20ms
+  maxInFlight: 4
+  sealAtBytes: 4194304
+  multipartThresholdBytes: 8388608
+lease:
+  duration: 10s
+  failIfHeld: false
+snapshot:
+  logThresholdBytes: 268435456
+  interval: 10min
+  retainedCount: 3
+  logDeletionDelay: 24h
+history:
+  windowSemanticEvents: 10000
+  pruneChunkSize: 1000
+  checkpointMinWrittenBytes: 1048576
+  checkpointCommandInterval: 10000
+  maxRetainedSupersededBytes: 268435456
+values:
+  wireInlineThresholdBytes: 100
+  maxValueBytes: 16777216
+  hydrateBeforeDispatch: false
+  blobDbMinValueBytes: 65536
+retention:
+  closedFlowDuration: 7days
+api:
+  listen: "0.0.0.0:8801"
+  grpcMaxMessageBytes: 33554432
+  maxWaitSeconds: 60
+  defaultRpcTimeout: 60s
+matching:
+  dispatchWait: 10s
+  stickyWait: 5s
+  maxConcurrentTasksCap: 256
+  maxStreams: 100000
+  maxQueueLength: 256
+  maxFlowTypes: 256
+  maxFlowTypeLength: 256
+  pingInterval: 20s
+streamStore:
+  backend: disabled
+  maxMessageBytes: 102400
+  maxReadMessages: 1000
+  estimatedMessageOverheadBytes: 512
+  trimTriggerPercent: 90
+  trimTargetPercent: 80
+  backgroundTrimBatchSize: 256
+  trimBatchYieldTime: 1ms
+  trimWorkers: 4
+search:
+  backend: builtin
+  builtinScanBudgetDocuments: 100000
+  paradeDbConnectionString: ""
+  paradeDbConnectionPoolSize: 10
+  paradeDbSchema: public
+  readYourWritesWait: 2s
+limits:
+  maxFlowStateBytes: 67108864
+  maxChannelMessages: 10000
+  maxConcurrentStepsPerFlow: 1000
+  maxSpeculativeCommandsPerFlow: 256
+  maxSpeculativeBytesPerNode: 67108864
+  maxLongPollWaitersPerNode: 100000
+  maxLongPollWaitersPerFlow: 1000
+  maxRequestIdsPerRun: 1000
+  maxFlowIdBytes: 1000
+dev:
+  dataDirectory: ""
+  s3DataDirectory: ""
+  durabilityMode: relaxed
+  logDirectory: null

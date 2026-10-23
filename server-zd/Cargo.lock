@@ -978,12 +978,14 @@ version = "0.1.0"
 name = "dexzd-cluster-metadata"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "dexzd-clock",
  "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-protocol",
  "prost",
+ "rand 0.10.3",
  "thiserror",
  "tokio",
  "tracing",
@@ -1045,7 +1047,9 @@ dependencies = [
 name = "dexzd-log"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "dexzd-clock",
  "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-protocol",
@@ -1065,6 +1069,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytes",
+ "s3mock",
  "s3mock-server",
  "tempfile",
  "thiserror",
@@ -1113,6 +1118,7 @@ dependencies = [
  "dexzd-api",
  "dexzd-clock",
  "dexzd-engine",
+ "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-storage",
  "humantime-serde",
@@ -1150,6 +1156,8 @@ dependencies = [
 name = "dexzd-storage"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "dexzd-apply",
  "dexzd-keyspace",
  "dexzd-object-store",
@@ -1161,6 +1169,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1168,6 +1177,7 @@ name = "dexzd-stream-store"
 version = "0.1.0"
 dependencies = [
  "dexzd-protocol",
+ "prost",
  "thiserror",
  "tokio",
  "tracing",

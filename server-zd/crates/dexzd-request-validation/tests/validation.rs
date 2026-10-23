@@ -21,10 +21,7 @@ use dexzd_request_validation::{
 };
 
 fn config() -> ValidationConfig {
-    let mut config = ValidationConfig {
-        minimum_step_heartbeat_timeout: Duration::from_secs(10),
-        ..ValidationConfig::default()
-    };
+    let mut config = ValidationConfig::default();
     config.default_flow_config.worker_target = Some(WorkerTarget {
         is_pull_mode: true,
         ..WorkerTarget::default()
@@ -78,6 +75,14 @@ fn assert_worker_invalid(
         "expected {expected:?}, got {error:?}"
     );
     assert!(!error.field_path.is_empty());
+}
+
+fn assert_waiting_invalid(result: Result<(), ValidationError>, expected: &str) {
+    assert_worker_invalid(
+        result,
+        expected,
+        ValidationCategory::RetryableWorkerResponse,
+    );
 }
 
 #[test]
@@ -366,7 +371,13 @@ fn worker_responses_reject_blob_values_and_bad_decisions() {
         ..InvokeWaitForMethodResponse::default()
     };
     assert_worker_invalid(
-        validate_worker_response(WorkerResponse::WaitFor(Some(&wait_for)), &config),
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&wait_for),
+                parent_flow_config: &config.default_flow_config,
+            },
+            &config,
+        ),
         "internal_blob_id",
         ValidationCategory::RetryableWorkerResponse,
     );
@@ -442,8 +453,8 @@ fn waiting_conditions_port_go_cases_and_subflow_rejections() {
         }],
         ..WaitingCondition::default()
     };
-    assert_invalid(
-        validate_waiting_condition(Some(&waiting), &config),
+    assert_waiting_invalid(
+        validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config),
         "negative duration_seconds",
     );
     waiting.timer_conditions.clear();
@@ -453,8 +464,8 @@ fn waiting_conditions_port_go_cases_and_subflow_rejections() {
         at_most: Some(1),
         ..ChannelCondition::default()
     });
-    assert_invalid(
-        validate_waiting_condition(Some(&waiting), &config),
+    assert_waiting_invalid(
+        validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config),
         "at_most 1 < at_least 2",
     );
     waiting.channel_conditions.clear();
@@ -462,8 +473,8 @@ fn waiting_conditions_port_go_cases_and_subflow_rejections() {
     waiting.condition_combinations.push(ConditionCombination {
         condition_ids: vec!["missing".into()],
     });
-    assert_invalid(
-        validate_waiting_condition(Some(&waiting), &config),
+    assert_waiting_invalid(
+        validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config),
         "undeclared condition_id",
     );
 
@@ -481,7 +492,9 @@ fn waiting_conditions_port_go_cases_and_subflow_rejections() {
         sub_flow_conditions: vec![subflow],
         ..WaitingCondition::default()
     };
-    let error = validate_waiting_condition(Some(&waiting), &config).expect_err("delay unsupported");
+    let error = validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config)
+        .expect_err("delay unsupported");
+    assert_eq!(error.category, ValidationCategory::RetryableWorkerResponse);
     assert!(error.message.starts_with("server-zd does not support"));
 
     let subflow = SubFlowCondition {
@@ -499,10 +512,13 @@ fn waiting_conditions_port_go_cases_and_subflow_rejections() {
         ..WaitingCondition::default()
     };
     let error = validate_worker_response(
-        WorkerResponse::WaitFor(Some(&InvokeWaitForMethodResponse {
-            waiting_condition: Some(waiting),
-            ..InvokeWaitForMethodResponse::default()
-        })),
+        WorkerResponse::WaitFor {
+            response: Some(&InvokeWaitForMethodResponse {
+                waiting_condition: Some(waiting),
+                ..InvokeWaitForMethodResponse::default()
+            }),
+            parent_flow_config: &config.default_flow_config,
+        },
         &config,
     )
     .expect_err("retry unsupported");
@@ -646,7 +662,13 @@ fn worker_blob_and_channel_validation_covers_all_written_values() {
     ];
     for response in cases {
         assert_worker_invalid(
-            validate_worker_response(WorkerResponse::WaitFor(Some(&response)), &config),
+            validate_worker_response(
+                WorkerResponse::WaitFor {
+                    response: Some(&response),
+                    parent_flow_config: &config.default_flow_config,
+                },
+                &config,
+            ),
             "internal_blob_id",
             ValidationCategory::RetryableWorkerResponse,
         );
@@ -656,7 +678,13 @@ fn worker_blob_and_channel_validation_covers_all_written_values() {
         ..InvokeWaitForMethodResponse::default()
     };
     assert_worker_invalid(
-        validate_worker_response(WorkerResponse::WaitFor(Some(&response)), &config),
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&response),
+                parent_flow_config: &config.default_flow_config,
+            },
+            &config,
+        ),
         "Channel publication at index 0 is invalid",
         ValidationCategory::RetryableWorkerResponse,
     );
@@ -665,7 +693,13 @@ fn worker_blob_and_channel_validation_covers_all_written_values() {
         ..InvokeWaitForMethodResponse::default()
     };
     assert_worker_invalid(
-        validate_worker_response(WorkerResponse::WaitFor(Some(&response)), &config),
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&response),
+                parent_flow_config: &config.default_flow_config,
+            },
+            &config,
+        ),
         "Channel deletion at index 0 is invalid",
         ValidationCategory::RetryableWorkerResponse,
     );
@@ -700,7 +734,13 @@ fn subflow_target_and_nested_failure_policy_are_rejected() {
         ..InvokeWaitForMethodResponse::default()
     };
     assert_worker_invalid(
-        validate_worker_response(WorkerResponse::WaitFor(Some(&response)), &config),
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&response),
+                parent_flow_config: &config.default_flow_config,
+            },
+            &config,
+        ),
         "server-zd does not support Worker target addresses",
         ValidationCategory::RetryableWorkerResponse,
     );
@@ -724,7 +764,13 @@ fn subflow_target_and_nested_failure_policy_are_rejected() {
         ..InvokeWaitForMethodResponse::default()
     };
     assert_worker_invalid(
-        validate_worker_response(WorkerResponse::WaitFor(Some(&response)), &config),
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&response),
+                parent_flow_config: &config.default_flow_config,
+            },
+            &config,
+        ),
         "server-zd does not support",
         ValidationCategory::NonRetryableWorkerResponse,
     );
@@ -897,9 +943,164 @@ fn waiting_condition_ids_and_server_owned_timer_state_are_rejected() {
         ),
     ];
     for (waiting, expected) in conditions {
-        assert_invalid(
-            validate_waiting_condition(Some(&waiting), &config),
+        assert_waiting_invalid(
+            validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config),
             expected,
         );
     }
+}
+
+#[test]
+fn subflow_inherits_parent_effective_flow_config() {
+    let mut config = ValidationConfig::default();
+    config.attribute_store_names.insert("parent-store".into());
+    let parent_flow_config = FlowConfig {
+        worker_target: Some(WorkerTarget {
+            is_pull_mode: true,
+            ..WorkerTarget::default()
+        }),
+        attribute_store_names: Some(dex::AttributeStoreNames {
+            names: vec!["parent-store".into()],
+        }),
+        ..FlowConfig::default()
+    };
+    let waiting = WaitingCondition {
+        waiting_condition_type: dex::WaitingConditionType::AllCompleted as i32,
+        sub_flow_conditions: vec![SubFlowCondition {
+            sub_flow_type: "ChildFlow".into(),
+            start_step_type: "StartStep".into(),
+            ..SubFlowCondition::default()
+        }],
+        ..WaitingCondition::default()
+    };
+    assert!(validate_waiting_condition(Some(&waiting), &parent_flow_config, &config).is_ok());
+    let response = InvokeWaitForMethodResponse {
+        waiting_condition: Some(waiting),
+        ..InvokeWaitForMethodResponse::default()
+    };
+    assert!(
+        validate_worker_response(
+            WorkerResponse::WaitFor {
+                response: Some(&response),
+                parent_flow_config: &parent_flow_config,
+            },
+            &config,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn default_heartbeat_minimum_matches_go_server() {
+    let config = ValidationConfig::default();
+    assert_eq!(
+        config.minimum_step_heartbeat_timeout,
+        Duration::from_secs(10)
+    );
+    let response = InvokeExecuteMethodResponse {
+        step_decision: Some(StepDecision {
+            next_steps: vec![StepMovement {
+                step_type: "NextStep".into(),
+                step_options: Some(StepOptions {
+                    heartbeat_timeout_seconds: 1,
+                    ..StepOptions::default()
+                }),
+                ..StepMovement::default()
+            }],
+            ..StepDecision::default()
+        }),
+        ..InvokeExecuteMethodResponse::default()
+    };
+    assert_worker_invalid(
+        validate_worker_response(WorkerResponse::Execute(Some(&response)), &config),
+        "heartbeat timeout must be zero or at least 10s",
+        ValidationCategory::RetryableWorkerResponse,
+    );
+
+    let mut zero_minimum = config;
+    zero_minimum.minimum_step_heartbeat_timeout = Duration::ZERO;
+    let mut request = start_request();
+    request.step_options = Some(StepOptions {
+        heartbeat_timeout_seconds: -1,
+        ..StepOptions::default()
+    });
+    let mut request_config = zero_minimum;
+    request_config.default_flow_config.worker_target = Some(WorkerTarget {
+        is_pull_mode: true,
+        ..WorkerTarget::default()
+    });
+    assert_invalid(
+        validate_client_request(ClientRequest::StartFlow(&request), &request_config),
+        "heartbeat timeout must be zero or at least 0s",
+    );
+}
+
+#[test]
+fn timeout_handler_failure_target_requires_proceed_policy() {
+    let config = config();
+    for failure_policy in [
+        dex::ExecuteMethodFailurePolicy::Unspecified as i32,
+        dex::ExecuteMethodFailurePolicy::FailFlowOnExecuteMethodFailure as i32,
+    ] {
+        let handler = FlowTimeoutHandlerOptions {
+            failure_policy,
+            failure_proceed_step_options: Some(StepOptions::default()),
+            ..FlowTimeoutHandlerOptions::default()
+        };
+        let mut request = start_request();
+        request.flow_timeout_seconds = 10;
+        request.flow_timeout_policy = dex::FlowTimeoutPolicy::Handler as i32;
+        request.flow_start_options = Some(FlowStartOptions {
+            timeout_handler_options: Some(handler.clone()),
+            ..FlowStartOptions::default()
+        });
+        assert_invalid(
+            validate_client_request(ClientRequest::StartFlow(&request), &config),
+            "Flow timeout handler failure target requires the proceed policy",
+        );
+
+        let waiting = WaitingCondition {
+            waiting_condition_type: dex::WaitingConditionType::AllCompleted as i32,
+            sub_flow_conditions: vec![SubFlowCondition {
+                sub_flow_type: "ChildFlow".into(),
+                start_step_type: "StartStep".into(),
+                options: Some(SubFlowOptions {
+                    flow_timeout_seconds: 10,
+                    flow_timeout_policy: dex::FlowTimeoutPolicy::Handler as i32,
+                    timeout_handler_options: Some(handler),
+                    ..SubFlowOptions::default()
+                }),
+                ..SubFlowCondition::default()
+            }],
+            ..WaitingCondition::default()
+        };
+        assert_waiting_invalid(
+            validate_waiting_condition(Some(&waiting), &config.default_flow_config, &config),
+            "Flow timeout handler failure target requires the proceed policy",
+        );
+    }
+}
+
+#[test]
+fn unsupported_step_type_takes_priority_over_reserved_characters() {
+    let config = config();
+    let response = InvokeExecuteMethodResponse {
+        step_decision: Some(StepDecision {
+            next_steps: vec![StepMovement {
+                step_type: "NextStep".into(),
+                step_options: Some(StepOptions {
+                    execute_failure_proceed_step_type: "a/b".into(),
+                    ..StepOptions::default()
+                }),
+                ..StepMovement::default()
+            }],
+            ..StepDecision::default()
+        }),
+        ..InvokeExecuteMethodResponse::default()
+    };
+    assert_worker_invalid(
+        validate_worker_response(WorkerResponse::Execute(Some(&response)), &config),
+        "server-zd does not support execute_failure_proceed_step_type",
+        ValidationCategory::NonRetryableWorkerResponse,
+    );
 }
