@@ -54,6 +54,8 @@ message ValueRecord {
 message ValueBirthRecord {
   uint64 size_bytes = 1;
   uint64 written_seq = 2;
+  // Seq at which the value lost its last holder (its key in table G); zero while held.
+  uint64 garbage_seq = 3;
 }
 
 // Row of RunTable::ValueGarbage (table G), keyed by (lost_last_holder_seq, value ID).
@@ -126,6 +128,8 @@ message RunRecord {
   // True after retention expired and the prefix purge started.
   bool is_purging = 27;
   int64 retention_deadline_micros = 28;
+  // A Step returned GracefulComplete; the attempt completes once no user Step is active.
+  bool is_graceful_completion_requested = 29;
 }
 
 // Close details of a closed attempt.

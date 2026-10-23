@@ -9,8 +9,10 @@
 //! Read access to stored state for apply, and the transaction that buffers apply's writes.
 
 mod flow_transaction;
+mod run_rows;
 
 pub(crate) use flow_transaction::FlowTransaction;
+pub(crate) use run_rows::{RunRows, read_flow_directory, write_flow_directory};
 
 use dexzd_keyspace::ColumnFamily;
 
