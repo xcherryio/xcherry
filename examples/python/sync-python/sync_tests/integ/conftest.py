@@ -48,22 +48,21 @@ def sync_app(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SyncExampleAp
         worker_mode=read_worker_mode_from_environment(),
     )
     app = SyncExampleApp(config)
-    if config.worker_mode.is_pull:
-        # Pull registration fails without a server, so probe first to keep the skip.
-        is_server_ready = _server_is_ready(app.client)
-        if is_server_ready:
-            app.start_worker()
-    else:
-        app.start_worker()
-        is_server_ready = _server_is_ready(app.client)
-    if not is_server_ready:
-        app.close()
-        pytest.skip(
-            "no Dex server at "
-            f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to run "
-            "sync-python integ tests"
-        )
     try:
+        if config.worker_mode.is_pull:
+            # Pull registration fails without a server, so probe first to keep the skip.
+            is_server_ready = _server_is_ready(app.client)
+            if is_server_ready:
+                app.start_worker()
+        else:
+            app.start_worker()
+            is_server_ready = _server_is_ready(app.client)
+        if not is_server_ready:
+            pytest.skip(
+                "no Dex server at "
+                f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to run "
+                "sync-python integ tests"
+            )
         yield app
     finally:
         app.close()

@@ -45,7 +45,6 @@ pub(crate) struct FlowSmokeEntry {
     pub path: &'static str,
     pub query: HashMap<String, String>,
     pub flags: FlowSmokeFlags,
-    pub server_zd_unsupported_feature: Option<&'static str>,
 }
 
 pub(crate) struct FlowSmokeHttpClient {

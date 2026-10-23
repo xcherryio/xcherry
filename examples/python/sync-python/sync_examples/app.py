@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 import threading
 import time
@@ -90,6 +91,7 @@ class SyncExampleApp:
             ),
         )
         self._worker_thread: threading.Thread | None = None
+        self._is_closed = False
 
     @property
     def client(self) -> Client:
@@ -101,20 +103,38 @@ class SyncExampleApp:
         return self._client
 
     def start_worker(self) -> None:
+        """Starts the Worker thread, closing this app if startup fails.
+
+        Raises:
+            BaseException: The original startup or registration error.
+        """
         if self._worker_thread is not None:
             return
-        self._worker_thread = threading.Thread(
-            target=self.worker.start,
-            name="dex-sync-example-worker",
-            daemon=True,
-        )
-        self._worker_thread.start()
-        if self.config.worker_mode.is_pull:
-            self.worker.wait_pull_registered(timeout=PULL_REGISTRATION_TIMEOUT_SECONDS)
-            return
-        _await_worker(self.worker.worker_target.address)
+        try:
+            self._worker_thread = threading.Thread(
+                target=self.worker.start,
+                name="dex-sync-example-worker",
+                daemon=True,
+            )
+            self._worker_thread.start()
+            if self.config.worker_mode.is_pull:
+                self.worker.wait_pull_registered(
+                    timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
+                )
+                return
+            _await_worker(self.worker.worker_target.address)
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                _logger.exception("failed to close SyncExampleApp after startup failed")
+            raise
 
     def close(self) -> None:
+        """Closes the Client, Worker, Worker thread, and BlobCache once."""
+        if self._is_closed:
+            return
+        self._is_closed = True
         if self._client is not None:
             self._client.close()
             self._client = None
@@ -123,6 +143,9 @@ class SyncExampleApp:
             self._worker_thread.join(timeout=10)
             self._worker_thread = None
         self.blob_cache.close()
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _new_worker_options(config: SyncExamplesConfig) -> WorkerOptions:

@@ -66,7 +66,7 @@ use dex_sdk::{
     WaitForStepCompletionOptions, Worker, WorkerOptions,
 };
 use tempfile::TempDir;
-use worker_harness::{await_pull_registration, read_worker_mode, should_skip_on_server_zd};
+use worker_harness::{await_pull_registration, read_worker_mode};
 
 struct DexEnvironment {
     client: Client,
@@ -330,9 +330,6 @@ fn channel_message_can_be_moved_by_id() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn money_transfer_completes_with_released_sdk() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow = MoneyTransferFlow::default();
     let flow_id = unique_flow_id("money-transfer");
@@ -558,9 +555,6 @@ fn stream_resumes_after_step_and_client_writes() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_happy_path() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing");
     start_order_processing(&environment, &flow_id, false);
@@ -589,9 +583,6 @@ fn order_processing_happy_path() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_reminder_then_ship() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing-reminder");
     start_order_processing(&environment, &flow_id, false);
@@ -629,9 +620,6 @@ fn order_processing_reminder_then_ship() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn order_processing_ship_failure_refunds() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow_id = unique_flow_id("order-processing-refund");
     start_order_processing(&environment, &flow_id, true);
@@ -901,9 +889,6 @@ fn subscription_updates_charge_and_cancels() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn failure_recovery_retries_and_compensates() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow = FailureRecoveryFlow::default();
     let flow_id = unique_flow_id("failure-recovery");
@@ -933,9 +918,6 @@ fn failure_recovery_retries_and_compensates() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn polling_streams_job_progress_and_completes_with_job_result() {
-    if should_skip_on_server_zd("failure policies") {
-        return;
-    }
     let environment = DexEnvironment::start();
     let flow = PollingFlow::new(Arc::clone(&environment.polling_jobs));
     let flow_id = unique_flow_id("pattern-polling");

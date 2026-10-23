@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import time
 from typing import Any, Callable
@@ -286,6 +287,7 @@ class ExampleApp:
             ),
         )
         self._worker_task: asyncio.Task[None] | None = None
+        self._is_closed = False
 
     @property
     def client(self) -> AsyncClient:
@@ -297,18 +299,34 @@ class ExampleApp:
         return self._client
 
     async def start_worker(self) -> None:
+        """Starts the MCP registry and Worker, closing this app if startup fails.
+
+        Raises:
+            BaseException: The original startup or registration error.
+        """
         if self._worker_task is not None:
             return
-        await self.mcp_registry.start()
-        self._worker_task = asyncio.create_task(self.worker.start())
-        if self.config.worker_mode.is_pull:
-            await self.worker.wait_pull_registered(
-                timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
-            )
-            return
-        await _await_worker(self.worker.worker_target.address, self._worker_task)
+        try:
+            await self.mcp_registry.start()
+            self._worker_task = asyncio.create_task(self.worker.start())
+            if self.config.worker_mode.is_pull:
+                await self.worker.wait_pull_registered(
+                    timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
+                )
+                return
+            await _await_worker(self.worker.worker_target.address, self._worker_task)
+        except BaseException:
+            try:
+                await self.close()
+            except Exception:
+                _logger.exception("failed to close ExampleApp after startup failed")
+            raise
 
     async def close(self) -> None:
+        """Closes the Client, Worker, MCP registry, and BlobCache once."""
+        if self._is_closed:
+            return
+        self._is_closed = True
         if self._client is not None:
             await self._client.close()
             self._client = None
@@ -321,6 +339,9 @@ class ExampleApp:
             self._worker_task = None
         await self.mcp_registry.close()
         self.blob_cache.close()
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _new_worker_options(config: ExamplesConfig) -> WorkerOptions:

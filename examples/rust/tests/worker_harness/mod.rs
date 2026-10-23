@@ -22,15 +22,6 @@ pub(crate) fn read_worker_mode() -> WorkerMode {
     WorkerMode::parse(value.as_deref()).expect("valid DEX_EXAMPLES_WORKER_MODE")
 }
 
-/// Returns true and reports the reason when server-zd rejects a sample feature.
-pub(crate) fn should_skip_on_server_zd(feature: &str) -> bool {
-    let is_server_zd = std::env::var("DEX_INTEG_ENGINE").is_ok_and(|engine| engine == "zd");
-    if is_server_zd {
-        eprintln!("server-zd does not support {feature}");
-    }
-    is_server_zd
-}
-
 pub(crate) fn await_pull_registration(worker: &Worker) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

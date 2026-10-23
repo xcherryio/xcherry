@@ -7,7 +7,7 @@ test:
 	cargo test --all-targets --locked
 
 integTests:
-	cargo test --locked --test dex_integration -- --ignored --test-threads=1
+	cargo test --locked --test dex_integration -- --ignored --test-threads=1 $(INTEG_TEST_ARGS)
 
 flowSmokeTests:
 	cargo test --locked --test flow_smoke -- --ignored --test-threads=1

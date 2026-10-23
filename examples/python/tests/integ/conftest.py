@@ -75,22 +75,21 @@ async def example_app(
         agent_mcp_config=_agent_mcp_config(tmp_path_factory),
     )
     app = ExampleApp(config)
-    if config.worker_mode.is_pull:
-        # Pull registration fails without a server, so probe first to keep the skip.
-        is_server_ready = await server_is_ready(app.client)
-        if is_server_ready:
-            await app.start_worker()
-    else:
-        await app.start_worker()
-        is_server_ready = await server_is_ready(app.client)
-    if not is_server_ready:
-        await app.close()
-        pytest.skip(
-            "no Dex server at "
-            f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to a running "
-            "Dex server to run the example integration tests"
-        )
     try:
+        if config.worker_mode.is_pull:
+            # Pull registration fails without a server, so probe first to keep the skip.
+            is_server_ready = await server_is_ready(app.client)
+            if is_server_ready:
+                await app.start_worker()
+        else:
+            await app.start_worker()
+            is_server_ready = await server_is_ready(app.client)
+        if not is_server_ready:
+            pytest.skip(
+                "no Dex server at "
+                f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to a running "
+                "Dex server to run the example integration tests"
+            )
         yield app
     finally:
         await app.close()

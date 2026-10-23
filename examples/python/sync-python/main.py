@@ -30,8 +30,8 @@ from sync_examples.http_app import create_app
 def main() -> None:
     config = SyncExamplesConfig.from_env()
     app_state = SyncExampleApp(config)
-    app_state.start_worker()
     try:
+        app_state.start_worker()
         host, port = parse_http_address(config.http_address)
         worker_description = (
             "pull Worker"

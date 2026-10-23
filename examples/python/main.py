@@ -37,8 +37,8 @@ async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     config = ExamplesConfig.from_env()
     app_state = ExampleApp(config)
-    await app_state.start_worker()
     try:
+        await app_state.start_worker()
         await start_cron_schedule(app_state)
 
         host, port = parse_http_address(config.http_address)
