@@ -45,6 +45,7 @@
       "dexzd-apply": 2,
       "dexzd-cluster-metadata": 2,
       "dexzd-log": 2,
+      "dexzd-request-validation": 2,
       "dexzd-stream-store": 2,
       "dexzd-storage": 3,
       "dexzd-worker-dispatch": 3,
