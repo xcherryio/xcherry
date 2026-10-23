@@ -35,6 +35,7 @@ pub(crate) struct SnapshotService {
     pub(crate) cluster_id: [u8; 16],
     /// Epoch of this process; every batch it routes carries it.
     pub(crate) epoch: u64,
+    pub(crate) node_meta_lock: Arc<std::sync::Mutex<()>>,
     pub(crate) config: SnapshotConfig,
     pub(crate) snapshot_lock: Mutex<()>,
 }
@@ -133,8 +134,13 @@ impl SnapshotService {
             created_at_unix_micros: self.clock.now_unix_micros(),
         };
         let runtime = tokio::runtime::Handle::current();
+        let node_meta_lock = self.node_meta_lock.clone();
         // Checkpoints and file hashing block, so the whole upload runs on the blocking pool.
         tokio::task::spawn_blocking(move || {
+            // create_snapshot reads NodeMeta first and writes it back last.
+            let _node_meta_guard = node_meta_lock
+                .lock()
+                .expect("node metadata lock is not poisoned");
             let snapshot_number = store
                 .node_meta()?
                 .map_or(0, |meta| meta.last_snapshot_number)

@@ -309,3 +309,72 @@ async fn submissions_during_recovery_are_unavailable() {
     );
     node.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn voided_batches_after_takeover_keep_submission_order() {
+    let mut cluster = TestCluster::new();
+    let first = cluster.start_in_memory().await;
+    first.commit_prompt("void-flow", 1).await;
+    let cluster_object = dexzd_cluster_metadata::bootstrap_or_validate(
+        cluster.object_store.as_ref(),
+        cluster.clock.as_ref(),
+        dexzd_cluster_metadata::ClusterConfig {
+            partition_count: PARTITION_COUNT,
+        },
+    )
+    .await
+    .expect("cluster exists");
+    drop(first);
+    let stream = StreamIdentity {
+        cluster_id: cluster_object
+            .cluster
+            .cluster_id
+            .as_slice()
+            .try_into()
+            .expect("16-byte cluster ID"),
+        node_id: "node-a".to_owned(),
+        incarnation: 1,
+    };
+    // The crashed epoch-1 writer pipelined seq 4 and 5 past the gap at seq 3.
+    for seq in [4, 5] {
+        let stale = encode_batch(&BatchContent {
+            stream: stream.clone(),
+            epoch: 1,
+            seq,
+            sealed_at_unix_micros: 0,
+            records: vec![BatchRecord {
+                partition: 0,
+                bytes: Bytes::from_static(b"never acknowledged"),
+            }],
+            epoch_start_writer: None,
+        })
+        .expect("encode batch");
+        cluster
+            .object_store
+            .put(&stream.batch_key(seq), stale, WriteCondition::CreateOnly)
+            .await
+            .expect("put succeeds");
+    }
+    let second = cluster.start_in_memory().await;
+    let submitted: Vec<_> = (0..4)
+        .map(|_| {
+            second
+                .submit("void-flow", CommitUrgency::Prompt)
+                .expect("submit succeeds")
+        })
+        .collect();
+    let mut submitted_ids = Vec::new();
+    for (command, ticket) in submitted {
+        submitted_ids.push(command.command_id);
+        ticket.wait().await.expect("command commits");
+    }
+    let committed_ids: Vec<Vec<u8>> = second
+        .runtime
+        .committed_commands()
+        .into_iter()
+        .filter(|committed| committed.command.epoch == 2)
+        .map(|committed| committed.command.command_id)
+        .collect();
+    assert_eq!(committed_ids, submitted_ids);
+    second.node.shutdown().await;
+}

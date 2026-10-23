@@ -36,15 +36,41 @@ pub async fn recover_stream(
     new_epoch: u64,
     writer_process_id: &str,
 ) -> Result<RecoveredStream, LogError> {
-    if new_epoch == 0
-        || writer_process_id.is_empty()
-        || (last_applied_seq == 0) != (last_applied_epoch == 0)
-    {
+    if (last_applied_seq == 0) != (last_applied_epoch == 0) {
         return Err(LogError::Invalid(
-            "invalid applied position, new epoch, or writer process ID".into(),
+            "invalid applied position or epoch".into(),
         ));
     }
-    if last_applied_epoch >= new_epoch {
+    let from_seq = last_applied_seq
+        .checked_add(1)
+        .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
+    recover_stream_from(
+        store,
+        clock,
+        stream,
+        from_seq,
+        last_applied_epoch,
+        new_epoch,
+        writer_process_id,
+    )
+    .await
+}
+
+pub async fn recover_stream_from(
+    store: &dyn ObjectStore,
+    clock: &dyn WallClock,
+    stream: &StreamIdentity,
+    from_seq: u64,
+    effective_epoch_at_start: u64,
+    new_epoch: u64,
+    writer_process_id: &str,
+) -> Result<RecoveredStream, LogError> {
+    if from_seq == 0 || new_epoch == 0 || writer_process_id.is_empty() {
+        return Err(LogError::Invalid(
+            "invalid stream position, epoch, or writer process ID".into(),
+        ));
+    }
+    if effective_epoch_at_start >= new_epoch {
         return Err(LogError::Fenced);
     }
     let mut result = RecoveredStream {
@@ -53,10 +79,8 @@ pub async fn recover_stream(
         epoch_start_seq: 0,
         next_seq: 0,
     };
-    let mut effective_epoch = last_applied_epoch;
-    let mut seq = last_applied_seq
-        .checked_add(1)
-        .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
+    let mut effective_epoch = effective_epoch_at_start;
+    let mut seq = from_seq;
     loop {
         let key = stream.batch_key(seq);
         let Some(object) = store.get(&key).await? else {
@@ -95,10 +119,7 @@ pub async fn recover_stream(
                 Ok(write_result) => match write_result {
                     Ok(WriteOutcome::Written { .. }) => {
                         result.epoch_start_seq = seq;
-                        result.next_seq = seq
-                            .checked_add(1)
-                            .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
-                        return Ok(result);
+                        return finish_epoch_start(store, stream, new_epoch, result).await;
                     }
                     Ok(WriteOutcome::PreconditionFailed) => true,
                     Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => true,
@@ -115,10 +136,7 @@ pub async fn recover_stream(
                         validate_batch_identity(&batch, stream, seq)?;
                         if batch.trailer == ours {
                             result.epoch_start_seq = seq;
-                            result.next_seq = seq.checked_add(1).ok_or_else(|| {
-                                LogError::Invalid("stream sequence exhausted".into())
-                            })?;
-                            return Ok(result);
+                            return finish_epoch_start(store, stream, new_epoch, result).await;
                         }
                         if batch.header.epoch >= new_epoch {
                             return Err(LogError::Fenced);
@@ -138,6 +156,34 @@ pub async fn recover_stream(
         }
         sleep(backoff.min(deadline.saturating_duration_since(Instant::now()))).await;
         backoff = (backoff * 2).min(Duration::from_millis(500));
+    }
+}
+
+async fn finish_epoch_start(
+    store: &dyn ObjectStore,
+    stream: &StreamIdentity,
+    new_epoch: u64,
+    mut result: RecoveredStream,
+) -> Result<RecoveredStream, LogError> {
+    let mut seq = result
+        .epoch_start_seq
+        .checked_add(1)
+        .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
+    loop {
+        let key = stream.batch_key(seq);
+        let Some(object) = store.get(&key).await? else {
+            result.next_seq = seq;
+            return Ok(result);
+        };
+        let batch = decode_batch(&object.bytes)?;
+        validate_batch_identity(&batch, stream, seq)?;
+        if batch.header.epoch >= new_epoch {
+            return Err(LogError::Fenced);
+        }
+        result.void_sequences.push(seq);
+        seq = seq
+            .checked_add(1)
+            .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
     }
 }
 

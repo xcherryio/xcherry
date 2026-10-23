@@ -31,6 +31,8 @@ pub enum LogError {
     Invalid(String),
     #[error("log stream fenced by a newer epoch")]
     Fenced,
+    #[error("log stream collided with an older writer; restart recovery")]
+    Restart,
     #[error("log pipeline is unavailable; retry the proposal")]
     Retryable,
     #[error("log pipeline deadline expired")]

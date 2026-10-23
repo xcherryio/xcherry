@@ -58,6 +58,7 @@ pub struct ProposalTicket {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProposalFailure {
     Fenced,
+    Restart,
     Unavailable,
 }
 
@@ -192,13 +193,7 @@ impl PendingBatch {
 
 struct InFlightBatch {
     batch: PendingBatch,
-    outcome: Option<Result<PutStatus, LogError>>,
-}
-
-#[derive(Clone, Copy)]
-enum PutStatus {
-    Persisted,
-    Void,
+    outcome: Option<Result<(), LogError>>,
 }
 
 struct PipelineRuntime {
@@ -227,7 +222,7 @@ async fn run_pipeline(
     let mut open_deadline = None;
     let mut ready = VecDeque::new();
     let mut in_flight = BTreeMap::<u64, InFlightBatch>::new();
-    let mut writes = JoinSet::<(u64, Result<PutStatus, LogError>)>::new();
+    let mut writes = JoinSet::<(u64, Result<(), LogError>)>::new();
     let mut receiver_closed = false;
     loop {
         if !open.is_empty()
@@ -343,7 +338,7 @@ async fn run_pipeline(
                 .take()
                 .expect("completed batch has an outcome");
             match outcome {
-                Ok(PutStatus::Persisted) => {
+                Ok(()) => {
                     let mut records_by_partition = BTreeMap::<u32, Vec<Bytes>>::new();
                     let mut tickets = Vec::with_capacity(finished.batch.proposals.len());
                     for proposal in &finished.batch.proposals {
@@ -377,7 +372,6 @@ async fn run_pipeline(
                         drop(proposal.permit);
                     }
                 }
-                Ok(PutStatus::Void) => ready.push_back(finished.batch),
                 Err(LogError::Fenced) => {
                     fail_batch(finished.batch, ProposalFailure::Fenced);
                     fail_all(
@@ -385,6 +379,16 @@ async fn run_pipeline(
                         &mut ready,
                         &mut in_flight,
                         ProposalFailure::Fenced,
+                    );
+                    return;
+                }
+                Err(LogError::Restart) => {
+                    fail_batch(finished.batch, ProposalFailure::Restart);
+                    fail_all(
+                        &mut open,
+                        &mut ready,
+                        &mut in_flight,
+                        ProposalFailure::Restart,
                     );
                     return;
                 }
@@ -432,7 +436,7 @@ async fn write_batch(
     seq: u64,
     body: Bytes,
     timeout_duration: Duration,
-) -> Result<PutStatus, LogError> {
+) -> Result<(), LogError> {
     let key = stream.batch_key(seq);
     let trailer = xxh3_128(&body[..body.len() - 16]);
     let deadline = Instant::now() + timeout_duration;
@@ -449,7 +453,7 @@ async fn write_batch(
         {
             Err(_) => return Err(LogError::Deadline),
             Ok(result) => match result {
-                Ok(WriteOutcome::Written { .. }) => return Ok(PutStatus::Persisted),
+                Ok(WriteOutcome::Written { .. }) => return Ok(()),
                 Ok(WriteOutcome::PreconditionFailed) => true,
                 Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => true,
                 Err(error) if error.kind == ObjectStoreErrorKind::Transient => false,
@@ -464,10 +468,10 @@ async fn write_batch(
                         let batch = decode_batch(&object.bytes)?;
                         validate_batch_identity(&batch, stream, seq)?;
                         if batch.trailer == trailer {
-                            return Ok(PutStatus::Persisted);
+                            return Ok(());
                         }
                         if batch.header.epoch < epoch {
-                            return Ok(PutStatus::Void);
+                            return Err(LogError::Restart);
                         }
                         return Err(LogError::Fenced);
                     }
