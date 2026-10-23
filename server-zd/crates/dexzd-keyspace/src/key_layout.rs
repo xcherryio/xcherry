@@ -136,11 +136,13 @@ pub enum RunTable {
     Checkpoint = 0x16,
     /// The run's search document.
     SearchDocument = 0x17,
+    /// Request ID deduplication entries ordered by recorded seq, for eviction.
+    RequestDedupOrder = 0x18,
 }
 
 impl RunTable {
     /// Every table, in byte order.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::RunRecord,
         Self::AttemptRecord,
         Self::Attribute,
@@ -164,6 +166,7 @@ impl RunTable {
         Self::HistoryRecord,
         Self::Checkpoint,
         Self::SearchDocument,
+        Self::RequestDedupOrder,
     ];
 
     /// Returns the column family that stores this table.
@@ -368,7 +371,7 @@ mod tests {
     #[test]
     fn table_bytes_are_unique_and_permanent() {
         let bytes: Vec<u8> = RunTable::ALL.iter().map(|table| *table as u8).collect();
-        assert_eq!(bytes, (1..=23).collect::<Vec<u8>>());
+        assert_eq!(bytes, (1..=24).collect::<Vec<u8>>());
         let kinds: Vec<u8> = IndexKind::ALL.iter().map(|kind| *kind as u8).collect();
         assert_eq!(kinds, (1..=8).collect::<Vec<u8>>());
         assert_eq!(RunTable::Value.column_family(), ColumnFamily::Value);
