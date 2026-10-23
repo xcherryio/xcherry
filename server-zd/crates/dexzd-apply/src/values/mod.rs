@@ -27,6 +27,8 @@ use dexzd_protocol::dexzd::v1::{
 use prost::Message;
 
 use crate::ApplyError;
+use crate::command_handlers::run_cursor::RunCursor;
+use crate::history::AttemptRow;
 use crate::state_access::{FlowTransaction, RunRows};
 
 /// Why a value from a client or Worker cannot be stored.
@@ -289,6 +291,34 @@ pub(crate) fn is_null_value(value: Option<&Value>) -> bool {
         None => true,
         Some(value) => matches!(value.kind, None | Some(Kind::NullValue(_))),
     }
+}
+
+/// Deletes the values that lost their last holder before `window_start_seq` (plan R5').
+///
+/// Stub until the value garbage collection (task A5) lands; time travel calls it after it
+/// advances the window.
+pub(crate) fn prune_garbage(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &RunCursor,
+    window_start_seq: u64,
+) -> Result<(), ApplyError> {
+    let _ = (transaction, cursor, window_start_seq);
+    Ok(())
+}
+
+/// Rewrites value holder sets for a time travel (plan R4'): every value referenced by the
+/// previous or the new attempt state gets exactly the holders of the new state.
+///
+/// Stub until the value garbage collection (task A5) lands. Both row lists are complete
+/// attempt-scoped states; the run record fields come from `cursor.record`.
+pub(crate) fn rewrite_holders_for_time_travel(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &RunCursor,
+    previous_attempt_rows: &[AttemptRow],
+    new_attempt_rows: &[AttemptRow],
+) -> Result<(), ApplyError> {
+    let _ = (transaction, cursor, previous_attempt_rows, new_attempt_rows);
+    Ok(())
 }
 
 fn table_value(value_id: ValueId, size_bytes: u64, is_string_value: bool) -> StoredValue {

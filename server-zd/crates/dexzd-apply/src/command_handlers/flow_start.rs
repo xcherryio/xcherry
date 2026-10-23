@@ -165,6 +165,7 @@ pub(crate) fn start_run(
             start_seq: cursor.seq,
             created_at_micros: scope.now_micros,
             reason: String::new(),
+            checkpoint_seqs: Vec::new(),
         },
     );
     if let Err(rejection) = apply_attribute_writes(

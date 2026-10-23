@@ -1,0 +1,433 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+//! The TimeTravel command (plan section 8.4): forks attempt n+1 from a point of the selected
+//! lineage, replaces the attempt-scoped state, and reapplies later external input.
+
+use std::collections::BTreeSet;
+
+use dexzd_keyspace::row_keys::{active_work_index_key, timer_index_key};
+use dexzd_keyspace::{ColumnFamily, RunTable};
+use dexzd_protocol::dex::{
+    ErrorSubStatus, FlowStatus, TimeTravelForkHistoryEvent, flow_history_event,
+};
+use dexzd_protocol::dexzd::v1::{
+    AttemptRecord, CommandReply, FlowCommand, RetentionTimerId, StepExecutionRecord,
+    StepInvocationKey, StepInvocationPhase, TimeTravelCommand, TimeTravelReply, TimerId,
+    TimerRecord, command_reply, flow_command::Command, timer_id,
+};
+use prost::Message;
+
+use crate::command_handlers::command_replies::{error_reply, grpc_code};
+use crate::command_handlers::flow_close::update_directory_status;
+use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
+use crate::command_handlers::{CommandScope, HandlerResult};
+use crate::history::attempt_scope::{
+    AttemptRow, decode_timer_id, hex, read_attempt_rows, set_run_status,
+};
+use crate::history::lineage::{Lineage, history_records};
+use crate::history::replay_state::{TransactionReader, absorb_writes};
+use crate::history::reset_target::resolve_target;
+use crate::history::state_rebuild::rebuild_attempt_state;
+use crate::state_access::FlowTransaction;
+use crate::steps::{arm_timer, disarm_timer};
+use crate::{ApplyEffect, ApplyError, BehaviorVersion, WaitableChange};
+
+pub(crate) fn apply_time_travel(
+    transaction: &mut FlowTransaction<'_>,
+    mut cursor: RunCursor,
+    scope: &CommandScope<'_>,
+    command: &TimeTravelCommand,
+) -> Result<HandlerResult, ApplyError> {
+    let request = command.request.clone().unwrap_or_default();
+    let previous_attempt = cursor.attempt();
+    let selected_attempt = match u32::try_from(request.run_attempt) {
+        Ok(0) => previous_attempt,
+        Ok(attempt) if attempt <= previous_attempt => attempt,
+        _ => {
+            return Ok(HandlerResult::Rejected(error_reply(
+                grpc_code::INVALID_ARGUMENT,
+                ErrorSubStatus::Uncategorized,
+                format!(
+                    "run attempt {} does not exist; the run has attempts 1 to {previous_attempt}",
+                    request.run_attempt
+                ),
+            )));
+        }
+    };
+    let lineage = Lineage::of_attempt(transaction, cursor.rows, selected_attempt)?;
+    let target = match resolve_target(transaction, &cursor, scope.now_micros, &request, &lineage)?
+    {
+        Ok(target) => target,
+        Err(reply) => return Ok(HandlerResult::Rejected(reply)),
+    };
+    let is_reapplying = !request.skip_writes_reapply;
+    if is_reapplying && cursor.record.max_pruned_external_input_seq > target.point.seq {
+        return Ok(HandlerResult::Rejected(error_reply(
+            grpc_code::FAILED_PRECONDITION,
+            ErrorSubStatus::Uncategorized,
+            format!(
+                "external input after the target point left the time travel window (run seq {}), \
+                 so it cannot be reapplied; set skip_writes_reapply to travel without reapplying \
+                 writes",
+                cursor.record.max_pruned_external_input_seq
+            ),
+        )));
+    }
+    let reapplied_inputs = if is_reapplying {
+        collect_external_inputs(transaction, &cursor, &lineage, target.point.seq)?
+    } else {
+        Vec::new()
+    };
+    let rebuilt =
+        rebuild_attempt_state(transaction, cursor.rows, &cursor.record, target.point)?;
+    let previous_rows = read_attempt_rows(transaction, cursor.rows)?;
+    let was_running = cursor.record.status == FlowStatus::Running as i32;
+    cancel_running_invocations(&mut cursor, &previous_rows)?;
+    let new_attempt = previous_attempt + 1;
+    cursor.rows.put_attempt_record(
+        transaction,
+        &AttemptRecord {
+            attempt: new_attempt,
+            parent_attempt: target.point.attempt,
+            parent_seq: target.point.seq,
+            start_seq: cursor.seq,
+            created_at_micros: scope.now_micros,
+            reason: request.reason.clone(),
+            checkpoint_seqs: Vec::new(),
+        },
+    );
+    cursor.record.current_attempt = new_attempt;
+    set_run_status(&mut cursor.record, &rebuilt.run_status);
+    cursor.starts_attempt = true;
+    replace_attempt_rows(transaction, &mut cursor, scope, &previous_rows, rebuilt.rows)?;
+    update_run_lifecycle(transaction, &mut cursor, scope, was_running)?;
+    apply_received_child_results(transaction, &mut cursor, scope)?;
+    let restored_rows = read_attempt_rows(transaction, cursor.rows)?;
+    dispatch_restored_invocations(&mut cursor, &restored_rows)?;
+    crate::values::rewrite_holders_for_time_travel(
+        transaction,
+        &cursor,
+        &previous_rows,
+        &restored_rows,
+    )?;
+    cursor.add_event(flow_history_event::Payload::TimeTravelFork(
+        TimeTravelForkHistoryEvent {
+            previous_run_id: cursor.run_id().to_string(),
+            previous_run_attempt: i32::try_from(previous_attempt).unwrap_or(i32::MAX),
+            target_run_attempt: i32::try_from(target.point.attempt).unwrap_or(i32::MAX),
+            target_event_id: target.last_event_id,
+        },
+    ));
+    cursor.wake(WaitableChange::RunAttemptChanged);
+    let reply = CommandReply {
+        reply: Some(command_reply::Reply::TimeTravel(TimeTravelReply {
+            run_attempt: new_attempt,
+        })),
+    };
+    let mut output = cursor.finish(transaction, scope, reply, HistoryKind::SEMANTIC)?;
+    reapply_external_inputs(transaction, scope, &reapplied_inputs, &mut output.effects)?;
+    Ok(HandlerResult::Applied(output))
+}
+
+/// External input of the lineage after `target_seq`, in seq order. StopFlow is never input.
+fn collect_external_inputs(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+    lineage: &Lineage,
+    target_seq: u64,
+) -> Result<Vec<FlowCommand>, ApplyError> {
+    Ok(
+        history_records(transaction, cursor.rows, target_seq + 1, u64::MAX)?
+            .into_iter()
+            .filter(|record| {
+                record.is_external_input && lineage.contains(record.attempt, record.seq)
+            })
+            .filter_map(|record| record.command)
+            .filter(|command| {
+                matches!(
+                    command.command,
+                    Some(
+                        Command::AttributesSet(_)
+                            | Command::ChannelPublish(_)
+                            | Command::ChannelMessageDelete(_)
+                            | Command::RpcCommitted(_)
+                            | Command::TimerSkip(_)
+                    )
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Tells Workers to stop every attempt the previous attempt state was running.
+fn cancel_running_invocations(
+    cursor: &mut RunCursor,
+    previous_rows: &[AttemptRow],
+) -> Result<(), ApplyError> {
+    for step in step_executions(previous_rows)? {
+        if let Some(invocation) = &step.invocation
+            && invocation.phase == StepInvocationPhase::Running as i32
+        {
+            let run_id = cursor.run_id();
+            cursor.add_effect(ApplyEffect::InvocationCanceled {
+                run_id,
+                task_id: invocation.task_id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Replaces the attempt-scoped rows with the rebuilt ones. Hard-delete Attributes are
+/// run-scoped and keep their current rows. Timers move to the new attempt; restored running
+/// attempts get new dispatch IDs so cancellations of the old ones never hit them.
+fn replace_attempt_rows(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+    previous_rows: &[AttemptRow],
+    rebuilt_rows: Vec<AttemptRow>,
+) -> Result<(), ApplyError> {
+    let rows = cursor.rows;
+    let partition = transaction.context().partition;
+    let mut hard_delete_keys = BTreeSet::new();
+    for row in previous_rows {
+        if row.is_hard_delete_attribute()? {
+            hard_delete_keys.insert(row.key_suffix.clone());
+            continue;
+        }
+        if row.table == RunTable::Timer {
+            let timer = decode_timer_record(row)?;
+            transaction.delete(
+                ColumnFamily::PartitionIndex,
+                timer_index_key(
+                    partition,
+                    timer.fire_at_micros,
+                    rows.flow_hash,
+                    rows.run_id,
+                    &row.key_suffix,
+                ),
+            );
+        }
+        transaction.delete(ColumnFamily::Flow, row.key(rows));
+    }
+    let mut restored_running_count = 0_u32;
+    for row in rebuilt_rows {
+        match row.table {
+            RunTable::Attribute => {
+                if row.is_hard_delete_attribute()? || hard_delete_keys.contains(&row.key_suffix) {
+                    continue;
+                }
+                transaction.put(ColumnFamily::Flow, row.key(rows), row.value);
+            }
+            RunTable::Timer => {
+                let timer = decode_timer_record(&row)?;
+                let mut timer_id = match timer.timer_id {
+                    Some(timer_id) => timer_id,
+                    None => decode_timer_id(&row.key_suffix)?,
+                };
+                timer_id.run_attempt = cursor.attempt();
+                arm_timer(transaction, cursor, &timer_id, timer.fire_at_micros);
+            }
+            RunTable::StepExecution => {
+                let mut step = decode_step_execution(&row)?;
+                if let Some(invocation) = step.invocation.as_mut()
+                    && invocation.phase == StepInvocationPhase::Running as i32
+                {
+                    invocation.task_id =
+                        restored_task_id(&scope.command.command_id, restored_running_count);
+                    restored_running_count += 1;
+                }
+                cursor.rows.put_step_execution(transaction, &step);
+            }
+            _ => transaction.put(ColumnFamily::Flow, row.key(rows), row.value),
+        }
+    }
+    Ok(())
+}
+
+/// A dispatch ID derived from the TimeTravel command ID and the restored attempt's index.
+fn restored_task_id(command_id: &[u8], index: u32) -> Vec<u8> {
+    let mut task_id = vec![0; 16];
+    let prefix_length = command_id.len().min(12);
+    task_id[..prefix_length].copy_from_slice(&command_id[..prefix_length]);
+    task_id[12..].copy_from_slice(&index.to_be_bytes());
+    task_id
+}
+
+/// Reopens a closed run or closes a running one when the restored status differs.
+fn update_run_lifecycle(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+    was_running: bool,
+) -> Result<(), ApplyError> {
+    let is_running = cursor.record.status == FlowStatus::Running as i32;
+    let partition = transaction.context().partition;
+    let active_work_key = active_work_index_key(partition, cursor.rows.flow_hash, cursor.run_id());
+    let retention_timer = TimerId {
+        run_attempt: 0,
+        kind: Some(timer_id::Kind::Retention(RetentionTimerId {})),
+    };
+    match (was_running, is_running) {
+        (true, true) => return Ok(()),
+        (false, true) => {
+            disarm_timer(transaction, cursor, &retention_timer)?;
+            cursor.record.retention_deadline_micros = 0;
+            transaction.put(ColumnFamily::PartitionIndex, active_work_key, Vec::new());
+        }
+        (true, false) => {
+            let settings = cursor.record.settings.unwrap_or_default();
+            let retention_deadline = scope
+                .now_micros
+                .saturating_add(settings.retention_after_close_micros);
+            cursor.record.retention_deadline_micros = retention_deadline;
+            arm_timer(transaction, cursor, &retention_timer, retention_deadline);
+            transaction.delete(ColumnFamily::PartitionIndex, active_work_key);
+            cursor.wake(WaitableChange::FlowClosed);
+        }
+        (false, false) => {}
+    }
+    update_directory_status(transaction, cursor, scope)
+}
+
+/// Completes restored SubFlow conditions whose child results the run already received (plan
+/// C15). The SubFlow condition engine (tasks A3 and A6) fills this in.
+fn apply_received_child_results(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+) -> Result<(), ApplyError> {
+    let _ = (transaction, cursor, scope);
+    Ok(())
+}
+
+/// Re-dispatches the restored calls: running attempts with their stored snapshots and attempt
+/// numbers, and pending calls.
+fn dispatch_restored_invocations(
+    cursor: &mut RunCursor,
+    restored_rows: &[AttemptRow],
+) -> Result<(), ApplyError> {
+    let run_id = cursor.run_id();
+    let run_attempt = cursor.attempt();
+    for step in step_executions(restored_rows)? {
+        let Some(invocation) = &step.invocation else {
+            continue;
+        };
+        let key = StepInvocationKey {
+            step_execution_id: step.step_execution_id.clone(),
+            method: invocation.method,
+        };
+        let phase = StepInvocationPhase::try_from(invocation.phase)
+            .unwrap_or(StepInvocationPhase::Unspecified);
+        match phase {
+            StepInvocationPhase::Pending => cursor.add_effect(ApplyEffect::InvocationPending {
+                run_id,
+                run_attempt,
+                invocation: key,
+                attempt: invocation.attempt,
+            }),
+            StepInvocationPhase::Running => cursor.add_effect(ApplyEffect::InvocationStarted {
+                run_id,
+                run_attempt,
+                invocation: key,
+                attempt: invocation.attempt,
+                task_id: invocation.task_id.clone(),
+            }),
+            StepInvocationPhase::Backoff | StepInvocationPhase::Unspecified => {}
+        }
+    }
+    Ok(())
+}
+
+/// Reapplies external input on the new attempt, each as its own command of the attempt so a
+/// later time travel in this lineage can reapply it again. Input the new state rejects (a
+/// missing Channel message, an invalid transactional RPC) is skipped.
+fn reapply_external_inputs(
+    transaction: &mut FlowTransaction<'_>,
+    scope: &CommandScope<'_>,
+    inputs: &[FlowCommand],
+    effects: &mut Vec<ApplyEffect>,
+) -> Result<(), ApplyError> {
+    let behavior_version = BehaviorVersion::from_command(scope.command.behavior_version)?;
+    for input in inputs {
+        let command = reapplied_command(input, scope);
+        let Some(body) = &command.command else {
+            continue;
+        };
+        let input_scope = CommandScope::new(&command, behavior_version);
+        let (writes, input_effects) = {
+            let reader = TransactionReader::new(transaction);
+            let mut input_transaction = FlowTransaction::new(&reader, transaction.context());
+            let input_cursor = match RunCursor::open(&input_transaction, &input_scope)? {
+                Ok(input_cursor) => input_cursor,
+                Err(_) => continue,
+            };
+            match crate::command_handlers::apply_run_command(
+                &mut input_transaction,
+                input_cursor,
+                &input_scope,
+                body,
+            )? {
+                HandlerResult::Applied(output) => (input_transaction.into_writes(), output.effects),
+                HandlerResult::Rejected(_) => continue,
+            }
+        };
+        absorb_writes(transaction, writes);
+        effects.extend(input_effects);
+    }
+    Ok(())
+}
+
+/// The recorded input as applied now. Request IDs are cleared: the run-scoped deduplication
+/// table already holds them, and the reapplied write must not be answered from it.
+fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowCommand {
+    let mut command = input.clone();
+    command.proposed_at_micros = scope.now_micros;
+    command.expected_run_attempt = 0;
+    command.behavior_version = scope.command.behavior_version;
+    match command.command.as_mut() {
+        Some(Command::AttributesSet(set)) => {
+            if let Some(request) = set.request.as_mut() {
+                request.request_id.clear();
+            }
+        }
+        Some(Command::ChannelMessageDelete(delete)) => {
+            if let Some(request) = delete.request.as_mut() {
+                request.request_id.clear();
+            }
+        }
+        _ => {}
+    }
+    command
+}
+
+fn step_executions(attempt_rows: &[AttemptRow]) -> Result<Vec<StepExecutionRecord>, ApplyError> {
+    attempt_rows
+        .iter()
+        .filter(|row| row.table == RunTable::StepExecution)
+        .map(decode_step_execution)
+        .collect()
+}
+
+fn decode_step_execution(row: &AttemptRow) -> Result<StepExecutionRecord, ApplyError> {
+    StepExecutionRecord::decode(row.value.as_slice()).map_err(|error| ApplyError::CorruptState {
+        table: "step execution",
+        key: hex(&row.key_suffix),
+        detail: error.to_string(),
+    })
+}
+
+fn decode_timer_record(row: &AttemptRow) -> Result<TimerRecord, ApplyError> {
+    TimerRecord::decode(row.value.as_slice()).map_err(|error| ApplyError::CorruptState {
+        table: "timer",
+        key: hex(&row.key_suffix),
+        detail: error.to_string(),
+    })
+}

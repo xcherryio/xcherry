@@ -109,10 +109,6 @@ impl<'reader> FlowTransaction<'reader> {
     }
 
     /// Deletes every key in `[start, end)`, including rows buffered earlier in this call.
-    #[expect(
-        dead_code,
-        reason = "Run purge (task A6) deletes whole runs with range deletes."
-    )]
     pub(crate) fn delete_range(
         &mut self,
         column_family: ColumnFamily,
@@ -172,6 +168,19 @@ impl<'reader> FlowTransaction<'reader> {
         row: &RowMessage,
     ) {
         self.put(column_family, key, row.encode_to_vec());
+    }
+
+    /// Returns the rows this call put in `column_family`, in key order.
+    pub(crate) fn buffered_puts(
+        &self,
+        column_family: ColumnFamily,
+    ) -> impl Iterator<Item = (&[u8], &[u8])> {
+        self.rows
+            .range((column_family, Vec::new())..)
+            .take_while(move |((family, _), _)| *family == column_family)
+            .filter_map(|((_, key), value)| {
+                value.as_deref().map(|value| (key.as_slice(), value))
+            })
     }
 
     /// Returns the buffered writes in deterministic order.

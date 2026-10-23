@@ -130,6 +130,11 @@ message RunRecord {
   int64 retention_deadline_micros = 28;
   // A Step returned GracefulComplete; the attempt completes once no user Step is active.
   bool is_graceful_completion_requested = 29;
+  // Semantic events that left the window; the window holds semantic_event_count minus this.
+  uint64 pruned_semantic_event_count = 30;
+  // Encoded size of the attempt-scoped rows in the latest checkpoint; approximates the
+  // current attempt state size in the checkpoint rule.
+  uint64 last_checkpoint_state_bytes = 31;
 }
 
 // Close details of a closed attempt.
@@ -165,6 +170,9 @@ message AttemptRecord {
   uint64 start_seq = 4;
   int64 created_at_micros = 5;
   string reason = 6;
+  // Seqs of the retained checkpoints of this attempt, ascending. The first is the start
+  // checkpoint.
+  repeated uint64 checkpoint_seqs = 7;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -452,6 +460,18 @@ message HistoryRecord {
   repeated dex.FlowHistoryEvent events = 7;
   // Debug builds only: hash of the attempt state after this command.
   bytes state_hash = 8;
+  // Step method calls whose first attempt became pending in this command; time travel
+  // resolves Step type and Step execution targets from them.
+  repeated HistoryStepMethodPending pending_step_methods = 9;
+}
+
+// A Step method call whose first attempt became pending.
+message HistoryStepMethodPending {
+  string step_execution_id = 1;
+  string step_type = 2;
+  StepMethod method = 3;
+  // True when the same command created the Step execution.
+  bool is_step_created = 4;
 }
 
 // Row of RunTable::Checkpoint (column family `history`), keyed by attempt (4 bytes) and seq
@@ -460,6 +480,16 @@ message CheckpointRecord {
   uint32 attempt = 1;
   uint64 seq = 2;
   repeated CheckpointRow rows = 3;
+  // Attempt-scoped fields of the run record at this point.
+  CheckpointRunStatus run_status = 4;
+}
+
+// The attempt-scoped part of a RunRecord: status, close details, and graceful completion.
+message CheckpointRunStatus {
+  dex.FlowStatus status = 1;
+  int64 closed_at_micros = 2;
+  FlowCloseRecord close = 3;
+  bool is_graceful_completion_requested = 4;
 }
 
 // One attempt-scoped state row: its table byte, key suffix, and encoded value.

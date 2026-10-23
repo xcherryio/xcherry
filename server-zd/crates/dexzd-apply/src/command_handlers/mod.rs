@@ -44,35 +44,67 @@ pub(crate) fn apply_command(
     command: &FlowCommand,
     behavior_version: BehaviorVersion,
 ) -> Result<ApplyOutcome, ApplyError> {
+    let scope = CommandScope::new(command, behavior_version);
+    Ok(apply_in_scope(context, state, &scope)?.0)
+}
+
+/// Replays a recorded command for time travel: no history, checkpoints, or window changes.
+/// Returns the writes, or `None` when the command was rejected.
+pub(crate) fn apply_replayed_command(
+    context: &ApplyContext,
+    state: &dyn FlowStateReader,
+    command: &FlowCommand,
+    behavior_version: BehaviorVersion,
+) -> Result<Option<Vec<crate::StateWrite>>, ApplyError> {
+    let mut scope = CommandScope::new(command, behavior_version);
+    scope.is_replay = true;
+    let (outcome, is_applied) = apply_in_scope(context, state, &scope)?;
+    Ok(is_applied.then_some(outcome.writes))
+}
+
+/// Applies the scope's command; the flag tells whether it was applied or rejected.
+fn apply_in_scope(
+    context: &ApplyContext,
+    state: &dyn FlowStateReader,
+    scope: &CommandScope<'_>,
+) -> Result<(ApplyOutcome, bool), ApplyError> {
+    let command = scope.command;
+    let behavior_version = scope.behavior_version;
     let Some(body) = &command.command else {
         return Err(ApplyError::InvariantViolation {
             detail: "a committed Flow command has no command body".to_owned(),
         });
     };
-    let scope = CommandScope::new(command, behavior_version);
     let mut transaction = FlowTransaction::new(state, *context);
     let result = match body {
-        Command::FlowStart(start) => flow_start::apply_flow_start(&mut transaction, &scope, start)?,
+        Command::FlowStart(start) => flow_start::apply_flow_start(&mut transaction, scope, start)?,
         Command::StepAttemptStarted(_)
         | Command::StepAttemptHeartbeat(_)
         | Command::StepAttemptFailed(_)
         | Command::StepMethodCompleted(_) => {
-            match with_run(&transaction, &scope)? {
+            match with_run(&transaction, scope)? {
                 Err(reply) => HandlerResult::Rejected(reply),
-                Ok(cursor) => match apply_step_command(&mut transaction, cursor, &scope, body)? {
+                Ok(cursor) => match apply_step_command(&mut transaction, cursor, scope, body)? {
                     StepHandlerResult::Done(result) => result,
                     StepHandlerResult::ApplyAsFailure(failure) => {
                         // Discard the result's partial writes and record the failure instead.
                         transaction = FlowTransaction::new(state, *context);
                         let failure_command = Command::StepAttemptFailed(failure);
-                        let cursor = match with_run(&transaction, &scope)? {
+                        // History records the failure, so replay applies what was applied.
+                        let recorded_failure = FlowCommand {
+                            command: Some(failure_command.clone()),
+                            ..command.clone()
+                        };
+                        let mut failure_scope = CommandScope::new(&recorded_failure, behavior_version);
+                        failure_scope.is_replay = scope.is_replay;
+                        let cursor = match with_run(&transaction, &failure_scope)? {
                             Ok(cursor) => cursor,
-                            Err(reply) => return Ok(ApplyOutcome::rejected(reply)),
+                            Err(reply) => return Ok((ApplyOutcome::rejected(reply), false)),
                         };
                         match apply_step_command(
                             &mut transaction,
                             cursor,
-                            &scope,
+                            &failure_scope,
                             &failure_command,
                         )? {
                             StepHandlerResult::Done(result) => result,
@@ -86,14 +118,14 @@ pub(crate) fn apply_command(
                 },
             }
         }
-        _ => match with_run(&transaction, &scope)? {
+        _ => match with_run(&transaction, scope)? {
             Err(reply) => HandlerResult::Rejected(reply),
-            Ok(cursor) => apply_run_command(&mut transaction, cursor, &scope, body)?,
+            Ok(cursor) => apply_run_command(&mut transaction, cursor, scope, body)?,
         },
     };
     Ok(match result {
-        HandlerResult::Applied(output) => output.into_outcome(transaction.into_writes()),
-        HandlerResult::Rejected(reply) => ApplyOutcome::rejected(reply),
+        HandlerResult::Applied(output) => (output.into_outcome(transaction.into_writes()), true),
+        HandlerResult::Rejected(reply) => (ApplyOutcome::rejected(reply), false),
     })
 }
 
@@ -104,7 +136,7 @@ fn with_run(
     RunCursor::open(transaction, scope)
 }
 
-fn apply_run_command(
+pub(crate) fn apply_run_command(
     transaction: &mut FlowTransaction<'_>,
     cursor: RunCursor,
     scope: &CommandScope<'_>,
@@ -127,9 +159,11 @@ fn apply_run_command(
         Command::TimersFired(fired) => {
             step_commands::apply_timers_fired(transaction, cursor, scope, fired)
         }
+        Command::TimeTravel(travel) => {
+            crate::history::apply_time_travel(transaction, cursor, scope, travel)
+        }
         Command::RpcCommitted(_)
         | Command::TimerSkip(_)
-        | Command::TimeTravel(_)
         | Command::InboxMessage(_)
         | Command::OutboxAck(_)
         | Command::HardDeleteObjectsDeleted(_)

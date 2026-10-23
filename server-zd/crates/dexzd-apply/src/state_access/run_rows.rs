@@ -85,10 +85,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn attempt_record(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -431,10 +427,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::History, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn history_record(
         &self,
         transaction: &FlowTransaction<'_>,
