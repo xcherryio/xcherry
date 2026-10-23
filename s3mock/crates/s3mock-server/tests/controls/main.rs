@@ -11,6 +11,7 @@
 mod configuration;
 mod faults;
 mod known_answers;
+mod lifecycle;
 mod multipart;
 mod observations;
 mod signatures;

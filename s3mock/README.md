@@ -114,6 +114,9 @@ Unknown admin paths or methods return HTTP 404 JSON.
 | `DELETE /_s3mock/counters` | None | Resets counters only; `{"reset":true}`. In-flight requests are counted when they finish. |
 | `GET /_s3mock/requests` | None | `{"capacity":1024,"requests":[...]}` in completion order, oldest first. |
 | `POST /_s3mock/gc` | None | Runs orphan collection; `{"examined_files":0,"removed_files":0}`. |
+| `GET /_s3mock/lifecycle/clock` | None | Returns the lifecycle time and its offset from wall-clock time; `{"now_unix_ms":0,"offset_ms":0}`. |
+| `POST /_s3mock/lifecycle/advance` | `{"milliseconds":86400000}` | Moves the lifecycle clock forward (never backward) and returns the clock. |
+| `POST /_s3mock/lifecycle/run` | None | Applies lifecycle rules once at the lifecycle time; returns `expired_current_versions`, `removed_delete_markers`, `expired_noncurrent_versions`, and `aborted_uploads`. |
 
 GC uses the store's safety boundary: it examines data files older than the store's open time, so
 an upload in flight cannot lose its data file. It does not advance a clock or expire live objects.
