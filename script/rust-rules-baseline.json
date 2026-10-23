@@ -1,4 +1,6 @@
 {
+  "R2:examples/rust/src/patterns": {"files": 10, "submodules": 15},
+  "R2:examples/rust/src/primitives": {"files": 10, "submodules": 17},
   "R1:sdk-rust/crates/dex-sdk/src/client.rs": 1777,
   "R1:sdk-rust/crates/dex-sdk/src/context.rs": 1476,
   "R1:sdk-rust/crates/dex-sdk/src/worker_dispatcher.rs": 1913,
