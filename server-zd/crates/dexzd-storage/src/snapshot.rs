@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Component, Path};
 use std::time::Duration;
 
-use dexzd_keyspace::ColumnFamily;
+use dexzd_keyspace::{ColumnFamily, validate_node_identifier};
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use dexzd_protocol::dexzd::v1::{
     LocalStoreKind, PartitionAppliedPosition, SnapshotFile, SnapshotManifest,
@@ -58,14 +58,9 @@ impl SnapshotSource for RocksDbLocalStore {
         _snapshot_number: u64,
     ) -> StorageResult<(LocalStoreKind, Vec<PartitionAppliedPosition>)> {
         self.checkpoint(directory)?;
-        let checkpoint = RocksDbLocalStore::open(
-            directory,
-            RocksDbStoreOptions {
-                block_cache_bytes: 1024 * 1024,
-            },
-        )?;
+        // A writable reopen can allocate SST numbers that the live DB later reuses.
+        let checkpoint = RocksDbLocalStore::open_checkpoint_read_view(directory)?;
         let positions = partition_positions(&checkpoint)?;
-        drop(checkpoint);
         Ok((LocalStoreKind::Rocksdb, positions))
     }
 }
@@ -123,7 +118,7 @@ impl LocalStore for RestoredLocalStore {
         }
     }
 
-    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + '_>> {
+    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + Send + Sync + '_>> {
         match self {
             Self::RocksDb(store) => store.consistent_view(),
             Self::Memory(store) => store.consistent_view(),
@@ -137,7 +132,7 @@ pub async fn create_snapshot<S: SnapshotSource>(
     identity: &SnapshotIdentity,
     snapshot_number: u64,
 ) -> StorageResult<(String, SnapshotManifest)> {
-    validate_path_segment(&identity.node_id)?;
+    validate_node_identifier(&identity.node_id)?;
     let node_meta = store
         .node_meta()?
         .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
@@ -155,15 +150,22 @@ pub async fn create_snapshot<S: SnapshotSource>(
     for entry in fs::read_dir(&checkpoint_path)? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
-            continue;
+            return Err(StorageError::Invalid(format!(
+                "checkpoint contains non-file entry: {}",
+                entry.path().display()
+            )));
         }
         let file_name = entry
             .file_name()
             .into_string()
             .map_err(|_| StorageError::Invalid("snapshot filename is not UTF-8".into()))?;
         validate_path_segment(&file_name)?;
+        if file_name == "LOCK" || file_name == "LOG" || file_name.starts_with("LOG.old.") {
+            continue;
+        }
         let path = entry.path();
         let (size_bytes, checksum) = file_checksum(&path)?;
+        // Immutable files keep unique names; mutable files use content hashes in their object keys.
         let immutable_file = file_name.ends_with(".sst") || file_name.ends_with(".blob");
         let object_name = if immutable_file {
             file_name.clone()
@@ -172,8 +174,10 @@ pub async fn create_snapshot<S: SnapshotSource>(
         };
         let object_key = format!("{lineage_prefix}/files/{object_name}");
         match object_store.head(&object_key).await? {
-            Some(_) => {
-                verify_uploaded_file(object_store, &object_key, size_bytes, checksum).await?
+            Some(metadata) => {
+                if metadata.size != size_bytes {
+                    return Err(StorageError::SnapshotObjectMismatch { key: object_key });
+                }
             }
             None => {
                 match object_store
@@ -182,12 +186,24 @@ pub async fn create_snapshot<S: SnapshotSource>(
                 {
                     Ok(WriteOutcome::Written { .. }) => {}
                     Ok(WriteOutcome::PreconditionFailed) => {
-                        verify_uploaded_file(object_store, &object_key, size_bytes, checksum)
-                            .await?
+                        verify_uploaded_file(
+                            object_store,
+                            &object_key,
+                            size_bytes,
+                            checksum,
+                            &temporary.path,
+                        )
+                        .await?
                     }
                     Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
-                        verify_uploaded_file(object_store, &object_key, size_bytes, checksum)
-                            .await?
+                        verify_uploaded_file(
+                            object_store,
+                            &object_key,
+                            size_bytes,
+                            checksum,
+                            &temporary.path,
+                        )
+                        .await?
                     }
                     Err(error) => return Err(error.into()),
                 }
@@ -233,14 +249,21 @@ pub async fn create_snapshot<S: SnapshotSource>(
                 .await?
                 .ok_or_else(|| StorageError::Invalid("snapshot manifest vanished".into()))?;
             if existing.bytes.as_ref() != bytes {
-                return Err(StorageError::Invalid(
-                    "snapshot manifest number already exists with different content".into(),
-                ));
+                return Err(StorageError::SnapshotManifestConflict { key: manifest_key });
             }
         }
         Err(error) => return Err(error.into()),
     }
-    let mut updated_meta = node_meta;
+    let mut updated_meta = store
+        .node_meta()?
+        .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
+    if updated_meta.lineage_id != node_meta.lineage_id
+        || snapshot_number <= updated_meta.last_snapshot_number
+    {
+        return Err(StorageError::Invalid(
+            "store lineage or snapshot number changed during upload".into(),
+        ));
+    }
     updated_meta.last_snapshot_number = snapshot_number;
     store.put_node_meta(&updated_meta)?;
     Ok((manifest_key, manifest))
@@ -251,17 +274,22 @@ async fn verify_uploaded_file(
     key: &str,
     expected_size: u64,
     expected_checksum: u64,
+    temporary_directory: &Path,
 ) -> StorageResult<()> {
-    let existing = object_store
-        .get(key)
+    let path = temporary_directory.join(format!("verify-{}", Uuid::now_v7()));
+    let downloaded_size = object_store
+        .get_to_file(key, &path)
         .await?
         .ok_or_else(|| StorageError::Invalid(format!("snapshot object vanished: {key}")))?;
-    if existing.object_size != expected_size
-        || xxhash_rust::xxh3::xxh3_64(&existing.bytes) != expected_checksum
+    let (actual_size, actual_checksum) = file_checksum(&path)?;
+    fs::remove_file(&path)?;
+    if downloaded_size != expected_size
+        || actual_size != expected_size
+        || actual_checksum != expected_checksum
     {
-        return Err(StorageError::Invalid(format!(
-            "snapshot object differs: {key}"
-        )));
+        return Err(StorageError::SnapshotObjectMismatch {
+            key: key.to_owned(),
+        });
     }
     Ok(())
 }
@@ -288,6 +316,10 @@ pub async fn restore_snapshot(
         ));
     }
     fs::create_dir_all(target_directory)?;
+    let mut target_guard = RestoreTargetGuard {
+        path: target_directory.to_path_buf(),
+        is_committed: false,
+    };
     for file in &manifest.files {
         let path = target_directory.join(&file.relative_path);
         let downloaded_size = object_store
@@ -299,10 +331,9 @@ pub async fn restore_snapshot(
         let (size, checksum) = file_checksum(&path)?;
         if downloaded_size != file.size_bytes || size != file.size_bytes || checksum != file.xxh3_64
         {
-            return Err(StorageError::Invalid(format!(
-                "snapshot file checksum mismatch: {}",
-                file.object_key
-            )));
+            return Err(StorageError::SnapshotChecksumMismatch {
+                key: file.object_key.clone(),
+            });
         }
     }
     let restored = match LocalStoreKind::try_from(manifest.store_kind)
@@ -337,6 +368,7 @@ pub async fn restore_snapshot(
     meta.lineage_id = new_node_meta().lineage_id;
     meta.last_snapshot_number = 0;
     restored.put_node_meta(&meta)?;
+    target_guard.is_committed = true;
     Ok(restored)
 }
 
@@ -353,7 +385,7 @@ pub async fn retain_snapshots(
             "snapshot retention count must be positive".into(),
         ));
     }
-    validate_path_segment(node_id)?;
+    validate_node_identifier(node_id)?;
     let lineage = parse_lineage(lineage_id)?;
     let prefix = format!("snapshot/{node_id}/{lineage}/manifest/");
     let mut keys = Vec::new();
@@ -403,11 +435,16 @@ pub async fn retain_snapshots(
         })
         .filter(|key| !retained_files.contains(key))
         .collect();
-    for index in removable {
-        object_store.delete(&keys[index]).await?;
+    let obsolete_manifests: Vec<String> = removable
+        .into_iter()
+        .map(|index| keys[index].clone())
+        .collect();
+    for chunk in obsolete_manifests.chunks(1000) {
+        object_store.delete_many(chunk).await?;
     }
-    for key in obsolete_files {
-        object_store.delete(key).await?;
+    let obsolete_files: Vec<String> = obsolete_files.into_iter().map(str::to_owned).collect();
+    for chunk in obsolete_files.chunks(1000) {
+        object_store.delete_many(chunk).await?;
     }
     Ok(())
 }
@@ -420,6 +457,7 @@ fn partition_positions(store: &impl LocalReadView) -> StorageResult<Vec<Partitio
             meta.applied.map(|applied| PartitionAppliedPosition {
                 partition: meta.partition,
                 applied: Some(applied),
+                applied_epoch: meta.applied_epoch,
             })
         })
         .collect())
@@ -451,7 +489,7 @@ fn validate_path_segment(segment: &str) -> StorageResult<()> {
 
 fn validate_manifest(key: &str, manifest: &SnapshotManifest) -> StorageResult<()> {
     let lineage = parse_lineage(&manifest.lineage_id)?;
-    validate_path_segment(&manifest.node_id)?;
+    validate_node_identifier(&manifest.node_id)?;
     if manifest.format_version != 1 || manifest.cluster_id.len() != 16 {
         return Err(StorageError::Invalid(
             "invalid snapshot manifest version or cluster ID".into(),
@@ -521,6 +559,21 @@ impl Drop for SnapshotTemporaryDirectory {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.path) {
             tracing::warn!(path = %self.path.display(), %error, "failed to remove snapshot temporary directory");
+        }
+    }
+}
+
+struct RestoreTargetGuard {
+    path: std::path::PathBuf,
+    is_committed: bool,
+}
+
+impl Drop for RestoreTargetGuard {
+    fn drop(&mut self) {
+        if !self.is_committed
+            && let Err(error) = fs::remove_dir_all(&self.path)
+        {
+            tracing::warn!(path = %self.path.display(), %error, "failed to remove incomplete restored store");
         }
     }
 }
