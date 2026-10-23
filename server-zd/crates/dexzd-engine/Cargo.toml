@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bytes.workspace = true
 dexzd-apply.workspace = true
 dexzd-clock.workspace = true
@@ -17,6 +18,7 @@ dexzd-keyspace.workspace = true
 dexzd-log.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
+dexzd-request-validation.workspace = true
 dexzd-storage.workspace = true
 dexzd-worker-dispatch.workspace = true
 futures.workspace = true

@@ -1006,6 +1006,7 @@ dependencies = [
 name = "dexzd-engine"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "dexzd-apply",
  "dexzd-clock",
@@ -1014,6 +1015,7 @@ dependencies = [
  "dexzd-log",
  "dexzd-object-store",
  "dexzd-protocol",
+ "dexzd-request-validation",
  "dexzd-storage",
  "dexzd-worker-dispatch",
  "futures",
