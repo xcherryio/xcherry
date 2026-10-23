@@ -13,6 +13,7 @@ mod outbox;
 mod run_purge;
 
 pub(crate) use inbox::apply_inbox_message;
+#[expect(unused_imports, reason = "A3 calls this after the wait engine lands.")]
 pub(crate) use outbox::{
     apply_outbox_ack, on_outbox_retention_fired, report_child_closed, start_child_flows,
 };

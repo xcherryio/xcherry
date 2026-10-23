@@ -12,20 +12,27 @@ use dexzd_apply::{
     ApplyContext, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
-use dexzd_keyspace::row_keys::{outbox_key, prefix_range, run_named_key, run_singleton_key};
+use dexzd_keyspace::row_keys::{
+    hard_delete_pending_key, outbox_key, prefix_range, run_item_index_key, run_named_key,
+    run_singleton_key,
+};
 use dexzd_keyspace::{
-    ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, run_prefix, run_table_prefix,
+    ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, run_prefix,
+    run_table_prefix,
 };
 use dexzd_protocol::dex::{
-    FlowConfig, FlowStatus, FlowTimeoutPolicy, StartFlowRequest, StopFlowRequest, StopType,
-    SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, WorkerTarget,
+    CloseDecision, CloseDecisionType, FlowConfig, FlowStatus, FlowTimeoutPolicy,
+    InvokeExecuteMethodResponse, StartFlowRequest, StepDecision, StepOptions, StopFlowRequest,
+    StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, WorkerTarget,
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand, FlowStartCommand, FlowStopCommand,
+    HardDeleteObjectRecord, HardDeleteObjectReference, HardDeleteObjectsDeletedCommand,
     InboxMessageCommand, OutboxAckCommand, OutboxRecord, OutboxRetentionTimerId,
-    ParentFlowReference, RunPurgeCommand, RunRecord, RunSettings, SubFlowResultRecord, TimerId,
-    TimersFiredCommand, command_reply, flow_command::Command, inbox_message_command, outbox_record,
-    timer_id,
+    ParentFlowReference, RunPurgeCommand, RunRecord, RunSettings, StepAttemptFailedCommand,
+    StepAttemptStartedCommand, StepInvocationKey, StepMethod, StepMethodCompletedCommand,
+    SubFlowResultRecord, TimerId, TimersFiredCommand, command_reply, flow_command::Command,
+    inbox_message_command, outbox_record, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -189,6 +196,10 @@ impl Harness {
                         condition: Some(SubFlowCondition {
                             sub_flow_type: "ChildFlow".to_owned(),
                             start_step_type: "ChildStep".to_owned(),
+                            step_options: Some(StepOptions {
+                                skip_wait_for: true,
+                                ..StepOptions::default()
+                            }),
                             options: Some(SubFlowOptions {
                                 reuse_policy: reuse_policy as i32,
                                 ..SubFlowOptions::default()
@@ -426,6 +437,14 @@ fn child_start_completion_dedup_ack_retention_and_purge() {
             .keys()
             .all(|(_, key)| !key.starts_with(&run_key_prefix))
     );
+    let mut signature = child_hash.to_be_bytes().to_vec();
+    signature.extend_from_slice(&FIRST_CHILD_RUN);
+    assert!(harness.state.rows.keys().all(|(family, key)| {
+        *family != ColumnFamily::PartitionIndex
+            || !key
+                .windows(signature.len())
+                .any(|window| window == signature)
+    }));
 }
 
 #[test]
@@ -523,4 +542,156 @@ fn attach_reuses_running_run_and_always_restart_terminates_it() {
         harness.record(CHILD_ID, SECOND_CHILD_RUN).status,
         FlowStatus::Running as i32
     );
+}
+
+#[test]
+fn every_terminal_child_status_reports_to_parent() {
+    for expected_status in [
+        FlowStatus::Completed,
+        FlowStatus::Failed,
+        FlowStatus::Canceled,
+        FlowStatus::Terminated,
+    ] {
+        let mut harness = Harness::new();
+        harness.start_parent();
+        harness.deliver_child_start(
+            START_MESSAGE,
+            FIRST_CHILD_RUN,
+            "child-request",
+            SubFlowReusePolicy::Unspecified,
+        );
+        match expected_status {
+            FlowStatus::Completed | FlowStatus::Failed => {
+                let invocation = StepInvocationKey {
+                    step_execution_id: "ChildStep-1".to_owned(),
+                    method: StepMethod::Execute as i32,
+                };
+                harness.apply(
+                    CHILD_ID,
+                    &FIRST_CHILD_RUN,
+                    Command::StepAttemptStarted(StepAttemptStartedCommand {
+                        invocation: Some(invocation.clone()),
+                        attempt: 1,
+                        task_id: [8; 16].to_vec(),
+                    }),
+                );
+                if expected_status == FlowStatus::Completed {
+                    harness.apply(
+                        CHILD_ID,
+                        &FIRST_CHILD_RUN,
+                        Command::StepMethodCompleted(StepMethodCompletedCommand {
+                            invocation: Some(invocation),
+                            attempt: 1,
+                            response: Some(step_method_completed_command::Response::Execute(
+                                InvokeExecuteMethodResponse {
+                                    step_decision: Some(StepDecision {
+                                        close_decision: Some(CloseDecision {
+                                            close_decision_type: CloseDecisionType::ForceComplete
+                                                as i32,
+                                            ..CloseDecision::default()
+                                        }),
+                                        ..StepDecision::default()
+                                    }),
+                                    ..InvokeExecuteMethodResponse::default()
+                                },
+                            )),
+                            ..StepMethodCompletedCommand::default()
+                        }),
+                    );
+                } else {
+                    harness.apply(
+                        CHILD_ID,
+                        &FIRST_CHILD_RUN,
+                        Command::StepAttemptFailed(StepAttemptFailedCommand {
+                            invocation: Some(invocation),
+                            attempt: 1,
+                            kind: 1,
+                            is_non_retryable: true,
+                            server_detail: "failed".to_owned(),
+                            ..StepAttemptFailedCommand::default()
+                        }),
+                    );
+                }
+            }
+            FlowStatus::Canceled | FlowStatus::Terminated => {
+                let stop_type = if expected_status == FlowStatus::Canceled {
+                    StopType::Cancel
+                } else {
+                    StopType::Terminate
+                };
+                harness.apply(
+                    CHILD_ID,
+                    &FIRST_CHILD_RUN,
+                    Command::FlowStop(FlowStopCommand {
+                        request: Some(StopFlowRequest {
+                            stop_type: stop_type as i32,
+                            ..StopFlowRequest::default()
+                        }),
+                    }),
+                );
+            }
+            _ => unreachable!("test names only terminal statuses"),
+        }
+        let outbox = harness.outbox(CHILD_ID, FIRST_CHILD_RUN);
+        assert_eq!(outbox.len(), 1, "one report for {expected_status:?}");
+        let outbox_record::Payload::ChildCompleted(report) = outbox[0].payload.as_ref().unwrap()
+        else {
+            panic!("expected completion report")
+        };
+        assert_eq!(
+            report.result.as_ref().unwrap().flow_status,
+            expected_status as i32
+        );
+        assert_ok(&harness.deliver_completion(&outbox[0]));
+    }
+}
+
+#[test]
+fn hard_delete_ack_removes_pending_row_and_index_idempotently() {
+    let mut harness = Harness::new();
+    harness.start_parent();
+    let flow_hash = harness.hasher.flow_hash(TenantId::DEFAULT, "parent");
+    let partition = harness.hasher.partition_of(flow_hash);
+    let row_key = hard_delete_pending_key(flow_hash, RunId(PARENT_RUN), "object-1");
+    let index_key = run_item_index_key(
+        partition,
+        IndexKind::HardDeletePending,
+        flow_hash,
+        RunId(PARENT_RUN),
+        b"object-1",
+    );
+    harness.state.rows.insert(
+        (ColumnFamily::Flow, row_key.clone()),
+        HardDeleteObjectRecord {
+            object: Some(HardDeleteObjectReference {
+                object_id: "object-1".to_owned(),
+                ..HardDeleteObjectReference::default()
+            }),
+            written_seq: 1,
+        }
+        .encode_to_vec(),
+    );
+    harness.state.rows.insert(
+        (ColumnFamily::PartitionIndex, index_key.clone()),
+        Vec::new(),
+    );
+    let command = Command::HardDeleteObjectsDeleted(HardDeleteObjectsDeletedCommand {
+        object_ids: vec!["object-1".to_owned()],
+    });
+    assert_ok(&harness.apply("parent", &PARENT_RUN, command.clone()));
+    assert!(
+        !harness
+            .state
+            .rows
+            .contains_key(&(ColumnFamily::Flow, row_key))
+    );
+    assert!(
+        !harness
+            .state
+            .rows
+            .contains_key(&(ColumnFamily::PartitionIndex, index_key))
+    );
+    let repeated = harness.apply("parent", &PARENT_RUN, command);
+    assert_ok(&repeated);
+    assert!(repeated.writes.is_empty());
 }

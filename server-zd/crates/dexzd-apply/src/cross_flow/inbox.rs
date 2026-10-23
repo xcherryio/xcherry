@@ -328,10 +328,10 @@ fn invalid_child_parameters(
     {
         return Some("SubFlow requires a pull Worker target");
     }
-    if let Some(step_options) = condition.step_options.as_ref() {
-        if step_options.wait_for_failure_policy == 2 || step_options.execute_failure_policy == 2 {
-            return Some("SubFlow Step failure proceed policy is unsupported");
-        }
+    if let Some(step_options) = condition.step_options.as_ref()
+        && (step_options.wait_for_failure_policy == 2 || step_options.execute_failure_policy == 2)
+    {
+        return Some("SubFlow Step failure proceed policy is unsupported");
     }
     if options
         .timeout_handler_options

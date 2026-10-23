@@ -29,6 +29,7 @@ use crate::values::{
 const OUTBOX_RETENTION_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
 
 /// Writes one complete child-start message per SubFlow condition.
+#[expect(dead_code, reason = "A3 calls this after the wait engine lands.")]
 pub(crate) fn start_child_flows(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
@@ -132,6 +133,7 @@ pub(crate) fn start_child_flows(
     Ok(Ok(()))
 }
 
+#[expect(dead_code, reason = "A3 calls the child-start path after its wait engine lands.")]
 fn pin_complete_value(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
@@ -163,6 +165,7 @@ fn pin_complete_value(
     Ok(Ok(complete))
 }
 
+#[expect(dead_code, reason = "A3 calls the child-start path after its wait engine lands.")]
 fn effective_flow_config(
     parent: Option<&FlowConfig>,
     override_config: Option<&FlowConfig>,
