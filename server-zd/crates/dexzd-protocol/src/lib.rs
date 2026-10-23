@@ -18,3 +18,11 @@
 pub mod dex {
     tonic::include_proto!("dex");
 }
+
+/// Generated server-zd internal persistent formats from `server-zd/proto/dexzd/v1`.
+pub mod dexzd {
+    /// Version 1 of the internal formats.
+    pub mod v1 {
+        tonic::include_proto!("dexzd.v1");
+    }
+}

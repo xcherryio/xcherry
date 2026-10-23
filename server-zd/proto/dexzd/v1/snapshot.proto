@@ -1,0 +1,95 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+// Persistent format of server-zd snapshots and local store metadata.
+// Compatibility: additive changes only; never renumber, reuse, or retype a field.
+syntax = "proto3";
+
+package dexzd.v1;
+
+import "dexzd/v1/log.proto";
+
+// Kind of local store that produced a snapshot.
+enum LocalStoreKind {
+  LOCAL_STORE_KIND_UNSPECIFIED = 0;
+  // RocksDB checkpoint files (production).
+  LOCAL_STORE_KIND_ROCKSDB = 1;
+  // One serialized key-value file (deterministic simulation only).
+  LOCAL_STORE_KIND_MEMORY = 2;
+}
+
+// Manifest of one complete snapshot. It is written last, at
+// <prefix>/snapshot/<node_id>/<lineage_id>/manifest/<snapshot_number:020>; a snapshot without a
+// manifest does not exist.
+message SnapshotManifest {
+  uint32 format_version = 1;
+  // 16-byte cluster ID.
+  bytes cluster_id = 2;
+  string node_id = 3;
+  // 16-byte UUIDv7 of the local store lineage that produced the snapshot.
+  bytes lineage_id = 4;
+  // Increases by one per snapshot within a lineage.
+  uint64 snapshot_number = 5;
+  int64 created_at_unix_micros = 6;
+  LocalStoreKind store_kind = 7;
+  // Every file needed to restore the store. Files are immutable and may live under another
+  // lineage's files directory.
+  repeated SnapshotFile files = 8;
+  // Applied log position of every partition captured by the snapshot.
+  repeated PartitionAppliedPosition partition_positions = 9;
+}
+
+// One immutable file of a snapshot.
+message SnapshotFile {
+  // Full object key.
+  string object_key = 1;
+  // Path relative to the restored store directory.
+  string relative_path = 2;
+  uint64 size_bytes = 3;
+  // xxh3-64 of the file content.
+  uint64 xxh3_64 = 4;
+}
+
+// The last log batch whose records for this partition are fully applied.
+message PartitionAppliedPosition {
+  uint32 partition = 1;
+  LogPosition applied = 2;
+  // Epoch of that batch; see PartitionMeta.applied_epoch.
+  uint64 applied_epoch = 3;
+}
+
+// Local store record for one partition, written in the same atomic batch as the state it
+// describes (column family partition_meta, key = partition as 2 bytes big-endian).
+message PartitionMeta {
+  uint32 partition = 1;
+  // Last batch whose records for this partition are applied.
+  LogPosition applied = 2;
+  // Largest command timestamp applied in this partition; owners propose strictly larger ones.
+  int64 last_command_timestamp_micros = 3;
+  // Behavior version of the last applied command, for diagnostics.
+  uint32 last_behavior_version = 4;
+  // Epoch of the last applied batch: the effective writer epoch at `applied`. Log recovery
+  // needs it to recognize void batches without rereading earlier EpochStart batches.
+  uint64 applied_epoch = 5;
+}
+
+// Local store record for the node (column family node_meta).
+message NodeMeta {
+  // 16-byte UUIDv7 that names this local store's lineage.
+  bytes lineage_id = 1;
+  // Newest snapshot uploaded from this lineage.
+  uint64 last_snapshot_number = 2;
+  // Hard-delete objects uploaded before their command committed; checked after a restart.
+  repeated PendingHardDeleteUpload pending_hard_delete_uploads = 3;
+}
+
+// A hard-delete Attribute object uploaded by the owner whose command may not have committed.
+message PendingHardDeleteUpload {
+  string object_key = 1;
+  int64 uploaded_at_unix_micros = 2;
+}

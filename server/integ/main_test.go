@@ -31,6 +31,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DEX_INTEG_FAKE_BINARY") == "1" {
+		os.Exit(runFakeBinaryDex())
+	}
 	flag.Parse()
 	var err error
 
@@ -51,6 +54,18 @@ func TestMain(m *testing.M) {
 	}
 
 	fmt.Println("*temporalIntegTest, *cadenceIntegTest", *temporalIntegTest, *cadenceIntegTest)
+	if *integWorkerMode != "" && *integWorkerMode != "push" && *integWorkerMode != "pull" {
+		log.Fatal("integ-worker-mode must be push or pull")
+	}
+	if *dexServerBinary != "" {
+		if *dexServerEngine != "zd" || *dexServerAddress != "" {
+			log.Fatal("binary mode requires -dex-server-engine=zd and no dexServerAddress")
+		}
+		*integWorkerMode = "pull"
+		*cadenceIntegTest = false
+		code := m.Run()
+		os.Exit(code)
+	}
 	if *dexServerAddress != "" && (!*temporalIntegTest || *cadenceIntegTest) {
 		log.Fatal("dexServerAddress requires Temporal-only integration tests")
 	}

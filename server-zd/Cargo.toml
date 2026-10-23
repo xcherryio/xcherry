@@ -78,6 +78,13 @@ uuid = { version = "1", features = ["v4", "v7"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zstd = "0.13"
 
+[profile.dev]
+# Line tables keep backtraces useful; full debug info multiplies target sizes across worktrees.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unreachable_pub = "warn"

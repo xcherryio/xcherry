@@ -701,7 +701,7 @@ async function startHarness() {
   let invocationCount = 0;
   server.addService(FlowServiceService, {
     getServerInfo(_call, callback) {
-      callback(null, { serverVersion: "test", minimumSupportedProtocolVersion: 1, currentProtocolVersion: 1 });
+      callback(null, { serverVersion: "test", minimumSupportedProtocolVersion: 1, currentProtocolVersion: 1, serverEngine: 0 });
     },
     syncAttributeIndexes(_call, callback) { callback(null, {}); },
   } as Partial<FlowServiceServer> as FlowServiceServer);
