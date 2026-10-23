@@ -19,10 +19,13 @@ pub struct RuntimeConfig {
     /// Default 256. A proposal beyond it waits for commits to catch up, at most
     /// `speculation_capacity_wait`, and then fails with `Unavailable`.
     pub max_speculative_commands_per_flow: usize,
-    /// Largest number of uncommitted write bytes (keys, values, and replies) across every
-    /// overlay of the node. Default 64 MiB. Enforced like `max_speculative_commands_per_flow`;
-    /// a single command larger than the limit is admitted only when no other bytes are
-    /// uncommitted.
+    /// Largest number of uncommitted bytes (queued commands plus their speculative writes, keys,
+    /// values, effects, and replies) across every overlay of the node. Default 64 MiB. Enforced
+    /// like `max_speculative_commands_per_flow`; a single command larger than the limit is
+    /// admitted only when no other bytes are uncommitted. Each proposal atomically reserves its
+    /// command's size before it is submitted and adds its outcome's size after the speculative
+    /// apply, so the total can exceed the limit by at most the outcomes of proposals running at
+    /// that moment (one per proposing thread).
     pub max_speculative_bytes_per_node: usize,
     /// How long a proposal waits for speculation capacity before it fails with `Unavailable`.
     /// Default 5 s.

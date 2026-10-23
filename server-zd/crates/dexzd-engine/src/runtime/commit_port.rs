@@ -9,6 +9,7 @@
 //! The boundary between the Flow runtime and the commit pipeline.
 
 use dexzd_apply::{ApplyContext, ApplyOutcome, FlowStateReader};
+use dexzd_keyspace::PartitionId;
 use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition};
 use tokio::sync::oneshot;
 
@@ -130,4 +131,26 @@ pub trait FlowCommandCommitter: Send + Sync + 'static {
     ///
     /// Returns [`CommitError`] when the local store cannot open a view.
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError>;
+
+    /// Checks a speculative outcome against its committed outcome, for example in debug replay
+    /// checks. The runtime calls it for every committed command it applied speculatively, after
+    /// its own byte comparison passed, and halts on an error.
+    ///
+    /// Returns [`ReplayMismatch`] when the outcomes must be treated as different.
+    fn check_speculative_outcome(
+        &self,
+        _partition: PartitionId,
+        _speculative: &ApplyOutcome,
+        _committed: &CommittedCommand,
+    ) -> Result<(), ReplayMismatch> {
+        Ok(())
+    }
+}
+
+/// A speculative outcome that differs from its committed outcome.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("speculative and committed outcomes differ: {detail}")]
+pub struct ReplayMismatch {
+    /// What differs.
+    pub detail: String,
 }

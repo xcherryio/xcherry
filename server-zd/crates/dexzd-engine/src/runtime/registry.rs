@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader};
 use dexzd_keyspace::{PartitionHasher, RunId, TenantId};
-use dexzd_protocol::dexzd::v1::{FlowCommand, StepInvocationKey};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, StepInvocationKey, flow_command, inbox_message_command,
+};
 use prost::Message;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +28,7 @@ use crate::runtime::flow_runtime::{FlowRuntime, FlowRuntimeState};
 use crate::runtime::rpc_locks::{
     LockBlocker, RpcLockTable, find_invocation_lock_blocker, find_rpc_lock_blocker,
 };
-use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry};
+use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry, OwnedOverlayView};
 use crate::runtime::{
     CommitTicket, CommitUrgency, CommittedFlowCommand, FlowAddress, FlowCommandCommitter,
     HardDeleteValueReader, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, RuntimeError,
@@ -67,7 +69,8 @@ pub struct PendingInvocation {
 pub struct ProposalResult {
     /// The outcome on the speculative overlay; equal to the committed one unless the node halts.
     pub speculative: ApplyOutcome,
-    /// Resolves once the command is committed and applied to the local store.
+    /// Resolves once the command is committed and applied to the local store. Wait for it with
+    /// [`FlowRuntimeRegistry::wait_for_commit`], which halts the registry when the commit fails.
     pub ticket: CommitTicket,
 }
 
@@ -129,17 +132,15 @@ impl FlowRuntimeRegistry {
         command: FlowCommand,
         urgency: CommitUrgency,
     ) -> Result<ProposalResult, RuntimeError> {
-        let mut command = Some(command);
         let proposal = self
-            .propose_with(&flow, urgency, |_| {
-                Ok(Some((command.take().expect("built once"), ())))
-            })
+            .propose_with(&flow, urgency, |_| Ok(Some((command.clone(), ()))))
             .await?;
         Ok(proposal.expect("the builder always proposes").0)
     }
 
-    /// Waits until every command this Flow proposed before the call has settled (committed or
-    /// discarded). Dispatch calls it before a SYNC invocation (plan 8.2, invariant A4).
+    /// Waits until every command this Flow proposed before the call has settled (committed; a
+    /// failed commit halts the registry instead). Dispatch calls it before a SYNC invocation
+    /// (plan 8.2, invariant A4).
     ///
     /// Returns `NodeStopping` when the registry halts while waiting.
     pub async fn sync_barrier(&self, flow: &FlowAddress) -> Result<(), RuntimeError> {
@@ -174,8 +175,9 @@ impl FlowRuntimeRegistry {
         self.check_running()?;
         let lease = self.inner.lease(flow);
         let runtime = lease.runtime();
-        let committed = self.inner.dependencies.committer.committed_view()?;
         let state = runtime.lock_state();
+        // Snapshot under the Flow lock: a commit cannot drop its overlay entry in between.
+        let committed = self.inner.dependencies.committer.committed_view()?;
         let reader = state.overlay.reader(committed.as_ref());
         let blocker = find_invocation_lock_blocker(
             &reader,
@@ -200,7 +202,6 @@ impl FlowRuntimeRegistry {
         command: FlowCommand,
         urgency: CommitUrgency,
     ) -> Result<Option<ProposalResult>, RuntimeError> {
-        let mut command = Some(command);
         let proposal = self
             .propose_with(flow, urgency, |scope| {
                 let blocker = find_invocation_lock_blocker(
@@ -215,7 +216,7 @@ impl FlowRuntimeRegistry {
                 if blocker.is_some() {
                     return Ok(None);
                 }
-                Ok(Some((command.take().expect("built once"), ())))
+                Ok(Some((command.clone(), ())))
             })
             .await?;
         Ok(proposal.map(|(result, ())| result))
@@ -225,7 +226,8 @@ impl FlowRuntimeRegistry {
     ///
     /// Drops the command's overlay entry and compares its speculative outcome with the
     /// committed one byte for byte; a mismatch halts the registry. Then forwards the committed
-    /// effects and wakes long-poll waiters. Never blocks on I/O.
+    /// effects and wakes long-poll waiters. Replayed commands, which have no overlay entry, only
+    /// wake waiters: partition rebuild owns their effects. Never blocks on I/O.
     pub fn apply_committed(&self, committed: CommittedFlowCommand) {
         if self.inner.halted.is_cancelled() {
             return;
@@ -235,38 +237,52 @@ impl FlowRuntimeRegistry {
             committed.command.flow_id.clone(),
         );
         let outcome = &committed.committed.outcome;
+        let mut speculative = None;
         if let Some(lease) = self.inner.lease_existing(&flow) {
             let runtime = lease.runtime();
             let mut state = runtime.lock_state();
-            let matched = state.overlay.take_committed(&committed.command.command_id);
-            let failure = match matched {
+            let mut is_out_of_order = false;
+            match state.overlay.take_committed(&committed.command.command_id) {
                 CommittedMatch::Head(entry) => {
                     self.inner.release_bytes(entry.size_bytes);
                     state.record_settled(1);
-                    (!is_same_outcome(&entry.outcome, outcome)).then(|| {
-                        format!(
-                            "speculative and committed outcomes differ for Flow {}",
-                            flow.flow_id
-                        )
-                    })
+                    speculative = Some(entry.outcome);
                 }
-                CommittedMatch::Foreign => None,
-                CommittedMatch::OutOfOrder => Some(format!(
-                    "commands of Flow {} committed out of proposal order",
-                    flow.flow_id
-                )),
-            };
+                CommittedMatch::Foreign => {}
+                CommittedMatch::OutOfOrder => is_out_of_order = true,
+            }
             runtime.publish_settled(&state);
             drop(state);
-            if let Some(reason) = failure {
-                self.halt(reason);
+            if is_out_of_order {
+                self.halt(format!(
+                    "commands of Flow {} committed out of proposal order",
+                    flow.flow_id
+                ));
                 return;
             }
         }
-        self.inner
-            .dependencies
-            .effects
-            .handle(&flow, &outcome.effects, true);
+        // Commands this registry never proposed are replays; partition rebuild owns their effects.
+        if let Some(speculative) = speculative {
+            if !is_same_outcome(&speculative, outcome) {
+                self.halt(format!(
+                    "speculative and committed outcomes differ for Flow {}",
+                    flow.flow_id
+                ));
+                return;
+            }
+            if let Err(mismatch) = self.inner.dependencies.committer.check_speculative_outcome(
+                committed.context.partition,
+                &speculative,
+                &committed.committed,
+            ) {
+                self.halt(mismatch.to_string());
+                return;
+            }
+            self.inner
+                .dependencies
+                .effects
+                .handle(&flow, &outcome.effects, true);
+        }
         for effect in &outcome.effects {
             if let ApplyEffect::WakeWaiters { change, .. } = effect {
                 self.inner.waiters.wake(&flow, change);
@@ -319,6 +335,8 @@ impl FlowRuntimeRegistry {
     }
 
     /// Builds, submits, and speculatively applies a command in one critical section of the Flow's lock.
+    ///
+    /// `build` runs again after each wait for capacity, against the then-current state.
     pub(crate) async fn propose_with<T>(
         &self,
         flow: &FlowAddress,
@@ -333,11 +351,14 @@ impl FlowRuntimeRegistry {
             let capacity_released = self.inner.capacity_released.notified();
             tokio::pin!(capacity_released);
             capacity_released.as_mut().enable();
-            let proposal = {
+            let admission = {
                 let mut state = runtime.lock_state();
-                self.inner
-                    .has_capacity(&state)
-                    .then(|| self.propose_locked(runtime, &mut state, urgency, &mut build))
+                self.propose_locked(runtime, &mut state, urgency, &mut build)
+            };
+            let proposal = match admission {
+                Ok(Admission::AtCapacity) => None,
+                Ok(Admission::Decided(decided)) => Some(Ok(decided)),
+                Err(error) => Some(Err(error)),
             };
             if let Some(proposal) = proposal {
                 if let Ok(Some((result, _))) = &proposal
@@ -366,13 +387,18 @@ impl FlowRuntimeRegistry {
         }
     }
 
+    /// Returns [`Admission::AtCapacity`] when the Flow or the node is at its speculation limit;
+    /// nothing is reserved or submitted then.
     fn propose_locked<T>(
         &self,
         runtime: &FlowRuntime,
         state: &mut FlowRuntimeState,
         urgency: CommitUrgency,
         build: &mut impl FnMut(&mut ProposalScope<'_>) -> Result<Option<(FlowCommand, T)>, RuntimeError>,
-    ) -> Result<Option<(ProposalResult, T)>, RuntimeError> {
+    ) -> Result<Admission<T>, RuntimeError> {
+        if state.overlay.len() >= self.inner.config.max_speculative_commands_per_flow {
+            return Ok(Admission::AtCapacity);
+        }
         let dependencies = &self.inner.dependencies;
         let committed = dependencies.committer.committed_view()?;
         let built = {
@@ -384,11 +410,24 @@ impl FlowRuntimeRegistry {
             })?
         };
         let Some((command, extra)) = built else {
-            return Ok(None);
+            return Ok(Admission::Decided(None));
         };
-        let (stamped, ticket) = dependencies
+        let command = self.resolve_child_start(command);
+        // Reserve before submit, which cannot be undone; the outcome's size is added after apply.
+        let reserved_bytes = command.encoded_len();
+        if !self.inner.try_reserve_bytes(reserved_bytes) {
+            return Ok(Admission::AtCapacity);
+        }
+        let submitted = dependencies
             .committer
-            .submit(runtime.context, command, urgency)?;
+            .submit(runtime.context, command, urgency);
+        let (stamped, ticket) = match submitted {
+            Ok(submitted) => submitted,
+            Err(error) => {
+                self.inner.release_bytes(reserved_bytes);
+                return Err(error.into());
+            }
+        };
         let applied = {
             let reader = state.overlay.reader(committed.as_ref());
             dependencies
@@ -398,24 +437,66 @@ impl FlowRuntimeRegistry {
         let speculative = match applied {
             Ok(outcome) => outcome,
             Err(error) => {
+                self.inner.release_bytes(reserved_bytes);
                 let error = RuntimeError::from(error);
                 self.halt(error.to_string());
                 return Err(error);
             }
         };
-        let entry = OverlayEntry::new(stamped.command_id, speculative.clone());
+        let entry = OverlayEntry::new(&stamped, speculative.clone());
         self.inner
-            .uncommitted_bytes
-            .fetch_add(entry.size_bytes, Ordering::AcqRel);
+            .settle_reservation(reserved_bytes, entry.size_bytes);
         state.overlay.push(entry);
         state.proposed_count += 1;
-        Ok(Some((
+        Ok(Admission::Decided(Some((
             ProposalResult {
                 speculative,
                 ticket,
             },
             extra,
-        )))
+        ))))
+    }
+
+    /// Gives a child Flow start its new run ID and run settings, as FlowStart gets them.
+    fn resolve_child_start(&self, mut command: FlowCommand) -> FlowCommand {
+        if let Some(flow_command::Command::InboxMessage(inbox)) = command.command.as_mut()
+            && matches!(
+                inbox.payload,
+                Some(inbox_message_command::Payload::ChildStart(_))
+            )
+        {
+            if inbox.new_run_id.is_empty() {
+                inbox.new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+            }
+            if inbox.settings.is_none() {
+                inbox.settings = Some(self.inner.config.run_settings);
+            }
+        }
+        command
+    }
+
+    /// Returns a read view of a Flow's committed state, plus its uncommitted commands when
+    /// `include_speculative` is true. The view is a snapshot and holds no lock.
+    ///
+    /// Returns an error when the committed view cannot be opened.
+    pub fn flow_state_reader(
+        &self,
+        flow: &FlowAddress,
+        include_speculative: bool,
+    ) -> Result<Box<dyn FlowStateReader + Send>, RuntimeError> {
+        self.check_running()?;
+        let lease = include_speculative
+            .then(|| self.inner.lease_existing(flow))
+            .flatten();
+        let Some(lease) = lease else {
+            return Ok(self.inner.dependencies.committer.committed_view()?);
+        };
+        let state = lease.runtime().lock_state();
+        // Snapshot under the Flow lock: a commit cannot drop its overlay entry in between.
+        let committed = self.inner.dependencies.committer.committed_view()?;
+        let overlay = state.overlay.clone();
+        drop(state);
+        Ok(Box::new(OwnedOverlayView { committed, overlay }))
     }
 
     /// Runs `inspect` under the Flow's lock with the speculative view and the RPC locks.
@@ -426,8 +507,9 @@ impl FlowRuntimeRegistry {
     ) -> Result<T, RuntimeError> {
         self.check_running()?;
         let runtime = lease.runtime();
-        let committed = self.inner.dependencies.committer.committed_view()?;
         let mut state = runtime.lock_state();
+        // Snapshot under the Flow lock: a commit cannot drop its overlay entry in between.
+        let committed = self.inner.dependencies.committer.committed_view()?;
         let state = &mut *state;
         let reader = state.overlay.reader(committed.as_ref());
         inspect(&mut ProposalScope {
@@ -435,22 +517,6 @@ impl FlowRuntimeRegistry {
             rpc_locks: &mut state.rpc_locks,
             context: runtime.context,
         })
-    }
-
-    /// Discards the Flow's overlay after a commit failure: later entries were built on it.
-    pub(crate) fn discard_overlay(&self, flow: &FlowAddress) {
-        let Some(lease) = self.inner.lease_existing(flow) else {
-            return;
-        };
-        let runtime = lease.runtime();
-        let mut state = runtime.lock_state();
-        let entry_count = state.overlay.len();
-        let bytes = state.overlay.clear();
-        state.record_settled(entry_count);
-        runtime.publish_settled(&state);
-        drop(state);
-        self.inner.release_bytes(bytes);
-        tracing::warn!(flow_id = %flow.flow_id, entry_count, "discarded speculative overlay after a commit failure");
     }
 
     /// Takes RPC locks, or fails with `ABORTED` when an RPC or a running Step holds a key.
@@ -498,6 +564,14 @@ impl FlowRuntimeRegistry {
         }
         Ok(())
     }
+}
+
+/// Result of one proposal attempt under the Flow's lock.
+enum Admission<T> {
+    /// The Flow or the node is at its speculation limit.
+    AtCapacity,
+    /// The builder declined (`None`) or the command was proposed.
+    Decided(Option<(ProposalResult, T)>),
 }
 
 /// What a proposal builder sees while it holds the Flow's lock.
@@ -563,11 +637,26 @@ impl RegistryInner {
         }
     }
 
-    fn has_capacity(&self, state: &FlowRuntimeState) -> bool {
-        let uncommitted_bytes = self.uncommitted_bytes.load(Ordering::Acquire);
-        state.overlay.len() < self.config.max_speculative_commands_per_flow
-            && (uncommitted_bytes == 0
-                || uncommitted_bytes < self.config.max_speculative_bytes_per_node)
+    /// Reserves `bytes` of the node's speculation budget in one atomic step.
+    ///
+    /// Returns false when the reservation would exceed the limit while other bytes are held.
+    fn try_reserve_bytes(&self, bytes: usize) -> bool {
+        let limit = self.config.max_speculative_bytes_per_node;
+        self.uncommitted_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current == 0 || current.saturating_add(bytes) <= limit).then(|| current + bytes)
+            })
+            .is_ok()
+    }
+
+    /// Replaces a pre-submit reservation with the entry's actual retained size.
+    fn settle_reservation(&self, reserved_bytes: usize, retained_bytes: usize) {
+        if retained_bytes >= reserved_bytes {
+            self.uncommitted_bytes
+                .fetch_add(retained_bytes - reserved_bytes, Ordering::AcqRel);
+        } else {
+            self.release_bytes(reserved_bytes - retained_bytes);
+        }
     }
 
     fn release_bytes(&self, bytes: usize) {

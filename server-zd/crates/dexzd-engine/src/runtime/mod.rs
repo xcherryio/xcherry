@@ -25,7 +25,7 @@ mod tests;
 
 pub use commit_port::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
-    CommittedFlowCommand, FlowCommandCommitter,
+    CommittedFlowCommand, FlowCommandCommitter, ReplayMismatch,
 };
 pub use flow_address::FlowAddress;
 pub use registry::{

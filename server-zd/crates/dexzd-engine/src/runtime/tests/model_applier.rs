@@ -9,7 +9,7 @@
 //! A small deterministic stand-in for apply that writes real state rows for a few commands.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
@@ -36,6 +36,8 @@ pub(crate) type ScriptedApply = Result<ApplyOutcome, ApplyError>;
 pub(crate) struct ModelApplier {
     pub(crate) scripted: Mutex<VecDeque<ScriptedApply>>,
     pub(crate) applied: Mutex<Vec<FlowCommand>>,
+    /// Runs at the start of every apply call.
+    pub(crate) apply_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl CommandApplier for ModelApplier {
@@ -45,6 +47,10 @@ impl CommandApplier for ModelApplier {
         state: &dyn FlowStateReader,
         command: &FlowCommand,
     ) -> Result<ApplyOutcome, ApplyError> {
+        let hook = self.apply_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
         self.applied.lock().unwrap().push(command.clone());
         if let Some(scripted) = self.scripted.lock().unwrap().pop_front() {
             return scripted;

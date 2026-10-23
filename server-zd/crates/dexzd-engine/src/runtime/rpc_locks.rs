@@ -101,10 +101,18 @@ pub(crate) fn find_invocation_lock_blocker(
         if has_holder(&record) && record.holder.as_ref() != Some(invocation) {
             return Ok(Some((lock_key.clone(), LockBlocker::Step)));
         }
-        let has_earlier_waiter = record.waiters.iter().any(|waiter| {
-            waiter.invocation.as_ref() != Some(invocation)
-                && waiter.pending_since_seq < pending_since_seq
-        });
+        // Apply starts only the first queued waiter, so queue position breaks sequence ties.
+        let own_position = record
+            .waiters
+            .iter()
+            .position(|waiter| waiter.invocation.as_ref() == Some(invocation));
+        let has_earlier_waiter = match own_position {
+            Some(position) => position > 0,
+            None => record
+                .waiters
+                .iter()
+                .any(|waiter| waiter.pending_since_seq < pending_since_seq),
+        };
         if has_earlier_waiter {
             return Ok(Some((lock_key.clone(), LockBlocker::EarlierWaiter)));
         }

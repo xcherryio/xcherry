@@ -13,7 +13,9 @@ use dexzd_keyspace::{ColumnFamily, RunId};
 use dexzd_protocol::dex::{
     AttributeMatch, AttributeMatchOperator, GetAttributesRequest, WaitForAttributeRequest,
 };
-use dexzd_protocol::dexzd::v1::FlowCommand;
+use dexzd_protocol::dexzd::v1::{
+    ChildFlowStartMessage, FlowCommand, InboxMessageCommand, flow_command, inbox_message_command,
+};
 
 use crate::runtime::tests::fixtures::{
     TENANT, attributes_set_command, flow, int_value, start_flow, string_value,
@@ -21,8 +23,8 @@ use crate::runtime::tests::fixtures::{
 use crate::runtime::tests::model_applier::ok_reply;
 use crate::runtime::tests::test_support::{RuntimeHarness, invariant_error};
 use crate::runtime::{
-    CommitError, CommitUrgency, CommittedCommand, CommittedFlowCommand, FlowAddress, RuntimeConfig,
-    RuntimeError,
+    CommitError, CommitUrgency, CommittedCommand, CommittedFlowCommand, FlowAddress,
+    ReplayMismatch, RuntimeConfig, RuntimeError,
 };
 
 async fn started(harness: &RuntimeHarness, flow_id: &str) -> RunId {
@@ -232,7 +234,7 @@ async fn out_of_order_commit_halts_the_registry() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn committed_outcome_of_an_unknown_command_forwards_effects_and_wakes_waiters() {
+async fn committed_outcome_of_a_replayed_command_does_not_forward_effects() {
     let harness = RuntimeHarness::new();
     let address = FlowAddress::new(TENANT, "replayed");
     let run_id = RunId([9; 16]);
@@ -256,12 +258,13 @@ async fn committed_outcome_of_an_unknown_command_forwards_effects_and_wakes_wait
             position: Default::default(),
         },
     });
-    let calls = harness.effect_calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, address);
-    assert!(calls[0].2, "committed effects are marked committed");
+    assert!(
+        harness.effect_calls().is_empty(),
+        "partition rebuild owns the effects of replayed commands"
+    );
     assert!(!harness.registry.halted().is_cancelled());
     assert_eq!(harness.registry.runtime_count(), 0);
+    assert_eq!(address.flow_id, "replayed");
 }
 
 #[tokio::test(start_paused = true)]
@@ -460,7 +463,7 @@ async fn speculative_apply_error_halts_the_registry() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn failed_commit_discards_the_overlay_and_fails_the_client() {
+async fn failed_commit_halts_the_registry_and_fails_the_client() {
     let harness = RuntimeHarness::new();
     started(&harness, "order-1").await;
     let address = flow("order-1");
@@ -485,8 +488,68 @@ async fn failed_commit_discards_the_overlay_and_fails_the_client() {
         matches!(error, RuntimeError::NodeStopping { .. }),
         "{error:?}"
     );
-    assert_eq!(harness.registry.uncommitted_bytes(), 0);
-    harness.registry.sync_barrier(&address).await.unwrap();
+    assert!(harness.registry.halted().is_cancelled());
+    let barrier_error = harness.registry.sync_barrier(&address).await.unwrap_err();
+    assert!(
+        matches!(barrier_error, RuntimeError::NodeStopping { .. }),
+        "{barrier_error:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_commit_never_lets_a_queued_later_command_settle_as_foreign() {
+    let harness = RuntimeHarness::new();
+    let run_id = started(&harness, "order-1").await;
+    let address = flow("order-1");
+    let mut proposals = Vec::new();
+    for number in 1..=2 {
+        proposals.push(
+            harness
+                .registry
+                .propose(
+                    address.clone(),
+                    attribute_command("order-1", run_id, "count", number),
+                    CommitUrgency::Batched,
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    assert!(harness.fail_next(CommitError::Unavailable {
+        detail: "object storage outage".to_owned(),
+    }));
+    let first = proposals.remove(0);
+    let error = harness
+        .registry
+        .wait_for_commit(&address, first.ticket)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, RuntimeError::Unavailable { .. }),
+        "{error:?}"
+    );
+    assert!(harness.registry.halted().is_cancelled());
+    let barrier_error = harness.registry.sync_barrier(&address).await.unwrap_err();
+    assert!(
+        matches!(barrier_error, RuntimeError::NodeStopping { .. }),
+        "{barrier_error:?}"
+    );
+
+    let committed_effects_before = committed_effect_count(&harness);
+    assert!(harness.commit_next(), "the second command was queued");
+    assert_eq!(
+        committed_effect_count(&harness),
+        committed_effects_before,
+        "a halted registry runs no committed effects"
+    );
+}
+
+fn committed_effect_count(harness: &RuntimeHarness) -> usize {
+    harness
+        .effect_calls()
+        .iter()
+        .filter(|(_, _, is_committed)| *is_committed)
+        .count()
 }
 
 #[tokio::test(start_paused = true)]
@@ -644,4 +707,80 @@ async fn owner_crash_before_commit_keeps_only_committed_state() {
     let response = wait.await.unwrap();
     assert_eq!(response.matched_value, Some(int_value(1)));
     assert!(!restarted.registry.halted().is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn committer_replay_check_failure_halts_the_registry() {
+    let harness = RuntimeHarness::new();
+    let run_id = started(&harness, "order-1").await;
+    *harness.committer.replay_mismatch.lock().unwrap() = Some(ReplayMismatch {
+        detail: "debug replay differs".to_owned(),
+    });
+    harness
+        .registry
+        .propose(
+            flow("order-1"),
+            attribute_command("order-1", run_id, "count", 1),
+            CommitUrgency::Prompt,
+        )
+        .await
+        .unwrap();
+    harness.commit_next();
+    assert!(harness.registry.halted().is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn child_start_inbox_messages_get_a_run_id_and_settings() {
+    let harness = RuntimeHarness::new();
+    let command = FlowCommand {
+        flow_id: "child".to_owned(),
+        command: Some(flow_command::Command::InboxMessage(InboxMessageCommand {
+            message_id: vec![1; 16],
+            payload: Some(inbox_message_command::Payload::ChildStart(
+                ChildFlowStartMessage::default(),
+            )),
+            ..InboxMessageCommand::default()
+        })),
+        ..FlowCommand::default()
+    };
+    harness
+        .registry
+        .propose(flow("child"), command, CommitUrgency::Prompt)
+        .await
+        .unwrap();
+    let Some(flow_command::Command::InboxMessage(inbox)) = harness.submitted()[0].command.clone()
+    else {
+        panic!("expected InboxMessage");
+    };
+    assert_eq!(inbox.new_run_id.len(), 16);
+    assert_eq!(
+        inbox.settings.unwrap().retention_after_close_micros,
+        7 * 24 * 60 * 60 * 1_000_000
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn flow_state_reader_optionally_includes_uncommitted_commands() {
+    let harness = RuntimeHarness::new();
+    let run_id = started(&harness, "order-1").await;
+    let address = flow("order-1");
+    harness
+        .registry
+        .propose(
+            address.clone(),
+            attribute_command("order-1", run_id, "count", 1),
+            CommitUrgency::Batched,
+        )
+        .await
+        .unwrap();
+    let key = dexzd_keyspace::run_key(
+        harness.registry.flow_context(&address).flow_hash,
+        run_id,
+        dexzd_keyspace::RunTable::Attribute,
+        b"count",
+    );
+    let speculative = harness.registry.flow_state_reader(&address, true).unwrap();
+    let committed = harness.registry.flow_state_reader(&address, false).unwrap();
+    assert!(speculative.get(ColumnFamily::Flow, &key).unwrap().is_some());
+    assert!(committed.get(ColumnFamily::Flow, &key).unwrap().is_none());
 }

@@ -10,8 +10,11 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use dexzd_apply::{ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite};
+use dexzd_apply::{
+    ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
+};
 use dexzd_keyspace::ColumnFamily;
+use dexzd_protocol::dexzd::v1::FlowCommand;
 use prost::Message;
 
 /// One proposed, uncommitted command and its speculative outcome.
@@ -23,11 +26,14 @@ pub(crate) struct OverlayEntry {
 }
 
 impl OverlayEntry {
-    pub(crate) fn new(command_id: Vec<u8>, outcome: ApplyOutcome) -> Self {
-        let size_bytes = outcome.writes.iter().map(write_size_bytes).sum::<usize>()
+    /// Sizes the entry by everything retained until commit: the queued command and its outcome.
+    pub(crate) fn new(command: &FlowCommand, outcome: ApplyOutcome) -> Self {
+        let size_bytes = command.encoded_len()
+            + outcome.writes.iter().map(write_size_bytes).sum::<usize>()
+            + outcome.effects.iter().map(effect_size_bytes).sum::<usize>()
             + outcome.reply.encoded_len();
         Self {
-            command_id,
+            command_id: command.command_id.clone(),
             outcome,
             size_bytes,
         }
@@ -35,7 +41,7 @@ impl OverlayEntry {
 }
 
 /// Speculative outcomes of uncommitted commands, oldest first.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct SpeculativeOverlay {
     entries: VecDeque<OverlayEntry>,
     total_bytes: usize,
@@ -89,12 +95,6 @@ impl SpeculativeOverlay {
             }
             _ => CommittedMatch::Foreign,
         }
-    }
-
-    /// Drops every entry and returns the bytes they held.
-    pub(crate) fn clear(&mut self) -> usize {
-        self.entries.clear();
-        std::mem::take(&mut self.total_bytes)
     }
 
     /// Returns a reader that layers the overlay over `committed`.
@@ -252,10 +252,63 @@ impl FlowStateReader for OverlayStateReader<'_> {
     }
 }
 
+/// A copy of a Flow's overlay over its own committed view, usable without the Flow's lock.
+pub(crate) struct OwnedOverlayView {
+    pub(crate) committed: Box<dyn FlowStateReader + Send>,
+    pub(crate) overlay: SpeculativeOverlay,
+}
+
+impl FlowStateReader for OwnedOverlayView {
+    fn get(
+        &self,
+        column_family: ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StateReadError> {
+        self.overlay
+            .reader(self.committed.as_ref())
+            .get(column_family, key)
+    }
+
+    fn scan(
+        &self,
+        column_family: ColumnFamily,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+    ) -> Result<Vec<StateRow>, StateReadError> {
+        self.overlay
+            .reader(self.committed.as_ref())
+            .scan(column_family, start, end, limit)
+    }
+}
+
 fn write_size_bytes(write: &StateWrite) -> usize {
     match write {
         StateWrite::Put { key, value, .. } => key.len() + value.len(),
         StateWrite::Delete { key, .. } => key.len(),
         StateWrite::DeleteRange { start, end, .. } => start.len() + end.len(),
     }
+}
+
+fn effect_size_bytes(effect: &ApplyEffect) -> usize {
+    let heap_bytes = match effect {
+        ApplyEffect::InvocationPending { invocation, .. } => invocation.step_execution_id.len(),
+        ApplyEffect::InvocationStarted {
+            invocation,
+            task_id,
+            ..
+        } => invocation.step_execution_id.len() + task_id.len(),
+        ApplyEffect::InvocationCanceled { task_id, .. } => task_id.len(),
+        ApplyEffect::LocksReleased { lock_keys, .. } => lock_keys.iter().map(String::len).sum(),
+        ApplyEffect::OutboxMessagesWritten { message_ids, .. } => {
+            message_ids.iter().map(Vec::len).sum()
+        }
+        ApplyEffect::HardDeleteObjectsPending { object_ids, .. } => {
+            object_ids.iter().map(String::len).sum()
+        }
+        ApplyEffect::TimerArmed { .. }
+        | ApplyEffect::RunPurgeRequested { .. }
+        | ApplyEffect::WakeWaiters { .. } => 0,
+    };
+    std::mem::size_of::<ApplyEffect>() + heap_bytes
 }
