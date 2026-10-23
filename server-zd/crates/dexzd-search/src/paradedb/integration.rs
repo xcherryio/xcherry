@@ -415,6 +415,20 @@ async fn paradedb_matches_builtin_evaluator() {
         assert_eq!(page.entries.len(), 1, "{query}");
         assert_eq!(page.entries[0].run_id, expected_run_id, "{query}");
     }
+    for page_size in [0, usize::MAX] {
+        let page = backend
+            .search(SearchRequest {
+                tenant_id: TenantId(1),
+                query: "",
+                page_size,
+                page_token: None,
+                field_registry: &registry,
+            })
+            .await
+            .expect("bounded backend page");
+        assert_eq!(page.entries.len(), 2);
+        assert!(page.next_page_token.is_none());
+    }
     for changed_query in ["", "WorkflowType = 'Engine' ORDER BY StartTime ASC"] {
         let error = backend
             .search(SearchRequest {

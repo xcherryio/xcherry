@@ -19,7 +19,7 @@ pub struct SearchRequest<'a> {
     pub tenant_id: TenantId,
     /// Visibility query text, including optional ordering.
     pub query: &'a str,
-    /// Maximum number of entries to return.
+    /// Maximum entries to return; zero defaults to 1,000, and larger requests cap at 1,000.
     pub page_size: usize,
     /// Opaque position returned by the previous page.
     pub page_token: Option<&'a str>,

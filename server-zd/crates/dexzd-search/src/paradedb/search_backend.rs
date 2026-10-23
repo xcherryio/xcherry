@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use tokio_postgres::{Client, Config, NoTls};
 
 use super::{PageCursor, SqlTranslationError, translate_query};
+use crate::builtin::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 use crate::page_token::PagePosition;
 use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
@@ -86,11 +87,11 @@ impl Drop for ParadeDbSearchBackend {
 #[async_trait]
 impl SearchBackend for ParadeDbSearchBackend {
     async fn search(&self, request: SearchRequest<'_>) -> Result<SearchPage, SearchError> {
-        if request.page_size == 0 {
-            return Err(SearchError::InvalidArgument(
-                "SearchFlows page size must be positive".into(),
-            ));
-        }
+        let page_size = if request.page_size == 0 {
+            DEFAULT_PAGE_SIZE
+        } else {
+            request.page_size.min(MAX_PAGE_SIZE)
+        };
         let query = parse_and_check(request.query, request.field_registry)
             .map_err(|error| SearchError::InvalidArgument(error.to_string()))?;
         let position = request
@@ -103,7 +104,7 @@ impl SearchBackend for ParadeDbSearchBackend {
             start_time_ns: position.start_time_ns,
             run_id: position.run_id.to_string(),
         });
-        let limit = request.page_size.checked_add(1).ok_or_else(|| {
+        let limit = page_size.checked_add(1).ok_or_else(|| {
             SearchError::InvalidArgument("SearchFlows page size is too large".into())
         })?;
         let limit = i64::try_from(limit).map_err(|_| {
@@ -126,9 +127,9 @@ impl SearchBackend for ParadeDbSearchBackend {
             .map_err(|error| {
                 SearchError::Unavailable(format!("query ParadeDB visibility runs: {error}"))
             })?;
-        let has_next_page = rows.len() > request.page_size;
+        let has_next_page = rows.len() > page_size;
         if has_next_page {
-            rows.truncate(request.page_size);
+            rows.truncate(page_size);
         }
         let next_page_token = if has_next_page {
             rows.last()
