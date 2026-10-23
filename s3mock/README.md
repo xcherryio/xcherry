@@ -58,10 +58,17 @@ S3MOCK_CONFORMANCE_TARGET=aws make test
 
 The second command runs the conformance suite against real S3; all 45 tests passed against AWS S3
 in us-east-1 on 2026-10-23. AWS answered 500 InternalError when a checksummed multipart upload
-listed part 2 without part 1; s3mock returns the documented 400 InvalidPartOrder instead. The
-`S3mock AWS conformance` workflow runs it nightly once the repository variable
-`S3MOCK_CONFORMANCE_AWS_ROLE_ARN` names an IAM role that GitHub OIDC can assume. It creates and deletes buckets
-named `s3mock-conformance-<ULID>`.
+listed part 2 without part 1; s3mock returns the documented 400 InvalidPartOrder instead. Run it on
+demand, for example before relying on a newly emulated S3 behavior, with local AWS credentials:
+
+```bash
+AWS_PROFILE=<profile> AWS_REGION=us-east-1 S3MOCK_CONFORMANCE_TARGET=aws make test
+```
+
+It creates and deletes buckets named `s3mock-conformance-<ULID>`; set
+`S3MOCK_CONFORMANCE_BUCKET_LOG=<file>` to record them so leftovers from failed tests can be deleted.
+The `S3mock AWS conformance` workflow can run the same suite manually once the repository variable
+`S3MOCK_CONFORMANCE_AWS_ROLE_ARN` names an IAM role that GitHub OIDC can assume; it has no schedule.
 
 ## Testing controls
 
