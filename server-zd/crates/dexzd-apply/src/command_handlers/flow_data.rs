@@ -132,8 +132,10 @@ fn apply_hard_delete_write(
     if let Some(previous) = previous.and_then(|record| record.object) {
         schedule_hard_delete(transaction, cursor, previous);
     }
-    match (is_null_value(write.value.as_ref()), hard_delete_object) {
-        (false, Some(object)) => {
+    // The owner replaced the value with an uploaded object; its reference means "set" even
+    // though the value in the command is now empty.
+    match (hard_delete_object, is_null_value(write.value.as_ref())) {
+        (Some(object), _) => {
             transaction.put_message(
                 ColumnFamily::Flow,
                 current_key,
