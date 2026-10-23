@@ -33,7 +33,7 @@ pub enum FaultAction {
     ApplyThenOutcomeUnknown,
     /// Wait before running the operation. Tokio's paused clock controls the wait.
     Delay(Duration),
-    /// Return modified bytes from a successful read, preserving the stored object.
+    /// Return modified bytes from a successful content read, preserving the stored object. Other operations ignore this action.
     CorruptOnRead,
 }
 
@@ -56,7 +56,7 @@ struct State {
     counts: BTreeMap<(String, String), u64>,
 }
 
-/// Ordered, fault-injecting object store for deterministic simulation.
+/// Ordered, fault-injecting object store for deterministic simulation. Exact-key call counters grow with observed keys.
 #[derive(Default)]
 pub struct InMemoryObjectStore {
     state: Mutex<State>,
@@ -196,7 +196,12 @@ impl ObjectStore for InMemoryObjectStore {
             }
         };
         if !matches {
-            return Ok(WriteOutcome::PreconditionFailed);
+            return self.after_call(
+                action,
+                ObjectStoreOperation::Put,
+                key,
+                WriteOutcome::PreconditionFailed,
+            );
         }
         state.next_etag += 1;
         let etag = format!("\"{:016x}\"", state.next_etag);
