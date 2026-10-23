@@ -17,6 +17,17 @@ use crate::FlowStateReader;
 use crate::read_model::history::get_history_events;
 use crate::read_model::{ReadModelError, RunView};
 
+/// Result of waiting for one Step execution in the current Flow run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepCompletionState {
+    /// The Step completed normally.
+    Completed,
+    /// The Step has not completed and the Flow is still running.
+    NotCompleted,
+    /// The Step was canceled or the Flow ended before completion.
+    EndedWithoutCompletion,
+}
+
 /// Returns whether the current run attempt is closed.
 pub fn is_flow_closed(
     reader: &dyn FlowStateReader,
@@ -27,14 +38,14 @@ pub fn is_flow_closed(
     Ok(view.record.status != FlowStatus::Running as i32)
 }
 
-/// Returns whether a started Step execution finished or was canceled in this attempt.
-pub fn is_step_execution_finished(
+/// Reads whether a Step completed, is pending, or can no longer complete in this run.
+pub fn step_completion_state(
     reader: &dyn FlowStateReader,
     flow_hash: FlowHash,
     run_id: RunId,
     step_type: &str,
     step_execution_number: u32,
-) -> Result<bool, ReadModelError> {
+) -> Result<StepCompletionState, ReadModelError> {
     if step_type.is_empty() || step_execution_number == 0 {
         return Err(ReadModelError::InvalidRequest {
             detail: "Step type and positive execution number are required".to_owned(),
@@ -43,19 +54,31 @@ pub fn is_step_execution_finished(
     let view = RunView::open(reader, flow_hash, run_id)?;
     let counter = view.rows.step_counter(&view.transaction, step_type)?;
     if counter.last_step_number < step_execution_number {
-        return Ok(false);
+        return Ok(if view.record.status == FlowStatus::Running as i32 {
+            StepCompletionState::NotCompleted
+        } else {
+            StepCompletionState::EndedWithoutCompletion
+        });
     }
     let step_execution_id = format!("{step_type}-{step_execution_number}");
     let Some(step) = view
         .rows
         .step_execution(&view.transaction, &step_execution_id)?
     else {
-        return Ok(true);
+        return Ok(StepCompletionState::Completed);
     };
-    Ok(matches!(
-        StepExecutionPhase::try_from(step.phase),
-        Ok(StepExecutionPhase::Completed | StepExecutionPhase::Canceled)
-    ))
+    if step.phase == StepExecutionPhase::Completed as i32 {
+        return Ok(StepCompletionState::Completed);
+    }
+    Ok(
+        if step.phase == StepExecutionPhase::Canceled as i32
+            || view.record.status != FlowStatus::Running as i32
+        {
+            StepCompletionState::EndedWithoutCompletion
+        } else {
+            StepCompletionState::NotCompleted
+        },
+    )
 }
 
 /// Returns the matching Attribute value, or None while the wait predicate is false.
@@ -99,6 +122,12 @@ pub fn match_attribute(
             key: condition.key.clone(),
         });
     }
+    if matches!(current.kind.as_ref(), Some(value::Kind::DoubleValue(number)) if !number.is_finite())
+    {
+        return Err(ReadModelError::UnsupportedAttributeValue {
+            key: condition.key.clone(),
+        });
+    }
     let is_match = match (current.kind.as_ref(), operand.kind.as_ref()) {
         (Some(value::Kind::StringValue(left)), Some(value::Kind::StringValue(right))) => {
             compare_equal(left == right, operator)
@@ -110,11 +139,6 @@ pub fn match_attribute(
             compare_order(*left, *right, operator)
         }
         (Some(value::Kind::DoubleValue(left)), Some(value::Kind::DoubleValue(right))) => {
-            if !left.is_finite() {
-                return Err(ReadModelError::UnsupportedAttributeValue {
-                    key: condition.key.clone(),
-                });
-            }
             compare_order(*left, *right, operator)
         }
         (

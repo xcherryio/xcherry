@@ -100,7 +100,12 @@ pub(super) fn all_attribute_kvs(view: &RunView<'_>) -> Result<Vec<Kv>, ReadModel
         .filter_map(|(key, record)| {
             record.value.map(|stored| Kv {
                 key,
-                value: Some(wire_value(view.rows, &stored)),
+                value: Some(match stored.kind.as_ref() {
+                    Some(stored_value::Kind::HardDeleteObject(object)) => {
+                        hard_delete_reference(view.rows.run_id, object)
+                    }
+                    _ => wire_value(view.rows, &stored),
+                }),
             })
         })
         .collect();
@@ -115,29 +120,24 @@ pub(super) fn all_attribute_kvs(view: &RunView<'_>) -> Result<Vec<Kv>, ReadModel
     Ok(attributes)
 }
 
+fn hard_delete_reference(run_id: RunId, object: &HardDeleteObjectReference) -> Value {
+    let reference = format!("hd1|{}|{}", run_id, object.object_id);
+    let kind = if object.is_string_value {
+        value::Kind::InternalBlobIdForStringValue(reference)
+    } else {
+        value::Kind::InternalBlobIdForObjValue(reference)
+    };
+    Value { kind: Some(kind) }
+}
+
 fn permissions_value(permissions: &[String]) -> Value {
-    let mut json = String::from("[");
-    for (index, permission) in permissions.iter().enumerate() {
-        if index > 0 {
-            json.push(',');
-        }
-        json.push('"');
-        for character in permission.chars() {
-            match character {
-                '"' => json.push_str("\\\""),
-                '\\' => json.push_str("\\\\"),
-                '\n' => json.push_str("\\n"),
-                '\r' => json.push_str("\\r"),
-                '\t' => json.push_str("\\t"),
-                character if character < ' ' => {
-                    json.push_str(&format!("\\u{:04x}", u32::from(character)));
-                }
-                character => json.push(character),
-            }
-        }
-        json.push('"');
-    }
-    json.push(']');
+    let json = serde_json::to_string(permissions)
+        .expect("serializing a string slice into JSON cannot fail")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
     Value {
         kind: Some(value::Kind::ObjValue(EncodedObject {
             encoding: "json".to_owned(),

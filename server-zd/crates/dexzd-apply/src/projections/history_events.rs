@@ -9,12 +9,13 @@
 //! History events projected while applying commands (plan section 9.9).
 
 use dexzd_protocol::dex::{
-    FlowClosedHistoryEvent, FlowExecutionId, FlowInitialStart, FlowStartedOrContinuedHistoryEvent,
-    Kv, PendingStepMethodPhase, StepCompletionOutput, StepExecuteCompletedEvent,
-    StepExecuteCompletedOutput, StepExecuteFailedEvent, StepMethodEventContext,
-    StepMethodEventInput, StepMethodFailedOutput, StepMethodFailure, StepMethodOptions,
-    StepMethodPendingEvent, StepWaitForCompletedEvent, StepWaitForCompletedOutput,
-    StepWaitForFailedEvent, flow_history_event, flow_started_or_continued_history_event,
+    ChannelResult, ConditionResults, FlowClosedHistoryEvent, FlowExecutionId, FlowInitialStart,
+    FlowResult, FlowStartedOrContinuedHistoryEvent, Kv, PendingStepMethodPhase,
+    StepCompletionOutput, StepExecuteCompletedEvent, StepExecuteCompletedOutput,
+    StepExecuteFailedEvent, StepMethodEventContext, StepMethodEventInput, StepMethodFailedOutput,
+    StepMethodFailure, StepMethodOptions, StepMethodPendingEvent, StepWaitForCompletedEvent,
+    StepWaitForCompletedOutput, StepWaitForFailedEvent, flow_history_event,
+    flow_started_or_continued_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
     StartFlowReply, StepExecutionRecord, StepInvocationPhase, StepMethod,
@@ -119,8 +120,7 @@ pub(crate) fn record_method_pending(
             nanos: i32::try_from(duration_micros % 1_000_000).unwrap_or(0) * 1000,
         });
     }
-    let mut input = method_input(cursor, step);
-    input.unavailable = invocation.snapshot.is_none();
+    let input = method_input(cursor, step);
     let pending = StepMethodPendingEvent {
         input: Some(input),
         context: Some(context),
@@ -155,13 +155,23 @@ fn method_context(
 }
 
 fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEventInput {
+    let is_execute = step
+        .invocation
+        .as_ref()
+        .is_some_and(|invocation| invocation.method == StepMethod::Execute as i32);
     StepMethodEventInput {
-        unavailable: false,
+        unavailable: step.input.is_none(),
         step_input: step
             .input
             .as_ref()
             .map(|stored| wire_value(cursor.rows, stored)),
-        condition_results: None,
+        condition_results: if is_execute {
+            step.condition_results
+                .as_ref()
+                .map(|results| condition_results_input(cursor, results))
+        } else {
+            None
+        },
         attributes: step
             .invocation
             .as_ref()
@@ -180,15 +190,64 @@ fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEve
                     .collect()
             })
             .unwrap_or_default(),
-        step_execution_locals: step
-            .locals
+        step_execution_locals: if is_execute {
+            step.locals
+                .iter()
+                .map(|local| Kv {
+                    key: local.key.clone(),
+                    value: local
+                        .value
+                        .as_ref()
+                        .map(|stored| wire_value(cursor.rows, stored)),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn condition_results_input(
+    cursor: &RunCursor,
+    results: &dexzd_protocol::dexzd::v1::ConditionResultsRecord,
+) -> ConditionResults {
+    ConditionResults {
+        channel_results: results
+            .channel_results
             .iter()
-            .map(|local| Kv {
-                key: local.key.clone(),
-                value: local
-                    .value
-                    .as_ref()
-                    .map(|stored| wire_value(cursor.rows, stored)),
+            .map(|result| ChannelResult {
+                condition_id: result.condition_id.clone(),
+                condition_status: result.condition_status,
+                channel_name: result.channel_name.clone(),
+                values: result
+                    .messages
+                    .iter()
+                    .filter_map(|message| message.value.as_ref())
+                    .map(|stored| wire_value(cursor.rows, stored))
+                    .collect(),
+            })
+            .collect(),
+        timer_results: results.timer_results.clone(),
+        wait_for_failed: results.wait_for_failed,
+        sub_flow_results: results
+            .sub_flow_results
+            .iter()
+            .map(|result| FlowResult {
+                flow_status: result.flow_status,
+                results: result
+                    .results
+                    .iter()
+                    .map(|output| StepCompletionOutput {
+                        completed_step_type: output.completed_step_type.clone(),
+                        completed_step_execution_id: output.completed_step_execution_id.clone(),
+                        completed_step_output: output
+                            .completed_step_output
+                            .as_ref()
+                            .map(|stored| wire_value(cursor.rows, stored)),
+                    })
+                    .collect(),
+                error_type: result.error_type,
+                error_message: result.error_message.clone(),
             })
             .collect(),
     }

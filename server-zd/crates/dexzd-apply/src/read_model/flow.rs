@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, TenantId, flow_directory_key};
 use dexzd_protocol::dex::{
     ActiveStepExecutionState, ActiveStepPhase, ChannelMessage, ChannelValues, ConditionStatus,
-    FlowExecutionId, FlowResult, GetChannelMessagesResponse, GetFlowStateResponse,
+    FlowExecutionId, FlowResult, FlowStatus, GetChannelMessagesResponse, GetFlowStateResponse,
     GetFlowSummaryResponse, InternalTimerStatus, Kv, StepCompletionOutput,
     StepExecutionCompletedConditions, StepMovement, SubFlowConditionState, TimerInfo,
     WaitingConditionState,
@@ -126,8 +126,18 @@ pub fn get_flow_state(
     let view = RunView::open(reader, flow_hash, run_id)?;
     let mut steps = view.rows.step_executions(&view.transaction)?;
     steps.sort_by(|(_, left), (_, right)| {
-        (left.created_seq, &left.step_execution_id)
-            .cmp(&(right.created_seq, &right.step_execution_id))
+        (
+            left.is_timeout_handler,
+            &left.step_type,
+            left.step_number,
+            &left.step_execution_id,
+        )
+            .cmp(&(
+                right.is_timeout_handler,
+                &right.step_type,
+                right.step_number,
+                &right.step_execution_id,
+            ))
     });
     let active_step_executions = steps
         .iter()
@@ -277,14 +287,11 @@ fn completed_conditions(
         .timer_results
         .iter()
         .enumerate()
-        .map(|(index, result)| {
+        .filter(|(_, result)| result.condition_status == ConditionStatus::Completed as i32)
+        .map(|(index, _)| {
             (
                 i32::try_from(index).unwrap_or(i32::MAX),
-                if result.condition_status == ConditionStatus::Completed as i32 {
-                    InternalTimerStatus::Fired as i32
-                } else {
-                    InternalTimerStatus::Pending as i32
-                },
+                InternalTimerStatus::Fired as i32,
             )
         })
         .collect();
@@ -292,6 +299,10 @@ fn completed_conditions(
         .sub_flow_results
         .iter()
         .enumerate()
+        .filter(|(_, result)| {
+            result.flow_status != FlowStatus::Unspecified as i32
+                && result.flow_status != FlowStatus::Running as i32
+        })
         .map(|(index, result)| {
             (
                 i32::try_from(index).unwrap_or(i32::MAX),

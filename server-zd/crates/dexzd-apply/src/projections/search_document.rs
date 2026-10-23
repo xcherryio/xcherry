@@ -15,22 +15,34 @@ use dexzd_keyspace::{ColumnFamily, IndexKind, TenantId};
 use dexzd_protocol::dex::{
     ActiveStepSearchMode, EncodedObject, FlowStatus, IndexConfig, IndexType, Value, value,
 };
-use dexzd_protocol::dexzd::v1::{SearchAttributeValue, SearchDocumentRecord, StepExecutionPhase};
-use time::OffsetDateTime;
+use dexzd_protocol::dexzd::v1::{
+    SearchAttributeValue, SearchDocumentRecord, StepExecutionPhase, flow_command::Command,
+};
 use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
 
 use crate::ApplyError;
+use crate::command_handlers::CommandScope;
 use crate::command_handlers::run_cursor::RunCursor;
 use crate::state_access::FlowTransaction;
-use crate::values::{is_null_value, load_stored_value};
+use crate::values::load_stored_value;
 
 const MAX_SEARCH_VALUE_BYTES: usize = 256 * 1024;
 
 pub(crate) fn refresh_search_document(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,
+    scope: &CommandScope<'_>,
 ) -> Result<(), ApplyError> {
     let old_document = cursor.rows.search_document(transaction)?;
+    if old_document.is_some()
+        && matches!(
+            scope.command.command.as_ref(),
+            Some(Command::StepAttemptStarted(_) | Command::StepAttemptHeartbeat(_))
+        )
+    {
+        return Ok(());
+    }
     let record = &cursor.record;
     let mode = record
         .flow_config
@@ -107,7 +119,7 @@ pub(crate) fn refresh_search_document(
             continue;
         };
         let index_key = index_key(&write.key, index_config);
-        if is_null_value(write.value.as_ref()) {
+        if is_index_null(write.value.as_ref()) {
             indexed.remove(&index_key);
             continue;
         }
@@ -138,6 +150,13 @@ pub(crate) fn refresh_search_document(
         work_queue_permissions: permissions,
         attributes: indexed.into_values().collect(),
     };
+    if let Some(previous) = old_document.as_ref() {
+        let mut comparable = document.clone();
+        comparable.version = previous.version;
+        if &comparable == previous {
+            return Ok(());
+        }
+    }
     let partition = transaction.context().partition;
     let tenant_id = TenantId(record.tenant_id);
     let flow_hash = cursor.rows.flow_hash;
@@ -157,6 +176,7 @@ pub(crate) fn refresh_search_document(
             ),
         );
     }
+    // RunPurge must delete both SearchDocument and FlowList index keys.
     cursor.rows.put_search_document(transaction, &document);
     transaction.put(
         ColumnFamily::PartitionIndex,
@@ -182,6 +202,13 @@ pub(crate) fn refresh_search_document(
         Vec::new(),
     );
     Ok(())
+}
+
+fn is_index_null(value: Option<&Value>) -> bool {
+    match value {
+        None => true,
+        Some(value) => matches!(value.kind.as_ref(), Some(value::Kind::NullValue(_))),
+    }
 }
 
 fn index_key(attribute_key: &str, index_config: &IndexConfig) -> String {
@@ -244,7 +271,7 @@ fn convert_index_value(value: &Value, index_type: IndexType) -> Option<Value> {
             Kind::StringValue(number.to_string())
         }
         (IndexType::Keyword | IndexType::Text, Kind::DoubleValue(number)) => {
-            Kind::StringValue(number.to_string())
+            Kind::StringValue(format_go_float(*number))
         }
         (IndexType::Keyword | IndexType::Text, Kind::BoolValue(boolean)) => {
             Kind::StringValue(boolean.to_string())
@@ -256,14 +283,46 @@ fn convert_index_value(value: &Value, index_type: IndexType) -> Option<Value> {
         (IndexType::Double, Kind::DoubleValue(number)) => Kind::DoubleValue(*number),
         (IndexType::Double, Kind::StringValue(text)) => Kind::DoubleValue(text.parse().ok()?),
         (IndexType::Bool, Kind::BoolValue(boolean)) => Kind::BoolValue(*boolean),
-        (IndexType::Bool, Kind::StringValue(text)) => Kind::BoolValue(text.parse().ok()?),
+        (IndexType::Bool, Kind::StringValue(text)) => Kind::BoolValue(parse_go_bool(text)?),
         (IndexType::Datetime, Kind::StringValue(text)) => {
-            OffsetDateTime::parse(text, &Rfc3339).ok()?;
-            Kind::StringValue(text.clone())
+            let timestamp = OffsetDateTime::parse(text, &Rfc3339).ok()?;
+            Kind::StringValue(timestamp.to_offset(UtcOffset::UTC).format(&Rfc3339).ok()?)
         }
         _ => return None,
     };
     Some(Value { kind: Some(kind) })
+}
+
+fn parse_go_bool(text: &str) -> Option<bool> {
+    match text {
+        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
+        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
+        _ => None,
+    }
+}
+
+fn format_go_float(number: f64) -> String {
+    if number.is_nan() {
+        return "NaN".to_owned();
+    }
+    if number == f64::INFINITY {
+        return "+Inf".to_owned();
+    }
+    if number == f64::NEG_INFINITY {
+        return "-Inf".to_owned();
+    }
+    let magnitude = number.abs();
+    if magnitude >= 1_000_000.0 || (magnitude > 0.0 && magnitude < 0.0001) {
+        let scientific = format!("{number:e}");
+        let (mantissa, exponent) = scientific
+            .split_once('e')
+            .expect("Rust scientific formatting always includes an exponent");
+        let exponent: i32 = exponent
+            .parse()
+            .expect("Rust scientific formatting always uses an integer exponent");
+        return format!("{mantissa}e{exponent:+03}");
+    }
+    number.to_string()
 }
 
 fn keyword_array_value(bytes: &[u8]) -> Option<value::Kind> {

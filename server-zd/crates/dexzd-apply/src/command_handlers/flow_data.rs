@@ -56,7 +56,7 @@ pub(crate) fn apply_attribute_writes(
         if let Err(rejection) = outcome {
             return Ok(Err(rejection));
         }
-        if !write.is_hard_delete_on_null
+        if (!write.is_hard_delete_on_null || is_null_value(write.value.as_ref()))
             && write
                 .index_config
                 .as_ref()

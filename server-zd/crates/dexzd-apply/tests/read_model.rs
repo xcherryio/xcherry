@@ -11,30 +11,36 @@
 use std::collections::BTreeMap;
 
 use dexzd_apply::read_model::{
-    ReadModelError, get_attributes, get_channel_messages, get_flow_state, get_flow_summary,
-    get_history_events, get_search_document, is_flow_closed, is_history_event_available,
-    is_step_execution_finished, list_search_documents, load_blobs, match_attribute, resolve_run_id,
+    ReadModelError, StepCompletionState, get_attributes, get_channel_messages, get_flow_state,
+    get_flow_summary, get_history_events, get_search_document, is_flow_closed,
+    is_history_event_available, list_search_documents, load_blobs, match_attribute, resolve_run_id,
+    step_completion_state,
 };
 use dexzd_apply::{
     ApplyContext, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
-use dexzd_keyspace::row_keys::{flow_list_index_key, tenant_run_index_key};
-use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionHasher, RunId, TenantId};
+use dexzd_keyspace::row_keys::{
+    flow_list_index_key, run_named_key, run_singleton_key, tenant_run_index_key,
+};
+use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::{
     ActionPermissionMapping, ActionPermissionMappings, AttributeMatch, AttributeMatchOperator,
-    AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, FlowConfig, FlowStartOptions,
-    FlowStatus, IndexConfig, IndexType, InvokeExecuteMethodResponse, InvokeWaitForMethodResponse,
-    LoadBlobRequestEntry, PublishToChannelRequest, SetAttributesRequest, StartFlowRequest,
-    StepDecision, StepOptions, StopFlowRequest, StopType, UpdateFlowConfigRequest, Value,
-    WorkerTarget, flow_history_event, value,
+    AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, ConditionStatus, FlowConfig,
+    FlowStartOptions, FlowStatus, IndexConfig, IndexType, InvokeExecuteMethodResponse,
+    InvokeWaitForMethodResponse, LoadBlobRequestEntry, PublishToChannelRequest,
+    SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
+    StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value, WorkerTarget,
+    flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributesSetCommand, ChannelPublishCommand, FlowCommand, FlowConfigUpdateCommand,
-    FlowStartCommand, FlowStopCommand, HardDeleteObjectReference, RunSettings,
-    StepAttemptStartedCommand, StepInvocationKey, StepMethod, StepMethodCompletedCommand,
-    flow_command::Command, step_method_completed_command,
+    AttributesSetCommand, ChannelPublishCommand, ConditionResultsRecord, FlowCommand,
+    FlowConfigUpdateCommand, FlowStartCommand, FlowStopCommand, HardDeleteObjectReference,
+    RunRecord, RunSettings, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
+    StepMethod, StepMethodCompletedCommand, StoredFlowResult, flow_command::Command,
+    step_method_completed_command,
 };
+use prost::Message;
 
 #[derive(Default)]
 struct MemoryState {
@@ -103,6 +109,7 @@ impl MemoryState {
 struct Harness {
     state: MemoryState,
     context: ApplyContext,
+    flow_id: String,
     run_id: RunId,
     now_micros: i64,
     behavior_version: u32,
@@ -110,15 +117,20 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::new_for_flow("order-1", RunId([1; 16]))
+    }
+
+    fn new_for_flow(flow_id: &str, run_id: RunId) -> Self {
         let hasher = PartitionHasher::new(&[7; 16], 1024).expect("valid partition hasher");
-        let flow_hash = hasher.flow_hash(TenantId::DEFAULT, "order-1");
+        let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
         Self {
             state: MemoryState::default(),
             context: ApplyContext {
                 partition: hasher.partition_of(flow_hash),
                 flow_hash,
             },
-            run_id: RunId([1; 16]),
+            flow_id: flow_id.to_owned(),
+            run_id,
             now_micros: 1_800_000_000_000_000,
             behavior_version: 2,
         }
@@ -128,7 +140,7 @@ impl Harness {
         self.now_micros += 1000;
         let is_start = matches!(body, Command::FlowStart(_));
         let command = FlowCommand {
-            flow_id: "order-1".to_owned(),
+            flow_id: self.flow_id.clone(),
             run_id: if is_start {
                 Vec::new()
             } else {
@@ -151,7 +163,7 @@ impl Harness {
 
     fn start(&mut self, options: FlowStartOptions, step_options: Option<StepOptions>) {
         let request = StartFlowRequest {
-            flow_id: "order-1".to_owned(),
+            flow_id: self.flow_id.clone(),
             flow_type: "OrderFlow".to_owned(),
             start_step_type: "ChargeStep".to_owned(),
             step_input: Some(string_value("input")),
@@ -245,6 +257,35 @@ impl Harness {
                 ..StopFlowRequest::default()
             }),
         }));
+    }
+
+    fn set_step_condition_results(&mut self, results: ConditionResultsRecord) {
+        let key = run_named_key(
+            self.context.flow_hash,
+            self.run_id,
+            RunTable::StepExecution,
+            "ChargeStep-1",
+        );
+        let bytes = self
+            .state
+            .rows
+            .get_mut(&(ColumnFamily::Flow, key))
+            .expect("Step row exists");
+        let mut step = StepExecutionRecord::decode(bytes.as_slice()).expect("valid Step row");
+        step.condition_results = Some(results);
+        *bytes = step.encode_to_vec();
+    }
+
+    fn mark_run_purging(&mut self) {
+        let key = run_singleton_key(self.context.flow_hash, self.run_id, RunTable::RunRecord);
+        let bytes = self
+            .state
+            .rows
+            .get_mut(&(ColumnFamily::Flow, key))
+            .expect("run row exists");
+        let mut run = RunRecord::decode(bytes.as_slice()).expect("valid run row");
+        run.is_purging = true;
+        *bytes = run.encode_to_vec();
     }
 }
 
@@ -523,6 +564,192 @@ fn search_document_applies_index_writes_in_order_and_validates_typed_values() {
 }
 
 #[test]
+fn search_projection_matches_go_scalar_conversions_and_skips_bookkeeping_writes() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions {
+            attributes: vec![AttributeWrite {
+                key: "state".to_owned(),
+                value: Some(string_value("original")),
+                index_config: Some(index_config("Shared")),
+                ..AttributeWrite::default()
+            }],
+            ..FlowStartOptions::default()
+        },
+        None,
+    );
+    harness.set_attributes(
+        vec![
+            AttributeWrite {
+                key: "due".to_owned(),
+                value: Some(string_value("2026-10-23T20:00:00+08:00")),
+                index_config: Some(IndexConfig {
+                    r#type: IndexType::Datetime as i32,
+                    ..index_config("DueAt")
+                }),
+                ..AttributeWrite::default()
+            },
+            AttributeWrite {
+                key: "flag".to_owned(),
+                value: Some(string_value("TRUE")),
+                index_config: Some(IndexConfig {
+                    r#type: IndexType::Bool as i32,
+                    ..index_config("Flag")
+                }),
+                ..AttributeWrite::default()
+            },
+            AttributeWrite {
+                key: "size".to_owned(),
+                value: Some(Value {
+                    kind: Some(value::Kind::DoubleValue(1e21)),
+                }),
+                index_config: Some(IndexConfig {
+                    r#type: IndexType::Keyword as i32,
+                    ..index_config("Size")
+                }),
+                ..AttributeWrite::default()
+            },
+            AttributeWrite {
+                key: "unbounded".to_owned(),
+                value: Some(Value {
+                    kind: Some(value::Kind::DoubleValue(f64::INFINITY)),
+                }),
+                index_config: Some(IndexConfig {
+                    r#type: IndexType::Keyword as i32,
+                    ..index_config("Unbounded")
+                }),
+                ..AttributeWrite::default()
+            },
+            AttributeWrite {
+                key: "disabled".to_owned(),
+                value: Some(string_value("0")),
+                index_config: Some(IndexConfig {
+                    r#type: IndexType::Bool as i32,
+                    ..index_config("Disabled")
+                }),
+                ..AttributeWrite::default()
+            },
+            AttributeWrite {
+                key: "state".to_owned(),
+                value: Some(Value { kind: None }),
+                index_config: Some(index_config("Shared")),
+                ..AttributeWrite::default()
+            },
+        ],
+        None,
+        Vec::new(),
+    );
+    let mut document =
+        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+            .unwrap()
+            .unwrap();
+    let indexed = |key: &str| {
+        document
+            .attributes
+            .iter()
+            .find(|attribute| attribute.index_key == key)
+            .and_then(|attribute| attribute.value.clone())
+    };
+    assert_eq!(indexed("DueAt"), Some(string_value("2026-10-23T12:00:00Z")));
+    assert_eq!(
+        indexed("Flag"),
+        Some(Value {
+            kind: Some(value::Kind::BoolValue(true))
+        })
+    );
+    assert_eq!(indexed("Size"), Some(string_value("1e+21")));
+    assert_eq!(indexed("Unbounded"), Some(string_value("+Inf")));
+    assert_eq!(
+        indexed("Disabled"),
+        Some(Value {
+            kind: Some(value::Kind::BoolValue(false))
+        })
+    );
+    assert_eq!(indexed("Shared"), Some(string_value("original")));
+    let version = document.version;
+    harness.start_attempt(StepMethod::WaitFor);
+    document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.version, version);
+    harness.set_attributes(
+        vec![AttributeWrite {
+            key: "state".to_owned(),
+            value: None,
+            index_config: Some(index_config("Shared")),
+            is_hard_delete_on_null: true,
+            ..AttributeWrite::default()
+        }],
+        None,
+        Vec::new(),
+    );
+    document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        document
+            .attributes
+            .iter()
+            .all(|value| value.index_key != "Shared")
+    );
+}
+
+#[test]
+fn search_listing_omits_runs_being_purged() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.mark_run_purging();
+    assert!(
+        list_search_documents(
+            &harness.state,
+            harness.context.partition,
+            TenantId::DEFAULT,
+            None,
+            10,
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn permission_attribute_uses_go_json_escaping() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.set_attributes(
+        vec![AttributeWrite {
+            key: "state".to_owned(),
+            value: Some(string_value("ready")),
+            ..AttributeWrite::default()
+        }],
+        Some(ActionPermissionMappings {
+            mappings: vec![ActionPermissionMapping {
+                attribute_key: "state".to_owned(),
+                equal_values: vec![string_value("ready")],
+                required_permission: "<>&\u{2028}\u{2029}".to_owned(),
+            }],
+        }),
+        Vec::new(),
+    );
+    let attributes = get_attributes(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        &["DexWorkQueuePermissions".to_owned()],
+        false,
+    )
+    .unwrap();
+    let Some(value::Kind::ObjValue(object)) = attributes.response.attributes[0]
+        .value
+        .as_ref()
+        .and_then(|value| value.kind.as_ref())
+    else {
+        panic!("permissions Attribute must be JSON");
+    };
+    assert_eq!(object.payload, b"[\"\\u003c\\u003e\\u0026\\u2028\\u2029\"]");
+}
+
+#[test]
 fn active_step_search_mode_respects_skip_wait_for() {
     let mut harness = Harness::new();
     harness.start(
@@ -658,7 +885,7 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
     assert!(summary.close_time.is_none());
     assert!(!is_flow_closed(&harness.state, harness.context.flow_hash, harness.run_id).unwrap());
     assert!(
-        !is_step_execution_finished(
+        step_completion_state(
             &harness.state,
             harness.context.flow_hash,
             harness.run_id,
@@ -666,6 +893,7 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
             1,
         )
         .unwrap()
+            == StepCompletionState::NotCompleted
     );
 
     harness.set_attributes(
@@ -706,7 +934,8 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
     ));
     let loaded = load_blobs(
         &harness.state,
-        harness.context.flow_hash,
+        &PartitionHasher::new(&[7; 16], 1024).unwrap(),
+        TenantId::DEFAULT,
         &[LoadBlobRequestEntry {
             flow_id: "order-1".to_owned(),
             blob_value: Some(report_reference.clone()),
@@ -792,6 +1021,32 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
         "object-1"
     );
     assert!(secret.response.attributes[0].value.is_none());
+    let secret_state =
+        get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let secret_reference = secret_state
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == "secret")
+        .and_then(|attribute| attribute.value.clone())
+        .expect("hard-delete Attribute remains visible as a reference");
+    assert!(matches!(
+        secret_reference.kind.as_ref(),
+        Some(value::Kind::InternalBlobIdForStringValue(reference)) if reference.starts_with("hd1|")
+    ));
+    assert!(
+        load_blobs(
+            &harness.state,
+            &PartitionHasher::new(&[7; 16], 1024).unwrap(),
+            TenantId::DEFAULT,
+            &[LoadBlobRequestEntry {
+                flow_id: "order-1".to_owned(),
+                blob_value: Some(secret_reference),
+            }],
+        )
+        .unwrap()
+        .values
+        .is_empty()
+    );
 
     harness.apply(Command::ChannelPublish(ChannelPublishCommand {
         request: Some(PublishToChannelRequest {
@@ -835,7 +1090,7 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
     harness.start_attempt(StepMethod::Execute);
     harness.complete_execute(StepDecision::default());
     assert!(
-        is_step_execution_finished(
+        step_completion_state(
             &harness.state,
             harness.context.flow_hash,
             harness.run_id,
@@ -843,12 +1098,222 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
             1,
         )
         .unwrap()
+            == StepCompletionState::Completed
     );
     harness.stop();
     assert!(is_flow_closed(&harness.state, harness.context.flow_hash, harness.run_id).unwrap());
     let closed_summary =
         get_flow_summary(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
     assert!(closed_summary.close_time.is_some());
+}
+
+#[test]
+fn a_step_canceled_at_close_is_not_reported_as_completed() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.stop();
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            2,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+}
+
+#[test]
+fn attribute_wait_rejects_a_stored_nonfinite_double_for_any_operand() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.set_attributes(
+        vec![AttributeWrite {
+            key: "ratio".to_owned(),
+            value: Some(Value {
+                kind: Some(value::Kind::DoubleValue(f64::NAN)),
+            }),
+            ..AttributeWrite::default()
+        }],
+        None,
+        Vec::new(),
+    );
+    assert!(matches!(
+        match_attribute(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            &AttributeMatch {
+                key: "ratio".to_owned(),
+                operator: AttributeMatchOperator::Equal as i32,
+                operand: Some(string_value("not-a-number")),
+            },
+        ),
+        Err(ReadModelError::UnsupportedAttributeValue { .. })
+    ));
+}
+
+#[test]
+fn flow_state_orders_active_steps_by_type_then_execution_number() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.complete_wait_for();
+    harness.start_attempt(StepMethod::Execute);
+    harness.complete_execute(StepDecision {
+        next_steps: vec![
+            StepMovement {
+                step_type: "ZStep".to_owned(),
+                ..StepMovement::default()
+            },
+            StepMovement {
+                step_type: "AStep".to_owned(),
+                ..StepMovement::default()
+            },
+            StepMovement {
+                step_type: "ZStep".to_owned(),
+                ..StepMovement::default()
+            },
+        ],
+        ..StepDecision::default()
+    });
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    assert_eq!(
+        state
+            .active_step_executions
+            .iter()
+            .map(|step| step.step_execution_id.as_str())
+            .collect::<Vec<_>>(),
+        ["AStep-1", "ZStep-1", "ZStep-2"]
+    );
+    harness.stop();
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    let pending: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event.payload.as_ref() {
+            Some(flow_history_event::Payload::StepWaitForPending(method)) => Some((
+                event.event_id,
+                method.context.as_ref().unwrap().step_execution_id.as_str(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pending, [(4, "AStep-1"), (5, "ZStep-1"), (6, "ZStep-2")]);
+}
+
+#[test]
+fn load_blobs_resolves_each_entry_under_its_own_flow() {
+    let mut first = Harness::new();
+    first.start(FlowStartOptions::default(), None);
+    first.set_attributes(
+        vec![AttributeWrite {
+            key: "blob".to_owned(),
+            value: Some(string_value(&"a".repeat(500))),
+            ..AttributeWrite::default()
+        }],
+        None,
+        Vec::new(),
+    );
+    let first_reference = get_attributes(
+        &first.state,
+        first.context.flow_hash,
+        first.run_id,
+        &["blob".to_owned()],
+        false,
+    )
+    .unwrap()
+    .response
+    .attributes[0]
+        .value
+        .clone()
+        .unwrap();
+    let mut second = Harness::new_for_flow("order-2", RunId([2; 16]));
+    second.state = first.state;
+    second.start(FlowStartOptions::default(), None);
+    second.set_attributes(
+        vec![AttributeWrite {
+            key: "blob".to_owned(),
+            value: Some(string_value(&"b".repeat(500))),
+            ..AttributeWrite::default()
+        }],
+        None,
+        Vec::new(),
+    );
+    let second_reference = get_attributes(
+        &second.state,
+        second.context.flow_hash,
+        second.run_id,
+        &["blob".to_owned()],
+        false,
+    )
+    .unwrap()
+    .response
+    .attributes[0]
+        .value
+        .clone()
+        .unwrap();
+    let hasher = PartitionHasher::new(&[7; 16], 1024).unwrap();
+    let entries = [
+        LoadBlobRequestEntry {
+            flow_id: "order-1".to_owned(),
+            blob_value: Some(first_reference.clone()),
+        },
+        LoadBlobRequestEntry {
+            flow_id: "order-2".to_owned(),
+            blob_value: Some(second_reference),
+        },
+    ];
+    let loaded = load_blobs(&second.state, &hasher, TenantId::DEFAULT, &entries).unwrap();
+    assert_eq!(loaded.values.len(), 2);
+    assert!(
+        loaded
+            .values
+            .values()
+            .any(|value| value == &string_value(&"a".repeat(500)))
+    );
+    assert!(
+        loaded
+            .values
+            .values()
+            .any(|value| value == &string_value(&"b".repeat(500)))
+    );
+    let mismatch = load_blobs(
+        &second.state,
+        &hasher,
+        TenantId::DEFAULT,
+        &[LoadBlobRequestEntry {
+            flow_id: "order-2".to_owned(),
+            blob_value: Some(first_reference),
+        }],
+    );
+    assert!(matches!(
+        mismatch,
+        Err(ReadModelError::InvalidRequest { .. })
+    ));
 }
 
 #[test]
@@ -975,9 +1440,119 @@ fn history_pages_a_full_flow_and_allocates_pending_ids_at_close() {
                 dexzd_protocol::dex::PendingStepMethodPhase::Scheduled as i32
             }
         );
+        assert!(!method.input.as_ref().unwrap().unavailable);
+        assert_eq!(
+            method.input.as_ref().unwrap().step_input,
+            Some(string_value("input"))
+        );
         assert!(matches!(
             events[2].payload,
             Some(flow_history_event::Payload::FlowClosed(_))
         ));
     }
+}
+
+#[test]
+fn failed_close_drops_pending_step_method_events() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Fail as i32,
+            ..StopFlowRequest::default()
+        }),
+    }));
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[1].payload,
+        Some(flow_history_event::Payload::FlowClosed(_))
+    ));
+}
+
+#[test]
+fn pending_execute_includes_condition_results_and_state_only_lists_completed_conditions() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.complete_wait_for();
+    harness.set_step_condition_results(ConditionResultsRecord {
+        timer_results: vec![
+            TimerResult {
+                condition_id: "pending-timer".to_owned(),
+                condition_status: ConditionStatus::Waiting as i32,
+            },
+            TimerResult {
+                condition_id: "done-timer".to_owned(),
+                condition_status: ConditionStatus::Completed as i32,
+            },
+        ],
+        sub_flow_results: vec![
+            StoredFlowResult {
+                flow_status: FlowStatus::Running as i32,
+                ..StoredFlowResult::default()
+            },
+            StoredFlowResult {
+                flow_status: FlowStatus::Completed as i32,
+                ..StoredFlowResult::default()
+            },
+        ],
+        ..ConditionResultsRecord::default()
+    });
+    harness.start_attempt(StepMethod::Execute);
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let completed = state.active_step_executions[0]
+        .completed_conditions
+        .as_ref()
+        .unwrap();
+    assert_eq!(completed.completed_timer_conditions.len(), 1);
+    assert!(completed.completed_timer_conditions.contains_key(&1));
+    assert_eq!(completed.completed_sub_flow_results.len(), 1);
+    assert!(completed.completed_sub_flow_results.contains_key(&1));
+    harness.stop();
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    let Some(flow_history_event::Payload::StepExecutePending(method)) = &events[2].payload else {
+        panic!("close must project a pending Execute call");
+    };
+    let input = method.input.as_ref().unwrap();
+    assert!(!input.unavailable);
+    assert_eq!(
+        input
+            .condition_results
+            .as_ref()
+            .unwrap()
+            .timer_results
+            .len(),
+        2
+    );
+    assert_eq!(
+        input
+            .condition_results
+            .as_ref()
+            .unwrap()
+            .sub_flow_results
+            .len(),
+        2
+    );
 }

@@ -20,7 +20,8 @@ pub use blobs::load_blobs;
 pub use flow::{get_channel_messages, get_flow_state, get_flow_summary, resolve_run_id};
 pub use history::get_history_events;
 pub use predicates::{
-    is_flow_closed, is_history_event_available, is_step_execution_finished, match_attribute,
+    StepCompletionState, is_flow_closed, is_history_event_available, match_attribute,
+    step_completion_state,
 };
 pub use search::{get_search_document, list_search_documents};
 

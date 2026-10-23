@@ -85,9 +85,16 @@ pub(crate) fn close_flow(
                 .cmp(&(right.created_seq, &right.step_execution_id))
         });
     }
+    let should_record_pending = matches!(
+        closing.status,
+        FlowStatus::Canceled | FlowStatus::Terminated | FlowStatus::ServerSideTimeoutInternalOnly
+    ) || closing.error_type == FlowErrorType::FlowTimeout;
     for (_, mut step) in steps {
         if is_active(&step) {
-            if scope.behavior_version.has_close_pending_history() && step.invocation.is_some() {
+            if scope.behavior_version.has_close_pending_history()
+                && should_record_pending
+                && step.invocation.is_some()
+            {
                 history_events::record_method_pending(cursor, &step, scope.now_micros);
             }
             finish_step(transaction, cursor, &mut step, StepExecutionPhase::Canceled)?;

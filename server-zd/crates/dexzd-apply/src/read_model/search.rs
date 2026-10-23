@@ -74,6 +74,19 @@ pub fn list_search_documents(
             suffix[..8].try_into().map_err(|_| corrupt_index(&key))?,
         ));
         let run_id = RunId::from_slice(&suffix[8..]).map_err(|_| corrupt_index(&key))?;
+        let transaction = FlowTransaction::new(
+            reader,
+            ApplyContext {
+                partition,
+                flow_hash,
+            },
+        );
+        let Some(run) = RunRows::new(flow_hash, run_id).run_record(&transaction)? else {
+            return Err(corrupt_index(&key));
+        };
+        if run.is_purging {
+            continue;
+        }
         let Some(document) = get_search_document(reader, flow_hash, run_id)? else {
             return Err(corrupt_index(&key));
         };
