@@ -16,16 +16,12 @@
 
 mod apply_context;
 mod apply_outcome;
-#[expect(
-    dead_code,
-    reason = "Command handlers land in follow-up changes; remove once every helper is used."
-)]
 mod command_handlers;
-#[expect(
-    dead_code,
-    reason = "Command handlers land in follow-up changes; remove once every helper is used."
-)]
+mod cross_flow;
+mod projections;
 mod state_access;
+mod steps;
+mod values;
 
 pub use apply_context::{ApplyContext, BehaviorVersion};
 pub use apply_outcome::{ApplyEffect, ApplyError, ApplyOutcome, StateWrite, WaitableChange};
