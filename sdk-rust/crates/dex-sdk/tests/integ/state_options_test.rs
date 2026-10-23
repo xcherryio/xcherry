@@ -59,7 +59,10 @@ fn test_wait_for_and_execute_locks_serialize_parallel_steps() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_step_locks(client: &Client) -> SdkResult<()> {
     let workflow = StateOptionsLockingWorkflow::new();
     client.start_flow(&workflow, "state-options-locks", 10)?;

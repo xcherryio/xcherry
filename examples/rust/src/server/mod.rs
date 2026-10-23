@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod helpers;
+pub mod http_response;
+pub use http_response as helpers;
 pub mod router;
 
 pub use router::build_router;

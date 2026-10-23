@@ -58,7 +58,10 @@ fn test_state_api_fail_and_recovery_no_wait_until_workflow() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_wait_and_execute_recovery(client: &Client) -> SdkResult<()> {
     let workflow = StateRecoveryWorkflow::new();
     client.start_flow(&workflow, "state-recovery", 1)?;
@@ -67,7 +70,10 @@ fn compile_wait_and_execute_recovery(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_execute_only_recovery(client: &Client) -> SdkResult<()> {
     let workflow = StateRecoveryNoWaitWorkflow::new();
     client.start_flow(&workflow, "state-recovery-no-wait", 1)?;

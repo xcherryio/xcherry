@@ -110,7 +110,10 @@ fn start(prefix: &str) -> (DexDevTestEnvironment, RpcWorkflow, String) {
     (environment, workflow, flow_id)
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_memo_replacement(client: &Client) -> SdkResult<()> {
     client.start_flow(&RpcWorkflow::new(), "rpc-cache", 0)?;
     client.invoke_rpc(

@@ -20,46 +20,46 @@ use reqwest::blocking::Client as HttpClient;
 use serde_json::Value;
 
 #[derive(Clone, Copy)]
-pub struct FlowSmokeFlags {
+pub(crate) struct FlowSmokeFlags {
     pub step_start_may_fail: bool,
     pub no_start_step: bool,
 }
 
 impl FlowSmokeFlags {
-    pub const NONE: Self = Self {
+    pub(crate) const NONE: Self = Self {
         step_start_may_fail: false,
         no_start_step: false,
     };
-    pub const STEP_START_MAY_FAIL: Self = Self {
+    pub(crate) const STEP_START_MAY_FAIL: Self = Self {
         step_start_may_fail: true,
         no_start_step: false,
     };
-    pub const NO_START_STEP: Self = Self {
+    pub(crate) const NO_START_STEP: Self = Self {
         step_start_may_fail: false,
         no_start_step: true,
     };
 }
 
-pub struct FlowSmokeEntry {
+pub(crate) struct FlowSmokeEntry {
     pub name: &'static str,
     pub path: &'static str,
     pub query: HashMap<String, String>,
     pub flags: FlowSmokeFlags,
 }
 
-pub struct FlowSmokeHttpClient {
+pub(crate) struct FlowSmokeHttpClient {
     pub base_url: String,
     http: HttpClient,
     flow_counter: u64,
 }
 
-pub struct FlowSmokeTriggerResult {
+pub(crate) struct FlowSmokeTriggerResult {
     pub flow_id: String,
     pub run_id: String,
 }
 
 impl FlowSmokeHttpClient {
-    pub fn new(base_url: String) -> Self {
+    pub(crate) fn new(base_url: String) -> Self {
         Self {
             base_url,
             http: HttpClient::new(),
@@ -67,7 +67,7 @@ impl FlowSmokeHttpClient {
         }
     }
 
-    pub fn new_flow_id(&mut self, prefix: &str) -> String {
+    pub(crate) fn new_flow_id(&mut self, prefix: &str) -> String {
         self.flow_counter += 1;
         format!(
             "{prefix}-{}-{flow_counter}",
@@ -79,7 +79,7 @@ impl FlowSmokeHttpClient {
         )
     }
 
-    pub fn trigger_get(
+    pub(crate) fn trigger_get(
         &self,
         path: &str,
         query: &HashMap<String, String>,
@@ -98,7 +98,7 @@ impl FlowSmokeHttpClient {
         )
     }
 
-    pub fn trigger_post(&self, path: &str) -> FlowSmokeTriggerResult {
+    pub(crate) fn trigger_post(&self, path: &str) -> FlowSmokeTriggerResult {
         let response = self
             .http
             .post(format!("{}{path}", self.base_url))
@@ -111,7 +111,7 @@ impl FlowSmokeHttpClient {
     }
 }
 
-pub fn parse_flow_trigger_response(
+pub(crate) fn parse_flow_trigger_response(
     body: &str,
     workflow_id_from_query: &str,
 ) -> FlowSmokeTriggerResult {
@@ -169,7 +169,7 @@ fn regex_run_id(body: &str) -> Option<String> {
         .and_then(|rest| rest.split_whitespace().next().map(str::to_string))
 }
 
-pub fn assert_flow_smoke_start_step(entry: &FlowSmokeEntry, flow_id: &str, run_id: &str) {
+pub(crate) fn assert_flow_smoke_start_step(entry: &FlowSmokeEntry, flow_id: &str, run_id: &str) {
     if entry.flags.no_start_step {
         return;
     }
@@ -199,7 +199,7 @@ pub fn assert_flow_smoke_start_step(entry: &FlowSmokeEntry, flow_id: &str, run_i
     panic!("start step did not succeed for {}", entry.name);
 }
 
-pub fn assert_flow_smoke_no_unexpected_failures(
+pub(crate) fn assert_flow_smoke_no_unexpected_failures(
     entry: &FlowSmokeEntry,
     flow_id: &str,
     run_id: &str,
@@ -390,11 +390,11 @@ fn find_repo_root() -> std::path::PathBuf {
     }
 }
 
-pub fn query(workflow_id: &str) -> HashMap<String, String> {
+pub(crate) fn query(workflow_id: &str) -> HashMap<String, String> {
     HashMap::from([(String::from("workflowId"), workflow_id.to_string())])
 }
 
-pub fn query_with(workflow_id: &str, extra: &[(&str, &str)]) -> HashMap<String, String> {
+pub(crate) fn query_with(workflow_id: &str, extra: &[(&str, &str)]) -> HashMap<String, String> {
     let mut values = query(workflow_id);
     for (key, value) in extra {
         values.insert((*key).to_string(), (*value).to_string());

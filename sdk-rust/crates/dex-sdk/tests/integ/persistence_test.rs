@@ -217,7 +217,10 @@ fn test_set_data_attributes() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_persistence_reads(client: &Client) -> SdkResult<()> {
     let workflow = PersistenceWorkflow::new();
     let options = StartFlowOptions::new()
@@ -228,7 +231,10 @@ fn compile_persistence_reads(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_persistence_writes(client: &Client) -> SdkResult<()> {
     let workflow = PersistenceSetAttributesWorkflow::new();
     client.start_flow(&workflow, "set-attributes", "input".to_string())?;

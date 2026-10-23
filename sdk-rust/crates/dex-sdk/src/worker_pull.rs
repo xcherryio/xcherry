@@ -237,7 +237,7 @@ impl PullWorker {
                 }
                 () = shared.notify.notified() => {}
                 result = streams.join_next(), if !streams.is_empty() => {
-                    if let Some(Err(error)) = result { eprintln!("ERROR: pull Worker stream failed: {error}"); }
+                    if let Some(Err(error)) = result { tracing::error!(%error, "pull Worker stream failed"); }
                 }
             }
         }
@@ -251,7 +251,7 @@ impl PullWorker {
         if timeout_at(stop_deadline, async {
             while let Some(result) = streams.join_next().await {
                 if let Err(error) = result {
-                    eprintln!("ERROR: pull Worker stream failed: {error}");
+                    tracing::error!(%error, "pull Worker stream failed");
                 }
             }
         })
@@ -264,7 +264,7 @@ impl PullWorker {
             });
             while let Some(result) = streams.join_next().await {
                 if let Err(error) = result {
-                    eprintln!("ERROR: pull Worker stream failed: {error}");
+                    tracing::error!(%error, "pull Worker stream failed");
                 }
             }
         }
@@ -394,24 +394,16 @@ impl PullStream {
                     let mut state = self.shared.state.lock().expect("pull state lock");
                     if !state.logged_unsupported {
                         state.logged_unsupported = true;
-                        eprintln!(
-                            "ERROR: pull Worker polling is unsupported by this Dex server: {status}"
-                        );
+                        tracing::error!(%status, "pull Worker polling is unsupported by this Dex server");
                     }
                     backoff = Duration::from_secs(60);
                 }
                 Err(status) if is_permanent(status.code()) => {
-                    eprintln!(
-                        "ERROR: Worker task stream rejected for {}: {status}",
-                        self.queue
-                    );
+                    tracing::error!(%status, queue = %self.queue, "Worker task stream rejected");
                     backoff = Duration::from_secs(60);
                 }
                 Err(status) => {
-                    eprintln!(
-                        "WARN: Worker task stream disconnected for {}: {status}",
-                        self.queue
-                    );
+                    tracing::warn!(%status, queue = %self.queue, "Worker task stream disconnected");
                 }
                 Ok(()) => {}
             }
@@ -583,7 +575,7 @@ impl PullStream {
                     }
                 }
                 result = async { (&mut active.as_mut().expect("active task").handler).await }, if active.is_some() => {
-                    if let Err(error) = result { eprintln!("ERROR: pull Worker handler failed: {error}"); }
+                    if let Err(error) = result { tracing::error!(%error, "pull Worker handler failed"); }
                     active = None;
                     let should_retire = self.shared.release(self.stream_id);
                     if should_retire || is_draining || self.stop.borrow().phase != 0 {
@@ -625,7 +617,7 @@ impl PullStream {
             task.cancellation.cancel();
             task.transport_cancellation.cancel();
             if let Err(error) = task.handler.await {
-                eprintln!("ERROR: pull Worker handler failed: {error}");
+                tracing::error!(%error, "pull Worker handler failed");
             }
             self.shared.release(self.stream_id);
         }
@@ -786,7 +778,7 @@ async fn execute_task(
             if let Err(error) =
                 send_task_frame(&sender, &task_id, frame, &transport_cancellation).await
             {
-                eprintln!("WARN: send Worker RPC result: {error}");
+                tracing::warn!(%error, "send Worker RPC result");
             }
         }
         None => {
@@ -803,7 +795,7 @@ async fn execute_task(
             )
             .await
             {
-                eprintln!("WARN: send Worker task error: {error}");
+                tracing::warn!(%error, "send Worker task error");
             }
         }
     }
@@ -944,12 +936,7 @@ fn is_permanent(code: Code) -> bool {
 }
 
 fn generate_app_worker_id() -> String {
-    let identity = ["DEX_WORKER_INSTANCE", "POD_NAME", "HOSTNAME"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(|value| value.to_string_lossy().into_owned())
-        .find(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned());
+    let identity = super::worker_options::WorkerEnvironmentConfig::from_environment().identity;
     let mut cleaned = String::new();
     for character in identity.to_ascii_lowercase().chars() {
         if cleaned.len() >= 54 {
@@ -1069,7 +1056,8 @@ mod tests {
                 .send(sender)
                 .await
                 .map_err(|error| Status::internal(error.to_string()))?;
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 loop {
                     match incoming.message().await {
                         Ok(Some(_)) => {}
@@ -1935,7 +1923,8 @@ mod tests {
             self.notify.notify_one();
             let (sender, receiver) = mpsc::channel(4);
             let pongs = Arc::clone(&self.pongs);
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
                     frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
                         supports_unknown_name_rejection: false,
@@ -2070,7 +2059,8 @@ mod tests {
             }
             let (sender, receiver) = mpsc::channel(2);
             let rejected = self.rejected.clone();
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 let registered = PollWorkerTaskResponse {
                     frame: Some(ResponseFrame::Registered(PollWorkerTaskRegistered {
                         supports_unknown_name_rejection: false,
@@ -2245,7 +2235,8 @@ mod tests {
                 .map_err(|_| Status::internal("registration response closed"))?;
             send_unknown_task(&sender, "unknown-step", true).await?;
             let received = self.received.clone();
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 let mut completed_tasks = 0;
                 while let Ok(Some(frame)) = incoming.message().await {
                     if matches!(
@@ -2273,7 +2264,10 @@ mod tests {
                             return;
                         }
                     } else if matches!(frame.frame, Some(RequestFrame::Pong(_))) {
-                        let _ = received.send(frame).await;
+                        received
+                            .send(frame)
+                            .await
+                            .expect("the test retains the Pong receiver until the frame arrives");
                         return;
                     }
                 }
@@ -2531,7 +2525,8 @@ mod tests {
             self.active_streams.fetch_add(1, Ordering::AcqRel);
             self.changed.notify_one();
             let service = self.clone();
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 loop {
                     match incoming.message().await {
                         Ok(Some(PollWorkerTaskRequest {
@@ -2822,7 +2817,8 @@ mod tests {
             let events = self.events.clone();
             let read_delay = self.read_delay;
             let ready = self.ready.clone();
-            tokio::spawn(async move {
+            // The test runtime owns cancellation of this deliberately detached mock stream reader.
+            let _stream_reader = tokio::spawn(async move {
                 if is_task_stream && !read_delay.is_zero() {
                     match incoming.message().await {
                         Ok(Some(PollWorkerTaskRequest {

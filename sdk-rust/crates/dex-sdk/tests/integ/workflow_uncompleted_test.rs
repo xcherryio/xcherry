@@ -343,7 +343,10 @@ fn assert_failure(
     assert_eq!(expected_result_count, failure.completions().len());
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_workflow_uncompleted(client: &Client) -> SdkResult<()> {
     client.start_flow(
         &WorkflowUncompletedForceFailWorkflow::new(),

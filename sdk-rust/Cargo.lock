@@ -247,6 +247,7 @@ version = "0.6.0"
 dependencies = [
  "dex-blob-cache",
  "jni",
+ "tracing",
 ]
 
 [[package]]

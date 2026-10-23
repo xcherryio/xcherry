@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+//! Java JNI bindings for the shared Dex blob cache.
+
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -14,6 +16,10 @@ use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jlong};
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheOpen(
     mut env: JNIEnv,
@@ -36,6 +42,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheOpen(
     jni_result(&mut env, result, 0)
 }
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheGet(
     mut env: JNIEnv,
@@ -69,6 +79,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheGet(
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cachePut(
     mut env: JNIEnv,
@@ -97,6 +111,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cachePut(
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheDelete(
     mut env: JNIEnv,
@@ -115,6 +133,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheDelet
     jni_result(&mut env, result, ());
 }
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheDeleteAll(
     mut env: JNIEnv,
@@ -129,6 +151,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheDelet
     jni_result(&mut env, result, ());
 }
 
+#[expect(
+    unsafe_code,
+    reason = "JNI requires an unmangled exported symbol for the Java native method."
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheClose(
     mut env: JNIEnv,
@@ -140,6 +166,10 @@ pub extern "system" fn Java_io_superdurable_dex_NativeBlobCacheBridge_cacheClose
             return Err("native BlobCache handle is closed".to_owned());
         }
         // SAFETY: cacheOpen returns this Box exactly once; Java clears the handle before close.
+        #[expect(
+            unsafe_code,
+            reason = "Java transfers the unique cache allocation back during close."
+        )]
         let cache = unsafe { Box::from_raw(handle as *mut BlobCache) };
         cache.close().map_err(|error| error.to_string())
     });
@@ -151,6 +181,10 @@ fn native_cache(handle: jlong) -> Result<&'static BlobCache, String> {
         return Err("native BlobCache handle is closed".to_owned());
     }
     // SAFETY: Java's lifecycle lock prevents cacheClose while an operation owns the handle.
+    #[expect(
+        unsafe_code,
+        reason = "Java holds the lifecycle lock while accessing this native cache handle."
+    )]
     unsafe {
         (handle as *const BlobCache)
             .as_ref()
@@ -185,5 +219,7 @@ fn jni_result<T: Copy>(env: &mut JNIEnv, result: Result<T, String>, fallback: T)
 }
 
 fn throw_illegal_state(env: &mut JNIEnv, message: String) {
-    let _ = env.throw_new("java/lang/IllegalStateException", message);
+    if let Err(error) = env.throw_new("java/lang/IllegalStateException", message) {
+        tracing::error!(%error, "raise Java BlobCache exception");
+    }
 }

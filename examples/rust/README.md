@@ -1,5 +1,9 @@
 # Rust examples
 
+## Purpose
+
+Runnable Rust examples for Dex Flows, Steps, and application patterns.
+
 This application mirrors the examples shared by the Java, Python, and TypeScript
 applications. It intentionally depends on the published `dex-sdk = "=1.2.1"`
 crate without a repository path override.

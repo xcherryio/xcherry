@@ -39,7 +39,10 @@ fn test_skip_wait_until() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_skip_wait_until_test(client: &Client) -> SdkResult<()> {
     client.start_flow(&SkipWaitUntilWorkflow::new(), "execute-only", 0)?;
     let _: i32 = client.wait_for_flow("execute-only")?.single_output()?;

@@ -44,3 +44,8 @@ generated-code-check: generated-code ## Verify checked-in generated code is curr
 		printf '%s\n' "$$changes"; \
 		exit 1; \
 	fi
+
+.PHONY: rust-rules-check
+rust-rules-check: ## Check repository-wide Rust conventions and checker fixtures
+	python3 script/check-rust-rules.py
+	python3 -m unittest discover -s script -p check_rust_rules_test.py

@@ -135,7 +135,10 @@ fn assert_reset_times_out_without_attributes(
     assert_eq!(0, result.completions().len());
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_locking_rpc_reapply(client: &Client) -> SdkResult<()> {
     let workflow = ResetWorkflow::new();
     client.start_flow(&workflow, "reset-locking", ())?;
@@ -149,7 +152,10 @@ fn compile_locking_rpc_reapply(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_skip_writes_reapply(client: &Client) -> SdkResult<()> {
     let workflow = ResetWorkflow::new();
     let options = TimeTravelOptions::from_step(&workflow.first).skip_writes_reapply(true);

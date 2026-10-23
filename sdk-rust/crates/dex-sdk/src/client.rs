@@ -1151,7 +1151,10 @@ impl Client {
             } else {
                 None
             };
-        #[allow(clippy::needless_update)]
+        #[expect(
+            clippy::needless_update,
+            reason = "The test preserves forward-compatible construction of SDK options."
+        )]
         let flow_start_options = FlowStartOptions {
             id_reuse_policy: match options.id_reuse_policy {
                 IdReusePolicy::Default => ProtoIdReusePolicy::Unspecified,

@@ -6,9 +6,15 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-#![allow(clippy::doc_markdown, clippy::large_enum_variant)]
+//! Generated protobuf and gRPC bindings for the Dex protocol.
 
 /// Generated Dex protocol.
+#[expect(
+    clippy::allow_attributes,
+    clippy::allow_attributes_without_reason,
+    clippy::large_enum_variant,
+    reason = "The protobuf generator owns these declarations and their lint attributes."
+)]
 pub mod dex {
     tonic::include_proto!("dex");
 }

@@ -345,7 +345,10 @@ fn test_movement_options_do_not_mutate_step_defaults() {
     assert_eq!(Some("expected wait failure 2"), failure.error_message());
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_basic_and_reuse(client: &Client) -> SdkResult<()> {
     let workflow = BasicWorkflow::new();
     let options = StartFlowOptions::new()
@@ -359,7 +362,10 @@ fn compile_basic_and_reuse(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_empty_and_model_inputs(client: &Client) -> SdkResult<()> {
     client.start_flow(&BasicEmptyInputWorkflow::new(), "empty", ())?;
     client.start_flow(
@@ -370,7 +376,10 @@ fn compile_empty_and_model_inputs(client: &Client) -> SdkResult<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_failure_policy_and_config_override(client: &Client) -> SdkResult<()> {
     let config = FlowConfig::new()
         .active_step_search_mode(ActiveStepSearchMode::All)
@@ -386,7 +395,10 @@ fn compile_failure_policy_and_config_override(client: &Client) -> SdkResult<()> 
     client.update_flow_config("mixed", config)
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_describe_and_step_wait(client: &Client) -> SdkResult<()> {
     let workflow = BasicWorkflow::new();
     let _info = client.describe_flow("basic")?;

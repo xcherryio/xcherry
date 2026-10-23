@@ -6,6 +6,10 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+#[expect(
+    dead_code,
+    reason = "Cross-SDK tests share support with integration scenarios that need additional helpers."
+)]
 #[path = "integ/support.rs"]
 mod support;
 

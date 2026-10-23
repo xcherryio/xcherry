@@ -33,8 +33,6 @@ impl DexDevTestEnvironment {
     pub(crate) fn start(registry: SdkResult<Registry>) -> Self {
         Self::start_with_mode(registry, is_pull_mode())
     }
-
-    #[allow(dead_code)]
     pub(crate) fn start_push(registry: SdkResult<Registry>) -> Self {
         Self::start_with_mode(registry, false)
     }
@@ -153,8 +151,6 @@ pub(crate) fn is_pull_mode() -> bool {
         Err(error) => panic!("cannot read DEX_INTEG_WORKER_MODE: {error}"),
     }
 }
-
-#[allow(dead_code)]
 pub(crate) fn skip_timer_when_pending(
     client: &Client,
     flow_id: &str,

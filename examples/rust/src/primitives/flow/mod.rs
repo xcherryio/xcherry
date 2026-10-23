@@ -13,5 +13,8 @@
 // limitations under the License.
 
 pub mod controller;
-#[allow(clippy::module_inception)]
+#[expect(
+    clippy::module_inception,
+    reason = "The primitive category and its Flow example share the domain name."
+)]
 pub mod flow;

@@ -67,7 +67,10 @@ fn test_waiting_internal_channel() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_internal_channels(client: &Client) -> SdkResult<()> {
     client.start_flow(&InternalChannelWorkflow::new(), "basic-internal", 1)?;
     let _: i32 = client.wait_for_flow("basic-internal")?.single_output()?;

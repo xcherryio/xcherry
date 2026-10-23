@@ -311,6 +311,20 @@ handlers should emit heartbeats or Stream messages while polling
 `Context::is_cancelled`. Cancellation becomes observable when the Worker
 response stream closes.
 
+### Worker diagnostics
+
+Workers report errors and warnings through the `tracing` crate. Examples are a
+disconnected or rejected task stream, a failed handler, and a failed RPC result.
+The SDK prints nothing by itself. Install a `tracing` subscriber in your
+application to see these events:
+
+```rust
+tracing_subscriber::fmt().init();
+```
+
+Without a subscriber, the Worker keeps its retry behavior but these events are
+discarded.
+
 ### Pull mode
 
 Run `start()` on a dedicated thread, then await `worker.wait_pull_registered()` to wait until

@@ -73,12 +73,12 @@ pub const SEND_DEAL_CONDITION_MESSAGE: Rpc<ConditionMessage, ()> =
     Rpc::new("SendDealConditionMessage");
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StateStepInput {
+pub(super) struct StateStepInput {
     pub state_name: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ActionStepInput {
+pub(super) struct ActionStepInput {
     pub state_name: String,
     pub action_index: usize,
 }
@@ -129,7 +129,7 @@ impl Flow for DealDSLFlow {
 }
 
 #[derive(Default)]
-pub struct InitializeDeal;
+pub(super) struct InitializeDeal;
 
 impl Step for InitializeDeal {
     type Input = DealStart;
@@ -151,7 +151,7 @@ impl Step for InitializeDeal {
 }
 
 #[derive(Default)]
-pub struct WaitForDealCondition;
+pub(super) struct WaitForDealCondition;
 
 impl Step for WaitForDealCondition {
     type Input = StateStepInput;
@@ -190,7 +190,7 @@ impl Step for WaitForDealCondition {
 }
 
 #[derive(Default)]
-pub struct ExecuteDealAction;
+pub(super) struct ExecuteDealAction;
 
 impl Step for ExecuteDealAction {
     type Input = ActionStepInput;
@@ -225,7 +225,7 @@ impl Step for ExecuteDealAction {
 }
 
 #[derive(Default)]
-pub struct EvaluateDealTransition;
+pub(super) struct EvaluateDealTransition;
 
 impl Step for EvaluateDealTransition {
     type Input = StateStepInput;
@@ -368,5 +368,5 @@ pub static DEAL_CURRENT_STATE: LazyLock<Attribute<String>> =
     LazyLock::new(|| Attribute::new("DealCurrentState"));
 static DEAL_PENDING_CONDITION: LazyLock<Attribute<String>> =
     LazyLock::new(|| Attribute::new("DealPendingCondition"));
-pub static DEAL_CONDITION_MESSAGES: LazyLock<ChannelMap<BTreeMap<String, String>>> =
+pub(super) static DEAL_CONDITION_MESSAGES: LazyLock<ChannelMap<BTreeMap<String, String>>> =
     LazyLock::new(|| ChannelMap::new("DealConditionMessages"));

@@ -177,7 +177,10 @@ fn assert_running_reuse(reuse_policy: SubFlowReusePolicy, expects_restart: bool)
     let child_id = sub_flow_id(&id, &parent.start, 0);
     let environment = environment(registry2(parent, TimerWorkflow::new()));
     let parent = TimerSubFlowParent::new(reuse_policy);
-    environment.client.start_flow(&parent, &id, 300).unwrap();
+    environment
+        .client
+        .start_flow(&parent, &id, 300)
+        .expect("the SubFlow integration fixture completes the requested operation");
     let first_run_id = await_running(&environment.client, &child_id, None);
     environment
         .client
@@ -185,7 +188,7 @@ fn assert_running_reuse(reuse_policy: SubFlowReusePolicy, expects_restart: bool)
             &id,
             TimeTravelOptions::from_beginning().reason("verify SubFlow running reuse"),
         )
-        .unwrap();
+        .expect("the SubFlow integration fixture completes the requested operation");
     let active_run_id = await_running(
         &environment.client,
         &child_id,
@@ -198,7 +201,9 @@ fn assert_running_reuse(reuse_policy: SubFlowReusePolicy, expects_restart: bool)
         StepExecutionId::of(&TimerStep),
         TimerId::by_condition_id("test-timer-id"),
     );
-    let output: String = wait(&environment.client, &id).single_output().unwrap();
+    let output: String = wait(&environment.client, &id)
+        .single_output()
+        .expect("the SubFlow integration fixture completes the requested operation");
     assert_eq!(
         vec![child_id.as_str(), "Completed"],
         output.split('|').collect::<Vec<_>>()
@@ -229,7 +234,7 @@ fn registry3<First: Flow, Second: Flow, Third: Flow>(
 fn wait(client: &Client, flow_id: &str) -> dex_sdk::FlowResult {
     client
         .wait_for_flow_with_timeout(flow_id, Duration::from_secs(30))
-        .unwrap()
+        .expect("the SubFlow integration fixture completes the requested operation")
 }
 
 fn await_running(client: &Client, flow_id: &str, excluded_run_id: Option<&str>) -> String {
@@ -249,7 +254,12 @@ fn await_running(client: &Client, flow_id: &str, excluded_run_id: Option<&str>) 
 fn await_different_run(client: &Client, flow_id: &str, first_run_id: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if client.describe_flow(flow_id).unwrap().run_id != first_run_id {
+        if client
+            .describe_flow(flow_id)
+            .expect("the SubFlow integration fixture completes the requested operation")
+            .run_id
+            != first_run_id
+        {
             return;
         }
         thread::yield_now();

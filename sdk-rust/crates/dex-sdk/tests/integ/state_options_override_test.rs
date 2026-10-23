@@ -36,7 +36,10 @@ fn test_state_options_override_workflow() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_movement_options_override(client: &Client) -> SdkResult<()> {
     let workflow = StateOptionsOverrideWorkflow::new();
     client.start_flow(&workflow, "options-override", "input".to_string())?;

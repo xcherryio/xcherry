@@ -61,7 +61,10 @@ fn test_basic_signal_workflow() {
     );
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Integration fixtures implement schema variants exercised by selected test targets."
+)]
 fn compile_signals_and_timer_skip(client: &Client) -> SdkResult<()> {
     let workflow = SignalWorkflow::new();
     client.start_flow(&workflow, "signal", 1)?;

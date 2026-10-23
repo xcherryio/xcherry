@@ -18,3 +18,22 @@ napi-derive.workspace = true
 
 [build-dependencies]
 napi-build.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+let_underscore_must_use = "warn"
+let_underscore_future = "warn"
+unused_result_ok = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+match_wildcard_for_single_variants = "warn"
