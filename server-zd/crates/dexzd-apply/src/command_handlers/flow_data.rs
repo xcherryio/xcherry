@@ -158,17 +158,17 @@ fn apply_hard_delete_write(
                 },
             );
         }
-        (false, None) => {
+        (None, true) => {
+            transaction.delete(ColumnFamily::Flow, current_key);
+            cursor.rows.delete_attribute(transaction, &write.key);
+        }
+        (None, false) => {
             return Err(ApplyError::InvariantViolation {
                 detail: format!(
                     "hard-delete write of {:?} has no uploaded object",
                     write.key
                 ),
             });
-        }
-        (true, _) => {
-            transaction.delete(ColumnFamily::Flow, current_key);
-            cursor.rows.delete_attribute(transaction, &write.key);
         }
     }
     Ok(())
