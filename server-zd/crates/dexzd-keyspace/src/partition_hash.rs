@@ -31,8 +31,10 @@ pub enum PartitionHashError {
 
 /// Maps (tenant ID, Flow ID) to a [`FlowHash`] and a [`PartitionId`] with keyed SipHash-2-4.
 ///
-/// The key and partition count come from the cluster object and never change, so every node
-/// computes the same partition for the same Flow.
+/// The key and partition count come from the cluster object and never change. Every node
+/// therefore computes the same partition for the same Flow.
+///
+/// Key bytes 0-7 are k0 and bytes 8-15 are k1, each little-endian, as in the SipHash paper.
 #[derive(Clone)]
 pub struct PartitionHasher {
     key0: u64,
@@ -153,6 +155,15 @@ mod tests {
         let hasher = PartitionHasher::new(&[0_u8; 16], 1024).unwrap();
         let hash = hasher.flow_hash(TenantId::DEFAULT, "flow");
         assert_eq!(format!("{:016x}", hash.0), KNOWN_FLOW_HASH);
+    }
+
+    #[test]
+    fn known_hash_with_distinct_key_bytes_never_changes() {
+        let key: Vec<u8> = (0_u8..16).collect();
+        let hasher = PartitionHasher::new(&key, 1024).unwrap();
+        let hash = hasher.flow_hash(TenantId(0x0102_0304_0506_0708), "order-42");
+        assert_eq!(format!("{:016x}", hash.0), "f6487cae05e30bcc");
+        assert_eq!(hasher.partition_of(hash), PartitionId(985));
     }
 
     // Cross-checked with an independent SipHash-2-4 implementation.
