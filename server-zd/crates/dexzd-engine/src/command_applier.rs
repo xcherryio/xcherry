@@ -23,3 +23,18 @@ pub trait CommandApplier: Send + Sync + 'static {
         command: &FlowCommand,
     ) -> Result<ApplyOutcome, ApplyError>;
 }
+
+/// [`CommandApplier`] backed by the deterministic `dexzd-apply` state machine.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DeterministicCommandApplier;
+
+impl CommandApplier for DeterministicCommandApplier {
+    fn apply(
+        &self,
+        context: &ApplyContext,
+        state: &dyn FlowStateReader,
+        command: &FlowCommand,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        dexzd_apply::apply_flow_command(context, state, command)
+    }
+}

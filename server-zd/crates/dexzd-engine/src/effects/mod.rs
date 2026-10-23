@@ -37,6 +37,7 @@ use dexzd_object_store::ObjectStoreError;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::StorageError;
+use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -52,6 +53,7 @@ pub use hard_delete_objects::{
 };
 pub use method_request::MethodRequest;
 
+use crate::recovery::{PartitionRuntimeRebuilder, RuntimeRebuildError};
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
 use method_request::MethodAttemptKey;
@@ -337,6 +339,22 @@ impl RuntimeEffectSink for EffectRunner {
         if self.router.send(message).is_err() {
             tracing::debug!("effect runner stopped; effects are rebuilt after restart");
         }
+    }
+}
+
+impl PartitionRuntimeRebuilder for EffectRunner {
+    fn rebuild_partition(
+        &self,
+        partition: PartitionId,
+    ) -> BoxFuture<'_, Result<(), RuntimeRebuildError>> {
+        Box::pin(async move {
+            EffectRunner::rebuild_partition(self, partition)
+                .await
+                .map_err(|error| RuntimeRebuildError {
+                    partition,
+                    detail: error.to_string(),
+                })
+        })
     }
 }
 
