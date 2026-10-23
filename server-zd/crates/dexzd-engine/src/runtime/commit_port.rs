@@ -8,6 +8,8 @@
 
 //! The boundary between the Flow runtime and the commit pipeline.
 
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use dexzd_apply::{ApplyContext, ApplyOutcome, FlowStateReader};
 use dexzd_keyspace::PartitionId;
 use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition};
@@ -64,19 +66,53 @@ pub enum CommitError {
 #[derive(Debug)]
 pub struct CommitTicket {
     receiver: oneshot::Receiver<Result<CommittedCommand, CommitError>>,
+    failure_watch: Arc<Mutex<CommitFailureWatch>>,
 }
 
 /// Producer side of a [`CommitTicket`], held by the commit pipeline.
+///
+/// Failing or dropping it runs the ticket's failure observer synchronously, even when nobody waits.
 #[derive(Debug)]
 pub struct CommitTicketSender {
-    sender: oneshot::Sender<Result<CommittedCommand, CommitError>>,
+    sender: Option<oneshot::Sender<Result<CommittedCommand, CommitError>>>,
+    failure_watch: Arc<Mutex<CommitFailureWatch>>,
+}
+
+/// Runs once with the error of a failed commit.
+pub(crate) type CommitFailureObserver = Box<dyn FnOnce(&CommitError) + Send>;
+
+/// Hands a commit failure to the observer, whichever of the two arrives first.
+#[derive(Default)]
+struct CommitFailureWatch {
+    observer: Option<CommitFailureObserver>,
+    failure: Option<CommitError>,
+}
+
+impl std::fmt::Debug for CommitFailureWatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommitFailureWatch")
+            .field("has_observer", &self.observer.is_some())
+            .field("failure", &self.failure)
+            .finish()
+    }
 }
 
 impl CommitTicket {
     /// Creates a connected sender and ticket.
     pub fn new_pair() -> (CommitTicketSender, CommitTicket) {
         let (sender, receiver) = oneshot::channel();
-        (CommitTicketSender { sender }, CommitTicket { receiver })
+        let failure_watch = Arc::new(Mutex::new(CommitFailureWatch::default()));
+        (
+            CommitTicketSender {
+                sender: Some(sender),
+                failure_watch: Arc::clone(&failure_watch),
+            },
+            CommitTicket {
+                receiver,
+                failure_watch,
+            },
+        )
     }
 
     /// Waits for the commit result.
@@ -86,20 +122,69 @@ impl CommitTicket {
     pub async fn wait(self) -> Result<CommittedCommand, CommitError> {
         match self.receiver.await {
             Ok(result) => result,
-            Err(_) => Err(CommitError::NodeStopping {
-                detail: "commit pipeline dropped the commit ticket".to_owned(),
-            }),
+            Err(_) => Err(dropped_ticket_error()),
+        }
+    }
+
+    /// Runs `observer` once if the commit fails, now when it already failed. Survives dropping
+    /// the ticket.
+    pub(crate) fn observe_failure(&self, observer: CommitFailureObserver) {
+        let mut watch = lock_failure_watch(&self.failure_watch);
+        match watch.failure.take() {
+            Some(failure) => {
+                drop(watch);
+                observer(&failure);
+            }
+            None => watch.observer = Some(observer),
         }
     }
 }
 
 impl CommitTicketSender {
     /// Resolves the ticket. A ticket whose waiter is gone is resolved silently.
-    pub fn resolve(self, result: Result<CommittedCommand, CommitError>) {
+    pub fn resolve(mut self, result: Result<CommittedCommand, CommitError>) {
+        if let Err(error) = &result {
+            self.report_failure(error.clone());
+        }
+        let sender = self
+            .sender
+            .take()
+            .expect("present until resolved or dropped");
         // Nobody waits; the outcome stream still carries the command.
-        if self.sender.send(result).is_err() {
+        if sender.send(result).is_err() {
             tracing::trace!("commit ticket waiter is gone");
         }
+    }
+
+    fn report_failure(&self, error: CommitError) {
+        let mut watch = lock_failure_watch(&self.failure_watch);
+        match watch.observer.take() {
+            Some(observer) => {
+                drop(watch);
+                observer(&error);
+            }
+            None => watch.failure = Some(error),
+        }
+    }
+}
+
+impl Drop for CommitTicketSender {
+    fn drop(&mut self) {
+        if self.sender.is_some() {
+            self.report_failure(dropped_ticket_error());
+        }
+    }
+}
+
+fn lock_failure_watch(watch: &Mutex<CommitFailureWatch>) -> MutexGuard<'_, CommitFailureWatch> {
+    watch
+        .lock()
+        .expect("commit failure watch lock is poisoned only if a holder panicked")
+}
+
+fn dropped_ticket_error() -> CommitError {
+    CommitError::NodeStopping {
+        detail: "commit pipeline dropped the commit ticket".to_owned(),
     }
 }
 
@@ -112,6 +197,8 @@ impl CommitTicketSender {
 /// that the pipeline holds while it calls `apply_committed`. The pipeline calls
 /// `apply_committed` only after the command's writes are in the local store, never from inside
 /// `submit`.
+///
+/// Failing or dropping a ticket halts the runtime on that thread, before the partition commits more.
 pub trait FlowCommandCommitter: Send + Sync + 'static {
     /// Stamps the command (epoch, behavior version, command ID, proposed_at_micros) and
     /// enqueues it in the commit pipeline in one step, so log order equals stamp order within
