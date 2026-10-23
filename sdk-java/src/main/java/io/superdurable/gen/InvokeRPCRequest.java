@@ -286,6 +286,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+   * server-zd deduplicates it for the whole run.
    * </pre>
    *
    * <code>string request_id = 7;</code>
@@ -307,6 +308,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+   * server-zd deduplicates it for the whole run.
    * </pre>
    *
    * <code>string request_id = 7;</code>
@@ -1673,6 +1675,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+     * server-zd deduplicates it for the whole run.
      * </pre>
      *
      * <code>string request_id = 7;</code>
@@ -1693,6 +1696,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+     * server-zd deduplicates it for the whole run.
      * </pre>
      *
      * <code>string request_id = 7;</code>
@@ -1714,6 +1718,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+     * server-zd deduplicates it for the whole run.
      * </pre>
      *
      * <code>string request_id = 7;</code>
@@ -1731,6 +1736,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+     * server-zd deduplicates it for the whole run.
      * </pre>
      *
      * <code>string request_id = 7;</code>
@@ -1745,6 +1751,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+     * server-zd deduplicates it for the whole run.
      * </pre>
      *
      * <code>string request_id = 7;</code>

@@ -5,6 +5,7 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
 /**
  * <pre>
  * Hosted by Dex worker; server calls these RPCs.
+ * server-zd supports only pull Workers and never calls WorkerService.
  * </pre>
  */
 @javax.annotation.Generated(
@@ -158,6 +159,7 @@ public final class WorkerServiceGrpc {
   /**
    * <pre>
    * Hosted by Dex worker; server calls these RPCs.
+   * server-zd supports only pull Workers and never calls WorkerService.
    * </pre>
    */
   public interface AsyncService {
@@ -188,6 +190,7 @@ public final class WorkerServiceGrpc {
    * Base class for the server implementation of the service WorkerService.
    * <pre>
    * Hosted by Dex worker; server calls these RPCs.
+   * server-zd supports only pull Workers and never calls WorkerService.
    * </pre>
    */
   public static abstract class WorkerServiceImplBase
@@ -202,6 +205,7 @@ public final class WorkerServiceGrpc {
    * A stub to allow clients to do asynchronous rpc calls to service WorkerService.
    * <pre>
    * Hosted by Dex worker; server calls these RPCs.
+   * server-zd supports only pull Workers and never calls WorkerService.
    * </pre>
    */
   public static final class WorkerServiceStub
@@ -246,6 +250,7 @@ public final class WorkerServiceGrpc {
    * A stub to allow clients to do synchronous rpc calls to service WorkerService.
    * <pre>
    * Hosted by Dex worker; server calls these RPCs.
+   * server-zd supports only pull Workers and never calls WorkerService.
    * </pre>
    */
   public static final class WorkerServiceBlockingStub
@@ -289,6 +294,7 @@ public final class WorkerServiceGrpc {
    * A stub to allow clients to do ListenableFuture-style rpc calls to service WorkerService.
    * <pre>
    * Hosted by Dex worker; server calls these RPCs.
+   * server-zd supports only pull Workers and never calls WorkerService.
    * </pre>
    */
   public static final class WorkerServiceFutureStub

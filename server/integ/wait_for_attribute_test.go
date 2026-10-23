@@ -48,6 +48,7 @@ func TestWaitForAttributeTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	requireTemporalOnly(t)
 	for i := 0; i < *repeatIntegTest; i++ {
 		doTestWaitForAttributeSuccess(t)
 		smallWaitForFastTest()

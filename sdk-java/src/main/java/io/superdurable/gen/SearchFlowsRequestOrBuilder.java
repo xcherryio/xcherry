@@ -41,6 +41,10 @@ public interface SearchFlowsRequestOrBuilder extends
       getNextPageTokenBytes();
 
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>bool include_continued_as_new = 4;</code>
    * @return The includeContinuedAsNew.
    */

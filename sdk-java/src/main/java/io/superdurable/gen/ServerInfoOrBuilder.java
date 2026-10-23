@@ -49,4 +49,23 @@ public interface ServerInfoOrBuilder extends
    * @return The currentProtocolVersion.
    */
   int getCurrentProtocolVersion();
+
+  /**
+   * <pre>
+   * The engine behind this Server.
+   * </pre>
+   *
+   * <code>.dex.ServerEngine server_engine = 4;</code>
+   * @return The enum numeric value on the wire for serverEngine.
+   */
+  int getServerEngineValue();
+  /**
+   * <pre>
+   * The engine behind this Server.
+   * </pre>
+   *
+   * <code>.dex.ServerEngine server_engine = 4;</code>
+   * @return The serverEngine.
+   */
+  io.superdurable.gen.ServerEngine getServerEngine();
 }
