@@ -1016,6 +1016,7 @@ dependencies = [
  "dexzd-log",
  "dexzd-object-store",
  "dexzd-protocol",
+ "dexzd-request-validation",
  "dexzd-storage",
  "dexzd-worker-dispatch",
  "futures",
@@ -1026,6 +1027,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1082,6 +1084,14 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "dexzd-request-validation"
+version = "0.1.0"
+dependencies = [
+ "dexzd-protocol",
+ "thiserror",
 ]
 
 [[package]]

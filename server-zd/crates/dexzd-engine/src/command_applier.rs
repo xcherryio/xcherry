@@ -6,18 +6,16 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Calls apply through a trait so tests can replace the deterministic state machine.
-
 use dexzd_apply::{ApplyContext, ApplyError, ApplyOutcome, FlowStateReader};
 use dexzd_protocol::dexzd::v1::FlowCommand;
 
 /// Applies one stamped command to a state view. Production uses
 /// `dexzd_apply::apply_flow_command`; tests inject fakes.
 pub trait CommandApplier: Send + Sync + 'static {
-    /// Applies `command` to `state` and returns its writes, effects, and reply.
+    /// Applies `command` to `state` and returns its outcome.
     ///
-    /// Must return byte-identical outcomes for the same state and command. An `Err` stops the
-    /// command's partition.
+    /// Returns [`ApplyError`] when the state or the command violates a trusted invariant; the
+    /// partition must stop.
     fn apply(
         &self,
         context: &ApplyContext,

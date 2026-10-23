@@ -17,6 +17,7 @@ dexzd-keyspace.workspace = true
 dexzd-log.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
+dexzd-request-validation.workspace = true
 dexzd-storage.workspace = true
 dexzd-worker-dispatch.workspace = true
 futures.workspace = true
@@ -26,6 +27,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+xxhash-rust.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
