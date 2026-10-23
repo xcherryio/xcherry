@@ -8,6 +8,7 @@
 
 //! Startup cleanup of temporary files and of data files that no committed metadata references.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -16,10 +17,14 @@ use std::str::FromStr;
 use redb::ReadableDatabase;
 use ulid::Ulid;
 
-use super::{BUCKETS, Store, VERSIONS, decode_json, load_versions, relative_data_file};
+use super::{
+    BUCKETS, PARTS, Store, UPLOADS, UPLOADS_DIRECTORY_NAME, VERSIONS, decode_json, load_versions,
+    relative_data_file,
+};
 use crate::data_file;
 use crate::error::StoreError;
-use crate::record::BucketRecord;
+use crate::key_codec::{encode_bucket_prefix, prefix_successor};
+use crate::record::{BucketRecord, PartRecord, UploadRecord};
 
 /// Counts reported by [`Store::collect_orphan_data_files`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,7 +97,12 @@ impl Store {
             Err(error) => return Err(error.into()),
         };
         for shard in shards {
-            for file in fs::read_dir(shard?.path())? {
+            let shard = shard?.path();
+            if shard.file_name().and_then(|name| name.to_str()) == Some(UPLOADS_DIRECTORY_NAME) {
+                self.collect_upload_orphans(bucket, &shard, collection)?;
+                continue;
+            }
+            for file in fs::read_dir(shard)? {
                 let path = file?.path();
                 let name = path
                     .file_name()
@@ -108,6 +118,79 @@ impl Store {
                         Ok(()) => collection.removed_files += 1,
                         Err(error) => {
                             tracing::warn!(path = %path.display(), %error, "failed to remove orphan data file");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes upload directories without an upload record and part files no part record names.
+    fn collect_upload_orphans(
+        &self,
+        bucket: &BucketRecord,
+        uploads_directory: &Path,
+        collection: &mut OrphanCollection,
+    ) -> Result<(), StoreError> {
+        let (live_uploads, live_part_files) = {
+            let transaction = self.database.begin_read()?;
+            let bucket_prefix = encode_bucket_prefix(&bucket.name);
+            let end = prefix_successor(&bucket_prefix)
+                .expect("encoded bucket prefixes end with a terminator below 0xFF");
+            let mut live_uploads = HashSet::new();
+            for entry in transaction
+                .open_table(UPLOADS)?
+                .range(bucket_prefix.as_slice()..end.as_slice())?
+            {
+                let upload: UploadRecord = decode_json(entry?.1.value())?;
+                live_uploads.insert(upload.upload_id);
+            }
+            let mut live_part_files = HashSet::new();
+            for entry in transaction
+                .open_table(PARTS)?
+                .range(bucket_prefix.as_slice()..end.as_slice())?
+            {
+                let part: PartRecord = decode_json(entry?.1.value())?;
+                live_part_files.insert(self.bucket_directory(bucket).join(part.data_file));
+            }
+            (live_uploads, live_part_files)
+        };
+        for upload_directory in fs::read_dir(uploads_directory)? {
+            let upload_directory = upload_directory?.path();
+            let upload_id = upload_directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if !self.is_older_than_open(&upload_id) {
+                continue;
+            }
+            if !live_uploads.contains(&upload_id) {
+                remove_directory(&upload_directory);
+                continue;
+            }
+            // A completion or abort may remove the directory while this scan runs.
+            let files = match fs::read_dir(&upload_directory) {
+                Ok(files) => files,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for file in files {
+                let path = file?.path();
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                if !self.is_older_than_open(name) {
+                    continue;
+                }
+                collection.examined_files += 1;
+                if !live_part_files.contains(&path) {
+                    match fs::remove_file(&path) {
+                        Ok(()) => collection.removed_files += 1,
+                        Err(error) => {
+                            tracing::warn!(path = %path.display(), %error, "failed to remove orphan part file");
                         }
                     }
                 }

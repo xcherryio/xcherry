@@ -72,34 +72,123 @@ impl XmlWriter {
     }
 }
 
-/// Returns the text of the first `element` in an XML body, or `None` when it is absent.
-pub(crate) fn first_element_text(body: &[u8], element: &str) -> Result<Option<String>, S3Error> {
+/// One element of a parsed request document.
+#[derive(Debug, Default)]
+pub(crate) struct XmlElement {
+    pub(crate) name: String,
+    /// Character data directly inside this element, concatenated across text and CDATA sections.
+    pub(crate) text: String,
+    pub(crate) children: Vec<XmlElement>,
+}
+
+impl XmlElement {
+    pub(crate) fn child(&self, name: &str) -> Option<&XmlElement> {
+        self.children.iter().find(|child| child.name == name)
+    }
+
+    pub(crate) fn children_named<'element>(
+        &'element self,
+        name: &'element str,
+    ) -> impl Iterator<Item = &'element XmlElement> {
+        self.children.iter().filter(move |child| child.name == name)
+    }
+
+    /// Returns the untrimmed text of the first direct child named `name`.
+    pub(crate) fn child_text(&self, name: &str) -> Option<&str> {
+        self.child(name).map(|child| child.text.as_str())
+    }
+}
+
+/// Parses one complete document whose root element is `root`; anything else is MalformedXML.
+pub(crate) fn parse_document(body: &[u8], root: &str) -> Result<XmlElement, S3Error> {
+    let malformed = |detail: String| {
+        S3Error::malformed_xml(format!(
+            "The XML you provided was not well-formed or did not validate against our published schema: {detail}"
+        ))
+    };
     let mut reader = quick_xml::Reader::from_reader(body);
     let mut buffer = Vec::new();
-    let mut is_inside_element = false;
+    let mut open_elements: Vec<XmlElement> = Vec::new();
+    let mut document: Option<XmlElement> = None;
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(start)) => {
-                is_inside_element = start.local_name().as_ref() == element.as_bytes()
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| malformed(error.to_string()))?;
+        match event {
+            Event::Start(start) => {
+                if document.is_some() {
+                    return Err(malformed("content after the root element".to_owned()));
+                }
+                let name = String::from_utf8_lossy(start.local_name().as_ref()).into_owned();
+                if open_elements.is_empty() && name != root {
+                    return Err(malformed(format!("the root element must be {root}")));
+                }
+                open_elements.push(XmlElement {
+                    name,
+                    ..XmlElement::default()
+                });
             }
-            Ok(Event::Text(text)) if is_inside_element => {
-                let unescaped = text.unescape().map_err(|error| {
-                    S3Error::malformed_xml(format!("invalid XML text: {error}"))
-                })?;
-                return Ok(Some(unescaped.trim().to_owned()));
-            }
-            Ok(Event::End(_)) => {
-                if is_inside_element {
-                    return Ok(Some(String::new()));
+            Event::Empty(empty) => {
+                let element = XmlElement {
+                    name: String::from_utf8_lossy(empty.local_name().as_ref()).into_owned(),
+                    ..XmlElement::default()
+                };
+                match open_elements.last_mut() {
+                    Some(parent) => parent.children.push(element),
+                    None if document.is_none() && element.name == root => document = Some(element),
+                    None => return Err(malformed(format!("the root element must be {root}"))),
                 }
             }
-            Ok(Event::Eof) => return Ok(None),
-            Ok(_) => {}
-            Err(error) => {
-                return Err(S3Error::malformed_xml(format!(
-                    "the XML is not well formed: {error}"
-                )));
+            Event::End(end) => {
+                let element = open_elements
+                    .pop()
+                    .ok_or_else(|| malformed("an unmatched end tag".to_owned()))?;
+                if end.local_name().as_ref() != element.name.as_bytes() {
+                    return Err(malformed(format!(
+                        "mismatched end tag for {}",
+                        element.name
+                    )));
+                }
+                // S3 documents never mix character data with child elements.
+                if !element.children.is_empty() && !element.text.trim().is_empty() {
+                    return Err(malformed(format!(
+                        "{} mixes text and elements",
+                        element.name
+                    )));
+                }
+                match open_elements.last_mut() {
+                    Some(parent) => parent.children.push(element),
+                    None => document = Some(element),
+                }
             }
+            Event::Text(text) => {
+                let unescaped = text
+                    .unescape()
+                    .map_err(|error| malformed(format!("invalid character data: {error}")))?;
+                match open_elements.last_mut() {
+                    Some(element) => element.text.push_str(&unescaped),
+                    None if unescaped.trim().is_empty() => {}
+                    None => return Err(malformed("text outside the root element".to_owned())),
+                }
+            }
+            Event::CData(cdata) => {
+                let text = std::str::from_utf8(&cdata)
+                    .map_err(|_| malformed("CDATA is not valid UTF-8".to_owned()))?;
+                match open_elements.last_mut() {
+                    Some(element) => element.text.push_str(text),
+                    None => return Err(malformed("CDATA outside the root element".to_owned())),
+                }
+            }
+            Event::Eof => {
+                if !open_elements.is_empty() {
+                    return Err(malformed(
+                        "the document ended before its root element closed".to_owned(),
+                    ));
+                }
+                return document
+                    .ok_or_else(|| malformed(format!("the document has no {root} element")));
+            }
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_) => {}
         }
         buffer.clear();
     }

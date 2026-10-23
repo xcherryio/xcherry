@@ -23,7 +23,7 @@ fn strict_store_opens_at_relative_and_nested_roots() {
             durability: Durability::Strict,
         })
         .unwrap();
-        store.create_bucket("opened").unwrap();
+        store.create_bucket("opened", false).unwrap();
         assert!(directory.path().join(root).join("metadata.redb").is_file());
     }
 }

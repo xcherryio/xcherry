@@ -27,7 +27,7 @@ async fn start_with_bucket() -> RunningServer {
     })
     .expect("the raw HTTP test harness I/O succeeds");
     store
-        .create_bucket("raw")
+        .create_bucket("raw", false)
         .expect("the raw HTTP test harness I/O succeeds");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -38,31 +38,42 @@ async fn start_with_bucket() -> RunningServer {
 }
 
 /// Sends one aws-chunked PutObject and returns the response status code.
+///
+/// The server may reject the request before reading the whole body and then reset the connection,
+/// so the request goes out in one write and only the status line is read.
 async fn put_aws_chunked(server: &RunningServer, extra_headers: &str, body: &[u8]) -> u16 {
     let mut stream = TcpStream::connect(server.server.local_address())
         .await
-        .expect("the raw HTTP test harness I/O succeeds");
-    let head = format!(
-        "PUT /raw/object HTTP/1.1\r\nhost: localhost\r\ncontent-encoding: aws-chunked\r\n         x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER\r\n{extra_headers}         content-length: {}\r\nconnection: close\r\n\r\n",
+        .expect("the test server accepts connections");
+    let mut request = format!(
+        "PUT /raw/object HTTP/1.1\r\nhost: localhost\r\ncontent-encoding: aws-chunked\r\n\
+         x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER\r\n{extra_headers}\
+         content-length: {}\r\nconnection: close\r\n\r\n",
         body.len()
-    );
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
     stream
-        .write_all(head.as_bytes())
+        .write_all(&request)
         .await
-        .expect("the raw HTTP test harness I/O succeeds");
-    stream
-        .write_all(body)
-        .await
-        .expect("the raw HTTP test harness I/O succeeds");
+        .expect("the test server reads the request");
     let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .await
-        .expect("the raw HTTP test harness I/O succeeds");
-    let status_line = String::from_utf8_lossy(&response[..12]).into_owned();
+    let mut buffer = [0u8; 256];
+    while !response.windows(2).any(|window| window == b"\r\n") {
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .expect("the status line arrives before any reset");
+        assert!(
+            read > 0,
+            "the server closed the connection without a response"
+        );
+        response.extend_from_slice(&buffer[..read]);
+    }
+    let status_line = String::from_utf8_lossy(&response).into_owned();
     status_line[9..12]
         .parse()
-        .expect("the raw HTTP test harness I/O succeeds")
+        .expect("the response starts with an HTTP status line")
 }
 
 fn temporary_file_count(server: &RunningServer) -> usize {

@@ -29,12 +29,12 @@ const URL_ENCODED_LISTING: &AsciiSet = &NON_ALPHANUMERIC
 const STORAGE_CLASS: &str = "STANDARD";
 
 /// Applies `encoding-type=url` to keys, prefixes, and delimiters in listing responses.
-struct ListingEncoder {
+pub(super) struct ListingEncoder {
     is_url_encoded: bool,
 }
 
 impl ListingEncoder {
-    fn from_query(query: &QueryParameters) -> Result<ListingEncoder, S3Error> {
+    pub(super) fn from_query(query: &QueryParameters) -> Result<ListingEncoder, S3Error> {
         match query.get("encoding-type") {
             None => Ok(ListingEncoder {
                 is_url_encoded: false,
@@ -48,7 +48,7 @@ impl ListingEncoder {
         }
     }
 
-    fn encode(&self, text: &str) -> String {
+    pub(super) fn encode(&self, text: &str) -> String {
         if self.is_url_encoded {
             utf8_percent_encode(text, URL_ENCODED_LISTING).to_string()
         } else {
@@ -56,7 +56,7 @@ impl ListingEncoder {
         }
     }
 
-    fn encoding_type(&self) -> Option<&'static str> {
+    pub(super) fn encoding_type(&self) -> Option<&'static str> {
         self.is_url_encoded.then_some("url")
     }
 }
@@ -214,7 +214,7 @@ fn write_object_attributes(document: &mut XmlWriter, record: &VersionRecord) {
     if let Some(checksum) = &record.checksum {
         document
             .text_element("ChecksumAlgorithm", checksum.algorithm.s3_name())
-            .text_element("ChecksumType", "FULL_OBJECT");
+            .text_element("ChecksumType", checksum.checksum_type.s3_name());
     }
     document
         .text_element("Size", &record.size.to_string())
@@ -248,6 +248,6 @@ fn max_keys(query: &QueryParameters) -> Result<usize, S3Error> {
     }
 }
 
-fn non_empty(text: &str) -> Option<&str> {
+pub(super) fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }

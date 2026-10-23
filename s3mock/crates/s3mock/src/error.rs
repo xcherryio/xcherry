@@ -46,6 +46,18 @@ pub enum StoreError {
     InvalidArgument(String),
     #[error("the Content-MD5 header is not valid base64-encoded MD5")]
     InvalidDigest,
+    #[error("the bucket state does not allow this request: {0}")]
+    InvalidBucketState(String),
+    #[error("bucket {0:?} has no Object Lock configuration")]
+    ObjectLockConfigurationNotFound(String),
+    #[error("multipart upload {upload_id:?} does not exist")]
+    NoSuchUpload { upload_id: String },
+    #[error("one or more of the specified parts could not be found or did not match: {0}")]
+    InvalidPart(String),
+    #[error("the list of parts was not in ascending order")]
+    InvalidPartOrder,
+    #[error("part {part_number} is smaller than the 5 MiB minimum for a non-final part")]
+    EntityTooSmall { part_number: u32 },
     #[error("data file {path:?} is corrupt: {reason}")]
     CorruptDataFile { path: String, reason: String },
     #[error("metadata store error: {0}")]

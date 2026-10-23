@@ -30,13 +30,16 @@ writes, so do not use it for crash-recovery tests.
 
 | Area | Operations |
 | --- | --- |
-| Buckets | CreateBucket, HeadBucket, DeleteBucket, ListBuckets, GetBucketLocation |
+| Buckets | CreateBucket, HeadBucket, DeleteBucket (ends in-progress uploads), ListBuckets, GetBucketLocation |
 | Versioning | GetBucketVersioning, PutBucketVersioning, ListObjectVersions, version-addressed GET, HEAD, and DELETE |
 | Objects | PutObject, GetObject, HeadObject, DeleteObject |
 | Listing | ListObjectsV2 with prefix, delimiter, max-keys, continuation-token, start-after, and encoding-type |
 | Conditions | PutObject `If-None-Match: *` and `If-Match`; GET and HEAD `If-Match`, `If-None-Match`, `If-Modified-Since`, and `If-Unmodified-Since` |
 | Integrity | `Content-MD5`; CRC32, CRC32C, CRC64NVME, SHA1, and SHA256 checksums in headers or aws-chunked trailers |
 | Ranges | One `Range: bytes=` range per request |
+| Multipart | CreateMultipartUpload, UploadPart, CompleteMultipartUpload (with `If-None-Match` and `If-Match`), AbortMultipartUpload, ListParts, ListMultipartUploads |
+| Batch delete | DeleteObjects with Quiet mode and per-key results |
+| Object Lock | Get/PutObjectLockConfiguration and CreateBucket with Object Lock; retention is stored, never enforced |
 
 Other operations and subresources return `501 NotImplemented`.
 

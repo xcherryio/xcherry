@@ -122,6 +122,7 @@ impl Store {
             last_modified_unix_ms: i64::try_from(internal_version.timestamp_ms())
                 .expect("ULID timestamps fit in i64"),
             data_file: None,
+            parts_count: None,
         }
     }
 }

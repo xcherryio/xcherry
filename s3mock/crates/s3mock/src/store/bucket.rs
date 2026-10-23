@@ -13,14 +13,18 @@ use std::net::Ipv4Addr;
 
 use redb::{ReadableDatabase, ReadableTable};
 
-use super::{BUCKETS, Store, VERSIONS, decode_json, encode_json, require_bucket};
+use super::{BUCKETS, PARTS, Store, UPLOADS, VERSIONS, decode_json, encode_json, require_bucket};
 use crate::error::StoreError;
 use crate::key_codec::{encode_bucket_prefix, prefix_successor};
-use crate::record::{BucketRecord, VersioningState};
+use crate::record::{BucketRecord, ObjectLockConfiguration, VersioningState};
 
 impl Store {
-    /// Creates an empty, unversioned bucket.
-    pub fn create_bucket(&self, bucket: &str) -> Result<BucketRecord, StoreError> {
+    /// Creates an empty bucket; Object Lock also enables versioning, as in S3.
+    pub fn create_bucket(
+        &self,
+        bucket: &str,
+        is_object_lock_enabled: bool,
+    ) -> Result<BucketRecord, StoreError> {
         validate_bucket_name(bucket)?;
         let incarnation = self.next_internal_version();
         let record = BucketRecord {
@@ -28,7 +32,12 @@ impl Store {
             incarnation: incarnation.to_string(),
             created_unix_ms: i64::try_from(incarnation.timestamp_ms())
                 .expect("ULID timestamps fit in i64"),
-            versioning: VersioningState::Unversioned,
+            versioning: if is_object_lock_enabled {
+                VersioningState::Enabled
+            } else {
+                VersioningState::Unversioned
+            },
+            object_lock: is_object_lock_enabled.then(ObjectLockConfiguration::default),
         };
         let transaction = self.begin_write()?;
         {
@@ -60,6 +69,17 @@ impl Store {
                 return Err(StoreError::BucketNotEmpty(bucket.to_owned()));
             }
             buckets.remove(bucket)?;
+            // In-progress multipart uploads end with the bucket; their files go with its directory.
+            for table in [UPLOADS, PARTS] {
+                let mut uploads_or_parts = transaction.open_table(table)?;
+                let mut keys = Vec::new();
+                for entry in uploads_or_parts.range(bucket_prefix.as_slice()..end.as_slice())? {
+                    keys.push(entry?.0.value().to_vec());
+                }
+                for entry_key in keys {
+                    uploads_or_parts.remove(entry_key.as_slice())?;
+                }
+            }
             record
         };
         transaction.commit()?;
@@ -107,11 +127,48 @@ impl Store {
         {
             let mut buckets = transaction.open_table(BUCKETS)?;
             let mut record = require_bucket(&buckets, bucket)?;
+            if record.object_lock.is_some() && versioning != VersioningState::Enabled {
+                return Err(StoreError::InvalidBucketState(
+                    "versioning cannot be suspended on an Object Lock bucket".to_owned(),
+                ));
+            }
             record.versioning = versioning;
             buckets.insert(bucket, encode_json(&record)?.as_slice())?;
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Stores an Object Lock configuration; the bucket must have versioning enabled.
+    pub fn put_object_lock_configuration(
+        &self,
+        bucket: &str,
+        configuration: ObjectLockConfiguration,
+    ) -> Result<(), StoreError> {
+        let transaction = self.begin_write()?;
+        {
+            let mut buckets = transaction.open_table(BUCKETS)?;
+            let mut record = require_bucket(&buckets, bucket)?;
+            if record.versioning != VersioningState::Enabled {
+                return Err(StoreError::InvalidBucketState(
+                    "Object Lock requires a versioning-enabled bucket".to_owned(),
+                ));
+            }
+            record.object_lock = Some(configuration);
+            buckets.insert(bucket, encode_json(&record)?.as_slice())?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns the Object Lock configuration, or `ObjectLockConfigurationNotFound`.
+    pub fn object_lock_configuration(
+        &self,
+        bucket: &str,
+    ) -> Result<ObjectLockConfiguration, StoreError> {
+        self.bucket(bucket)?
+            .object_lock
+            .ok_or_else(|| StoreError::ObjectLockConfigurationNotFound(bucket.to_owned()))
     }
 }
 
