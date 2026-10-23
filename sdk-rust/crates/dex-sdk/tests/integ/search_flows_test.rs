@@ -16,11 +16,14 @@ use dex_sdk::{
 use serde_json::Value as JsonValue;
 
 use crate::search_flows_workflow::SearchFlowsWorkflow;
-use crate::support::{DexDevTestEnvironment, flow_id};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_search_flows_finds_indexed_flow() {
+    if skip_if_server_zd("Continue-As-New") {
+        return;
+    }
     let environment =
         DexDevTestEnvironment::start(Registry::new().register(SearchFlowsWorkflow::new()));
     let workflow = SearchFlowsWorkflow::new();

@@ -38,6 +38,7 @@ func TestUpdateWorkerTargetCadence(t *testing.T) {
 }
 
 func testUpdateWorkerTarget(t *testing.T, backendType service.BackendType) {
+	requirePushWorkers(t, "switching addresses between Workers for one Flow type")
 	firstHandler := signal.NewHandler()
 	firstTarget := startWorker(t, firstHandler)
 	secondHandler := signal.NewHandler()
