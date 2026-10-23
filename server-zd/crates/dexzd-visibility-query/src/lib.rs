@@ -79,6 +79,12 @@ pub struct Query {
 }
 
 impl Query {
+    /// Borrows the validated filter expression for backend translation.
+    #[must_use]
+    pub fn expression(&self) -> &Expression {
+        &self.expression
+    }
+
     /// Returns the explicit sort field and direction, when ORDER BY was supplied.
     #[must_use]
     pub fn order_by(&self) -> Option<(&str, SortDirection)> {
@@ -103,45 +109,97 @@ struct OrderBy {
     direction: SortDirection,
 }
 
+/// A validated Boolean visibility expression.
 #[derive(Debug, Clone)]
-enum Expression {
+pub enum Expression {
+    /// Matches every document.
     True,
+    /// Negates an expression.
     Not(Box<Expression>),
+    /// Requires both expressions.
     And(Box<Expression>, Box<Expression>),
+    /// Requires either expression.
     Or(Box<Expression>, Box<Expression>),
+    /// Tests one indexed field.
     Predicate(Predicate),
 }
 
+/// A validated comparison against one indexed field.
 #[derive(Debug, Clone)]
-struct Predicate {
+pub struct Predicate {
     field: String,
     index_type: IndexType,
     operator: Operator,
     literals: Vec<Literal>,
 }
 
+impl Predicate {
+    /// Returns the registered field name.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the registered field type.
+    #[must_use]
+    pub fn index_type(&self) -> IndexType {
+        self.index_type
+    }
+
+    /// Returns the validated operator.
+    #[must_use]
+    pub fn operator(&self) -> Operator {
+        self.operator
+    }
+
+    /// Returns the typed comparison literals.
+    #[must_use]
+    pub fn literals(&self) -> &[Literal] {
+        &self.literals
+    }
+}
+
+/// A validated visibility comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Operator {
+pub enum Operator {
+    /// Equal.
     Equal,
+    /// Not equal.
     NotEqual,
+    /// Greater than.
     Greater,
+    /// Greater than or equal.
     GreaterEqual,
+    /// Less than.
     Less,
+    /// Less than or equal.
     LessEqual,
+    /// Membership in a literal list.
     In,
+    /// Exclusion from a literal list.
     NotIn,
+    /// Inclusive range.
     Between,
+    /// Prefix match.
     StartsWith,
+    /// Missing field.
     IsNull,
+    /// Present field.
     IsNotNull,
 }
 
+/// A literal checked against its field's index type.
 #[derive(Debug, Clone)]
-enum Literal {
+pub enum Literal {
+    /// Keyword, text, or array-member string.
     String(String),
+    /// Signed integer.
     Int(i64),
+    /// Double-precision number.
     Double(f64),
+    /// Boolean value.
     Bool(bool),
+    /// Unix nanoseconds.
     Datetime(i64),
 }
 
