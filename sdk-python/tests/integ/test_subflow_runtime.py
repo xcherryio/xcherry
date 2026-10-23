@@ -27,6 +27,7 @@ from dex import (
 from .abnormal_exit_flow import AbnormalExitFlow
 from .basic_flow import BasicFlow
 from .environment import DexDevTestEnvironment
+from .flow_service_client import skip_if_server_zd
 from .shared import unique_id
 from .subflow_flow import (
     AllSubFlowParent,
@@ -128,6 +129,7 @@ def test_subflow_default_reuse_restarts_failed_execution_across_parent_reset() -
 
 
 def test_subflow_partial_results_survive_continue_as_new_without_restart() -> None:
+    skip_if_server_zd("Continue-As-New")
     completed = BasicFlow()
     delayed = TimerFlow()
     parent = ContinueAsNewSubFlowParent(completed, delayed)
