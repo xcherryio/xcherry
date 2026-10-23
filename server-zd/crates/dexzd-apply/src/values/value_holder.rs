@@ -60,8 +60,18 @@ pub(crate) enum ValueHolder {
         value_index: u32,
     },
     /// One output of a completed child Flow.
+    #[expect(
+        dead_code,
+        reason = "Retained for previously stored child result holders."
+    )]
     SubFlowResultOutput {
         child_flow_id: String,
+        output_index: u32,
+    },
+    /// One output addressed to a specific parent registration attempt.
+    SubFlowResultAttemptOutput {
+        child_flow_id: String,
+        registration_attempt: u32,
         output_index: u32,
     },
 }
@@ -149,6 +159,16 @@ impl ValueHolder {
                 output_index,
             } => {
                 encoded.push(0x0d);
+                encoded.extend_from_slice(&length_prefixed_name(child_flow_id));
+                encoded.extend_from_slice(&output_index.to_be_bytes());
+            }
+            Self::SubFlowResultAttemptOutput {
+                child_flow_id,
+                registration_attempt,
+                output_index,
+            } => {
+                encoded.push(0x0e);
+                encoded.extend_from_slice(&registration_attempt.to_be_bytes());
                 encoded.extend_from_slice(&length_prefixed_name(child_flow_id));
                 encoded.extend_from_slice(&output_index.to_be_bytes());
             }

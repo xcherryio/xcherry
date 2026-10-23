@@ -6,11 +6,11 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use dexzd_keyspace::row_keys::{inbox_dedup_key, run_named_key};
-use dexzd_keyspace::{ColumnFamily, RunId, RunTable};
+use dexzd_keyspace::row_keys::inbox_dedup_key;
+use dexzd_keyspace::{ColumnFamily, RunId};
 use dexzd_protocol::dex::{
     ErrorSubStatus, FlowStatus, FlowTimeoutPolicy, IdReusePolicy, StartFlowRequest,
-    SubFlowReusePolicy, WorkerTarget,
+    SubFlowReusePolicy,
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, ChildFlowStartMessage, CrossFlowEndpoint, InboxDedupRecord,
@@ -19,13 +19,16 @@ use dexzd_protocol::dexzd::v1::{
 };
 
 use crate::ApplyError;
-use crate::command_handlers::command_replies::{error_reply, grpc_code, ok_reply};
+use crate::command_handlers::command_replies::{error_reply, ok_reply};
 use crate::command_handlers::flow_start::{RunStart, start_run};
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::command_handlers::{CommandScope, HandlerResult};
-use crate::cross_flow::outbox::report_terminal_to_parent;
+use crate::cross_flow::outbox::{report_terminal_to_parent, validate_child_start_parameters};
+use crate::cross_flow::sub_flow_result_key;
 use crate::state_access::{FlowTransaction, RunRows, read_flow_directory};
 use crate::values::{ValueHolder, release_stored_value, store_value};
+
+const GRPC_UNAVAILABLE: i32 = 14;
 
 /// Applies a delivered cross-Flow message. A successful reply acknowledges delivery.
 pub(crate) fn apply_inbox_message(
@@ -34,10 +37,12 @@ pub(crate) fn apply_inbox_message(
     command: &InboxMessageCommand,
 ) -> Result<HandlerResult, ApplyError> {
     let Some(source) = command.source.as_ref() else {
-        return Ok(reject_child_start("cross-Flow message has no source"));
+        return Err(invalid_cross_flow_message(
+            "cross-Flow message has no source",
+        ));
     };
     if source.run_id.len() != 16 || command.message_id.len() != 16 {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "cross-Flow message has an invalid identity",
         ));
     }
@@ -48,7 +53,9 @@ pub(crate) fn apply_inbox_message(
         Some(inbox_message_command::Payload::ChildCompleted(completed)) => {
             apply_child_completed(transaction, scope, command, source, completed)
         }
-        None => Ok(reject_child_start("cross-Flow message has no payload")),
+        None => Err(invalid_cross_flow_message(
+            "cross-Flow message has no payload",
+        )),
     }
 }
 
@@ -60,28 +67,31 @@ fn apply_child_start(
     start: &ChildFlowStartMessage,
 ) -> Result<HandlerResult, ApplyError> {
     if start.child_flow_id != scope.flow_id() || source.tenant_id != scope.tenant_id.0 {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child start target or tenant does not match the command",
         ));
     }
     let Some(parent) = start.parent.as_ref() else {
-        return Ok(reject_child_start("child start has no parent reference"));
+        return Err(invalid_cross_flow_message(
+            "child start has no parent reference",
+        ));
     };
     if parent.parent.as_ref() != Some(source) {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child start source does not match its parent",
         ));
     }
     if start.child_flow_id != expected_child_flow_id(parent, &source.flow_id) {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child Flow ID does not match its parent Step",
         ));
     }
     let condition = start.condition.clone().unwrap_or_default();
     let options = condition.options.clone().unwrap_or_default();
     let config = start.flow_config.clone().unwrap_or_default();
-    if let Some(detail) = invalid_child_parameters(&condition, &config) {
-        return Ok(reject_child_start(detail));
+    if let Err(detail) = validate_child_start_parameters(&condition, &config, parent.sub_flow_index)
+    {
+        return Err(invalid_cross_flow_message(detail));
     }
     let directory = read_flow_directory(transaction, scope.tenant_id, scope.flow_id())?;
     for entry in &directory.runs {
@@ -96,6 +106,20 @@ fn apply_child_start(
         }
     }
     let latest = directory.runs.last();
+    if let Some(latest) = latest {
+        let latest_run_id = run_id_from_directory(&latest.run_id)?;
+        let latest_rows = RunRows::new(transaction.context().flow_hash, latest_run_id);
+        let latest_record = latest_rows.run_record(transaction)?.ok_or_else(|| {
+            invalid_cross_flow_message("latest child run disappeared from its directory")
+        })?;
+        if latest_record.is_purging {
+            return Ok(HandlerResult::Rejected(error_reply(
+                GRPC_UNAVAILABLE,
+                ErrorSubStatus::Uncategorized,
+                "latest child run is being purged",
+            )));
+        }
+    }
     let policy = SubFlowReusePolicy::try_from(options.reuse_policy)
         .unwrap_or(SubFlowReusePolicy::Unspecified);
     let is_same_request = latest.is_some_and(|entry| entry.start_request_id == start.request_id);
@@ -155,8 +179,8 @@ fn apply_child_start(
         hard_delete_objects: &[],
         parent: Some(parent.clone()),
     };
-    let result = start_run(transaction, scope, &run_start)?;
-    if let HandlerResult::Applied(output) = &result {
+    let mut result = start_run(transaction, scope, &run_start)?;
+    if let HandlerResult::Applied(output) = &mut result {
         let run_id = output
             .run_id
             .ok_or_else(|| ApplyError::InvariantViolation {
@@ -169,6 +193,11 @@ fn apply_child_start(
             &command.message_id,
             1,
         );
+        output.reply = ok_reply();
+    } else if let HandlerResult::Rejected(reply) = &result {
+        return Err(invalid_cross_flow_message(format!(
+            "validated child start was rejected: {reply:?}"
+        )));
     }
     Ok(result)
 }
@@ -183,7 +212,7 @@ fn attach_existing(
 ) -> Result<HandlerResult, ApplyError> {
     let rows = RunRows::new(transaction.context().flow_hash, run_id);
     let Some(record) = rows.run_record(transaction)? else {
-        return Ok(reject_child_start("existing child run disappeared"));
+        return Err(invalid_cross_flow_message("existing child run disappeared"));
     };
     let mut cursor = RunCursor::for_new_run(rows, record);
     let parent = start.parent.clone().unwrap_or_default();
@@ -212,12 +241,12 @@ fn apply_child_completed(
     completed: &ChildFlowCompletedMessage,
 ) -> Result<HandlerResult, ApplyError> {
     let Some(parent_reference) = completed.parent.as_ref() else {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child completion has no parent reference",
         ));
     };
     let Some(parent) = parent_reference.parent.as_ref() else {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child completion has no parent endpoint",
         ));
     };
@@ -230,7 +259,7 @@ fn apply_child_completed(
         || source.run_attempt != completed.child_run_attempt
         || completed.child_flow_id != expected_child_flow_id(parent_reference, scope.flow_id())
     {
-        return Ok(reject_child_start(
+        return Err(invalid_cross_flow_message(
             "child completion source or target does not match",
         ));
     }
@@ -248,43 +277,52 @@ fn apply_child_completed(
         return Ok(HandlerResult::Rejected(ok_reply()));
     }
     let mut cursor = RunCursor::for_new_run(rows, record);
-    let key = run_named_key(
-        rows.flow_hash,
-        run_id,
-        RunTable::SubFlowResult,
-        &completed.child_flow_id,
-    );
+    let registration_attempt = parent.run_attempt;
+    let key = sub_flow_result_key(rows, &completed.child_flow_id, registration_attempt);
     let previous: Option<SubFlowResultRecord> =
         transaction.get_message(ColumnFamily::Flow, &key, "SubFlow result")?;
     if let Some(previous) = previous.and_then(|previous| previous.result) {
         for (index, output) in previous.results.into_iter().enumerate() {
             if let Some(stored) = output.completed_step_output {
-                let holder = ValueHolder::SubFlowResultOutput {
+                let holder = ValueHolder::SubFlowResultAttemptOutput {
                     child_flow_id: completed.child_flow_id.clone(),
-                    output_index: u32::try_from(index).unwrap_or(u32::MAX),
+                    registration_attempt,
+                    output_index: u32::try_from(index)
+                        .expect("stored output count fits a u32 index"),
                 };
                 release_stored_value(transaction, rows, &stored, &holder, cursor.seq)?;
             }
         }
     }
-    let result = completed.result.clone().unwrap_or_default();
+    let result = completed
+        .result
+        .clone()
+        .ok_or_else(|| invalid_cross_flow_message("child completion has no Flow result"))?;
     let mut outputs = Vec::with_capacity(result.results.len());
     for (index, output) in result.results.into_iter().enumerate() {
         let stored = if let Some(value) = output.completed_step_output.as_ref() {
-            let holder = ValueHolder::SubFlowResultOutput {
+            let holder = ValueHolder::SubFlowResultAttemptOutput {
                 child_flow_id: completed.child_flow_id.clone(),
-                output_index: u32::try_from(index).unwrap_or(u32::MAX),
+                registration_attempt,
+                output_index: u32::try_from(index).expect("child output count fits a u32 index"),
             };
+            let mut limits = cursor.value_limits();
+            limits.max_value_bytes = u64::MAX;
             match store_value(
                 transaction,
                 rows,
-                cursor.value_limits(),
+                limits,
                 &mut cursor.values,
                 value,
                 &holder,
             )? {
                 Ok(stored) => Some(stored),
-                Err(rejection) => return Ok(reject_child_start(rejection.message())),
+                Err(rejection) => {
+                    return Err(invalid_cross_flow_message(format!(
+                        "admitted child output could not be stored: {}",
+                        rejection.message()
+                    )));
+                }
             }
         } else {
             None
@@ -308,6 +346,7 @@ fn apply_child_completed(
                 error_message: result.error_message,
             }),
             received_seq: cursor.seq,
+            parent_registration_attempt: registration_attempt,
         },
     );
     put_inbox_dedup(transaction, rows, source, &command.message_id, cursor.seq);
@@ -316,46 +355,14 @@ fn apply_child_completed(
         &mut cursor,
         scope,
         &completed.child_flow_id,
+        registration_attempt,
     )?;
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,
         scope,
         ok_reply(),
-        HistoryKind::BOOKKEEPING,
+        HistoryKind::SEMANTIC,
     )?))
-}
-
-fn invalid_child_parameters(
-    condition: &dexzd_protocol::dex::SubFlowCondition,
-    config: &dexzd_protocol::dex::FlowConfig,
-) -> Option<&'static str> {
-    let options = condition.options.clone().unwrap_or_default();
-    if options.flow_start_delay_seconds != 0 {
-        return Some("SubFlow start delay is unsupported");
-    }
-    if options.retry_policy.is_some() {
-        return Some("SubFlow Flow retry policy is unsupported");
-    }
-    if !config
-        .worker_target
-        .as_ref()
-        .is_some_and(|target: &WorkerTarget| target.is_pull_mode && target.address.is_empty())
-    {
-        return Some("SubFlow requires a pull Worker target");
-    }
-    if let Some(step_options) = condition.step_options.as_ref()
-        && (step_options.wait_for_failure_policy == 2 || step_options.execute_failure_policy == 2)
-    {
-        return Some("SubFlow Step failure proceed policy is unsupported");
-    }
-    if options
-        .timeout_handler_options
-        .as_ref()
-        .is_some_and(|handler| handler.failure_policy == 2)
-    {
-        return Some("SubFlow timeout handler failure proceed policy is unsupported");
-    }
-    None
 }
 
 fn inbox_is_duplicate(
@@ -395,11 +402,8 @@ fn expected_child_flow_id(parent: &ParentFlowReference, parent_flow_id: &str) ->
     )
 }
 
-fn reject_child_start(detail: impl Into<String>) -> HandlerResult {
-    // The delivery owner converts a rejected start reply to an INVALID_USER_FLOW_CODE completion.
-    HandlerResult::Rejected(error_reply(
-        grpc_code::INVALID_ARGUMENT,
-        ErrorSubStatus::Uncategorized,
-        detail,
-    ))
+fn invalid_cross_flow_message(detail: impl Into<String>) -> ApplyError {
+    ApplyError::InvariantViolation {
+        detail: detail.into(),
+    }
 }

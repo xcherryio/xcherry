@@ -8,7 +8,11 @@
 
 use dexzd_keyspace::row_keys::{outbox_key, run_item_index_key};
 use dexzd_keyspace::{ColumnFamily, IndexKind};
-use dexzd_protocol::dex::{FlowConfig, FlowResult, StepCompletionOutput, SubFlowCondition, Value};
+use dexzd_protocol::dex::{
+    ActiveStepSearchMode, ExecuteMethodFailurePolicy, FlowConfig, FlowResult, FlowTimeoutPolicy,
+    StepCompletionOutput, StepDurability, SubFlowCondition, SubFlowReusePolicy,
+    WaitForMethodFailurePolicy,
+};
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, ChildFlowStartMessage, CrossFlowEndpoint, OutboxAckCommand,
     OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, StoredValue, TimerId, outbox_record,
@@ -23,10 +27,12 @@ use crate::command_handlers::{CommandScope, HandlerResult};
 use crate::state_access::FlowTransaction;
 use crate::steps::arm_timer;
 use crate::values::{
-    ValueHolder, ValueRejection, load_stored_value, release_stored_value, store_value,
+    ValueHolder, ValueRejection, complete_value_for_outbox, load_stored_value, release_stored_value,
 };
 
 const OUTBOX_RETENTION_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
+const CHILD_START_MESSAGE_KIND: u8 = 1;
+const CHILD_COMPLETED_MESSAGE_KIND: u8 = 2;
 
 /// Writes one complete child-start message per SubFlow condition.
 pub(crate) fn start_child_flows(
@@ -42,23 +48,24 @@ pub(crate) fn start_child_flows(
             detail: "SubFlow condition and child ID counts differ".to_owned(),
         });
     }
+    validate_child_start_conditions(cursor.record.flow_config.as_ref(), sub_flow_conditions)
+        .map_err(|detail| ApplyError::InvariantViolation { detail })?;
     for (condition_index, condition) in sub_flow_conditions.iter().enumerate() {
-        let sub_flow_index = i32::try_from(condition_index).unwrap_or(i32::MAX);
+        let sub_flow_index =
+            i32::try_from(condition_index).expect("SubFlow condition count fits a signed index");
         let child_flow_id = child_ids[condition_index].clone();
         let message_id = message_id(
+            CHILD_START_MESSAGE_KIND,
             cursor.seq,
-            u64::try_from(condition_index).unwrap_or(u64::MAX),
+            u64::try_from(condition_index).expect("SubFlow condition count fits a u64 index"),
         );
         let mut complete_condition = condition.clone();
-        complete_condition.sub_flow_index = sub_flow_index;
-        let mut held_values = Vec::new();
         if let Some(value) = condition.step_input.as_ref() {
-            let complete = match pin_complete_value(
+            let complete = match complete_value_for_outbox(
                 transaction,
-                cursor,
+                cursor.rows,
+                cursor.value_limits(),
                 value,
-                &message_id,
-                &mut held_values,
             )? {
                 Ok(complete) => complete,
                 Err(rejection) => return Ok(Err(rejection)),
@@ -68,12 +75,11 @@ pub(crate) fn start_child_flows(
         if let Some(options) = complete_condition.options.as_mut() {
             for write in &mut options.attributes {
                 if let Some(value) = write.value.as_ref() {
-                    let complete = match pin_complete_value(
+                    let complete = match complete_value_for_outbox(
                         transaction,
-                        cursor,
+                        cursor.rows,
+                        cursor.value_limits(),
                         value,
-                        &message_id,
-                        &mut held_values,
                     )? {
                         Ok(complete) => complete,
                         Err(rejection) => return Ok(Err(rejection)),
@@ -123,41 +129,10 @@ pub(crate) fn start_child_flows(
                 request_id,
                 parent: Some(parent),
             }),
-            held_values,
+            Vec::new(),
         );
     }
     Ok(Ok(()))
-}
-
-fn pin_complete_value(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
-    value: &Value,
-    message_id: &[u8],
-    held_values: &mut Vec<StoredValue>,
-) -> Result<Result<Value, ValueRejection>, ApplyError> {
-    let holder = ValueHolder::OutboxMessage {
-        message_id: message_id.to_vec(),
-        value_index: u32::try_from(held_values.len()).unwrap_or(u32::MAX),
-    };
-    let stored = match store_value(
-        transaction,
-        cursor.rows,
-        cursor.value_limits(),
-        &mut cursor.values,
-        value,
-        &holder,
-    )? {
-        Ok(stored) => stored,
-        Err(rejection) => return Ok(Err(rejection)),
-    };
-    let complete = load_stored_value(transaction, cursor.rows, &stored)?.ok_or_else(|| {
-        ApplyError::InvariantViolation {
-            detail: "newly stored SubFlow value was unavailable".to_owned(),
-        }
-    })?;
-    held_values.push(stored);
-    Ok(Ok(complete))
 }
 
 fn effective_flow_config(
@@ -189,6 +164,145 @@ fn effective_flow_config(
         }
     }
     effective
+}
+
+pub(crate) fn validate_child_start_conditions(
+    parent_config: Option<&FlowConfig>,
+    conditions: &[SubFlowCondition],
+) -> Result<(), String> {
+    let parent_config = parent_config.ok_or("SubFlow start requires the parent FlowConfig")?;
+    for (index, condition) in conditions.iter().enumerate() {
+        let expected_index =
+            i32::try_from(index).expect("SubFlow condition count fits a signed index");
+        let flow_config = effective_flow_config(
+            Some(parent_config),
+            condition
+                .options
+                .as_ref()
+                .and_then(|options| options.flow_config_override.as_ref()),
+        );
+        validate_child_start_parameters(condition, &flow_config, expected_index)
+            .map_err(|detail| format!("SubFlow condition at index {index}: {detail}"))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_child_start_parameters(
+    condition: &SubFlowCondition,
+    flow_config: &FlowConfig,
+    expected_index: i32,
+) -> Result<(), String> {
+    if condition.sub_flow_index != expected_index {
+        return Err(format!(
+            "unstable index {} (expected {expected_index})",
+            condition.sub_flow_index
+        ));
+    }
+    if condition.sub_flow_type.is_empty() || condition.start_step_type.is_empty() {
+        return Err("Flow and starting Step types are required".to_owned());
+    }
+    if ['/', '$', ':']
+        .iter()
+        .any(|character| condition.start_step_type.contains(*character))
+    {
+        return Err("starting Step type contains a reserved character".to_owned());
+    }
+    if let Some(step_options) = condition.step_options.as_ref()
+        && (step_options.wait_for_failure_policy
+            == WaitForMethodFailurePolicy::ProceedOnFailure as i32
+            || step_options.execute_failure_policy
+                == ExecuteMethodFailurePolicy::ProceedToConfiguredStep as i32
+            || !step_options.execute_failure_proceed_step_type.is_empty()
+            || step_options.execute_failure_proceed_step_options.is_some())
+    {
+        return Err("SubFlow Step failure proceed policy is unsupported".to_owned());
+    }
+    let options = condition.options.as_ref().cloned().unwrap_or_default();
+    if options.flow_start_delay_seconds < 0 {
+        return Err("SubFlow start delay must be non-negative".to_owned());
+    }
+    if options.flow_start_delay_seconds > 0 {
+        return Err("SubFlow start delay is unsupported".to_owned());
+    }
+    if options.retry_policy.is_some() {
+        return Err("SubFlow Flow retry policy is unsupported".to_owned());
+    }
+    if SubFlowReusePolicy::try_from(options.reuse_policy).is_err() {
+        return Err("unknown SubFlow reuse policy".to_owned());
+    }
+    let timeout_policy =
+        resolved_timeout_policy(options.flow_timeout_seconds, options.flow_timeout_policy)?;
+    if let Some(handler) = options.timeout_handler_options.as_ref() {
+        if options.flow_timeout_seconds <= 0 || timeout_policy != FlowTimeoutPolicy::Handler {
+            return Err(
+                "Flow timeout handler options require the Handler policy and a positive timeout"
+                    .to_owned(),
+            );
+        }
+        if handler.method_timeout_seconds < 0 {
+            return Err("Flow timeout handler method timeout must be non-negative".to_owned());
+        }
+        if handler.heartbeat_timeout_seconds < 0 {
+            return Err("Flow timeout handler heartbeat timeout must be non-negative".to_owned());
+        }
+        if handler.failure_policy == ExecuteMethodFailurePolicy::ProceedToConfiguredStep as i32 {
+            return Err("Flow timeout handler failure proceed policy is unsupported".to_owned());
+        }
+        if ExecuteMethodFailurePolicy::try_from(handler.failure_policy).is_err() {
+            return Err("unknown Flow timeout handler failure policy".to_owned());
+        }
+        if !handler.failure_proceed_step_type.is_empty()
+            || handler.failure_proceed_step_options.is_some()
+        {
+            return Err(
+                "Flow timeout handler failure target requires the proceed policy".to_owned(),
+            );
+        }
+    }
+    validate_effective_flow_config(flow_config)
+}
+
+fn resolved_timeout_policy(timeout_seconds: i32, policy: i32) -> Result<FlowTimeoutPolicy, String> {
+    if timeout_seconds < 0 {
+        return Err("flow timeout must be non-negative".to_owned());
+    }
+    let policy = FlowTimeoutPolicy::try_from(policy)
+        .map_err(|_| "unknown flow timeout policy".to_owned())?;
+    if timeout_seconds == 0 && policy != FlowTimeoutPolicy::Unspecified {
+        return Err("flow timeout policy requires a positive timeout".to_owned());
+    }
+    if timeout_seconds > 0 && policy == FlowTimeoutPolicy::Unspecified {
+        return Ok(FlowTimeoutPolicy::Fail);
+    }
+    Ok(policy)
+}
+
+fn validate_effective_flow_config(flow_config: &FlowConfig) -> Result<(), String> {
+    if flow_config
+        .continue_as_new_threshold
+        .is_some_and(|value| value < 0)
+        || flow_config
+            .continue_as_new_page_size_in_bytes
+            .is_some_and(|value| value < 0)
+    {
+        return Err("FlowConfig thresholds must be non-negative".to_owned());
+    }
+    if flow_config
+        .active_step_search_mode
+        .is_some_and(|value| ActiveStepSearchMode::try_from(value).is_err())
+        || flow_config
+            .step_durability
+            .is_some_and(|value| StepDurability::try_from(value).is_err())
+    {
+        return Err("FlowConfig has an unknown enum value".to_owned());
+    }
+    let Some(target) = flow_config.worker_target.as_ref() else {
+        return Err("SubFlow requires a pull Worker target".to_owned());
+    };
+    if !target.is_pull_mode || !target.address.is_empty() || target.is_headless_address {
+        return Err("SubFlow requires a pull Worker target".to_owned());
+    }
+    Ok(())
 }
 
 pub(crate) fn write_outbox(
@@ -230,9 +344,13 @@ pub(crate) fn write_outbox(
     });
 }
 
-pub(crate) fn message_id(run_seq: u64, index: u64) -> Vec<u8> {
-    let mut bytes = run_seq.to_be_bytes().to_vec();
-    bytes.extend_from_slice(&index.to_be_bytes());
+pub(crate) fn message_id(kind: u8, run_seq: u64, index: u64) -> Vec<u8> {
+    let index_bytes = index.to_be_bytes();
+    assert_eq!(index_bytes[0], 0, "outbox index fits 56 bits");
+    let mut bytes = Vec::with_capacity(16);
+    bytes.push(kind);
+    bytes.extend_from_slice(&run_seq.to_be_bytes());
+    bytes.extend_from_slice(&index_bytes[1..]);
     bytes
 }
 
@@ -264,7 +382,7 @@ pub(crate) fn report_child_closed(
             transaction,
             cursor,
             parent,
-            u64::try_from(index).unwrap_or(u64::MAX),
+            u64::try_from(index).expect("attached parent count fits a u64 index"),
         )?;
     }
     if let Some(close) = cursor.record.close.as_mut() {
@@ -290,9 +408,14 @@ pub(crate) fn report_terminal_to_parent(
         let complete = output
             .completed_step_output
             .as_ref()
-            .map(|stored| load_stored_value(transaction, cursor.rows, stored))
-            .transpose()?
-            .flatten();
+            .map(|stored| {
+                load_stored_value(transaction, cursor.rows, stored)?.ok_or_else(|| {
+                    ApplyError::InvariantViolation {
+                        detail: "stored child output has no value row".to_owned(),
+                    }
+                })
+            })
+            .transpose()?;
         results.push(StepCompletionOutput {
             completed_step_type: output.completed_step_type.clone(),
             completed_step_execution_id: output.completed_step_execution_id.clone(),
@@ -302,7 +425,7 @@ pub(crate) fn report_terminal_to_parent(
     write_outbox(
         transaction,
         cursor,
-        message_id(cursor.seq, index),
+        message_id(CHILD_COMPLETED_MESSAGE_KIND, cursor.seq, index),
         target,
         outbox_record::Payload::ChildCompleted(ChildFlowCompletedMessage {
             child_flow_id: cursor.record.flow_id.clone(),
@@ -395,7 +518,8 @@ pub(crate) fn on_outbox_retention_fired(
             stored,
             &ValueHolder::OutboxMessage {
                 message_id: timer.message_id.clone(),
-                value_index: u32::try_from(index).unwrap_or(u32::MAX),
+                value_index: u32::try_from(index)
+                    .expect("retained outbox value count fits a u32 index"),
             },
             cursor.seq,
         )?;

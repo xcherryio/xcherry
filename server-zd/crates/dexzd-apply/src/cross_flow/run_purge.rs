@@ -14,8 +14,8 @@ use dexzd_keyspace::row_keys::{
 use dexzd_keyspace::{ColumnFamily, IndexKind, RunId, RunTable, run_prefix, run_table_prefix};
 use dexzd_protocol::dex::ErrorSubStatus;
 use dexzd_protocol::dexzd::v1::{
-    HardDeleteObjectRecord, HardDeleteObjectsDeletedCommand, OutboxRecord, RunPurgeCommand,
-    TimerRecord,
+    HardDeleteObjectRecord, HardDeleteObjectsDeletedCommand, OutboxRecord, RetentionTimerId,
+    RunPurgeCommand, TimerId, TimerRecord, timer_id,
 };
 use prost::Message;
 
@@ -24,6 +24,9 @@ use crate::command_handlers::command_replies::{error_reply, grpc_code, ok_reply}
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::command_handlers::{CommandScope, HandlerOutput, HandlerResult};
 use crate::state_access::{FlowTransaction, RunRows, read_flow_directory, write_flow_directory};
+use crate::steps::arm_timer;
+
+const RETENTION_RETRY_MICROS: i64 = 60 * 60 * 1_000_000;
 
 /// Removes acknowledged hard-delete pending rows after object deletion.
 pub(crate) fn apply_hard_delete_objects_deleted(
@@ -90,6 +93,37 @@ pub(crate) fn apply_run_purge(
             ErrorSubStatus::Uncategorized,
             "run retention has not requested purge",
         )));
+    }
+    if has_unacknowledged_outbox(transaction, rows)? {
+        let previous_deadline = record.retention_deadline_micros;
+        let mut cursor = RunCursor::for_new_run(rows, record);
+        cursor.record.is_purging = false;
+        let retry_deadline = scope.now_micros.saturating_add(RETENTION_RETRY_MICROS);
+        cursor.record.retention_deadline_micros = retry_deadline;
+        transaction.delete(
+            ColumnFamily::PartitionIndex,
+            retention_index_key(partition, previous_deadline, flow_hash, run_id),
+        );
+        arm_timer(
+            transaction,
+            &mut cursor,
+            &TimerId {
+                run_attempt: 0,
+                kind: Some(timer_id::Kind::Retention(RetentionTimerId {})),
+            },
+            retry_deadline,
+        );
+        transaction.put(
+            ColumnFamily::PartitionIndex,
+            retention_index_key(partition, retry_deadline, flow_hash, run_id),
+            Vec::new(),
+        );
+        return Ok(HandlerResult::Applied(cursor.finish(
+            transaction,
+            scope,
+            ok_reply(),
+            HistoryKind::BOOKKEEPING,
+        )?));
     }
     remove_timer_indexes(transaction, rows)?;
     remove_outbox_indexes(transaction, rows)?;
@@ -158,6 +192,19 @@ pub(crate) fn apply_run_purge(
         effects: Vec::new(),
         run_id: Some(run_id),
     }))
+}
+
+fn has_unacknowledged_outbox(
+    transaction: &FlowTransaction<'_>,
+    rows: RunRows,
+) -> Result<bool, ApplyError> {
+    let prefix = run_table_prefix(rows.flow_hash, rows.run_id, RunTable::Outbox);
+    let (start, end) = prefix_range(&prefix);
+    let messages: Vec<(Vec<u8>, OutboxRecord)> =
+        transaction.scan_messages(ColumnFamily::Flow, &start, &end, usize::MAX, "outbox")?;
+    Ok(messages
+        .iter()
+        .any(|(_, message)| message.acknowledged_at_micros == 0))
 }
 
 fn remove_timer_indexes(
