@@ -30,14 +30,14 @@ pub enum SearchValue {
 
 /// Supplies typed visibility values for one indexed Flow run.
 pub trait SearchDocument {
-    /// Returns a field's value, or None when the field is absent or NULL.
+    /// Returns None for NULL; empty KEYWORD_ARRAY values remain StringArray. Dex runs expose WorkflowType as Engine.
     fn field_value(&self, field: &str) -> Option<SearchValue>;
 }
 
 /// Evaluates a checked query against a search document.
 #[must_use]
 pub fn evaluate(query: &Query, document: &impl SearchDocument) -> bool {
-    evaluate_expression(&query.expression, document)
+    evaluate_expression(&query.expression, document) == Some(true)
 }
 
 /// Compares documents by query order; defaults to running, CloseTime descending, StartTime descending, then RunId.
@@ -111,44 +111,58 @@ fn compare_optional_values(left: Option<SearchValue>, right: Option<SearchValue>
     }
 }
 
-fn evaluate_expression(expression: &Expression, document: &impl SearchDocument) -> bool {
+fn evaluate_expression(expression: &Expression, document: &impl SearchDocument) -> Option<bool> {
     match expression {
-        Expression::True => true,
-        Expression::Not(inner) => !evaluate_expression(inner, document),
-        Expression::And(left, right) => {
-            evaluate_expression(left, document) && evaluate_expression(right, document)
+        Expression::True => Some(true),
+        Expression::Not(inner) => evaluate_expression(inner, document).map(|value| !value),
+        Expression::And(children) => {
+            let mut has_null = false;
+            for child in children {
+                match evaluate_expression(child, document) {
+                    Some(false) => return Some(false),
+                    None => has_null = true,
+                    Some(true) => {}
+                }
+            }
+            if has_null { None } else { Some(true) }
         }
-        Expression::Or(left, right) => {
-            evaluate_expression(left, document) || evaluate_expression(right, document)
+        Expression::Or(children) => {
+            let mut has_null = false;
+            for child in children {
+                match evaluate_expression(child, document) {
+                    Some(true) => return Some(true),
+                    None => has_null = true,
+                    Some(false) => {}
+                }
+            }
+            if has_null { None } else { Some(false) }
         }
         Expression::Predicate(predicate) => evaluate_predicate(predicate, document),
     }
 }
 
-fn evaluate_predicate(predicate: &Predicate, document: &impl SearchDocument) -> bool {
+fn evaluate_predicate(predicate: &Predicate, document: &impl SearchDocument) -> Option<bool> {
     let value = document.field_value(&predicate.field);
     if predicate.operator == Operator::IsNull {
-        return value.is_none();
+        return Some(value.is_none());
     }
     if predicate.operator == Operator::IsNotNull {
-        return value.is_some();
+        return Some(value.is_some());
     }
     if predicate.field == "WorkflowType"
         && predicate.operator == Operator::Equal
         && matches!(predicate.literals.first(), Some(Literal::String(value)) if value == "Engine")
     {
-        return true;
+        return Some(true);
     }
     if predicate.field == "ExecutionStatus"
         && predicate.operator == Operator::Equal
         && matches!(predicate.literals.first(), Some(Literal::String(value)) if value == "ContinuedAsNew")
     {
-        return false;
+        return Some(false);
     }
-    let Some(value) = value else {
-        return false;
-    };
-    match predicate.operator {
+    let value = value?;
+    Some(match predicate.operator {
         Operator::Equal => equals(&value, &predicate.literals[0], predicate.index_type),
         Operator::NotEqual => !equals(&value, &predicate.literals[0], predicate.index_type),
         Operator::In => predicate
@@ -176,10 +190,9 @@ fn evaluate_predicate(predicate: &Predicate, document: &impl SearchDocument) -> 
         Operator::StartsWith => {
             matches!((&value, &predicate.literals[0]), (SearchValue::String(value), Literal::String(prefix)) if value.starts_with(prefix))
         }
-        Operator::IsNull | Operator::IsNotNull => {
-            unreachable!("NULL operators return before value matching")
-        }
-    }
+        Operator::IsNull => false,
+        Operator::IsNotNull => true,
+    })
 }
 
 fn equals(value: &SearchValue, literal: &Literal, index_type: IndexType) -> bool {

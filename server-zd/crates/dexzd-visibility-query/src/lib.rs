@@ -51,7 +51,7 @@ impl FieldRegistry {
         Self::default()
     }
 
-    /// Registers an application field by its exact name and index type.
+    /// Registers an application field. System fields retain their built-in types on name collisions.
     pub fn insert(&mut self, name: impl Into<String>, index_type: IndexType) {
         self.fields.insert(name.into(), index_type);
     }
@@ -96,6 +96,7 @@ impl Query {
 
 /// Direction of an explicit ORDER BY clause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SortDirection {
     /// Ascending order.
     Ascending,
@@ -111,15 +112,16 @@ struct OrderBy {
 
 /// A validated Boolean visibility expression.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Expression {
     /// Matches every document.
     True,
     /// Negates an expression.
     Not(Box<Expression>),
-    /// Requires both expressions.
-    And(Box<Expression>, Box<Expression>),
-    /// Requires either expression.
-    Or(Box<Expression>, Box<Expression>),
+    /// Requires every expression.
+    And(Vec<Expression>),
+    /// Requires at least one expression.
+    Or(Vec<Expression>),
     /// Tests one indexed field.
     Predicate(Predicate),
 }
@@ -161,6 +163,7 @@ impl Predicate {
 
 /// A validated visibility comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Operator {
     /// Equal.
     Equal,
@@ -190,6 +193,7 @@ pub enum Operator {
 
 /// A literal checked against its field's index type.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Literal {
     /// Keyword, text, or array-member string.
     String(String),

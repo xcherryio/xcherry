@@ -15,12 +15,21 @@ use crate::{
     SortDirection,
 };
 
+const MAX_QUERY_BYTES: usize = 256 * 1024;
+const MAX_EXPRESSIONS: usize = 10_000;
+const MAX_NESTING: usize = 64;
+
 pub(crate) fn parse(input: &str, fields: &FieldRegistry) -> Result<Query, QueryError> {
+    if input.len() > MAX_QUERY_BYTES {
+        return Err(QueryError::new(MAX_QUERY_BYTES, "query exceeds 256 KiB"));
+    }
     let tokens = lex(input)?;
     let mut parser = Parser {
         tokens,
         position: 0,
         fields,
+        expression_count: 0,
+        nesting_depth: 0,
     };
     let expression = if parser.at_end() || parser.at_keyword("ORDER") {
         Expression::True
@@ -71,40 +80,71 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     position: usize,
     fields: &'a FieldRegistry,
+    expression_count: usize,
+    nesting_depth: usize,
 }
 
 impl Parser<'_> {
     fn parse_or(&mut self) -> Result<Expression, QueryError> {
-        let mut expression = self.parse_and()?;
+        let mut expressions = vec![self.parse_and()?];
         while self.take_keyword("OR") {
-            expression = Expression::Or(Box::new(expression), Box::new(self.parse_and()?));
+            expressions.push(self.parse_and()?);
         }
-        Ok(expression)
+        if expressions.len() == 1 {
+            Ok(expressions.remove(0))
+        } else {
+            Ok(Expression::Or(expressions))
+        }
     }
 
     fn parse_and(&mut self) -> Result<Expression, QueryError> {
-        let mut expression = self.parse_not()?;
+        let mut expressions = vec![self.parse_not()?];
         while self.take_keyword("AND") {
-            expression = Expression::And(Box::new(expression), Box::new(self.parse_not()?));
+            expressions.push(self.parse_not()?);
         }
-        Ok(expression)
+        if expressions.len() == 1 {
+            Ok(expressions.remove(0))
+        } else {
+            Ok(Expression::And(expressions))
+        }
     }
 
     fn parse_not(&mut self) -> Result<Expression, QueryError> {
         if self.take_keyword("NOT") {
-            return Ok(Expression::Not(Box::new(self.parse_not()?)));
+            self.enter_nesting(self.tokens[self.position - 1].offset)?;
+            let inner = self.parse_not()?;
+            self.nesting_depth -= 1;
+            return Ok(Expression::Not(Box::new(inner)));
         }
         if self.take_symbol("(") {
+            self.enter_nesting(self.tokens[self.position - 1].offset)?;
             let expression = self.parse_or()?;
             self.expect_symbol(")")?;
+            self.nesting_depth -= 1;
             return Ok(expression);
         }
         self.parse_predicate()
     }
 
+    fn enter_nesting(&mut self, offset: usize) -> Result<(), QueryError> {
+        if self.nesting_depth >= MAX_NESTING {
+            return Err(QueryError::new(offset, "query nesting exceeds 64 levels"));
+        }
+        self.nesting_depth += 1;
+        Ok(())
+    }
+
     fn parse_predicate(&mut self) -> Result<Expression, QueryError> {
         let field_token = self.advance().clone();
-        let TokenKind::Identifier(field) = field_token.kind else {
+        if self.expression_count >= MAX_EXPRESSIONS {
+            return Err(QueryError::new(
+                field_token.offset,
+                "query exceeds 10000 expressions",
+            ));
+        }
+        self.expression_count += 1;
+        let (TokenKind::Identifier(field) | TokenKind::QuotedIdentifier(field)) = field_token.kind
+        else {
             return Err(QueryError::new(
                 field_token.offset,
                 format!("expected field name, found {}", describe(&field_token.kind)),
@@ -164,7 +204,7 @@ impl Parser<'_> {
                 self.expect_symbol("(")?;
                 let mut values = Vec::new();
                 loop {
-                    values.push(self.parse_literal(&field, index_type)?);
+                    values.push(self.parse_literal(&field, index_type, operator)?);
                     if !self.take_symbol(",") {
                         break;
                     }
@@ -173,12 +213,12 @@ impl Parser<'_> {
                 values
             }
             Operator::Between => {
-                let lower = self.parse_literal(&field, index_type)?;
+                let lower = self.parse_literal(&field, index_type, operator)?;
                 self.expect_keyword("AND")?;
-                let upper = self.parse_literal(&field, index_type)?;
+                let upper = self.parse_literal(&field, index_type, operator)?;
                 vec![lower, upper]
             }
-            _ => vec![self.parse_literal(&field, index_type)?],
+            _ => vec![self.parse_literal(&field, index_type, operator)?],
         };
         Ok(Expression::Predicate(Predicate {
             field,
@@ -218,11 +258,16 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_literal(&mut self, field: &str, index_type: IndexType) -> Result<Literal, QueryError> {
+    fn parse_literal(
+        &mut self,
+        field: &str,
+        index_type: IndexType,
+        operator: Operator,
+    ) -> Result<Literal, QueryError> {
         let token = self.advance().clone();
         let literal = match (&token.kind, index_type) {
             (
-                TokenKind::String(value),
+                TokenKind::String(value) | TokenKind::Number(value),
                 IndexType::Keyword | IndexType::Text | IndexType::KeywordArray,
             ) => Literal::String(value.clone()),
             (TokenKind::String(value), IndexType::Datetime) => {
@@ -263,12 +308,12 @@ impl Parser<'_> {
                 }
                 Literal::Double(number)
             }
-            (TokenKind::Identifier(value), IndexType::Bool)
+            (TokenKind::Identifier(value) | TokenKind::String(value), IndexType::Bool)
                 if value.eq_ignore_ascii_case("true") =>
             {
                 Literal::Bool(true)
             }
-            (TokenKind::Identifier(value), IndexType::Bool)
+            (TokenKind::Identifier(value) | TokenKind::String(value), IndexType::Bool)
                 if value.eq_ignore_ascii_case("false") =>
             {
                 Literal::Bool(false)
@@ -284,6 +329,10 @@ impl Parser<'_> {
             }
         };
         if field == "ExecutionStatus"
+            && matches!(
+                operator,
+                Operator::Equal | Operator::NotEqual | Operator::In | Operator::NotIn
+            )
             && let Literal::String(value) = &literal
             && !matches!(
                 value.as_str(),
@@ -364,6 +413,7 @@ impl Parser<'_> {
 fn describe(kind: &TokenKind) -> String {
     match kind {
         TokenKind::Identifier(value) => format!("identifier {value:?}"),
+        TokenKind::QuotedIdentifier(value) => format!("quoted identifier {value:?}"),
         TokenKind::String(_) => "string literal".to_owned(),
         TokenKind::Number(value) => format!("number {value:?}"),
         TokenKind::Symbol(value) => format!("symbol {value:?}"),

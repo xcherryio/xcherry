@@ -11,6 +11,7 @@ use crate::QueryError;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
     Identifier(String),
+    QuotedIdentifier(String),
     String(String),
     Number(String),
     Symbol(&'static str),
@@ -110,7 +111,7 @@ impl Lexer<'_> {
                     continue;
                 }
                 return Ok(if delimiter == '`' {
-                    TokenKind::Identifier(value)
+                    TokenKind::QuotedIdentifier(value)
                 } else {
                     TokenKind::String(value)
                 });

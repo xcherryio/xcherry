@@ -45,6 +45,9 @@ fn registry() -> FieldRegistry {
         ("array1", IndexType::KeywordArray),
         ("CustomKeywordField", IndexType::Keyword),
         ("Custom Key", IndexType::Keyword),
+        ("OrderNumber", IndexType::Keyword),
+        ("NOT", IndexType::Keyword),
+        ("flag", IndexType::Bool),
     ] {
         fields.insert(name, index_type);
     }
@@ -62,6 +65,7 @@ fn evaluates_all_operators_and_types() {
         .with("FlowType", SearchValue::String("CheckoutFlow".into()))
         .with("ExecutionStatus", SearchValue::String("Running".into()))
         .with("keyword1", SearchValue::String("ready".into()))
+        .with("OrderNumber", SearchValue::String("12345".into()))
         .with("text1", SearchValue::String("Senior Rust-Engineer".into()))
         .with("int1", SearchValue::Int(7))
         .with("double1", SearchValue::Double(14_000.5))
@@ -97,6 +101,7 @@ fn evaluates_all_operators_and_types() {
         "WorkflowId BETWEEN 'flow-40' AND 'flow-50'",
         "WorkflowId STARTS_WITH 'flow-'",
         "keyword1 IS NOT NULL",
+        "OrderNumber = 12345",
         "CloseTime IS NULL",
         "text1 = 'rust senior'",
         "text1 = 'RUST engineer'",
@@ -110,6 +115,7 @@ fn evaluates_all_operators_and_types() {
         "double1 = 1.40005e4",
         "double1 >= 14000",
         "bool1 = TRUE",
+        "bool1 = 'true'",
         "bool1 != false",
         "bool1 IN (false, true)",
         "array1 = 'charge'",
@@ -120,6 +126,7 @@ fn evaluates_all_operators_and_types() {
         "StartTime = '2026-07-03T00:00:00Z'",
         "datetime1 BETWEEN '2026-07-02T00:00:00Z' AND '2026-07-04T00:00:00Z'",
         "WorkflowType = 'Engine'",
+        "ExecutionStatus STARTS_WITH 'Run'",
         "NOT WorkflowId = 'other' AND (int1 = 7 OR bool1 = false)",
     ] {
         assert!(evaluate(&check(query), &document), "{query}");
@@ -150,10 +157,12 @@ fn precedence_escapes_and_null_semantics() {
     let document = Document::default()
         .with("keyword1", SearchValue::String("a'b\"c".into()))
         .with("Custom Key", SearchValue::String("hello".into()))
+        .with("NOT", SearchValue::String("reserved".into()))
         .with("bool1", SearchValue::Bool(true));
     assert!(evaluate(&check("keyword1 = 'a''b\\\"c'"), &document));
     assert!(evaluate(&check("keyword1 = \"a'b\"\"c\""), &document));
     assert!(evaluate(&check("`Custom Key` = 'hello'"), &document));
+    assert!(evaluate(&check("`NOT` = 'reserved'"), &document));
     assert!(evaluate(
         &check("not bool1 = false and keyword1 = 'a''b\\\"c'"),
         &document
@@ -169,6 +178,9 @@ fn precedence_escapes_and_null_semantics() {
     for query in [
         "CloseTime != '2026-07-03T00:00:00Z'",
         "CloseTime NOT IN ('2026-07-03T00:00:00Z')",
+        "NOT CloseTime = '2026-07-03T00:00:00Z'",
+        "NOT CloseTime IN ('2026-07-03T00:00:00Z')",
+        "NOT (CloseTime != '2026-07-03T00:00:00Z')",
     ] {
         assert!(!evaluate(&check(query), &document), "{query}");
     }
@@ -181,7 +193,7 @@ fn errors_have_byte_offsets_and_specific_reasons() {
         ("é = 'x'", 0, "unknown visibility field"),
         ("int1 = '7'", 7, "expected Int literal"),
         ("int1 = 1e3", 7, "expected Int literal"),
-        ("keyword1 = 7", 11, "expected Keyword literal"),
+        ("keyword1 = true", 11, "expected Keyword literal"),
         ("text1 > 'a'", 6, "unsupported for text1"),
         ("array1 BETWEEN 'a' AND 'b'", 7, "unsupported for array1"),
         ("bool1 STARTS_WITH 't'", 6, "unsupported for bool1"),
@@ -208,8 +220,8 @@ fn errors_have_byte_offsets_and_specific_reasons() {
             18,
             "unsupported ExecutionStatus",
         ),
-        ("bool1 = 'true'", 8, "expected Bool literal"),
-        ("array1 = 1", 9, "expected KeywordArray literal"),
+        ("bool1 = 'maybe'", 8, "expected Bool literal"),
+        ("array1 = true", 9, "expected KeywordArray literal"),
         ("keyword1 BETWEEN 'a' b", 21, "expected AND"),
         ("WorkflowId IN ('a'", 18, "expected )"),
         ("int1 = 1e", 7, "expected digits in numeric exponent"),
@@ -284,6 +296,8 @@ fn repository_query_corpus_parses_and_type_checks() {
         "ExecutionStatus = \"Running\" AND FlowType = \"Checkout\"", // Web basic query.
         "WorkflowId = \"order-42\" AND StartTime >= \"2026-07-01T00:00:00Z\"", // Web advanced query.
         "ExecutionStatus IN (\"Running\", \"Failed\")", // Web advanced syntax.
+        "OrderNumber = 12345 AND flag = \"true\"",      // Web basic builder for Keyword and Bool.
+        "(OrderNumber = 12345) AND (FlowType = 'CheckoutFlow')", // Example-server wrapper.
         "DexWorkQueuePermissions = 'charge' AND FlowType = 'CheckoutFlow'", // Web v2 search.
         "FlowType = 'CheckoutFlow' AND (DexWorkQueuePermissions = 'refund.manage' OR DexWorkQueuePermissions = 'refund.message')", // Web v2 permission union.
         "FlowType = 'CheckoutFlow' AND StartTime >= '2026-07-01T00:00:00.123456789Z'", // Web v2 datetime filter.
@@ -307,4 +321,50 @@ fn cadence_only_query_spellings_are_rejected() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn null_logic_keeps_negations_unknown() {
+    let document = Document::default().with("bool1", SearchValue::Bool(true));
+    for input in [
+        "keyword2 = 'x'",
+        "keyword2 != 'x'",
+        "keyword2 IN ('x')",
+        "keyword2 NOT IN ('x')",
+        "NOT keyword2 = 'x'",
+        "NOT keyword2 IN ('x')",
+        "NOT (keyword2 != 'x')",
+        "keyword2 = 'x' AND bool1 = true",
+        "keyword2 = 'x' OR bool1 = false",
+    ] {
+        assert!(!evaluate(&check(input), &document), "{input}");
+    }
+    for input in [
+        "keyword2 IS NULL",
+        "NOT keyword2 IS NOT NULL",
+        "keyword2 = 'x' OR bool1 = true",
+        "keyword2 = 'x' AND bool1 = false OR bool1 = true",
+    ] {
+        assert!(evaluate(&check(input), &document), "{input}");
+    }
+}
+
+#[test]
+fn untrusted_expression_depth_and_count_are_bounded() {
+    let nested = format!("{}keyword1 = 'x'{}", "(".repeat(70), ")".repeat(70));
+    let error = parse_and_check(&nested, &registry()).expect_err("deep nesting");
+    assert!(error.message.contains("nesting exceeds 64"), "{error}");
+    let nested_not = format!("{}keyword1 = 'x'", "NOT ".repeat(70));
+    let error = parse_and_check(&nested_not, &registry()).expect_err("deep NOT");
+    assert!(error.message.contains("nesting exceeds 64"), "{error}");
+
+    let long_chain = vec!["keyword1 = 'x'"; 10_001].join(" OR ");
+    let error = parse_and_check(&long_chain, &registry()).expect_err("too many expressions");
+    assert!(error.message.contains("10000 expressions"), "{error}");
+    let accepted_chain = vec!["keyword1 = 'x'"; 5_000].join(" OR ");
+    let accepted = check(&accepted_chain);
+    assert!(!evaluate(&accepted, &Document::default()));
+    let oversized = " ".repeat(256 * 1024 + 1);
+    let error = parse_and_check(&oversized, &registry()).expect_err("oversized query");
+    assert_eq!(error.offset, 256 * 1024);
 }
