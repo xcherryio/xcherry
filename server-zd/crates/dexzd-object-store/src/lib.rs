@@ -56,7 +56,7 @@ pub enum WriteOutcome {
         /// ETag of the new object.
         etag: String,
     },
-    /// The precondition did not hold; nothing was written (HTTP 412 only).
+    /// The precondition failed (HTTP 412, or S3 404 `NoSuchKey` for `If-Match`); nothing was written.
     PreconditionFailed,
 }
 
@@ -117,6 +117,7 @@ pub trait ObjectStore: Send + Sync + 'static {
     /// Returns [`WriteOutcome::PreconditionFailed`] when the store rejected the condition. An
     /// error of kind [`ObjectStoreErrorKind::OutcomeUnknown`] means the write may or may not
     /// have happened; callers must read the key to find out.
+    /// A missing key fails [`WriteCondition::ReplaceIfEtagMatches`] with `PreconditionFailed`.
     async fn put(
         &self,
         key: &str,
