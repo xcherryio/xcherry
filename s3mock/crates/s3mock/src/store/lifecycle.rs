@@ -60,6 +60,11 @@ impl Store {
         wall_clock + self.lifecycle_clock_offset_ms.load(Ordering::Relaxed)
     }
 
+    /// Returns how far the lifecycle clock is ahead of wall-clock time, in milliseconds.
+    pub fn lifecycle_clock_offset_ms(&self) -> i64 {
+        self.lifecycle_clock_offset_ms.load(Ordering::Relaxed)
+    }
+
     /// Moves the lifecycle clock forward by `milliseconds` and returns the total offset.
     ///
     /// Only lifecycle decisions use this clock; object timestamps keep wall-clock time.

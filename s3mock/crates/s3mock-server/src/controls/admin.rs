@@ -160,12 +160,54 @@ impl Controls {
                     json!({"examined_files": result.examined_files, "removed_files": result.removed_files}),
                 )
             }
+            (&Method::GET, "/_s3mock/lifecycle/clock") => Ok(lifecycle_clock(&store)),
+            (&Method::POST, "/_s3mock/lifecycle/advance") => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Advance {
+                    milliseconds: i64,
+                }
+                let body = Limited::new(request.into_body(), 64 * 1024)
+                    .collect()
+                    .await
+                    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?
+                    .to_bytes();
+                let advance: Advance = serde_json::from_slice(&body)
+                    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+                // The clock only moves forward, so a pass can never undo an earlier expiration decision.
+                if advance.milliseconds < 0 {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "milliseconds must not be negative".into(),
+                    ));
+                }
+                store.advance_lifecycle_clock(advance.milliseconds);
+                Ok(lifecycle_clock(&store))
+            }
+            (&Method::POST, "/_s3mock/lifecycle/run") => {
+                let run = run_store_operation(&store, Store::run_lifecycle)
+                    .await
+                    .map_err(|error| (error.status, error.message))?;
+                Ok(json!({
+                    "expired_current_versions": run.expired_current_versions,
+                    "removed_delete_markers": run.removed_delete_markers,
+                    "expired_noncurrent_versions": run.expired_noncurrent_versions,
+                    "aborted_uploads": run.aborted_uploads,
+                }))
+            }
             _ => Err((
                 StatusCode::NOT_FOUND,
                 "unknown admin endpoint or method".into(),
             )),
         }
     }
+}
+
+fn lifecycle_clock(store: &Store) -> serde_json::Value {
+    json!({
+        "now_unix_ms": store.lifecycle_now_unix_ms(),
+        "offset_ms": store.lifecycle_clock_offset_ms(),
+    })
 }
 
 fn json_response(status: StatusCode, value: &impl Serialize) -> S3Response {
