@@ -66,19 +66,7 @@ const config: Config = {
       innerHTML: `
 (function () {
   try {
-    var match = document.cookie.match(/(?:^|; )superdurable-theme=(light|dark)(?:;|$)/);
-    var cookieTheme = match ? match[1] : null;
-    var storedTheme = window.localStorage.getItem('theme');
-    var systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    var theme = cookieTheme || ((storedTheme === 'light' || storedTheme === 'dark') ? storedTheme : systemTheme);
-    window.localStorage.setItem('theme', theme);
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme;
-    if (!cookieTheme && (storedTheme === 'light' || storedTheme === 'dark')) {
-      var shared = location.hostname === 'superdurable.io' || location.hostname.endsWith('.superdurable.io');
-      document.cookie = 'superdurable-theme=' + storedTheme + '; Path=/; Max-Age=31536000; SameSite=Lax' +
-        (shared ? '; Domain=.superdurable.io; Secure' : '');
-    }
+    window.localStorage.removeItem('theme');
   } catch (_) {}
 })();
 (function () {
@@ -181,6 +169,7 @@ const config: Config = {
     image: 'img/brand/dex-social.png',
     colorMode: {
       defaultMode: 'light',
+      disableSwitch: true,
       respectPrefersColorScheme: true,
     },
     navbar: {

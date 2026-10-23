@@ -98,7 +98,7 @@ const dexSkillSources = await Promise.all(dexSkillSourcePaths.map((filePath) => 
 
 assert.match(home, /https:\/\/superdurable\.ai\/dex-ai\//);
 assert.match(home, /https:\/\/github\.com\/superdurable/);
-assert.match(home, /Toggle color theme/);
+assert.doesNotMatch(home, /Toggle color theme/);
 assert.match(home, />Sign up\s*</);
 assert.doesNotMatch(home, /github-star-link|github-star-stat|Book a call|Book a demo/);
 
@@ -112,6 +112,8 @@ assert.doesNotMatch(navbar, /target="_blank"/);
 assert.doesNotMatch(home, /product-bar|https:\/\/superdurable\.io\//);
 
 const footer = home.match(/<footer class="theme-layout-footer footer[\s\S]*?<\/footer>/)?.[0] ?? '';
+assert.match(footer, /company-footer-brand[\s\S]*?>Super Durable</);
+assert.match(footer, /company-footer-bottom/);
 assert.match(footer, />Products</);
 assert.match(footer, />Developers</);
 assert.match(footer, />Company</);
@@ -144,6 +146,8 @@ assert.match(zhHome, /href="\/zh-Hans\/quick-start\/"/);
 assert.match(cloud, /Dex Cloud \/ BYOC/);
 assert.match(cloud, /Coming Soon/);
 assert.match(cloud, /Explore Dex OSS Docs/);
+assert.match(cloud, />Managed Dex Engine <span/);
+assert.doesNotMatch(cloud, /View Dex BYOC/);
 assert.match(cloud, /https:\/\/superdurable\.ai\/dex-engine\//);
 assert.match(cron, /flow-definition-canvas/);
 assert.match(cron, /CronScheduleFlow/);

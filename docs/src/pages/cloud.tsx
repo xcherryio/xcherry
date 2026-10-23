@@ -31,7 +31,7 @@ export default function CloudPage(): ReactNode {
             Explore Dex OSS Docs <span aria-hidden="true">→</span>
           </Link>
           <a className="brand-button" href="https://superdurable.ai/dex-engine/">
-            View Dex BYOC <span aria-hidden="true">↗</span>
+            Managed Dex Engine <span aria-hidden="true">↗</span>
           </a>
         </div>
       </main>

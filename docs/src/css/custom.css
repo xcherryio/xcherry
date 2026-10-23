@@ -1924,3 +1924,36 @@ code {
   .navbar__brand { margin-right: 12px; }
   .navbar__item { padding-inline: 8px; }
 }
+
+.navbar a svg[class*='iconExternalLink'],
+.footer a svg[class*='iconExternalLink'] {
+  display: none;
+}
+
+.company-footer-top {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 3fr);
+  gap: 48px;
+}
+
+.company-footer-brand .navbar__brand {
+  margin: 0;
+}
+
+.company-footer-top .footer__links {
+  margin-bottom: 0;
+}
+
+.company-footer-bottom {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+@media (max-width: 767px) {
+  .company-footer-top {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+}
