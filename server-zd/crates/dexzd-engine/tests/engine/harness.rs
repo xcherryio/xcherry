@@ -15,9 +15,10 @@ use dexzd_apply::{
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
-    CommandApplier, CommitConfig, CommitTicket, CommitUrgency, CommittedOutcome, EngineNode,
-    EngineNodeConfig, EngineNodeDependencies, EngineServices, EngineStartError, LocalStoreConfig,
-    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
+    CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
+    CommittedFlowCommand, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
+    EngineServices, EngineStartError, LocalStoreConfig, PartitionRuntimeRebuilder,
+    RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -25,7 +26,6 @@ use dexzd_keyspace::{
 use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dexzd::v1::{AttributesSetCommand, CommandReply, FlowCommand, flow_command};
 use futures::future::BoxFuture;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub(crate) const PARTITION_COUNT: u32 = 4;
@@ -149,22 +149,19 @@ pub(crate) fn decode_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes.try_into().expect("counter has eight bytes"))
 }
 
-/// Records rebuilt partitions and every committed outcome.
+/// Records rebuilt partitions and every committed command.
 #[derive(Default)]
 pub(crate) struct RecordingRuntime {
     rebuilt: Mutex<Vec<PartitionId>>,
-    outcomes: Arc<Mutex<Vec<CommittedOutcome>>>,
-    consumer: Mutex<Option<JoinHandle<()>>>,
+    committed: Mutex<Vec<CommittedFlowCommand>>,
     failing_partition: Option<PartitionId>,
 }
 
 impl RecordingRuntime {
     pub(crate) fn failing_rebuild_of(partition: PartitionId) -> Self {
         Self {
-            rebuilt: Mutex::default(),
-            outcomes: Arc::default(),
-            consumer: Mutex::default(),
             failing_partition: Some(partition),
+            ..Self::default()
         }
     }
 
@@ -172,27 +169,26 @@ impl RecordingRuntime {
         self.rebuilt.lock().expect("rebuilt lock").clone()
     }
 
-    pub(crate) fn outcomes(&self) -> Vec<CommittedOutcome> {
-        self.outcomes.lock().expect("outcomes lock").clone()
+    pub(crate) fn committed_commands(&self) -> Vec<CommittedFlowCommand> {
+        self.committed.lock().expect("committed lock").clone()
     }
 
-    fn consume(&self, services: EngineServices) {
-        let outcomes = self.outcomes.clone();
-        let mut receiver = services.committed_outcomes;
-        let consumer = tokio::spawn(async move {
-            while let Some(outcome) = receiver.recv().await {
-                outcomes.lock().expect("outcomes lock").push(outcome);
-            }
-        });
-        *self.consumer.lock().expect("consumer lock") = Some(consumer);
+    /// Returns the command IDs of `flow_id` in the order they were published.
+    pub(crate) fn committed_command_ids(&self, flow_id: &str) -> Vec<Vec<u8>> {
+        self.committed_commands()
+            .into_iter()
+            .filter(|committed| committed.command.flow_id == flow_id)
+            .map(|committed| committed.command.command_id)
+            .collect()
     }
 }
 
-impl Drop for RecordingRuntime {
-    fn drop(&mut self) {
-        if let Some(consumer) = self.consumer.get_mut().expect("consumer lock").take() {
-            consumer.abort();
-        }
+impl CommittedCommandSink for RecordingRuntime {
+    fn apply_committed(&self, committed: CommittedFlowCommand) {
+        self.committed
+            .lock()
+            .expect("committed lock")
+            .push(committed);
     }
 }
 
@@ -291,9 +287,9 @@ impl TestCluster {
                 clock: self.clock.clone(),
                 applier: applier.clone(),
             },
-            move |services: EngineServices| -> Arc<dyn PartitionRuntimeRebuilder> {
-                factory_runtime.consume(services);
-                factory_runtime
+            move |_services: EngineServices| EngineRuntimeHooks {
+                committed_commands: factory_runtime.clone(),
+                rebuilder: factory_runtime,
             },
         )
         .await?;
@@ -345,7 +341,7 @@ impl TestNode {
         &self,
         flow_id: &str,
         urgency: CommitUrgency,
-    ) -> Result<(FlowCommand, CommitTicket), dexzd_engine::CommitError> {
+    ) -> Result<(FlowCommand, CommitTicket), CommitError> {
         self.node
             .committer()
             .submit(self.context(flow_id), flow_command(flow_id), urgency)
@@ -395,4 +391,8 @@ pub(crate) fn flow_command(flow_id: &str) -> FlowCommand {
         )),
         ..FlowCommand::default()
     }
+}
+
+pub(crate) fn is_partition_stopped(error: &CommitError) -> bool {
+    matches!(error, CommitError::Unavailable { detail } if detail.contains("stopped applying"))
 }

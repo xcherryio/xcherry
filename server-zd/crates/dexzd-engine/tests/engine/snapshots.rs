@@ -143,5 +143,11 @@ async fn log_batches_are_deleted_only_after_a_snapshot_is_old_enough() {
             .flat_map(|partition| &partition.segments)
             .all(|segment| segment.start_seq == first_retained_seq)
     );
-    test.node.shutdown().await;
+    test.commit_prompt("cleanup-flow", 1).await;
+    drop(test);
+
+    let restarted = cluster.start_in_memory().await;
+    assert_eq!(restarted.committed_count("cleanup-flow").await, 5);
+    assert_eq!(restarted.applier.applied_commands().len(), 1);
+    restarted.node.shutdown().await;
 }

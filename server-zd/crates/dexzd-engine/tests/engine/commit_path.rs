@@ -13,7 +13,7 @@ use dexzd_engine::{CommitError, CommitUrgency, LocalStoreConfig, NodeStopReason,
 
 use crate::harness::{
     CountingApplier, FAILING_FLOW, NONDETERMINISTIC_FLOW, PANICKING_FLOW, RecordingRuntime,
-    TestCluster,
+    TestCluster, is_partition_stopped,
 };
 
 #[tokio::test(start_paused = true)]
@@ -30,8 +30,7 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
         tickets.push(ticket);
     }
     let mut positions = Vec::new();
-    for (command, ticket) in stamped.iter().zip(tickets) {
-        assert_eq!(ticket.command_id(), command.command_id.as_slice());
+    for ticket in tickets {
         let committed = ticket.wait().await.expect("command commits");
         positions.push(committed.position.seq);
     }
@@ -47,16 +46,7 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
             .all(|pair| pair[0].proposed_at_micros < pair[1].proposed_at_micros)
     );
     assert_eq!(test.committed_count("order-flow").await, 3);
-    let published: Vec<Vec<u8>> = test
-        .runtime
-        .outcomes()
-        .into_iter()
-        .filter(|outcome| outcome.flow_id == "order-flow")
-        .map(|outcome| {
-            assert!(!outcome.is_replayed);
-            outcome.command_id
-        })
-        .collect();
+    let published = test.runtime.committed_command_ids("order-flow");
     let submitted: Vec<Vec<u8>> = stamped
         .into_iter()
         .map(|command| command.command_id)
@@ -117,7 +107,10 @@ async fn submissions_beyond_the_unapplied_budget_are_rejected() {
         .await
         .expect("node starts");
     let rejected = test.submit("large-flow", CommitUrgency::Prompt);
-    assert!(matches!(rejected, Err(CommitError::Backpressure)));
+    assert!(
+        matches!(&rejected, Err(CommitError::Unavailable { detail }) if detail.contains("backlog")),
+        "{rejected:?}"
+    );
     test.node.shutdown().await;
 }
 
@@ -131,17 +124,13 @@ async fn apply_failure_stops_only_its_partition() {
         let (_, ticket) = test
             .submit(failing_flow, CommitUrgency::Prompt)
             .expect("submit succeeds");
-        assert_eq!(
-            ticket.wait().await,
-            Err(CommitError::PartitionStopped {
-                partition: failing_partition
-            })
-        );
+        let error = ticket.wait().await.expect_err("apply fails");
+        assert!(is_partition_stopped(&error), "{error:?}");
         assert_eq!(test.node.halted_partitions(), vec![failing_partition]);
-        assert!(matches!(
-            test.submit(failing_flow, CommitUrgency::Prompt),
-            Err(CommitError::PartitionStopped { .. })
-        ));
+        let error = test
+            .submit(failing_flow, CommitUrgency::Prompt)
+            .expect_err("the partition stopped");
+        assert!(is_partition_stopped(&error), "{error:?}");
         test.commit_prompt(&healthy_flow, 2).await;
         assert_eq!(test.committed_count(&healthy_flow).await, 2);
         assert_eq!(test.node.stop_reason(), None);
@@ -166,10 +155,8 @@ async fn repeated_apply_check_stops_a_nondeterministic_partition() {
     let (_, ticket) = test
         .submit(NONDETERMINISTIC_FLOW, CommitUrgency::Prompt)
         .expect("submit succeeds");
-    assert!(matches!(
-        ticket.wait().await,
-        Err(CommitError::PartitionStopped { .. })
-    ));
+    let error = ticket.wait().await.expect_err("apply differs");
+    assert!(is_partition_stopped(&error), "{error:?}");
     assert_eq!(test.applier.applied_commands().len(), 6);
     test.node.shutdown().await;
 }

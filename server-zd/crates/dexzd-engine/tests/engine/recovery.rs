@@ -40,8 +40,12 @@ async fn restart_after_crash_replays_the_log_into_a_new_store() {
     drop(first);
 
     let second = cluster.start_in_memory().await;
-    let replayed = second.runtime.outcomes();
-    assert!(replayed.iter().all(|outcome| outcome.is_replayed));
+    let replayed = second.runtime.committed_commands();
+    assert!(
+        replayed
+            .iter()
+            .all(|committed| committed.command.epoch == 1)
+    );
     let committed = second.committed_count("crash-flow").await;
     assert!(committed == 3 || committed == 4, "{committed}");
     assert_eq!(second.committed_count(&other_flow).await, 2);

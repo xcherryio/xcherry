@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::commit::{CommitState, EngineLocalStore, PartitionApplierPool, PartitionFrame};
 use crate::recovery::EngineStartError;
-use crate::recovery::local_store_opening::min_applied_seq;
+use crate::recovery::local_store_opening::lowest_applied_position;
 
 /// Where the recovered log stream continues.
 #[derive(Debug, Clone, Copy)]
@@ -41,19 +41,22 @@ impl LogReplay<'_> {
     /// Applies every committed batch after the local store's applied positions, writes
     /// EpochStart for `epoch`, and marks every partition applied through it.
     pub(crate) async fn run(&self) -> Result<ReplayedLog, EngineStartError> {
-        let last_applied_seq = min_applied_seq(self.store, self.state.partition_count())?;
+        let (last_applied_seq, last_applied_epoch) =
+            lowest_applied_position(self.store, self.state.partition_count())?;
         let writer_process_id = Uuid::now_v7().to_string();
         let recovered = recover_stream(
             self.object_store,
             self.clock,
             self.stream,
             last_applied_seq,
+            last_applied_epoch,
             self.epoch,
             &writer_process_id,
         )
         .await?;
         tracing::info!(
             last_applied_seq,
+            last_applied_epoch,
             batches = recovered.batches_to_apply.len(),
             voided_batches = recovered.void_sequences.len(),
             epoch_start_seq = recovered.epoch_start_seq,

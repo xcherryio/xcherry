@@ -122,15 +122,28 @@ pub(crate) fn min_applied_seq(
     store: &dyn LocalReadView,
     partition_count: u32,
 ) -> Result<u64, EngineStartError> {
+    Ok(lowest_applied_position(store, partition_count)?.0)
+}
+
+/// Returns the (seq, epoch) of the lowest applied batch over every partition, or (0, 0) when
+/// a partition applied nothing.
+pub(crate) fn lowest_applied_position(
+    store: &dyn LocalReadView,
+    partition_count: u32,
+) -> Result<(u64, u64), EngineStartError> {
     let metas = store.partition_metas()?;
     if metas.len() < partition_count as usize {
-        return Ok(0);
+        return Ok((0, 0));
     }
     Ok(metas
         .iter()
-        .map(|meta| meta.applied.as_ref().map_or(0, |applied| applied.seq))
+        .map(|meta| {
+            meta.applied
+                .as_ref()
+                .map_or((0, 0), |applied| (applied.seq, meta.applied_epoch))
+        })
         .min()
-        .unwrap_or(0))
+        .unwrap_or((0, 0)))
 }
 
 fn is_nonempty_directory(directory: &Path) -> Result<bool, EngineStartError> {
