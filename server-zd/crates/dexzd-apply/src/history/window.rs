@@ -36,23 +36,38 @@ pub(crate) fn advance_window_if_full(
     if in_window <= window_events + chunk_events {
         return Ok(());
     }
-    let Some(pruned) = find_new_window_start(transaction, cursor, chunk_events)? else {
+    if !advance_window(transaction, cursor, chunk_events)? {
         return Err(ApplyError::InvariantViolation {
             detail: format!(
                 "the window counts {in_window} semantic events but history has fewer from seq {}",
                 cursor.record.window_start_seq
             ),
         });
+    }
+    Ok(())
+}
+
+/// Moves W past its oldest `semantic_points` points, keeping what rebuilds every later point.
+///
+/// Returns false, changing nothing, when no semantic point would remain in the window. The
+/// superseded value byte cap (task A5) also advances the window through this function.
+pub(crate) fn advance_window(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    semantic_points: u64,
+) -> Result<bool, ApplyError> {
+    let Some(pruned) = find_new_window_start(transaction, cursor, semantic_points)? else {
+        return Ok(false);
     };
     let record = &mut cursor.record;
     record.window_start_seq = pruned.window_start_seq;
-    record.pruned_semantic_event_count += chunk_events;
+    record.pruned_semantic_event_count += semantic_points;
     record.max_pruned_external_input_seq = record
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
     delete_unneeded_history(transaction, cursor, pruned.window_start_attempt)?;
-    crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
-    Ok(())
+    while crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)? > 0 {}
+    Ok(true)
 }
 
 struct PrunedChunk {

@@ -20,3 +20,8 @@ mod window;
 
 pub(crate) use checkpoints::{after_command, pending_step_methods};
 pub(crate) use time_travel::apply_time_travel;
+#[expect(
+    unused_imports,
+    reason = "The superseded value byte cap (task A5) advances the window through it."
+)]
+pub(crate) use window::advance_window;
