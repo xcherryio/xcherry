@@ -18,12 +18,18 @@ import pytest
 from dex import StepExecutionId, WaitForStepCompletionOptions
 
 from .async_environment import AsyncDexDevTestEnvironment
+from .flow_service_client import skip_if_server_zd
 from .shared import unique_id
 from .step_cancellation_flow import CancellationScenario, StepCancellationFlow
 
 
 @pytest.mark.parametrize("scenario", list(CancellationScenario))
 def test_step_cancellation(scenario: CancellationScenario) -> None:
+    if scenario not in {
+        CancellationScenario.GLOBAL_SELECTOR,
+        CancellationScenario.SIBLING_SELECTOR,
+    }:
+        skip_if_server_zd("Step failure policies")
     asyncio.run(_run_step_cancellation(scenario))
 
 

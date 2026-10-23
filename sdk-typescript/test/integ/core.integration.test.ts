@@ -24,7 +24,7 @@ import { BasicInternalChannelFlow } from "./basic_internal_channel_flow.js";
 import { ConditionalCompleteFlow } from "./conditional_complete_flow.js";
 import { DeadEndFlow } from "./dead_end_flow.js";
 import { ExecuteOnlyFlow } from "./execute_only_flow.js";
-import { expectError, flowId, skipTimerWhenPending, withEnvironment } from "./environment.js";
+import { expectError, flowId, skipIfServerZD, skipTimerWhenPending, withEnvironment } from "./environment.js";
 import { NoStartFlow } from "./no_start_flow.js";
 import { NoStateFlow } from "./no_state_flow.js";
 import { SignalFlow } from "./signal_flow.js";
@@ -136,7 +136,8 @@ test("signals, mapped signals, and skipped timer form one combination", async ()
   });
 });
 
-test("execute-only Steps survive Continue-As-New", async () => {
+test("execute-only Steps survive Continue-As-New", async (context) => {
+  if (await skipIfServerZD(context, "Continue-As-New")) return;
   const flow = new ExecuteOnlyFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("skip-wait-until");
@@ -147,7 +148,8 @@ test("execute-only Steps survive Continue-As-New", async () => {
   });
 });
 
-test("movement Step options override defaults", async () => {
+test("movement Step options override defaults", async (context) => {
+  if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new StateOptionsOverrideFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("state-options-override");
@@ -172,7 +174,8 @@ for (const [name, flow] of [
   ["with-wait", new StateRecoveryFlow()],
   ["without-wait", new StateRecoveryNoWaitFlow()],
 ] as const) {
-  test(`execute failure recovery ${name}`, async () => {
+  test(`execute failure recovery ${name}`, async (context) => {
+    if (await skipIfServerZD(context, "Step failure policies")) return;
     await withEnvironment([flow], async ({ client }) => {
       const id = flowId(`state-recovery-${name}`);
       await client.startFlow(flow, id, 5);

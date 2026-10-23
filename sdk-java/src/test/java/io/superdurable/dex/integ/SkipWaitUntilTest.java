@@ -37,6 +37,7 @@ public final class SkipWaitUntilTest {
 
     @Test
     void testSkipWaitUntil() throws Exception {
+        IntegrationTestWaits.skipIfServerZD("Continue-As-New");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 WORKFLOW)) {

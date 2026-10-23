@@ -29,6 +29,25 @@ import { Timestamp } from "./google/protobuf/timestamp.js";
 
 export const protobufPackage = "dex";
 
+/**
+ * Identifies the engine behind a Dex Server. Clients use it only to adapt behavior that differs
+ * between engines.
+ */
+export enum ServerEngine {
+  /**
+   * SERVER_ENGINE_UNSPECIFIED - The Server does not report its engine. Servers released before this field existed are the
+   * Go Server on Temporal or Cadence.
+   */
+  SERVER_ENGINE_UNSPECIFIED = 0,
+  /** SERVER_ENGINE_TEMPORAL - The Go Server running on Temporal. */
+  SERVER_ENGINE_TEMPORAL = 1,
+  /** SERVER_ENGINE_CADENCE - The Go Server running on Cadence. */
+  SERVER_ENGINE_CADENCE = 2,
+  /** SERVER_ENGINE_ZD - server-zd: the zero-dependency Server that keeps all state in object storage. */
+  SERVER_ENGINE_ZD = 3,
+  UNRECOGNIZED = -1,
+}
+
 /** Explains why a Worker declined a task. */
 export enum PollWorkerTaskRejectReason {
   /** POLL_WORKER_TASK_REJECT_REASON_UNSPECIFIED - No rejection reason was supplied. */
@@ -42,7 +61,10 @@ export enum PollWorkerTaskRejectReason {
   UNRECOGNIZED = -1,
 }
 
-/** Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration. */
+/**
+ * Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0,
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1,
@@ -69,6 +91,10 @@ export enum IndexType {
 export enum WaitForMethodFailurePolicy {
   WAIT_FOR_METHOD_FAILURE_POLICY_UNSPECIFIED = 0,
   WAIT_FOR_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_FAILURE = 1,
+  /**
+   * WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE - server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE = 2,
   UNRECOGNIZED = -1,
 }
@@ -76,6 +102,10 @@ export enum WaitForMethodFailurePolicy {
 export enum ExecuteMethodFailurePolicy {
   EXECUTE_METHOD_FAILURE_POLICY_UNSPECIFIED = 0,
   EXECUTE_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_EXECUTE_METHOD_FAILURE = 1,
+  /**
+   * EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP - server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP = 2,
   UNRECOGNIZED = -1,
 }
@@ -97,7 +127,10 @@ export enum ActiveStepSearchMode {
   UNRECOGNIZED = -1,
 }
 
-/** Was optimize_activity: false=SYNC, true=ASYNC. Timer is always optimized by the server. */
+/**
+ * Was optimize_activity: false=SYNC, true=ASYNC. Timer is always optimized by the server.
+ * On server-zd both durabilities record the same events. ASYNC advances without waiting for the commit; there is no local phase.
+ */
 export enum StepDurability {
   STEP_DURABILITY_UNSPECIFIED = 0,
   STEP_DURABILITY_SYNC = 1,
@@ -126,10 +159,14 @@ export enum FlowStatus {
   FLOW_STATUS_RUNNING = 1,
   FLOW_STATUS_COMPLETED = 2,
   FLOW_STATUS_FAILED = 3,
-  /** FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY - Reserved for reporting a backend hard timeout; applications must not depend on this status. */
+  /**
+   * FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY - Reserved for reporting a backend hard timeout; applications must not depend on this status.
+   * server-zd never returns this status.
+   */
   FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY = 4,
   FLOW_STATUS_TERMINATED = 5,
   FLOW_STATUS_CANCELED = 6,
+  /** FLOW_STATUS_CONTINUED_AS_NEW - server-zd never returns this status. */
   FLOW_STATUS_CONTINUED_AS_NEW = 7,
   UNRECOGNIZED = -1,
 }
@@ -147,7 +184,10 @@ export enum FlowErrorType {
   UNRECOGNIZED = -1,
 }
 
-/** PendingStepMethodPhase reports the latest persisted backend lifecycle event. */
+/**
+ * PendingStepMethodPhase reports the latest persisted backend lifecycle event.
+ * On server-zd, SCHEDULED waits for locks or dispatch. STARTED means an attempt is running.
+ */
 export enum PendingStepMethodPhase {
   PENDING_STEP_METHOD_PHASE_UNSPECIFIED = 0,
   PENDING_STEP_METHOD_PHASE_SCHEDULED = 1,
@@ -276,6 +316,8 @@ export interface ServerInfo {
   minimumSupportedProtocolVersion: number;
   /** Newest protocol version implemented by this Server. */
   currentProtocolVersion: number;
+  /** The engine behind this Server. */
+  serverEngine: ServerEngine;
 }
 
 /** Carries one Worker frame on a pull stream. Register must be the first frame. */
@@ -404,7 +446,10 @@ export interface PollWorkerTaskReconnect {
 export interface PollWorkerTaskPing {
 }
 
-/** Describes one task dispatched to a Dex task queue. */
+/**
+ * Describes one task dispatched to a Dex task queue.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export interface DispatchTaskRequest {
   /** Selects the initial queue: a sticky Worker ID or a Flow type. */
   queue: string;
@@ -443,7 +488,10 @@ export interface DispatchTaskRequest {
   supportsUnknownNameError: boolean;
 }
 
-/** Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error. */
+/**
+ * Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export interface DispatchTaskResponse {
   output:
     | { $case: "waitFor"; value: InvokeWaitForMethodOutput }
@@ -464,7 +512,10 @@ export interface DispatchTaskResponse {
   rejectedByAppWorkerId: string;
 }
 
-/** Reports a failure before Dex receives a Worker result. */
+/**
+ * Reports a failure before Dex receives a Worker result.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export interface DispatchTaskError {
   reason: DispatchTaskErrorReason;
   detail: string;
@@ -473,10 +524,16 @@ export interface DispatchTaskError {
 export interface Value {
   kind:
     | //
-    /** Hydrate from blob storage, then replace with string_value. */
+    /**
+     * Hydrate from blob storage, then replace with string_value.
+     * The Server chooses this reference text; clients must treat it as opaque.
+     */
     { $case: "internalBlobIdForStringValue"; value: string }
     | //
-    /** Hydrate from blob storage, then replace with obj_value. */
+    /**
+     * Hydrate from blob storage, then replace with obj_value.
+     * The Server chooses this reference text; clients must treat it as opaque.
+     */
     { $case: "internalBlobIdForObjValue"; value: string }
     | { $case: "stringValue"; value: string }
     | { $case: "objValue"; value: EncodedObject }
@@ -556,9 +613,18 @@ export interface Context {
   fromStepExecutionId: string;
   /** Previous Step method failure supplied only to its configured recovery method. */
   recoveryError: RecoveryErrorInfo | undefined;
-  lastHeartbeatValue: Value | undefined;
+  lastHeartbeatValue:
+    | Value
+    | undefined;
+  /**
+   * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+   * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+   * so combine both when an idempotency key must change after time travel.
+   */
+  runAttempt: number;
 }
 
+/** server-zd never sets this. */
 export interface LocalActivityMetadata {
   currentStepExecutionId: string;
   fromStepExecutionId: string;
@@ -572,6 +638,7 @@ export interface RetryPolicy {
   totalDurationSeconds: number;
 }
 
+/** server-zd does not support Flow retry and rejects a set policy with INVALID_ARGUMENT. */
 export interface FlowRetryPolicy {
   initialIntervalSeconds: number;
   backoffCoefficient: number;
@@ -586,7 +653,15 @@ export interface StepOptions {
   executeRetryPolicy: RetryPolicy | undefined;
   waitForFailurePolicy: WaitForMethodFailurePolicy;
   executeFailurePolicy: ExecuteMethodFailurePolicy;
+  /**
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   executeFailureProceedStepType: string;
+  /**
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   executeFailureProceedStepOptions: StepOptions | undefined;
   skipWaitFor: boolean;
   waitForDurabilityOverride: StepDurability;
@@ -607,7 +682,15 @@ export interface FlowTimeoutHandlerOptions {
   heartbeatTimeoutSeconds: number;
   retryPolicy: RetryPolicy | undefined;
   failurePolicy: ExecuteMethodFailurePolicy;
+  /**
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   failureProceedStepType: string;
+  /**
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   */
   failureProceedStepOptions: StepOptions | undefined;
   durabilityOverride: StepDurability;
   lockAttributeKeys: string[];
@@ -622,7 +705,9 @@ export interface FlowAlreadyStartedOptions {
 
 export interface FlowStartOptions {
   idReusePolicy: IdReusePolicy;
+  /** server-zd rejects a positive start delay with INVALID_ARGUMENT. */
   flowStartDelaySeconds: number;
+  /** server-zd rejects a set policy with INVALID_ARGUMENT. */
   retryPolicy: FlowRetryPolicy | undefined;
   attributes: AttributeWrite[];
   flowConfigOverride: FlowConfig | undefined;
@@ -631,8 +716,14 @@ export interface FlowStartOptions {
 }
 
 export interface FlowConfig {
-  activeStepSearchMode?: ActiveStepSearchMode | undefined;
-  continueAsNewThreshold?: number | undefined;
+  activeStepSearchMode?:
+    | ActiveStepSearchMode
+    | undefined;
+  /** server-zd ignores this field. */
+  continueAsNewThreshold?:
+    | number
+    | undefined;
+  /** server-zd ignores this field. */
   continueAsNewPageSizeInBytes?: number | undefined;
   stepDurability?: StepDurability | undefined;
   workerTarget:
@@ -647,8 +738,12 @@ export interface AttributeStoreNames {
 }
 
 export interface WorkerTarget {
-  /** Plaintext gRPC dial target, not an HTTP URL. */
+  /**
+   * Plaintext gRPC dial target, not an HTTP URL.
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+   */
   address: string;
+  /** server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT. */
   isHeadlessAddress: boolean;
   /** Routes work through a connected pull Worker; mutually exclusive with address. */
   isPullMode: boolean;
@@ -819,6 +914,7 @@ export interface SearchFlowsRequest {
   query: string;
   pageSize: number;
   nextPageToken: string;
+  /** server-zd ignores this field. */
   includeContinuedAsNew: boolean;
 }
 
@@ -860,13 +956,20 @@ export interface GetFlowSummaryRequest {
 }
 
 export interface GetFlowSummaryResponse {
-  flowExecutionId: FlowExecutionID | undefined;
+  flowExecutionId:
+    | FlowExecutionID
+    | undefined;
+  /** On server-zd this always equals run_id. */
   firstRunId: string;
   requestId: string;
   flowType: string;
   flowStatus: FlowStatus;
   startTime: Date | undefined;
-  closeTime: Date | undefined;
+  closeTime:
+    | Date
+    | undefined;
+  /** server-zd only: the current run attempt of this run. */
+  runAttempt: number;
 }
 
 export interface InternalAsyncStepInputSnapshot {
@@ -888,6 +991,11 @@ export interface GetHistoryEventsRequest {
   startInternalEventId: bigint;
   estimatePageSize: number;
   nextPageToken: Uint8Array;
+  /**
+   * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+   * run attempt.
+   */
+  runAttempt: number;
 }
 
 export interface GetHistoryEventsResponse {
@@ -898,7 +1006,11 @@ export interface GetHistoryEventsResponse {
 
 export interface FlowHistoryEvent {
   eventId: bigint;
-  eventTime: Date | undefined;
+  eventTime:
+    | Date
+    | undefined;
+  /** server-zd only: the run attempt that recorded this event. */
+  runAttempt: number;
   payload:
     | { $case: "flowStartedOrContinued"; value: FlowStartedOrContinuedHistoryEvent }
     | { $case: "flowClosed"; value: FlowClosedHistoryEvent }
@@ -919,6 +1031,12 @@ export interface FlowHistoryEvent {
 export interface TimeTravelForkHistoryEvent {
   /** Previous run containing the original history branch. */
   previousRunId: string;
+  /** server-zd only: the run attempt that was current before this time travel. */
+  previousRunAttempt: number;
+  /** server-zd only: the run attempt of the point this time travel returned to. */
+  targetRunAttempt: number;
+  /** server-zd only: the event ID of the point this time travel returned to. */
+  targetEventId: bigint;
 }
 
 export interface FlowStartedOrContinuedHistoryEvent {
@@ -928,10 +1046,9 @@ export interface FlowStartedOrContinuedHistoryEvent {
   flowTimeout: Duration | undefined;
   flowTimeoutPolicy: FlowTimeoutPolicy;
   timeoutHandlerOptions: FlowTimeoutHandlerOptions | undefined;
-  startOrContinue: { $case: "initialStart"; value: FlowInitialStart } | {
-    $case: "continuedStart";
-    value: FlowContinuedStart;
-  } | undefined;
+  startOrContinue: { $case: "initialStart"; value: FlowInitialStart } | //
+  /** server-zd never sets this. */
+  { $case: "continuedStart"; value: FlowContinuedStart } | undefined;
 }
 
 export interface FlowInitialStart {
@@ -941,6 +1058,7 @@ export interface FlowInitialStart {
   initialAttributes: KV[];
 }
 
+/** server-zd never sets this. */
 export interface FlowContinuedStart {
   previousRunId: string;
   stepsToStart: StepMovement[];
@@ -961,6 +1079,7 @@ export interface FlowClosedHistoryEvent {
   results: StepCompletionOutput[];
   errorType: FlowErrorType;
   errorMessage: string;
+  /** server-zd never sets this. */
   continuedToRunId: string;
   stickyAppWorkerId: string;
 }
@@ -1141,10 +1260,17 @@ export interface ResetFlowRequest {
   /** Skips reapplying RPCs, Channel publications, and Attribute writes after the reset point. */
   skipWritesReapply: boolean;
   stepMethod: FlowResetStepMethod;
+  /**
+   * server-zd only: selects the run attempt whose history is searched for the reset point.
+   * Zero selects the current run attempt.
+   */
+  runAttempt: number;
 }
 
 export interface ResetFlowResponse {
   runId: string;
+  /** server-zd only: the run attempt created by this time travel. run_id does not change there. */
+  runAttempt: number;
 }
 
 export interface InvokeRPCRequest {
@@ -1159,7 +1285,10 @@ export interface InvokeRPCRequest {
    * read-modify-write. Empty means no locking and uses the configured RPC path.
    */
   lockAttributeKeys: string[];
-  /** Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope. */
+  /**
+   * Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+   * server-zd deduplicates it for the whole run.
+   */
   requestId: string;
   /**
    * Requests transactional reads and writes. Attribute locking enables it
@@ -1213,6 +1342,7 @@ export interface WaitForStepCompletionRequest {
    * Use a positive value only to reclaim accepted waits left in flight after callers exit.
    * Temporal permits 10 in-flight Updates per Workflow Execution. Active callers transparently
    * start a new generation. Zero disables rollover; each rollover adds Update history.
+   * server-zd ignores this field.
    */
   internalHandlerTimeoutSeconds: number;
   /** Optional logical idempotency key. Empty derives wait-for-step-completion:{Step execution ID}. */
@@ -1237,6 +1367,7 @@ export interface WaitForAttributeRequest {
    * Use a positive value only to reclaim accepted waits left in flight after callers exit.
    * Temporal permits 10 in-flight Updates per Workflow Execution. Active callers transparently
    * start a new generation. Zero disables rollover; each rollover adds Update history.
+   * server-zd ignores this field.
    */
   internalHandlerTimeoutSeconds: number;
   /** Optional logical idempotency key. Empty derives wait-for-attribute:{encoded condition}. */
@@ -1330,7 +1461,10 @@ export interface InvokeWaitForMethodRequest_LoadedChannelMessagesEntry {
 }
 
 export interface InvokeWaitForMethodResponse {
-  /** Server-populated lineage input for local activity history. */
+  /**
+   * Server-populated lineage input for local activity history.
+   * server-zd never sets this.
+   */
   localActivityMetadata: LocalActivityMetadata | undefined;
   upsertAttributes: AttributeWrite[];
   waitingCondition: WaitingCondition | undefined;
@@ -1384,7 +1518,10 @@ export interface InvokeExecuteMethodRequest_LoadedChannelMessagesEntry {
 }
 
 export interface InvokeExecuteMethodResponse {
-  /** Server-populated lineage input for local activity history. */
+  /**
+   * Server-populated lineage input for local activity history.
+   * server-zd never sets this.
+   */
   localActivityMetadata: LocalActivityMetadata | undefined;
   stepDecision: StepDecision | undefined;
   upsertAttributes: AttributeWrite[];
@@ -1483,7 +1620,9 @@ export interface WaitingConditionState {
 export interface SubFlowOptions {
   reusePolicy: SubFlowReusePolicy;
   flowTimeoutSeconds: number;
+  /** server-zd rejects a positive start delay with INVALID_ARGUMENT. */
   flowStartDelaySeconds: number;
+  /** server-zd rejects a set policy with INVALID_ARGUMENT. */
   retryPolicy: FlowRetryPolicy | undefined;
   attributes: AttributeWrite[];
   flowConfigOverride: FlowConfig | undefined;
@@ -1712,6 +1851,7 @@ export interface RecoveryErrorInfo {
 }
 
 export interface InternalLocalStepActivityFailure {
+  /** server-zd never sets this. */
   localActivityMetadata: LocalActivityMetadata | undefined;
   firstAttemptTimestamp: bigint;
   methodOptions: StepMethodOptions | undefined;
@@ -1906,7 +2046,7 @@ export interface StepExecutionNumbers {
 }
 
 function createBaseServerInfo(): ServerInfo {
-  return { serverVersion: "", minimumSupportedProtocolVersion: 0, currentProtocolVersion: 0 };
+  return { serverVersion: "", minimumSupportedProtocolVersion: 0, currentProtocolVersion: 0, serverEngine: 0 };
 }
 
 export const ServerInfo: MessageFns<ServerInfo> = {
@@ -1919,6 +2059,9 @@ export const ServerInfo: MessageFns<ServerInfo> = {
     }
     if (message.currentProtocolVersion !== 0) {
       writer.uint32(24).uint32(message.currentProtocolVersion);
+    }
+    if (message.serverEngine !== 0) {
+      writer.uint32(32).int32(message.serverEngine);
     }
     return writer;
   },
@@ -1954,6 +2097,14 @@ export const ServerInfo: MessageFns<ServerInfo> = {
           message.currentProtocolVersion = reader.uint32();
           continue;
         }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.serverEngine = reader.int32() as any;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1971,6 +2122,7 @@ export const ServerInfo: MessageFns<ServerInfo> = {
     message.serverVersion = object.serverVersion ?? "";
     message.minimumSupportedProtocolVersion = object.minimumSupportedProtocolVersion ?? 0;
     message.currentProtocolVersion = object.currentProtocolVersion ?? 0;
+    message.serverEngine = object.serverEngine ?? 0;
     return message;
   },
 };
@@ -3917,6 +4069,7 @@ function createBaseContext(): Context {
     fromStepExecutionId: "",
     recoveryError: undefined,
     lastHeartbeatValue: undefined,
+    runAttempt: 0,
   };
 }
 
@@ -3954,6 +4107,9 @@ export const Context: MessageFns<Context> = {
     }
     if (message.lastHeartbeatValue !== undefined) {
       Value.encode(message.lastHeartbeatValue, writer.uint32(74).fork()).join();
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(80).int32(message.runAttempt);
     }
     return writer;
   },
@@ -4037,6 +4193,14 @@ export const Context: MessageFns<Context> = {
           message.lastHeartbeatValue = Value.decode(reader, reader.uint32());
           continue;
         }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4069,6 +4233,7 @@ export const Context: MessageFns<Context> = {
     message.lastHeartbeatValue = (object.lastHeartbeatValue !== undefined && object.lastHeartbeatValue !== null)
       ? Value.fromPartial(object.lastHeartbeatValue)
       : undefined;
+    message.runAttempt = object.runAttempt ?? 0;
     return message;
   },
 };
@@ -7626,6 +7791,7 @@ function createBaseGetFlowSummaryResponse(): GetFlowSummaryResponse {
     flowStatus: 0,
     startTime: undefined,
     closeTime: undefined,
+    runAttempt: 0,
   };
 }
 
@@ -7651,6 +7817,9 @@ export const GetFlowSummaryResponse: MessageFns<GetFlowSummaryResponse> = {
     }
     if (message.closeTime !== undefined) {
       Timestamp.encode(toTimestamp(message.closeTime), writer.uint32(58).fork()).join();
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(64).int32(message.runAttempt);
     }
     return writer;
   },
@@ -7718,6 +7887,14 @@ export const GetFlowSummaryResponse: MessageFns<GetFlowSummaryResponse> = {
           message.closeTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -7741,6 +7918,7 @@ export const GetFlowSummaryResponse: MessageFns<GetFlowSummaryResponse> = {
     message.flowStatus = object.flowStatus ?? 0;
     message.startTime = object.startTime ?? undefined;
     message.closeTime = object.closeTime ?? undefined;
+    message.runAttempt = object.runAttempt ?? 0;
     return message;
   },
 };
@@ -7914,7 +8092,14 @@ export const InternalLocalActivityInput: MessageFns<InternalLocalActivityInput> 
 };
 
 function createBaseGetHistoryEventsRequest(): GetHistoryEventsRequest {
-  return { flowId: "", runId: "", startInternalEventId: 0n, estimatePageSize: 0, nextPageToken: new Uint8Array(0) };
+  return {
+    flowId: "",
+    runId: "",
+    startInternalEventId: 0n,
+    estimatePageSize: 0,
+    nextPageToken: new Uint8Array(0),
+    runAttempt: 0,
+  };
 }
 
 export const GetHistoryEventsRequest: MessageFns<GetHistoryEventsRequest> = {
@@ -7936,6 +8121,9 @@ export const GetHistoryEventsRequest: MessageFns<GetHistoryEventsRequest> = {
     }
     if (message.nextPageToken.length !== 0) {
       writer.uint32(42).bytes(message.nextPageToken);
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(48).int32(message.runAttempt);
     }
     return writer;
   },
@@ -7987,6 +8175,14 @@ export const GetHistoryEventsRequest: MessageFns<GetHistoryEventsRequest> = {
           message.nextPageToken = reader.bytes();
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8008,6 +8204,7 @@ export const GetHistoryEventsRequest: MessageFns<GetHistoryEventsRequest> = {
       : 0n;
     message.estimatePageSize = object.estimatePageSize ?? 0;
     message.nextPageToken = object.nextPageToken ?? new Uint8Array(0);
+    message.runAttempt = object.runAttempt ?? 0;
     return message;
   },
 };
@@ -8088,7 +8285,7 @@ export const GetHistoryEventsResponse: MessageFns<GetHistoryEventsResponse> = {
 };
 
 function createBaseFlowHistoryEvent(): FlowHistoryEvent {
-  return { eventId: 0n, eventTime: undefined, payload: undefined };
+  return { eventId: 0n, eventTime: undefined, runAttempt: 0, payload: undefined };
 }
 
 export const FlowHistoryEvent: MessageFns<FlowHistoryEvent> = {
@@ -8101,6 +8298,9 @@ export const FlowHistoryEvent: MessageFns<FlowHistoryEvent> = {
     }
     if (message.eventTime !== undefined) {
       Timestamp.encode(toTimestamp(message.eventTime), writer.uint32(18).fork()).join();
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(24).int32(message.runAttempt);
     }
     switch (message.payload?.$case) {
       case "flowStartedOrContinued":
@@ -8164,6 +8364,14 @@ export const FlowHistoryEvent: MessageFns<FlowHistoryEvent> = {
           }
 
           message.eventTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
           continue;
         }
         case 20: {
@@ -8311,6 +8519,7 @@ export const FlowHistoryEvent: MessageFns<FlowHistoryEvent> = {
     const message = createBaseFlowHistoryEvent();
     message.eventId = (object.eventId !== undefined && object.eventId !== null) ? BigInt(object.eventId) : 0n;
     message.eventTime = object.eventTime ?? undefined;
+    message.runAttempt = object.runAttempt ?? 0;
     switch (object.payload?.$case) {
       case "flowStartedOrContinued": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
@@ -8423,13 +8632,25 @@ export const FlowHistoryEvent: MessageFns<FlowHistoryEvent> = {
 };
 
 function createBaseTimeTravelForkHistoryEvent(): TimeTravelForkHistoryEvent {
-  return { previousRunId: "" };
+  return { previousRunId: "", previousRunAttempt: 0, targetRunAttempt: 0, targetEventId: 0n };
 }
 
 export const TimeTravelForkHistoryEvent: MessageFns<TimeTravelForkHistoryEvent> = {
   encode(message: TimeTravelForkHistoryEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.previousRunId !== "") {
       writer.uint32(10).string(message.previousRunId);
+    }
+    if (message.previousRunAttempt !== 0) {
+      writer.uint32(16).int32(message.previousRunAttempt);
+    }
+    if (message.targetRunAttempt !== 0) {
+      writer.uint32(24).int32(message.targetRunAttempt);
+    }
+    if (message.targetEventId !== 0n) {
+      if (BigInt.asIntN(64, message.targetEventId) !== message.targetEventId) {
+        throw new globalThis.Error("value provided for field message.targetEventId of type int64 too large");
+      }
+      writer.uint32(32).int64(message.targetEventId);
     }
     return writer;
   },
@@ -8449,6 +8670,30 @@ export const TimeTravelForkHistoryEvent: MessageFns<TimeTravelForkHistoryEvent> 
           message.previousRunId = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.previousRunAttempt = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.targetRunAttempt = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.targetEventId = reader.int64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8464,6 +8709,11 @@ export const TimeTravelForkHistoryEvent: MessageFns<TimeTravelForkHistoryEvent> 
   fromPartial<I extends Exact<DeepPartial<TimeTravelForkHistoryEvent>, I>>(object: I): TimeTravelForkHistoryEvent {
     const message = createBaseTimeTravelForkHistoryEvent();
     message.previousRunId = object.previousRunId ?? "";
+    message.previousRunAttempt = object.previousRunAttempt ?? 0;
+    message.targetRunAttempt = object.targetRunAttempt ?? 0;
+    message.targetEventId = (object.targetEventId !== undefined && object.targetEventId !== null)
+      ? BigInt(object.targetEventId)
+      : 0n;
     return message;
   },
 };
@@ -11098,6 +11348,7 @@ function createBaseResetFlowRequest(): ResetFlowRequest {
     stepExecutionId: "",
     skipWritesReapply: false,
     stepMethod: 0,
+    runAttempt: 0,
   };
 }
 
@@ -11129,6 +11380,9 @@ export const ResetFlowRequest: MessageFns<ResetFlowRequest> = {
     }
     if (message.stepMethod !== 0) {
       writer.uint32(72).int32(message.stepMethod);
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(80).int32(message.runAttempt);
     }
     return writer;
   },
@@ -11212,6 +11466,14 @@ export const ResetFlowRequest: MessageFns<ResetFlowRequest> = {
           message.stepMethod = reader.int32() as any;
           continue;
         }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11235,18 +11497,22 @@ export const ResetFlowRequest: MessageFns<ResetFlowRequest> = {
     message.stepExecutionId = object.stepExecutionId ?? "";
     message.skipWritesReapply = object.skipWritesReapply ?? false;
     message.stepMethod = object.stepMethod ?? 0;
+    message.runAttempt = object.runAttempt ?? 0;
     return message;
   },
 };
 
 function createBaseResetFlowResponse(): ResetFlowResponse {
-  return { runId: "" };
+  return { runId: "", runAttempt: 0 };
 }
 
 export const ResetFlowResponse: MessageFns<ResetFlowResponse> = {
   encode(message: ResetFlowResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.runId !== "") {
       writer.uint32(10).string(message.runId);
+    }
+    if (message.runAttempt !== 0) {
+      writer.uint32(16).int32(message.runAttempt);
     }
     return writer;
   },
@@ -11266,6 +11532,14 @@ export const ResetFlowResponse: MessageFns<ResetFlowResponse> = {
           message.runId = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.runAttempt = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11281,6 +11555,7 @@ export const ResetFlowResponse: MessageFns<ResetFlowResponse> = {
   fromPartial<I extends Exact<DeepPartial<ResetFlowResponse>, I>>(object: I): ResetFlowResponse {
     const message = createBaseResetFlowResponse();
     message.runId = object.runId ?? "";
+    message.runAttempt = object.runAttempt ?? 0;
     return message;
   },
 };
@@ -20118,6 +20393,7 @@ export const FlowServiceService = {
       Buffer.from(WaitForAttributeResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): WaitForAttributeResponse => WaitForAttributeResponse.decode(value),
   },
+  /** server-zd returns UNIMPLEMENTED. */
   triggerContinueAsNew: {
     path: "/dex.FlowService/TriggerContinueAsNew" as const,
     requestStream: false as const,
@@ -20166,6 +20442,7 @@ export interface FlowServiceServer extends UntypedServiceImplementation {
   updateFlowConfig: handleUnaryCall<UpdateFlowConfigRequest, Empty>;
   waitForStepCompletion: handleUnaryCall<WaitForStepCompletionRequest, WaitForStepCompletionResponse>;
   waitForAttribute: handleUnaryCall<WaitForAttributeRequest, WaitForAttributeResponse>;
+  /** server-zd returns UNIMPLEMENTED. */
   triggerContinueAsNew: handleUnaryCall<TriggerContinueAsNewRequest, Empty>;
   healthCheck: handleUnaryCall<Empty, HealthInfo>;
 }
@@ -20541,6 +20818,7 @@ export interface FlowServiceClient extends Client {
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: WaitForAttributeResponse) => void,
   ): ClientUnaryCall;
+  /** server-zd returns UNIMPLEMENTED. */
   triggerContinueAsNew(
     request: TriggerContinueAsNewRequest,
     callback: (error: ServiceError | null, response: Empty) => void,
@@ -20576,7 +20854,10 @@ export const FlowServiceClient = makeGenericClientConstructor(FlowServiceService
   serviceName: string;
 };
 
-/** Hosted by Dex worker; server calls these RPCs. */
+/**
+ * Hosted by Dex worker; server calls these RPCs.
+ * server-zd supports only pull Workers and never calls WorkerService.
+ */
 export type WorkerServiceService = typeof WorkerServiceService;
 export const WorkerServiceService = {
   invokeWaitForMethod: {
@@ -20706,7 +20987,10 @@ export const WorkerTaskServiceClient = makeGenericClientConstructor(
   serviceName: string;
 };
 
-/** Hosted on the internal listener; server instances route tasks and Worker streams to queue owners. */
+/**
+ * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export type MatchingServiceService = typeof MatchingServiceService;
 export const MatchingServiceService = {
   /** Streams Worker output frames and a final result or dispatch error. */
@@ -20772,7 +21056,10 @@ export const MatchingServiceClient = makeGenericClientConstructor(
   serviceName: string;
 };
 
-/** Server-internal only (interpreter CAN activity → API). Not SDK-facing. */
+/**
+ * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+ * Go Server internals; server-zd does not serve or persist them.
+ */
 export type InternalServiceService = typeof InternalServiceService;
 export const InternalServiceService = {
   dumpFlowForContinueAsNew: {

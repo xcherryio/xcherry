@@ -52,6 +52,10 @@ private static final long serialVersionUID = 0L;
   public static final int LOCAL_ACTIVITY_METADATA_FIELD_NUMBER = 1;
   private io.superdurable.gen.LocalActivityMetadata localActivityMetadata_;
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    * @return Whether the localActivityMetadata field is set.
    */
@@ -60,6 +64,10 @@ private static final long serialVersionUID = 0L;
     return ((bitField0_ & 0x00000001) != 0);
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    * @return The localActivityMetadata.
    */
@@ -68,6 +76,10 @@ private static final long serialVersionUID = 0L;
     return localActivityMetadata_ == null ? io.superdurable.gen.LocalActivityMetadata.getDefaultInstance() : localActivityMetadata_;
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
    */
   @java.lang.Override
@@ -659,6 +671,10 @@ private static final long serialVersionUID = 0L;
     private com.google.protobuf.SingleFieldBuilder<
         io.superdurable.gen.LocalActivityMetadata, io.superdurable.gen.LocalActivityMetadata.Builder, io.superdurable.gen.LocalActivityMetadataOrBuilder> localActivityMetadataBuilder_;
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      * @return Whether the localActivityMetadata field is set.
      */
@@ -666,6 +682,10 @@ private static final long serialVersionUID = 0L;
       return ((bitField0_ & 0x00000001) != 0);
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      * @return The localActivityMetadata.
      */
@@ -677,6 +697,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public Builder setLocalActivityMetadata(io.superdurable.gen.LocalActivityMetadata value) {
@@ -693,6 +717,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public Builder setLocalActivityMetadata(
@@ -707,6 +735,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public Builder mergeLocalActivityMetadata(io.superdurable.gen.LocalActivityMetadata value) {
@@ -728,6 +760,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public Builder clearLocalActivityMetadata() {
@@ -741,6 +777,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public io.superdurable.gen.LocalActivityMetadata.Builder getLocalActivityMetadataBuilder() {
@@ -749,6 +789,10 @@ private static final long serialVersionUID = 0L;
       return internalGetLocalActivityMetadataFieldBuilder().getBuilder();
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     public io.superdurable.gen.LocalActivityMetadataOrBuilder getLocalActivityMetadataOrBuilder() {
@@ -760,6 +804,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd never sets this.
+     * </pre>
+     *
      * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
      */
     private com.google.protobuf.SingleFieldBuilder<

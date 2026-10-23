@@ -13,6 +13,7 @@ public interface InvokeWaitForMethodResponseOrBuilder extends
   /**
    * <pre>
    * Server-populated lineage input for local activity history.
+   * server-zd never sets this.
    * </pre>
    *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
@@ -22,6 +23,7 @@ public interface InvokeWaitForMethodResponseOrBuilder extends
   /**
    * <pre>
    * Server-populated lineage input for local activity history.
+   * server-zd never sets this.
    * </pre>
    *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
@@ -31,6 +33,7 @@ public interface InvokeWaitForMethodResponseOrBuilder extends
   /**
    * <pre>
    * Server-populated lineage input for local activity history.
+   * server-zd never sets this.
    * </pre>
    *
    * <code>.dex.LocalActivityMetadata local_activity_metadata = 1;</code>
