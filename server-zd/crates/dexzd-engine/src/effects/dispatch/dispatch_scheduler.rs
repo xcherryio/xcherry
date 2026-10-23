@@ -1,0 +1,217 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+//! Tracks pending and running method attempts for the effect router: lock-checked starts,
+//! invocations parked on busy locks, running attempt tasks, and cancellation.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
+
+use dexzd_keyspace::RunId;
+use dexzd_protocol::dexzd::v1::StepInvocationKey;
+use tokio_util::sync::CancellationToken;
+
+use crate::effects::dispatch::method_attempt::MethodAttempt;
+use crate::effects::effect_runtime::{EffectRuntimeError, InvocationStartOutcome};
+use crate::effects::method_request::MethodAttemptKey;
+use crate::effects::{EffectContext, RouterMessage};
+use crate::runtime::FlowAddress;
+
+/// Task IDs of finished attempts remembered to ignore duplicate start effects.
+const FINISHED_TASK_ID_CAPACITY: usize = 4096;
+
+/// Result of one lock-checked start, reported back to the router.
+#[derive(Debug)]
+pub(crate) enum InvocationStartResult {
+    Started,
+    LocksBusy,
+    Stale,
+    Stopped,
+}
+
+struct RunningAttempt {
+    cancel: CancellationToken,
+}
+
+struct StartingInvocation {
+    /// Lock releases of the run already seen when the start began.
+    lock_release_count: u64,
+}
+
+/// Dispatch state owned by the effect router task.
+pub(crate) struct DispatchScheduler {
+    context: Arc<EffectContext>,
+    starting: BTreeMap<MethodAttemptKey, StartingInvocation>,
+    parked: BTreeMap<RunId, BTreeMap<MethodAttemptKey, FlowAddress>>,
+    lock_release_counts: BTreeMap<RunId, u64>,
+    running: BTreeMap<Vec<u8>, RunningAttempt>,
+    finished_task_ids: BTreeSet<Vec<u8>>,
+    finished_order: VecDeque<Vec<u8>>,
+}
+
+impl DispatchScheduler {
+    pub(crate) fn new(context: Arc<EffectContext>) -> Self {
+        Self {
+            context,
+            starting: BTreeMap::new(),
+            parked: BTreeMap::new(),
+            lock_release_counts: BTreeMap::new(),
+            running: BTreeMap::new(),
+            finished_task_ids: BTreeSet::new(),
+            finished_order: VecDeque::new(),
+        }
+    }
+
+    /// Starts a pending invocation unless a start of the same attempt is in flight.
+    pub(crate) fn start_pending_invocation(&mut self, flow: FlowAddress, key: MethodAttemptKey) {
+        if self.starting.contains_key(&key) {
+            return;
+        }
+        let lock_release_count = self.lock_release_count(key.run_id);
+        self.starting
+            .insert(key.clone(), StartingInvocation { lock_release_count });
+        let context = Arc::clone(&self.context);
+        self.context.tracker.spawn(async move {
+            let result = try_start_until_answered(&context, &flow, &key).await;
+            context.report(RouterMessage::InvocationStartFinished { flow, key, result });
+        });
+    }
+
+    /// Records the answer of a lock-checked start.
+    pub(crate) fn finish_start(
+        &mut self,
+        flow: FlowAddress,
+        key: MethodAttemptKey,
+        result: InvocationStartResult,
+    ) {
+        let Some(starting) = self.starting.remove(&key) else {
+            return;
+        };
+        if !matches!(result, InvocationStartResult::LocksBusy) {
+            return;
+        }
+        if starting.lock_release_count != self.lock_release_count(key.run_id) {
+            // Locks were released while the start was in flight; try again now.
+            self.start_pending_invocation(flow, key);
+            return;
+        }
+        self.parked.entry(key.run_id).or_default().insert(key, flow);
+    }
+
+    /// Retries the run's invocations that waited for locks.
+    pub(crate) fn release_locks(&mut self, run_id: RunId) {
+        *self.lock_release_counts.entry(run_id).or_insert(0) += 1;
+        for (key, flow) in self.parked.remove(&run_id).unwrap_or_default() {
+            self.start_pending_invocation(flow, key);
+        }
+    }
+
+    /// Retries every parked invocation; in-memory RPC locks release without an effect.
+    pub(crate) fn retry_parked_invocations(&mut self) {
+        let parked = std::mem::take(&mut self.parked);
+        for (key, flow) in parked.into_values().flatten() {
+            self.start_pending_invocation(flow, key);
+        }
+    }
+
+    /// Runs a started attempt unless it already runs or ran.
+    pub(crate) fn run_started_attempt(
+        &mut self,
+        flow: FlowAddress,
+        key: MethodAttemptKey,
+        task_id: Vec<u8>,
+    ) {
+        if self.running.contains_key(&task_id) || self.finished_task_ids.contains(&task_id) {
+            return;
+        }
+        let cancel = self.context.shutdown.child_token();
+        self.running.insert(
+            task_id.clone(),
+            RunningAttempt {
+                cancel: cancel.clone(),
+            },
+        );
+        let run = self.context.run_location(&flow, key.run_id);
+        let attempt = MethodAttempt {
+            context: Arc::clone(&self.context),
+            flow,
+            run,
+            key,
+            task_id: task_id.clone(),
+            cancel,
+        };
+        let context = Arc::clone(&self.context);
+        self.context.tracker.spawn(async move {
+            attempt.run().await;
+            context.report(RouterMessage::AttemptFinished { task_id });
+        });
+    }
+
+    /// Stops the attempt dispatched as `task_id`; its Worker receives a cancel request.
+    pub(crate) fn cancel_attempt(&mut self, task_id: &[u8]) {
+        if let Some(attempt) = self.running.get(task_id) {
+            attempt.cancel.cancel();
+        }
+    }
+
+    pub(crate) fn finish_attempt(&mut self, task_id: Vec<u8>) {
+        self.running.remove(&task_id);
+        if self.finished_task_ids.insert(task_id.clone()) {
+            self.finished_order.push_back(task_id);
+        }
+        while self.finished_order.len() > FINISHED_TASK_ID_CAPACITY {
+            if let Some(oldest) = self.finished_order.pop_front() {
+                self.finished_task_ids.remove(&oldest);
+            }
+        }
+    }
+
+    pub(crate) fn has_parked_invocations(&self) -> bool {
+        !self.parked.is_empty()
+    }
+
+    fn lock_release_count(&self, run_id: RunId) -> u64 {
+        self.lock_release_counts.get(&run_id).copied().unwrap_or(0)
+    }
+}
+
+/// Asks the runtime to start the attempt, retrying while the runtime is unavailable.
+async fn try_start_until_answered(
+    context: &EffectContext,
+    flow: &FlowAddress,
+    key: &MethodAttemptKey,
+) -> InvocationStartResult {
+    let invocation: StepInvocationKey = key.invocation();
+    let task_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+    let mut backoff = context.retry_backoff();
+    loop {
+        let outcome = context
+            .runtime
+            .try_start_invocation(
+                flow,
+                key.run_id,
+                key.run_attempt,
+                &invocation,
+                key.attempt,
+                task_id.clone(),
+            )
+            .await;
+        match outcome {
+            Ok(InvocationStartOutcome::Started) => return InvocationStartResult::Started,
+            Ok(InvocationStartOutcome::LocksBusy) => return InvocationStartResult::LocksBusy,
+            Ok(InvocationStartOutcome::Stale) => return InvocationStartResult::Stale,
+            Err(EffectRuntimeError::NodeStopping { .. }) => return InvocationStartResult::Stopped,
+            Err(error @ EffectRuntimeError::Unavailable { .. }) => {
+                tracing::debug!(%error, run_id = %key.run_id, "invocation start is waiting for the runtime");
+                if !backoff.wait(&context.shutdown).await {
+                    return InvocationStartResult::Stopped;
+                }
+            }
+        }
+    }
+}

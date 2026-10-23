@@ -10,8 +10,9 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use dexzd_protocol::dex::{
-    self, ActionPermissionMappings, AttributeWrite, FlowConfig, FlowTimeoutHandlerOptions,
-    StepOptions, Value, WorkerTarget, value,
+    self, ActionPermissionMappings, ActiveStepSearchMode, AttributeWrite,
+    ExecuteMethodFailurePolicy, FlowConfig, FlowTimeoutHandlerOptions, FlowTimeoutPolicy,
+    StepDurability, StepOptions, Value, WaitForMethodFailurePolicy, WorkerTarget, value,
 };
 
 /// Identifies how the caller handles a validation failure.
@@ -42,7 +43,7 @@ pub struct ValidationError {
 pub struct ValidationConfig {
     /// Maximum UTF-8 byte length of an application Flow ID; defaults to 1000.
     pub maximum_flow_id_bytes: usize,
-    /// Minimum positive Step heartbeat timeout.
+    /// Minimum positive Step heartbeat timeout; defaults to 10 seconds, matching the Go Server.
     pub minimum_step_heartbeat_timeout: Duration,
     /// Default Flow configuration applied before a StartFlow override.
     pub default_flow_config: FlowConfig,
@@ -56,11 +57,11 @@ impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             maximum_flow_id_bytes: 1000,
-            minimum_step_heartbeat_timeout: Duration::ZERO,
+            minimum_step_heartbeat_timeout: Duration::from_secs(10),
             default_flow_config: FlowConfig {
-                active_step_search_mode: Some(3),
+                active_step_search_mode: Some(ActiveStepSearchMode::Disabled as i32),
                 continue_as_new_threshold: Some(100),
-                step_durability: Some(1),
+                step_durability: Some(StepDurability::Sync as i32),
                 ..FlowConfig::default()
             },
             attribute_store_names: HashSet::new(),
@@ -155,56 +156,68 @@ pub(crate) fn validate_attribute_writes(
                 "DexWorkQueuePermissions is managed by the Server",
             ));
         }
-        if write.is_hard_delete_on_null {
-            match write.value.as_ref().and_then(|value| value.kind.as_ref()) {
-                Some(value::Kind::NullValue(_))
-                | Some(value::Kind::StringValue(_))
-                | Some(value::Kind::ObjValue(_)) => {}
-                Some(_) => {
-                    return Err(invalid(
-                        item_path.clone(),
-                        format!(
-                            "hard-delete attribute {:?} must be a string, an object, or null",
-                            write.key
-                        ),
-                    ));
-                }
-                None => {
-                    return Err(invalid(
-                        item_path.clone(),
-                        format!(
-                            "hard-delete attribute {:?} has an empty value; use null to delete it",
-                            write.key
-                        ),
-                    ));
-                }
-            }
-            if write
-                .index_config
-                .as_ref()
-                .is_some_and(|index| index.enable)
-            {
-                return Err(invalid(
-                    item_path.clone(),
-                    format!("hard-delete attribute {:?} must not be indexed", write.key),
-                ));
-            }
-            if write.sync_config.as_ref().is_some_and(|sync| sync.enabled) {
-                return Err(invalid(
-                    item_path,
-                    format!(
-                        "hard-delete attribute {:?} must not sync to an Attribute Store",
-                        write.key
-                    ),
-                ));
-            }
-            if !config.has_blob_store {
-                return Err(invalid(
-                    format!("{path}[{index}]"),
-                    "hard-delete Attributes require an enabled blob store",
-                ));
-            }
+        validate_hard_delete_write(&item_path, write, config, false)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_hard_delete_write(
+    path: &str,
+    write: &AttributeWrite,
+    config: &ValidationConfig,
+    allow_missing_value: bool,
+) -> Result<(), ValidationError> {
+    if !write.is_hard_delete_on_null {
+        return Ok(());
+    }
+    match write.value.as_ref().and_then(|value| value.kind.as_ref()) {
+        None if allow_missing_value && write.value.is_none() => {}
+        Some(
+            value::Kind::NullValue(_) | value::Kind::StringValue(_) | value::Kind::ObjValue(_),
+        ) => {}
+        None => {
+            return Err(invalid(
+                path,
+                format!(
+                    "hard-delete attribute {:?} has an empty value; use null to delete it",
+                    write.key
+                ),
+            ));
         }
+        Some(_) => {
+            return Err(invalid(
+                path,
+                format!(
+                    "hard-delete attribute {:?} must be a string, an object, or null",
+                    write.key
+                ),
+            ));
+        }
+    }
+    if write
+        .index_config
+        .as_ref()
+        .is_some_and(|index| index.enable)
+    {
+        return Err(invalid(
+            path,
+            format!("hard-delete attribute {:?} must not be indexed", write.key),
+        ));
+    }
+    if write.sync_config.as_ref().is_some_and(|sync| sync.enabled) {
+        return Err(invalid(
+            path,
+            format!(
+                "hard-delete attribute {:?} must not sync to an Attribute Store",
+                write.key
+            ),
+        ));
+    }
+    if !config.has_blob_store {
+        return Err(invalid(
+            path,
+            "hard-delete Attributes require an enabled blob store",
+        ));
     }
     Ok(())
 }
@@ -282,18 +295,18 @@ pub(crate) fn validate_flow_timeout_policy(
         return Err(invalid(path, "flow timeout must be non-negative"));
     }
     if timeout_seconds == 0 {
-        if policy != 0 {
+        if policy != FlowTimeoutPolicy::Unspecified as i32 {
             return Err(invalid(
                 path,
                 "flow timeout policy requires a positive timeout",
             ));
         }
-        return Ok(0);
+        return Ok(FlowTimeoutPolicy::Unspecified as i32);
     }
-    match policy {
-        0 => Ok(1),
-        1..=3 => Ok(policy),
-        _ => Err(invalid(path, "unknown flow timeout policy")),
+    match FlowTimeoutPolicy::try_from(policy) {
+        Ok(FlowTimeoutPolicy::Unspecified) => Ok(FlowTimeoutPolicy::Fail as i32),
+        Ok(_) => Ok(policy),
+        Err(_) => Err(invalid(path, "unknown flow timeout policy")),
     }
 }
 
@@ -307,7 +320,7 @@ pub(crate) fn validate_timeout_handler(
     let Some(options) = options else {
         return Ok(());
     };
-    if timeout_seconds <= 0 || policy != 3 {
+    if timeout_seconds <= 0 || policy != FlowTimeoutPolicy::Handler as i32 {
         return Err(invalid(
             path,
             "Flow timeout handler options require the Handler policy and a positive timeout",
@@ -319,7 +332,7 @@ pub(crate) fn validate_timeout_handler(
             "Flow timeout handler method timeout must be non-negative",
         ));
     }
-    if options.failure_policy == 2 {
+    if options.failure_policy == ExecuteMethodFailurePolicy::ProceedToConfiguredStep as i32 {
         return Err(unsupported_step_policy(
             format!("{path}.failure_policy"),
             "Flow timeout handler proceed failure policy",
@@ -329,6 +342,18 @@ pub(crate) fn validate_timeout_handler(
         return Err(unsupported_step_policy(
             format!("{path}.failure_proceed_step_type"),
             "Flow timeout handler failure_proceed_step_type",
+        ));
+    }
+    if options.failure_proceed_step_options.is_some()
+        && matches!(
+            ExecuteMethodFailurePolicy::try_from(options.failure_policy),
+            Ok(ExecuteMethodFailurePolicy::Unspecified
+                | ExecuteMethodFailurePolicy::FailFlowOnExecuteMethodFailure)
+        )
+    {
+        return Err(invalid(
+            format!("{path}.failure_proceed_step_options"),
+            "Flow timeout handler failure target requires the proceed policy",
         ));
     }
     let mapped = StepOptions {
@@ -348,7 +373,7 @@ pub(crate) fn validate_timeout_handler(
         ..StepOptions::default()
     };
     validate_step_options(path, Some(&mapped), config)?;
-    if options.failure_policy != 0 && options.failure_policy != 1 {
+    if ExecuteMethodFailurePolicy::try_from(options.failure_policy).is_err() {
         return Err(invalid(
             format!("{path}.failure_policy"),
             "unknown Flow timeout handler failure policy",
@@ -365,18 +390,15 @@ pub(crate) fn validate_step_options(
     let mut current = options;
     let mut current_path = path.to_owned();
     while let Some(options) = current {
-        validate_identifier(
-            &format!("{current_path}.execute_failure_proceed_step_type"),
-            "step type",
-            &options.execute_failure_proceed_step_type,
-        )?;
-        if options.wait_for_failure_policy == 2 {
+        if options.wait_for_failure_policy == WaitForMethodFailurePolicy::ProceedOnFailure as i32 {
             return Err(unsupported_step_policy(
                 format!("{current_path}.wait_for_failure_policy"),
                 "WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE",
             ));
         }
-        if options.execute_failure_policy == 2 {
+        if options.execute_failure_policy
+            == ExecuteMethodFailurePolicy::ProceedToConfiguredStep as i32
+        {
             return Err(unsupported_step_policy(
                 format!("{current_path}.execute_failure_policy"),
                 "EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP",
@@ -388,6 +410,11 @@ pub(crate) fn validate_step_options(
                 "execute_failure_proceed_step_type",
             ));
         }
+        validate_identifier(
+            &format!("{current_path}.execute_failure_proceed_step_type"),
+            "step type",
+            &options.execute_failure_proceed_step_type,
+        )?;
         let heartbeat = options.heartbeat_timeout_seconds;
         if heartbeat < 0
             || (heartbeat > 0
@@ -396,8 +423,8 @@ pub(crate) fn validate_step_options(
             return Err(invalid(
                 format!("{current_path}.heartbeat_timeout_seconds"),
                 format!(
-                    "heartbeat timeout must be zero or at least {:?}",
-                    config.minimum_step_heartbeat_timeout
+                    "heartbeat timeout must be zero or at least {}",
+                    format_duration(config.minimum_step_heartbeat_timeout)
                 ),
             ));
         }
@@ -419,6 +446,14 @@ pub(crate) fn validate_step_options(
         current_path.push_str(".execute_failure_proceed_step_options");
     }
     Ok(())
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.is_zero() {
+        "0s".to_owned()
+    } else {
+        format!("{duration:?}")
+    }
 }
 
 pub(crate) fn validate_state_selections(
@@ -496,7 +531,7 @@ pub(crate) fn validate_flow_config(
     }
     if flow_config
         .step_durability
-        .is_some_and(|value| !(0..=2).contains(&value))
+        .is_some_and(|value| StepDurability::try_from(value).is_err())
     {
         return Err(invalid(
             format!("{path}.step_durability"),
@@ -508,7 +543,7 @@ pub(crate) fn validate_flow_config(
     }
     if flow_config
         .active_step_search_mode
-        .is_some_and(|value| !(0..=3).contains(&value))
+        .is_some_and(|value| ActiveStepSearchMode::try_from(value).is_err())
     {
         return Err(invalid(
             format!("{path}.active_step_search_mode"),
@@ -546,6 +581,32 @@ pub(crate) fn validate_flow_config(
         }
     }
     Ok(())
+}
+
+pub(crate) fn apply_flow_config_override(effective: &mut FlowConfig, override_config: &FlowConfig) {
+    if override_config.active_step_search_mode.is_some() {
+        effective.active_step_search_mode = override_config.active_step_search_mode;
+    }
+    if override_config.continue_as_new_threshold.is_some() {
+        effective.continue_as_new_threshold = override_config.continue_as_new_threshold;
+    }
+    if override_config.continue_as_new_page_size_in_bytes.is_some() {
+        effective.continue_as_new_page_size_in_bytes =
+            override_config.continue_as_new_page_size_in_bytes;
+    }
+    if override_config.step_durability.is_some() {
+        effective.step_durability = override_config.step_durability;
+    }
+    if override_config.worker_target.is_some() {
+        effective
+            .worker_target
+            .clone_from(&override_config.worker_target);
+    }
+    if override_config.attribute_store_names.is_some() {
+        effective
+            .attribute_store_names
+            .clone_from(&override_config.attribute_store_names);
+    }
 }
 
 pub(crate) fn normalize_worker_target(

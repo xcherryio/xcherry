@@ -8,24 +8,40 @@
 
 use std::collections::HashSet;
 
-use dexzd_protocol::dex::{FlowConfig, WaitingCondition};
+use dexzd_protocol::dex::{FlowConfig, SubFlowReusePolicy, WaitingCondition, WaitingConditionType};
 
 use crate::shared::{
-    ValidationConfig, ValidationError, invalid, validate_attribute_writes, validate_blob_value,
-    validate_flow_config, validate_flow_timeout_policy, validate_identifier,
-    validate_start_options, validate_step_options, validate_timeout_handler,
+    ValidationCategory, ValidationConfig, ValidationError, apply_flow_config_override, invalid,
+    validate_attribute_writes, validate_blob_value, validate_flow_config,
+    validate_flow_timeout_policy, validate_identifier, validate_start_options,
+    validate_step_options, validate_timeout_handler,
 };
 
 /// Validates a Worker's WaitFor conditions, including nested SubFlow options.
 pub fn validate_waiting_condition(
     waiting: Option<&WaitingCondition>,
+    parent_flow_config: &FlowConfig,
+    config: &ValidationConfig,
+) -> Result<(), ValidationError> {
+    do_validate_waiting_condition(waiting, parent_flow_config, config).map_err(|mut error| {
+        if error.category == ValidationCategory::InvalidArgument {
+            error.category = ValidationCategory::RetryableWorkerResponse;
+        }
+        error
+    })
+}
+
+fn do_validate_waiting_condition(
+    waiting: Option<&WaitingCondition>,
+    parent_flow_config: &FlowConfig,
     config: &ValidationConfig,
 ) -> Result<(), ValidationError> {
     let Some(waiting) = waiting else {
         return Ok(());
     };
     let mut declared_ids = HashSet::new();
-    let requires_ids = waiting.waiting_condition_type == 3;
+    let requires_ids =
+        waiting.waiting_condition_type == WaitingConditionType::AnyCombinationCompleted as i32;
     for (index, timer) in waiting.timer_conditions.iter().enumerate() {
         let path = format!("waiting_condition.timer_conditions[{index}]");
         register_id(
@@ -164,7 +180,7 @@ pub fn validate_waiting_condition(
                 options.flow_start_delay_seconds,
                 options.retry_policy.is_some(),
             )?;
-            if !(0..=3).contains(&options.reuse_policy) {
+            if SubFlowReusePolicy::try_from(options.reuse_policy).is_err() {
                 return Err(invalid(
                     format!("{options_path}.reuse_policy"),
                     format!("SubFlow condition at index {index} has an unknown reuse policy"),
@@ -180,13 +196,13 @@ pub fn validate_waiting_condition(
         } else {
             validate_blob_value(&format!("{path}.step_input"), subflow.step_input.as_ref())?;
         }
-        let mut effective = config.default_flow_config.clone();
+        let mut effective = parent_flow_config.clone();
         if let Some(override_config) = subflow
             .options
             .as_ref()
             .and_then(|options| options.flow_config_override.as_ref())
         {
-            apply_subflow_config_override(&mut effective, override_config);
+            apply_flow_config_override(&mut effective, override_config);
         }
         validate_flow_config(
             &format!("{path}.options.flow_config_override"),
@@ -195,8 +211,8 @@ pub fn validate_waiting_condition(
             true,
         )?;
     }
-    match waiting.waiting_condition_type {
-        1 | 2 => {
+    match WaitingConditionType::try_from(waiting.waiting_condition_type) {
+        Ok(WaitingConditionType::AllCompleted | WaitingConditionType::AnyCompleted) => {
             if !waiting.condition_combinations.is_empty() {
                 return Err(invalid(
                     "waiting_condition.condition_combinations",
@@ -204,7 +220,9 @@ pub fn validate_waiting_condition(
                 ));
             }
         }
-        3 => validate_combinations(waiting, &declared_ids)?,
+        Ok(WaitingConditionType::AnyCombinationCompleted) => {
+            validate_combinations(waiting, &declared_ids)?
+        }
         _ => {
             return Err(invalid(
                 "waiting_condition.waiting_condition_type",
@@ -216,32 +234,6 @@ pub fn validate_waiting_condition(
         }
     }
     Ok(())
-}
-
-fn apply_subflow_config_override(effective: &mut FlowConfig, override_config: &FlowConfig) {
-    if override_config.active_step_search_mode.is_some() {
-        effective.active_step_search_mode = override_config.active_step_search_mode;
-    }
-    if override_config.continue_as_new_threshold.is_some() {
-        effective.continue_as_new_threshold = override_config.continue_as_new_threshold;
-    }
-    if override_config.continue_as_new_page_size_in_bytes.is_some() {
-        effective.continue_as_new_page_size_in_bytes =
-            override_config.continue_as_new_page_size_in_bytes;
-    }
-    if override_config.step_durability.is_some() {
-        effective.step_durability = override_config.step_durability;
-    }
-    if override_config.worker_target.is_some() {
-        effective
-            .worker_target
-            .clone_from(&override_config.worker_target);
-    }
-    if override_config.attribute_store_names.is_some() {
-        effective
-            .attribute_store_names
-            .clone_from(&override_config.attribute_store_names);
-    }
 }
 
 fn register_id<'a>(

@@ -10,6 +10,7 @@
 
 mod command_applier;
 mod commit;
+mod effects;
 mod engine_node;
 mod long_poll;
 mod recovery;
@@ -20,6 +21,14 @@ pub use command_applier::{CommandApplier, DeterministicCommandApplier};
 pub use commit::{
     CommandCommitter, CommitConfig, CommittedStateView, EngineLocalStore, NodeStopReason,
     ReplayCheck, ReplayMismatch,
+};
+pub use effects::{
+    EffectDependencies, EffectError, EffectRunner, EffectRuntime, EffectRuntimeError, EffectTasks,
+    EffectTasksHandle, EffectsConfig, HARD_DELETE_OBJECT_KEY_PREFIX, HardDeleteObjectOwner,
+    HardDeleteObjects, HardDeleteUploadLedger, HardDeleteUploads, InvocationStartOutcome,
+    MethodDispatchRequest, MethodDispatchSession, MethodDispatchStartError, MethodDispatcher,
+    MethodRequest, NodeMetaUploadLedger, decode_hard_delete_value, encode_hard_delete_value,
+    hard_delete_placeholder_value,
 };
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
 pub use recovery::{
