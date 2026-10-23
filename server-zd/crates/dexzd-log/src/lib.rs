@@ -19,4 +19,4 @@ pub use batch_codec::{
 pub use commit_pipeline::{
     CommitPipeline, CommitPipelineConfig, CommittedBatch, ProposalFailure, ProposalTicket,
 };
-pub use stream_recovery::{RecoveredStream, recover_stream};
+pub use stream_recovery::{RecoveredStream, recover_stream, recover_stream_from};

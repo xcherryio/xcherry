@@ -18,6 +18,7 @@ use dexzd_clock::WallClock;
 use dexzd_log::{
     BatchContent, BatchRecord, CommitPipeline, CommitPipelineConfig, LogError, ProposalFailure,
     StreamIdentity, decode_batch, encode_batch, read_partition_records, recover_stream,
+    recover_stream_from,
 };
 use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
@@ -341,6 +342,12 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
     store
         .insert(stream().batch_key(3), batch(1, 3, b"unacknowledged"))
         .await;
+    store
+        .insert(
+            stream().batch_key(4),
+            batch(1, 4, b"another unacknowledged"),
+        )
+        .await;
     let recovered = recover_stream(
         store.as_ref(),
         &FixedClock,
@@ -354,6 +361,8 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
     .unwrap();
     assert_eq!(recovered.epoch_start_seq, 2);
     assert_eq!(recovered.batches_to_apply.len(), 1);
+    assert_eq!(recovered.void_sequences, vec![3, 4]);
+    assert_eq!(recovered.next_seq, 5);
     let (pipeline, mut committed) = CommitPipeline::start(
         store.clone(),
         Arc::new(FixedClock),
@@ -363,12 +372,46 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
         CommitPipelineConfig::default(),
     )
     .unwrap();
-    let ticket = pipeline
-        .propose(2, Bytes::from_static(b"replacement"), true)
+    let first = pipeline
+        .propose(2, Bytes::from_static(b"first replacement"), true)
         .await
         .unwrap();
-    assert_eq!(ticket.committed.await.unwrap().unwrap(), 4);
-    assert_eq!(committed.recv().await.unwrap().seq, 4);
+    let second = pipeline
+        .propose(2, Bytes::from_static(b"second replacement"), true)
+        .await
+        .unwrap();
+    assert_eq!(first.committed.await.unwrap().unwrap(), 5);
+    assert_eq!(second.committed.await.unwrap().unwrap(), 6);
+    assert_eq!(committed.recv().await.unwrap().seq, 5);
+    assert_eq!(committed.recv().await.unwrap().seq, 6);
+    assert_eq!(
+        decode_batch(
+            &store
+                .get(&stream().batch_key(5))
+                .await
+                .unwrap()
+                .unwrap()
+                .bytes
+        )
+        .unwrap()
+        .records[0]
+            .bytes,
+        "first replacement"
+    );
+    assert_eq!(
+        decode_batch(
+            &store
+                .get(&stream().batch_key(6))
+                .await
+                .unwrap()
+                .unwrap()
+                .bytes
+        )
+        .unwrap()
+        .records[0]
+            .bytes,
+        "second replacement"
+    );
     drop(pipeline);
     let recovered_again = recover_stream(
         store.as_ref(),
@@ -381,15 +424,82 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
     )
     .await
     .unwrap();
-    assert_eq!(recovered_again.void_sequences, vec![3]);
+    assert_eq!(recovered_again.void_sequences, vec![3, 4]);
     assert_eq!(
         recovered_again
             .batches_to_apply
             .iter()
             .map(|batch| batch.header.seq)
             .collect::<Vec<_>>(),
-        vec![1, 2, 4]
+        vec![1, 2, 5, 6]
     );
+}
+
+#[tokio::test]
+async fn racing_older_writer_restarts_pipeline_without_resequencing() {
+    let store = Arc::new(MemoryStore::default());
+    store
+        .insert(stream().batch_key(1), batch(1, 1, b"old committed"))
+        .await;
+    let recovered = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 2, "new")
+        .await
+        .unwrap();
+    assert_eq!(recovered.next_seq, 3);
+    store
+        .inject_race(stream().batch_key(3), batch(1, 3, b"racing old writer"))
+        .await;
+    let release = store.block_seq(3).await;
+    let config = CommitPipelineConfig {
+        max_in_flight: 1,
+        max_batch_records: 1,
+        ..Default::default()
+    };
+    let (pipeline, mut committed) = CommitPipeline::start(
+        store.clone(),
+        Arc::new(FixedClock),
+        stream(),
+        2,
+        recovered.next_seq,
+        config,
+    )
+    .unwrap();
+    let first = pipeline
+        .propose(2, Bytes::from_static(b"first"), true)
+        .await
+        .unwrap();
+    let second = pipeline
+        .propose(2, Bytes::from_static(b"second"), true)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while store.put_count.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.notify_one();
+    assert_eq!(
+        first.committed.await.unwrap(),
+        Err(ProposalFailure::Restart)
+    );
+    assert_eq!(
+        second.committed.await.unwrap(),
+        Err(ProposalFailure::Restart)
+    );
+    assert!(committed.recv().await.is_none());
+    assert!(store.get(&stream().batch_key(4)).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn empty_store_starts_at_manifest_segment_sequence() {
+    let store = MemoryStore::default();
+    let recovered = recover_stream_from(&store, &FixedClock, &stream(), 42, 0, 1, "first-writer")
+        .await
+        .unwrap();
+    assert_eq!(recovered.epoch_start_seq, 42);
+    assert_eq!(recovered.next_seq, 43);
+    assert!(store.get(&stream().batch_key(1)).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -426,10 +536,14 @@ async fn recovery_handles_all_precondition_outcomes() {
     .unwrap();
     same.inject_race(stream().batch_key(1), own_epoch_start)
         .await;
+    same.insert(stream().batch_key(2), batch(1, 2, b"old tail"))
+        .await;
     let recovered = recover_stream(&same, &FixedClock, &stream(), 0, 0, 2, "new")
         .await
         .unwrap();
     assert_eq!(recovered.epoch_start_seq, 1);
+    assert_eq!(recovered.void_sequences, vec![2]);
+    assert_eq!(recovered.next_seq, 3);
 
     let fenced = MemoryStore::default();
     fenced
@@ -437,6 +551,24 @@ async fn recovery_handles_all_precondition_outcomes() {
         .await;
     assert!(matches!(
         recover_stream(&fenced, &FixedClock, &stream(), 0, 0, 2, "new").await,
+        Err(LogError::Fenced)
+    ));
+
+    let fenced_after_barrier = MemoryStore::default();
+    fenced_after_barrier
+        .insert(stream().batch_key(2), batch(2, 2, b"competing writer"))
+        .await;
+    assert!(matches!(
+        recover_stream(
+            &fenced_after_barrier,
+            &FixedClock,
+            &stream(),
+            0,
+            0,
+            2,
+            "new"
+        )
+        .await,
         Err(LogError::Fenced)
     ));
 }
