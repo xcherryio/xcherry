@@ -267,3 +267,120 @@ async fn overwritten_hard_delete_objects_are_deleted_then_acknowledged() {
     assert_eq!(current.object.expect("object").object_id, second);
     harness.shutdown().await;
 }
+
+/// Fails the first `remaining` hard-delete object writes before they take effect.
+struct FailHardDeletePuts {
+    remaining: std::sync::atomic::AtomicUsize,
+}
+
+impl dexzd_object_store::FaultInjector for FailHardDeletePuts {
+    fn action(
+        &self,
+        operation: dexzd_object_store::ObjectStoreOperation,
+        key: &str,
+    ) -> dexzd_object_store::FaultAction {
+        let is_hard_delete_put = operation == dexzd_object_store::ObjectStoreOperation::Put
+            && key.starts_with("hard-delete/");
+        if is_hard_delete_put
+            && self
+                .remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |remaining| remaining.checked_sub(1),
+                )
+                .is_ok()
+        {
+            return dexzd_object_store::FaultAction::FailBeforeEffect;
+        }
+        dexzd_object_store::FaultAction::Proceed
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn transient_upload_failures_are_retried_and_the_result_still_commits() {
+    let mut durable = super::DurableState::new();
+    durable.objects = std::sync::Arc::new(dexzd_object_store::InMemoryObjectStore::with_injector(
+        std::sync::Arc::new(FailHardDeletePuts {
+            remaining: std::sync::atomic::AtomicUsize::new(2),
+        }),
+    ));
+    let harness = EffectHarness::with_config(durable, crate::effects::EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    let run_id = harness.start_flow(start_request("order-1"), settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse {
+        upsert_attributes: vec![hard_delete_write("secret", string_value("card-4242"))],
+        ..InvokeWaitForMethodResponse::default()
+    });
+    let execute = harness.dispatcher.next_dispatch().await;
+    assert!(matches!(
+        execute.method_request(),
+        MethodRequest::Execute(_)
+    ));
+    let completed = harness.runtime.commands_matching(is_method_completed);
+    assert_eq!(completed.len(), 1);
+    let Some(flow_command::Command::StepMethodCompleted(command)) = &completed[0].command.command
+    else {
+        panic!("expected a completion");
+    };
+    assert_eq!(
+        object_value(
+            &harness,
+            "order-1",
+            run_id,
+            &command.hard_delete_objects[0].object_id
+        )
+        .await,
+        Some(string_value("card-4242"))
+    );
+    assert_eq!(pending_upload_count(&harness), 0);
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn server_errors_before_dispatch_fail_the_attempt_so_it_retries() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    harness
+        .runtime
+        .busy_lock_keys
+        .lock()
+        .expect("lock")
+        .insert("secret".to_owned());
+    let mut request = start_request("order-1");
+    request.step_options = Some(dexzd_protocol::dex::StepOptions {
+        wait_for_lock_attribute_keys: vec!["secret".to_owned()],
+        ..dexzd_protocol::dex::StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    let object_id = set_hard_delete_attribute(&harness, "order-1", run_id, "secret", "v1").await;
+    let owner = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    harness
+        .durable
+        .objects
+        .put(
+            &owner.object_key(&object_id),
+            bytes::Bytes::from_static(&[0xff, 0xff, 0xff]),
+            dexzd_object_store::WriteCondition::Unconditional,
+        )
+        .await
+        .expect("corrupt the object");
+    harness.runtime.busy_lock_keys.lock().expect("lock").clear();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    harness.settle().await;
+    let failures = harness.runtime.commands_matching(super::is_attempt_failed);
+    let Some(flow_command::Command::StepAttemptFailed(failure)) = &failures[0].command.command
+    else {
+        panic!("expected a failure");
+    };
+    assert_eq!(
+        failure.kind,
+        dexzd_protocol::dexzd::v1::StepAttemptFailureKind::DispatchError as i32
+    );
+    assert!(failure.server_detail.contains("server error"));
+    assert!(!failure.is_non_retryable);
+    harness.shutdown().await;
+}

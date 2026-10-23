@@ -550,3 +550,63 @@ async fn speculative_and_committed_copies_of_a_start_dispatch_once() {
     assert_eq!(harness.dispatcher.dispatch_count.load(Ordering::SeqCst), 2);
     harness.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn unsupported_failure_policies_in_decisions_fail_without_retry() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(StepOptions {
+        skip_wait_for: true,
+        ..StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    let execute = harness.dispatcher.next_dispatch().await;
+    execute.complete_execute(InvokeExecuteMethodResponse {
+        step_decision: Some(StepDecision {
+            next_steps: vec![dexzd_protocol::dex::StepMovement {
+                step_type: "ShipStep".to_owned(),
+                step_options: Some(StepOptions {
+                    execute_failure_policy:
+                        dexzd_protocol::dex::ExecuteMethodFailurePolicy::ProceedToConfiguredStep
+                            as i32,
+                    execute_failure_proceed_step_type: "RecoverStep".to_owned(),
+                    ..StepOptions::default()
+                }),
+                ..dexzd_protocol::dex::StepMovement::default()
+            }],
+            ..StepDecision::default()
+        }),
+        ..InvokeExecuteMethodResponse::default()
+    });
+    harness.settle().await;
+    let failures = failures(&harness);
+    assert_eq!(
+        failures[0].0,
+        StepAttemptFailureKind::UnsupportedFeature as i32
+    );
+    assert!(failures[0].1, "C21 failures are not retried");
+    assert_eq!(
+        harness.run_record("order-1", run_id).status,
+        FlowStatus::Failed as i32
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn async_methods_propose_with_batched_urgency() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(StepOptions {
+        wait_for_durability_override: dexzd_protocol::dex::StepDurability::Async as i32,
+        ..StepOptions::default()
+    });
+    harness.start_flow(request, settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse::default());
+    harness.dispatcher.next_dispatch().await;
+    let completed = harness.runtime.commands_matching(is_method_completed);
+    assert_eq!(completed[0].urgency, CommitUrgency::Batched);
+    harness.shutdown().await;
+}

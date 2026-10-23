@@ -10,7 +10,7 @@
 //! fires due timers in time order merged per run into `TimersFired`, and never fires a timer
 //! before the owner's wall clock reaches its fire time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -72,8 +72,9 @@ struct PartitionTimerService {
     context: Arc<EffectContext>,
     partition: PartitionId,
     wake: Arc<Notify>,
-    /// Index keys of fired timers still in the index, and when to try them again.
-    retry_after: BTreeMap<Vec<u8>, Instant>,
+    /// Index keys of fired timers still in the index: when to try again, and the delay that
+    /// doubles on each try.
+    retry_after: BTreeMap<Vec<u8>, (Instant, Duration)>,
 }
 
 impl PartitionTimerService {
@@ -116,15 +117,19 @@ impl PartitionTimerService {
         let horizon_micros = now_micros.saturating_add(lookahead_micros);
         let entries = self.load_timers(horizon_micros)?;
         let now = Instant::now();
-        self.retry_after.retain(|key, retry_at| {
-            *retry_at > now && entries.iter().any(|(entry_key, _)| entry_key == key)
-        });
+        let loaded_keys: BTreeSet<&Vec<u8>> = entries.iter().map(|(key, _)| key).collect();
+        self.retry_after.retain(|key, _| loaded_keys.contains(key));
+        let is_waiting = |retry_after: &BTreeMap<Vec<u8>, (Instant, Duration)>, key: &Vec<u8>| {
+            retry_after
+                .get(key)
+                .is_some_and(|(retry_at, _)| *retry_at > now)
+        };
 
         let mut runs: Vec<(RunLocation, Vec<TimerId>)> = Vec::new();
         let mut run_positions: BTreeMap<RunLocation, usize> = BTreeMap::new();
         let mut next_fire_micros = None;
         for (key, entry) in &entries {
-            if self.retry_after.contains_key(key) {
+            if is_waiting(&self.retry_after, key) {
                 continue;
             }
             if entry.fire_at_micros > now_micros {
@@ -141,7 +146,7 @@ impl PartitionTimerService {
             let fired_keys: Vec<Vec<u8>> = entries
                 .iter()
                 .filter(|(key, entry)| {
-                    entry.fire_at_micros <= now_micros && !self.retry_after.contains_key(key)
+                    entry.fire_at_micros <= now_micros && !is_waiting(&self.retry_after, key)
                 })
                 .map(|(key, _)| key.clone())
                 .collect();
@@ -151,9 +156,15 @@ impl PartitionTimerService {
             for result in futures::future::join_all(proposals).await {
                 result?;
             }
-            let retry_at = Instant::now() + self.context.config.fired_timer_retry_delay;
+            let fired_at = Instant::now();
             for key in fired_keys {
-                self.retry_after.insert(key, retry_at);
+                let delay = self
+                    .retry_after
+                    .get(&key)
+                    .map_or(self.context.config.fired_timer_retry_delay, |(_, delay)| {
+                        (*delay * 2).min(self.context.config.timer_lookahead)
+                    });
+                self.retry_after.insert(key, (fired_at + delay, delay));
             }
             return Ok(None);
         }
@@ -162,8 +173,14 @@ impl PartitionTimerService {
             .saturating_sub(now_micros)
             .max(0);
         let mut wake_at = now + Duration::from_micros(u64::try_from(fire_wait_micros).unwrap_or(0));
-        if let Some(retry_at) = self.retry_after.values().min() {
-            wake_at = wake_at.min(*retry_at);
+        if let Some(retry_at) = self
+            .retry_after
+            .values()
+            .map(|(retry_at, _)| *retry_at)
+            .filter(|retry_at| *retry_at > now)
+            .min()
+        {
+            wake_at = wake_at.min(retry_at);
         }
         Ok(Some(wake_at))
     }
