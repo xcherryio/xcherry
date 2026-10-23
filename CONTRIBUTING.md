@@ -21,6 +21,7 @@
 | [sdk-typescript/](sdk-typescript/) | TypeScript SDK |
 | [examples/typescript/](examples/typescript/) | TypeScript examples |
 | [examples/playground/](examples/playground/) | Shared examples playground |
+| [s3mock/](s3mock/) | S3-compatible object store on local disk for development and tests |
 
 Go SDK + samples use root [`go.work`](go.work). `blob-cache-go` remains outside the workspace so consumers resolve released versions. Build the server separately (`cd server && go build ./...`) to avoid a Cadence/Temporal `genproto` workspace conflict.
 
@@ -68,6 +69,16 @@ make -C sdk-go e2eTests  # starts an isolated dexcli dev environment
 ```bash
 make -C blob-cache-go tests
 ```
+
+### s3mock
+
+```bash
+make -C s3mock test  # unit tests and the conformance suite against an in-process s3mock
+make -C s3mock run ARGS="--data-directory /tmp/s3mock-data"
+```
+
+`S3MOCK_CONFORMANCE_TARGET=aws make -C s3mock test` runs the same conformance suite against real S3
+with the default AWS credential chain.
 
 ### Dex CLI and Web
 

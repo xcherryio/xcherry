@@ -1,0 +1,31 @@
+[package]
+name = "s3mock"
+description = "Local-disk object store with S3 semantics for Dex development"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+crc32c.workspace = true
+crc32fast.workspace = true
+crc64fast-nvme.workspace = true
+hex.workspace = true
+md-5.workspace = true
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

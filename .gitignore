@@ -53,6 +53,7 @@ dist/
 sdk-rust/target/
 sdk-rust/coverage/
 examples/rust/target/
+s3mock/target/
 
 # TypeScript
 sdk-typescript/node_modules/

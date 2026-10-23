@@ -63,6 +63,9 @@ jobs:
             examples_rust:
               - 'examples/rust/**'
               - '.github/workflows/examples-rust-ci.yml'
+            s3mock:
+              - 's3mock/**'
+              - '.github/workflows/s3mock-ci.yml'
             examples_typescript:
               - 'examples/typescript/**'
               - '.github/workflows/examples-typescript-ci.yml'
@@ -95,6 +98,7 @@ jobs:
               - 'sdk-java/**'
               - 'sdk-python/**'
               - 'sdk-rust/**'
+              - 's3mock/**'
               - 'web/**'
               - 'examples/go/**'
               - 'examples/java/**'
@@ -124,6 +128,7 @@ jobs:
           FILTER_EXAMPLES_JAVA: ${{ steps.filter.outputs.examples_java }}
           FILTER_EXAMPLES_PYTHON: ${{ steps.filter.outputs.examples_python }}
           FILTER_EXAMPLES_RUST: ${{ steps.filter.outputs.examples_rust }}
+          FILTER_S3MOCK: ${{ steps.filter.outputs.s3mock }}
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
@@ -150,6 +155,7 @@ jobs:
               "Python SDK CI"
               "Rust SDK CI"
               "TypeScript SDK CI"
+              "S3mock CI"
               "Server CI"
               "Server All-in-One CI"
               "Web CI"
@@ -165,6 +171,7 @@ jobs:
             [[ "$FILTER_EXAMPLES_JAVA" == "true" ]] && expected+=("Java examples CI")
             [[ "$FILTER_EXAMPLES_PYTHON" == "true" ]] && expected+=("Python examples CI")
             [[ "$FILTER_EXAMPLES_RUST" == "true" ]] && expected+=("Rust examples CI")
+            [[ "$FILTER_S3MOCK" == "true" ]] && expected+=("S3mock CI")
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")
