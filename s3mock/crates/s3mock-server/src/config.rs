@@ -33,6 +33,15 @@ pub struct ServerConfig {
     /// crash-recovery tests.
     #[arg(long, env = "S3MOCK_DURABILITY", value_enum, default_value_t = DurabilityFlag::Strict)]
     pub durability: DurabilityFlag,
+    /// Seconds between lifecycle passes. Default `60`; `0` disables the background pass. Each pass
+    /// removes everything due at the lifecycle clock, so expiration happens within one interval of
+    /// its due time rather than on S3's daily schedule.
+    #[arg(
+        long,
+        env = "S3MOCK_LIFECYCLE_SCAN_INTERVAL_SECONDS",
+        default_value_t = 60
+    )]
+    pub lifecycle_scan_interval_seconds: u64,
 }
 
 /// Command-line spelling of [`Durability`].

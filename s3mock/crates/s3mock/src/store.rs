@@ -9,6 +9,7 @@
 //! The object store: redb metadata plus one self-describing data file per object version.
 
 mod bucket;
+mod lifecycle;
 mod maintenance;
 mod multipart;
 mod multipart_complete;
@@ -21,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicI64;
 
 use redb::{Database, ReadableTable, Table, TableDefinition, WriteTransaction};
 use serde::Serialize;
@@ -31,6 +33,7 @@ use crate::error::StoreError;
 use crate::key_codec::{encode_object_key, prefix_successor};
 use crate::record::{BucketRecord, VersionRecord};
 
+pub use lifecycle::LifecycleRun;
 pub use maintenance::OrphanCollection;
 pub use multipart::{
     CompletedPart, CreateMultipartUploadRequest, ListMultipartUploadsRequest, ListPartsRequest,
@@ -95,6 +98,8 @@ pub struct Store {
     version_generator: Mutex<ulid::Generator>,
     /// Every later ULID is at least this old because the generator is monotonic, even if the clock steps back.
     opened_at_unix_ms: u64,
+    /// Added to wall-clock time for lifecycle decisions only.
+    lifecycle_clock_offset_ms: AtomicI64,
 }
 
 impl Store {
@@ -122,6 +127,7 @@ impl Store {
             durability: config.durability,
             version_generator: Mutex::new(version_generator),
             opened_at_unix_ms: opened_at.timestamp_ms(),
+            lifecycle_clock_offset_ms: AtomicI64::new(0),
         };
         store.create_tables()?;
         store.remove_temporary_files()?;

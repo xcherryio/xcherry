@@ -8,6 +8,8 @@
 
 //! S3 XML documents: a small escaping writer, request-body parsing, and S3 timestamps.
 
+use std::collections::BTreeMap;
+
 use quick_xml::events::Event;
 
 use crate::s3_error::S3Error;
@@ -96,6 +98,23 @@ impl XmlElement {
     /// Returns the untrimmed text of the first direct child named `name`.
     pub(crate) fn child_text(&self, name: &str) -> Option<&str> {
         self.child(name).map(|child| child.text.as_str())
+    }
+
+    /// Maps every descendant leaf element name to its text; a later duplicate name wins.
+    pub(crate) fn leaf_texts(&self) -> BTreeMap<String, String> {
+        let mut leaves = BTreeMap::new();
+        self.collect_leaf_texts(&mut leaves);
+        leaves
+    }
+
+    fn collect_leaf_texts(&self, leaves: &mut BTreeMap<String, String>) {
+        for child in &self.children {
+            if child.children.is_empty() {
+                leaves.insert(child.name.clone(), child.text.clone());
+            } else {
+                child.collect_leaf_texts(leaves);
+            }
+        }
     }
 }
 

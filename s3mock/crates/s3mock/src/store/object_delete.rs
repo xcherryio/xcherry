@@ -39,6 +39,20 @@ impl Store {
         key: &str,
         request: &DeleteObjectRequest,
     ) -> Result<DeleteObjectOutcome, StoreError> {
+        Ok(self
+            .delete_object_if_unchanged(bucket, key, request, None)?
+            .expect("an unguarded delete always applies"))
+    }
+
+    /// Deletes like [`Store::delete_object`] only while the addressed version, or the current
+    /// version when none is addressed, still has `expected_internal_version`; otherwise returns `None`.
+    pub(super) fn delete_object_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        request: &DeleteObjectRequest,
+        expected_internal_version: Option<&str>,
+    ) -> Result<Option<DeleteObjectOutcome>, StoreError> {
         validate_object_key(key)?;
         let addressed_version = request
             .version_id
@@ -52,6 +66,27 @@ impl Store {
             let mut latest = transaction.open_table(LATEST)?;
             let mut versions = transaction.open_table(VERSIONS)?;
             let stored_versions = load_versions(&versions, bucket, key)?;
+            if let Some(expected) = expected_internal_version {
+                let guarded = match addressed_version {
+                    Some(internal_version) => {
+                        stored_versions
+                            .iter()
+                            .find(|stored| match internal_version {
+                                None => stored.record.is_null_version,
+                                Some(ulid) => {
+                                    !stored.record.is_null_version
+                                        && stored.record.internal_version == ulid.to_string()
+                                }
+                            })
+                    }
+                    None => stored_versions
+                        .first()
+                        .filter(|stored| !stored.record.is_delete_marker),
+                };
+                if guarded.is_none_or(|stored| stored.record.internal_version != expected) {
+                    return Ok(None);
+                }
+            }
             let outcome = match (&request.version_id, addressed_version) {
                 (Some(version_id), Some(internal_version)) => {
                     let removed = find_version(stored_versions, internal_version);
@@ -105,7 +140,7 @@ impl Store {
         };
         transaction.commit()?;
         remove_superseded_files(&superseded_files);
-        Ok(outcome)
+        Ok(Some(outcome))
     }
 
     fn new_delete_marker(&self, is_null_version: bool) -> VersionRecord {

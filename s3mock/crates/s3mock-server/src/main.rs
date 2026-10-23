@@ -9,6 +9,7 @@
 //! S3-compatible HTTP server that serves an s3mock store over path-style URLs.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use s3mock::{Store, StoreConfig};
@@ -36,10 +37,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         durability = ?config.durability,
         "s3mock is serving"
     );
+    let lifecycle_scanner = (config.lifecycle_scan_interval_seconds > 0).then(|| {
+        tokio::spawn(scan_lifecycle(
+            Arc::clone(&store),
+            Duration::from_secs(config.lifecycle_scan_interval_seconds),
+        ))
+    });
     let orphan_collection = tokio::task::spawn_blocking(move || store.collect_orphan_data_files());
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");
     server.shutdown().await;
+    if let Some(scanner) = lifecycle_scanner {
+        scanner.abort();
+    }
     match orphan_collection.await? {
         Ok(collection) => tracing::info!(
             examined_files = collection.examined_files,
@@ -49,4 +59,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => tracing::warn!(%error, "orphan data file collection failed"),
     }
     Ok(())
+}
+
+/// Applies lifecycle rules every `interval` until the task is aborted at shutdown.
+async fn scan_lifecycle(store: Arc<Store>, interval: Duration) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let store = Arc::clone(&store);
+        match tokio::task::spawn_blocking(move || store.run_lifecycle()).await {
+            Ok(Ok(run)) => tracing::debug!(
+                expired_current_versions = run.expired_current_versions,
+                removed_delete_markers = run.removed_delete_markers,
+                expired_noncurrent_versions = run.expired_noncurrent_versions,
+                aborted_uploads = run.aborted_uploads,
+                "lifecycle pass finished"
+            ),
+            Ok(Err(error)) => tracing::warn!(%error, "lifecycle pass failed"),
+            Err(error) => tracing::error!(%error, "lifecycle pass panicked"),
+        }
+    }
 }
