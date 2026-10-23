@@ -1145,6 +1145,8 @@ dependencies = [
 name = "dexzd-storage"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "dexzd-apply",
  "dexzd-keyspace",
  "dexzd-object-store",
@@ -1156,6 +1158,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
