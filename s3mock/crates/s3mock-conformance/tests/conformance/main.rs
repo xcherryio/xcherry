@@ -10,8 +10,11 @@
 
 mod buckets;
 mod conditions;
+mod delete_objects;
 mod durability;
 mod listing;
+mod multipart;
+mod object_lock;
 mod objects;
 mod support;
 mod versioning;

@@ -40,7 +40,13 @@ impl ConformanceTarget {
             Ok("aws") => {
                 let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
                 ConformanceTarget {
-                    client: Client::new(&config),
+                    client: Client::from_conf(
+                        aws_sdk_s3::Config::from(&config)
+                            .to_builder()
+                            .region(Region::new(REGION))
+                            .force_path_style(true)
+                            .build(),
+                    ),
                     s3mock: None,
                     created_buckets: Vec::new(),
                 }
@@ -74,6 +80,13 @@ impl ConformanceTarget {
 
     /// Creates a bucket with a unique name that [`ConformanceTarget::cleanup`] deletes.
     pub(crate) async fn create_bucket(&mut self) -> String {
+        self.create_bucket_with_object_lock(false).await
+    }
+
+    pub(crate) async fn create_bucket_with_object_lock(
+        &mut self,
+        is_object_lock_enabled: bool,
+    ) -> String {
         let bucket = format!(
             "s3mock-conformance-{}",
             ulid::Ulid::new().to_string().to_ascii_lowercase()
@@ -81,6 +94,7 @@ impl ConformanceTarget {
         self.client
             .create_bucket()
             .bucket(&bucket)
+            .set_object_lock_enabled_for_bucket(is_object_lock_enabled.then_some(true))
             .send()
             .await
             .expect("creating a uniquely named bucket succeeds");
