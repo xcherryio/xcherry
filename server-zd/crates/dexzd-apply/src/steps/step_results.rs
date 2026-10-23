@@ -25,7 +25,7 @@ use crate::command_handlers::run_cursor::RunCursor;
 use crate::projections::history_events;
 use crate::state_access::FlowTransaction;
 use crate::steps::attempt_snapshot::compute_attempt_snapshot;
-use crate::steps::invocations::can_take_locks;
+use crate::steps::invocations::{can_take_locks, release_heartbeat_checkpoint};
 use crate::steps::{
     InvocationEnd, RetryDecision, apply_step_decision, decide_retry, end_running_attempt,
     make_invocation_pending, start_attempt, wait_conditions,
@@ -242,6 +242,12 @@ pub(crate) fn apply_attempt_failed(
         RetryDecision::Exhausted => {
             if let Some(invocation) = step.invocation.as_mut() {
                 invocation.last_failure = Some(failure.clone());
+                release_heartbeat_checkpoint(
+                    transaction,
+                    cursor,
+                    &step.step_execution_id,
+                    invocation,
+                )?;
             }
             history_events::record_method_failed(transaction, cursor, &step, method, &failure)?;
             step.phase = StepExecutionPhase::Failed as i32;
