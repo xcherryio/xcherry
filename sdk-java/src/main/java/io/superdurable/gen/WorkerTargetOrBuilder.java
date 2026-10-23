@@ -13,6 +13,7 @@ public interface WorkerTargetOrBuilder extends
   /**
    * <pre>
    * Plaintext gRPC dial target, not an HTTP URL.
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
    * </pre>
    *
    * <code>string address = 1;</code>
@@ -22,6 +23,7 @@ public interface WorkerTargetOrBuilder extends
   /**
    * <pre>
    * Plaintext gRPC dial target, not an HTTP URL.
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
    * </pre>
    *
    * <code>string address = 1;</code>
@@ -31,6 +33,10 @@ public interface WorkerTargetOrBuilder extends
       getAddressBytes();
 
   /**
+   * <pre>
+   * server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
+   * </pre>
+   *
    * <code>bool is_headless_address = 2;</code>
    * @return The isHeadlessAddress.
    */

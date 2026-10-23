@@ -19,7 +19,7 @@ use dex_sdk::{
 };
 
 use crate::basic_workflow::BasicWorkflow;
-use crate::support::{DexDevTestEnvironment, flow_id};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 
 const GET_WORKER: Rpc<(), String> = Rpc::new("get_worker");
 
@@ -415,6 +415,9 @@ fn run_probe(client: &Client) -> String {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn pull_worker_test_end_to_end() {
+    if skip_if_server_zd("push Workers") {
+        return;
+    }
     let server_address =
         std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
     let cache_directory = tempfile::tempdir().expect("create pull cache directory");

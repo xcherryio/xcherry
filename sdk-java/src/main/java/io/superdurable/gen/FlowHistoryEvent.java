@@ -148,6 +148,21 @@ private static final long serialVersionUID = 0L;
     return eventTime_ == null ? com.google.protobuf.Timestamp.getDefaultInstance() : eventTime_;
   }
 
+  public static final int RUN_ATTEMPT_FIELD_NUMBER = 3;
+  private int runAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: the run attempt that recorded this event.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 3;</code>
+   * @return The runAttempt.
+   */
+  @java.lang.Override
+  public int getRunAttempt() {
+    return runAttempt_;
+  }
+
   public static final int FLOW_STARTED_OR_CONTINUED_FIELD_NUMBER = 20;
   /**
    * <code>.dex.FlowStartedOrContinuedHistoryEvent flow_started_or_continued = 20;</code>
@@ -540,6 +555,9 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000001) != 0)) {
       output.writeMessage(2, getEventTime());
     }
+    if (runAttempt_ != 0) {
+      output.writeInt32(3, runAttempt_);
+    }
     if (payloadCase_ == 20) {
       output.writeMessage(20, (io.superdurable.gen.FlowStartedOrContinuedHistoryEvent) payload_);
     }
@@ -587,6 +605,10 @@ private static final long serialVersionUID = 0L;
     if (((bitField0_ & 0x00000001) != 0)) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(2, getEventTime());
+    }
+    if (runAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(3, runAttempt_);
     }
     if (payloadCase_ == 20) {
       size += com.google.protobuf.CodedOutputStream
@@ -667,6 +689,8 @@ private static final long serialVersionUID = 0L;
       if (!getEventTime()
           .equals(other.getEventTime())) return false;
     }
+    if (getRunAttempt()
+        != other.getRunAttempt()) return false;
     if (!getPayloadCase().equals(other.getPayloadCase())) return false;
     switch (payloadCase_) {
       case 20:
@@ -738,6 +762,8 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + EVENT_TIME_FIELD_NUMBER;
       hash = (53 * hash) + getEventTime().hashCode();
     }
+    hash = (37 * hash) + RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getRunAttempt();
     switch (payloadCase_) {
       case 20:
         hash = (37 * hash) + FLOW_STARTED_OR_CONTINUED_FIELD_NUMBER;
@@ -933,6 +959,7 @@ private static final long serialVersionUID = 0L;
         eventTimeBuilder_.dispose();
         eventTimeBuilder_ = null;
       }
+      runAttempt_ = 0;
       if (flowStartedOrContinuedBuilder_ != null) {
         flowStartedOrContinuedBuilder_.clear();
       }
@@ -1015,6 +1042,9 @@ private static final long serialVersionUID = 0L;
             : eventTimeBuilder_.build();
         to_bitField0_ |= 0x00000001;
       }
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.runAttempt_ = runAttempt_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1088,6 +1118,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.hasEventTime()) {
         mergeEventTime(other.getEventTime());
+      }
+      if (other.getRunAttempt() != 0) {
+        setRunAttempt(other.getRunAttempt());
       }
       switch (other.getPayloadCase()) {
         case FLOW_STARTED_OR_CONTINUED: {
@@ -1180,6 +1213,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 18
+            case 24: {
+              runAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 24
             case 162: {
               input.readMessage(
                   internalGetFlowStartedOrContinuedFieldBuilder().getBuilder(),
@@ -1447,6 +1485,50 @@ private static final long serialVersionUID = 0L;
         eventTime_ = null;
       }
       return eventTimeBuilder_;
+    }
+
+    private int runAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: the run attempt that recorded this event.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 3;</code>
+     * @return The runAttempt.
+     */
+    @java.lang.Override
+    public int getRunAttempt() {
+      return runAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that recorded this event.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 3;</code>
+     * @param value The runAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRunAttempt(int value) {
+
+      runAttempt_ = value;
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: the run attempt that recorded this event.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 3;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      runAttempt_ = 0;
+      onChanged();
+      return this;
     }
 
     private com.google.protobuf.SingleFieldBuilder<
