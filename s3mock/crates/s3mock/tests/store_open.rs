@@ -21,6 +21,7 @@ fn strict_store_opens_at_relative_and_nested_roots() {
         let store = Store::open(&StoreConfig {
             root_directory: PathBuf::from(root),
             durability: Durability::Strict,
+            etag_mode: s3mock::EtagMode::Md5,
         })
         .unwrap();
         store.create_bucket("opened", false).unwrap();

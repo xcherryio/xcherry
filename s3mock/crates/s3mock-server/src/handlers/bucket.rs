@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use http::{HeaderMap, Response, StatusCode};
 use http_body_util::{BodyExt, Limited};
-use hyper::body::Incoming;
 use s3mock::{DefaultRetention, ObjectLockConfiguration, RetentionMode, Store, VersioningState};
 
 use super::OWNER_ID;
@@ -102,7 +101,7 @@ pub(crate) async fn get_bucket_versioning(
 pub(crate) async fn put_bucket_versioning(
     store: Arc<Store>,
     bucket: String,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     let body = Limited::new(body, MAX_CONFIGURATION_BYTES)
         .collect()
@@ -161,7 +160,7 @@ pub(crate) async fn put_object_lock_configuration(
     store: Arc<Store>,
     bucket: String,
     headers: &HeaderMap,
-    body: Incoming,
+    body: crate::server::RequestBody,
 ) -> Result<S3Response, S3Error> {
     let body = read_small_body(body, headers, MAX_CONFIGURATION_BYTES).await?;
     body.verify_integrity(headers, false)?;

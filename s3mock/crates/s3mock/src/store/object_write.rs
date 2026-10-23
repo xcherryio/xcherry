@@ -190,7 +190,7 @@ impl Store {
         let transaction = self.begin_write()?;
         let mut superseded_files = Vec::new();
         let mut upload_directory = None;
-        let (versioning, internal_version) = {
+        let (versioning, internal_version, etag) = {
             let buckets = transaction.open_table(BUCKETS)?;
             let bucket_record = require_bucket(&buckets, bucket)?;
             if bucket_record.incarnation != published.bucket_incarnation {
@@ -214,6 +214,9 @@ impl Store {
             let internal_version = self.next_internal_version();
             let mut record = published.record.clone();
             record.internal_version = internal_version.to_string();
+            if self.etag_mode == super::EtagMode::Opaque {
+                record.etag = format!("opaque-{}", Ulid::new());
+            }
             record.last_modified_unix_ms = unix_ms(internal_version);
             // Versioning may change while the body streams; metadata follows the state at commit.
             record.is_null_version = bucket_record.versioning != VersioningState::Enabled;
@@ -229,7 +232,7 @@ impl Store {
             let version_key = encode_version_key(bucket, key, internal_version);
             versions.insert(version_key.as_slice(), encode_json(&record)?.as_slice())?;
             refresh_latest(&mut latest, &versions, bucket, key)?;
-            (bucket_record.versioning, internal_version)
+            (bucket_record.versioning, internal_version, record.etag)
         };
         transaction.commit()?;
         remove_superseded_files(&superseded_files);
@@ -237,7 +240,7 @@ impl Store {
             remove_upload_directory(&directory);
         }
         Ok(PutObjectOutcome {
-            etag: published.record.etag.clone(),
+            etag,
             version_id: version_id_for(versioning, internal_version),
             checksum: published
                 .record

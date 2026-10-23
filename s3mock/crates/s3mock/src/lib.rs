@@ -24,7 +24,7 @@ pub use record::{
 };
 pub use store::{
     ByteRangeRequest, CompleteMultipartUploadRequest, CompletedPart, CreateMultipartUploadRequest,
-    DeleteObjectOutcome, DeleteObjectRequest, Durability, ListMultipartUploadsRequest,
+    DeleteObjectOutcome, DeleteObjectRequest, Durability, EtagMode, ListMultipartUploadsRequest,
     ListObjectVersionsPage, ListObjectVersionsRequest, ListObjectsPage, ListObjectsRequest,
     ListPartsRequest, ListedObject, ListedVersion, MAX_KEYS_LIMIT, MAX_PART_NUMBER,
     MultipartUploadsPage, ObjectBody, ObjectReadRequest, ObjectSelection, OrphanCollection,

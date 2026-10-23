@@ -24,6 +24,7 @@ async fn start_with_bucket() -> RunningServer {
     let store = Store::open(&StoreConfig {
         root_directory: directory.path().to_path_buf(),
         durability: Durability::Relaxed,
+        etag_mode: s3mock::EtagMode::Md5,
     })
     .expect("the raw HTTP test harness I/O succeeds");
     store

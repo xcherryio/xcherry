@@ -8,11 +8,12 @@
 
 //! Connection handling, request dispatch, and common response headers.
 
-use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::time::Instant;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -29,6 +30,8 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::config::ServerConfig;
+use crate::controls::{Controls, FaultAction, ObservedBody, RequestObservation};
 use crate::handlers;
 use crate::routing::{self, S3Operation};
 use crate::s3_error::S3Error;
@@ -37,6 +40,7 @@ use crate::xml::XmlWriter;
 /// How long shutdown waits for in-flight requests before dropping their connections.
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
+pub(crate) type RequestBody = BoxBody<Bytes, io::Error>;
 pub(crate) type ResponseBody = BoxBody<Bytes, io::Error>;
 pub(crate) type S3Response = Response<ResponseBody>;
 
@@ -74,9 +78,24 @@ impl Drop for ServerHandle {
 
 /// Serves S3 requests from `listener` until [`ServerHandle::shutdown`] is called.
 pub fn start(store: Arc<Store>, listener: TcpListener) -> io::Result<ServerHandle> {
+    start_with_config(store, listener, ServerConfig::default())
+}
+
+/// Serves S3 and admin requests using explicit testing and authentication configuration.
+pub fn start_with_config(
+    store: Arc<Store>,
+    listener: TcpListener,
+    config: ServerConfig,
+) -> io::Result<ServerHandle> {
+    let controls = Arc::new(Controls::new(config));
     let local_address = listener.local_addr()?;
     let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-    let accept_task = tokio::spawn(accept_connections(store, listener, shutdown_receiver));
+    let accept_task = tokio::spawn(accept_connections(
+        store,
+        controls,
+        listener,
+        shutdown_receiver,
+    ));
     Ok(ServerHandle {
         local_address,
         shutdown_sender: Some(shutdown_sender),
@@ -86,6 +105,7 @@ pub fn start(store: Arc<Store>, listener: TcpListener) -> io::Result<ServerHandl
 
 async fn accept_connections(
     store: Arc<Store>,
+    controls: Arc<Controls>,
     listener: TcpListener,
     mut shutdown_receiver: oneshot::Receiver<()>,
 ) {
@@ -109,7 +129,8 @@ async fn accept_connections(
                     }
                 };
                 let store = Arc::clone(&store);
-                let service = service_fn(move |request| handle_request(Arc::clone(&store), request));
+                let controls = Arc::clone(&controls);
+                let service = service_fn(move |request| handle_request(Arc::clone(&store), Arc::clone(&controls), request));
                 let connection = graceful.watch(connection_builder.serve_connection(TokioIo::new(stream), service));
                 connections.spawn(async move {
                     if let Err(error) = connection.await {
@@ -130,12 +151,60 @@ async fn accept_connections(
 
 async fn handle_request(
     store: Arc<Store>,
+    controls: Arc<Controls>,
     request: Request<Incoming>,
-) -> Result<S3Response, Infallible> {
+) -> Result<S3Response, io::Error> {
+    let request = request.map(|body| body.map_err(io::Error::other).boxed());
+    if request.uri().path().starts_with("/_s3mock/") {
+        return Ok(controls.admin(store, request).await);
+    }
+    let started = Instant::now();
+    let mut observation =
+        RequestObservation::new(request.method(), request.uri(), request.headers());
     let request_id = ulid::Ulid::new().to_string();
     let is_head = request.method() == Method::HEAD;
-    tracing::debug!(%request_id, method = %request.method(), uri = %request.uri(), "handling request");
-    let mut response = match dispatch(store, request).await {
+    let received = Arc::new(AtomicU64::new(0));
+    let counter = Arc::clone(&received);
+    let request = request.map(|body| {
+        body.map_frame(move |frame| {
+            if let Some(data) = frame.data_ref() {
+                counter.fetch_add(data.len() as u64, Ordering::Relaxed);
+            }
+            frame
+        })
+        .boxed()
+    });
+    let verified = crate::signature::verify_request(request, &controls.config).await;
+    let fault = if verified.is_ok() {
+        controls.select_fault(&observation)
+    } else {
+        None
+    };
+    observation.injected_fault = fault.as_ref().map(|action| action.name().to_owned());
+    if let Some(FaultAction::Delay { milliseconds }) = fault {
+        tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+    }
+    let result = match verified {
+        Err(error) => Err(error),
+        Ok(request) => match fault.as_ref().and_then(FaultAction::error) {
+            Some(error) => Err(error),
+            None => dispatch(store, request).await,
+        },
+    };
+    if matches!(fault, Some(FaultAction::CommitThenDrop))
+        && result
+            .as_ref()
+            .is_ok_and(|response| response.status().is_success())
+    {
+        observation.bytes_received = received.load(Ordering::Relaxed);
+        observation.duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        controls.record(observation);
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "injected drop after commit",
+        ));
+    }
+    let mut response = match result {
         Ok(response) => response,
         Err(error) => render_error(error, &request_id, is_head),
     };
@@ -146,10 +215,21 @@ async fn handle_request(
         header_value(&BASE64.encode(request_id.as_bytes())),
     );
     headers.insert("server", HeaderValue::from_static("s3mock"));
-    Ok(response)
+    observation.status = response.status().as_u16();
+    let (parts, body) = response.into_parts();
+    let body = ObservedBody::new(
+        body,
+        controls,
+        observation,
+        received,
+        started,
+        fault.as_ref(),
+    )
+    .boxed();
+    Ok(Response::from_parts(parts, body))
 }
 
-async fn dispatch(store: Arc<Store>, request: Request<Incoming>) -> Result<S3Response, S3Error> {
+async fn dispatch(store: Arc<Store>, request: Request<RequestBody>) -> Result<S3Response, S3Error> {
     let operation = routing::route(request.method(), request.uri())?;
     let (parts, body) = request.into_parts();
     match operation {

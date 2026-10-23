@@ -17,6 +17,7 @@ fn open_versioned_store(directory: &tempfile::TempDir) -> Store {
     let store = Store::open(&StoreConfig {
         root_directory: directory.path().to_path_buf(),
         durability: Durability::Relaxed,
+        etag_mode: s3mock::EtagMode::Md5,
     })
     .expect("the store test setup succeeds");
     store

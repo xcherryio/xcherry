@@ -75,12 +75,22 @@ pub enum Durability {
     Relaxed,
 }
 
+/// ETag representation assigned when an object version commits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EtagMode {
+    #[default]
+    Md5,
+    Opaque,
+}
+
 /// Settings fixed when a store is opened.
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
     /// Directory holding `metadata.redb`, `data/`, and `tmp/`; created when missing.
     pub root_directory: PathBuf,
     pub durability: Durability,
+    /// Default `Md5`; `Opaque` assigns a stable identifier to each committed version.
+    pub etag_mode: EtagMode,
 }
 
 /// A local-disk object store with S3 semantics. Share it across threads with `Arc`.
@@ -91,6 +101,7 @@ pub struct Store {
     temporary_directory: PathBuf,
     database: Database,
     durability: Durability,
+    etag_mode: EtagMode,
     /// Monotonic so sequential writes to one key always order by request arrival.
     version_generator: Mutex<ulid::Generator>,
     /// Every later ULID is at least this old because the generator is monotonic, even if the clock steps back.
@@ -120,6 +131,7 @@ impl Store {
             temporary_directory,
             database,
             durability: config.durability,
+            etag_mode: config.etag_mode,
             version_generator: Mutex::new(version_generator),
             opened_at_unix_ms: opened_at.timestamp_ms(),
         };
