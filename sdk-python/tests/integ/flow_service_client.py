@@ -37,7 +37,8 @@ def skip_if_server_zd(feature: str) -> None:
 def _server_engine() -> int:
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
     with grpc.insecure_channel(server_address) as channel:
-        server_info = pb_grpc.FlowServiceStub(channel).GetServerInfo(Empty())
+        client = pb_grpc.FlowServiceStub(channel)  # type: ignore[no-untyped-call]
+        server_info = client.GetServerInfo(Empty())
     return int(server_info.server_engine)
 
 
