@@ -9,7 +9,7 @@
 //! Multipart uploads: creation, parts, abort, and listing. Completion lives in `multipart_complete`.
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -174,6 +174,9 @@ impl Store {
             last_modified_unix_ms: unix_ms(staged.upload_id),
             data_file: relative_path,
         };
+        if self.is_durable() {
+            File::open(staged.temporary_file.path())?.sync_all()?;
+        }
         staged.temporary_file.publish(&path)?;
         match self.insert_part(bucket, key, upload_ulid, &bucket_record, &record) {
             Ok(replaced) => {
@@ -247,6 +250,7 @@ impl Store {
             let upload = CompletedUpload {
                 upload_key: encode_upload_key(bucket, key, upload_ulid),
                 upload_id: upload_id.to_owned(),
+                assembled_parts: Vec::new(),
             };
             remove_upload(&mut uploads, &mut parts, &upload)?;
             self.upload_directory(&bucket_record, upload_id)
@@ -382,6 +386,18 @@ pub(super) fn remove_upload(
         return Err(StoreError::NoSuchUpload {
             upload_id: upload.upload_id.clone(),
         });
+    }
+    for (part_number, data_file) in &upload.assembled_parts {
+        let part_key = encode_part_key(&upload.upload_key, *part_number);
+        let current: Option<PartRecord> = match parts.get(part_key.as_slice())? {
+            Some(value) => Some(decode_json(value.value())?),
+            None => None,
+        };
+        if current.is_none_or(|part| &part.data_file != data_file) {
+            return Err(StoreError::InvalidPart(format!(
+                "part {part_number} was replaced during completion"
+            )));
+        }
     }
     let end = prefix_successor(&upload.upload_key).expect("upload keys contain a byte below 0xFF");
     let mut part_keys = Vec::new();

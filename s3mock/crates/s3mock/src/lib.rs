@@ -20,7 +20,7 @@ pub use data_file::{ObjectWriter, StagedObject, UploadChecksumExpectations};
 pub use error::StoreError;
 pub use record::{
     BucketRecord, ContentHeaders, DefaultRetention, ObjectLockConfiguration, PartRecord,
-    UploadRecord, VersionRecord, VersioningState,
+    RetentionMode, UploadRecord, VersionRecord, VersioningState,
 };
 pub use store::{
     ByteRangeRequest, CompleteMultipartUploadRequest, CompletedPart, CreateMultipartUploadRequest,

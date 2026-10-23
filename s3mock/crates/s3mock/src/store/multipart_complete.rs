@@ -9,7 +9,7 @@
 //! CompleteMultipartUpload: validate the part list, concatenate the parts, and commit one version.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 
 use md5::{Digest, Md5};
 use redb::ReadableDatabase;
@@ -34,12 +34,18 @@ const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 pub struct CompleteMultipartUploadRequest {
     pub parts: Vec<CompletedPart>,
     pub write_condition: WriteCondition,
+    /// The object checksum from an `x-amz-checksum-*` header; a composite value may omit `-N`.
+    pub expected_checksum: Option<(ChecksumAlgorithm, String)>,
+    /// From `x-amz-checksum-type`; must equal the type chosen at creation.
+    pub expected_checksum_type: Option<ChecksumType>,
+    /// From `x-amz-mp-object-size`; must equal the assembled size.
+    pub expected_object_size: Option<u64>,
 }
 
 impl Store {
-    /// Assembles the listed parts into the newest version of the key and deletes the upload.
+    /// Assembles the listed parts into the newest version and deletes the upload.
     ///
-    /// The write condition is checked when the version commits; on failure the upload remains.
+    /// The write condition is checked at commit. A rejected completion keeps the upload.
     pub fn complete_multipart_upload(
         &self,
         bucket: &str,
@@ -66,7 +72,18 @@ impl Store {
             let stored_parts = load_parts(&transaction.open_table(PARTS)?, &upload_key)?;
             (bucket_record, upload, stored_parts)
         };
-        let selected = select_parts(&request.parts, &stored_parts)?;
+        if let Some(expected_type) = request.expected_checksum_type
+            && expected_type != upload.checksum_type
+        {
+            return Err(StoreError::BadDigest {
+                algorithm: upload.checksum_type.s3_name(),
+            });
+        }
+        let selected = select_parts(
+            &request.parts,
+            &stored_parts,
+            upload.checksum_algorithm.is_some(),
+        )?;
         let full_object_algorithm = match upload.checksum_type {
             ChecksumType::FullObject => upload
                 .checksum_algorithm
@@ -77,6 +94,14 @@ impl Store {
         let staged = self
             .concatenate_parts(&bucket_record, &selected, full_object_algorithm)?
             .finish(&UploadChecksumExpectations::default())?;
+        if let Some(expected_size) = request.expected_object_size
+            && expected_size != staged.size()
+        {
+            return Err(StoreError::InvalidRequest(format!(
+                "x-amz-mp-object-size {expected_size} does not match the assembled size {}",
+                staged.size()
+            )));
+        }
         let part_count = u32::try_from(selected.len()).expect("at most 10000 parts are listed");
         let checksum = match (upload.checksum_type, upload.checksum_algorithm) {
             (ChecksumType::Composite, Some(algorithm)) => {
@@ -88,6 +113,28 @@ impl Store {
                 staged.checksum.clone()
             }
         };
+        if let Some((algorithm, expected_value)) = &request.expected_checksum {
+            if *algorithm != checksum.algorithm {
+                return Err(StoreError::InvalidRequest(format!(
+                    "the {} checksum does not match the upload's {} checksum algorithm",
+                    algorithm.s3_name(),
+                    checksum.algorithm.s3_name()
+                )));
+            }
+            let without_part_count = |value: &str| {
+                value
+                    .trim()
+                    .split('-')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            if without_part_count(expected_value) != without_part_count(&checksum.base64_value) {
+                return Err(StoreError::BadDigest {
+                    algorithm: algorithm.s3_name(),
+                });
+            }
+        }
         let attributes = VersionAttributes {
             content_headers: upload.content_headers,
             user_metadata: upload.user_metadata,
@@ -98,6 +145,10 @@ impl Store {
         let completed_upload = CompletedUpload {
             upload_key,
             upload_id: upload_id.to_owned(),
+            assembled_parts: selected
+                .iter()
+                .map(|part| (part.part_number, part.data_file.clone()))
+                .collect(),
         };
         self.publish_and_commit(
             bucket,
@@ -121,9 +172,23 @@ impl Store {
             bucket_record.incarnation.clone(),
             algorithm,
         )?;
-        let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
+        // Open every part first: an open file stays readable even if a concurrent UploadPart replaces it.
+        let mut files = Vec::with_capacity(parts.len());
         for part in parts {
-            let mut file = File::open(self.bucket_directory(bucket_record).join(&part.data_file))?;
+            let path = self.bucket_directory(bucket_record).join(&part.data_file);
+            match File::open(&path) {
+                Ok(file) => files.push(file),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Err(StoreError::InvalidPart(format!(
+                        "part {} was replaced or removed during completion",
+                        part.part_number
+                    )));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
+        for mut file in files {
             loop {
                 let read = file.read(&mut buffer)?;
                 if read == 0 {
@@ -137,9 +202,12 @@ impl Store {
 }
 
 /// Matches the client's part list against the stored parts, applying S3's ordering, ETag, and size rules.
+///
+/// Uploads with a checksum algorithm must list parts 1, 2, 3, and so on without gaps.
 fn select_parts<'stored>(
     listed: &[CompletedPart],
     stored: &'stored [PartRecord],
+    is_checksummed: bool,
 ) -> Result<Vec<&'stored PartRecord>, StoreError> {
     if listed.is_empty() {
         return Err(StoreError::InvalidRequest(
@@ -149,7 +217,12 @@ fn select_parts<'stored>(
     let mut selected = Vec::with_capacity(listed.len());
     let mut previous_part_number = 0;
     for listed_part in listed {
-        if listed_part.part_number <= previous_part_number {
+        let is_out_of_order = if is_checksummed {
+            listed_part.part_number != previous_part_number + 1
+        } else {
+            listed_part.part_number <= previous_part_number
+        };
+        if is_out_of_order {
             return Err(StoreError::InvalidPartOrder);
         }
         previous_part_number = listed_part.part_number;

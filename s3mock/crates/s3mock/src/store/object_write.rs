@@ -261,6 +261,8 @@ pub(super) struct VersionAttributes {
 pub(super) struct CompletedUpload {
     pub(super) upload_key: Vec<u8>,
     pub(super) upload_id: String,
+    /// Part numbers and files the assembled object was read from; a replaced part fails the commit.
+    pub(super) assembled_parts: Vec<(u32, String)>,
 }
 
 /// A data file that is durable on disk but not yet referenced by metadata.

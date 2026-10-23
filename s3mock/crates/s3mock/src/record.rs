@@ -40,11 +40,34 @@ pub struct ObjectLockConfiguration {
     pub default_retention: Option<DefaultRetention>,
 }
 
+/// Object Lock retention mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RetentionMode {
+    Governance,
+    Compliance,
+}
+
+impl RetentionMode {
+    /// Returns the S3 name, such as `GOVERNANCE`.
+    pub fn s3_name(self) -> &'static str {
+        match self {
+            RetentionMode::Governance => "GOVERNANCE",
+            RetentionMode::Compliance => "COMPLIANCE",
+        }
+    }
+
+    /// Parses an S3 retention mode name.
+    pub fn from_s3_name(name: &str) -> Option<RetentionMode> {
+        [RetentionMode::Governance, RetentionMode::Compliance]
+            .into_iter()
+            .find(|mode| mode.s3_name() == name)
+    }
+}
+
 /// The default retention rule of an Object Lock configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DefaultRetention {
-    /// `GOVERNANCE` or `COMPLIANCE`.
-    pub mode: String,
+    pub mode: RetentionMode,
     pub days: Option<u32>,
     pub years: Option<u32>,
 }

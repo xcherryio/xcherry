@@ -17,11 +17,12 @@ use s3mock::{DeleteObjectOutcome, DeleteObjectRequest, Store, StoreError};
 use super::request_body::read_small_body;
 use crate::s3_error::S3Error;
 use crate::server::{S3Response, run_store_operation, xml_response};
-use crate::xml::{XmlWriter, first_element_text, repeated_elements};
+use crate::xml::{XmlWriter, parse_document};
 
 /// S3 accepts at most this many keys per request.
 const MAX_DELETE_OBJECTS: usize = 1000;
-const MAX_DELETE_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Fits 1000 maximum-length keys even when every byte is written as a five-byte entity.
+const MAX_DELETE_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 struct DeleteTarget {
     key: String,
@@ -34,21 +35,30 @@ pub(crate) async fn delete_objects(
     headers: HeaderMap,
     body: Incoming,
 ) -> Result<S3Response, S3Error> {
+    {
+        let bucket = bucket.clone();
+        run_store_operation(&store, move |store| store.bucket(&bucket)).await?;
+    }
     let body = read_small_body(body, &headers, MAX_DELETE_BODY_BYTES).await?;
     body.verify_integrity(&headers, true)?;
-    let is_quiet = first_element_text(&body.bytes, "Quiet")?
-        .is_some_and(|quiet| quiet.eq_ignore_ascii_case("true"));
-    let targets = repeated_elements(&body.bytes, "Object")?
-        .into_iter()
-        .map(|mut fields| {
-            let key = fields
-                .remove("Key")
-                .ok_or_else(|| S3Error::malformed_xml("every Object needs a Key"))?;
+    let document = parse_document(&body.bytes, "Delete")?;
+    let is_quiet = document
+        .child_text("Quiet")
+        .is_some_and(|quiet| quiet.trim().eq_ignore_ascii_case("true"));
+    let targets = document
+        .children_named("Object")
+        .map(|object| {
+            let key = object
+                .child_text("Key")
+                .ok_or_else(|| S3Error::malformed_xml("every Object needs a Key"))?
+                .to_owned();
             Ok(DeleteTarget {
                 key,
-                version_id: fields
-                    .remove("VersionId")
-                    .filter(|version_id| !version_id.is_empty()),
+                version_id: object
+                    .child_text("VersionId")
+                    .map(str::trim)
+                    .filter(|version_id| !version_id.is_empty())
+                    .map(str::to_owned),
             })
         })
         .collect::<Result<Vec<_>, S3Error>>()?;

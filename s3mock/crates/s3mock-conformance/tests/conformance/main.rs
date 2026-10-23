@@ -14,6 +14,7 @@ mod delete_objects;
 mod durability;
 mod listing;
 mod multipart;
+mod multipart_validation;
 mod object_lock;
 mod objects;
 mod support;

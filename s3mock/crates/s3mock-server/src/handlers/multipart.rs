@@ -30,7 +30,7 @@ use crate::request_headers::{
 use crate::routing::QueryParameters;
 use crate::s3_error::S3Error;
 use crate::server::{S3Response, run_store_operation, xml_response};
-use crate::xml::{XmlWriter, format_iso8601, repeated_elements};
+use crate::xml::{XmlWriter, format_iso8601, parse_document};
 
 /// A part list for 10000 parts fits comfortably in this many bytes.
 const MAX_COMPLETE_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -161,22 +161,43 @@ pub(crate) async fn complete_multipart_upload(
 ) -> Result<S3Response, S3Error> {
     let upload_id = required_upload_id(&query)?;
     let write_condition = write_condition(headers)?;
+    let expected_checksum = ChecksumAlgorithm::ALL.into_iter().find_map(|algorithm| {
+        header_text(headers, algorithm.header_name())
+            .map(|value| (algorithm, value.trim().to_owned()))
+    });
+    let expected_checksum_type = header_text(headers, "x-amz-checksum-type")
+        .map(|name| {
+            ChecksumType::from_s3_name(name.trim()).ok_or_else(|| {
+                S3Error::invalid_argument(format!("unsupported checksum type {name:?}"))
+            })
+        })
+        .transpose()?;
+    let expected_object_size = header_text(headers, "x-amz-mp-object-size")
+        .map(|size| {
+            size.trim().parse::<u64>().map_err(|_| {
+                S3Error::invalid_argument("x-amz-mp-object-size must be a non-negative integer")
+            })
+        })
+        .transpose()?;
     let body = read_small_body(body, headers, MAX_COMPLETE_BODY_BYTES).await?;
-    body.verify_integrity(headers, false)?;
-    let parts = repeated_elements(&body.bytes, "Part")?
-        .into_iter()
-        .map(|fields| {
-            let part_number = fields
-                .get("PartNumber")
+    // Checksum headers on this request describe the object, not the part list.
+    body.verify_content_md5(headers)?;
+    let document = parse_document(&body.bytes, "CompleteMultipartUpload")?;
+    let parts = document
+        .children_named("Part")
+        .map(|part| {
+            let part_number = part
+                .child_text("PartNumber")
                 .and_then(|value| value.trim().parse::<u32>().ok())
                 .ok_or_else(|| S3Error::malformed_xml("every Part needs a numeric PartNumber"))?;
-            let etag = fields
-                .get("ETag")
-                .cloned()
+            let etag = part
+                .child_text("ETag")
+                .map(str::to_owned)
                 .ok_or_else(|| S3Error::malformed_xml("every Part needs an ETag"))?;
-            let checksum_base64 = ChecksumAlgorithm::ALL
-                .into_iter()
-                .find_map(|algorithm| fields.get(algorithm.xml_element_name()).cloned());
+            let checksum_base64 = ChecksumAlgorithm::ALL.into_iter().find_map(|algorithm| {
+                part.child_text(algorithm.xml_element_name())
+                    .map(str::to_owned)
+            });
             Ok(CompletedPart {
                 part_number,
                 etag,
@@ -192,6 +213,9 @@ pub(crate) async fn complete_multipart_upload(
     let request = CompleteMultipartUploadRequest {
         parts,
         write_condition,
+        expected_checksum,
+        expected_checksum_type,
+        expected_object_size,
     };
     let outcome = {
         let (bucket, key) = (bucket.clone(), key.clone());

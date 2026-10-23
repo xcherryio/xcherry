@@ -55,6 +55,18 @@ pub(super) async fn read_small_body(
 }
 
 impl SmallBody {
+    /// Verifies only `Content-MD5`, for requests whose checksum headers describe something else.
+    pub(super) fn verify_content_md5(&self, headers: &HeaderMap) -> Result<(), S3Error> {
+        match header_text(headers, "content-md5") {
+            Some(content_md5) if content_md5.trim() != md5_base64(&self.bytes) => {
+                Err(S3Error::from(s3mock::StoreError::BadDigest {
+                    algorithm: "MD5",
+                }))
+            }
+            Some(_) | None => Ok(()),
+        }
+    }
+
     /// Verifies `Content-MD5` and `x-amz-checksum-*` values; `is_required` demands at least one.
     pub(super) fn verify_integrity(
         &self,
