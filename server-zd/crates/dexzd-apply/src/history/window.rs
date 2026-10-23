@@ -66,7 +66,7 @@ pub(crate) fn advance_window(
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
     delete_unneeded_history(transaction, cursor, pruned.window_start_attempt)?;
-    while crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)? > 0 {}
+    crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
     Ok(true)
 }
 

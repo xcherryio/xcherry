@@ -12,22 +12,33 @@
 //! value table, and every slot or pinned call that uses one is a holder. A value whose holder
 //! set becomes empty moves to table G and is deleted when the time travel window passes it.
 
+mod garbage;
+mod storage_accounting;
+mod time_travel;
 mod value_holder;
 
+pub(crate) use garbage::enforce_superseded_byte_cap;
+#[expect(unused_imports, reason = "Available to window maintenance handlers.")]
+pub(crate) use garbage::{prune_garbage, superseded_bytes_over_cap};
+pub(crate) use storage_accounting::{
+    active_run_storage_bytes, projected_superseded_value_bytes, reconcile_run_storage,
+    total_run_storage_bytes,
+};
+pub(crate) use time_travel::rewrite_holders_for_time_travel;
 pub(crate) use value_holder::ValueHolder;
 
 use dexzd_keyspace::row_keys::{prefix_range, value_garbage_key, value_holder_key, value_row_key};
-use dexzd_keyspace::{ColumnFamily, RunTable, ValueId, ValueReference};
+use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, RunTable, ValueId, ValueReference};
 use dexzd_protocol::dex::Value;
 use dexzd_protocol::dex::value::Kind;
 use dexzd_protocol::dexzd::v1::{
-    CheckpointRow, StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord,
-    ValueGarbageRecord, ValueRecord, stored_value,
+    StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord, ValueGarbageRecord,
+    ValueRecord, stored_value,
 };
 use prost::Message;
 
 use crate::ApplyError;
-use crate::command_handlers::run_cursor::RunCursor;
+use crate::FlowStateReader;
 use crate::state_access::{FlowTransaction, RunRows};
 
 /// Why a value from a client or Worker cannot be stored.
@@ -185,7 +196,7 @@ pub(crate) fn release_stored_value(
     holder: &ValueHolder,
     current_seq: u64,
 ) -> Result<(), ApplyError> {
-    let Some((value_id, size_bytes)) = table_value_id(stored) else {
+    let Some((value_id, _)) = table_value_id(stored) else {
         return Ok(());
     };
     // Removing a holder that does not exist does nothing (plan section 10.2).
@@ -213,7 +224,9 @@ pub(crate) fn release_stored_value(
     transaction.put_message(
         ColumnFamily::Flow,
         value_garbage_key(rows.flow_hash, rows.run_id, current_seq, value_id),
-        &ValueGarbageRecord { size_bytes },
+        &ValueGarbageRecord {
+            size_bytes: stored_value_size(stored),
+        },
     );
     Ok(())
 }
@@ -244,12 +257,8 @@ pub(crate) fn wire_value(rows: RunRows, stored: &StoredValue) -> Value {
 }
 
 /// Reads the complete value, or `None` if a table value was already collected.
-#[expect(
-    dead_code,
-    reason = "Used by the read model and cross-Flow copies (tasks A6 and A7)."
-)]
 pub(crate) fn load_stored_value(
-    transaction: &FlowTransaction<'_>,
+    state: &dyn FlowStateReader,
     rows: RunRows,
     stored: &StoredValue,
 ) -> Result<Option<Value>, ApplyError> {
@@ -259,11 +268,19 @@ pub(crate) fn load_stored_value(
             let Some((value_id, _)) = table_value_id(stored) else {
                 return Ok(None);
             };
-            let record: Option<ValueRecord> = transaction.get_message(
-                ColumnFamily::Value,
-                &value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id),
-                "value",
-            )?;
+            let key = value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id);
+            let record = state.get(ColumnFamily::Value, &key)?;
+            let record = record
+                .map(|bytes| {
+                    ValueRecord::decode(bytes.as_slice()).map_err(|error| {
+                        ApplyError::CorruptState {
+                            table: "value",
+                            key: key.iter().map(|byte| format!("{byte:02x}")).collect(),
+                            detail: error.to_string(),
+                        }
+                    })
+                })
+                .transpose()?;
             Ok(record.and_then(|record| record.value))
         }
         Some(stored_value::Kind::HardDeleteObject(_)) | None => Ok(None),
@@ -271,10 +288,6 @@ pub(crate) fn load_stored_value(
 }
 
 /// Size accounted for a stored value.
-#[expect(
-    dead_code,
-    reason = "Used by storage accounting and the window byte cap (task A5)."
-)]
 pub(crate) fn stored_value_size(stored: &StoredValue) -> u64 {
     match &stored.kind {
         Some(stored_value::Kind::InlineValue(value)) => {
@@ -286,38 +299,32 @@ pub(crate) fn stored_value_size(stored: &StoredValue) -> u64 {
     }
 }
 
+/// Loads a wire reference; invalid, foreign, hard-delete, or collected references return `None`; state failures return errors.
+pub fn load_for_wire(
+    state: &dyn FlowStateReader,
+    flow_hash: FlowHash,
+    run_id: RunId,
+    reference: &str,
+) -> Result<Option<Value>, ApplyError> {
+    let Ok(parsed): Result<ValueReference, _> = reference.parse() else {
+        return Ok(None);
+    };
+    if parsed.run_id != run_id {
+        return Ok(None);
+    }
+    load_stored_value(
+        state,
+        RunRows::new(flow_hash, run_id),
+        &table_value(parsed.value_id, 0, false),
+    )
+}
+
 /// True when the value is a JSON null or absent, which deletes an Attribute.
 pub(crate) fn is_null_value(value: Option<&Value>) -> bool {
     match value {
         None => true,
         Some(value) => matches!(value.kind, None | Some(Kind::NullValue(_))),
     }
-}
-
-/// Deletes up to a page of values that lost their last holder before `window_start_seq`.
-///
-/// Stub until task A5 lands; returns the number of collected values.
-pub(crate) fn prune_garbage(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &RunCursor,
-    window_start_seq: u64,
-) -> Result<usize, ApplyError> {
-    let _ = (transaction, cursor, window_start_seq);
-    Ok(0)
-}
-
-/// Gives values of both attempt states exactly the new state's holders (plan R4').
-///
-/// Stub until task A5 lands.
-pub(crate) fn rewrite_holders_for_time_travel(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &RunCursor,
-    old_attempt_rows: &[CheckpointRow],
-    new_attempt_rows: &[CheckpointRow],
-    seq: u64,
-) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, old_attempt_rows, new_attempt_rows, seq);
-    Ok(())
 }
 
 fn table_value(value_id: ValueId, size_bytes: u64, is_string_value: bool) -> StoredValue {

@@ -17,6 +17,14 @@ use crate::{ApplyContext, ApplyError, FlowStateReader, StateWrite};
 /// Rows fetched from the reader per page while merging a scan with buffered writes.
 const SCAN_PAGE_ROWS: usize = 256;
 
+/// One buffered row change with its committed value.
+pub(crate) struct StateRowChange {
+    pub(crate) column_family: ColumnFamily,
+    pub(crate) key: Vec<u8>,
+    pub(crate) previous: Option<Vec<u8>>,
+    pub(crate) current: Option<Vec<u8>>,
+}
+
 /// Buffered writes of one apply call on top of a [`FlowStateReader`].
 ///
 /// Reads see the buffered writes. [`Self::into_writes`] returns the writes in a deterministic
@@ -168,6 +176,78 @@ impl<'reader> FlowTransaction<'reader> {
         row: &RowMessage,
     ) {
         self.put(column_family, key, row.encode_to_vec());
+    }
+
+    /// Returns buffered changes beneath one run prefix with their committed values.
+    pub(crate) fn changed_run_rows(
+        &self,
+        run_prefix: &[u8],
+    ) -> Result<Vec<StateRowChange>, ApplyError> {
+        let mut changes = BTreeMap::new();
+        for ((column_family, key), current) in &self.rows {
+            if matches!(column_family, ColumnFamily::Flow | ColumnFamily::History)
+                && key.starts_with(run_prefix)
+            {
+                changes.insert(
+                    (*column_family, key.clone()),
+                    StateRowChange {
+                        column_family: *column_family,
+                        key: key.clone(),
+                        previous: self.reader.get(*column_family, key)?,
+                        current: current.clone(),
+                    },
+                );
+            }
+        }
+        for (column_family, start, end) in &self.range_deletes {
+            if !matches!(column_family, ColumnFamily::Flow | ColumnFamily::History) {
+                continue;
+            }
+            let mut page_start = start.clone();
+            loop {
+                let page = self
+                    .reader
+                    .scan(*column_family, &page_start, end, SCAN_PAGE_ROWS)?;
+                if page.is_empty() {
+                    break;
+                }
+                for (key, previous) in page {
+                    page_start = key.clone();
+                    page_start.push(0);
+                    if key.starts_with(run_prefix) {
+                        changes
+                            .entry((*column_family, key.clone()))
+                            .or_insert(StateRowChange {
+                                column_family: *column_family,
+                                key,
+                                previous: Some(previous),
+                                current: None,
+                            });
+                    }
+                }
+            }
+        }
+        Ok(changes.into_values().collect())
+    }
+
+    /// Returns individual buffered row writes under one table prefix with their committed values.
+    pub(crate) fn buffered_row_changes_with_prefix(
+        &self,
+        column_family: ColumnFamily,
+        prefix: &[u8],
+    ) -> Result<Vec<StateRowChange>, ApplyError> {
+        let (start, end) = dexzd_keyspace::row_keys::prefix_range(prefix);
+        self.rows
+            .range((column_family, start)..(column_family, end))
+            .map(|((_, key), current)| {
+                Ok(StateRowChange {
+                    column_family,
+                    key: key.clone(),
+                    previous: self.reader.get(column_family, key)?,
+                    current: current.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Returns the rows this call put in `column_family`, in key order.

@@ -14,6 +14,7 @@ use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::{CommandScope, HandlerOutput};
 use crate::history;
 use crate::state_access::{FlowTransaction, RunRows};
+use crate::values::enforce_superseded_byte_cap;
 use crate::values::{ValueIdAllocator, ValueLimits};
 use crate::{ApplyEffect, ApplyError, WaitableChange};
 
@@ -184,6 +185,7 @@ impl RunCursor {
             history::after_command(transaction, &mut self, kind)?;
         }
         self.rows.put_run_record(transaction, &self.record);
+        enforce_superseded_byte_cap(transaction, &mut self)?;
         if let Some(last_event_id) = last_event_id {
             self.wake(WaitableChange::HistoryAppended { last_event_id });
         }

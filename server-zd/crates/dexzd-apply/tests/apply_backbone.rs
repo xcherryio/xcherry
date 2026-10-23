@@ -10,16 +10,18 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_apply::values::load_for_wire;
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    hard_delete_current_key, hard_delete_pending_key, prefix_range, run_named_key,
-    run_singleton_key, value_holder_key, value_row_key,
+    hard_delete_current_key, hard_delete_pending_key, history_record_key, prefix_range,
+    run_named_key, run_singleton_key, value_holder_key, value_row_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, ValueReference,
+    parse_run_key, run_prefix,
 };
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowStartOptions,
@@ -31,11 +33,11 @@ use dexzd_protocol::dex::{
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, CommandReply, FlowCommand, FlowStartCommand,
     FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
-    RetryBackoffTimerId, RunRecord, RunSettings, StepAttemptFailedCommand,
+    RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage, StepAttemptFailedCommand,
     StepAttemptHeartbeatCommand, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
     StepMethod, StepMethodCompletedCommand, StoredValue, TimerId, TimersFiredCommand,
-    ValueBirthRecord, command_reply, flow_command::Command, step_attempt_heartbeat_command,
-    step_method_completed_command, stored_value, timer_id,
+    ValueBirthRecord, ValueGarbageRecord, command_reply, flow_command::Command,
+    step_attempt_heartbeat_command, step_method_completed_command, stored_value, timer_id,
 };
 use prost::Message;
 
@@ -156,15 +158,30 @@ impl Harness {
             apply_flow_command(&self.context, &self.state, &command).expect("apply succeeds");
         assert_eq!(outcome.writes, again.writes, "apply must be deterministic");
         self.state.commit(&outcome);
+        if !self.run_id.is_empty() && !outcome.writes.is_empty() {
+            assert_eq!(
+                self.run_record().storage.expect("run storage is accounted"),
+                self.recount_storage()
+            );
+            self.assert_value_table_invariant();
+        }
         outcome
     }
 
     fn start(&mut self, request: StartFlowRequest) -> ApplyOutcome {
+        self.start_with_settings(request, settings())
+    }
+
+    fn start_with_settings(
+        &mut self,
+        request: StartFlowRequest,
+        run_settings: RunSettings,
+    ) -> ApplyOutcome {
         let new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
         let outcome = self.apply(Command::FlowStart(FlowStartCommand {
             new_run_id: new_run_id.clone(),
             request: Some(request),
-            settings: Some(settings()),
+            settings: Some(run_settings),
             resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
             worker_target: Some(WorkerTarget {
                 is_pull_mode: true,
@@ -178,6 +195,13 @@ impl Harness {
         {
             self.run_id = reply.run_id.clone();
         }
+        if !self.run_id.is_empty() && !outcome.writes.is_empty() {
+            assert_eq!(
+                self.run_record().storage.expect("run storage is accounted"),
+                self.recount_storage()
+            );
+            self.assert_value_table_invariant();
+        }
         outcome
     }
 
@@ -190,6 +214,162 @@ impl Harness {
             .expect("memory reads never fail")
             .expect("the run record exists");
         RunRecord::decode(bytes.as_slice()).expect("the run record decodes")
+    }
+
+    fn set_max_run_state_bytes(&mut self, max_run_state_bytes: u64) {
+        let run_id = RunId::from_slice(&self.run_id).expect("started run");
+        let key = run_singleton_key(self.context.flow_hash, run_id, RunTable::RunRecord);
+        let original = self
+            .state
+            .rows
+            .get(&(ColumnFamily::Flow, key.clone()))
+            .expect("the run record exists")
+            .clone();
+        let mut record = RunRecord::decode(original.as_slice()).expect("valid run record");
+        record
+            .settings
+            .as_mut()
+            .expect("run settings exist")
+            .max_run_state_bytes = max_run_state_bytes;
+        let original_state_bytes = record
+            .storage
+            .expect("storage is accounted")
+            .state_row_bytes;
+        loop {
+            let new_state_bytes =
+                original_state_bytes - original.len() as u64 + record.encoded_len() as u64;
+            let storage = record.storage.as_mut().expect("storage is accounted");
+            if storage.state_row_bytes == new_state_bytes {
+                break;
+            }
+            storage.state_row_bytes = new_state_bytes;
+        }
+        self.state
+            .rows
+            .insert((ColumnFamily::Flow, key), record.encode_to_vec());
+        assert_eq!(
+            record.storage.expect("storage is accounted"),
+            self.recount_storage()
+        );
+    }
+
+    fn try_set_attribute(
+        &mut self,
+        attribute_key: &str,
+        value: Value,
+        request_id: &str,
+    ) -> ApplyOutcome {
+        self.apply(Command::AttributesSet(AttributesSetCommand {
+            request: Some(SetAttributesRequest {
+                attributes: vec![AttributeWrite {
+                    key: attribute_key.to_owned(),
+                    value: Some(value),
+                    ..AttributeWrite::default()
+                }],
+                request_id: request_id.to_owned(),
+                ..SetAttributesRequest::default()
+            }),
+            hard_delete_objects: Vec::new(),
+            request_fingerprint: request_id.as_bytes().to_vec(),
+        }))
+    }
+
+    fn value_reference(&self, run_seq: u64, index_in_command: u32) -> String {
+        ValueReference {
+            run_id: RunId::from_slice(&self.run_id).expect("started run"),
+            value_id: ValueId {
+                run_seq,
+                index_in_command,
+            },
+        }
+        .to_string()
+    }
+
+    fn recount_storage(&self) -> RunStorageUsage {
+        let run_id = RunId::from_slice(&self.run_id).expect("started run");
+        let prefix = run_prefix(self.context.flow_hash, run_id);
+        let mut usage = RunStorageUsage::default();
+        let mut birth_bytes = 0;
+        for ((column_family, key), value) in &self.state.rows {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let table = parse_run_key(key).expect("valid run key").table;
+            match column_family {
+                ColumnFamily::Flow => {
+                    usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    if table == RunTable::ValueBirth {
+                        birth_bytes += ValueBirthRecord::decode(value.as_slice())
+                            .expect("valid birth row")
+                            .size_bytes;
+                    } else if table == RunTable::ValueGarbage {
+                        usage.superseded_value_bytes +=
+                            ValueGarbageRecord::decode(value.as_slice())
+                                .expect("valid garbage row")
+                                .size_bytes;
+                    }
+                }
+                ColumnFamily::History => {
+                    usage.history_bytes += (key.len() + value.len()) as u64;
+                }
+                _ => {}
+            }
+        }
+        usage.live_value_bytes = birth_bytes - usage.superseded_value_bytes;
+        usage
+    }
+
+    fn assert_value_table_invariant(&self) {
+        let run_id = RunId::from_slice(&self.run_id).expect("started run");
+        let prefix = run_prefix(self.context.flow_hash, run_id);
+        let mut births = BTreeMap::new();
+        let mut holders = BTreeMap::<(u64, u32), usize>::new();
+        let mut garbage = BTreeMap::new();
+        let mut value_rows = BTreeMap::new();
+        for ((family, key), bytes) in &self.state.rows {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let parsed = parse_run_key(key).expect("valid run key");
+            match (family, parsed.table) {
+                (ColumnFamily::Flow, RunTable::ValueBirth) => {
+                    let id = value_id_from_suffix(parsed.suffix);
+                    births.insert(
+                        id,
+                        ValueBirthRecord::decode(bytes.as_slice()).expect("valid birth row"),
+                    );
+                }
+                (ColumnFamily::Flow, RunTable::ValueHolder) => {
+                    *holders
+                        .entry(value_id_from_suffix(parsed.suffix))
+                        .or_default() += 1;
+                }
+                (ColumnFamily::Flow, RunTable::ValueGarbage) => {
+                    let seq = u64::from_be_bytes(parsed.suffix[..8].try_into().expect("G seq"));
+                    let id = value_id_from_suffix(&parsed.suffix[8..]);
+                    assert!(garbage.insert(id, seq).is_none(), "one G row per value");
+                }
+                (ColumnFamily::Value, RunTable::Value) => {
+                    value_rows.insert(value_id_from_suffix(parsed.suffix), ());
+                }
+                _ => {}
+            }
+        }
+        for (id, birth) in &births {
+            assert!(value_rows.contains_key(id), "B row needs a value row");
+            let holder_count = holders.remove(id).unwrap_or_default();
+            let garbage_seq = garbage.remove(id);
+            assert!(
+                (holder_count > 0 && garbage_seq.is_none() && birth.garbage_seq == 0)
+                    || (holder_count == 0
+                        && garbage_seq == Some(birth.garbage_seq)
+                        && birth.garbage_seq > 0),
+                "each value has holders or exactly one matching G row"
+            );
+        }
+        assert!(holders.is_empty(), "holder without B row");
+        assert!(garbage.is_empty(), "G row without B row");
+        assert_eq!(value_rows.len(), births.len(), "value row without B row");
     }
 
     fn start_attempt(
@@ -236,6 +416,13 @@ impl Harness {
             ..StepMethodCompletedCommand::default()
         }))
     }
+}
+
+fn value_id_from_suffix(suffix: &[u8]) -> (u64, u32) {
+    (
+        u64::from_be_bytes(suffix[..8].try_into().expect("value seq")),
+        u32::from_be_bytes(suffix[8..12].try_into().expect("value index")),
+    )
 }
 
 fn settings() -> RunSettings {
@@ -586,6 +773,512 @@ fn large_attribute_values_go_to_the_value_table_and_reach_the_snapshot_as_refere
     );
 }
 
+#[test]
+fn load_blobs_reads_live_values_and_omits_invalid_or_foreign_references() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let value = string_value(&"v".repeat(500));
+    harness.set_attribute("report", value.clone(), "set-1");
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    let reference = ValueReference {
+        run_id,
+        value_id: ValueId {
+            run_seq: 2,
+            index_in_command: 0,
+        },
+    }
+    .to_string();
+    assert_eq!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &reference
+        )
+        .expect("value lookup succeeds"),
+        Some(value)
+    );
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            "hard-delete/object"
+        )
+        .expect("invalid reference is omitted")
+        .is_none()
+    );
+    let other_run_id = RunId::from_slice(&[8; 16]).expect("valid run ID");
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            other_run_id,
+            &reference,
+        )
+        .expect("foreign reference is omitted")
+        .is_none()
+    );
+}
+
+#[test]
+fn superseded_values_revive_and_repeated_holder_writes_remain_live() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let first_value = string_value(&"a".repeat(500));
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", first_value.clone(), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        first_value.encoded_len() as u64
+    );
+    harness.set_attribute(
+        "report",
+        Value {
+            kind: Some(value::Kind::InternalBlobIdForStringValue(
+                first_reference.clone(),
+            )),
+        },
+        "set-3",
+    );
+    assert_eq!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            RunId::from_slice(&harness.run_id).expect("started run"),
+            &first_reference,
+        )
+        .expect("value lookup succeeds"),
+        Some(first_value)
+    );
+    let superseded_after_revival = harness.run_record().storage.unwrap().superseded_value_bytes;
+    harness.set_attribute(
+        "report",
+        Value {
+            kind: Some(value::Kind::InternalBlobIdForStringValue(first_reference)),
+        },
+        "set-4",
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        superseded_after_revival
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap(),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn byte_cap_advances_the_window_and_collects_old_values() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 0;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    let record = harness.run_record();
+    assert!(record.window_start_seq <= 3);
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    assert!(
+        harness
+            .state
+            .get(
+                ColumnFamily::History,
+                &history_record_key(harness.context.flow_hash, run_id, 3)
+            )
+            .expect("memory reads never fail")
+            .is_some(),
+        "the current command's history remains readable"
+    );
+    assert!(record.storage.unwrap().superseded_value_bytes > 0);
+    assert_eq!(record.storage.unwrap(), harness.recount_storage());
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference
+        )
+        .expect("window value remains readable")
+        .is_some()
+    );
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    let record = harness.run_record();
+    assert_eq!(record.window_start_seq, 4);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference,
+        )
+        .expect("collected reference is omitted")
+        .is_none()
+    );
+    assert_eq!(
+        harness
+            .state
+            .rows
+            .keys()
+            .filter(|(family, key)| {
+                *family == ColumnFamily::Flow
+                    && parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::ValueGarbage)
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn repeated_overwrites_retain_values_at_the_window_boundary() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 600;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_reference = harness.value_reference(2, 0);
+    let second_reference = harness.value_reference(3, 0);
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference,
+        )
+        .expect("window value remains readable")
+        .is_some()
+    );
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    assert_eq!(harness.run_record().window_start_seq, 4);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference,
+        )
+        .expect("old value lookup succeeds")
+        .is_none()
+    );
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &second_reference,
+        )
+        .expect("boundary value remains readable")
+        .is_some()
+    );
+    assert_eq!(
+        harness
+            .run_record()
+            .storage
+            .expect("run storage is accounted"),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn garbage_collection_is_bounded_and_resumes_on_the_next_command() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 0;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let attributes = (0..150)
+        .map(|index| AttributeWrite {
+            key: format!("value-{index}"),
+            value: Some(string_value(&"x".repeat(150))),
+            ..AttributeWrite::default()
+        })
+        .collect();
+    harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes,
+            request_id: "set-many".to_owned(),
+            ..SetAttributesRequest::default()
+        }),
+        request_fingerprint: vec![1],
+        ..AttributesSetCommand::default()
+    }));
+    let attributes = (0..150)
+        .map(|index| AttributeWrite {
+            key: format!("value-{index}"),
+            value: Some(Value { kind: None }),
+            ..AttributeWrite::default()
+        })
+        .collect();
+    harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes,
+            request_id: "delete-many".to_owned(),
+            ..SetAttributesRequest::default()
+        }),
+        request_fingerprint: vec![2],
+        ..AttributesSetCommand::default()
+    }));
+    assert_eq!(garbage_row_count(&harness), 150);
+    harness.set_attribute("trigger", string_value("small"), "trigger-1");
+    assert_eq!(garbage_row_count(&harness), 22);
+    harness.set_attribute("trigger", string_value("new"), "trigger-2");
+    assert_eq!(garbage_row_count(&harness), 0);
+}
+
+fn garbage_row_count(harness: &Harness) -> usize {
+    harness
+        .state
+        .rows
+        .keys()
+        .filter(|(family, key)| {
+            *family == ColumnFamily::Flow
+                && parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::ValueGarbage)
+        })
+        .count()
+}
+
+#[test]
+fn running_snapshot_holds_a_superseded_value_until_the_attempt_ends() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let first_reference = harness.value_reference(2, 0);
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    assert_eq!(
+        harness.run_record().storage.unwrap().superseded_value_bytes,
+        0
+    );
+    harness.complete_wait_for("ChargeStep-1", 1);
+    assert!(harness.run_record().storage.unwrap().superseded_value_bytes > 0);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            RunId::from_slice(&harness.run_id).expect("started run"),
+            &first_reference,
+        )
+        .expect("window value remains readable")
+        .is_some()
+    );
+    assert_eq!(
+        harness.run_record().storage.unwrap(),
+        harness.recount_storage()
+    );
+}
+
+#[test]
+fn snapshot_pin_survives_window_advance_and_collects_after_attempt_completion() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 0;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_value = string_value(&"a".repeat(500));
+    let first_reference = harness.value_reference(2, 0);
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    harness.set_attribute("report", first_value.clone(), "set-1");
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    harness.set_attribute("report", string_value(&"d".repeat(500)), "set-4");
+    assert!(harness.run_record().window_start_seq > 2);
+    assert_eq!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference
+        )
+        .expect("snapshot value remains readable"),
+        Some(first_value)
+    );
+    assert_eq!(
+        harness
+            .state
+            .rows
+            .iter()
+            .filter(|((family, key), _)| {
+                *family == ColumnFamily::Flow
+                    && parse_run_key(key).is_ok_and(|parsed| {
+                        parsed.table == RunTable::ValueGarbage
+                            && value_id_from_suffix(&parsed.suffix[8..]) == (2, 0)
+                    })
+            })
+            .count(),
+        0
+    );
+    harness.complete_wait_for("ChargeStep-1", 1);
+    let end_seq = harness.run_record().next_run_seq - 1;
+    assert!(harness.state.rows.keys().any(|(family, key)| {
+        *family == ColumnFamily::Flow
+            && parse_run_key(key).is_ok_and(|parsed| {
+                parsed.table == RunTable::ValueGarbage
+                    && u64::from_be_bytes(parsed.suffix[..8].try_into().expect("G seq")) == end_seq
+                    && value_id_from_suffix(&parsed.suffix[8..]) == (2, 0)
+            })
+    }));
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference
+        )
+        .expect("newly superseded value remains readable")
+        .is_some()
+    );
+    harness.set_attribute("report", string_value(&"e".repeat(500)), "set-5");
+    assert!(harness.run_record().window_start_seq > end_seq);
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference
+        )
+        .expect("collected value is omitted")
+        .is_none()
+    );
+}
+
+#[test]
+fn client_state_limit_rejects_writes_without_changes() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.set_max_run_state_bytes(1);
+    let before = harness.state.rows.clone();
+    let rejected = harness.try_set_attribute("report", string_value(&"x".repeat(9000)), "set-1");
+    assert!(is_error(&rejected.reply, 8));
+    assert!(rejected.writes.is_empty());
+    assert_eq!(harness.state.rows, before);
+}
+
+#[test]
+fn worker_state_limit_becomes_a_non_retryable_attempt_failure() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_max_run_state_bytes(1);
+    let outcome = harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "report".to_owned(),
+                    value: Some(string_value(&"x".repeat(9000))),
+                    ..AttributeWrite::default()
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert!(!is_error(&outcome.reply, 8));
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    assert!(record.close.unwrap().error_message.contains("run state"));
+    assert_eq!(record.storage.unwrap(), harness.recount_storage());
+}
+
+#[test]
+fn state_limit_does_not_drop_an_attempt_start() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.set_max_run_state_bytes(1);
+    let started = harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    assert!(!started.writes.is_empty());
+    assert!(
+        started
+            .effects
+            .iter()
+            .any(|effect| { matches!(effect, ApplyEffect::InvocationStarted { .. }) })
+    );
+}
+
+#[test]
+fn state_limit_allows_timers_and_stop_to_settle_a_full_run() {
+    let mut timed = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.flow_timeout_seconds = 30;
+    timed.start(request);
+    timed.set_max_run_state_bytes(1);
+    let fired = timed.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::FlowTimeout(FlowTimeoutTimerId {})),
+        }],
+    }));
+    assert!(!fired.writes.is_empty());
+    assert_eq!(timed.run_record().status, FlowStatus::Failed as i32);
+
+    let mut stopped = Harness::new("order-1");
+    stopped.start(start_request("request-1"));
+    stopped.set_max_run_state_bytes(1);
+    let outcome = stopped.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Terminate as i32,
+            ..StopFlowRequest::default()
+        }),
+    }));
+    assert!(!outcome.writes.is_empty());
+    assert_ne!(stopped.run_record().status, FlowStatus::Running as i32);
+}
+
+#[test]
+fn state_limit_allows_attribute_deletion_to_release_a_value() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.set_attribute("report", string_value(&"x".repeat(500)), "set-1");
+    harness.set_max_run_state_bytes(1);
+    let deleted = harness.set_attribute("report", Value { kind: None }, "delete-1");
+    assert!(!deleted.writes.is_empty());
+    assert!(!is_error(&deleted.reply, 8));
+}
+
+#[test]
+fn value_size_limit_rejects_client_writes_and_fails_worker_attempts() {
+    let mut client_harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_value_bytes = 100;
+    client_harness.start_with_settings(start_request("request-1"), run_settings);
+    let rejected =
+        client_harness.try_set_attribute("report", string_value(&"x".repeat(500)), "set-1");
+    assert!(is_error(&rejected.reply, 3));
+    assert!(rejected.writes.is_empty());
+
+    let mut worker_harness = Harness::new("order-1");
+    worker_harness.start_with_settings(start_request("request-1"), run_settings);
+    worker_harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    worker_harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "report".to_owned(),
+                    value: Some(string_value(&"x".repeat(500))),
+                    ..AttributeWrite::default()
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    let record = worker_harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    assert!(
+        record
+            .close
+            .expect("failure has close details")
+            .error_message
+            .contains("value")
+    );
+}
 fn locking_options(lock_key: &str) -> StepOptions {
     StepOptions {
         skip_wait_for: true,
@@ -733,7 +1426,12 @@ fn stopping_a_flow_releases_held_locks_and_waiters() {
 
 /// Value-table bookkeeping read straight from the harness state.
 impl Harness {
-    fn set_attribute(&mut self, attribute_key: &str, value: Value, request_id: &str) {
+    fn set_attribute(
+        &mut self,
+        attribute_key: &str,
+        value: Value,
+        request_id: &str,
+    ) -> ApplyOutcome {
         self.set_attributes(
             AttributeWrite {
                 key: attribute_key.to_owned(),
@@ -742,7 +1440,7 @@ impl Harness {
             },
             Vec::new(),
             request_id,
-        );
+        )
     }
 
     fn set_hard_delete_attribute(

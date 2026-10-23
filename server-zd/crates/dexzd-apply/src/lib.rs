@@ -22,7 +22,7 @@ mod history;
 mod projections;
 mod state_access;
 mod steps;
-mod values;
+pub mod values;
 
 pub use apply_context::{ApplyContext, BehaviorVersion};
 pub use apply_outcome::{ApplyEffect, ApplyError, ApplyOutcome, StateWrite, WaitableChange};
