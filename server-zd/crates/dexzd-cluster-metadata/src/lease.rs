@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_clock::WallClock;
+use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use dexzd_protocol::dexzd::v1::NodeLease;
 use prost::Message;
@@ -98,6 +99,7 @@ struct LeaseOwner {
     etag: String,
     duration: Duration,
     last_request_sent: Instant,
+    current_valid_until: Instant,
     status: watch::Sender<LeaseStatus>,
 }
 
@@ -109,22 +111,23 @@ pub async fn acquire_lease(
     config: &LeaseConfig,
 ) -> Result<LeaseHandle, MetadataError> {
     let duration_micros =
-        i64::try_from(config.duration.as_micros()).map_err(|_| MetadataError::InvalidMetadata {
-            key: "lease",
+        i64::try_from(config.duration.as_micros()).map_err(|_| MetadataError::InvalidConfig {
+            field: "lease duration",
             detail: "lease duration exceeds i64 microseconds".to_owned(),
         })?;
     if duration_micros <= 0 || config.duration / 3 == Duration::ZERO {
-        return Err(MetadataError::InvalidMetadata {
-            key: "lease",
+        return Err(MetadataError::InvalidConfig {
+            field: "lease duration",
             detail: "lease duration must permit a positive renewal interval".to_owned(),
         });
     }
-    if node.node_id.is_empty() || node.node_id.contains('/') {
-        return Err(MetadataError::InvalidMetadata {
-            key: "lease",
-            detail: "node ID must be nonempty and contain no slash".to_owned(),
-        });
-    }
+    validate_node_identifier(&node.node_id)?;
+    let grace_micros = i64::try_from(config.takeover_grace.as_micros()).map_err(|_| {
+        MetadataError::InvalidConfig {
+            field: "lease takeover grace",
+            detail: "takeover grace exceeds i64 microseconds".to_owned(),
+        }
+    })?;
     let key = format!("lease/{}", node.node_id);
     let process_id = Uuid::new_v4().to_string();
     loop {
@@ -138,6 +141,7 @@ pub async fn acquire_lease(
                 })
             })
             .transpose()?;
+        let sent_at = Instant::now();
         let now = clock.now_unix_micros();
         if let Some(previous) = &previous {
             if previous.node_id != node.node_id {
@@ -146,12 +150,6 @@ pub async fn acquire_lease(
                     detail: "lease node ID disagrees with its object key".to_owned(),
                 });
             }
-            let grace_micros = i64::try_from(config.takeover_grace.as_micros()).map_err(|_| {
-                MetadataError::InvalidMetadata {
-                    key: "lease",
-                    detail: "takeover grace exceeds i64 microseconds".to_owned(),
-                }
-            })?;
             let available_at = previous.expires_at_unix_micros.saturating_add(grace_micros);
             if now < available_at {
                 if config.fail_fast {
@@ -187,7 +185,6 @@ pub async fn acquire_lease(
         let condition = existing.map_or(WriteCondition::CreateOnly, |content| {
             WriteCondition::ReplaceIfEtagMatches { etag: content.etag }
         });
-        let sent_at = Instant::now();
         let write_result = store
             .put(&key, Bytes::from(lease.encode_to_vec()), condition)
             .await;
@@ -228,6 +225,7 @@ pub async fn acquire_lease(
             etag,
             duration: config.duration,
             last_request_sent: sent_at,
+            current_valid_until: valid_until,
             status,
         };
         let epoch = bump_node_epoch(owner.store.as_ref(), owner.clock.as_ref(), node).await?;
@@ -238,7 +236,7 @@ pub async fn acquire_lease(
             });
         }
         owner.lease.epoch = epoch;
-        owner.renew().await?;
+        owner.renew_before_deadline().await?;
         drop(receiver.borrow_and_update());
         let renewal_task = tokio::spawn(async move { owner.run().await });
         return Ok(LeaseHandle {
@@ -253,13 +251,20 @@ impl LeaseOwner {
     async fn run(mut self) {
         loop {
             tokio::time::sleep_until(self.last_request_sent + self.duration / 3).await;
-            if let Err(error) = self.renew().await {
+            if let Err(error) = self.renew_before_deadline().await {
                 drop(
                     self.status
                         .send_replace(LeaseStatus::Lost(error.to_string())),
                 );
                 return;
             }
+        }
+    }
+
+    async fn renew_before_deadline(&mut self) -> Result<(), MetadataError> {
+        match tokio::time::timeout_at(self.current_valid_until, self.renew()).await {
+            Ok(result) => result,
+            Err(_) => Err(self.lost("renewal exceeded local lease deadline")),
         }
     }
 
@@ -271,6 +276,7 @@ impl LeaseOwner {
             .ok_or(MetadataError::Overflow {
                 field: "node lease version",
             })?;
+        let sent_at = Instant::now();
         proposed.expires_at_unix_micros = self
             .clock
             .now_unix_micros()
@@ -278,7 +284,6 @@ impl LeaseOwner {
             .ok_or(MetadataError::Overflow {
                 field: "lease expiry",
             })?;
-        let sent_at = Instant::now();
         let condition = WriteCondition::ReplaceIfEtagMatches {
             etag: self.etag.clone(),
         };
@@ -310,12 +315,16 @@ impl LeaseOwner {
             Err(error) => return Err(error.into()),
         };
         let valid_until = sent_at + self.duration;
+        if Instant::now() >= self.current_valid_until {
+            return Err(self.lost("renewal completed after previous lease deadline"));
+        }
         if Instant::now() >= valid_until {
             return Err(self.lost("renewal completed after local lease deadline"));
         }
         self.lease = proposed;
         self.etag = etag;
         self.last_request_sent = sent_at;
+        self.current_valid_until = valid_until;
         drop(
             self.status
                 .send_replace(LeaseStatus::ValidUntil(valid_until)),

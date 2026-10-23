@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,15 +16,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
-    AttributeIndexDeclaration, Change, ClusterConfig, LeaseConfig, LeaseStatus, MetadataError,
-    NodeConfig, acquire_lease, bootstrap_or_validate, bump_node_epoch, create_initial_manifest,
-    read_manifest, read_registry, register, update_manifest,
+    AttributeIndexDeclaration, ClusterConfig, LeaseConfig, LeaseStatus, ManifestChange,
+    MetadataError, NodeConfig, acquire_lease, bootstrap_or_validate, bump_node_epoch,
+    create_initial_manifest, raise_version_barrier, read_attribute_index_registry, read_manifest,
+    register_attribute_indexes, update_manifest, update_partition_snapshot,
 };
 use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
-use dexzd_protocol::dexzd::v1::{ClusterObject, ControllerLease, Manifest};
+use dexzd_protocol::dexzd::v1::{ClusterObject, ControllerLease, Manifest, SnapshotReference};
 use prost::Message;
 use tokio::sync::Barrier;
 use tokio::time::Instant;
@@ -34,6 +35,8 @@ struct MemoryStore {
     objects: Mutex<BTreeMap<String, (Bytes, String)>>,
     next_etag: AtomicU64,
     unknown_next_manifest_write: AtomicBool,
+    unknown_next_create_key: Mutex<Option<&'static str>>,
+    block_next_lease_renewal: AtomicBool,
     fail_next_lease_renewal: AtomicBool,
     manifest_read_barrier: Mutex<Option<(Arc<Barrier>, usize)>>,
 }
@@ -52,6 +55,30 @@ impl ObjectStore for MemoryStore {
         body: Bytes,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
+        if matches!(&condition, WriteCondition::CreateOnly) {
+            let mut unknown_key = self
+                .unknown_next_create_key
+                .lock()
+                .expect("test store mutex");
+            if unknown_key
+                .as_ref()
+                .is_some_and(|unknown_key| *unknown_key == key)
+            {
+                *unknown_key = None;
+                return Err(ObjectStoreError::new(
+                    ObjectStoreOperation::Put,
+                    key,
+                    ObjectStoreErrorKind::OutcomeUnknown,
+                    "injected lost response without write",
+                ));
+            }
+        }
+        if key.starts_with("lease/")
+            && matches!(&condition, WriteCondition::ReplaceIfEtagMatches { .. })
+            && self.block_next_lease_renewal.swap(false, Ordering::SeqCst)
+        {
+            return std::future::pending().await;
+        }
         if key.starts_with("lease/")
             && matches!(condition, WriteCondition::ReplaceIfEtagMatches { .. })
             && self.fail_next_lease_renewal.swap(false, Ordering::SeqCst)
@@ -222,6 +249,7 @@ impl ObjectStore for MemoryStore {
 struct TestClock {
     start: Instant,
     unix_micros: i64,
+    offset_micros: AtomicI64,
 }
 
 impl Default for TestClock {
@@ -229,13 +257,16 @@ impl Default for TestClock {
         Self {
             start: Instant::now(),
             unix_micros: 1_800_000_000_000_000,
+            offset_micros: AtomicI64::new(0),
         }
     }
 }
 
 impl WallClock for TestClock {
     fn now_unix_micros(&self) -> i64 {
-        self.unix_micros + self.start.elapsed().as_micros() as i64
+        self.unix_micros
+            + self.start.elapsed().as_micros() as i64
+            + self.offset_micros.load(Ordering::SeqCst)
     }
 }
 
@@ -315,6 +346,46 @@ async fn first_bootstrap_and_second_node_validate_immutable_cluster() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn rejected_node_ids_never_enter_manifest_or_lease_keys() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    let invalid_node = NodeConfig {
+        node_id: "Node_A".to_owned(),
+        ..node()
+    };
+    assert!(matches!(
+        create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &invalid_node).await,
+        Err(MetadataError::InvalidNodeIdentifier(_))
+    ));
+    assert!(matches!(
+        bump_node_epoch(store.as_ref(), clock.as_ref(), &invalid_node).await,
+        Err(MetadataError::InvalidNodeIdentifier(_))
+    ));
+    assert!(matches!(
+        acquire_lease(store.clone(), clock, &invalid_node, &LeaseConfig::default()).await,
+        Err(MetadataError::InvalidNodeIdentifier(_))
+    ));
+    assert_eq!(store.object_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn create_only_retries_when_unknown_write_did_not_land() {
+    let store = MemoryStore::default();
+    let clock = TestClock::default();
+    *store.unknown_next_create_key.lock().unwrap() = Some("cluster");
+    let cluster = bootstrap_or_validate(&store, &clock, ClusterConfig::default())
+        .await
+        .unwrap();
+    assert_eq!(cluster.partition_hasher.partition_count(), 1024);
+    *store.unknown_next_create_key.lock().unwrap() = Some("manifest");
+    let manifest = create_initial_manifest(&store, &clock, 2, &node())
+        .await
+        .unwrap();
+    assert_eq!(manifest.version, 1);
+    assert_eq!(store.object_count(), 2);
+}
+
+#[tokio::test(start_paused = true)]
 async fn concurrent_manifest_edits_both_apply_with_increasing_versions() {
     let store = Arc::new(MemoryStore::default());
     let clock = Arc::new(TestClock::default());
@@ -336,7 +407,7 @@ async fn concurrent_manifest_edits_both_apply_with_increasing_versions() {
         update_manifest(first_store.as_ref(), first_clock.as_ref(), |manifest| {
             manifest.nodes.get_mut("node-a").unwrap().internal_address =
                 "127.0.0.1:9001".to_owned();
-            Ok(Change::Changed)
+            Ok(ManifestChange::Changed)
         })
         .await
     });
@@ -348,7 +419,7 @@ async fn concurrent_manifest_edits_both_apply_with_increasing_versions() {
                 node_id: "node-a".to_owned(),
                 expires_at_unix_micros: 100,
             });
-            Ok(Change::Changed)
+            Ok(ManifestChange::Changed)
         })
         .await
     });
@@ -389,12 +460,67 @@ async fn manifest_write_with_unknown_outcome_is_applied_once() {
         .store(true, Ordering::SeqCst);
     let result = update_manifest(&store, &clock, |manifest: &mut Manifest| {
         manifest.nodes.get_mut("node-a").unwrap().internal_address = "new-address".to_owned();
-        Ok(Change::Changed)
+        Ok(ManifestChange::Changed)
     })
     .await
     .unwrap();
     assert_eq!(result.version, 2);
     assert_eq!(read_manifest(&store).await.unwrap().unwrap().version, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_and_version_barrier_updates_reject_unsupported_versions() {
+    let store = MemoryStore::default();
+    let clock = TestClock::default();
+    create_initial_manifest(&store, &clock, 2, &node())
+        .await
+        .unwrap();
+    let snapshot = SnapshotReference {
+        node_id: "node-a".to_owned(),
+        lineage_id: vec![7; 16],
+        snapshot_number: 1,
+        manifest_key: "snapshot/node-a/manifest/1".to_owned(),
+    };
+    let updated = update_partition_snapshot(&store, &clock, 0, snapshot.clone())
+        .await
+        .unwrap();
+    assert_eq!(updated.version, 2);
+    assert_eq!(
+        update_partition_snapshot(&store, &clock, 0, snapshot)
+            .await
+            .unwrap()
+            .version,
+        2
+    );
+    assert_eq!(
+        raise_version_barrier(&store, &clock, 1, 1)
+            .await
+            .unwrap()
+            .version,
+        2
+    );
+    assert!(matches!(
+        raise_version_barrier(&store, &clock, 2, 1).await,
+        Err(MetadataError::UnsupportedVersionBarrier { .. })
+    ));
+    let mut future_manifest = read_manifest(&store).await.unwrap().unwrap();
+    future_manifest
+        .version_barrier
+        .as_mut()
+        .unwrap()
+        .format_version = 2;
+    store
+        .put(
+            "manifest",
+            Bytes::from(future_manifest.encode_to_vec()),
+            WriteCondition::Unconditional,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        update_manifest(&store, &clock, |_| Ok(ManifestChange::Changed)).await,
+        Err(MetadataError::UnsupportedVersionBarrier { .. })
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -492,6 +618,83 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn waiter_stays_pending_while_holder_renews() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let holder = acquire_lease(
+        store.clone(),
+        clock.clone(),
+        &node(),
+        &LeaseConfig::default(),
+    )
+    .await
+    .unwrap();
+    let waiter =
+        tokio::spawn(
+            async move { acquire_lease(store, clock, &node(), &LeaseConfig::default()).await },
+        );
+    tokio::task::yield_now().await;
+    for _ in 0..6 {
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+    }
+    holder.shutdown().await;
+    waiter.abort();
+    assert!(matches!(waiter.await, Err(error) if error.is_cancelled()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn old_holder_reports_loss_after_takeover() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let old_holder = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    let mut old_status = old_holder.subscribe();
+    clock.offset_micros.store(12_000_000, Ordering::SeqCst);
+    let new_holder = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    assert_eq!(new_holder.epoch(), old_holder.epoch() + 1);
+    tokio::time::advance(Duration::from_secs(4)).await;
+    old_status.changed().await.unwrap();
+    assert!(
+        matches!(&*old_status.borrow(), LeaseStatus::Lost(detail) if detail.contains("precondition failed"))
+    );
+    old_holder.shutdown().await;
+    new_holder.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn hung_renewal_reports_loss_at_the_local_deadline() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let holder = acquire_lease(store.clone(), clock, &node(), &LeaseConfig::default())
+        .await
+        .unwrap();
+    let mut status = holder.subscribe();
+    store.block_next_lease_renewal.store(true, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(9)).await;
+    assert!(matches!(*status.borrow(), LeaseStatus::ValidUntil(_)));
+    tokio::time::advance(Duration::from_secs(2)).await;
+    status.changed().await.unwrap();
+    assert!(matches!(&*status.borrow(), LeaseStatus::Lost(detail) if detail.contains("deadline")));
+    holder.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn renewal_failure_reports_lease_loss() {
     let store = Arc::new(MemoryStore::default());
     let clock = Arc::new(TestClock::default());
@@ -519,21 +722,51 @@ async fn registry_adds_keys_and_rejects_type_conflicts_without_noop_writes() {
         index_key: "status".to_owned(),
         index_type: 1,
     };
-    let first = register(&store, &clock, 7, std::slice::from_ref(&declaration))
+    let first = register_attribute_indexes(&store, &clock, 7, std::slice::from_ref(&declaration))
         .await
         .unwrap();
     assert_eq!(first.version, 1);
     let write_count = store.next_etag.load(Ordering::SeqCst);
-    let second = register(&store, &clock, 7, &[declaration]).await.unwrap();
+    let second = register_attribute_indexes(&store, &clock, 7, &[declaration])
+        .await
+        .unwrap();
     assert_eq!(second.version, 1);
     assert_eq!(store.next_etag.load(Ordering::SeqCst), write_count);
-    assert_eq!(read_registry(&store).await.unwrap().registrations.len(), 1);
+    assert_eq!(
+        read_attribute_index_registry(&store)
+            .await
+            .unwrap()
+            .registrations
+            .len(),
+        1
+    );
     let conflicting = AttributeIndexDeclaration {
         index_key: "status".to_owned(),
         index_type: 2,
     };
     assert!(matches!(
-        register(&store, &clock, 7, &[conflicting]).await,
+        register_attribute_indexes(&store, &clock, 7, &[conflicting]).await,
         Err(MetadataError::AttributeIndexConflict { .. })
     ));
+    let fresh_store = MemoryStore::default();
+    assert!(matches!(
+        register_attribute_indexes(
+            &fresh_store,
+            &clock,
+            7,
+            &[
+                AttributeIndexDeclaration {
+                    index_key: "status".to_owned(),
+                    index_type: 1
+                },
+                AttributeIndexDeclaration {
+                    index_key: "status".to_owned(),
+                    index_type: 2
+                },
+            ],
+        )
+        .await,
+        Err(MetadataError::AttributeIndexConflict { .. })
+    ));
+    assert_eq!(fresh_store.object_count(), 0);
 }
