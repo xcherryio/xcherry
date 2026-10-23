@@ -43,6 +43,17 @@ const OBJECT_READ_PARAMETERS: [&str; 7] = [
     "response-expires",
 ];
 
+const LIST_UPLOADS_PARAMETERS: [&str; 7] = [
+    "uploads",
+    "prefix",
+    "delimiter",
+    "max-uploads",
+    "key-marker",
+    "upload-id-marker",
+    "encoding-type",
+];
+const LIST_PARTS_PARAMETERS: [&str; 3] = ["uploadId", "max-parts", "part-number-marker"];
+
 /// An S3 operation with its path parameters.
 #[derive(Debug)]
 pub(crate) enum S3Operation {
@@ -64,6 +75,43 @@ pub(crate) enum S3Operation {
     },
     PutBucketVersioning {
         bucket: String,
+    },
+    GetObjectLockConfiguration {
+        bucket: String,
+    },
+    PutObjectLockConfiguration {
+        bucket: String,
+    },
+    ListMultipartUploads {
+        bucket: String,
+        query: QueryParameters,
+    },
+    DeleteObjects {
+        bucket: String,
+    },
+    CreateMultipartUpload {
+        bucket: String,
+        key: String,
+    },
+    UploadPart {
+        bucket: String,
+        key: String,
+        query: QueryParameters,
+    },
+    CompleteMultipartUpload {
+        bucket: String,
+        key: String,
+        query: QueryParameters,
+    },
+    AbortMultipartUpload {
+        bucket: String,
+        key: String,
+        query: QueryParameters,
+    },
+    ListParts {
+        bucket: String,
+        key: String,
+        query: QueryParameters,
     },
     ListObjectsV2 {
         bucket: String,
@@ -167,6 +215,18 @@ fn route_bucket(
     query: QueryParameters,
 ) -> Result<S3Operation, S3Error> {
     match *method {
+        Method::PUT if query.contains("object-lock") => {
+            query.require_only(&["object-lock"], "PutObjectLockConfiguration")?;
+            Ok(S3Operation::PutObjectLockConfiguration { bucket })
+        }
+        Method::GET if query.contains("object-lock") => {
+            query.require_only(&["object-lock"], "GetObjectLockConfiguration")?;
+            Ok(S3Operation::GetObjectLockConfiguration { bucket })
+        }
+        Method::GET if query.contains("uploads") => {
+            query.require_only(&LIST_UPLOADS_PARAMETERS, "ListMultipartUploads")?;
+            Ok(S3Operation::ListMultipartUploads { bucket, query })
+        }
         Method::PUT if query.contains("versioning") => {
             query.require_only(&["versioning"], "PutBucketVersioning")?;
             Ok(S3Operation::PutBucketVersioning { bucket })
@@ -193,7 +253,10 @@ fn route_bucket(
             Ok(S3Operation::ListObjectsV2 { bucket, query })
         }
         Method::GET => Err(S3Error::not_implemented("ListObjects (version 1)")),
-        Method::POST if query.contains("delete") => Err(S3Error::not_implemented("DeleteObjects")),
+        Method::POST if query.contains("delete") => {
+            query.require_only(&["delete"], "DeleteObjects")?;
+            Ok(S3Operation::DeleteObjects { bucket })
+        }
         _ => Err(method_not_allowed()),
     }
 }
@@ -205,9 +268,29 @@ fn route_object(
     query: QueryParameters,
 ) -> Result<S3Operation, S3Error> {
     match *method {
+        Method::PUT if query.contains("uploadId") => {
+            query.require_only(&["uploadId", "partNumber"], "UploadPart")?;
+            Ok(S3Operation::UploadPart { bucket, key, query })
+        }
         Method::PUT => {
             query.require_only(&[], "this object PUT")?;
             Ok(S3Operation::PutObject { bucket, key })
+        }
+        Method::POST if query.contains("uploads") => {
+            query.require_only(&["uploads"], "CreateMultipartUpload")?;
+            Ok(S3Operation::CreateMultipartUpload { bucket, key })
+        }
+        Method::POST if query.contains("uploadId") => {
+            query.require_only(&["uploadId"], "CompleteMultipartUpload")?;
+            Ok(S3Operation::CompleteMultipartUpload { bucket, key, query })
+        }
+        Method::DELETE if query.contains("uploadId") => {
+            query.require_only(&["uploadId"], "AbortMultipartUpload")?;
+            Ok(S3Operation::AbortMultipartUpload { bucket, key, query })
+        }
+        Method::GET if query.contains("uploadId") => {
+            query.require_only(&LIST_PARTS_PARAMETERS, "ListParts")?;
+            Ok(S3Operation::ListParts { bucket, key, query })
         }
         Method::GET => {
             query.require_only(&OBJECT_READ_PARAMETERS, "GetObject")?;

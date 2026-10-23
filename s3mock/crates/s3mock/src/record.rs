@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::checksum::ObjectChecksum;
+use crate::checksum::{ChecksumAlgorithm, ChecksumType, ObjectChecksum};
 
 /// Versioning state of a bucket, following S3's three states.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +29,24 @@ pub struct BucketRecord {
     pub incarnation: String,
     pub created_unix_ms: i64,
     pub versioning: VersioningState,
+    /// Stored and returned only; s3mock never enforces retention.
+    #[serde(default)]
+    pub object_lock: Option<ObjectLockConfiguration>,
+}
+
+/// Object Lock configuration of a bucket created with Object Lock enabled.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectLockConfiguration {
+    pub default_retention: Option<DefaultRetention>,
+}
+
+/// The default retention rule of an Object Lock configuration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultRetention {
+    /// `GOVERNANCE` or `COMPLIANCE`.
+    pub mode: String,
+    pub days: Option<u32>,
+    pub years: Option<u32>,
 }
 
 /// Content headers that S3 stores with an object and returns on GET and HEAD.
@@ -59,6 +77,37 @@ pub struct VersionRecord {
     pub last_modified_unix_ms: i64,
     /// Data file name relative to the bucket data directory; absent for delete markers.
     pub data_file: Option<String>,
+    /// Number of parts for an object completed by a multipart upload.
+    #[serde(default)]
+    pub parts_count: Option<u32>,
+}
+
+/// An in-progress multipart upload, persisted in the `uploads` table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadRecord {
+    pub upload_id: String,
+    pub key: String,
+    /// The bucket incarnation the upload belongs to.
+    pub bucket_incarnation: String,
+    pub initiated_unix_ms: i64,
+    pub content_headers: ContentHeaders,
+    pub user_metadata: BTreeMap<String, String>,
+    /// Algorithm the client chose at creation; parts must carry it.
+    pub checksum_algorithm: Option<ChecksumAlgorithm>,
+    pub checksum_type: ChecksumType,
+}
+
+/// One uploaded part, persisted in the `parts` table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartRecord {
+    pub part_number: u32,
+    pub size: u64,
+    /// Unquoted MD5 ETag of the part.
+    pub etag: String,
+    pub checksum: ObjectChecksum,
+    pub last_modified_unix_ms: i64,
+    /// Part file name relative to the bucket data directory.
+    pub data_file: String,
 }
 
 impl VersionRecord {

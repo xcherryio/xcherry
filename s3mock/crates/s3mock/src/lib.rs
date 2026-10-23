@@ -15,14 +15,19 @@ mod key_codec;
 mod record;
 mod store;
 
-pub use checksum::{ChecksumAlgorithm, ObjectChecksum, decode_base64};
+pub use checksum::{ChecksumAlgorithm, ChecksumType, ObjectChecksum, decode_base64, md5_base64};
 pub use data_file::{ObjectWriter, StagedObject, UploadChecksumExpectations};
 pub use error::StoreError;
-pub use record::{BucketRecord, ContentHeaders, VersionRecord, VersioningState};
+pub use record::{
+    BucketRecord, ContentHeaders, DefaultRetention, ObjectLockConfiguration, PartRecord,
+    UploadRecord, VersionRecord, VersioningState,
+};
 pub use store::{
-    ByteRangeRequest, DeleteObjectOutcome, DeleteObjectRequest, Durability, ListObjectVersionsPage,
-    ListObjectVersionsRequest, ListObjectsPage, ListObjectsRequest, ListedObject, ListedVersion,
-    MAX_KEYS_LIMIT, ObjectBody, ObjectReadRequest, ObjectSelection, OrphanCollection,
-    PutObjectOutcome, PutObjectRequest, ReadConditions, ResolvedRange, Store, StoreConfig,
-    WriteCondition,
+    ByteRangeRequest, CompleteMultipartUploadRequest, CompletedPart, CreateMultipartUploadRequest,
+    DeleteObjectOutcome, DeleteObjectRequest, Durability, ListMultipartUploadsRequest,
+    ListObjectVersionsPage, ListObjectVersionsRequest, ListObjectsPage, ListObjectsRequest,
+    ListPartsRequest, ListedObject, ListedVersion, MAX_KEYS_LIMIT, MAX_PART_NUMBER,
+    MultipartUploadsPage, ObjectBody, ObjectReadRequest, ObjectSelection, OrphanCollection,
+    PartsPage, PutObjectOutcome, PutObjectRequest, ReadConditions, ResolvedRange, Store,
+    StoreConfig, WriteCondition,
 };

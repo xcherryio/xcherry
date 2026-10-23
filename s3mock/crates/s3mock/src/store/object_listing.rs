@@ -224,13 +224,13 @@ impl Store {
 }
 
 /// An owned table entry, so the scan can seek again without holding a borrowed range.
-struct TableEntry {
-    key: Vec<u8>,
-    value: Vec<u8>,
+pub(super) struct TableEntry {
+    pub(super) key: Vec<u8>,
+    pub(super) value: Vec<u8>,
 }
 
 /// Returns the first entry in `[start, end)`.
-fn first_entry(
+pub(super) fn first_entry(
     table: &impl ReadableTable<&'static [u8], &'static [u8]>,
     start: &[u8],
     end: &[u8],
@@ -250,12 +250,12 @@ fn first_entry(
     }
 }
 
-fn is_at_or_before(common_prefix: &str, marker: Option<&str>) -> bool {
+pub(super) fn is_at_or_before(common_prefix: &str, marker: Option<&str>) -> bool {
     marker.is_some_and(|marker| common_prefix <= marker)
 }
 
 /// Returns the common prefix that `key` folds into, if the delimiter occurs after `prefix`.
-fn fold_common_prefix(key: &str, prefix: &str, delimiter: &str) -> Option<String> {
+pub(super) fn fold_common_prefix(key: &str, prefix: &str, delimiter: &str) -> Option<String> {
     if delimiter.is_empty() {
         return None;
     }
@@ -266,18 +266,18 @@ fn fold_common_prefix(key: &str, prefix: &str, delimiter: &str) -> Option<String
 }
 
 /// Smallest encoded key after every entry of `key`, in both the latest and versions tables.
-fn after_key(bucket: &str, key: &str) -> Vec<u8> {
+pub(super) fn after_key(bucket: &str, key: &str) -> Vec<u8> {
     prefix_successor(&encode_object_key(bucket, key))
         .expect("encoded object keys end with a terminator below 0xFF")
 }
 
 /// Smallest encoded key after every key starting with `prefix`.
-fn after_prefix(bucket: &str, prefix: &str) -> Vec<u8> {
+pub(super) fn after_prefix(bucket: &str, prefix: &str) -> Vec<u8> {
     prefix_successor(&encode_key_prefix(bucket, prefix))
         .expect("encoded key prefixes contain a byte below 0xFF")
 }
 
-fn immediate_successor(encoded_key: &[u8]) -> Vec<u8> {
+pub(super) fn immediate_successor(encoded_key: &[u8]) -> Vec<u8> {
     let mut successor = encoded_key.to_vec();
     successor.push(0);
     successor

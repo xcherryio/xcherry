@@ -154,7 +154,37 @@ async fn dispatch(store: Arc<Store>, request: Request<Incoming>) -> Result<S3Res
     let (parts, body) = request.into_parts();
     match operation {
         S3Operation::ListBuckets => handlers::list_buckets(store).await,
-        S3Operation::CreateBucket { bucket } => handlers::create_bucket(store, bucket).await,
+        S3Operation::CreateBucket { bucket } => {
+            handlers::create_bucket(store, bucket, &parts.headers).await
+        }
+        S3Operation::GetObjectLockConfiguration { bucket } => {
+            handlers::get_object_lock_configuration(store, bucket).await
+        }
+        S3Operation::PutObjectLockConfiguration { bucket } => {
+            handlers::put_object_lock_configuration(store, bucket, &parts.headers, body).await
+        }
+        S3Operation::ListMultipartUploads { bucket, query } => {
+            handlers::list_multipart_uploads(store, bucket, query).await
+        }
+        S3Operation::DeleteObjects { bucket } => {
+            handlers::delete_objects(store, bucket, parts.headers, body).await
+        }
+        S3Operation::CreateMultipartUpload { bucket, key } => {
+            handlers::create_multipart_upload(store, bucket, key, &parts.headers).await
+        }
+        S3Operation::UploadPart { bucket, key, query } => {
+            handlers::upload_part(store, bucket, key, query, parts.headers, body).await
+        }
+        S3Operation::CompleteMultipartUpload { bucket, key, query } => {
+            handlers::complete_multipart_upload(store, bucket, key, query, &parts.headers, body)
+                .await
+        }
+        S3Operation::AbortMultipartUpload { bucket, key, query } => {
+            handlers::abort_multipart_upload(store, bucket, key, query).await
+        }
+        S3Operation::ListParts { bucket, key, query } => {
+            handlers::list_parts(store, bucket, key, query).await
+        }
         S3Operation::HeadBucket { bucket } => handlers::head_bucket(store, bucket).await,
         S3Operation::DeleteBucket { bucket } => handlers::delete_bucket(store, bucket).await,
         S3Operation::GetBucketLocation { bucket } => {

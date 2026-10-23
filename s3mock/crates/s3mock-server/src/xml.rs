@@ -8,6 +8,8 @@
 
 //! S3 XML documents: a small escaping writer, request-body parsing, and S3 timestamps.
 
+use std::collections::BTreeMap;
+
 use quick_xml::events::Event;
 
 use crate::s3_error::S3Error;
@@ -94,6 +96,52 @@ pub(crate) fn first_element_text(body: &[u8], element: &str) -> Result<Option<St
                 }
             }
             Ok(Event::Eof) => return Ok(None),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(S3Error::malformed_xml(format!(
+                    "the XML is not well formed: {error}"
+                )));
+            }
+        }
+        buffer.clear();
+    }
+}
+
+/// Returns the child element texts of every `container` element, such as each `<Part>` of a part list.
+pub(crate) fn repeated_elements(
+    body: &[u8],
+    container: &str,
+) -> Result<Vec<BTreeMap<String, String>>, S3Error> {
+    let mut reader = quick_xml::Reader::from_reader(body);
+    let mut buffer = Vec::new();
+    let mut entries = Vec::new();
+    let mut current: Option<BTreeMap<String, String>> = None;
+    let mut child: Option<String> = None;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => {
+                let name = String::from_utf8_lossy(start.local_name().as_ref()).into_owned();
+                if name == container {
+                    current = Some(BTreeMap::new());
+                } else if current.is_some() {
+                    child = Some(name);
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(fields), Some(name)) = (current.as_mut(), child.as_ref()) {
+                    let unescaped = text.unescape().map_err(|error| {
+                        S3Error::malformed_xml(format!("invalid XML text: {error}"))
+                    })?;
+                    fields.insert(name.clone(), unescaped.into_owned());
+                }
+            }
+            Ok(Event::End(end)) => {
+                if end.local_name().as_ref() == container.as_bytes() {
+                    entries.extend(current.take());
+                }
+                child = None;
+            }
+            Ok(Event::Eof) => return Ok(entries),
             Ok(_) => {}
             Err(error) => {
                 return Err(S3Error::malformed_xml(format!(

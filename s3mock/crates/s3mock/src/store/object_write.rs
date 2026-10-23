@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 use redb::ReadableTable;
 use ulid::Ulid;
 
+use super::multipart::{remove_upload, remove_upload_directory};
 use super::{
-    BUCKETS, LATEST, Store, VERSIONS, create_directory_durably, decode_json, encode_json,
-    load_versions, refresh_latest, relative_data_file, remove_superseded_files, require_bucket,
-    validate_object_key,
+    BUCKETS, LATEST, PARTS, Store, UPLOADS, VERSIONS, create_directory_durably, decode_json,
+    encode_json, load_versions, refresh_latest, relative_data_file, remove_superseded_files,
+    require_bucket, validate_object_key,
 };
 use crate::checksum::{ChecksumAlgorithm, ObjectChecksum};
 use crate::data_file::{self, DataFileHeader, ObjectWriter, StagedObject};
@@ -84,14 +85,35 @@ impl Store {
         staged: StagedObject,
         request: PutObjectRequest,
     ) -> Result<PutObjectOutcome, StoreError> {
-        let PutObjectRequest {
-            content_headers,
-            user_metadata,
-            write_condition,
-        } = request;
-        let published =
-            self.publish_data_file(bucket, key, staged, content_headers, user_metadata)?;
-        match self.commit_version(bucket, key, &published, &write_condition) {
+        let attributes = VersionAttributes {
+            content_headers: request.content_headers,
+            user_metadata: request.user_metadata,
+            etag: staged.md5_hex.clone(),
+            checksum: staged.checksum.clone(),
+            parts_count: None,
+        };
+        self.publish_and_commit(
+            bucket,
+            key,
+            staged,
+            attributes,
+            &request.write_condition,
+            None,
+        )
+    }
+
+    /// Publishes a staged data file and commits it as the newest version, removing the file on failure.
+    pub(super) fn publish_and_commit(
+        &self,
+        bucket: &str,
+        key: &str,
+        staged: StagedObject,
+        attributes: VersionAttributes,
+        write_condition: &WriteCondition,
+        completed_upload: Option<&CompletedUpload>,
+    ) -> Result<PutObjectOutcome, StoreError> {
+        let published = self.publish_data_file(bucket, key, staged, attributes)?;
+        match self.commit_version(bucket, key, &published, write_condition, completed_upload) {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
                 remove_unreferenced_file(&published.path);
@@ -106,8 +128,7 @@ impl Store {
         bucket: &str,
         key: &str,
         staged: StagedObject,
-        content_headers: ContentHeaders,
-        user_metadata: BTreeMap<String, String>,
+        attributes: VersionAttributes,
     ) -> Result<PublishedDataFile, StoreError> {
         let bucket_record = self.bucket(bucket)?;
         if bucket_record.incarnation != staged.bucket_incarnation {
@@ -120,12 +141,13 @@ impl Store {
             is_null_version: bucket_record.versioning != VersioningState::Enabled,
             is_delete_marker: false,
             size: staged.size,
-            etag: staged.md5_hex.clone(),
-            checksum: Some(staged.checksum.clone()),
-            content_headers,
-            user_metadata,
+            etag: attributes.etag,
+            checksum: Some(attributes.checksum),
+            content_headers: attributes.content_headers,
+            user_metadata: attributes.user_metadata,
             last_modified_unix_ms: unix_ms(staged.upload_id),
             data_file: Some(relative_path.clone()),
+            parts_count: attributes.parts_count,
         };
         let header = DataFileHeader {
             bucket: bucket.to_owned(),
@@ -163,9 +185,11 @@ impl Store {
         key: &str,
         published: &PublishedDataFile,
         write_condition: &WriteCondition,
+        completed_upload: Option<&CompletedUpload>,
     ) -> Result<PutObjectOutcome, StoreError> {
         let transaction = self.begin_write()?;
         let mut superseded_files = Vec::new();
+        let mut upload_directory = None;
         let (versioning, internal_version) = {
             let buckets = transaction.open_table(BUCKETS)?;
             let bucket_record = require_bucket(&buckets, bucket)?;
@@ -180,6 +204,12 @@ impl Store {
                 None => None,
             };
             check_write_condition(write_condition, current.as_ref(), bucket, key)?;
+            if let Some(upload) = completed_upload {
+                let mut uploads = transaction.open_table(UPLOADS)?;
+                let mut parts = transaction.open_table(PARTS)?;
+                remove_upload(&mut uploads, &mut parts, upload)?;
+                upload_directory = Some(self.upload_directory(&bucket_record, &upload.upload_id));
+            }
             // Write transactions are serialized, so this ULID orders versions by commit.
             let internal_version = self.next_internal_version();
             let mut record = published.record.clone();
@@ -203,6 +233,9 @@ impl Store {
         };
         transaction.commit()?;
         remove_superseded_files(&superseded_files);
+        if let Some(directory) = upload_directory {
+            remove_upload_directory(&directory);
+        }
         Ok(PutObjectOutcome {
             etag: published.record.etag.clone(),
             version_id: version_id_for(versioning, internal_version),
@@ -213,6 +246,21 @@ impl Store {
                 .expect("uploaded versions always carry a checksum"),
         })
     }
+}
+
+/// What a committed version stores besides its data, chosen by PutObject or a multipart completion.
+pub(super) struct VersionAttributes {
+    pub(super) content_headers: ContentHeaders,
+    pub(super) user_metadata: BTreeMap<String, String>,
+    pub(super) etag: String,
+    pub(super) checksum: ObjectChecksum,
+    pub(super) parts_count: Option<u32>,
+}
+
+/// The multipart upload a commit consumes, removed in the same transaction.
+pub(super) struct CompletedUpload {
+    pub(super) upload_key: Vec<u8>,
+    pub(super) upload_id: String,
 }
 
 /// A data file that is durable on disk but not yet referenced by metadata.

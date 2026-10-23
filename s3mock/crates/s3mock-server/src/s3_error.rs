@@ -126,6 +126,26 @@ impl From<StoreError> for S3Error {
                 S3Error::new(StatusCode::BAD_REQUEST, "InvalidRequest", message)
             }
             StoreError::InvalidArgument(_) => S3Error::invalid_argument(message),
+            StoreError::InvalidBucketState(_) => {
+                S3Error::new(StatusCode::CONFLICT, "InvalidBucketState", message)
+            }
+            StoreError::ObjectLockConfigurationNotFound(_) => S3Error::new(
+                StatusCode::NOT_FOUND,
+                "ObjectLockConfigurationNotFoundError",
+                message,
+            ),
+            StoreError::NoSuchUpload { .. } => {
+                S3Error::new(StatusCode::NOT_FOUND, "NoSuchUpload", message)
+            }
+            StoreError::InvalidPart(_) => {
+                S3Error::new(StatusCode::BAD_REQUEST, "InvalidPart", message)
+            }
+            StoreError::InvalidPartOrder => {
+                S3Error::new(StatusCode::BAD_REQUEST, "InvalidPartOrder", message)
+            }
+            StoreError::EntityTooSmall { .. } => {
+                S3Error::new(StatusCode::BAD_REQUEST, "EntityTooSmall", message)
+            }
             StoreError::CorruptDataFile { .. }
             | StoreError::Metadata(_)
             | StoreError::CorruptMetadata(_)

@@ -10,6 +10,8 @@
 
 mod bucket;
 mod maintenance;
+mod multipart;
+mod multipart_complete;
 mod object_delete;
 mod object_listing;
 mod object_read;
@@ -30,6 +32,11 @@ use crate::key_codec::{encode_object_key, prefix_successor};
 use crate::record::{BucketRecord, VersionRecord};
 
 pub use maintenance::OrphanCollection;
+pub use multipart::{
+    CompletedPart, CreateMultipartUploadRequest, ListMultipartUploadsRequest, ListPartsRequest,
+    MAX_PART_NUMBER, MultipartUploadsPage, PartsPage,
+};
+pub use multipart_complete::CompleteMultipartUploadRequest;
 pub use object_delete::{DeleteObjectOutcome, DeleteObjectRequest};
 pub use object_listing::MAX_KEYS_LIMIT;
 pub use object_listing::{
@@ -46,6 +53,12 @@ const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
 const VERSIONS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("versions");
 /// The current version of every key whose newest version is not a delete marker.
 const LATEST: TableDefinition<&[u8], &[u8]> = TableDefinition::new("latest");
+/// In-progress multipart uploads, keyed by `encode_upload_key`.
+const UPLOADS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("uploads");
+/// Uploaded parts, keyed by `encode_part_key`.
+const PARTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("parts");
+/// Bucket subdirectory holding one directory of part files per upload.
+const UPLOADS_DIRECTORY_NAME: &str = "uploads";
 
 const METADATA_FILE_NAME: &str = "metadata.redb";
 const DATA_DIRECTORY_NAME: &str = "data";
@@ -120,6 +133,8 @@ impl Store {
         transaction.open_table(BUCKETS)?;
         transaction.open_table(VERSIONS)?;
         transaction.open_table(LATEST)?;
+        transaction.open_table(UPLOADS)?;
+        transaction.open_table(PARTS)?;
         transaction.commit()?;
         Ok(())
     }
@@ -147,6 +162,12 @@ impl Store {
 
     fn bucket_directory(&self, bucket: &BucketRecord) -> PathBuf {
         self.data_directory.join(&bucket.incarnation)
+    }
+
+    fn upload_directory(&self, bucket: &BucketRecord, upload_id: &str) -> PathBuf {
+        self.bucket_directory(bucket)
+            .join(UPLOADS_DIRECTORY_NAME)
+            .join(upload_id)
     }
 
     fn data_file_path(&self, bucket: &BucketRecord, record: &VersionRecord) -> Option<PathBuf> {

@@ -20,7 +20,7 @@ fn open_versioned_store(directory: &tempfile::TempDir) -> Store {
     })
     .expect("the store test setup succeeds");
     store
-        .create_bucket("ordering")
+        .create_bucket("ordering", false)
         .expect("the store test setup succeeds");
     store
         .put_bucket_versioning("ordering", VersioningState::Enabled)

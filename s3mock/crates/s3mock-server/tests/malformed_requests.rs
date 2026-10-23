@@ -27,7 +27,7 @@ async fn start_with_bucket() -> RunningServer {
     })
     .expect("the raw HTTP test harness I/O succeeds");
     store
-        .create_bucket("raw")
+        .create_bucket("raw", false)
         .expect("the raw HTTP test harness I/O succeeds");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

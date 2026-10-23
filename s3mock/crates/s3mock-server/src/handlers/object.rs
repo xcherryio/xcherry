@@ -91,7 +91,10 @@ pub(crate) async fn put_object(
             outcome.checksum.algorithm.header_name(),
             outcome.checksum.base64_value,
         ));
-        response_headers.push(("x-amz-checksum-type", "FULL_OBJECT".to_owned()));
+        response_headers.push((
+            "x-amz-checksum-type",
+            outcome.checksum.checksum_type.s3_name().to_owned(),
+        ));
     }
     let borrowed: Vec<(&str, &str)> = response_headers
         .iter()
@@ -101,7 +104,7 @@ pub(crate) async fn put_object(
 }
 
 /// Streams the request body into the writer on a blocking thread and returns the aws-chunked trailers.
-async fn stream_upload(
+pub(super) async fn stream_upload(
     writer: ObjectWriter,
     body: Incoming,
     encoding: BodyEncoding,
@@ -191,7 +194,7 @@ async fn receive_body(
     Ok(trailers)
 }
 
-fn expected_checksum(
+pub(super) fn expected_checksum(
     plan: &UploadChecksumPlan,
     trailers: &[(String, String)],
 ) -> Result<Option<String>, S3Error> {
@@ -284,7 +287,7 @@ fn object_read_request(query: &QueryParameters, headers: &HeaderMap) -> ObjectRe
     }
 }
 
-fn is_checksum_mode_enabled(headers: &HeaderMap) -> bool {
+pub(super) fn is_checksum_mode_enabled(headers: &HeaderMap) -> bool {
     header_text(headers, "x-amz-checksum-mode")
         .is_some_and(|mode| mode.eq_ignore_ascii_case("ENABLED"))
 }
@@ -380,7 +383,7 @@ fn object_response_builder(
                 checksum.algorithm.header_name(),
                 header_value(&checksum.base64_value),
             )
-            .header("x-amz-checksum-type", "FULL_OBJECT");
+            .header("x-amz-checksum-type", checksum.checksum_type.s3_name());
     }
     builder
 }

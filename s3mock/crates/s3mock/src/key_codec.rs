@@ -56,6 +56,20 @@ pub(crate) fn encode_version_key(bucket: &str, key: &str, internal_version: Ulid
     output
 }
 
+/// Encodes `(bucket, key, upload)` so uploads of a key sort by initiation time.
+pub(crate) fn encode_upload_key(bucket: &str, key: &str, upload_id: Ulid) -> Vec<u8> {
+    let mut output = encode_object_key(bucket, key);
+    output.extend_from_slice(&upload_id.0.to_be_bytes());
+    output
+}
+
+/// Encodes a part of an upload so parts sort by part number.
+pub(crate) fn encode_part_key(upload_key: &[u8], part_number: u32) -> Vec<u8> {
+    let mut output = upload_key.to_vec();
+    output.extend_from_slice(&part_number.to_be_bytes());
+    output
+}
+
 /// Decodes the object key from an encoded latest-table or version-table key.
 pub(crate) fn decode_object_key(encoded: &[u8], bucket: &str) -> String {
     let bucket_prefix = encode_bucket_prefix(bucket);
