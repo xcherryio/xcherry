@@ -221,7 +221,7 @@ fn release_previous(
 
 /// Adds work queue permissions for written Attributes whose new value equals a mapped value.
 /// The set only grows (plan section 9.3).
-fn apply_permission_mappings(
+pub(crate) fn apply_permission_mappings(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
     writes: &[AttributeWrite],

@@ -16,6 +16,7 @@ mod command_scope;
 pub(crate) mod flow_close;
 pub(crate) mod flow_data;
 mod flow_start;
+mod rpc_committed;
 pub(crate) mod run_cursor;
 mod step_commands;
 
@@ -127,8 +128,10 @@ fn apply_run_command(
         Command::TimersFired(fired) => {
             step_commands::apply_timers_fired(transaction, cursor, scope, fired)
         }
-        Command::RpcCommitted(_)
-        | Command::TimerSkip(_)
+        Command::RpcCommitted(command) => {
+            rpc_committed::apply_rpc_committed(transaction, cursor, scope, command)
+        }
+        Command::TimerSkip(_)
         | Command::TimeTravel(_)
         | Command::InboxMessage(_)
         | Command::OutboxAck(_)
