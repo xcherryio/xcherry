@@ -51,7 +51,8 @@ pub(crate) fn advance_window_if_full(
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
     delete_unneeded_history(transaction, cursor, pruned.window_start_attempt)?;
-    crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)
+    crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
+    Ok(())
 }
 
 struct PrunedChunk {

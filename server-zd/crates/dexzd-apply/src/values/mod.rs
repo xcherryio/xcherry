@@ -21,14 +21,13 @@ use dexzd_keyspace::{ColumnFamily, RunTable, ValueId, ValueReference};
 use dexzd_protocol::dex::Value;
 use dexzd_protocol::dex::value::Kind;
 use dexzd_protocol::dexzd::v1::{
-    StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord, ValueGarbageRecord,
-    ValueRecord, stored_value,
+    CheckpointRow, StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord,
+    ValueGarbageRecord, ValueRecord, stored_value,
 };
 use prost::Message;
 
 use crate::ApplyError;
 use crate::command_handlers::run_cursor::RunCursor;
-use crate::history::AttemptRow;
 use crate::state_access::{FlowTransaction, RunRows};
 
 /// Why a value from a client or Worker cannot be stored.
@@ -293,17 +292,16 @@ pub(crate) fn is_null_value(value: Option<&Value>) -> bool {
     }
 }
 
-/// Deletes the values that lost their last holder before `window_start_seq` (plan R5').
+/// Deletes up to a page of values that lost their last holder before `window_start_seq`.
 ///
-/// Stub until the value garbage collection (task A5) lands; time travel calls it after it
-/// advances the window.
+/// Stub until task A5 lands; returns the number of collected values.
 pub(crate) fn prune_garbage(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,
     window_start_seq: u64,
-) -> Result<(), ApplyError> {
+) -> Result<usize, ApplyError> {
     let _ = (transaction, cursor, window_start_seq);
-    Ok(())
+    Ok(0)
 }
 
 /// Gives values of both attempt states exactly the new state's holders (plan R4').
@@ -312,10 +310,11 @@ pub(crate) fn prune_garbage(
 pub(crate) fn rewrite_holders_for_time_travel(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,
-    previous_attempt_rows: &[AttemptRow],
-    new_attempt_rows: &[AttemptRow],
+    old_attempt_rows: &[CheckpointRow],
+    new_attempt_rows: &[CheckpointRow],
+    seq: u64,
 ) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, previous_attempt_rows, new_attempt_rows);
+    let _ = (transaction, cursor, old_attempt_rows, new_attempt_rows, seq);
     Ok(())
 }
 

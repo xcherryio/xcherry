@@ -27,7 +27,7 @@ use crate::command_handlers::flow_close::update_directory_status;
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::command_handlers::{CommandScope, HandlerResult};
 use crate::history::attempt_scope::{
-    AttemptRow, decode_timer_id, hex, read_attempt_rows, set_run_status,
+    AttemptRow, decode_timer_id, hex, holder_rows, read_attempt_rows, run_status_of, set_run_status,
 };
 use crate::history::lineage::{Lineage, history_records};
 use crate::history::replay_state::{TransactionReader, absorb_writes};
@@ -100,6 +100,7 @@ pub(crate) fn apply_time_travel(
     };
     let rebuilt = rebuild_attempt_state(transaction, cursor.rows, &cursor.record, target.point)?;
     let previous_rows = read_attempt_rows(transaction, cursor.rows)?;
+    let previous_status = run_status_of(&cursor.record);
     let was_running = cursor.record.status == FlowStatus::Running as i32;
     cancel_running_invocations(&mut cursor, &previous_rows)?;
     let new_attempt = previous_attempt + 1;
@@ -132,8 +133,9 @@ pub(crate) fn apply_time_travel(
     crate::values::rewrite_holders_for_time_travel(
         transaction,
         &cursor,
-        &previous_rows,
-        &restored_rows,
+        &holder_rows(&previous_rows, &previous_status),
+        &holder_rows(&restored_rows, &run_status_of(&cursor.record)),
+        cursor.seq,
     )?;
     cursor.add_event(flow_history_event::Payload::TimeTravelFork(
         TimeTravelForkHistoryEvent {

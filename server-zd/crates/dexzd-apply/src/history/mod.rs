@@ -18,6 +18,5 @@ mod state_rebuild;
 mod time_travel;
 mod window;
 
-pub(crate) use attempt_scope::AttemptRow;
 pub(crate) use checkpoints::{after_command, pending_step_methods};
 pub(crate) use time_travel::apply_time_travel;
