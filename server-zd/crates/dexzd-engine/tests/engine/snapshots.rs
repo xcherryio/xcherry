@@ -151,3 +151,21 @@ async fn log_batches_are_deleted_only_after_a_snapshot_is_old_enough() {
     assert_eq!(restarted.applier.applied_commands().len(), 1);
     restarted.node.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_snapshot_keeps_serving_and_succeeds_later() {
+    let mut cluster = TestCluster::new();
+    let test = cluster.start_in_memory().await;
+    test.commit_prompt("retry-flow", 1).await;
+    cluster.faults.fail_puts_under("snapshot/");
+    test.node
+        .take_snapshot()
+        .await
+        .expect_err("snapshot uploads fail");
+    test.commit_prompt("retry-flow", 1).await;
+    assert_eq!(test.node.stop_reason(), None);
+    cluster.faults.fail_puts_under("never-matches/");
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
+    test.node.shutdown().await;
+}

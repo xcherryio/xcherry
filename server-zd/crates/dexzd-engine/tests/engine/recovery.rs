@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use dexzd_engine::{
-    CommitError, CommitUrgency, EngineStartError, LocalStoreConfig, NodeStopReason,
+    CommitError, CommitUrgency, EngineNode, EngineNodeDependencies, EngineRuntimeHooks,
+    EngineServices, EngineStartError, LocalStoreConfig, NodeStopReason,
 };
 use dexzd_keyspace::PartitionId;
 use dexzd_log::{BatchContent, BatchRecord, StreamIdentity, encode_batch};
@@ -262,4 +263,49 @@ async fn a_newer_epoch_in_the_log_fences_the_node() {
     ));
     assert_eq!(test.node.wait_for_stop().await, NodeStopReason::Fenced);
     test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn submissions_during_recovery_are_unavailable() {
+    let cluster = TestCluster::new();
+    let config = cluster.config(LocalStoreConfig::InMemory);
+    let runtime = Arc::new(RecordingRuntime::default());
+    let factory_runtime = runtime.clone();
+    let mut rejection = None;
+    let node = EngineNode::start(
+        &config,
+        EngineNodeDependencies {
+            object_store: cluster.object_store.clone(),
+            clock: cluster.clock.clone(),
+            applier: Arc::new(CountingApplier::default()),
+        },
+        |services: EngineServices| {
+            let flow_hash = services
+                .partition_hasher
+                .flow_hash(dexzd_keyspace::TenantId::DEFAULT, "early-flow");
+            let context = dexzd_apply::ApplyContext {
+                partition: services.partition_hasher.partition_of(flow_hash),
+                flow_hash,
+            };
+            rejection = services
+                .committer
+                .submit(
+                    context,
+                    crate::harness::flow_command("early-flow"),
+                    CommitUrgency::Prompt,
+                )
+                .err();
+            EngineRuntimeHooks {
+                committed_commands: factory_runtime.clone(),
+                rebuilder: factory_runtime,
+            }
+        },
+    )
+    .await
+    .expect("node starts");
+    assert!(
+        matches!(&rejection, Some(CommitError::Unavailable { detail }) if detail.contains("recovering")),
+        "{rejection:?}"
+    );
+    node.shutdown().await;
 }
