@@ -11,19 +11,15 @@
 mod command_committer;
 mod commit_config;
 mod commit_state;
-mod committed_outcomes;
 mod committed_state_view;
 mod log_proposer;
 mod partition_applier;
 mod replay_checks;
 mod staged_state_reader;
 
-pub use command_committer::{
-    CommandCommitter, CommitError, CommitTicket, CommitUrgency, CommittedCommand,
-};
+pub use command_committer::CommandCommitter;
 pub use commit_config::CommitConfig;
 pub use commit_state::NodeStopReason;
-pub use committed_outcomes::{CommittedOutcome, CommittedOutcomeReceiver};
 pub use committed_state_view::CommittedStateView;
 pub use replay_checks::{ReplayCheck, ReplayMismatch};
 

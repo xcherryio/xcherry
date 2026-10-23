@@ -20,24 +20,27 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_applier::CommandApplier;
-use crate::commit::commit_state::{CommitState, NodeStopReason};
-use crate::commit::committed_outcomes::CommittedOutcome;
+use crate::commit::EngineLocalStore;
+use crate::commit::commit_state::{CommitState, NodeStopReason, partition_stopped_error};
 use crate::commit::replay_checks::compare_repeated_apply;
 use crate::commit::staged_state_reader::StagedStateReader;
-use crate::commit::{CommitError, CommittedCommand, EngineLocalStore};
+use crate::recovery::CommittedCommandSink;
+use crate::runtime::{CommittedCommand, CommittedFlowCommand};
 
 /// The records of one partition in one committed log batch.
 pub(crate) struct PartitionFrame {
     pub(crate) partition: PartitionId,
     pub(crate) position: LogPosition,
+    /// Epoch of the batch that holds the frame.
+    pub(crate) epoch: u64,
     pub(crate) records: Vec<Bytes>,
-    pub(crate) is_replayed: bool,
 }
 
 enum LaneWork {
     Frame(PartitionFrame),
     AdvanceAppliedPosition {
         position: LogPosition,
+        epoch: u64,
         done: oneshot::Sender<()>,
     },
 }
@@ -54,7 +57,7 @@ pub(crate) struct FrameApplier {
     pub(crate) applier: Arc<dyn CommandApplier>,
     pub(crate) hasher: PartitionHasher,
     pub(crate) state: Arc<CommitState>,
-    pub(crate) outcomes: mpsc::Sender<CommittedOutcome>,
+    pub(crate) committed_commands: Arc<dyn CommittedCommandSink>,
     pub(crate) is_checking_replay: bool,
 }
 
@@ -105,12 +108,14 @@ impl PartitionApplierPool {
     pub(crate) async fn advance_applied_position(
         &self,
         position: &LogPosition,
+        epoch: u64,
     ) -> Result<(), ApplierPoolClosed> {
         let mut completions = Vec::with_capacity(self.lanes.len());
         for lane in &self.lanes {
             let (done, receiver) = oneshot::channel();
             lane.send(LaneWork::AdvanceAppliedPosition {
                 position: position.clone(),
+                epoch,
                 done,
             })
             .await
@@ -177,11 +182,15 @@ impl ApplierLane {
                         tokio::task::spawn_blocking(move || frame_applier.apply_frame(frame)).await;
                     self.stop_on_task_failure(applied);
                 }
-                LaneWork::AdvanceAppliedPosition { position, done } => {
+                LaneWork::AdvanceAppliedPosition {
+                    position,
+                    epoch,
+                    done,
+                } => {
                     let frame_applier = self.frame_applier.clone();
                     let partitions = self.partitions();
                     let advanced = tokio::task::spawn_blocking(move || {
-                        frame_applier.advance_applied_position(&partitions, &position);
+                        frame_applier.advance_applied_position(&partitions, &position, epoch);
                     })
                     .await;
                     self.stop_on_task_failure(advanced);
@@ -296,6 +305,7 @@ impl FrameApplier {
                 applied: Some(frame.position.clone()),
                 last_command_timestamp_micros,
                 last_behavior_version,
+                applied_epoch: frame.epoch,
             })
             .map_err(|error| FrameFailure::StoreFailed(error.to_string()))?;
         store
@@ -304,7 +314,12 @@ impl FrameApplier {
         Ok(Some(applied))
     }
 
-    fn advance_applied_position(&self, partitions: &[PartitionId], position: &LogPosition) {
+    fn advance_applied_position(
+        &self,
+        partitions: &[PartitionId],
+        position: &LogPosition,
+        epoch: u64,
+    ) {
         let store: &EngineLocalStore = &self.store;
         let mut batch = dexzd_storage::WriteBatch::new();
         for partition in partitions {
@@ -332,6 +347,7 @@ impl FrameApplier {
                 continue;
             }
             meta.applied = Some(position.clone());
+            meta.applied_epoch = epoch;
             if let Err(error) = batch.put_partition_meta(&meta) {
                 self.state.stop(NodeStopReason::LocalStoreFailed {
                     detail: error.to_string(),
@@ -421,27 +437,19 @@ impl FrameApplier {
             outcome,
         } in applied
         {
-            let committed = Arc::new(CommittedCommand {
+            let committed = CommittedCommand {
                 outcome,
                 position: frame.position.clone(),
-            });
-            let published = CommittedOutcome {
-                partition: context.partition,
-                tenant_id: TenantId(command.tenant_id),
-                flow_id: command.flow_id,
-                flow_hash: context.flow_hash,
-                command_id: command.command_id,
-                committed: committed.clone(),
-                is_replayed: frame.is_replayed,
             };
-            let command_id = published.command_id.clone();
-            if self.outcomes.blocking_send(published).is_err() {
-                tracing::debug!("committed outcome receiver closed");
+            if let Some(pending) = self.state.take(&command.command_id) {
+                pending.responder.resolve(Ok(committed.clone()));
             }
-            if let Some(pending) = self.state.take(&command_id) {
-                // The proposer may have stopped waiting; the command is applied either way.
-                let _ignored_send = pending.responder.send(Ok(committed));
-            }
+            self.committed_commands
+                .apply_committed(CommittedFlowCommand {
+                    command,
+                    context,
+                    committed,
+                });
         }
     }
 
@@ -455,10 +463,9 @@ impl FrameApplier {
                 continue;
             };
             if let Some(pending) = self.state.take(&command.command_id) {
-                // The proposer may have stopped waiting; nothing else observes the result.
-                let _ignored_send = pending.responder.send(Err(CommitError::PartitionStopped {
-                    partition: frame.partition,
-                }));
+                pending
+                    .responder
+                    .resolve(Err(partition_stopped_error(frame.partition)));
             }
         }
     }

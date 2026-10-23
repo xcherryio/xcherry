@@ -31,8 +31,6 @@ pub struct CommitConfig {
     pub applier_lanes: usize,
     /// Defaults to 64; partition frames queued per applier lane before the commit pipeline waits.
     pub applier_queue_frames: usize,
-    /// Defaults to 1024; committed outcomes buffered for the runtime before appliers wait.
-    pub committed_outcome_buffer: usize,
     /// Defaults to false; when true, appliers apply every command twice and compare the
     /// outcomes, and [`crate::CommandCommitter::check_speculative_outcome`] compares
     /// speculative and committed outcomes. Any difference stops the partition.
@@ -50,7 +48,6 @@ impl Default for CommitConfig {
             batch_write_deadline: Duration::from_secs(10),
             applier_lanes: 8,
             applier_queue_frames: 64,
-            committed_outcome_buffer: 1024,
             debug_replay_checks: false,
         }
     }

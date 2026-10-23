@@ -165,8 +165,8 @@ impl CommittedBatchRouter {
                     incarnation: self.incarnation,
                     seq: batch.seq,
                 },
+                epoch: batch.epoch,
                 records,
-                is_replayed: false,
             };
             if self.appliers.enqueue(frame).await.is_err() {
                 return false;

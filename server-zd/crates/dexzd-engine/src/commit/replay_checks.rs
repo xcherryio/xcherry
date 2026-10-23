@@ -10,7 +10,7 @@ use std::fmt;
 
 use dexzd_apply::ApplyOutcome;
 
-use crate::commit::CommittedCommand;
+use crate::runtime::CommittedCommand;
 
 /// Two applications of the same command to the same state produced different outcomes.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

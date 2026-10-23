@@ -33,6 +33,8 @@ pub(crate) struct SnapshotService {
     pub(crate) progress: Arc<CommitProgress>,
     pub(crate) log_cleanup: LogCleanup,
     pub(crate) cluster_id: [u8; 16],
+    /// Epoch of this process; every batch it routes carries it.
+    pub(crate) epoch: u64,
     pub(crate) config: SnapshotConfig,
     pub(crate) snapshot_lock: Mutex<()>,
 }
@@ -81,11 +83,14 @@ impl SnapshotService {
         let last_routed_seq = self.progress.last_routed_seq.load(Ordering::Acquire);
         if last_routed_seq > 0 {
             self.appliers
-                .advance_applied_position(&LogPosition {
-                    node_id: stream.node_id.clone(),
-                    incarnation: stream.incarnation,
-                    seq: last_routed_seq,
-                })
+                .advance_applied_position(
+                    &LogPosition {
+                        node_id: stream.node_id.clone(),
+                        incarnation: stream.incarnation,
+                        seq: last_routed_seq,
+                    },
+                    self.epoch,
+                )
                 .await
                 .map_err(|_| SnapshotError::NodeStopped)?;
         }

@@ -22,74 +22,6 @@ use crate::commit::commit_state::{CommitResponse, CommitState, NodeStopReason, P
 use crate::commit::committed_state_view::CommittedStateView;
 use crate::commit::replay_checks::{ReplayMismatch, compare_speculative_outcome};
 
-/// How soon a submitted command needs to be durable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitUrgency {
-    /// SYNC Step events, API writes, cross-Flow messages, Flow close: seal promptly.
-    Prompt,
-    /// ASYNC Step events: may wait for the batch window.
-    Batched,
-}
-
-/// A command that is committed and applied to the local store.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CommittedCommand {
-    /// Apply outcome on committed state; byte-identical to the speculative outcome.
-    pub outcome: ApplyOutcome,
-    /// Log batch that holds the command.
-    pub position: LogPosition,
-}
-
-/// Why a command was not committed.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CommitError {
-    /// Too many submitted commands wait for apply. Retryable; clients see `Unavailable`.
-    #[error("the commit backlog is full; retry later")]
-    Backpressure,
-    /// The node is still recovering. Retryable; clients see `Unavailable`.
-    #[error("the node is recovering and does not accept commands yet")]
-    NotServing,
-    /// Apply failed for the partition, which no longer applies commands until the node
-    /// restarts. Retryable on another node; clients see `Unavailable`.
-    #[error("partition {} stopped applying commands", partition.0)]
-    PartitionStopped {
-        /// The stopped partition.
-        partition: PartitionId,
-    },
-    /// The node stopped serving and exits; the command may or may not be committed.
-    #[error("the node is stopping: {reason}")]
-    NodeStopping {
-        /// Why the node stopped.
-        reason: NodeStopReason,
-    },
-}
-
-/// Resolves once the submitted command is committed and applied to the local store.
-#[derive(Debug)]
-pub struct CommitTicket {
-    command_id: Vec<u8>,
-    receiver: oneshot::Receiver<CommitResponse>,
-}
-
-impl CommitTicket {
-    /// Returns the command ID stamped on the command.
-    pub fn command_id(&self) -> &[u8] {
-        &self.command_id
-    }
-
-    /// Waits until the command is committed and applied.
-    ///
-    /// Returns the committed outcome, or [`CommitError::PartitionStopped`] or
-    /// [`CommitError::NodeStopping`] when it will not be applied by this node.
-    pub async fn wait(self) -> Result<Arc<CommittedCommand>, CommitError> {
-        self.receiver.await.unwrap_or_else(|_| {
-            Err(CommitError::NodeStopping {
-                reason: NodeStopReason::Shutdown,
-            })
-        })
-    }
-}
-
 pub(crate) struct LogProposal {
     pub(crate) partition: PartitionId,
     pub(crate) record: Bytes,
@@ -164,8 +96,9 @@ impl CommandCommitter {
     /// Returns the stamped command (apply it to the speculative overlay) and a ticket that
     /// resolves once the command is committed AND applied to the local store.
     ///
-    /// Fails without enqueueing with [`CommitError::Backpressure`], [`CommitError::NotServing`],
-    /// [`CommitError::PartitionStopped`], or [`CommitError::NodeStopping`].
+    /// Fails without enqueueing with [`CommitError::Unavailable`] while the node recovers,
+    /// when the unapplied budget is full, or when the partition stopped, and with
+    /// [`CommitError::NodeStopping`] after the node stopped.
     pub fn submit(
         &self,
         context: ApplyContext,
@@ -180,13 +113,13 @@ impl CommandCommitter {
             "the runtime computes partitions from the cluster's partition count"
         );
         if inner.state.is_partition_halted(partition) {
-            return Err(CommitError::PartitionStopped { partition });
+            return Err(partition_stopped_error(partition));
         }
         let command_id = Uuid::now_v7().as_bytes().to_vec();
         command.epoch = inner.epoch;
         command.behavior_version = inner.behavior_version;
         command.command_id.clone_from(&command_id);
-        let (responder, receiver) = oneshot::channel();
+        let (responder, ticket) = CommitTicket::new_pair();
         let mut stamps = self.lock_stamps();
         let watermark = stamps.last_stamped_micros[usize::from(partition.0)];
         command.proposed_at_micros = inner
@@ -203,7 +136,9 @@ impl CommandCommitter {
         let admission = u32::try_from(record.len().max(1))
             .ok()
             .and_then(|bytes| inner.admission.clone().try_acquire_many_owned(bytes).ok())
-            .ok_or(CommitError::Backpressure)?;
+            .ok_or_else(|| CommitError::Unavailable {
+                detail: "the commit backlog is full".to_owned(),
+            })?;
         inner.state.register(
             command_id.clone(),
             PendingCommand {
@@ -218,22 +153,17 @@ impl CommandCommitter {
         };
         if stamps.proposals.send(proposal).is_err() {
             drop(inner.state.take(&command_id));
+            let reason = inner
+                .state
+                .stop_reason()
+                .unwrap_or(NodeStopReason::Shutdown);
             return Err(CommitError::NodeStopping {
-                reason: inner
-                    .state
-                    .stop_reason()
-                    .unwrap_or(NodeStopReason::Shutdown),
+                detail: reason.to_string(),
             });
         }
         stamps.last_stamped_micros[usize::from(partition.0)] = command.proposed_at_micros;
         drop(stamps);
-        Ok((
-            command,
-            CommitTicket {
-                command_id,
-                receiver,
-            },
-        ))
+        Ok((command, ticket))
     }
 
     /// A consistent read view of committed state (local store snapshot) for any Flow.
@@ -272,5 +202,20 @@ impl CommandCommitter {
             .stamps
             .lock()
             .expect("stamp lock is not poisoned")
+    }
+}
+
+impl FlowCommandCommitter for CommandCommitter {
+    fn submit(
+        &self,
+        context: ApplyContext,
+        command: FlowCommand,
+        urgency: CommitUrgency,
+    ) -> Result<(FlowCommand, CommitTicket), CommitError> {
+        CommandCommitter::submit(self, context, command, urgency)
+    }
+
+    fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
+        Ok(Box::new(CommandCommitter::committed_view(self)))
     }
 }

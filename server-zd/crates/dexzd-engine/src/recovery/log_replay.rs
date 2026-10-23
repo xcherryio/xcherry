@@ -81,8 +81,8 @@ impl LogReplay<'_> {
                     .enqueue(PartitionFrame {
                         partition: PartitionId(partition),
                         position: self.position(batch.header.seq),
+                        epoch: batch.header.epoch,
                         records,
-                        is_replayed: true,
                     })
                     .await
                     .map_err(|_| EngineStartError::Stopped {
@@ -91,7 +91,7 @@ impl LogReplay<'_> {
             }
         }
         self.appliers
-            .advance_applied_position(&self.position(recovered.epoch_start_seq))
+            .advance_applied_position(&self.position(recovered.epoch_start_seq), self.epoch)
             .await
             .map_err(|_| EngineStartError::Stopped {
                 reason: self.stop_reason(),

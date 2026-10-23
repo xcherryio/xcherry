@@ -28,12 +28,12 @@ use tokio_util::sync::CancellationToken;
 use crate::command_applier::CommandApplier;
 use crate::commit::{
     CommandCommitter, CommandCommitterParts, CommitConfig, CommitProgress, CommitState,
-    CommittedBatchRouter, CommittedOutcomeReceiver, EngineLocalStore, FrameApplier, NodeStopReason,
-    PartitionApplierPool, run_log_proposer,
+    CommittedBatchRouter, EngineLocalStore, FrameApplier, NodeStopReason, PartitionApplierPool,
+    run_log_proposer,
 };
 use crate::recovery::{
-    ClusterMetadata, EngineServices, EngineStartError, LocalStoreConfig, LocalStoreRequirements,
-    LogReplay, PartitionRuntimeRebuilder, open_local_store,
+    ClusterMetadata, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    LocalStoreRequirements, LogReplay, open_local_store,
 };
 use crate::snapshots::{LogCleanup, SnapshotConfig, SnapshotError, SnapshotService};
 
@@ -91,7 +91,7 @@ impl EngineNode {
         runtime_factory: F,
     ) -> Result<Self, EngineStartError>
     where
-        F: FnOnce(EngineServices) -> Arc<dyn PartitionRuntimeRebuilder>,
+        F: FnOnce(EngineServices) -> EngineRuntimeHooks,
     {
         validate_config(config)?;
         let EngineNodeDependencies {
@@ -139,20 +139,6 @@ impl EngineNode {
             state.clone(),
             tasks.cancellation.clone(),
         ));
-        let (outcome_sender, outcome_receiver) =
-            mpsc::channel(config.commit.committed_outcome_buffer);
-        let appliers = Arc::new(PartitionApplierPool::start(
-            FrameApplier {
-                store: store.clone(),
-                applier,
-                hasher: metadata.cluster.partition_hasher.clone(),
-                state: state.clone(),
-                outcomes: outcome_sender,
-                is_checking_replay: config.commit.debug_replay_checks,
-            },
-            config.commit.applier_lanes,
-            config.commit.applier_queue_frames,
-        ));
         let (proposal_sender, proposal_receiver) = mpsc::unbounded_channel();
         let committer = CommandCommitter::new(CommandCommitterParts {
             state: state.clone(),
@@ -166,9 +152,20 @@ impl EngineNode {
         });
         let runtime = runtime_factory(EngineServices {
             committer: committer.clone(),
-            committed_outcomes: CommittedOutcomeReceiver::new(outcome_receiver),
             partition_hasher: metadata.cluster.partition_hasher.clone(),
         });
+        let appliers = Arc::new(PartitionApplierPool::start(
+            FrameApplier {
+                store: store.clone(),
+                applier,
+                hasher: metadata.cluster.partition_hasher.clone(),
+                state: state.clone(),
+                committed_commands: runtime.committed_commands.clone(),
+                is_checking_replay: config.commit.debug_replay_checks,
+            },
+            config.commit.applier_lanes,
+            config.commit.applier_queue_frames,
+        ));
         let replayed = LogReplay {
             object_store: object_store.as_ref(),
             clock: clock.as_ref(),
@@ -214,7 +211,7 @@ impl EngineNode {
                 u16::try_from(partition).expect("the manifest limits partitions to u16"),
             );
             if !state.is_partition_halted(partition) {
-                runtime.rebuild_partition(partition).await?;
+                runtime.rebuilder.rebuild_partition(partition).await?;
             }
         }
         if let Some(reason) = state.stop_reason() {
@@ -234,6 +231,7 @@ impl EngineNode {
                 deletion_delay: config.snapshots.deletion_delay,
             },
             cluster_id: metadata.cluster_id()?,
+            epoch,
             config: config.snapshots.clone(),
             snapshot_lock: tokio::sync::Mutex::new(()),
         });
@@ -297,8 +295,6 @@ fn validate_config(config: &EngineNodeConfig) -> Result<(), EngineStartError> {
         Some("commit.applier_lanes must be positive")
     } else if commit.applier_queue_frames == 0 {
         Some("commit.applier_queue_frames must be positive")
-    } else if commit.committed_outcome_buffer == 0 {
-        Some("commit.committed_outcome_buffer must be positive")
     } else if commit.max_unapplied_bytes == 0 {
         Some("commit.max_unapplied_bytes must be positive")
     } else if snapshots.retained_count == 0 {

@@ -6,7 +6,6 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-
 //! Runtime that proposes, commits, and applies server-zd commands and runs their effects: dispatch, timers, deliveries, and recovery.
 
 mod command_applier;
@@ -23,8 +22,8 @@ pub use commit::{
 };
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
 pub use recovery::{
-    CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError,
-    LocalStoreConfig, PartitionRuntimeRebuilder, RuntimeRebuildError,
+    CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    PartitionRuntimeRebuilder, RuntimeRebuildError,
 };
 pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,

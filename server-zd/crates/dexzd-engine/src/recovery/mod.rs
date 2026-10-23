@@ -14,7 +14,10 @@ mod log_replay;
 mod runtime_rebuild;
 
 pub use local_store_opening::LocalStoreConfig;
-pub use runtime_rebuild::{EngineServices, PartitionRuntimeRebuilder, RuntimeRebuildError};
+pub use runtime_rebuild::{
+    CommittedCommandSink, EngineRuntimeHooks, EngineServices, PartitionRuntimeRebuilder,
+    RuntimeRebuildError,
+};
 
 pub(crate) use cluster_metadata::ClusterMetadata;
 pub(crate) use local_store_opening::{LocalStoreRequirements, open_local_store};

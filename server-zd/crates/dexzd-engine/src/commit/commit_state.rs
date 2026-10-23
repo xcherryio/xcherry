@@ -8,14 +8,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use dexzd_keyspace::PartitionId;
-use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, watch};
 
-use crate::commit::CommittedCommand;
-use crate::commit::command_committer::CommitError;
+use crate::runtime::{CommitError, CommitTicketSender};
 
 /// Why a node stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,10 +61,8 @@ pub(crate) enum NodeState {
     Stopped(NodeStopReason),
 }
 
-pub(crate) type CommitResponse = Result<Arc<CommittedCommand>, CommitError>;
-
 pub(crate) struct PendingCommand {
-    pub(crate) responder: oneshot::Sender<CommitResponse>,
+    pub(crate) responder: CommitTicketSender,
     /// Releases the command's bytes from the unapplied budget when dropped.
     pub(crate) _admission: OwnedSemaphorePermit,
 }
@@ -132,19 +129,20 @@ impl CommitState {
             std::mem::take(&mut pending.by_command_id)
         };
         for (_, command) in drained {
-            // A dropped ticket means the proposer no longer waits; nothing to notify.
-            let _ignored_send = command.responder.send(Err(CommitError::NodeStopping {
-                reason: reason.clone(),
+            command.responder.resolve(Err(CommitError::NodeStopping {
+                detail: reason.to_string(),
             }));
         }
     }
 
     pub(crate) fn check_serving(&self) -> Result<(), CommitError> {
         match &*self.lifecycle.borrow() {
-            NodeState::Recovering => Err(CommitError::NotServing),
+            NodeState::Recovering => Err(CommitError::Unavailable {
+                detail: "the node is recovering".to_owned(),
+            }),
             NodeState::Serving => Ok(()),
             NodeState::Stopped(reason) => Err(CommitError::NodeStopping {
-                reason: reason.clone(),
+                detail: reason.to_string(),
             }),
         }
     }
@@ -178,7 +176,7 @@ impl CommitState {
         let mut pending = self.lock_pending();
         if let Some(reason) = &pending.stop_reason {
             return Err(CommitError::NodeStopping {
-                reason: reason.clone(),
+                detail: reason.to_string(),
             });
         }
         pending.by_command_id.insert(command_id, command);
@@ -210,5 +208,12 @@ impl CommitState {
         self.pending
             .lock()
             .expect("pending command lock is not poisoned")
+    }
+}
+
+/// The error for commands of a partition that stopped applying after an apply failure.
+pub(crate) fn partition_stopped_error(partition: PartitionId) -> CommitError {
+    CommitError::Unavailable {
+        detail: format!("partition {} stopped applying commands", partition.0),
     }
 }
