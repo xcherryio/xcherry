@@ -87,6 +87,7 @@ func doTestSubFlowCondition(
 	shouldRestart bool,
 	configureTest ...func(*DexServiceTestConfig),
 ) {
+	requireTemporalOnly(t)
 	handler := &subFlowHandler{reusePolicy: reusePolicy}
 	workerTarget := startWorker(t, handler)
 	testConfig := DexServiceTestConfig{
