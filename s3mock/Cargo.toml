@@ -15,7 +15,7 @@ rust-version = "1.97"
 publish = false
 
 [workspace.dependencies]
-aws-config = { version = "1.13", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
+aws-config = { version = "1.13", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client", "credentials-process", "sso"] }
 aws-sdk-s3 = { version = "1.155", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 base64 = "0.22"
 bytes = "1"
