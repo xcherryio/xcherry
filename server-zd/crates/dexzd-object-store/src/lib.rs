@@ -9,8 +9,10 @@
 //! Object storage interface used by server-zd, with an S3 implementation and a fault-injecting in-memory implementation for tests.
 //!
 //! Keys passed to [`ObjectStore`] are relative to the store's configured prefix, for example
-//! `log/node-a/0000000001/00000000000000000042`. Every server-zd commit depends on conditional
-//! writes, so implementations must honor [`WriteCondition`] exactly.
+//! `log/node-a/0000000001/00000000000000000042`.
+//!
+//! Every server-zd commit depends on conditional writes, so implementations must honor
+//! [`WriteCondition`] exactly.
 
 mod in_memory;
 mod object_store_error;
@@ -52,8 +54,7 @@ pub enum WriteOutcome {
         /// ETag of the new object.
         etag: String,
     },
-    /// The precondition did not hold; nothing was written (HTTP 412, or 409 for a concurrent
-    /// conditional write).
+    /// The precondition did not hold; nothing was written (HTTP 412 only).
     PreconditionFailed,
 }
 
@@ -99,9 +100,14 @@ pub struct ObjectListing {
 
 /// Object storage operations used by server-zd.
 ///
-/// Implementations are shared across tasks (`Arc<dyn ObjectStore>`). Large bodies may be
-/// uploaded with multipart internally; the [`WriteCondition`] then applies to the final
-/// `CompleteMultipartUpload`, so the result is the same as for a single PUT.
+/// Implementations are shared across tasks (`Arc<dyn ObjectStore>`).
+///
+/// Large bodies may use multipart internally. The [`WriteCondition`] then applies to
+/// `CompleteMultipartUpload`, so the result matches a single PUT.
+///
+/// HTTP 409 `ConditionalRequestConflict` means a concurrent operation, not a false condition.
+/// Implementations retry it (restarting a multipart upload) and report
+/// [`ObjectStoreErrorKind::Transient`] if it persists.
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
     /// Writes `body` at `key` if `condition` holds.
@@ -136,6 +142,9 @@ pub trait ObjectStore: Send + Sync + 'static {
 
     /// Streams the object into a new file at `path` and returns its size, or `None` when the
     /// object does not exist (no file is created then).
+    ///
+    /// Implementations write to a temporary file and rename it on success. On error no file
+    /// remains at `path`.
     async fn get_to_file(&self, key: &str, path: &Path) -> ObjectStoreResult<Option<u64>>;
 
     /// Returns the object's metadata, or `None` when it does not exist.
