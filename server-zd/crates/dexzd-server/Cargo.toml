@@ -1,0 +1,53 @@
+[package]
+name = "dexzd-server"
+description = "The dex-server-zd executable: typed configuration, startup, shutdown, and the dev mode with an embedded S3 emulator"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "dex-server-zd"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+dexzd-api.workspace = true
+dexzd-clock.workspace = true
+dexzd-engine.workspace = true
+dexzd-object-store.workspace = true
+dexzd-storage.workspace = true
+humantime-serde.workspace = true
+s3mock-server.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+let_underscore_must_use = "warn"
+let_underscore_future = "warn"
+unused_result_ok = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+print_stdout = "allow"
+print_stderr = "allow"
+match_wildcard_for_single_variants = "warn"

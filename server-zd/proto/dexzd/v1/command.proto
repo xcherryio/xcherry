@@ -1,0 +1,346 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+// Persistent format of server-zd commands: the records inside log batch frames.
+// A command records what happened and all of its inputs; apply derives the result.
+// Compatibility: additive changes only; never renumber, reuse, or retype a field.
+syntax = "proto3";
+
+package dexzd.v1;
+
+import "dex.proto";
+
+// One record in a partition frame of a log batch.
+message LogRecord {
+  uint32 partition = 1;
+  // Field 2 is kept free for node-level commands of a later multi-node release.
+  oneof body {
+    FlowCommand flow = 3;
+  }
+}
+
+// A command that changes the state of one Flow (its directory entry and its runs).
+message FlowCommand {
+  string flow_id = 1;
+  // 16-byte run ID the command targets. Empty only for commands that may create a run
+  // (FlowStart, and InboxMessage carrying a child start).
+  bytes run_id = 2;
+  // When non-zero, apply rejects the command unless the run's current attempt equals it.
+  uint32 expected_run_attempt = 3;
+  // Epoch of the owner that proposed the command.
+  uint64 epoch = 4;
+  // Behavior version that apply must use for this command.
+  uint32 behavior_version = 5;
+  // Owner wall clock, strictly increasing per partition. Apply uses only this time.
+  int64 proposed_at_micros = 6;
+  // 16-byte UUIDv7 for tracing from the API request to apply and its effects.
+  bytes command_id = 7;
+  // Tenant of the Flow; 0 for the single tenant.
+  uint64 tenant_id = 8;
+
+  oneof command {
+    FlowStartCommand flow_start = 20;
+    FlowStopCommand flow_stop = 21;
+    FlowConfigUpdateCommand flow_config_update = 22;
+    AttributesSetCommand attributes_set = 23;
+    ChannelPublishCommand channel_publish = 24;
+    ChannelMessageDeleteCommand channel_message_delete = 25;
+    StepAttemptStartedCommand step_attempt_started = 30;
+    StepAttemptHeartbeatCommand step_attempt_heartbeat = 31;
+    StepAttemptFailedCommand step_attempt_failed = 32;
+    StepMethodCompletedCommand step_method_completed = 33;
+    RpcCommittedCommand rpc_committed = 40;
+    TimersFiredCommand timers_fired = 50;
+    TimerSkipCommand timer_skip = 51;
+    TimeTravelCommand time_travel = 60;
+    InboxMessageCommand inbox_message = 70;
+    OutboxAckCommand outbox_ack = 71;
+    HardDeleteObjectsDeletedCommand hard_delete_objects_deleted = 80;
+    RunPurgeCommand run_purge = 81;
+  }
+}
+
+// Limits and defaults that the owner resolved from configuration when the run started.
+// Apply never reads configuration, so these travel in the command and live in the RunRecord.
+message RunSettings {
+  // Number of semantic events in the time travel window (default 10000).
+  uint32 history_window_semantic_events = 1;
+  // Semantic events pruned at once when the window overflows (default 1000).
+  uint32 history_prune_chunk_semantic_events = 2;
+  // Bytes of superseded values the window may retain before it shrinks (default 256 MiB).
+  uint64 max_retained_superseded_bytes = 3;
+  // Time after close before the run is deleted (default 7 days).
+  int64 retention_after_close_micros = 4;
+  // Values up to this size are inline on the wire and in state rows (default 100).
+  uint32 wire_inline_threshold_bytes = 5;
+  // Largest accepted value (default 16 MiB).
+  uint64 max_value_bytes = 6;
+  // A checkpoint is written after at least max(this, current state size) bytes of state writes
+  // (default 1 MiB).
+  uint64 checkpoint_min_written_bytes = 7;
+  // A checkpoint is also written after this many commands (default 10000).
+  uint32 checkpoint_max_commands = 8;
+  // Request IDs remembered per run for deduplication (default 1000).
+  uint32 request_dedup_capacity = 9;
+  // Largest total state size of the run (default 1 GiB).
+  uint64 max_run_state_bytes = 10;
+  // Largest number of Step executions in the current attempt (default 10000).
+  uint32 max_active_step_executions = 11;
+}
+
+// A hard-delete Attribute value that the owner uploaded as its own object before proposing.
+message HardDeleteObjectReference {
+  // Index of the AttributeWrite in the command's write list.
+  uint32 write_index = 1;
+  // Object ID (UUIDv7 text); the key is hard-delete/<tenant>/<flow hash>/<run ID>/<object ID>.
+  string object_id = 2;
+  uint64 size_bytes = 3;
+  // Whether the value was a string or an object, to rebuild the right Value kind on read.
+  bool is_string_value = 4;
+}
+
+// Client StartFlow, after validation. Values in the request are complete (never references).
+message FlowStartCommand {
+  // Run ID the owner generated for the new run.
+  bytes new_run_id = 1;
+  dex.StartFlowRequest request = 2;
+  RunSettings settings = 3;
+  // Timeout policy after applying the protocol default (UNSPECIFIED with a timeout is FAIL).
+  dex.FlowTimeoutPolicy resolved_timeout_policy = 4;
+  // Normalized Worker target (always pull mode on server-zd).
+  dex.WorkerTarget worker_target = 5;
+  repeated HardDeleteObjectReference hard_delete_objects = 6;
+  // xxh3-128 of the canonical request encoding, for request ID deduplication.
+  bytes request_fingerprint = 7;
+}
+
+message FlowStopCommand {
+  dex.StopFlowRequest request = 1;
+}
+
+message FlowConfigUpdateCommand {
+  dex.UpdateFlowConfigRequest request = 1;
+}
+
+message AttributesSetCommand {
+  dex.SetAttributesRequest request = 1;
+  repeated HardDeleteObjectReference hard_delete_objects = 2;
+  bytes request_fingerprint = 3;
+}
+
+// PublishToChannel. The owner replaced every message ID with a new UUIDv7.
+message ChannelPublishCommand {
+  dex.PublishToChannelRequest request = 1;
+}
+
+message ChannelMessageDeleteCommand {
+  dex.DeleteChannelMessageRequest request = 1;
+  bytes request_fingerprint = 2;
+}
+
+// Step method of a Step execution.
+enum StepMethod {
+  STEP_METHOD_UNSPECIFIED = 0;
+  STEP_METHOD_WAIT_FOR = 1;
+  STEP_METHOD_EXECUTE = 2;
+}
+
+// Identifies one logical method call of a Step execution in the current run attempt.
+message StepInvocationKey {
+  // `StepType-N`, or `sys:timeout_handler-1` for the Flow timeout handler.
+  string step_execution_id = 1;
+  StepMethod method = 2;
+}
+
+// The owner dispatched attempt `attempt` of a method call. Apply takes the locks and computes
+// the attempt's snapshot from state.
+message StepAttemptStartedCommand {
+  StepInvocationKey invocation = 1;
+  uint32 attempt = 2;
+  // 16-byte UUIDv7 of the dispatch.
+  bytes task_id = 3;
+}
+
+// A heartbeat that changed the attempt's checkpoint value.
+message StepAttemptHeartbeatCommand {
+  StepInvocationKey invocation = 1;
+  uint32 attempt = 2;
+  oneof checkpoint {
+    // New checkpoint value (complete, never a reference).
+    dex.Value value = 3;
+    // An explicit heartbeat without a value clears the checkpoint.
+    bool is_cleared = 4;
+  }
+}
+
+// Why an attempt failed.
+enum StepAttemptFailureKind {
+  STEP_ATTEMPT_FAILURE_KIND_UNSPECIFIED = 0;
+  // The Worker returned an error response.
+  STEP_ATTEMPT_FAILURE_KIND_WORKER_ERROR = 1;
+  // The method timeout expired.
+  STEP_ATTEMPT_FAILURE_KIND_METHOD_TIMEOUT = 2;
+  // No heartbeat arrived within the heartbeat timeout.
+  STEP_ATTEMPT_FAILURE_KIND_HEARTBEAT_TIMEOUT = 3;
+  // Dispatch failed: no Worker, Worker disconnected, or unknown Step type.
+  STEP_ATTEMPT_FAILURE_KIND_DISPATCH_ERROR = 4;
+  // The Worker's response failed validation.
+  STEP_ATTEMPT_FAILURE_KIND_INVALID_RESPONSE = 5;
+  // The Worker's response uses a feature server-zd does not support.
+  STEP_ATTEMPT_FAILURE_KIND_UNSUPPORTED_FEATURE = 6;
+  // The Worker's response contains a value larger than the run's max_value_bytes.
+  STEP_ATTEMPT_FAILURE_KIND_VALUE_TOO_LARGE = 7;
+  // The snapshot of the attempt is larger than the gRPC message limit.
+  STEP_ATTEMPT_FAILURE_KIND_REQUEST_TOO_LARGE = 8;
+}
+
+message StepAttemptFailedCommand {
+  StepInvocationKey invocation = 1;
+  uint32 attempt = 2;
+  StepAttemptFailureKind kind = 3;
+  dex.WorkerErrorResponse worker_error = 4;
+  // Server-side description of the failure.
+  string server_detail = 5;
+  // When true, the call fails without further retries (server-zd decided it cannot succeed).
+  bool is_non_retryable = 6;
+  dex.PullRouting pull_routing = 7;
+}
+
+// A Worker result for attempt `attempt`. Values are complete or references to values of this
+// run that the Worker echoed back; apply validates references.
+message StepMethodCompletedCommand {
+  StepInvocationKey invocation = 1;
+  uint32 attempt = 2;
+  oneof response {
+    dex.InvokeWaitForMethodResponse wait_for = 3;
+    dex.InvokeExecuteMethodResponse execute = 4;
+  }
+  // Worker that produced the result; becomes the run's sticky Worker.
+  string app_worker_id = 5;
+  repeated HardDeleteObjectReference hard_delete_objects = 6;
+  dex.PullRouting pull_routing = 7;
+}
+
+// An RPC that ran on a Worker and whose effects must be committed.
+message RpcCommittedCommand {
+  dex.InvokeRPCRequest request = 1;
+  dex.InvokeWorkerRPCResponse response = 2;
+  string app_worker_id = 3;
+  repeated HardDeleteObjectReference hard_delete_objects = 4;
+  bytes request_fingerprint = 5;
+  dex.PullRouting pull_routing = 6;
+}
+
+// Identifies a timer. Timers of an abandoned run attempt never fire.
+message TimerId {
+  uint32 run_attempt = 1;
+  oneof kind {
+    WaitConditionTimerId wait_condition = 2;
+    RetryBackoffTimerId retry_backoff = 3;
+    FlowTimeoutTimerId flow_timeout = 4;
+    RetentionTimerId retention = 5;
+    OutboxRetentionTimerId outbox_retention = 6;
+  }
+}
+
+message WaitConditionTimerId {
+  string step_execution_id = 1;
+  // Index among the Step's timer conditions.
+  uint32 timer_index = 2;
+}
+
+message RetryBackoffTimerId {
+  StepInvocationKey invocation = 1;
+  // The attempt that becomes pending when the timer fires.
+  uint32 next_attempt = 2;
+}
+
+message FlowTimeoutTimerId {}
+
+message RetentionTimerId {}
+
+message OutboxRetentionTimerId {
+  // 16-byte outbox message ID.
+  bytes message_id = 1;
+}
+
+// Timers whose fire time passed by the owner's clock.
+message TimersFiredCommand {
+  repeated TimerId timers = 1;
+}
+
+message TimerSkipCommand {
+  dex.SkipTimerRequest request = 1;
+}
+
+message TimeTravelCommand {
+  dex.ResetFlowRequest request = 1;
+}
+
+// Identifies the Flow run that sent or receives a cross-Flow message.
+message CrossFlowEndpoint {
+  uint64 tenant_id = 1;
+  string flow_id = 2;
+  bytes run_id = 3;
+  uint32 run_attempt = 4;
+}
+
+// Where a child Flow reports its completion.
+message ParentFlowReference {
+  CrossFlowEndpoint parent = 1;
+  string step_execution_id = 2;
+  int32 sub_flow_index = 3;
+  string condition_id = 4;
+}
+
+// Start of a child Flow, written into the parent's outbox by apply. Values are complete.
+message ChildFlowStartMessage {
+  string child_flow_id = 1;
+  dex.SubFlowCondition condition = 2;
+  // Effective FlowConfig: the parent's config with the SubFlow overrides applied.
+  dex.FlowConfig flow_config = 3;
+  string request_id = 4;
+  ParentFlowReference parent = 5;
+}
+
+// Completion report of a child Flow, written into the child's outbox by apply.
+message ChildFlowCompletedMessage {
+  string child_flow_id = 1;
+  bytes child_run_id = 2;
+  uint32 child_run_attempt = 3;
+  dex.FlowResult result = 4;
+  ParentFlowReference parent = 5;
+}
+
+// A cross-Flow message delivered to the receiving Flow's owner.
+message InboxMessageCommand {
+  // 16-byte outbox message ID; with the source it deduplicates redeliveries.
+  bytes message_id = 1;
+  CrossFlowEndpoint source = 2;
+  oneof payload {
+    ChildFlowStartMessage child_start = 3;
+    ChildFlowCompletedMessage child_completed = 4;
+  }
+  // For child starts: run ID the receiving owner generated, and its resolved settings.
+  bytes new_run_id = 5;
+  RunSettings settings = 6;
+}
+
+// The receiver committed these outbox messages; the sender stops redelivering them.
+message OutboxAckCommand {
+  repeated bytes message_ids = 1;
+}
+
+// The owner deleted these hard-delete objects from object storage.
+message HardDeleteObjectsDeletedCommand {
+  repeated string object_ids = 1;
+}
+
+// Retention expired and the owner deleted the run's hard-delete object prefix; apply deletes
+// every key of the run.
+message RunPurgeCommand {}
