@@ -10,6 +10,7 @@ members = [
     "crates/dexzd-log",
     "crates/dexzd-object-store",
     "crates/dexzd-protocol",
+    "crates/dexzd-request-validation",
     "crates/dexzd-search",
     "crates/dexzd-server",
     "crates/dexzd-simulation",
@@ -43,6 +44,7 @@ dexzd-keyspace = { path = "crates/dexzd-keyspace" }
 dexzd-log = { path = "crates/dexzd-log" }
 dexzd-object-store = { path = "crates/dexzd-object-store" }
 dexzd-protocol = { path = "crates/dexzd-protocol" }
+dexzd-request-validation = { path = "crates/dexzd-request-validation" }
 dexzd-search = { path = "crates/dexzd-search" }
 dexzd-server = { path = "crates/dexzd-server" }
 dexzd-storage = { path = "crates/dexzd-storage" }
