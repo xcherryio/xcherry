@@ -37,12 +37,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         durability = ?config.durability,
         "s3mock is serving"
     );
-    let lifecycle_scanner = (config.lifecycle_scan_interval_seconds > 0).then(|| {
-        tokio::spawn(scan_lifecycle(
+    let lifecycle_scanner = if config.lifecycle_scan_interval_seconds > 0 {
+        let scanner = tokio::spawn(scan_lifecycle(
             Arc::clone(&store),
             Duration::from_secs(config.lifecycle_scan_interval_seconds),
-        ))
-    });
+        ));
+        Some(scanner)
+    } else {
+        None
+    };
     let orphan_collection = tokio::task::spawn_blocking(move || store.collect_orphan_data_files());
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");
