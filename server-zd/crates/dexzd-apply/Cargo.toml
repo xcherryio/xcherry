@@ -1,0 +1,22 @@
+[package]
+name = "dexzd-apply"
+description = "Deterministic state machine that applies one server-zd command to Flow state and returns its writes, effects, and reply"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dexzd-keyspace.workspace = true
+dexzd-protocol.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

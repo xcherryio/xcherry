@@ -15,6 +15,7 @@ sdk-rust/target/
 sdk-rust/coverage/
 examples/rust/target/
 s3mock/target/
+server-zd/target/
 sdk-typescript/dist/
 sdk-java/publication-smoke-test/target/
 sdk-typescript/coverage/

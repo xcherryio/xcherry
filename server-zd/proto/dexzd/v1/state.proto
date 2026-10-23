@@ -1,0 +1,497 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+// Persistent format of server-zd Flow state rows in the local store. Keys are defined in
+// dexzd-keyspace (key_layout.rs); each message below names its table.
+// Compatibility: additive changes only; never renumber, reuse, or retype a field.
+syntax = "proto3";
+
+package dexzd.v1;
+
+import "dex.proto";
+import "dexzd/v1/command.proto";
+
+// ---------------------------------------------------------------------------------------------
+// Values
+// ---------------------------------------------------------------------------------------------
+
+// Identity of a value stored in the run's value table.
+message StoredValueId {
+  uint64 run_seq = 1;
+  uint32 index_in_command = 2;
+}
+
+// A value as kept in state rows: inline when small, otherwise a reference to the value table,
+// or a hard-delete Attribute object.
+message StoredValue {
+  oneof kind {
+    // Complete value no larger than the run's wire inline threshold.
+    dex.Value inline_value = 1;
+    StoredValueReference table_value = 2;
+    HardDeleteObjectReference hard_delete_object = 3;
+  }
+}
+
+// Reference to a value-table row.
+message StoredValueReference {
+  StoredValueId value_id = 1;
+  uint64 size_bytes = 2;
+  // Whether the value is a string (true) or an object; selects the wire reference field.
+  bool is_string_value = 3;
+}
+
+// Row of RunTable::Value (column family `value`): the complete value.
+message ValueRecord {
+  dex.Value value = 1;
+}
+
+// Row of RunTable::ValueBirth (table B): size and the seq of the command that wrote it.
+message ValueBirthRecord {
+  uint64 size_bytes = 1;
+  uint64 written_seq = 2;
+  // Seq at which the value lost its last holder (its key in table G); zero while held.
+  uint64 garbage_seq = 3;
+}
+
+// Row of RunTable::ValueGarbage (table G), keyed by (lost_last_holder_seq, value ID).
+message ValueGarbageRecord {
+  uint64 size_bytes = 1;
+}
+
+// A key-value pair whose value is stored.
+message StoredKeyValue {
+  string key = 1;
+  StoredValue value = 2;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Flow directory and run records
+// ---------------------------------------------------------------------------------------------
+
+// Row of the Flow directory: every retained run of (tenant ID, Flow ID), oldest first.
+message FlowDirectoryRecord {
+  repeated FlowDirectoryRun runs = 1;
+}
+
+message FlowDirectoryRun {
+  bytes run_id = 1;
+  dex.FlowStatus status = 2;
+  int64 started_at_micros = 3;
+  int64 closed_at_micros = 4;
+  string start_request_id = 5;
+}
+
+// Row of RunTable::RunRecord: run-scoped state that time travel never rolls back, plus the
+// current attempt's status for fast reads.
+message RunRecord {
+  uint64 tenant_id = 1;
+  string flow_id = 2;
+  bytes run_id = 3;
+  string flow_type = 4;
+  string start_request_id = 5;
+  int64 started_at_micros = 6;
+  RunSettings settings = 7;
+  // Status and close details of the current attempt.
+  dex.FlowStatus status = 8;
+  int64 closed_at_micros = 9;
+  FlowCloseRecord close = 10;
+  uint32 current_attempt = 11;
+  // Seq assigned to the next command applied to the run (starts at 1).
+  uint64 next_run_seq = 12;
+  // Event ID assigned to the next projected history event (starts at 1).
+  int64 next_event_id = 13;
+  // Run-scoped FlowConfig, including the normalized Worker target.
+  dex.FlowConfig flow_config = 14;
+  // Flow timeout: absolute deadline, policy, and handler options. Zero deadline means none.
+  int64 timeout_deadline_micros = 15;
+  dex.FlowTimeoutPolicy timeout_policy = 16;
+  dex.FlowTimeoutHandlerOptions timeout_handler_options = 17;
+  // Set for child Flows.
+  ParentFlowReference parent = 18;
+  string sticky_app_worker_id = 19;
+  // First seq inside the time travel window (W).
+  uint64 window_start_seq = 20;
+  // Largest seq of a pruned command that carried external input; see D12 in the plan.
+  uint64 max_pruned_external_input_seq = 21;
+  RunStorageUsage storage = 22;
+  // Semantic events recorded so far, for window accounting.
+  uint64 semantic_event_count = 23;
+  // Seq of the latest checkpoint of the current attempt and the state bytes written since.
+  uint64 last_checkpoint_seq = 24;
+  uint64 written_bytes_since_checkpoint = 25;
+  uint32 commands_since_checkpoint = 26;
+  // True after retention expired and the prefix purge started.
+  bool is_purging = 27;
+  int64 retention_deadline_micros = 28;
+  // A Step returned GracefulComplete; the attempt completes once no user Step is active.
+  bool is_graceful_completion_requested = 29;
+}
+
+// Close details of a closed attempt.
+message FlowCloseRecord {
+  dex.FlowErrorType error_type = 1;
+  string error_message = 2;
+  repeated StoredStepCompletionOutput results = 3;
+  // True when a child already reported this close to its parent.
+  bool is_reported_to_parent = 4;
+}
+
+message StoredStepCompletionOutput {
+  string completed_step_type = 1;
+  string completed_step_execution_id = 2;
+  StoredValue completed_step_output = 3;
+}
+
+// Storage bytes of the run, maintained by apply (plan 5.9 rule 2).
+message RunStorageUsage {
+  uint64 state_row_bytes = 1;
+  uint64 live_value_bytes = 2;
+  uint64 superseded_value_bytes = 3;
+  uint64 history_bytes = 4;
+}
+
+// Row of RunTable::AttemptRecord, keyed by attempt (4 bytes big-endian).
+message AttemptRecord {
+  uint32 attempt = 1;
+  // Point this attempt was forked from; zero for attempt 1.
+  uint32 parent_attempt = 2;
+  uint64 parent_seq = 3;
+  // Seq of the command that created the attempt (FlowStart or TimeTravel).
+  uint64 start_seq = 4;
+  int64 created_at_micros = 5;
+  string reason = 6;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Attribute, Channel, and permission state of the current attempt
+// ---------------------------------------------------------------------------------------------
+
+// Row of RunTable::Attribute, keyed by the Attribute key.
+message AttributeRecord {
+  StoredValue value = 1;
+  dex.IndexConfig index_config = 2;
+  dex.AttributeSyncConfig sync_config = 3;
+  uint64 written_seq = 4;
+  bool is_hard_delete_on_null = 5;
+}
+
+// Row of RunTable::ChannelMessage, keyed by channel name, 0x00, and enqueue seq (8 bytes).
+message ChannelMessageRecord {
+  string channel_name = 1;
+  string message_id = 2;
+  StoredValue value = 3;
+  uint64 enqueued_seq = 4;
+}
+
+// Row of RunTable::ChannelMeta, keyed by channel name.
+message ChannelMetaRecord {
+  uint64 pending_count = 1;
+  // Messages consumed into condition results whose Execute has not finished.
+  uint64 claimed_count = 2;
+}
+
+// Row of RunTable::PermissionSet (single row): work queue permissions, sorted, only growing.
+message PermissionSetRecord {
+  repeated string permissions = 1;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step executions, invocations, locks, timers, waiters
+// ---------------------------------------------------------------------------------------------
+
+// Lifecycle phase of a Step execution.
+enum StepExecutionPhase {
+  STEP_EXECUTION_PHASE_UNSPECIFIED = 0;
+  // WaitFor is pending or running.
+  STEP_EXECUTION_PHASE_WAIT_FOR = 1;
+  // WaitFor completed; waiting for its condition.
+  STEP_EXECUTION_PHASE_WAITING = 2;
+  // Execute is pending or running.
+  STEP_EXECUTION_PHASE_EXECUTE = 3;
+  STEP_EXECUTION_PHASE_COMPLETED = 4;
+  STEP_EXECUTION_PHASE_CANCELED = 5;
+  // A method exhausted its retries; the Flow failed.
+  STEP_EXECUTION_PHASE_FAILED = 6;
+}
+
+// Row of RunTable::StepExecution, keyed by Step execution ID.
+message StepExecutionRecord {
+  string step_execution_id = 1;
+  string step_type = 2;
+  uint32 step_number = 3;
+  StoredValue input = 4;
+  dex.StepOptions options = 5;
+  string from_step_execution_id = 6;
+  StepExecutionPhase phase = 7;
+  uint64 created_seq = 8;
+  int64 created_at_micros = 9;
+  repeated StoredKeyValue locals = 10;
+  WaitStateRecord wait = 11;
+  ConditionResultsRecord condition_results = 12;
+  // The method call of the current phase, when one exists.
+  StepInvocationRecord invocation = 13;
+  // True for the Flow timeout handler `sys:timeout_handler-1`.
+  bool is_timeout_handler = 14;
+  uint64 completed_seq = 15;
+}
+
+// Phase of one logical method call.
+enum StepInvocationPhase {
+  STEP_INVOCATION_PHASE_UNSPECIFIED = 0;
+  // Waiting for locks or for dispatch.
+  STEP_INVOCATION_PHASE_PENDING = 1;
+  // An attempt is running on a Worker.
+  STEP_INVOCATION_PHASE_RUNNING = 2;
+  // The last attempt failed; a retry backoff timer is armed.
+  STEP_INVOCATION_PHASE_BACKOFF = 3;
+}
+
+message StepInvocationRecord {
+  StepMethod method = 1;
+  StepInvocationPhase phase = 2;
+  // Attempt that is pending, running, or (in backoff) the next one.
+  uint32 attempt = 3;
+  int64 first_attempt_at_micros = 4;
+  // Seq at which the current attempt became pending; orders the per-key lock queue.
+  uint64 pending_since_seq = 5;
+  bytes task_id = 6;
+  int64 attempt_started_at_micros = 7;
+  // Lock keys this method needs; held only while RUNNING.
+  repeated string lock_keys = 8;
+  // Snapshot of the running attempt.
+  MethodSnapshotRecord snapshot = 9;
+  dex.StepMethodFailure last_failure = 10;
+  StoredValue heartbeat_checkpoint = 11;
+  int64 backoff_fires_at_micros = 12;
+  dex.PullRouting pull_routing = 13;
+}
+
+// Exactly what a Worker receives for one attempt, with values kept as stored values.
+message MethodSnapshotRecord {
+  repeated StoredKeyValue attributes = 1;
+  map<string, dex.ChannelInfo> channel_infos = 2;
+  repeated LoadedChannelMessagesRecord loaded_channel_messages = 3;
+  repeated string loaded_attribute_map_instances = 4;
+  repeated string loaded_channel_names = 5;
+  repeated string loaded_channel_map_instances = 6;
+}
+
+message LoadedChannelMessagesRecord {
+  string channel_name = 1;
+  repeated ChannelMessageRecord messages = 2;
+}
+
+// A registered wait condition.
+message WaitStateRecord {
+  dex.WaitingCondition condition = 1;
+  // Absolute fire times of the timer conditions, in declaration order.
+  repeated int64 timer_fire_at_micros = 2;
+  repeated dex.ConditionStatus timer_statuses = 3;
+  // Child Flow IDs started for the SubFlow conditions, in declaration order.
+  repeated string sub_flow_child_ids = 4;
+  uint64 started_waiting_seq = 5;
+}
+
+// Condition results consumed when the wait completed.
+message ConditionResultsRecord {
+  repeated ChannelResultRecord channel_results = 1;
+  repeated dex.TimerResult timer_results = 2;
+  bool wait_for_failed = 3;
+  repeated StoredFlowResult sub_flow_results = 4;
+}
+
+message ChannelResultRecord {
+  string condition_id = 1;
+  dex.ConditionStatus condition_status = 2;
+  string channel_name = 3;
+  repeated ChannelMessageRecord messages = 4;
+}
+
+message StoredFlowResult {
+  dex.FlowStatus flow_status = 1;
+  repeated StoredStepCompletionOutput results = 2;
+  dex.FlowErrorType error_type = 3;
+  string error_message = 4;
+}
+
+// Row of RunTable::StepCounter, keyed by Step type.
+message StepCounterRecord {
+  uint32 last_step_number = 1;
+}
+
+// Row of RunTable::LockTable, keyed by lock key (Attribute key or `map/instance`).
+message LockRecord {
+  // Running invocation that holds the lock; empty when free.
+  StepInvocationKey holder = 1;
+  uint32 holder_attempt = 2;
+  // Pending invocations waiting for this key, in FIFO order of pending_since_seq.
+  repeated LockWaiterRecord waiters = 3;
+}
+
+message LockWaiterRecord {
+  StepInvocationKey invocation = 1;
+  uint64 pending_since_seq = 2;
+}
+
+// Row of RunTable::Timer, keyed by the encoded TimerId.
+message TimerRecord {
+  TimerId timer_id = 1;
+  int64 fire_at_micros = 2;
+}
+
+// Row of RunTable::Waiter, keyed by channel name, 0x00, and Step execution ID: Steps whose
+// condition depends on the channel.
+message ChannelWaiterRecord {
+  uint64 started_waiting_seq = 1;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cross-Flow messages, deduplication, child results
+// ---------------------------------------------------------------------------------------------
+
+// Row of RunTable::Outbox, keyed by message ID.
+message OutboxRecord {
+  bytes message_id = 1;
+  CrossFlowEndpoint target = 2;
+  oneof payload {
+    ChildFlowStartMessage child_start = 3;
+    ChildFlowCompletedMessage child_completed = 4;
+  }
+  uint64 written_seq = 5;
+  // Set when the receiver acknowledged; the row is deleted when its retention timer fires.
+  int64 acknowledged_at_micros = 6;
+}
+
+// Row of RunTable::InboxDedup, keyed by source run ID (16 bytes) and message ID (16 bytes).
+message InboxDedupRecord {
+  uint64 received_seq = 1;
+}
+
+// Row of RunTable::RequestDedup, keyed by request kind (1 byte) and request ID.
+message RequestDedupRecord {
+  bytes request_fingerprint = 1;
+  CommandReply reply = 2;
+  uint64 recorded_seq = 3;
+}
+
+// Row of RunTable::SubFlowResult, keyed by child Flow ID.
+message SubFlowResultRecord {
+  bytes child_run_id = 1;
+  uint32 child_run_attempt = 2;
+  StoredFlowResult result = 3;
+  uint64 received_seq = 4;
+}
+
+// Row of RunTable::HardDeleteObject: key 0x00 + Attribute key is the current object; key 0x01 +
+// object ID is an object waiting for deletion.
+message HardDeleteObjectRecord {
+  HardDeleteObjectReference object = 1;
+  uint64 written_seq = 2;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Replies
+// ---------------------------------------------------------------------------------------------
+
+// Result of applying a command, returned to the proposer and remembered for request IDs.
+message CommandReply {
+  oneof reply {
+    CommandErrorReply error = 1;
+    StartFlowReply start_flow = 2;
+    RpcReply rpc = 3;
+    TimeTravelReply time_travel = 4;
+    EmptyReply ok = 5;
+  }
+}
+
+// A rejected command. Apply wrote nothing except, where noted, deduplication records.
+message CommandErrorReply {
+  // gRPC status code.
+  int32 grpc_code = 1;
+  dex.ErrorSubStatus sub_status = 2;
+  string message = 3;
+}
+
+message StartFlowReply {
+  bytes run_id = 1;
+  // True when the run already existed (same request ID, or ignore_already_started_error).
+  bool is_existing_run = 2;
+}
+
+message RpcReply {
+  StoredValue output = 1;
+}
+
+message TimeTravelReply {
+  uint32 run_attempt = 1;
+}
+
+message EmptyReply {}
+
+// ---------------------------------------------------------------------------------------------
+// History and checkpoints
+// ---------------------------------------------------------------------------------------------
+
+// Row of RunTable::HistoryRecord (column family `history`), keyed by run seq (8 bytes).
+message HistoryRecord {
+  uint64 seq = 1;
+  uint32 attempt = 2;
+  int64 timestamp_micros = 3;
+  // Semantic events are time travel targets and count toward the window.
+  bool is_semantic = 4;
+  // True when the command carried external input that time travel may reapply.
+  bool is_external_input = 5;
+  // The command with every value larger than the inline threshold replaced by a reference.
+  FlowCommand command = 6;
+  // History events projected from this command, with their event IDs.
+  repeated dex.FlowHistoryEvent events = 7;
+  // Debug builds only: hash of the attempt state after this command.
+  bytes state_hash = 8;
+}
+
+// Row of RunTable::Checkpoint (column family `history`), keyed by attempt (4 bytes) and seq
+// (8 bytes): the attempt-scoped state right after the command at `seq`.
+message CheckpointRecord {
+  uint32 attempt = 1;
+  uint64 seq = 2;
+  repeated CheckpointRow rows = 3;
+}
+
+// One attempt-scoped state row: its table byte, key suffix, and encoded value.
+message CheckpointRow {
+  uint32 table = 1;
+  bytes key_suffix = 2;
+  bytes value = 3;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------------------------
+
+// Row of RunTable::SearchDocument: what SearchFlows indexes for the run.
+message SearchDocumentRecord {
+  // Run seq of the last change; projections upsert only newer versions.
+  uint64 version = 1;
+  uint64 tenant_id = 2;
+  string flow_id = 3;
+  bytes run_id = 4;
+  string flow_type = 5;
+  dex.FlowStatus status = 6;
+  int64 started_at_micros = 7;
+  int64 closed_at_micros = 8;
+  string parent_flow_id = 9;
+  repeated string active_step_types = 10;
+  repeated string work_queue_permissions = 11;
+  repeated SearchAttributeValue attributes = 12;
+}
+
+message SearchAttributeValue {
+  string index_key = 1;
+  dex.IndexType index_type = 2;
+  dex.Value value = 3;
+}
