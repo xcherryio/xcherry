@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * Describes one task dispatched to a Dex task queue.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  *
  * Protobuf type {@code dex.DispatchTaskRequest}
@@ -971,6 +972,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Describes one task dispatched to a Dex task queue.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    *
    * Protobuf type {@code dex.DispatchTaskRequest}

@@ -6,7 +6,7 @@ object storage, and a node rebuilds its local state from snapshots and the comma
 
 It serves the same `protos/dex.proto` FlowService and pull-mode WorkerTaskService as the Go Server,
 so the Dex SDKs work without changes. It differs from the Go Server in a few documented ways (for
-example, it supports only pull Workers and has no Continue-As-New).
+example, it supports only pull Workers).
 
 ## Layout
 

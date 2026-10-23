@@ -27,22 +27,38 @@ public interface FlowConfigOrBuilder extends
   io.superdurable.gen.ActiveStepSearchMode getActiveStepSearchMode();
 
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_threshold = 2;</code>
    * @return Whether the continueAsNewThreshold field is set.
    */
   boolean hasContinueAsNewThreshold();
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_threshold = 2;</code>
    * @return The continueAsNewThreshold.
    */
   int getContinueAsNewThreshold();
 
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
    * @return Whether the continueAsNewPageSizeInBytes field is set.
    */
   boolean hasContinueAsNewPageSizeInBytes();
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
    * @return The continueAsNewPageSizeInBytes.
    */

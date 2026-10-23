@@ -89,6 +89,7 @@ type FlowServiceClient interface {
 	UpdateFlowConfig(ctx context.Context, in *UpdateFlowConfigRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	WaitForStepCompletion(ctx context.Context, in *WaitForStepCompletionRequest, opts ...grpc.CallOption) (*WaitForStepCompletionResponse, error)
 	WaitForAttribute(ctx context.Context, in *WaitForAttributeRequest, opts ...grpc.CallOption) (*WaitForAttributeResponse, error)
+	// server-zd returns UNIMPLEMENTED.
 	TriggerContinueAsNew(ctx context.Context, in *TriggerContinueAsNewRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	HealthCheck(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthInfo, error)
 }
@@ -403,6 +404,7 @@ type FlowServiceServer interface {
 	UpdateFlowConfig(context.Context, *UpdateFlowConfigRequest) (*emptypb.Empty, error)
 	WaitForStepCompletion(context.Context, *WaitForStepCompletionRequest) (*WaitForStepCompletionResponse, error)
 	WaitForAttribute(context.Context, *WaitForAttributeRequest) (*WaitForAttributeResponse, error)
+	// server-zd returns UNIMPLEMENTED.
 	TriggerContinueAsNew(context.Context, *TriggerContinueAsNewRequest) (*emptypb.Empty, error)
 	HealthCheck(context.Context, *emptypb.Empty) (*HealthInfo, error)
 	mustEmbedUnimplementedFlowServiceServer()
@@ -1134,6 +1136,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Hosted by Dex worker; server calls these RPCs.
+// server-zd supports only pull Workers and never calls WorkerService.
 type WorkerServiceClient interface {
 	InvokeWaitForMethod(ctx context.Context, in *InvokeWaitForMethodRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InvokeWaitForMethodOutput], error)
 	InvokeExecuteMethod(ctx context.Context, in *InvokeExecuteMethodRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InvokeExecuteMethodOutput], error)
@@ -1201,6 +1204,7 @@ func (c *workerServiceClient) InvokeWorkerRPC(ctx context.Context, in *InvokeWor
 // for forward compatibility.
 //
 // Hosted by Dex worker; server calls these RPCs.
+// server-zd supports only pull Workers and never calls WorkerService.
 type WorkerServiceServer interface {
 	InvokeWaitForMethod(*InvokeWaitForMethodRequest, grpc.ServerStreamingServer[InvokeWaitForMethodOutput]) error
 	InvokeExecuteMethod(*InvokeExecuteMethodRequest, grpc.ServerStreamingServer[InvokeExecuteMethodOutput]) error
@@ -1424,6 +1428,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+// Go Server internals; server-zd does not serve or persist them.
 type MatchingServiceClient interface {
 	// Streams Worker output frames and a final result or dispatch error.
 	DispatchTask(ctx context.Context, in *DispatchTaskRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DispatchTaskResponse], error)
@@ -1476,6 +1481,7 @@ type MatchingService_ForwardPollWorkerTaskClient = grpc.BidiStreamingClient[Poll
 // for forward compatibility.
 //
 // Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+// Go Server internals; server-zd does not serve or persist them.
 type MatchingServiceServer interface {
 	// Streams Worker output frames and a final result or dispatch error.
 	DispatchTask(*DispatchTaskRequest, grpc.ServerStreamingServer[DispatchTaskResponse]) error
@@ -1568,6 +1574,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+// Go Server internals; server-zd does not serve or persist them.
 type InternalServiceClient interface {
 	DumpFlowForContinueAsNew(ctx context.Context, in *ContinueAsNewDumpRequest, opts ...grpc.CallOption) (*ContinueAsNewDumpResponse, error)
 }
@@ -1595,6 +1602,7 @@ func (c *internalServiceClient) DumpFlowForContinueAsNew(ctx context.Context, in
 // for forward compatibility.
 //
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+// Go Server internals; server-zd does not serve or persist them.
 type InternalServiceServer interface {
 	DumpFlowForContinueAsNew(context.Context, *ContinueAsNewDumpRequest) (*ContinueAsNewDumpResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()

@@ -24,7 +24,7 @@ use crate::basic_proceed_on_wait_failure_workflow::BasicProceedOnWaitFailureWork
 use crate::basic_workflow::BasicWorkflow;
 use crate::signal_workflow::SignalWorkflow;
 use crate::skip_wait_until_mixed_wait_workflow::SkipWaitUntilMixedWaitWorkflow;
-use crate::support::{DexDevTestEnvironment, flow_id};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 
 #[test]
 #[ignore = "requires dexcli dev"]
@@ -185,6 +185,9 @@ fn test_model_input_workflow() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_workflow_config_override() {
+    if skip_if_server_zd("Continue-As-New") {
+        return;
+    }
     let environment = DexDevTestEnvironment::start(Registry::new().register(BasicWorkflow::new()));
     let workflow = BasicWorkflow::new();
     let flow_id = flow_id("config-override");
@@ -283,6 +286,9 @@ fn test_workflow_wait_for_step_completion() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_proceed_on_wait_failure_workflow() {
+    if skip_if_server_zd("Step failure policies") {
+        return;
+    }
     let environment = DexDevTestEnvironment::start(
         Registry::new().register(BasicProceedOnWaitFailureWorkflow::new()),
     );
@@ -327,6 +333,9 @@ fn test_mixed_wait_styles() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_movement_options_do_not_mutate_step_defaults() {
+    if skip_if_server_zd("Step failure policies") {
+        return;
+    }
     let environment = DexDevTestEnvironment::start(
         Registry::new().register(BasicImmutableStepOptionsWorkflow::new()),
     );

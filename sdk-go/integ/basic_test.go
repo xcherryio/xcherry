@@ -162,6 +162,7 @@ func (proceedOnWaitForFailureSecondStep) Execute(
 }
 
 func TestBasicFlow(t *testing.T) {
+	skipIfServerZD(t, "Flow retry")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "basic")
 	timeout := 30 * time.Second
@@ -223,6 +224,7 @@ func TestMultiOutputFlow(t *testing.T) {
 }
 
 func TestProceedOnWaitForFailureFlow(t *testing.T) {
+	skipIfServerZD(t, "Step failure policies")
 	flowID := newFlowID(t, "proceed-wait")
 	_, err := integClient.StartFlow(
 		integrationContext(t),

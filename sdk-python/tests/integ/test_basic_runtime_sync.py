@@ -31,6 +31,7 @@ from .abnormal_exit_flow import AbnormalExitFlow
 from .basic_flow import BasicFlow
 from .empty_input_flow import EmptyInputFlow
 from .environment import DexDevTestEnvironment
+from .flow_service_client import skip_if_server_zd
 from .immutable_step_options_flow import ImmutableStepOptionsFlow
 from .mixed_wait_flow import MixedWaitFlow
 from .model_input_flow import ModelInputFlow
@@ -118,6 +119,7 @@ def test_model_input_workflow() -> None:
 
 
 def test_flow_config_override() -> None:
+    skip_if_server_zd("Continue-As-New")
     flow = BasicFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("config-override")
@@ -164,6 +166,7 @@ def test_wait_for_step_completion() -> None:
 
 
 def test_proceed_on_wait_failure() -> None:
+    skip_if_server_zd("Step failure policies")
     flow = ProceedOnWaitFailureFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("proceed-on-wait-failure")
@@ -186,6 +189,7 @@ def test_mixed_wait_styles() -> None:
 
 
 def test_movement_options_do_not_mutate_step_defaults() -> None:
+    skip_if_server_zd("Step failure policies")
     flow = ImmutableStepOptionsFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("immutable-options")
