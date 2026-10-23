@@ -22,9 +22,9 @@ use tokio::sync::Mutex;
 
 use crate::FlowOperationError;
 
-/// Registers Attribute index declarations in the cluster registry and serves them to search.
+/// Registers Attribute index declarations and supplies them to search.
 ///
-/// The registry object is cached after the first read and replaced after each registration.
+/// Caches the registry; each registration replaces the cache.
 pub struct AttributeIndexes {
     object_store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,

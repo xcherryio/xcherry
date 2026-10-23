@@ -16,8 +16,9 @@ use tokio::net::TcpListener;
 use crate::ServerError;
 use crate::config::{DevConfig, DevDurabilityMode};
 
-/// The in-process S3 emulator of `dex-server-zd dev`. The engine reaches it over HTTP through
-/// the production S3 client, so development exercises the production code path.
+/// The in-process S3 emulator of `dex-server-zd dev`.
+///
+/// The engine uses the production S3 client over HTTP to reach it.
 pub(crate) struct EmbeddedS3 {
     server: ServerHandle,
 }

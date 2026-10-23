@@ -29,8 +29,9 @@ fn string_value(text: &str) -> Value {
     }
 }
 
-/// The smallest path every SDK takes: handshake, register a pull Worker, run one Step, read the
-/// result, and shut down while the Worker stream is still open.
+/// Every SDK's minimal path: handshake, pull Worker, one Step, result.
+///
+/// Shutdown must finish while the Worker stream is open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pull_worker_completes_a_single_step_flow() {
     let server = DevServer::start().await;

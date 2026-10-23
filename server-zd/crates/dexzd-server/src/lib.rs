@@ -165,10 +165,9 @@ pub fn run_from_command_line() -> Result<(), ServerError> {
     }
 }
 
-/// Starts the single-node dev server: an embedded S3 emulator under `<data-dir>/s3` and the
-/// engine's local store under `<data-dir>/store`, serving on `--listen`.
+/// Starts the single-node dev server with an embedded S3 emulator, serving on `--listen`.
 ///
-/// Does not install logging; the caller owns the global tracing subscriber.
+/// The caller installs logging.
 pub async fn start_dev_server(options: &DevCommandOptions) -> Result<RunningServer, ServerError> {
     start_dev_server_with_config(config::Config::load_dev(options)?).await
 }

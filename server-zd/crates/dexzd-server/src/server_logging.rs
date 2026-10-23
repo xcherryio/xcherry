@@ -19,8 +19,9 @@ use crate::ServerError;
 /// Log file name inside `--log-dir`; `dexcli dev` reads this name.
 const LOG_FILE_NAME: &str = "dex-server-zd.log";
 
-/// Installs the global subscriber: standard error, plus `<log_directory>/dex-server-zd.log`
-/// when a log directory is set. The `RUST_LOG` filter applies; the default level is info.
+/// Logs to standard error and, when set, `<log_directory>/dex-server-zd.log`.
+///
+/// `RUST_LOG` filters records; the default level is info.
 pub(crate) fn install(log_directory: Option<&Path>) -> Result<(), ServerError> {
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr_layer = tracing_subscriber::fmt::layer()

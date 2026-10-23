@@ -91,8 +91,9 @@ impl Drop for RunningServer {
     }
 }
 
-/// Starts a server from a validated configuration. `embedded_s3` is the dev mode emulator that
-/// the object store configuration already points at; the server stops it last.
+/// Starts a server from a validated configuration.
+///
+/// The server stops `embedded_s3`, the dev mode emulator, last.
 pub(crate) async fn start_server(
     config: &Config,
     embedded_s3: Option<EmbeddedS3>,

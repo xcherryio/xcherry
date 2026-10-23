@@ -22,10 +22,9 @@ use dexzd_protocol::dex::{
 
 use crate::FlowOperationError;
 
-/// The Flow operations behind FlowService: client writes, reads, and long polls of one node.
+/// Flow writes, reads, and long polls behind FlowService.
 ///
-/// Implementations validate requests, bound long-poll waits, and stop waiting when the returned
-/// future is dropped, because a client that cancels its call drops it.
+/// Implementations validate requests; dropping a future stops its wait.
 #[async_trait]
 pub trait FlowOperations: Send + Sync + 'static {
     /// Starts a Flow run.

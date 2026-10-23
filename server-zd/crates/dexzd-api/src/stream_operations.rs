@@ -17,9 +17,9 @@ use dexzd_stream_store::{StreamMessage, StreamStore, StreamStoreError, WriteStre
 
 use crate::FlowOperationError;
 
-/// Serves WriteStream, ReadStream, and ListStreamMessages from the node's Stream Store.
+/// Serves the Stream RPCs from the node's Stream Store.
 ///
-/// Streams are independent of Flow existence, so these calls never reach the Flow runtime.
+/// Streams do not depend on Flows, so these calls bypass the runtime.
 pub struct StreamOperations {
     stream_store: std::sync::Arc<StreamStore>,
     max_wait: Duration,

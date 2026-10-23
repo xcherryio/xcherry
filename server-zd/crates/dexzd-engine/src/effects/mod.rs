@@ -20,7 +20,6 @@ mod method_request;
 mod object_deletions;
 mod outbox_delivery;
 mod partition_rebuild;
-mod registry_effect_runtime;
 mod state_reads;
 mod timer_service;
 
@@ -53,12 +52,13 @@ pub use hard_delete_objects::{
     encode_hard_delete_value, hard_delete_placeholder_value,
 };
 pub use method_request::MethodRequest;
+pub(crate) use method_request::resolve_method_durability;
+pub(crate) use state_reads::{RunLocation, read_run_record, read_step_execution};
 
 use crate::recovery::{PartitionRuntimeRebuilder, RuntimeRebuildError};
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
 use method_request::MethodAttemptKey;
-use state_reads::RunLocation;
 use timer_service::TimerServices;
 
 /// Settings of the effect runner.

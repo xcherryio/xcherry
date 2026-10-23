@@ -10,6 +10,7 @@
 
 mod client_operations;
 mod commit_port;
+mod effect_runtime_adapter;
 mod flow_address;
 mod flow_runtime;
 pub(crate) mod read_operations;
