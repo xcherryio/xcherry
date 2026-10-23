@@ -10,6 +10,7 @@
 //! owner-memory method and heartbeat timeouts, and proposes its result or failure.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -83,24 +84,37 @@ impl AttemptFailure {
 }
 
 impl MethodAttempt {
-    /// Runs the attempt to its end. Errors are logged; the attempt is rebuilt after a restart.
+    /// Runs the attempt to its end. A server-side error fails the attempt so that it retries;
+    /// otherwise the invocation would stay running until a restart.
     pub(crate) async fn run(self) {
-        if let Err(error) = self.run_attempt().await {
-            tracing::warn!(
-                %error,
-                run_id = %self.key.run_id,
-                step_execution_id = %self.key.step_execution_id,
-                attempt = self.key.attempt,
-                "method attempt stopped with an error"
-            );
+        let Err(error) = self.run_attempt().await else {
+            return;
+        };
+        if matches!(error, EffectError::Stopped) || self.cancel.is_cancelled() {
+            return;
         }
+        tracing::warn!(
+            %error,
+            run_id = %self.key.run_id,
+            step_execution_id = %self.key.step_execution_id,
+            attempt = self.key.attempt,
+            "method attempt failed on the server"
+        );
+        let failure = AttemptFailure::server(
+            StepAttemptFailureKind::DispatchError,
+            format!("server error: {error}"),
+        );
+        self.propose_failure(failure, "", CommitUrgency::Prompt)
+            .await;
     }
 
     async fn run_attempt(&self) -> Result<(), EffectError> {
-        let state = {
-            let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
-            read_method_attempt_state(reader.as_ref(), self.run, &self.key, &self.task_id)?
-        };
+        let state = self
+            .retry_transient(|| async {
+                let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
+                read_method_attempt_state(reader.as_ref(), self.run, &self.key, &self.task_id)
+            })
+            .await?;
         let Some(state) = state else {
             tracing::debug!(run_id = %self.key.run_id, "method attempt is no longer running");
             return Ok(());
@@ -113,7 +127,9 @@ impl MethodAttempt {
             dex::StepDurability::Async => CommitUrgency::Batched,
             _ => CommitUrgency::Prompt,
         };
-        let hard_delete_values = self.read_hard_delete_values(&state).await?;
+        let hard_delete_values = self
+            .retry_transient(|| self.read_hard_delete_values(&state))
+            .await?;
         let request = build_method_request(&state, &hard_delete_values)?;
         let end = if request.encoded_len() > self.context.config.max_worker_request_bytes {
             AttemptEnd::Failure(AttemptFailure::server(
@@ -137,6 +153,31 @@ impl MethodAttempt {
             }
             AttemptEnd::Result(frame, app_worker_id) => {
                 self.complete(&state, *frame, app_worker_id, urgency).await
+            }
+        }
+    }
+
+    /// Runs `operation` until it succeeds or fails permanently, retrying transient failures.
+    ///
+    /// Returns [`EffectError::Stopped`] when the attempt is canceled while it waits.
+    async fn retry_transient<T, Operation, OperationFuture>(
+        &self,
+        mut operation: Operation,
+    ) -> Result<T, EffectError>
+    where
+        Operation: FnMut() -> OperationFuture,
+        OperationFuture: Future<Output = Result<T, EffectError>>,
+    {
+        let mut backoff = self.context.retry_backoff();
+        loop {
+            match operation().await {
+                Err(error) if error.is_retryable() => {
+                    tracing::warn!(%error, run_id = %self.key.run_id, "retrying a transient attempt failure");
+                    if !backoff.wait(&self.cancel).await {
+                        return Err(EffectError::Stopped);
+                    }
+                }
+                result => return result,
             }
         }
     }
@@ -340,11 +381,24 @@ impl MethodAttempt {
                 return Ok(());
             }
         };
-        let uploads = self
-            .context
-            .hard_delete_objects
-            .upload_attribute_writes(self.object_owner(state), result.attribute_writes_mut())
-            .await?;
+        let mut backoff = self.context.retry_backoff();
+        let uploads = loop {
+            let upload = self
+                .context
+                .hard_delete_objects
+                .upload_attribute_writes(self.object_owner(state), result.attribute_writes_mut())
+                .await;
+            match upload {
+                Ok(uploads) => break uploads,
+                Err(error) if error.is_retryable() => {
+                    tracing::warn!(%error, run_id = %self.key.run_id, "retrying hard-delete uploads");
+                    if !backoff.wait(&self.cancel).await {
+                        return Err(EffectError::Stopped);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let command = self.flow_command(flow_command::Command::StepMethodCompleted(
             result.into_command(
                 self.key.invocation(),

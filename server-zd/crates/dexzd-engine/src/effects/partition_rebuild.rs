@@ -30,7 +30,7 @@ pub(crate) async fn rebuild_partition(
     let reader = context.runtime.committed_state_reader()?;
     context
         .hard_delete_objects
-        .recover_pending_uploads(partition, &context.hasher, reader)
+        .recover_pending_uploads(partition, &context.startup_pending_uploads, reader)
         .await?;
     let reader = context.runtime.committed_state_reader()?;
     let mut work: BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)> = BTreeMap::new();

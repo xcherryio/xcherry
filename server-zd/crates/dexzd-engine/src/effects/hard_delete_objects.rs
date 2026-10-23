@@ -226,6 +226,7 @@ impl HardDeleteObjects {
     ///
     /// Returns the references to put into the command. The uploads are recorded in the ledger
     /// before they start; call [`Self::finish_uploads`] once the command's outcome is known.
+    /// On error `writes` is unchanged, so the caller may retry.
     pub async fn upload_attribute_writes(
         &self,
         owner: HardDeleteObjectOwner,
@@ -261,11 +262,7 @@ impl HardDeleteObjects {
         for ((write_index, object_id, is_string_value), object_key) in
             planned.into_iter().zip(uploads.object_keys.clone())
         {
-            let write = &mut writes[write_index];
-            let value = write
-                .value
-                .replace(hard_delete_placeholder_value())
-                .unwrap_or_default();
+            let value = writes[write_index].value.clone().unwrap_or_default();
             let body = encode_hard_delete_value(&value);
             let size_bytes = body.len() as u64;
             let failure = match self
@@ -293,6 +290,9 @@ impl HardDeleteObjects {
                 size_bytes,
                 is_string_value,
             });
+        }
+        for reference in &uploads.references {
+            writes[reference.write_index as usize].value = Some(hard_delete_placeholder_value());
         }
         Ok(uploads)
     }
@@ -363,16 +363,22 @@ impl HardDeleteObjects {
         }
     }
 
-    /// Deletes recorded uploads of runs in `partition` that committed state does not reference.
+    /// Returns the uploads recorded in the ledger.
+    pub(crate) fn pending_uploads(&self) -> Result<Vec<PendingHardDeleteUpload>, EffectError> {
+        self.ledger.pending_uploads()
+    }
+
+    /// Deletes `uploads` (recorded before this node started) of runs in `partition` that
+    /// committed state does not reference.
     pub(crate) async fn recover_pending_uploads(
         &self,
         partition: PartitionId,
-        hasher: &PartitionHasher,
+        uploads: &[PendingHardDeleteUpload],
         reader: Box<dyn FlowStateReader + Send>,
     ) -> Result<(), EffectError> {
         let mut finished_keys = Vec::new();
         let mut orphan_keys = Vec::new();
-        for upload in self.ledger.pending_uploads()? {
+        for upload in uploads.iter().cloned() {
             let Some((owner, object_id)) =
                 HardDeleteObjectOwner::parse_object_key(&upload.object_key)
             else {
@@ -380,7 +386,7 @@ impl HardDeleteObjects {
                 finished_keys.push(upload.object_key);
                 continue;
             };
-            if hasher.partition_of(owner.flow_hash) != partition {
+            if self.hasher.partition_of(owner.flow_hash) != partition {
                 continue;
             }
             let run = RunLocation {

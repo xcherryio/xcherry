@@ -26,7 +26,7 @@ mod timer_service;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +34,7 @@ use dexzd_apply::{ApplyEffect, StateReadError};
 use dexzd_clock::WallClock;
 use dexzd_keyspace::{PartitionHasher, PartitionId, RunId};
 use dexzd_object_store::ObjectStoreError;
-use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
+use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, PendingHardDeleteUpload};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::StorageError;
 use futures::future::BoxFuture;
@@ -145,6 +145,17 @@ pub enum EffectError {
     Stopped,
 }
 
+impl EffectError {
+    /// Returns true when the same operation may succeed if retried.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::ObjectStore(error) => error.is_retryable(),
+            Self::Runtime(EffectRuntimeError::Unavailable { .. }) | Self::StateRead(_) => true,
+            _ => false,
+        }
+    }
+}
+
 /// Messages to the router task.
 pub(crate) enum RouterMessage {
     Effects {
@@ -165,6 +176,7 @@ pub(crate) enum RouterMessage {
         task_id: Vec<u8>,
     },
     WorkFinished {
+        flow: FlowAddress,
         work: TrackedWork,
     },
 }
@@ -200,6 +212,9 @@ pub(crate) struct EffectContext {
     pub(crate) hasher: PartitionHasher,
     pub(crate) clock: Arc<dyn WallClock>,
     pub(crate) validation_config: ValidationConfig,
+    /// Hard-delete uploads recorded before this node started; recovery checks only these, so
+    /// uploads of commands proposed after startup are never mistaken for orphans.
+    pub(crate) startup_pending_uploads: Vec<PendingHardDeleteUpload>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) tracker: TaskTracker,
     router: mpsc::UnboundedSender<RouterMessage>,
@@ -363,6 +378,15 @@ impl EffectTasks {
     pub fn start(self, runtime: Arc<dyn EffectRuntime>) -> EffectTasksHandle {
         let shutdown = CancellationToken::new();
         let tracker = TaskTracker::new();
+        let startup_pending_uploads = match self.dependencies.hard_delete_objects.pending_uploads()
+        {
+            Ok(uploads) => uploads,
+            Err(error) => {
+                // Unrecovered orphans are still deleted with their run's prefix at retention.
+                tracing::warn!(%error, "reading pending hard-delete uploads failed");
+                Vec::new()
+            }
+        };
         let context = Arc::new(EffectContext {
             config: self.config,
             runtime,
@@ -370,7 +394,12 @@ impl EffectTasks {
             hard_delete_objects: self.dependencies.hard_delete_objects,
             hasher: self.dependencies.partition_hasher,
             clock: self.dependencies.clock,
-            validation_config: self.dependencies.validation_config,
+            validation_config: ValidationConfig {
+                // Hard-delete writes always have an object store on server-zd.
+                has_blob_store: true,
+                ..self.dependencies.validation_config
+            },
+            startup_pending_uploads,
             shutdown: shutdown.clone(),
             tracker: tracker.clone(),
             router: self.router_sender,
@@ -378,7 +407,7 @@ impl EffectTasks {
         let router = EffectRouter {
             dispatch: DispatchScheduler::new(Arc::clone(&context)),
             timers: TimerServices::new(Arc::clone(&context)),
-            tracked_work: BTreeSet::new(),
+            tracked_work: BTreeMap::new(),
             context,
         };
         tracker.spawn(router.run(self.router_receiver));
@@ -400,7 +429,8 @@ struct EffectRouter {
     context: Arc<EffectContext>,
     dispatch: DispatchScheduler,
     timers: TimerServices,
-    tracked_work: BTreeSet<TrackedWork>,
+    /// Running work, and whether a request arrived while it ran (it then runs again).
+    tracked_work: BTreeMap<TrackedWork, bool>,
 }
 
 impl EffectRouter {
@@ -447,8 +477,10 @@ impl EffectRouter {
                 self.dispatch.finish_start(flow, key, result);
             }
             RouterMessage::AttemptFinished { task_id } => self.dispatch.finish_attempt(task_id),
-            RouterMessage::WorkFinished { work } => {
-                self.tracked_work.remove(&work);
+            RouterMessage::WorkFinished { flow, work } => {
+                if self.tracked_work.remove(&work) == Some(true) {
+                    self.spawn_tracked(&flow, work);
+                }
             }
         }
     }
@@ -508,12 +540,14 @@ impl EffectRouter {
         }
     }
 
-    /// Spawns `work` unless the same work already runs; it rereads committed state, so a
-    /// duplicate request while it runs is covered by that read.
+    /// Spawns `work`, or marks running work to run again because state may have changed
+    /// after its last read.
     fn spawn_tracked(&mut self, flow: &FlowAddress, work: TrackedWork) {
-        if !self.tracked_work.insert(work.clone()) {
+        if let Some(is_rerun_requested) = self.tracked_work.get_mut(&work) {
+            *is_rerun_requested = true;
             return;
         }
+        self.tracked_work.insert(work.clone(), false);
         let context = Arc::clone(&self.context);
         let flow = flow.clone();
         self.context.tracker.spawn(async move {
@@ -533,7 +567,7 @@ impl EffectRouter {
             if let Err(error) = result {
                 tracing::warn!(%error, ?work, "effect work stopped with an error");
             }
-            context.report(RouterMessage::WorkFinished { work });
+            context.report(RouterMessage::WorkFinished { flow, work });
         });
     }
 }
