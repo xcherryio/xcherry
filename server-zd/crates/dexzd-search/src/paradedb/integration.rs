@@ -7,15 +7,33 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
+use dexzd_keyspace::TenantId;
 use dexzd_protocol::dex::IndexType;
 use dexzd_visibility_query::{
     FieldRegistry, SearchDocument, SearchValue, compare_documents, evaluate, parse_and_check,
 };
 use tokio_postgres::NoTls;
 
-use super::{MIGRATION_SQL, PageCursor, SearchRow, translate_query, upsert_statement};
+use super::{
+    MIGRATION_SQL, PageCursor, ParadeDbSearchBackend, ProjectionVisibilityWait, SearchRow,
+    translate_query, upsert_statement,
+};
+use crate::{SearchBackend, SearchError, SearchRequest};
+
+struct CountVisibilityWait(AtomicUsize);
+
+#[async_trait]
+impl ProjectionVisibilityWait for CountVisibilityWait {
+    async fn wait_until_visible(&self, _request: SearchRequest<'_>) -> Result<(), SearchError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct Document(BTreeMap<String, SearchValue>);
@@ -124,7 +142,7 @@ async fn paradedb_matches_builtin_evaluator() {
             )
             .with("text", SearchValue::String("Rust Backend".into()))
             .with("number", SearchValue::Int(5))
-            .with("double", SearchValue::Double(2.5))
+            .with("double", SearchValue::Double(2.0))
             .with("flag", SearchValue::Bool(true)),
         run(
             "r4",
@@ -267,6 +285,185 @@ async fn paradedb_matches_builtin_evaluator() {
             .collect();
         assert_eq!(actual_ids, expected_ids, "{order}");
     }
+
+    let first_run_id = "00000000-0000-0000-0000-000000000001";
+    let second_run_id = "00000000-0000-0000-0000-000000000002";
+    for document in [
+        run(first_run_id, "first", "Running", 1_000_000_000, None)
+            .with("keyword", SearchValue::String("red".into()))
+            .with("tags", SearchValue::StringArray(vec!["urgent".into()]))
+            .with("text", SearchValue::String("Rust Engineer".into()))
+            .with("number", SearchValue::Int(7))
+            .with("double", SearchValue::Double(2.5))
+            .with("flag", SearchValue::Bool(true))
+            .with("datetime", SearchValue::Datetime(1_000_000_000)),
+        run(
+            second_run_id,
+            "second",
+            "Completed",
+            2_000_000_000,
+            Some(3_000_000_000),
+        )
+        .with("keyword", SearchValue::String("blue".into()))
+        .with("number", SearchValue::Int(9)),
+    ] {
+        let row = SearchRow::from_document("1", 1, &document, &application_fields)
+            .expect("map backend fixture");
+        let statement = upsert_statement(&row);
+        client
+            .execute(&statement.sql, &statement.parameter_refs())
+            .await
+            .expect("insert backend fixture");
+    }
+    let mut configuration: tokio_postgres::Config =
+        database_url.parse().expect("parse CI ParadeDB URL");
+    configuration.options(format!("-c search_path={schema_name},public,pdb"));
+    let visibility_wait = Arc::new(CountVisibilityWait(AtomicUsize::new(0)));
+    let backend = ParadeDbSearchBackend::connect(&configuration, 2, Some(visibility_wait.clone()))
+        .await
+        .expect("connect backend pool");
+    let first_page = backend
+        .search(SearchRequest {
+            tenant_id: TenantId(1),
+            query: "WorkflowType = 'Engine'",
+            page_size: 1,
+            page_token: None,
+            field_registry: &registry,
+        })
+        .await
+        .expect("first backend page");
+    assert_eq!(first_page.entries.len(), 1);
+    assert_eq!(first_page.entries[0].run_id, first_run_id);
+    let returned_attributes: BTreeMap<_, _> = first_page.entries[0]
+        .indexed_attributes
+        .iter()
+        .map(|attribute| (attribute.key.as_str(), attribute.value.as_ref()))
+        .collect();
+    for attribute in [
+        "FlowType", "keyword", "tags", "text", "number", "double", "flag", "datetime",
+    ] {
+        assert!(
+            returned_attributes
+                .get(attribute)
+                .and_then(|value| *value)
+                .is_some(),
+            "{attribute}"
+        );
+    }
+    use dexzd_protocol::dex::value::Kind;
+    assert!(matches!(
+        returned_attributes["keyword"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::StringValue(value)) if value == "red"
+    ));
+    assert!(matches!(
+        returned_attributes["text"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::StringValue(value)) if value == "Rust Engineer"
+    ));
+    match returned_attributes["tags"].and_then(|value| value.kind.as_ref()) {
+        Some(Kind::ObjValue(value)) => {
+            let tags: Vec<String> =
+                serde_json::from_slice(&value.payload).expect("decode returned tags");
+            assert_eq!(tags, ["urgent"]);
+        }
+        _ => panic!("missing returned tags"),
+    }
+    assert!(matches!(
+        returned_attributes["number"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::IntValue(7))
+    ));
+    assert!(matches!(
+        returned_attributes["double"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::DoubleValue(2.0))
+    ));
+    assert!(matches!(
+        returned_attributes["flag"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::BoolValue(true))
+    ));
+    assert!(matches!(
+        returned_attributes["datetime"].and_then(|value| value.kind.as_ref()),
+        Some(Kind::StringValue(value)) if value == "1970-01-01T00:00:01Z"
+    ));
+    let token = first_page.next_page_token.expect("second backend page");
+    let second_page = backend
+        .search(SearchRequest {
+            tenant_id: TenantId(1),
+            query: "WorkflowType = 'Engine'",
+            page_size: 1,
+            page_token: Some(&token),
+            field_registry: &registry,
+        })
+        .await
+        .expect("second backend page");
+    assert_eq!(second_page.entries[0].run_id, second_run_id);
+    assert!(second_page.next_page_token.is_none());
+    assert_eq!(visibility_wait.0.load(Ordering::Relaxed), 2);
+    for (query, expected_run_id) in [
+        ("keyword = 'red'", first_run_id),
+        ("number >= 8", second_run_id),
+        ("CloseTime IS NULL", first_run_id),
+    ] {
+        let page = backend
+            .search(SearchRequest {
+                tenant_id: TenantId(1),
+                query,
+                page_size: 10,
+                page_token: None,
+                field_registry: &registry,
+            })
+            .await
+            .expect("filtered backend page");
+        assert_eq!(page.entries.len(), 1, "{query}");
+        assert_eq!(page.entries[0].run_id, expected_run_id, "{query}");
+    }
+    for changed_query in ["", "WorkflowType = 'Engine' ORDER BY StartTime ASC"] {
+        let error = backend
+            .search(SearchRequest {
+                tenant_id: TenantId(1),
+                query: changed_query,
+                page_size: 1,
+                page_token: Some(&token),
+                field_registry: &registry,
+            })
+            .await
+            .expect_err("changed query token");
+        assert!(matches!(error, SearchError::InvalidArgument(_)));
+    }
+    let replacement = if token.ends_with('0') { '1' } else { '0' };
+    let tampered = format!("{}{replacement}", &token[..token.len() - 1]);
+    let error = backend
+        .search(SearchRequest {
+            tenant_id: TenantId(1),
+            query: "WorkflowType = 'Engine'",
+            page_size: 1,
+            page_token: Some(&tampered),
+            field_registry: &registry,
+        })
+        .await
+        .expect_err("tampered token");
+    assert!(matches!(error, SearchError::InvalidArgument(_)));
+    let error = backend
+        .search(SearchRequest {
+            tenant_id: TenantId(2),
+            query: "WorkflowType = 'Engine'",
+            page_size: 1,
+            page_token: Some(&token),
+            field_registry: &registry,
+        })
+        .await
+        .expect_err("cross-tenant token");
+    assert!(matches!(error, SearchError::InvalidArgument(_)));
+    let other_tenant = backend
+        .search(SearchRequest {
+            tenant_id: TenantId(2),
+            query: "",
+            page_size: 10,
+            page_token: None,
+            field_registry: &registry,
+        })
+        .await
+        .expect("other tenant page");
+    assert!(other_tenant.entries.is_empty());
+    drop(backend);
 
     client
         .batch_execute(&format!("DROP SCHEMA {schema_name} CASCADE"))

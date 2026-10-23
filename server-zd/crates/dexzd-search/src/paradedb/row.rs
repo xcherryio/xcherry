@@ -45,6 +45,8 @@ pub struct SearchRow {
     pub sa_text: BTreeMap<String, SearchValue>,
     /// Integer and double application attributes.
     pub sa_number: BTreeMap<String, SearchValue>,
+    /// Recorded numeric index types for exact response encoding.
+    pub sa_number_types: BTreeMap<String, SearchValue>,
     /// Datetime application attributes.
     pub sa_datetime: BTreeMap<String, SearchValue>,
     /// Boolean application attributes.
@@ -103,6 +105,7 @@ impl SearchRow {
             sa_keyword: BTreeMap::new(),
             sa_text: BTreeMap::new(),
             sa_number: BTreeMap::new(),
+            sa_number_types: BTreeMap::new(),
             sa_datetime: BTreeMap::new(),
             sa_bool: BTreeMap::new(),
         };
@@ -144,6 +147,12 @@ impl SearchRow {
                 }
             };
             bucket.insert(field.clone(), value);
+            if matches!(index_type, IndexType::Int | IndexType::Double) {
+                row.sa_number_types.insert(
+                    field.clone(),
+                    SearchValue::Int(i64::from(*index_type as i32)),
+                );
+            }
         }
         Ok(row)
     }

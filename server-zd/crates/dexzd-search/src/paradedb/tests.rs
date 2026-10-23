@@ -50,6 +50,7 @@ fn migration_has_tenant_first_and_versioned_documents() {
         "sa_keyword",
         "sa_text",
         "sa_number",
+        "sa_number_types",
         "sa_datetime",
         "sa_bool",
     ] {
@@ -81,6 +82,15 @@ fn maps_typed_attributes_and_binds_upsert_values() {
     assert_eq!(row.sa_keyword.len(), 2);
     assert_eq!(row.sa_text.len(), 1);
     assert_eq!(row.sa_number.len(), 2);
+    assert_eq!(row.sa_number_types.len(), 2);
+    assert_eq!(
+        row.sa_number_types.get("number"),
+        Some(&SearchValue::Int(i64::from(IndexType::Int as i32)))
+    );
+    assert_eq!(
+        row.sa_number_types.get("double"),
+        Some(&SearchValue::Int(i64::from(IndexType::Double as i32)))
+    );
     assert_eq!(row.sa_datetime.len(), 1);
     assert_eq!(row.sa_bool.len(), 1);
     let statement = upsert_statement(&row);

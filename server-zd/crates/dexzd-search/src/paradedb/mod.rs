@@ -10,12 +10,15 @@
 
 mod query;
 mod row;
+mod search_backend;
+mod search_result;
 mod upsert;
 
 use tokio_postgres::types::ToSql;
 
 pub use query::{PageCursor, SqlTranslationError, translate_query};
 pub use row::{SearchRow, SearchRowError};
+pub use search_backend::{ParadeDbSearchBackend, ProjectionVisibilityWait};
 pub use upsert::upsert_statement;
 
 /// Fresh ParadeDB migration for versioned Dex run documents.

@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::{SearchRow, SqlStatement, SqlValue};
 
-pub(super) const SELECT_COLUMNS: &str = "tenant_id, run_id, workflow_id, workflow_type, flow_type, execution_status, start_time_ns, close_time_ns, dex_parent_flow_id, active_step_types, dex_work_queue_permissions, version, sa_keyword, sa_text, sa_number, sa_datetime, sa_bool";
+pub(super) const SELECT_COLUMNS: &str = "tenant_id, run_id, workflow_id, workflow_type, flow_type, execution_status, start_time_ns, close_time_ns, dex_parent_flow_id, active_step_types, dex_work_queue_permissions, version, sa_keyword::text AS sa_keyword, sa_text::text AS sa_text, sa_number::text AS sa_number, sa_number_types::text AS sa_number_types, sa_datetime::text AS sa_datetime, sa_bool::text AS sa_bool";
 pub(super) const DEFAULT_ORDER: &str = "ORDER BY is_running DESC, close_time_ns DESC NULLS LAST, start_time_ns DESC, run_id COLLATE \"C\" ASC";
 
 /// Keyset position for one returned run.

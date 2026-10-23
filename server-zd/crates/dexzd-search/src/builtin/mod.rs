@@ -9,7 +9,6 @@
 //! Tenant-scoped SearchFlows over committed local run documents.
 
 mod document;
-mod page_token;
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -28,7 +27,7 @@ use dexzd_visibility_query::{
 };
 
 use self::document::IndexedDocument;
-use self::page_token::PagePosition;
+use crate::page_token::PagePosition;
 use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 /// Default maximum number of indexed documents examined by one builtin search.
