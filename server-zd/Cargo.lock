@@ -1040,7 +1040,9 @@ dependencies = [
 name = "dexzd-log"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "dexzd-clock",
  "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-protocol",
