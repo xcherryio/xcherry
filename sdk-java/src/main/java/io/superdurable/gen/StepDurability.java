@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * Was optimize_activity: false=SYNC, true=ASYNC. Timer is always optimized by the server.
+ * On server-zd both durabilities record the same events. ASYNC advances without waiting for the commit; there is no local phase.
  * </pre>
  *
  * Protobuf enum {@code dex.StepDurability}
@@ -110,7 +111,7 @@ public enum StepDurability
   }
   public static com.google.protobuf.Descriptors.EnumDescriptor
       getDescriptor() {
-    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(7);
+    return io.superdurable.gen.DexProto.getDescriptor().getEnumType(8);
   }
 
   private static final StepDurability[] VALUES = values();

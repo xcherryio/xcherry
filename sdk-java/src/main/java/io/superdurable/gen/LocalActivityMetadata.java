@@ -6,6 +6,10 @@
 package io.superdurable.gen;
 
 /**
+ * <pre>
+ * server-zd never sets this.
+ * </pre>
+ *
  * Protobuf type {@code dex.LocalActivityMetadata}
  */
 @com.google.protobuf.Generated
@@ -299,6 +303,10 @@ private static final long serialVersionUID = 0L;
     return builder;
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * Protobuf type {@code dex.LocalActivityMetadata}
    */
   public static final class Builder extends

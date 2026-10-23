@@ -142,6 +142,10 @@ private static final long serialVersionUID = 0L;
   public static final int INCLUDE_CONTINUED_AS_NEW_FIELD_NUMBER = 4;
   private boolean includeContinuedAsNew_ = false;
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>bool include_continued_as_new = 4;</code>
    * @return The includeContinuedAsNew.
    */
@@ -697,6 +701,10 @@ private static final long serialVersionUID = 0L;
 
     private boolean includeContinuedAsNew_ ;
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>bool include_continued_as_new = 4;</code>
      * @return The includeContinuedAsNew.
      */
@@ -705,6 +713,10 @@ private static final long serialVersionUID = 0L;
       return includeContinuedAsNew_;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>bool include_continued_as_new = 4;</code>
      * @param value The includeContinuedAsNew to set.
      * @return This builder for chaining.
@@ -717,6 +729,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>bool include_continued_as_new = 4;</code>
      * @return This builder for chaining.
      */

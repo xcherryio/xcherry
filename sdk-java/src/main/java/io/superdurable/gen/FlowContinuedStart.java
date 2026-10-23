@@ -6,6 +6,10 @@
 package io.superdurable.gen;
 
 /**
+ * <pre>
+ * server-zd never sets this.
+ * </pre>
+ *
  * Protobuf type {@code dex.FlowContinuedStart}
  */
 @com.google.protobuf.Generated
@@ -652,6 +656,10 @@ io.superdurable.gen.ChannelValues defaultValue) {
     return builder;
   }
   /**
+   * <pre>
+   * server-zd never sets this.
+   * </pre>
+   *
    * Protobuf type {@code dex.FlowContinuedStart}
    */
   public static final class Builder extends

@@ -8,6 +8,7 @@ package io.superdurable.gen;
 /**
  * <pre>
  * Reports a failure before Dex receives a Worker result.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  *
  * Protobuf type {@code dex.DispatchTaskError}
@@ -284,6 +285,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Reports a failure before Dex receives a Worker result.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    *
    * Protobuf type {@code dex.DispatchTaskError}
