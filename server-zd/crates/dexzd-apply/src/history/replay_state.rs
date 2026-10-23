@@ -6,8 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! State readers that time travel layers on the committed state: the temporary state that
-//! replays an attempt, and a reader over a transaction for nested transactions.
+//! Readers layered on committed state: the replay state, and a reader for nested transactions.
 
 use std::collections::BTreeMap;
 
@@ -23,15 +22,13 @@ use crate::{ApplyError, FlowStateReader, StateReadError, StateRow, StateWrite};
 /// Base rows fetched per page while merging a scan with the overlay.
 const SCAN_PAGE_ROWS: usize = 256;
 
-/// The state one attempt is replayed on: the committed state with the attempt-scoped tables
-/// replaced by a checkpoint, plus the writes of the commands replayed so far.
+/// Committed state with the attempt-scoped tables replaced by a checkpoint, plus replayed writes.
 ///
-/// Run-scoped tables stay visible, adjusted so replayed commands see what they saw when they
-/// were first applied:
-/// - Deduplication tables look empty, because every recorded command was not a duplicate.
-/// - Child Flow results received at or after the replayed seq are hidden.
-/// - Value rows that window pruning already deleted look live. The window only prunes values
-///   that no point at or after W references, so they never reach the rebuilt state.
+/// Recorded commands were never duplicates, so deduplication tables look empty.
+///
+/// Child Flow results received at or after the replayed seq are hidden.
+///
+/// Pruned values look live; no point inside the window references them.
 pub(crate) struct ReplayState<'base> {
     base: &'base dyn FlowStateReader,
     overlay: BTreeMap<(ColumnFamily, Vec<u8>), Option<Vec<u8>>>,

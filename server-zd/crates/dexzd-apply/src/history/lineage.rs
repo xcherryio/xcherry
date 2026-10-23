@@ -8,9 +8,7 @@
 
 //! Attempt lineages and history record scans.
 //!
-//! Attempts cover disjoint, contiguous seq ranges because only the current attempt receives
-//! commands. The lineage of attempt `a` is `a` itself plus every ancestor up to the point it
-//! was forked from.
+//! Only the current attempt receives commands, so attempts cover disjoint, contiguous seq ranges.
 
 use dexzd_keyspace::row_keys::{history_record_key, prefix_range};
 use dexzd_keyspace::{ColumnFamily, RunTable, run_table_prefix};
@@ -22,8 +20,7 @@ use crate::state_access::{FlowTransaction, RunRows};
 /// History records read per scan page.
 const HISTORY_PAGE_RECORDS: usize = 64;
 
-/// The attempts of one lineage, from the selected attempt back to attempt 1, each with the
-/// largest seq that belongs to the lineage.
+/// Attempts of a lineage back to attempt 1, each with its largest seq in the lineage.
 #[derive(Debug, Clone)]
 pub(crate) struct Lineage {
     segments: Vec<(u32, u64)>,

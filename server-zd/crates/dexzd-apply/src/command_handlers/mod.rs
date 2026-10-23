@@ -48,8 +48,7 @@ pub(crate) fn apply_command(
     Ok(apply_in_scope(context, state, &scope)?.0)
 }
 
-/// Replays a recorded command for time travel: no history, checkpoints, or window changes.
-/// Returns the writes, or `None` when the command was rejected.
+/// Replays a recorded command without recording history. Returns its writes, or `None` when rejected.
 pub(crate) fn apply_replayed_command(
     context: &ApplyContext,
     state: &dyn FlowStateReader,

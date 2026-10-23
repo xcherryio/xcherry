@@ -6,15 +6,12 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Rebuilds the attempt state S' at a point (plan section 8.4 step 2): the newest checkpoint
-//! of the point's attempt at or before it, then its history commands up to the point, replayed
-//! through the same handlers on a temporary state.
+//! Rebuilds S' (plan section 8.4 step 2): a checkpoint, then the attempt's commands replayed.
 
 use dexzd_keyspace::ColumnFamily;
 use dexzd_keyspace::row_keys::checkpoint_key;
-use dexzd_protocol::dex::{StopFlowRequest, StopType};
 use dexzd_protocol::dexzd::v1::{
-    CheckpointRecord, CheckpointRunStatus, FlowCommand, FlowStopCommand, HistoryRecord, RunRecord,
+    CheckpointRecord, CheckpointRunStatus, FlowCommand, HistoryRecord, RunRecord,
     TimersFiredCommand, flow_command::Command,
 };
 
@@ -138,14 +135,6 @@ fn replayed_command(history_record: &HistoryRecord) -> Result<Option<FlowCommand
         });
     };
     let replayed_body = match body {
-        // In another run's history, FlowStart terminated that run (ID reuse).
-        Command::FlowStart(_) => Command::FlowStop(FlowStopCommand {
-            request: Some(StopFlowRequest {
-                stop_type: StopType::Terminate as i32,
-                reason: "terminated by StartFlow with ALLOW_TERMINATE_IF_RUNNING".to_owned(),
-                ..StopFlowRequest::default()
-            }),
-        }),
         Command::TimersFired(fired) => {
             let timers: Vec<_> = fired
                 .timers
@@ -162,10 +151,11 @@ fn replayed_command(history_record: &HistoryRecord) -> Result<Option<FlowCommand
         | Command::OutboxAck(_)
         | Command::HardDeleteObjectsDeleted(_)
         | Command::RunPurge(_) => return Ok(None),
-        Command::TimeTravel(_) => {
+        // Attempts start at a checkpoint after these, and only the latest run travels.
+        Command::FlowStart(_) | Command::TimeTravel(_) => {
             return Err(ApplyError::InvariantViolation {
                 detail: format!(
-                    "history record {} is a time travel inside its attempt",
+                    "history record {} starts a run or attempt inside the replayed range",
                     history_record.seq
                 ),
             });

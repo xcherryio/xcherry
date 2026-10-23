@@ -105,8 +105,7 @@ impl MemoryState {
 
 const SECOND: i64 = 1_000_000;
 
-/// Attempt-scoped rows of the run, normalized so states of different run attempts compare:
-/// timer IDs lose their run attempt and running attempts lose their dispatch ID.
+/// Attempt rows without timer run attempts and dispatch IDs, so attempts compare.
 type AttemptRows = BTreeMap<(u8, Vec<u8>), Vec<u8>>;
 
 struct Harness {
@@ -581,8 +580,7 @@ fn canceled_task_ids(outcome: &ApplyOutcome) -> Vec<Vec<u8>> {
 const FAILED_PRECONDITION: i32 = 9;
 const INVALID_ARGUMENT: i32 = 3;
 
-/// ChargeStep-1 runs WaitFor and Execute, then ShipStep-1 and ShipStep-2 run in parallel.
-/// Returns the seqs of: Execute pending, ShipStep created.
+/// Runs ChargeStep-1, then creates two ShipSteps. Returns seqs: Execute pending, ShipStep created.
 fn run_charge_then_ship(harness: &mut Harness) -> (u64, u64) {
     harness.start(start_request());
     harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
@@ -1236,4 +1234,70 @@ fn a_result_applied_as_failure_is_recorded_and_replayed_as_that_failure() {
     });
     assert_eq!(harness.run_record().status, FlowStatus::Failed as i32);
     assert_eq!(harness.attempt_rows(), rows_at_point);
+}
+
+#[test]
+fn results_stamped_with_an_abandoned_run_attempt_are_rejected() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("status", "running", "");
+    let point_time = harness
+        .history_record(harness.last_seq())
+        .unwrap()
+        .timestamp_micros;
+    harness.travel_to(reset_to_time(point_time));
+    // The owner stamps every Worker result with the run attempt it dispatched.
+    let mut stale = harness.command(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse::default(),
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    stale.expected_run_attempt = 1;
+    let outcome = apply_flow_command(&harness.context, &harness.state, &stale).unwrap();
+    assert_eq!(error_code(&outcome.reply), Some(FAILED_PRECONDITION));
+    assert!(outcome.writes.is_empty());
+    stale.expected_run_attempt = 2;
+    let outcome = apply_flow_command(&harness.context, &harness.state, &stale).unwrap();
+    assert!(
+        is_ok(&outcome.reply),
+        "the restored attempt accepts its own result"
+    );
+}
+
+#[test]
+fn only_the_latest_run_of_a_flow_id_can_time_travel() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    harness.set_attribute("status", "first run", "");
+    let first_run_id = harness.run_id.clone();
+    let mut terminate = start_request();
+    terminate.request_id = "start-2".to_owned();
+    terminate.flow_start_options = Some(dexzd_protocol::dex::FlowStartOptions {
+        id_reuse_policy: dexzd_protocol::dex::IdReusePolicy::AllowTerminateIfRunning as i32,
+        ..dexzd_protocol::dex::FlowStartOptions::default()
+    });
+    let outcome = harness.apply(Command::FlowStart(FlowStartCommand {
+        new_run_id: vec![8; 16],
+        request: Some(terminate),
+        settings: Some(settings()),
+        resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
+        worker_target: Some(WorkerTarget::default()),
+        hard_delete_objects: Vec::new(),
+        request_fingerprint: Vec::new(),
+    }));
+    assert!(matches!(
+        outcome.reply.reply,
+        Some(command_reply::Reply::StartFlow(_))
+    ));
+    harness.run_id = first_run_id;
+    assert_eq!(harness.run_record().status, FlowStatus::Terminated as i32);
+    let rejected = harness.time_travel(reset(FlowResetType::Beginning));
+    assert_eq!(error_code(&rejected.reply), Some(FAILED_PRECONDITION));
+    assert!(rejected.writes.is_empty());
+    harness.run_id = vec![8; 16];
+    harness.travel_to(reset(FlowResetType::Beginning));
 }

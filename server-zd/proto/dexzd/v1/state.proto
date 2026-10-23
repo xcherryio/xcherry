@@ -132,8 +132,7 @@ message RunRecord {
   bool is_graceful_completion_requested = 29;
   // Semantic events that left the window; the window holds semantic_event_count minus this.
   uint64 pruned_semantic_event_count = 30;
-  // Encoded size of the attempt-scoped rows in the latest checkpoint; approximates the
-  // current attempt state size in the checkpoint rule.
+  // Size of the latest checkpoint's rows; the checkpoint rule's attempt state size.
   uint64 last_checkpoint_state_bytes = 31;
 }
 
@@ -460,8 +459,7 @@ message HistoryRecord {
   repeated dex.FlowHistoryEvent events = 7;
   // Debug builds only: hash of the attempt state after this command.
   bytes state_hash = 8;
-  // Step method calls whose first attempt became pending in this command; time travel
-  // resolves Step type and Step execution targets from them.
+  // Method calls whose first attempt became pending; time travel targets use them.
   repeated HistoryStepMethodPending pending_step_methods = 9;
 }
 

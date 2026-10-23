@@ -6,8 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Maps a ResetFlow request to a point of the selected lineage (plan section 8.4). Targets
-//! other than the beginning must be semantic points inside the window.
+//! Maps a ResetFlow request to a semantic point of the selected lineage (plan section 8.4).
 
 use dexzd_protocol::dex::{ErrorSubStatus, FlowResetStepMethod, FlowResetType, ResetFlowRequest};
 use dexzd_protocol::dexzd::v1::{CommandReply, HistoryRecord, StepMethod};
@@ -138,8 +137,7 @@ fn invalid_argument(detail: String) -> CommandReply {
     )
 }
 
-/// Parses a reset time like the Go Server: RFC 3339 with optional fraction, Unix nanoseconds,
-/// or a relative time such as `3d` before `now_micros`. Returns Unix nanoseconds.
+/// Parses RFC 3339, Unix nanoseconds, or `3d` before `now_micros`, like the Go Server.
 pub(crate) fn parse_reset_time(text: &str, now_micros: i64) -> Result<i128, String> {
     if let Some(nanos) = parse_rfc3339_nanos(text) {
         return Ok(nanos);

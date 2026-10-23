@@ -6,8 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Which run state belongs to an attempt (plan section 7). Time travel replaces exactly these
-//! rows; everything else in the run is run-scoped and never rolls back.
+//! Attempt-scoped run state (plan section 7). Time travel replaces it; run-scoped state never rolls back.
 
 use dexzd_keyspace::row_keys::prefix_range;
 use dexzd_keyspace::{ColumnFamily, RunTable, run_key, run_table_prefix};
@@ -19,8 +18,7 @@ use prost::Message;
 use crate::ApplyError;
 use crate::state_access::{FlowTransaction, RunRows};
 
-/// Tables whose rows belong to the current attempt. Timer rows belong to it only when their
-/// TimerId names a run attempt (run-scoped timers use run attempt 0).
+/// Attempt-scoped tables. Run-scoped timers use run attempt 0 and are excluded.
 pub(crate) const ATTEMPT_SCOPED_TABLES: [RunTable; 8] = [
     RunTable::Attribute,
     RunTable::ChannelMessage,

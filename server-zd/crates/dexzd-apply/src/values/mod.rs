@@ -306,11 +306,9 @@ pub(crate) fn prune_garbage(
     Ok(())
 }
 
-/// Rewrites value holder sets for a time travel (plan R4'): every value referenced by the
-/// previous or the new attempt state gets exactly the holders of the new state.
+/// Gives values of both attempt states exactly the new state's holders (plan R4').
 ///
-/// Stub until the value garbage collection (task A5) lands. Both row lists are complete
-/// attempt-scoped states; the run record fields come from `cursor.record`.
+/// Stub until task A5 lands.
 pub(crate) fn rewrite_holders_for_time_travel(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,

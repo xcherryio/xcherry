@@ -6,8 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Per-command history bookkeeping (plan section 8.4): which Step method calls became pending,
-//! when to write an attempt checkpoint, and the window.
+//! Per-command history bookkeeping (plan section 8.4): pending method calls, checkpoints, and the window.
 
 use dexzd_keyspace::row_keys::checkpoint_key;
 use dexzd_keyspace::{ColumnFamily, parse_run_key};
@@ -19,8 +18,7 @@ use crate::history::window::advance_window_if_full;
 use crate::state_access::FlowTransaction;
 use crate::{ApplyEffect, ApplyError};
 
-/// Returns the method calls whose first attempt the command made pending, in effect order.
-/// The fork command of a new attempt re-dispatches restored calls, which are not new.
+/// Method calls whose first attempt became pending. A fork's re-dispatched calls are not new.
 pub(crate) fn pending_step_methods(
     transaction: &FlowTransaction<'_>,
     cursor: &RunCursor,
@@ -61,8 +59,7 @@ pub(crate) fn pending_step_methods(
     Ok(pending)
 }
 
-/// Runs after the command's history record is buffered: writes a checkpoint when due and
-/// prunes the window after semantic commands.
+/// Writes a checkpoint when due and prunes the window after semantic commands.
 pub(crate) fn after_command(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,

@@ -6,9 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! The time travel window (plan section 8.4, D12): the newest N semantic points, pruned M at a
-//! time. History is kept from the checkpoint that rebuilds the oldest point in the window; the
-//! FlowStart record and the attempt 1 start checkpoint are kept until the run is deleted.
+//! The time travel window (plan section 8.4): the newest N semantic points, pruned M at a time.
+//!
+//! FlowStart and the genesis checkpoint are kept until the run is deleted (D12).
 
 use dexzd_keyspace::ColumnFamily;
 use dexzd_keyspace::row_keys::{checkpoint_key, history_record_key};

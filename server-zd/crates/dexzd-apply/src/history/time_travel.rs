@@ -6,8 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! The TimeTravel command (plan section 8.4): forks attempt n+1 from a point of the selected
-//! lineage, replaces the attempt-scoped state, and reapplies later external input.
+//! TimeTravel (plan section 8.4): forks attempt n+1 from a point and reapplies later input.
 
 use std::collections::BTreeSet;
 
@@ -34,7 +33,7 @@ use crate::history::lineage::{Lineage, history_records};
 use crate::history::replay_state::{TransactionReader, absorb_writes};
 use crate::history::reset_target::resolve_target;
 use crate::history::state_rebuild::rebuild_attempt_state;
-use crate::state_access::FlowTransaction;
+use crate::state_access::{FlowTransaction, read_flow_directory};
 use crate::steps::{arm_timer, disarm_timer};
 use crate::{ApplyEffect, ApplyError, BehaviorVersion, WaitableChange};
 
@@ -60,6 +59,22 @@ pub(crate) fn apply_time_travel(
             )));
         }
     };
+    let directory = read_flow_directory(transaction, scope.tenant_id, scope.flow_id())?;
+    let is_latest_run = directory
+        .runs
+        .last()
+        .is_some_and(|run| run.run_id == cursor.run_id().as_bytes());
+    if !is_latest_run {
+        // ID reuse decisions read only the latest run, so an older run must stay closed.
+        return Ok(HandlerResult::Rejected(error_reply(
+            grpc_code::FAILED_PRECONDITION,
+            ErrorSubStatus::Uncategorized,
+            format!(
+                "only the latest run of Flow {} can time travel",
+                scope.flow_id()
+            ),
+        )));
+    }
     let lineage = Lineage::of_attempt(transaction, cursor.rows, selected_attempt)?;
     let target = match resolve_target(transaction, &cursor, scope.now_micros, &request, &lineage)? {
         Ok(target) => target,
@@ -188,9 +203,9 @@ fn cancel_running_invocations(
     Ok(())
 }
 
-/// Replaces the attempt-scoped rows with the rebuilt ones. Hard-delete Attributes are
-/// run-scoped and keep their current rows. Timers move to the new attempt; restored running
-/// attempts get new dispatch IDs so cancellations of the old ones never hit them.
+/// Replaces attempt rows; hard-delete Attributes stay current.
+///
+/// Restored running attempts get new dispatch IDs, so old cancellations miss them.
 fn replace_attempt_rows(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
@@ -301,8 +316,7 @@ fn update_run_lifecycle(
     update_directory_status(transaction, cursor, scope)
 }
 
-/// Completes restored SubFlow conditions whose child results the run already received (plan
-/// C15). The SubFlow condition engine (tasks A3 and A6) fills this in.
+/// Completes restored SubFlow conditions from received child results (C15); tasks A3 and A6.
 fn apply_received_child_results(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
@@ -350,9 +364,9 @@ fn dispatch_restored_invocations(
     Ok(())
 }
 
-/// Reapplies external input on the new attempt, each as its own command of the attempt so a
-/// later time travel in this lineage can reapply it again. Input the new state rejects (a
-/// missing Channel message, an invalid transactional RPC) is skipped.
+/// Reapplies each input as its own command, so later travels reapply it again.
+///
+/// Input the new state rejects is skipped.
 fn reapply_external_inputs(
     transaction: &mut FlowTransaction<'_>,
     scope: &CommandScope<'_>,
@@ -389,8 +403,7 @@ fn reapply_external_inputs(
     Ok(())
 }
 
-/// The recorded input as applied now. Request IDs are cleared: the run-scoped deduplication
-/// table already holds them, and the reapplied write must not be answered from it.
+/// Clears request IDs, which the run-scoped deduplication table would otherwise answer.
 fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowCommand {
     let mut command = input.clone();
     command.proposed_at_micros = scope.now_micros;
@@ -404,6 +417,11 @@ fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowComma
         }
         Some(Command::ChannelMessageDelete(delete)) => {
             if let Some(request) = delete.request.as_mut() {
+                request.request_id.clear();
+            }
+        }
+        Some(Command::RpcCommitted(rpc)) => {
+            if let Some(request) = rpc.request.as_mut() {
                 request.request_id.clear();
             }
         }
