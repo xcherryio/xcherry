@@ -37,6 +37,7 @@ import (
 	exampleserver "github.com/superdurable/dex/examples/go/cmd/server/dex"
 	"github.com/superdurable/dex/examples/go/registry"
 	"github.com/superdurable/dex/examples/go/shared/service"
+	"github.com/superdurable/dex/examples/go/shared/workermode"
 	"github.com/superdurable/dex/sdk-go/dex"
 )
 
@@ -54,6 +55,7 @@ type integrationEnvironment struct {
 	apiServer     *httptest.Server
 	worker        *dex.Worker
 	workerAddress string
+	workerMode    workermode.WorkerMode
 	workerResult  chan error
 }
 
@@ -72,17 +74,15 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(cacheDir))
 	}
+	workerMode, err := workermode.ReadWorkerModeFromEnvironment()
+	if err != nil {
+		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
+	}
 	workerPort, err := availablePort()
 	if err != nil {
 		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
 	}
-	worker, err := dex.NewWorker(registry, cache, dex.WorkerOptions{
-		BindAddress:        net.JoinHostPort("127.0.0.1", workerPort),
-		FlowServiceAddress: flowServiceAddress(),
-		WorkerTarget: dex.WorkerTarget{
-			Address: net.JoinHostPort(workerHost(), workerPort),
-		},
-	})
+	worker, err := dex.NewWorker(registry, cache, integrationWorkerOptions(workerMode, workerPort))
 	if err != nil {
 		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
 	}
@@ -107,6 +107,7 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 		apiServer:     apiServer,
 		worker:        worker,
 		workerAddress: net.JoinHostPort("127.0.0.1", workerPort),
+		workerMode:    workerMode,
 		workerResult:  workerResult,
 	}
 	integClient = client
@@ -119,6 +120,12 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 func (environment *integrationEnvironment) waitUntilReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	if environment.workerMode.IsPull() {
+		if err := environment.worker.WaitPullRegistered(ctx); err != nil {
+			return fmt.Errorf("wait for pull Worker registration: %w", err)
+		}
+		return nil
+	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -134,6 +141,22 @@ func (environment *integrationEnvironment) waitUntilReady() error {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for Worker readiness: %w", ctx.Err())
 		}
+	}
+}
+
+func integrationWorkerOptions(workerMode workermode.WorkerMode, workerPort string) dex.WorkerOptions {
+	if workerMode.IsPull() {
+		return dex.WorkerOptions{
+			FlowServiceAddress: flowServiceAddress(),
+			Pull:               workermode.NewExamplePullWorkerOptions(),
+		}
+	}
+	return dex.WorkerOptions{
+		BindAddress:        net.JoinHostPort("127.0.0.1", workerPort),
+		FlowServiceAddress: flowServiceAddress(),
+		WorkerTarget: dex.WorkerTarget{
+			Address: net.JoinHostPort(workerHost(), workerPort),
+		},
 	}
 }
 
@@ -187,6 +210,14 @@ func waitForFlow(t *testing.T, flowID string) dex.FlowResult {
 	)
 	require.NoError(t, err)
 	return result
+}
+
+// skipWhenServerZD skips a sample whose feature server-zd rejects.
+func skipWhenServerZD(t *testing.T, feature string) {
+	t.Helper()
+	if os.Getenv("DEX_INTEG_ENGINE") == "zd" {
+		t.Skipf("server-zd does not support %s", feature)
+	}
 }
 
 func availablePort() (string, error) {
