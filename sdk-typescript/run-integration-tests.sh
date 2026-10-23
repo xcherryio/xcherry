@@ -10,9 +10,22 @@
 
 set -euo pipefail
 
-export DEX_INTEG_WORKER_MODE="${DEX_INTEG_WORKER_MODE:-push}"
+export DEX_INTEG_ENGINE="${DEX_INTEG_ENGINE:-temporal}"
+if [[ "$DEX_INTEG_ENGINE" != temporal && "$DEX_INTEG_ENGINE" != zd ]]; then
+  echo "DEX_INTEG_ENGINE must be temporal or zd" >&2
+  exit 2
+fi
+default_worker_mode=push
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_worker_mode=pull
+fi
+export DEX_INTEG_WORKER_MODE="${DEX_INTEG_WORKER_MODE:-$default_worker_mode}"
 if [[ "$DEX_INTEG_WORKER_MODE" != "push" && "$DEX_INTEG_WORKER_MODE" != "pull" ]]; then
   echo "DEX_INTEG_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && "$DEX_INTEG_WORKER_MODE" == push ]]; then
+  echo "DEX_INTEG_WORKER_MODE=push is not supported with DEX_INTEG_ENGINE=zd" >&2
   exit 2
 fi
 
@@ -86,14 +99,23 @@ fi
   cd "$repo_root/cli"
   GOWORK=off go build -trimpath -o "$binary_dir/dexcli" ./cmd/dexcli
 )
+dev_args=(
+  -bind-address 127.0.0.1
+  -dex-port "$dex_port"
+  -web-port "$web_port"
+  -open=false
+)
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  if [[ -z "${DEX_SERVER_ZD_BINARY:-}" ]]; then
+    (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
+    DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
+  fi
+  dev_args+=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/zd")
+else
+  dev_args+=(-sqlite-db-filename "$test_dir/temporal.db")
+fi
 
-"$binary_dir/dexcli" dev \
-  -bind-address 127.0.0.1 \
-  -dex-port "$dex_port" \
-  -web-port "$web_port" \
-  -open=false \
-  -sqlite-db-filename "$test_dir/temporal.db" \
-  >>"$log_file" 2>&1 &
+"$binary_dir/dexcli" dev "${dev_args[@]}" >>"$log_file" 2>&1 &
 dexcli_pid=$!
 
 dex_ready=false
