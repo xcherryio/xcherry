@@ -5,6 +5,7 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
 /**
  * <pre>
  * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  */
 @javax.annotation.Generated(
@@ -127,6 +128,7 @@ public final class MatchingServiceGrpc {
   /**
    * <pre>
    * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public interface AsyncService {
@@ -156,6 +158,7 @@ public final class MatchingServiceGrpc {
    * Base class for the server implementation of the service MatchingService.
    * <pre>
    * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static abstract class MatchingServiceImplBase
@@ -170,6 +173,7 @@ public final class MatchingServiceGrpc {
    * A stub to allow clients to do asynchronous rpc calls to service MatchingService.
    * <pre>
    * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class MatchingServiceStub
@@ -212,6 +216,7 @@ public final class MatchingServiceGrpc {
    * A stub to allow clients to do synchronous rpc calls to service MatchingService.
    * <pre>
    * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class MatchingServiceBlockingStub
@@ -243,6 +248,7 @@ public final class MatchingServiceGrpc {
    * A stub to allow clients to do ListenableFuture-style rpc calls to service MatchingService.
    * <pre>
    * Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class MatchingServiceFutureStub

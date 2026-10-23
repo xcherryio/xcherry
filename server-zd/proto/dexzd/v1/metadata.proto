@@ -28,7 +28,8 @@ message ClusterObject {
   // Number of partitions; a power of two that never changes.
   uint32 partition_count = 3;
   PartitionHashAlgorithm partition_hash_algorithm = 4;
-  // 16-byte random key for the partition hash.
+  // 16-byte random key for the partition hash. Bytes 0-7 are SipHash k0 and bytes 8-15 are k1,
+  // each read as a little-endian u64.
   bytes partition_hash_key = 5;
   // Version of the RocksDB key layout; every node must support it.
   uint32 key_layout_version = 6;

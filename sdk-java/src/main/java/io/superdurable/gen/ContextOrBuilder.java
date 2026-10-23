@@ -125,4 +125,16 @@ public interface ContextOrBuilder extends
    * <code>.dex.Value last_heartbeat_value = 9;</code>
    */
   io.superdurable.gen.ValueOrBuilder getLastHeartbeatValueOrBuilder();
+
+  /**
+   * <pre>
+   * server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+   * increases on each time travel. On server-zd, run_id stays the same across run attempts,
+   * so combine both when an idempotency key must change after time travel.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 10;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
 }

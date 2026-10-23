@@ -5,6 +5,7 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
 /**
  * <pre>
  * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+ * Go Server internals; server-zd does not serve or persist them.
  * </pre>
  */
 @javax.annotation.Generated(
@@ -96,6 +97,7 @@ public final class InternalServiceGrpc {
   /**
    * <pre>
    * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public interface AsyncService {
@@ -112,6 +114,7 @@ public final class InternalServiceGrpc {
    * Base class for the server implementation of the service InternalService.
    * <pre>
    * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static abstract class InternalServiceImplBase
@@ -126,6 +129,7 @@ public final class InternalServiceGrpc {
    * A stub to allow clients to do asynchronous rpc calls to service InternalService.
    * <pre>
    * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class InternalServiceStub
@@ -154,6 +158,7 @@ public final class InternalServiceGrpc {
    * A stub to allow clients to do synchronous rpc calls to service InternalService.
    * <pre>
    * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class InternalServiceBlockingStub
@@ -181,6 +186,7 @@ public final class InternalServiceGrpc {
    * A stub to allow clients to do ListenableFuture-style rpc calls to service InternalService.
    * <pre>
    * Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+   * Go Server internals; server-zd does not serve or persist them.
    * </pre>
    */
   public static final class InternalServiceFutureStub

@@ -29,4 +29,34 @@ public interface TimeTravelForkHistoryEventOrBuilder extends
    */
   com.google.protobuf.ByteString
       getPreviousRunIdBytes();
+
+  /**
+   * <pre>
+   * server-zd only: the run attempt that was current before this time travel.
+   * </pre>
+   *
+   * <code>int32 previous_run_attempt = 2;</code>
+   * @return The previousRunAttempt.
+   */
+  int getPreviousRunAttempt();
+
+  /**
+   * <pre>
+   * server-zd only: the run attempt of the point this time travel returned to.
+   * </pre>
+   *
+   * <code>int32 target_run_attempt = 3;</code>
+   * @return The targetRunAttempt.
+   */
+  int getTargetRunAttempt();
+
+  /**
+   * <pre>
+   * server-zd only: the event ID of the point this time travel returned to.
+   * </pre>
+   *
+   * <code>int64 target_event_id = 4;</code>
+   * @return The targetEventId.
+   */
+  long getTargetEventId();
 }

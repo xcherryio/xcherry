@@ -33,6 +33,7 @@ private static final long serialVersionUID = 0L;
   }
   private ServerInfo() {
     serverVersion_ = "";
+    serverEngine_ = 0;
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -130,6 +131,32 @@ private static final long serialVersionUID = 0L;
     return currentProtocolVersion_;
   }
 
+  public static final int SERVER_ENGINE_FIELD_NUMBER = 4;
+  private int serverEngine_ = 0;
+  /**
+   * <pre>
+   * The engine behind this Server.
+   * </pre>
+   *
+   * <code>.dex.ServerEngine server_engine = 4;</code>
+   * @return The enum numeric value on the wire for serverEngine.
+   */
+  @java.lang.Override public int getServerEngineValue() {
+    return serverEngine_;
+  }
+  /**
+   * <pre>
+   * The engine behind this Server.
+   * </pre>
+   *
+   * <code>.dex.ServerEngine server_engine = 4;</code>
+   * @return The serverEngine.
+   */
+  @java.lang.Override public io.superdurable.gen.ServerEngine getServerEngine() {
+    io.superdurable.gen.ServerEngine result = io.superdurable.gen.ServerEngine.forNumber(serverEngine_);
+    return result == null ? io.superdurable.gen.ServerEngine.UNRECOGNIZED : result;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -153,6 +180,9 @@ private static final long serialVersionUID = 0L;
     if (currentProtocolVersion_ != 0) {
       output.writeUInt32(3, currentProtocolVersion_);
     }
+    if (serverEngine_ != io.superdurable.gen.ServerEngine.SERVER_ENGINE_UNSPECIFIED.getNumber()) {
+      output.writeEnum(4, serverEngine_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -167,6 +197,10 @@ private static final long serialVersionUID = 0L;
     if (currentProtocolVersion_ != 0) {
       size += com.google.protobuf.CodedOutputStream
         .computeUInt32Size(3, currentProtocolVersion_);
+    }
+    if (serverEngine_ != io.superdurable.gen.ServerEngine.SERVER_ENGINE_UNSPECIFIED.getNumber()) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeEnumSize(4, serverEngine_);
     }
     return size;
   }
@@ -198,6 +232,7 @@ private static final long serialVersionUID = 0L;
         != other.getMinimumSupportedProtocolVersion()) return false;
     if (getCurrentProtocolVersion()
         != other.getCurrentProtocolVersion()) return false;
+    if (serverEngine_ != other.serverEngine_) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -215,6 +250,8 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getMinimumSupportedProtocolVersion();
     hash = (37 * hash) + CURRENT_PROTOCOL_VERSION_FIELD_NUMBER;
     hash = (53 * hash) + getCurrentProtocolVersion();
+    hash = (37 * hash) + SERVER_ENGINE_FIELD_NUMBER;
+    hash = (53 * hash) + serverEngine_;
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -353,6 +390,7 @@ private static final long serialVersionUID = 0L;
       serverVersion_ = "";
       minimumSupportedProtocolVersion_ = 0;
       currentProtocolVersion_ = 0;
+      serverEngine_ = 0;
       return this;
     }
 
@@ -395,6 +433,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.currentProtocolVersion_ = currentProtocolVersion_;
       }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.serverEngine_ = serverEngine_;
+      }
     }
 
     @java.lang.Override
@@ -419,6 +460,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getCurrentProtocolVersion() != 0) {
         setCurrentProtocolVersion(other.getCurrentProtocolVersion());
+      }
+      if (other.serverEngine_ != 0) {
+        setServerEngineValue(other.getServerEngineValue());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -461,6 +505,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 24
+            case 32: {
+              serverEngine_ = input.readEnum();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 32
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -654,6 +703,78 @@ private static final long serialVersionUID = 0L;
     public Builder clearCurrentProtocolVersion() {
       bitField0_ = (bitField0_ & ~0x00000004);
       currentProtocolVersion_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private int serverEngine_ = 0;
+    /**
+     * <pre>
+     * The engine behind this Server.
+     * </pre>
+     *
+     * <code>.dex.ServerEngine server_engine = 4;</code>
+     * @return The enum numeric value on the wire for serverEngine.
+     */
+    @java.lang.Override public int getServerEngineValue() {
+      return serverEngine_;
+    }
+    /**
+     * <pre>
+     * The engine behind this Server.
+     * </pre>
+     *
+     * <code>.dex.ServerEngine server_engine = 4;</code>
+     * @param value The enum numeric value on the wire for serverEngine to set.
+     * @return This builder for chaining.
+     */
+    public Builder setServerEngineValue(int value) {
+      serverEngine_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The engine behind this Server.
+     * </pre>
+     *
+     * <code>.dex.ServerEngine server_engine = 4;</code>
+     * @return The serverEngine.
+     */
+    @java.lang.Override
+    public io.superdurable.gen.ServerEngine getServerEngine() {
+      io.superdurable.gen.ServerEngine result = io.superdurable.gen.ServerEngine.forNumber(serverEngine_);
+      return result == null ? io.superdurable.gen.ServerEngine.UNRECOGNIZED : result;
+    }
+    /**
+     * <pre>
+     * The engine behind this Server.
+     * </pre>
+     *
+     * <code>.dex.ServerEngine server_engine = 4;</code>
+     * @param value The serverEngine to set.
+     * @throws IllegalArgumentException if UNRECOGNIZED is provided.
+     * @return This builder for chaining.
+     */
+    public Builder setServerEngine(io.superdurable.gen.ServerEngine value) {
+      if (value == null) { throw new NullPointerException(); }
+      bitField0_ |= 0x00000008;
+      serverEngine_ = value.getNumber();
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The engine behind this Server.
+     * </pre>
+     *
+     * <code>.dex.ServerEngine server_engine = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearServerEngine() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      serverEngine_ = 0;
       onChanged();
       return this;
     }
