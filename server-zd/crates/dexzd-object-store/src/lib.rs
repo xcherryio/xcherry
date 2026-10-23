@@ -14,11 +14,19 @@
 //! Every server-zd commit depends on conditional writes, so implementations must honor
 //! [`WriteCondition`] exactly.
 
+mod file_download;
+mod in_memory;
 mod object_store_error;
+mod s3;
+mod s3_error;
+mod startup_self_check;
 
 use std::path::Path;
 
+pub use in_memory::{FaultAction, FaultInjector, InMemoryObjectStore};
 pub use object_store_error::{ObjectStoreError, ObjectStoreErrorKind, ObjectStoreOperation};
+pub use s3::{S3Credentials, S3ObjectStore, S3ObjectStoreConfig};
+pub use startup_self_check::{StartupSelfCheckError, StartupSelfCheckFailure, startup_self_check};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -48,7 +56,7 @@ pub enum WriteOutcome {
         /// ETag of the new object.
         etag: String,
     },
-    /// The precondition did not hold; nothing was written (HTTP 412 only).
+    /// The precondition failed (HTTP 412, or S3 404 `NoSuchKey` for `If-Match`); nothing was written.
     PreconditionFailed,
 }
 
@@ -109,6 +117,7 @@ pub trait ObjectStore: Send + Sync + 'static {
     /// Returns [`WriteOutcome::PreconditionFailed`] when the store rejected the condition. An
     /// error of kind [`ObjectStoreErrorKind::OutcomeUnknown`] means the write may or may not
     /// have happened; callers must read the key to find out.
+    /// A missing key fails [`WriteCondition::ReplaceIfEtagMatches`] with `PreconditionFailed`.
     async fn put(
         &self,
         key: &str,
