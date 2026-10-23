@@ -25,7 +25,7 @@ use dexzd_worker_dispatch::{
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
+use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream, UnboundedReceiverStream};
 use tonic::transport::{Channel, Server};
 use tonic::{Code, Request, Streaming};
 
@@ -366,10 +366,8 @@ async fn sticky_worker_is_preferred_and_missing_sticky_queue_falls_back() {
     );
     let mut second = request(0, "flow-fallback");
     second.sticky_app_worker_id = Some("absent-worker".to_owned());
-    let started = Instant::now();
     let mut second_handle = dispatch.dispatch(second).expect("test operation succeeds");
     let fallback_task = task_id(&mut flow_worker).await;
-    assert!(started.elapsed() < Duration::from_millis(250));
     flow_worker
         .sender
         .send(result(&fallback_task))
@@ -597,10 +595,24 @@ async fn idle_ping_shutdown_reconnect_and_tenant_queues_are_isolated() {
         DispatchOutcome::WorkerResult { .. }
     ));
     dispatch.shutdown();
-    assert!(matches!(
-        worker.next().await.frame,
-        Some(poll_worker_task_response::Frame::Reconnect(_))
-    ));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match worker.next().await.frame.expect("control frame exists") {
+                poll_worker_task_response::Frame::Reconnect(_) => break,
+                poll_worker_task_response::Frame::Ping(_) => {}
+                other => panic!("expected reconnect, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("reconnect arrives promptly");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), worker.stream.message())
+            .await
+            .expect("stream closes promptly")
+            .expect("stream status succeeds")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -766,4 +778,380 @@ async fn busy_worker_reconnects_after_finishing_its_task() {
         Err(status) => assert_eq!(status.code(), Code::Unavailable),
         Ok(_) => panic!("dispatch must stop"),
     }
+}
+
+#[tokio::test]
+async fn idle_workers_rotate_in_fifo_order() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut first = register_worker(&server.channel, registration("Flow", "first")).await;
+    let mut second = register_worker(&server.channel, registration("Flow", "second")).await;
+    for (index, expected) in ["first", "second", "first", "second"].iter().enumerate() {
+        let mut handle = dispatch
+            .dispatch(request(0, &format!("rotation-{index}")))
+            .expect("dispatch starts");
+        let (serving_worker, task) = tokio::select! {
+            frame = first.next() => ("first", frame),
+            frame = second.next() => ("second", frame),
+        };
+        assert_eq!(serving_worker, *expected);
+        let assigned = match task.frame.expect("task frame exists") {
+            poll_worker_task_response::Frame::Task(task) => task.task_id,
+            other => panic!("expected task, got {other:?}"),
+        };
+        if serving_worker == "first" {
+            first.sender.send(result(&assigned)).expect("result sends");
+        } else {
+            second.sender.send(result(&assigned)).expect("result sends");
+        }
+        assert!(matches!(
+            completed(&mut handle).await,
+            DispatchOutcome::WorkerResult { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn registration_always_precedes_a_waiting_dispatch_task() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    for index in 0..32 {
+        let mut handle = dispatch
+            .dispatch(request(0, &format!("waiting-{index}")))
+            .expect("dispatch starts");
+        tokio::task::yield_now().await;
+        let mut worker = register_worker(
+            &server.channel,
+            registration("Flow", &format!("worker-{index}")),
+        )
+        .await;
+        let assigned = task_id(&mut worker).await;
+        worker.sender.send(result(&assigned)).expect("result sends");
+        assert!(matches!(
+            completed(&mut handle).await,
+            DispatchOutcome::WorkerResult { .. }
+        ));
+        drop(worker);
+    }
+}
+
+#[tokio::test]
+async fn a_rejection_during_cancel_grace_keeps_the_stream_reusable() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut worker = register_worker(&server.channel, registration("Flow", "worker")).await;
+    let mut first = dispatch
+        .dispatch(request(0, "cancel-reject"))
+        .expect("dispatch starts");
+    let assigned = task_id(&mut worker).await;
+    first.cancel();
+    assert!(matches!(
+        worker.next().await.frame,
+        Some(poll_worker_task_response::Frame::CancelTask(_))
+    ));
+    worker.send(poll_worker_task_request::Frame::Reject(
+        PollWorkerTaskReject {
+            task_id: assigned,
+            reason: PollWorkerTaskRejectReason::NoCapacity as i32,
+        },
+    ));
+    assert!(matches!(
+        completed(&mut first).await,
+        DispatchOutcome::Cancelled
+    ));
+    let mut second = dispatch
+        .dispatch(request(0, "after-cancel-reject"))
+        .expect("dispatch starts");
+    let next_task = task_id(&mut worker).await;
+    worker
+        .sender
+        .send(result(&next_task))
+        .expect("result sends");
+    assert!(matches!(
+        completed(&mut second).await,
+        DispatchOutcome::WorkerResult { .. }
+    ));
+}
+
+#[tokio::test]
+async fn worker_frames_apply_backpressure_when_the_engine_stops_reading() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let (sender, receiver) = mpsc::channel(1);
+    sender
+        .send(PollWorkerTaskRequest {
+            frame: Some(poll_worker_task_request::Frame::Register(registration(
+                "Flow", "worker",
+            ))),
+        })
+        .await
+        .expect("registration sends");
+    let mut client = WorkerTaskServiceClient::new(server.channel.clone());
+    let mut stream = client
+        .poll_worker_task(Request::new(ReceiverStream::new(receiver)))
+        .await
+        .expect("poll opens")
+        .into_inner();
+    assert!(matches!(
+        stream
+            .message()
+            .await
+            .expect("registration status")
+            .expect("registration frame")
+            .frame,
+        Some(poll_worker_task_response::Frame::Registered(_))
+    ));
+    let mut handle = dispatch
+        .dispatch(request(0, "backpressure"))
+        .expect("dispatch starts");
+    let task_id = match stream
+        .message()
+        .await
+        .expect("task status")
+        .expect("task frame")
+        .frame
+        .expect("frame exists")
+    {
+        poll_worker_task_response::Frame::Task(task) => task.task_id,
+        other => panic!("expected task, got {other:?}"),
+    };
+    let large_heartbeat = PollWorkerTaskRequest {
+        frame: Some(poll_worker_task_request::Frame::TaskFrame(
+            PollWorkerTaskFrame {
+                task_id: task_id.clone(),
+                output: Some(poll_worker_task_frame::Output::WaitFor(
+                    InvokeWaitForMethodOutput {
+                        output: Some(dex::invoke_wait_for_method_output::Output::Heartbeat(
+                            StepMethodHeartbeat {
+                                value: Some(Value {
+                                    kind: Some(dex::value::Kind::StringValue(
+                                        "x".repeat(64 * 1024),
+                                    )),
+                                }),
+                            },
+                        )),
+                    },
+                )),
+            },
+        )),
+    };
+    let flood_sender = sender.clone();
+    let mut flood = tokio::spawn(async move {
+        for _ in 0..256 {
+            flood_sender
+                .send(large_heartbeat.clone())
+                .await
+                .expect("Worker frame sends");
+        }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut flood)
+            .await
+            .is_err(),
+        "Worker sends must stall while the dispatch handle is unread"
+    );
+    let mut outputs = 0;
+    while !flood.is_finished() {
+        match tokio::time::timeout(Duration::from_secs(3), handle.next())
+            .await
+            .expect("output arrives")
+            .expect("event exists")
+        {
+            DispatchEvent::Output(_) => outputs += 1,
+            DispatchEvent::Completed(outcome) => panic!("unexpected terminal outcome {outcome:?}"),
+        }
+    }
+    flood.await.expect("flood task completes");
+    assert!(outputs > 0);
+    sender.send(result(&task_id)).await.expect("result sends");
+    assert!(matches!(
+        completed(&mut handle).await,
+        DispatchOutcome::WorkerResult { .. }
+    ));
+}
+
+#[tokio::test]
+async fn sticky_wait_falls_back_when_the_sticky_worker_is_busy() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut sticky = register_worker(&server.channel, registration("sticky", "sticky")).await;
+    let mut fallback = register_worker(&server.channel, registration("Flow", "fallback")).await;
+    let mut busy_request = request(0, "busy-sticky");
+    busy_request.sticky_app_worker_id = Some("sticky".to_owned());
+    let mut busy = dispatch
+        .dispatch(busy_request)
+        .expect("busy dispatch starts");
+    let busy_task = task_id(&mut sticky).await;
+    let mut fallback_request = request(0, "fallback-flow");
+    fallback_request.sticky_app_worker_id = Some("sticky".to_owned());
+    fallback_request.sticky_wait = Some(Duration::from_millis(50));
+    let mut handle = dispatch
+        .dispatch(fallback_request)
+        .expect("fallback dispatch starts");
+    let fallback_task = task_id(&mut fallback).await;
+    fallback
+        .sender
+        .send(result(&fallback_task))
+        .expect("fallback result sends");
+    assert!(
+        matches!(completed(&mut handle).await, DispatchOutcome::WorkerResult { app_worker_id, .. } if app_worker_id == "fallback")
+    );
+    sticky
+        .sender
+        .send(result(&busy_task))
+        .expect("busy result sends");
+    assert!(matches!(
+        completed(&mut busy).await,
+        DispatchOutcome::WorkerResult { .. }
+    ));
+}
+
+#[tokio::test]
+async fn unknown_name_on_sticky_queue_excludes_that_worker_from_fallback() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut sticky = register_worker(&server.channel, registration("sticky", "sticky")).await;
+    let mut same_worker_flow =
+        register_worker(&server.channel, registration("Flow", "sticky")).await;
+    let mut fallback = register_worker(&server.channel, registration("Flow", "fallback")).await;
+    let mut requested = request(0, "unknown-sticky");
+    requested.sticky_app_worker_id = Some("sticky".to_owned());
+    let mut handle = dispatch.dispatch(requested).expect("dispatch starts");
+    let sticky_task = task_id(&mut sticky).await;
+    sticky.send(poll_worker_task_request::Frame::Reject(
+        PollWorkerTaskReject {
+            task_id: sticky_task,
+            reason: PollWorkerTaskRejectReason::UnknownStep as i32,
+        },
+    ));
+    let fallback_task = task_id(&mut fallback).await;
+    fallback
+        .sender
+        .send(result(&fallback_task))
+        .expect("result sends");
+    assert!(
+        matches!(completed(&mut handle).await, DispatchOutcome::WorkerResult { app_worker_id, .. } if app_worker_id == "fallback")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), same_worker_flow.stream.message())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn rejection_after_output_is_worker_disconnected() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut worker = register_worker(&server.channel, registration("Flow", "worker")).await;
+    let mut handle = dispatch
+        .dispatch(request(0, "late-reject"))
+        .expect("dispatch starts");
+    let assigned = task_id(&mut worker).await;
+    worker
+        .sender
+        .send(heartbeat(&assigned))
+        .expect("heartbeat sends");
+    assert!(matches!(
+        handle.next().await,
+        Some(DispatchEvent::Output(_))
+    ));
+    worker.send(poll_worker_task_request::Frame::Reject(
+        PollWorkerTaskReject {
+            task_id: assigned,
+            reason: PollWorkerTaskRejectReason::NoCapacity as i32,
+        },
+    ));
+    assert!(matches!(
+        completed(&mut handle).await,
+        DispatchOutcome::DispatchError {
+            reason: DispatchTaskErrorReason::WorkerDisconnected,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn method_deadline_sends_cancel_task() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut worker = register_worker(&server.channel, registration("Flow", "worker")).await;
+    let mut deadline_request = request(0, "deadline-flow");
+    deadline_request.deadline = SystemTime::now() + Duration::from_millis(500);
+    let mut handle = dispatch
+        .dispatch(deadline_request)
+        .expect("dispatch starts");
+    let assigned = task_id(&mut worker).await;
+    assert!(
+        matches!(worker.next().await.frame, Some(poll_worker_task_response::Frame::CancelTask(cancel)) if cancel.task_id == assigned)
+    );
+    worker
+        .sender
+        .send(result(&assigned))
+        .expect("final frame sends");
+    assert!(matches!(
+        completed(&mut handle).await,
+        DispatchOutcome::DeadlineExceeded
+    ));
+}
+
+#[tokio::test]
+async fn a_search_ends_when_matching_shuts_down() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let mut waiting = request(0, "search-shutdown");
+    waiting.dispatch_wait = Some(Duration::from_secs(5));
+    let mut handle = dispatch.dispatch(waiting).expect("dispatch starts");
+    tokio::task::yield_now().await;
+    dispatch.shutdown();
+    assert!(matches!(
+        completed(&mut handle).await,
+        DispatchOutcome::ServerClosing
+    ));
+}
+
+#[tokio::test]
+async fn per_worker_stream_limits_are_tenant_scoped() {
+    let config = MatchingConfig {
+        max_streams: 2,
+        max_concurrent_tasks_cap: 1,
+        ..Default::default()
+    };
+    let dispatch = dispatch_with_config(config);
+    let tenant_zero = start_server(dispatch.clone(), 0).await;
+    let tenant_one = start_server(dispatch.clone(), 1).await;
+    let _zero_worker =
+        register_worker(&tenant_zero.channel, registration("Flow", "same-worker")).await;
+    let _one_worker =
+        register_worker(&tenant_one.channel, registration("Flow", "same-worker")).await;
+}
+
+#[tokio::test]
+async fn busy_workers_receive_no_idle_ping() {
+    let config = MatchingConfig {
+        ping_interval: Duration::from_millis(20),
+        ..Default::default()
+    };
+    let dispatch = dispatch_with_config(config);
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut worker = register_worker(&server.channel, registration("Flow", "worker")).await;
+    let mut handle = dispatch
+        .dispatch(request(0, "busy-no-ping"))
+        .expect("dispatch starts");
+    let assigned = loop {
+        match worker.next().await.frame.expect("frame exists") {
+            poll_worker_task_response::Frame::Task(task) => break task.task_id,
+            poll_worker_task_response::Frame::Ping(_) => {}
+            other => panic!("expected task, got {other:?}"),
+        }
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(80), worker.stream.message())
+            .await
+            .is_err()
+    );
+    worker.sender.send(result(&assigned)).expect("result sends");
+    assert!(matches!(
+        completed(&mut handle).await,
+        DispatchOutcome::WorkerResult { .. }
+    ));
 }

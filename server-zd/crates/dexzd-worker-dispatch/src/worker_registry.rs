@@ -8,7 +8,7 @@
 
 //! In-memory, tenant-scoped pull Worker streams and task matching.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use crate::MatchingConfig;
 
+mod queue_state;
 mod worker_protocol;
 pub use worker_protocol::WorkerTaskService;
 
@@ -104,13 +105,15 @@ pub enum DispatchOutcome {
     Cancelled,
     /// The method deadline elapsed before a final Worker frame.
     DeadlineExceeded,
+    /// The matching owner shut down while waiting for a Worker.
+    ServerClosing,
 }
 
 /// Receives ordered events and can request cancellation of an active Worker task.
 pub struct DispatchHandle {
-    events: mpsc::UnboundedReceiver<DispatchEvent>,
+    events: mpsc::Receiver<DispatchEvent>,
     cancel: watch::Sender<bool>,
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl DispatchHandle {
@@ -129,9 +132,7 @@ impl Drop for DispatchHandle {
     fn drop(&mut self) {
         self.cancel();
         // The dispatch task owns its one-second cancellation grace period.
-        if self.task.is_finished() {
-            self.task.abort();
-        }
+        drop(self.task.take());
     }
 }
 
@@ -152,14 +153,22 @@ struct DispatchInner {
 struct Registry {
     is_closing: bool,
     streams: HashMap<Uuid, Arc<WorkerStream>>,
-    worker_counts: HashMap<String, usize>,
+    worker_counts: HashMap<(u64, String), usize>,
     queues: HashMap<(u64, String), QueueState>,
 }
 
 struct QueueState {
-    stream_ids: Vec<Uuid>,
+    stream_ids: HashSet<Uuid>,
+    idle: VecDeque<Uuid>,
     affinity: HashMap<String, (String, Instant)>,
+    affinity_order: VecDeque<(String, Instant)>,
     changes: watch::Sender<u64>,
+    users: usize,
+}
+
+struct QueueLease {
+    dispatch: WorkerDispatch,
+    key: (u64, String),
 }
 
 struct WorkerStream {
@@ -181,7 +190,7 @@ struct WorkerState {
 
 struct Assignment {
     task_id: String,
-    frames: mpsc::UnboundedSender<AssignmentFrame>,
+    frames: mpsc::Sender<AssignmentFrame>,
 }
 
 enum AssignmentFrame {
@@ -191,7 +200,7 @@ enum AssignmentFrame {
 
 struct QueuePick {
     worker: Option<Arc<WorkerStream>>,
-    assignment_frames: Option<mpsc::UnboundedReceiver<AssignmentFrame>>,
+    assignment_frames: Option<mpsc::Receiver<AssignmentFrame>>,
     changes: watch::Receiver<u64>,
     has_streams: bool,
 }
@@ -238,19 +247,23 @@ impl WorkerDispatch {
         {
             return Err(Status::unavailable("matching server is closing"));
         }
-        let (events_tx, events) = mpsc::unbounded_channel();
+        let (events_tx, events) = mpsc::channel(32);
         let (cancel, cancel_rx) = watch::channel(false);
         let dispatch = self.clone();
         let task = tokio::spawn(async move {
             let outcome = dispatch.run_dispatch(request, &events_tx, cancel_rx).await;
-            if events_tx.send(DispatchEvent::Completed(outcome)).is_err() {
+            if events_tx
+                .send(DispatchEvent::Completed(outcome))
+                .await
+                .is_err()
+            {
                 tracing::debug!("dispatch result receiver closed");
             }
         });
         Ok(DispatchHandle {
             events,
             cancel,
-            task,
+            task: Some(task),
         })
     }
 
@@ -268,7 +281,7 @@ impl WorkerDispatch {
     async fn run_dispatch(
         &self,
         request: DispatchRequest,
-        events: &mpsc::UnboundedSender<DispatchEvent>,
+        events: &mpsc::Sender<DispatchEvent>,
         mut cancel: watch::Receiver<bool>,
     ) -> DispatchOutcome {
         let task_id = Uuid::now_v7().to_string();
@@ -359,7 +372,7 @@ impl WorkerDispatch {
         queue_end: Instant,
         dispatch_end: Instant,
         is_sticky: bool,
-        events: &mpsc::UnboundedSender<DispatchEvent>,
+        events: &mpsc::Sender<DispatchEvent>,
         cancel: &mut watch::Receiver<bool>,
         excluded_worker_ids: &mut HashSet<String>,
         excluded_streams: &mut HashMap<Uuid, Instant>,
@@ -367,7 +380,12 @@ impl WorkerDispatch {
         unavailable: &mut bool,
         unknown: &mut bool,
     ) -> Option<DispatchOutcome> {
+        let _queue_lease = self.acquire_queue(request.tenant_id, queue_name);
+        let mut shutdown = self.inner.shutdown.subscribe();
         while Instant::now() < queue_end {
+            if *shutdown.borrow() {
+                return Some(DispatchOutcome::ServerClosing);
+            }
             if *cancel.borrow() {
                 return Some(DispatchOutcome::Cancelled);
             }
@@ -392,6 +410,9 @@ impl WorkerDispatch {
                 {
                     self.disconnect(worker.id);
                     *unavailable = true;
+                    if Instant::now() >= dispatch_end {
+                        return Some(disconnected_outcome("Worker stream disconnected"));
+                    }
                     continue;
                 }
                 let attempt = self
@@ -444,8 +465,13 @@ impl WorkerDispatch {
             let mut changes = picked.changes;
             tokio::select! {
                 _ = tokio::time::sleep_until(tokio::time::Instant::from_std(wake)) => {},
-                changed = changes.changed() => { if changed.is_err() { return None; } },
+                changed = changes.changed() => {
+                    if changed.is_err() && *shutdown.borrow() {
+                        return Some(DispatchOutcome::ServerClosing);
+                    }
+                },
                 changed = cancel.changed() => { if changed.is_err() || *cancel.borrow() { return Some(DispatchOutcome::Cancelled); } },
+                changed = shutdown.changed() => { if changed.is_err() || *shutdown.borrow() { return Some(DispatchOutcome::ServerClosing); } },
             }
         }
         None
@@ -462,9 +488,9 @@ impl WorkerDispatch {
         deadline: SystemTime,
         dispatch_end: Instant,
         payload: &DispatchTaskPayload,
-        events: &mpsc::UnboundedSender<DispatchEvent>,
+        events: &mpsc::Sender<DispatchEvent>,
         cancel: &mut watch::Receiver<bool>,
-        frames: &mut mpsc::UnboundedReceiver<AssignmentFrame>,
+        frames: &mut mpsc::Receiver<AssignmentFrame>,
     ) -> AttemptOutcome {
         let mut has_output = false;
         loop {
@@ -485,9 +511,23 @@ impl WorkerDispatch {
                             }));
                         }
                         has_output = true;
-                        if events.send(DispatchEvent::Output(frame)).is_err() {
-                            self.cancel_assignment(worker, task_id, frames).await;
-                            return AttemptOutcome::Final(Box::new(DispatchOutcome::Cancelled));
+                        tokio::select! {
+                            sent = events.send(DispatchEvent::Output(frame)) => {
+                                if sent.is_err() {
+                                    self.cancel_assignment(worker, task_id, frames).await;
+                                    return AttemptOutcome::Final(Box::new(DispatchOutcome::Cancelled));
+                                }
+                            },
+                            changed = cancel.changed() => {
+                                if changed.is_err() || *cancel.borrow() {
+                                    self.cancel_assignment(worker, task_id, frames).await;
+                                    return AttemptOutcome::Final(Box::new(DispatchOutcome::Cancelled));
+                                }
+                            },
+                            _ = tokio::time::sleep(deadline_wait) => {
+                                self.cancel_assignment(worker, task_id, frames).await;
+                                return AttemptOutcome::Final(Box::new(DispatchOutcome::DeadlineExceeded));
+                            },
                         }
                     }
                     Some(AssignmentFrame::Reject(reason)) => {
@@ -526,7 +566,7 @@ impl WorkerDispatch {
         &self,
         worker: &WorkerStream,
         task_id: &str,
-        frames: &mut mpsc::UnboundedReceiver<AssignmentFrame>,
+        frames: &mut mpsc::Receiver<AssignmentFrame>,
     ) {
         if worker
             .output
@@ -548,12 +588,44 @@ impl WorkerDispatch {
                 .await
             {
                 Ok(Some(AssignmentFrame::Output(frame))) if is_final(&frame) => return,
-                Ok(Some(AssignmentFrame::Output(_) | AssignmentFrame::Reject(_))) => {}
+                Ok(Some(AssignmentFrame::Reject(_))) => return,
+                Ok(Some(AssignmentFrame::Output(_))) => {}
                 Ok(None) | Err(_) => {
                     self.disconnect(worker.id);
                     return;
                 }
             }
+        }
+    }
+
+    fn acquire_queue(&self, tenant_id: u64, queue_name: &str) -> QueueLease {
+        let key = (tenant_id, queue_name.to_owned());
+        let mut registry = self
+            .inner
+            .registry
+            .lock()
+            .expect("matching registry lock poisoned");
+        registry
+            .queues
+            .entry(key.clone())
+            .or_insert_with(QueueState::new)
+            .users += 1;
+        QueueLease {
+            dispatch: self.clone(),
+            key,
+        }
+    }
+
+    fn release_queue(&self, key: &(u64, String)) {
+        let mut registry = self
+            .inner
+            .registry
+            .lock()
+            .expect("matching registry lock poisoned");
+        let queue = registry.queues.get_mut(key).expect("leased queue exists");
+        queue.users -= 1;
+        if queue.users == 0 {
+            registry.queues.remove(key);
         }
     }
 
@@ -571,48 +643,39 @@ impl WorkerDispatch {
             .registry
             .lock()
             .expect("matching registry lock poisoned");
+        let key = (tenant_id, queue_name.to_owned());
+        let queue = registry.queues.get(&key).expect("queue lease exists");
+        let changes = queue.changes.subscribe();
+        let has_streams = !queue.stream_ids.is_empty();
         if registry.is_closing {
-            let (changes, _) = watch::channel(0);
             return QueuePick {
                 worker: None,
                 assignment_frames: None,
-                changes: changes.subscribe(),
-                has_streams: false,
+                changes,
+                has_streams,
             };
         }
-        let queue = registry
-            .queues
-            .entry((tenant_id, queue_name.to_owned()))
-            .or_insert_with(QueueState::new);
-        let changes = queue.changes.subscribe();
-        let has_streams = !queue.stream_ids.is_empty();
-        let stream_ids = queue.stream_ids.clone();
         let preferred = queue
             .affinity
             .get(flow_id)
             .filter(|(_, expiry)| *expiry > Instant::now())
-            .map(|(id, _)| id.clone());
+            .map(|(worker_id, _)| worker_id.clone());
         let mut selected = None;
-        for id in &stream_ids {
-            let Some(worker) = registry.streams.get(id) else {
-                continue;
-            };
-            let state = worker.state.lock().expect("Worker state lock poisoned");
-            if state.is_busy
-                || state.is_closing
-                || excluded_worker_ids.contains(&worker.app_worker_id)
+        for (index, id) in queue.idle.iter().enumerate() {
+            let worker = registry.streams.get(id).expect("idle stream is registered");
+            if excluded_worker_ids.contains(&worker.app_worker_id)
                 || excluded_streams.contains_key(id)
             {
                 continue;
             }
             if selected.is_none() || preferred.as_ref() == Some(&worker.app_worker_id) {
-                selected = Some(worker.clone());
+                selected = Some((index, worker.clone()));
             }
             if preferred.as_ref() == Some(&worker.app_worker_id) {
                 break;
             }
         }
-        let Some(worker) = selected else {
+        let Some((index, worker)) = selected else {
             return QueuePick {
                 worker: None,
                 assignment_frames: None,
@@ -620,42 +683,64 @@ impl WorkerDispatch {
                 has_streams,
             };
         };
-        let (sender, receiver) = mpsc::unbounded_channel();
+        registry
+            .queues
+            .get_mut(&key)
+            .expect("queue lease exists")
+            .idle
+            .remove(index)
+            .expect("selected idle stream exists");
+        let (sender, receiver) = mpsc::channel(32);
         let mut state = worker.state.lock().expect("Worker state lock poisoned");
+        assert!(
+            !state.is_busy && !state.is_closing,
+            "idle stream must be available"
+        );
         state.is_busy = true;
         state.current = Some(Assignment {
             task_id: task_id.to_owned(),
             frames: sender,
         });
         drop(state);
-        let queue = registry
+        registry
             .queues
-            .get_mut(&(tenant_id, queue_name.to_owned()))
-            .expect("selected queue exists");
-        if !flow_id.is_empty() {
-            queue.affinity.insert(
-                flow_id.to_owned(),
-                (
-                    worker.app_worker_id.clone(),
-                    Instant::now() + self.inner.config.affinity_duration,
-                ),
+            .get_mut(&key)
+            .expect("queue lease exists")
+            .remember(
+                flow_id,
+                &worker.app_worker_id,
+                self.inner.config.affinity_duration,
             );
-            if queue.affinity.len() > 10_000
-                && let Some(oldest) = queue
-                    .affinity
-                    .iter()
-                    .min_by_key(|(_, (_, expiry))| expiry)
-                    .map(|(flow_id, _)| flow_id.clone())
-            {
-                queue.affinity.remove(&oldest);
-            }
-        }
         QueuePick {
             worker: Some(worker),
             assignment_frames: Some(receiver),
             changes,
             has_streams,
         }
+    }
+
+    fn make_idle(&self, worker: &WorkerStream) {
+        let mut registry = self
+            .inner
+            .registry
+            .lock()
+            .expect("matching registry lock poisoned");
+        if !registry.streams.contains_key(&worker.id) {
+            return;
+        }
+        let mut state = worker.state.lock().expect("Worker state lock poisoned");
+        if state.is_closing {
+            return;
+        }
+        state.is_busy = false;
+        state.current = None;
+        drop(state);
+        let queue = registry
+            .queues
+            .get_mut(&(worker.tenant_id, worker.queue.clone()))
+            .expect("registered queue exists");
+        queue.idle.push_back(worker.id);
+        queue.signal();
     }
 
     fn disconnect(&self, id: Uuid) {
@@ -667,18 +752,22 @@ impl WorkerDispatch {
         let Some(worker) = registry.streams.remove(&id) else {
             return;
         };
-        if let Some(count) = registry.worker_counts.get_mut(&worker.app_worker_id) {
+        let worker_key = (worker.tenant_id, worker.app_worker_id.clone());
+        if let Some(count) = registry.worker_counts.get_mut(&worker_key) {
             *count -= 1;
             if *count == 0 {
-                registry.worker_counts.remove(&worker.app_worker_id);
+                registry.worker_counts.remove(&worker_key);
             }
         }
-        if let Some(queue) = registry
-            .queues
-            .get_mut(&(worker.tenant_id, worker.queue.clone()))
-        {
-            queue.stream_ids.retain(|stream_id| *stream_id != id);
+        let queue_key = (worker.tenant_id, worker.queue.clone());
+        if let Some(queue) = registry.queues.get_mut(&queue_key) {
+            queue.stream_ids.remove(&id);
+            queue.idle.retain(|stream_id| *stream_id != id);
+            queue.users -= 1;
             queue.signal();
+            if queue.users == 0 {
+                registry.queues.remove(&queue_key);
+            }
         }
         let mut state = worker.state.lock().expect("Worker state lock poisoned");
         state.is_closing = true;
@@ -692,21 +781,6 @@ enum AttemptOutcome {
     Capacity,
     UnknownName,
     Disconnected,
-}
-
-impl QueueState {
-    fn new() -> Self {
-        let (changes, _) = watch::channel(0);
-        Self {
-            stream_ids: Vec::new(),
-            affinity: HashMap::new(),
-            changes,
-        }
-    }
-
-    fn signal(&self) {
-        self.changes.send_modify(|generation| *generation += 1);
-    }
 }
 
 fn build_task(task_id: &str, request: &DispatchRequest) -> PollWorkerTask {
