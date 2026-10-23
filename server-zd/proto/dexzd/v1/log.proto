@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Super Durable, Inc.
+//
+// Licensed under the Sustainable Use License 1.0.
+// You may not use this file except in compliance with the License.
+// See the LICENSE file in the repository root.
+//
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
+
+// Persistent format of server-zd command log batch objects.
+// Compatibility: additive changes only; never renumber, reuse, or retype a field.
+syntax = "proto3";
+
+package dexzd.v1;
+
+// Header of one log batch object, stored at <prefix>/log/<node_id>/<incarnation:010>/<seq:020>.
+//
+// Object layout (all integers little-endian):
+//   magic "DEXZDLOG" (8 bytes) | format_version u16 | header_length u32 | LogBatchHeader bytes |
+//   partition frames in header order | trailer: xxh3-128 of every preceding byte (16 bytes).
+// A frame is the zstd-compressed concatenation of length-delimited LogRecord messages.
+message LogBatchHeader {
+  // Cluster that owns this log; 16-byte UUID from the cluster object.
+  bytes cluster_id = 1;
+  // Node whose log stream contains this batch.
+  string node_id = 2;
+  // Node incarnation; a new incarnation starts a new stream directory.
+  uint32 incarnation = 3;
+  // Writer epoch. A batch whose epoch is lower than the epoch of an earlier EpochStart in the
+  // same stream is void and must be skipped.
+  uint64 epoch = 4;
+  // Position in the stream, starting at 1 and gapless after every EpochStart.
+  uint64 seq = 5;
+  // Total number of LogRecord messages in all frames.
+  uint32 record_count = 6;
+  // One entry per partition that has records in this batch, in ascending partition order.
+  repeated LogPartitionFrame partition_frames = 7;
+  // Set only on the EpochStart batch written by a new writer at the first gap; such a batch has
+  // no partition frames.
+  LogEpochStart epoch_start = 8;
+  // Writer wall clock when the batch was sealed, for diagnostics only.
+  int64 sealed_at_unix_micros = 9;
+}
+
+// Location and checksum of one partition's frame inside a batch object.
+message LogPartitionFrame {
+  uint32 partition = 1;
+  uint32 record_count = 2;
+  // Byte offset of the compressed frame from the start of the object.
+  uint64 byte_offset = 3;
+  // Length of the compressed frame in bytes.
+  uint64 compressed_length = 4;
+  // Length of the frame after decompression.
+  uint64 uncompressed_length = 5;
+  // xxh3-64 of the compressed frame bytes.
+  uint64 compressed_xxh3_64 = 6;
+}
+
+// Marks the start of a new writer epoch in a node's log stream.
+message LogEpochStart {
+  // The new epoch; equal to LogBatchHeader.epoch.
+  uint64 epoch = 1;
+  // Process that took over the stream, for diagnostics.
+  string writer_process_id = 2;
+}
+
+// Position of one batch in the cluster's logs.
+message LogPosition {
+  string node_id = 1;
+  uint32 incarnation = 2;
+  uint64 seq = 3;
+}
