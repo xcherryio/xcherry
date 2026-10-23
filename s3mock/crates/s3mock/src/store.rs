@@ -292,13 +292,33 @@ fn remove_superseded_files(paths: &[PathBuf]) {
     }
 }
 
+/// Creates `directory` and any missing ancestors, flushing each new entry into its parent when durable.
 fn create_directory_durably(directory: &Path, is_durable: bool) -> Result<(), StoreError> {
-    if directory.is_dir() {
+    let mut missing = Vec::new();
+    let mut current = directory;
+    while !current.is_dir() {
+        missing.push(current);
+        match current.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
+            Some(_) | None => break,
+        }
+    }
+    if missing.is_empty() {
         return Ok(());
     }
     fs::create_dir_all(directory)?;
-    if is_durable && let Some(parent) = directory.parent() {
-        crate::data_file::sync_directory(parent)?;
+    if is_durable {
+        for created in missing.iter().rev() {
+            crate::data_file::sync_directory(&parent_directory(created))?;
+        }
     }
     Ok(())
+}
+
+/// Returns the directory that holds `path`'s entry; a bare relative name lives in `.`.
+fn parent_directory(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        Some(_) | None => PathBuf::from("."),
+    }
 }
