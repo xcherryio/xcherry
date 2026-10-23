@@ -48,6 +48,7 @@ option java_outer_classname = "DexProto";
 //   Canceled          — caller canceled the RPC context
 //   Unavailable       — Temporal/Cadence backend or Stream Store backend unavailable;
 //                       never Dex application WorkerService
+//                       server-zd also returns this when object storage is unavailable or it applies backpressure.
 //   Internal          — unexpected / violated trusted invariant
 //   Unimplemented     — Cadence: WaitForStepCompletion, WaitForAttribute,
 //                       locking InvokeRPC (Temporal sync update required)
@@ -99,8 +100,23 @@ service FlowService {
   rpc UpdateFlowConfig(UpdateFlowConfigRequest) returns (google.protobuf.Empty);
   rpc WaitForStepCompletion(WaitForStepCompletionRequest) returns (WaitForStepCompletionResponse);
   rpc WaitForAttribute(WaitForAttributeRequest) returns (WaitForAttributeResponse);
+  // server-zd returns UNIMPLEMENTED.
   rpc TriggerContinueAsNew(TriggerContinueAsNewRequest) returns (google.protobuf.Empty);
   rpc HealthCheck(google.protobuf.Empty) returns (HealthInfo);
+}
+
+// Identifies the engine behind a Dex Server. Clients use it only to adapt behavior that differs
+// between engines.
+enum ServerEngine {
+  // The Server does not report its engine. Servers released before this field existed are the
+  // Go Server on Temporal or Cadence.
+  SERVER_ENGINE_UNSPECIFIED = 0;
+  // The Go Server running on Temporal.
+  SERVER_ENGINE_TEMPORAL = 1;
+  // The Go Server running on Cadence.
+  SERVER_ENGINE_CADENCE = 2;
+  // server-zd: the zero-dependency Server that keeps all state in object storage.
+  SERVER_ENGINE_ZD = 3;
 }
 
 // Describes the Dex Server release and the inclusive protocol range it supports.
@@ -111,9 +127,12 @@ message ServerInfo {
   uint32 minimum_supported_protocol_version = 2;
   // Newest protocol version implemented by this Server.
   uint32 current_protocol_version = 3;
+  // The engine behind this Server.
+  ServerEngine server_engine = 4;
 }
 
 // Hosted by Dex worker; server calls these RPCs.
+// server-zd supports only pull Workers and never calls WorkerService.
 service WorkerService {
   rpc InvokeWaitForMethod(InvokeWaitForMethodRequest) returns (stream InvokeWaitForMethodOutput);
   rpc InvokeExecuteMethod(InvokeExecuteMethodRequest) returns (stream InvokeExecuteMethodOutput);
@@ -127,6 +146,7 @@ service WorkerTaskService {
 }
 
 // Hosted on the internal listener; server instances route tasks and Worker streams to queue owners.
+// Go Server internals; server-zd does not serve or persist them.
 service MatchingService {
   // Streams Worker output frames and a final result or dispatch error.
   rpc DispatchTask(DispatchTaskRequest) returns (stream DispatchTaskResponse);
@@ -255,6 +275,7 @@ message PollWorkerTaskReconnect {
 message PollWorkerTaskPing {}
 
 // Describes one task dispatched to a Dex task queue.
+// Go Server internals; server-zd does not serve or persist them.
 message DispatchTaskRequest {
   // Selects the initial queue: a sticky Worker ID or a Flow type.
   string queue = 1;
@@ -288,6 +309,7 @@ message DispatchTaskRequest {
 }
 
 // Reports assignment changes, relays Worker output, then ends with a result, Worker error, or dispatch error.
+// Go Server internals; server-zd does not serve or persist them.
 message DispatchTaskResponse {
   oneof output {
     InvokeWaitForMethodOutput wait_for = 1;
@@ -307,12 +329,14 @@ message DispatchTaskResponse {
 }
 
 // Reports a failure before Dex receives a Worker result.
+// Go Server internals; server-zd does not serve or persist them.
 message DispatchTaskError {
   DispatchTaskErrorReason reason = 1;
   string detail = 2;
 }
 
 // Distinguishes no available Worker, a disconnected Worker, and a missing Step or RPC registration.
+// Go Server internals; server-zd does not serve or persist them.
 enum DispatchTaskErrorReason {
   DISPATCH_TASK_ERROR_REASON_UNSPECIFIED = 0;
   DISPATCH_TASK_ERROR_REASON_NO_WORKER_AVAILABLE = 1;
@@ -322,6 +346,7 @@ enum DispatchTaskErrorReason {
 }
 
 // Server-internal only (interpreter CAN activity → API). Not SDK-facing.
+// Go Server internals; server-zd does not serve or persist them.
 service InternalService {
   rpc DumpFlowForContinueAsNew(ContinueAsNewDumpRequest) returns (ContinueAsNewDumpResponse);
 }
@@ -329,8 +354,10 @@ service InternalService {
 message Value {
   oneof kind {
     // Hydrate from blob storage, then replace with string_value.
+    // The Server chooses this reference text; clients must treat it as opaque.
     string internal_blob_id_for_string_value = 1;
     // Hydrate from blob storage, then replace with obj_value.
+    // The Server chooses this reference text; clients must treat it as opaque.
     string internal_blob_id_for_obj_value = 2;
 
     string string_value = 3;
@@ -417,8 +444,13 @@ message Context {
   // Previous Step method failure supplied only to its configured recovery method.
   RecoveryErrorInfo recovery_error = 8;
   Value last_heartbeat_value = 9;
+  // server-zd only: the run attempt that dispatched this invocation. It starts at 1 and
+  // increases on each time travel. On server-zd, run_id stays the same across run attempts,
+  // so combine both when an idempotency key must change after time travel.
+  int32 run_attempt = 10;
 }
 
+// server-zd never sets this.
 message LocalActivityMetadata {
   string current_step_execution_id = 1;
   string from_step_execution_id = 2;
@@ -432,6 +464,7 @@ message RetryPolicy {
   int32 total_duration_seconds = 5;
 }
 
+// server-zd does not support Flow retry and rejects a set policy with INVALID_ARGUMENT.
 message FlowRetryPolicy {
   int32 initial_interval_seconds = 1;
   float backoff_coefficient = 2;
@@ -442,12 +475,16 @@ message FlowRetryPolicy {
 enum WaitForMethodFailurePolicy {
   WAIT_FOR_METHOD_FAILURE_POLICY_UNSPECIFIED = 0;
   WAIT_FOR_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_FAILURE = 1;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE = 2;
 }
 
 enum ExecuteMethodFailurePolicy {
   EXECUTE_METHOD_FAILURE_POLICY_UNSPECIFIED = 0;
   EXECUTE_METHOD_FAILURE_POLICY_FAIL_FLOW_ON_EXECUTE_METHOD_FAILURE = 1;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   EXECUTE_METHOD_FAILURE_POLICY_PROCEED_TO_CONFIGURED_STEP = 2;
 }
 
@@ -458,7 +495,11 @@ message StepOptions {
   RetryPolicy execute_retry_policy = 4;
   WaitForMethodFailurePolicy wait_for_failure_policy = 5;
   ExecuteMethodFailurePolicy execute_failure_policy = 6;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   string execute_failure_proceed_step_type = 7;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   StepOptions execute_failure_proceed_step_options = 8;
   bool skip_wait_for = 9;
   StepDurability wait_for_durability_override = 10;
@@ -479,7 +520,11 @@ message FlowTimeoutHandlerOptions {
   int32 heartbeat_timeout_seconds = 2;
   RetryPolicy retry_policy = 3;
   ExecuteMethodFailurePolicy failure_policy = 4;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   string failure_proceed_step_type = 5;
+  // server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+  // A Step decision that uses it fails the attempt without retry.
   StepOptions failure_proceed_step_options = 6;
   StepDurability durability_override = 7;
   repeated string lock_attribute_keys = 8;
@@ -502,7 +547,9 @@ message FlowAlreadyStartedOptions {
 
 message FlowStartOptions {
   IdReusePolicy id_reuse_policy = 1;
+  // server-zd rejects a positive start delay with INVALID_ARGUMENT.
   int32 flow_start_delay_seconds = 2;
+  // server-zd rejects a set policy with INVALID_ARGUMENT.
   FlowRetryPolicy retry_policy = 3;
   repeated AttributeWrite attributes = 4;
   FlowConfig flow_config_override = 5;
@@ -518,6 +565,7 @@ enum ActiveStepSearchMode {
 }
 
 // Was optimize_activity: false=SYNC, true=ASYNC. Timer is always optimized by the server.
+// On server-zd both durabilities record the same events. ASYNC advances without waiting for the commit; there is no local phase.
 enum StepDurability {
   STEP_DURABILITY_UNSPECIFIED = 0;
   STEP_DURABILITY_SYNC = 1;
@@ -526,7 +574,9 @@ enum StepDurability {
 
 message FlowConfig {
   optional ActiveStepSearchMode active_step_search_mode = 1;
+  // server-zd ignores this field.
   optional int32 continue_as_new_threshold = 2;
+  // server-zd ignores this field.
   optional int32 continue_as_new_page_size_in_bytes = 3;
   optional StepDurability step_durability = 4;
   WorkerTarget worker_target = 5;
@@ -540,7 +590,9 @@ message AttributeStoreNames {
 
 message WorkerTarget {
   // Plaintext gRPC dial target, not an HTTP URL.
+  // server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
   string address = 1;
+  // server-zd accepts only is_pull_mode and rejects address targets with INVALID_ARGUMENT.
   bool is_headless_address = 2;
   // Routes work through a connected pull Worker; mutually exclusive with address.
   bool is_pull_mode = 3;
@@ -709,9 +761,11 @@ enum FlowStatus {
   FLOW_STATUS_COMPLETED = 2;
   FLOW_STATUS_FAILED = 3;
   // Reserved for reporting a backend hard timeout; applications must not depend on this status.
+  // server-zd never returns this status.
   FLOW_STATUS_SERVER_SIDE_TIMEOUT_INTERNAL_ONLY = 4;
   FLOW_STATUS_TERMINATED = 5;
   FLOW_STATUS_CANCELED = 6;
+  // server-zd never returns this status.
   FLOW_STATUS_CONTINUED_AS_NEW = 7;
 }
 
@@ -744,6 +798,7 @@ message SearchFlowsRequest {
   string query = 1;
   int32 page_size = 2;
   string next_page_token = 3;
+  // server-zd ignores this field.
   bool include_continued_as_new = 4;
 }
 
@@ -780,12 +835,15 @@ message GetFlowSummaryRequest {
 
 message GetFlowSummaryResponse {
   FlowExecutionID flow_execution_id = 1;
+  // On server-zd this always equals run_id.
   string first_run_id = 2;
   string request_id = 3;
   string flow_type = 4;
   FlowStatus flow_status = 5;
   google.protobuf.Timestamp start_time = 6;
   google.protobuf.Timestamp close_time = 7;
+  // server-zd only: the current run attempt of this run.
+  int32 run_attempt = 8;
 }
 
 message InternalAsyncStepInputSnapshot {
@@ -808,6 +866,9 @@ message GetHistoryEventsRequest {
   int64 start_internal_event_id = 3;
   int32 estimate_page_size = 4;
   bytes next_page_token = 5;
+  // server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+  // run attempt.
+  int32 run_attempt = 6;
 }
 
 message GetHistoryEventsResponse {
@@ -819,6 +880,8 @@ message GetHistoryEventsResponse {
 message FlowHistoryEvent {
   int64 event_id = 1;
   google.protobuf.Timestamp event_time = 2;
+  // server-zd only: the run attempt that recorded this event.
+  int32 run_attempt = 3;
 
   oneof payload {
     FlowStartedOrContinuedHistoryEvent flow_started_or_continued = 20;
@@ -840,6 +903,12 @@ message FlowHistoryEvent {
 message TimeTravelForkHistoryEvent {
   // Previous run containing the original history branch.
   string previous_run_id = 1;
+  // server-zd only: the run attempt that was current before this time travel.
+  int32 previous_run_attempt = 2;
+  // server-zd only: the run attempt of the point this time travel returned to.
+  int32 target_run_attempt = 3;
+  // server-zd only: the event ID of the point this time travel returned to.
+  int64 target_event_id = 4;
 }
 
 message FlowStartedOrContinuedHistoryEvent {
@@ -852,6 +921,7 @@ message FlowStartedOrContinuedHistoryEvent {
 
   oneof start_or_continue {
     FlowInitialStart initial_start = 10;
+    // server-zd never sets this.
     FlowContinuedStart continued_start = 11;
   }
 }
@@ -863,6 +933,7 @@ message FlowInitialStart {
   repeated KV initial_attributes = 4;
 }
 
+// server-zd never sets this.
 message FlowContinuedStart {
   string previous_run_id = 1;
   repeated StepMovement steps_to_start = 2;
@@ -878,11 +949,13 @@ message FlowClosedHistoryEvent {
   repeated StepCompletionOutput results = 2;
   FlowErrorType error_type = 3;
   string error_message = 4;
+  // server-zd never sets this.
   string continued_to_run_id = 5;
   string sticky_app_worker_id = 6;
 }
 
 // PendingStepMethodPhase reports the latest persisted backend lifecycle event.
+// On server-zd, SCHEDULED waits for locks or dispatch. STARTED means an attempt is running.
 enum PendingStepMethodPhase {
   PENDING_STEP_METHOD_PHASE_UNSPECIFIED = 0;
   PENDING_STEP_METHOD_PHASE_SCHEDULED = 1;
@@ -1084,10 +1157,15 @@ message ResetFlowRequest {
   // Skips reapplying RPCs, Channel publications, and Attribute writes after the reset point.
   bool skip_writes_reapply = 8;
   FlowResetStepMethod step_method = 9;
+  // server-zd only: selects the run attempt whose history is searched for the reset point.
+  // Zero selects the current run attempt.
+  int32 run_attempt = 10;
 }
 
 message ResetFlowResponse {
   string run_id = 1;
+  // server-zd only: the run attempt created by this time travel. run_id does not change there.
+  int32 run_attempt = 2;
 }
 
 message InvokeRPCRequest {
@@ -1101,6 +1179,7 @@ message InvokeRPCRequest {
   // read-modify-write. Empty means no locking and uses the configured RPC path.
   repeated string lock_attribute_keys = 6;
   // Per-call UUID, SDK-generated and future-overridable; identical retries reuse it. Temporal Update paths use it as the run-scoped Update ID; Continue-as-New resets scope.
+  // server-zd deduplicates it for the whole run.
   string request_id = 7;
   // Requests transactional reads and writes. Attribute locking enables it
   // automatically. Channel deletion alone does not; callers must opt in.
@@ -1145,6 +1224,7 @@ message WaitForStepCompletionRequest {
   // Use a positive value only to reclaim accepted waits left in flight after callers exit.
   // Temporal permits 10 in-flight Updates per Workflow Execution. Active callers transparently
   // start a new generation. Zero disables rollover; each rollover adds Update history.
+  // server-zd ignores this field.
   int32 internal_handler_timeout_seconds = 5;
   // Optional logical idempotency key. Empty derives wait-for-step-completion:{Step execution ID}.
   string request_id = 6;
@@ -1162,6 +1242,7 @@ message WaitForAttributeRequest {
   // Use a positive value only to reclaim accepted waits left in flight after callers exit.
   // Temporal permits 10 in-flight Updates per Workflow Execution. Active callers transparently
   // start a new generation. Zero disables rollover; each rollover adds Update history.
+  // server-zd ignores this field.
   int32 internal_handler_timeout_seconds = 4;
   // Optional logical idempotency key. Empty derives wait-for-attribute:{encoded condition}.
   string request_id = 5;
@@ -1266,6 +1347,7 @@ message InvokeWaitForMethodRequest {
 
 message InvokeWaitForMethodResponse {
   // Server-populated lineage input for local activity history.
+  // server-zd never sets this.
   LocalActivityMetadata local_activity_metadata = 1;
   repeated AttributeWrite upsert_attributes = 2;
   WaitingCondition waiting_condition = 3;
@@ -1311,6 +1393,7 @@ message InvokeExecuteMethodRequest {
 
 message InvokeExecuteMethodResponse {
   // Server-populated lineage input for local activity history.
+  // server-zd never sets this.
   LocalActivityMetadata local_activity_metadata = 1;
   StepDecision step_decision = 2;
   repeated AttributeWrite upsert_attributes = 3;
@@ -1421,7 +1504,9 @@ enum SubFlowReusePolicy {
 message SubFlowOptions {
   SubFlowReusePolicy reuse_policy = 1;
   int32 flow_timeout_seconds = 2;
+  // server-zd rejects a positive start delay with INVALID_ARGUMENT.
   int32 flow_start_delay_seconds = 3;
+  // server-zd rejects a set policy with INVALID_ARGUMENT.
   FlowRetryPolicy retry_policy = 4;
   repeated AttributeWrite attributes = 5;
   FlowConfig flow_config_override = 6;
@@ -1552,6 +1637,7 @@ message ContinueAsNewDump {
 
 // --- Internal serializable types (history / query / activity) ---
 // Serialized by Temporal/Cadence DataConverters as binary protobuf. Not FlowService RPCs.
+// Go Server internals; server-zd does not serve or persist them.
 
 enum InternalTimerStatus {
   INTERNAL_TIMER_STATUS_UNSPECIFIED = 0;
@@ -1643,6 +1729,7 @@ message RecoveryErrorInfo {
 }
 
 message InternalLocalStepActivityFailure {
+  // server-zd never sets this.
   LocalActivityMetadata local_activity_metadata = 1;
   int64 first_attempt_timestamp = 2;
   StepMethodOptions method_options = 3;

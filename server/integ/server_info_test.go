@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -45,4 +46,9 @@ func testServerInfo(t *testing.T, backendType service.BackendType) {
 	require.Equal(t, "integration-test-version", serverInfo.GetServerVersion())
 	require.Equal(t, uint32(1), serverInfo.GetMinimumSupportedProtocolVersion())
 	require.Equal(t, uint32(3), serverInfo.GetCurrentProtocolVersion())
+	if backendType == service.BackendTypeTemporal {
+		require.Equal(t, dexpb.ServerEngine_SERVER_ENGINE_TEMPORAL, serverInfo.GetServerEngine())
+	} else {
+		require.Equal(t, dexpb.ServerEngine_SERVER_ENGINE_CADENCE, serverInfo.GetServerEngine())
+	}
 }

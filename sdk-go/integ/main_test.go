@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,8 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/sdk-go/dex"
+	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 	"github.com/superdurable/dex/sdk-go/integ/webv2approval"
 	"github.com/superdurable/dex/sdk-go/integ/webv2reply"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var integClient *dex.Client
@@ -32,6 +37,8 @@ var integClient *dex.Client
 var integWorkerTargetAddress string
 
 var isPullWorkerMode bool
+
+var integrationServerEngine = sync.OnceValues(fetchIntegrationServerEngine)
 
 type emptyFlowSchema struct {
 	dex.FlowDefaults
@@ -222,6 +229,29 @@ func integrationContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func skipIfServerZD(t *testing.T, feature string) {
+	t.Helper()
+	serverEngine, err := integrationServerEngine()
+	require.NoError(t, err)
+	if serverEngine == dexpb.ServerEngine_SERVER_ENGINE_ZD {
+		t.Skip("server-zd does not support " + feature)
+	}
+}
+
+func fetchIntegrationServerEngine() (dexpb.ServerEngine, error) {
+	connection, err := grpc.NewClient(flowServiceAddress(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return dexpb.ServerEngine_SERVER_ENGINE_UNSPECIFIED, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	serverInfo, requestErr := dexpb.NewFlowServiceClient(connection).GetServerInfo(ctx, &emptypb.Empty{})
+	if err := errors.Join(requestErr, connection.Close()); err != nil {
+		return dexpb.ServerEngine_SERVER_ENGINE_UNSPECIFIED, err
+	}
+	return serverInfo.GetServerEngine(), nil
 }
 
 func newFlowID(t *testing.T, prefix string) string {

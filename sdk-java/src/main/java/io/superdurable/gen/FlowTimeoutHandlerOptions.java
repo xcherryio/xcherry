@@ -130,6 +130,11 @@ private static final long serialVersionUID = 0L;
   @SuppressWarnings("serial")
   private volatile java.lang.Object failureProceedStepType_ = "";
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string failure_proceed_step_type = 5;</code>
    * @return The failureProceedStepType.
    */
@@ -147,6 +152,11 @@ private static final long serialVersionUID = 0L;
     }
   }
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>string failure_proceed_step_type = 5;</code>
    * @return The bytes for failureProceedStepType.
    */
@@ -168,6 +178,11 @@ private static final long serialVersionUID = 0L;
   public static final int FAILURE_PROCEED_STEP_OPTIONS_FIELD_NUMBER = 6;
   private io.superdurable.gen.StepOptions failureProceedStepOptions_;
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    * @return Whether the failureProceedStepOptions field is set.
    */
@@ -176,6 +191,11 @@ private static final long serialVersionUID = 0L;
     return ((bitField0_ & 0x00000002) != 0);
   }
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    * @return The failureProceedStepOptions.
    */
@@ -184,6 +204,11 @@ private static final long serialVersionUID = 0L;
     return failureProceedStepOptions_ == null ? io.superdurable.gen.StepOptions.getDefaultInstance() : failureProceedStepOptions_;
   }
   /**
+   * <pre>
+   * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+   * A Step decision that uses it fails the attempt without retry.
+   * </pre>
+   *
    * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
    */
   @java.lang.Override
@@ -1219,6 +1244,11 @@ private static final long serialVersionUID = 0L;
 
     private java.lang.Object failureProceedStepType_ = "";
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>string failure_proceed_step_type = 5;</code>
      * @return The failureProceedStepType.
      */
@@ -1235,6 +1265,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>string failure_proceed_step_type = 5;</code>
      * @return The bytes for failureProceedStepType.
      */
@@ -1252,6 +1287,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>string failure_proceed_step_type = 5;</code>
      * @param value The failureProceedStepType to set.
      * @return This builder for chaining.
@@ -1265,6 +1305,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>string failure_proceed_step_type = 5;</code>
      * @return This builder for chaining.
      */
@@ -1275,6 +1320,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>string failure_proceed_step_type = 5;</code>
      * @param value The bytes for failureProceedStepType to set.
      * @return This builder for chaining.
@@ -1293,6 +1343,11 @@ private static final long serialVersionUID = 0L;
     private com.google.protobuf.SingleFieldBuilder<
         io.superdurable.gen.StepOptions, io.superdurable.gen.StepOptions.Builder, io.superdurable.gen.StepOptionsOrBuilder> failureProceedStepOptionsBuilder_;
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      * @return Whether the failureProceedStepOptions field is set.
      */
@@ -1300,6 +1355,11 @@ private static final long serialVersionUID = 0L;
       return ((bitField0_ & 0x00000020) != 0);
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      * @return The failureProceedStepOptions.
      */
@@ -1311,6 +1371,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public Builder setFailureProceedStepOptions(io.superdurable.gen.StepOptions value) {
@@ -1327,6 +1392,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public Builder setFailureProceedStepOptions(
@@ -1341,6 +1411,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public Builder mergeFailureProceedStepOptions(io.superdurable.gen.StepOptions value) {
@@ -1362,6 +1437,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public Builder clearFailureProceedStepOptions() {
@@ -1375,6 +1455,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public io.superdurable.gen.StepOptions.Builder getFailureProceedStepOptionsBuilder() {
@@ -1383,6 +1468,11 @@ private static final long serialVersionUID = 0L;
       return internalGetFailureProceedStepOptionsFieldBuilder().getBuilder();
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     public io.superdurable.gen.StepOptionsOrBuilder getFailureProceedStepOptionsOrBuilder() {
@@ -1394,6 +1484,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * server-zd does not support this yet. StartFlow and SubFlow reject it with INVALID_ARGUMENT.
+     * A Step decision that uses it fails the attempt without retry.
+     * </pre>
+     *
      * <code>.dex.StepOptions failure_proceed_step_options = 6;</code>
      */
     private com.google.protobuf.SingleFieldBuilder<

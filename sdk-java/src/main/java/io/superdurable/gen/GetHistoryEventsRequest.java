@@ -162,6 +162,22 @@ private static final long serialVersionUID = 0L;
     return nextPageToken_;
   }
 
+  public static final int RUN_ATTEMPT_FIELD_NUMBER = 6;
+  private int runAttempt_ = 0;
+  /**
+   * <pre>
+   * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+   * run attempt.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 6;</code>
+   * @return The runAttempt.
+   */
+  @java.lang.Override
+  public int getRunAttempt() {
+    return runAttempt_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -191,6 +207,9 @@ private static final long serialVersionUID = 0L;
     if (!nextPageToken_.isEmpty()) {
       output.writeBytes(5, nextPageToken_);
     }
+    if (runAttempt_ != 0) {
+      output.writeInt32(6, runAttempt_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -212,6 +231,10 @@ private static final long serialVersionUID = 0L;
     if (!nextPageToken_.isEmpty()) {
       size += com.google.protobuf.CodedOutputStream
         .computeBytesSize(5, nextPageToken_);
+    }
+    if (runAttempt_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(6, runAttempt_);
     }
     return size;
   }
@@ -247,6 +270,8 @@ private static final long serialVersionUID = 0L;
         != other.getEstimatePageSize()) return false;
     if (!getNextPageToken()
         .equals(other.getNextPageToken())) return false;
+    if (getRunAttempt()
+        != other.getRunAttempt()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -269,6 +294,8 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getEstimatePageSize();
     hash = (37 * hash) + NEXT_PAGE_TOKEN_FIELD_NUMBER;
     hash = (53 * hash) + getNextPageToken().hashCode();
+    hash = (37 * hash) + RUN_ATTEMPT_FIELD_NUMBER;
+    hash = (53 * hash) + getRunAttempt();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -405,6 +432,7 @@ private static final long serialVersionUID = 0L;
       startInternalEventId_ = 0L;
       estimatePageSize_ = 0;
       nextPageToken_ = com.google.protobuf.ByteString.EMPTY;
+      runAttempt_ = 0;
       return this;
     }
 
@@ -453,6 +481,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000010) != 0)) {
         result.nextPageToken_ = nextPageToken_;
       }
+      if (((from_bitField0_ & 0x00000020) != 0)) {
+        result.runAttempt_ = runAttempt_;
+      }
     }
 
     @java.lang.Override
@@ -485,6 +516,9 @@ private static final long serialVersionUID = 0L;
       }
       if (!other.getNextPageToken().isEmpty()) {
         setNextPageToken(other.getNextPageToken());
+      }
+      if (other.getRunAttempt() != 0) {
+        setRunAttempt(other.getRunAttempt());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -537,6 +571,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000010;
               break;
             } // case 42
+            case 48: {
+              runAttempt_ = input.readInt32();
+              bitField0_ |= 0x00000020;
+              break;
+            } // case 48
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -790,6 +829,53 @@ private static final long serialVersionUID = 0L;
     public Builder clearNextPageToken() {
       bitField0_ = (bitField0_ & ~0x00000010);
       nextPageToken_ = getDefaultInstance().getNextPageToken();
+      onChanged();
+      return this;
+    }
+
+    private int runAttempt_ ;
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+     * run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 6;</code>
+     * @return The runAttempt.
+     */
+    @java.lang.Override
+    public int getRunAttempt() {
+      return runAttempt_;
+    }
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+     * run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 6;</code>
+     * @param value The runAttempt to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRunAttempt(int value) {
+
+      runAttempt_ = value;
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+     * run attempt.
+     * </pre>
+     *
+     * <code>int32 run_attempt = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRunAttempt() {
+      bitField0_ = (bitField0_ & ~0x00000020);
+      runAttempt_ = 0;
       onChanged();
       return this;
     }
