@@ -32,13 +32,20 @@ pub async fn recover_stream(
     clock: &dyn WallClock,
     stream: &StreamIdentity,
     last_applied_seq: u64,
+    last_applied_epoch: u64,
     new_epoch: u64,
     writer_process_id: &str,
 ) -> Result<RecoveredStream, LogError> {
-    if new_epoch == 0 || writer_process_id.is_empty() {
+    if new_epoch == 0
+        || writer_process_id.is_empty()
+        || (last_applied_seq == 0) != (last_applied_epoch == 0)
+    {
         return Err(LogError::Invalid(
-            "new epoch and writer process ID must be set".into(),
+            "invalid applied position, new epoch, or writer process ID".into(),
         ));
+    }
+    if last_applied_epoch >= new_epoch {
+        return Err(LogError::Fenced);
     }
     let mut result = RecoveredStream {
         batches_to_apply: Vec::new(),
@@ -46,27 +53,18 @@ pub async fn recover_stream(
         epoch_start_seq: 0,
         next_seq: 0,
     };
-    let mut effective_epoch = 0;
-    let mut seq = 1_u64;
+    let mut effective_epoch = last_applied_epoch;
+    let mut seq = last_applied_seq
+        .checked_add(1)
+        .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
     loop {
         let key = stream.batch_key(seq);
         let Some(object) = store.get(&key).await? else {
-            if seq <= last_applied_seq {
-                return Err(LogError::Corrupt(format!(
-                    "log prefix is unavailable before applied seq {last_applied_seq}"
-                )));
-            }
             break;
         };
         let batch = decode_batch(&object.bytes)?;
         validate_batch_identity(&batch, stream, seq)?;
-        accept_batch(
-            &mut result,
-            batch,
-            seq,
-            last_applied_seq,
-            &mut effective_epoch,
-        );
+        accept_batch(&mut result, batch, seq, &mut effective_epoch);
         seq = seq
             .checked_add(1)
             .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
@@ -125,13 +123,7 @@ pub async fn recover_stream(
                         if batch.header.epoch >= new_epoch {
                             return Err(LogError::Fenced);
                         }
-                        accept_batch(
-                            &mut result,
-                            batch,
-                            seq,
-                            last_applied_seq,
-                            &mut effective_epoch,
-                        );
+                        accept_batch(&mut result, batch, seq, &mut effective_epoch);
                         seq = seq
                             .checked_add(1)
                             .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
@@ -170,7 +162,6 @@ fn accept_batch(
     result: &mut RecoveredStream,
     batch: DecodedBatch,
     seq: u64,
-    last_applied_seq: u64,
     effective_epoch: &mut u64,
 ) {
     if batch.header.epoch < *effective_epoch {
@@ -180,7 +171,5 @@ fn accept_batch(
     if let Some(epoch_start) = &batch.header.epoch_start {
         *effective_epoch = epoch_start.epoch;
     }
-    if seq > last_applied_seq {
-        result.batches_to_apply.push(batch);
-    }
+    result.batches_to_apply.push(batch);
 }

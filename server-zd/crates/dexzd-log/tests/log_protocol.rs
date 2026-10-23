@@ -341,9 +341,17 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
     store
         .insert(stream().batch_key(3), batch(1, 3, b"unacknowledged"))
         .await;
-    let recovered = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 2, "new-writer")
-        .await
-        .unwrap();
+    let recovered = recover_stream(
+        store.as_ref(),
+        &FixedClock,
+        &stream(),
+        0,
+        0,
+        2,
+        "new-writer",
+    )
+    .await
+    .unwrap();
     assert_eq!(recovered.epoch_start_seq, 2);
     assert_eq!(recovered.batches_to_apply.len(), 1);
     let (pipeline, mut committed) = CommitPipeline::start(
@@ -362,10 +370,17 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
     assert_eq!(ticket.committed.await.unwrap().unwrap(), 4);
     assert_eq!(committed.recv().await.unwrap().seq, 4);
     drop(pipeline);
-    let recovered_again =
-        recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 3, "third-writer")
-            .await
-            .unwrap();
+    let recovered_again = recover_stream(
+        store.as_ref(),
+        &FixedClock,
+        &stream(),
+        0,
+        0,
+        3,
+        "third-writer",
+    )
+    .await
+    .unwrap();
     assert_eq!(recovered_again.void_sequences, vec![3]);
     assert_eq!(
         recovered_again
@@ -383,7 +398,7 @@ async fn recovery_handles_all_precondition_outcomes() {
     store
         .inject_race(stream().batch_key(1), batch(1, 1, b"old committed"))
         .await;
-    let recovered = recover_stream(&store, &FixedClock, &stream(), 0, 2, "new")
+    let recovered = recover_stream(&store, &FixedClock, &stream(), 0, 0, 2, "new")
         .await
         .unwrap();
     assert_eq!(recovered.epoch_start_seq, 2);
@@ -394,7 +409,7 @@ async fn recovery_handles_all_precondition_outcomes() {
 
     let lost = MemoryStore::default();
     lost.inject_unknown_after_write(stream().batch_key(1)).await;
-    let recovered = recover_stream(&lost, &FixedClock, &stream(), 0, 2, "new")
+    let recovered = recover_stream(&lost, &FixedClock, &stream(), 0, 0, 2, "new")
         .await
         .unwrap();
     assert_eq!(recovered.epoch_start_seq, 1);
@@ -411,7 +426,7 @@ async fn recovery_handles_all_precondition_outcomes() {
     .unwrap();
     same.inject_race(stream().batch_key(1), own_epoch_start)
         .await;
-    let recovered = recover_stream(&same, &FixedClock, &stream(), 0, 2, "new")
+    let recovered = recover_stream(&same, &FixedClock, &stream(), 0, 0, 2, "new")
         .await
         .unwrap();
     assert_eq!(recovered.epoch_start_seq, 1);
@@ -421,7 +436,7 @@ async fn recovery_handles_all_precondition_outcomes() {
         .inject_race(stream().batch_key(1), epoch_start(2, 1))
         .await;
     assert!(matches!(
-        recover_stream(&fenced, &FixedClock, &stream(), 0, 2, "new").await,
+        recover_stream(&fenced, &FixedClock, &stream(), 0, 0, 2, "new").await,
         Err(LogError::Fenced)
     ));
 }
@@ -434,21 +449,26 @@ async fn recovery_rejects_corrupt_objects() {
     store.insert(key.clone(), body.clone()).await;
     store.corrupt(&key, body.len() - 1).await;
     assert!(matches!(
-        recover_stream(&store, &FixedClock, &stream(), 0, 2, "new").await,
+        recover_stream(&store, &FixedClock, &stream(), 0, 0, 2, "new").await,
         Err(LogError::Corrupt(_))
     ));
 }
 
 #[tokio::test]
-async fn recovery_refuses_to_reuse_a_cleaned_applied_position() {
+async fn recovery_resumes_after_a_cleaned_applied_position() {
     let store = MemoryStore::default();
     store
-        .insert(stream().batch_key(2), batch(1, 2, b"retained tail"))
+        .insert(stream().batch_key(2), batch(1, 2, b"void tail"))
         .await;
-    assert!(matches!(
-        recover_stream(&store, &FixedClock, &stream(), 1, 2, "new").await,
-        Err(LogError::Corrupt(_))
-    ));
+    store
+        .insert(stream().batch_key(3), batch(2, 3, b"valid tail"))
+        .await;
+    let recovered = recover_stream(&store, &FixedClock, &stream(), 1, 2, 3, "new")
+        .await
+        .unwrap();
+    assert_eq!(recovered.void_sequences, vec![2]);
+    assert_eq!(recovered.batches_to_apply[0].records[0].bytes, "valid tail");
+    assert_eq!(recovered.epoch_start_seq, 4);
     assert!(store.get(&stream().batch_key(1)).await.unwrap().is_none());
 }
 
@@ -463,7 +483,7 @@ async fn older_epoch_start_after_barrier_cannot_lower_effective_epoch() {
             batch(1, 3, b"void after older marker"),
         )
         .await;
-    let recovered = recover_stream(&store, &FixedClock, &stream(), 0, 3, "replacement")
+    let recovered = recover_stream(&store, &FixedClock, &stream(), 0, 0, 3, "replacement")
         .await
         .unwrap();
     assert_eq!(recovered.void_sequences, vec![2, 3]);
@@ -748,7 +768,7 @@ async fn crashed_pipeline_leaves_a_void_tail_and_stale_writer_is_fenced() {
     store.blocked_seq.lock().await.remove(&1);
     release.notify_waiters();
 
-    let recovered = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 2, "takeover")
+    let recovered = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 2, "takeover")
         .await
         .unwrap();
     assert_eq!(recovered.epoch_start_seq, 1);
@@ -771,7 +791,7 @@ async fn crashed_pipeline_leaves_a_void_tail_and_stale_writer_is_fenced() {
         ticket.committed.await.unwrap(),
         Err(ProposalFailure::Fenced)
     );
-    let recovered_again = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 3, "next")
+    let recovered_again = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 3, "next")
         .await
         .unwrap();
     assert_eq!(recovered_again.void_sequences, vec![2]);
@@ -796,6 +816,7 @@ async fn seeded_takeovers_recover_exactly_the_acknowledged_prefix() {
             store.as_ref(),
             &FixedClock,
             &stream(),
+            0,
             0,
             epoch,
             "replacement",
@@ -858,7 +879,7 @@ async fn seeded_takeovers_recover_exactly_the_acknowledged_prefix() {
             .unwrap()
             + 1;
     }
-    let final_recovery = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 13, "final")
+    let final_recovery = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 13, "final")
         .await
         .unwrap();
     let replayed: Vec<_> = final_recovery
