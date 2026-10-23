@@ -8,6 +8,8 @@
 
 //! S3 error responses: HTTP status, error code, and the headers S3 adds to some errors.
 
+use std::time::{Duration, UNIX_EPOCH};
+
 use http::StatusCode;
 use s3mock::StoreError;
 
@@ -95,11 +97,13 @@ impl From<StoreError> for S3Error {
                     .with_header("x-amz-delete-marker", "true")
                     .with_header("x-amz-version-id", version_id)
             }
-            StoreError::MethodNotAllowedOnDeleteMarker { version_id } => {
-                S3Error::new(StatusCode::METHOD_NOT_ALLOWED, "MethodNotAllowed", message)
-                    .with_header("x-amz-delete-marker", "true")
-                    .with_header("x-amz-version-id", version_id)
-            }
+            StoreError::MethodNotAllowedOnDeleteMarker {
+                version_id,
+                last_modified_unix_ms,
+            } => S3Error::new(StatusCode::METHOD_NOT_ALLOWED, "MethodNotAllowed", message)
+                .with_header("x-amz-delete-marker", "true")
+                .with_header("x-amz-version-id", version_id)
+                .with_header("last-modified", format_http_date(last_modified_unix_ms)),
             StoreError::PreconditionFailed => S3Error::new(
                 StatusCode::PRECONDITION_FAILED,
                 "PreconditionFailed",
@@ -131,4 +135,11 @@ impl From<StoreError> for S3Error {
             }
         }
     }
+}
+
+/// Formats Unix milliseconds as an HTTP date, such as `Last-Modified`.
+pub(crate) fn format_http_date(unix_ms: i64) -> String {
+    let since_epoch =
+        Duration::from_millis(u64::try_from(unix_ms).expect("stored timestamps are after 1970"));
+    httpdate::fmt_http_date(UNIX_EPOCH + since_epoch)
 }

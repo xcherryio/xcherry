@@ -16,11 +16,10 @@ use std::str::FromStr;
 use redb::ReadableDatabase;
 use ulid::Ulid;
 
-use super::{BUCKETS, Store, VERSIONS, decode_json};
+use super::{BUCKETS, Store, VERSIONS, decode_json, load_versions, relative_data_file};
 use crate::data_file;
 use crate::error::StoreError;
-use crate::key_codec::encode_version_key;
-use crate::record::{BucketRecord, VersionRecord};
+use crate::record::BucketRecord;
 
 /// Counts reported by [`Store::collect_orphan_data_files`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,7 +116,7 @@ impl Store {
         Ok(())
     }
 
-    /// A data file is live when its header's version is in `versions` and points back at this file.
+    /// A data file is live when a version of its header's key points back at this file.
     fn is_referenced(
         &self,
         bucket: &BucketRecord,
@@ -132,18 +131,15 @@ impl Store {
             }
             Err(error) => return Err(error),
         };
-        let internal_version = Ulid::from_str(file_name).expect("checked by is_older_than_open");
         let transaction = self.database.begin_read()?;
         let versions = transaction.open_table(VERSIONS)?;
-        let version_key = encode_version_key(&bucket.name, &header.key, internal_version);
-        let Some(value) = versions.get(version_key.as_slice())? else {
-            return Ok(false);
-        };
-        let record: VersionRecord = decode_json(value.value())?;
-        Ok(record
-            .data_file
-            .as_deref()
-            .is_some_and(|relative| relative.ends_with(file_name)))
+        let expected_relative_path =
+            relative_data_file(Ulid::from_str(file_name).expect("checked by is_older_than_open"));
+        Ok(load_versions(&versions, &bucket.name, &header.key)?
+            .iter()
+            .any(|stored| {
+                stored.record.data_file.as_deref() == Some(expected_relative_path.as_str())
+            }))
     }
 
     fn is_older_than_open(&self, name: &str) -> bool {

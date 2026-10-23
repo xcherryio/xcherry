@@ -28,7 +28,10 @@ pub enum StoreError {
     #[error("the latest version of {key:?} is a delete marker")]
     DeleteMarker { key: String, version_id: String },
     #[error("the requested version {version_id:?} is a delete marker")]
-    MethodNotAllowedOnDeleteMarker { version_id: String },
+    MethodNotAllowedOnDeleteMarker {
+        version_id: String,
+        last_modified_unix_ms: i64,
+    },
     #[error("at least one of the preconditions did not hold")]
     PreconditionFailed,
     #[error("the object was not modified")]

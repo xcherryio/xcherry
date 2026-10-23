@@ -9,7 +9,6 @@
 //! PutObject, GetObject, HeadObject, and DeleteObject.
 
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
 use futures_util::TryStreamExt;
@@ -31,7 +30,7 @@ use crate::request_headers::{
     read_conditions, upload_checksum_plan, user_metadata, write_condition,
 };
 use crate::routing::QueryParameters;
-use crate::s3_error::S3Error;
+use crate::s3_error::{S3Error, format_http_date};
 use crate::server::{S3Response, header_value, run_store_operation};
 
 /// Decoded chunks buffered between the network reader and the file writer.
@@ -114,13 +113,11 @@ async fn stream_upload(
     let written = write_task
         .await
         .map_err(|error| S3Error::internal(format!("upload writer task failed: {error}")))?;
+    // Dropping an unfinished writer deletes its temporary file.
     match (received, written) {
         (Ok(trailers), Ok(writer)) => Ok((writer, trailers)),
-        (Err(error), Ok(writer)) => {
-            writer.abandon();
-            Err(error)
-        }
-        // The writer already removed its file; its error explains why the reader stopped.
+        (Err(error), Ok(_)) => Err(error),
+        // A writer failure explains why the reader stopped.
         (Ok(_) | Err(_), Err(error)) => Err(S3Error::from(error)),
     }
 }
@@ -130,10 +127,7 @@ fn write_chunks(
     mut receiver: mpsc::Receiver<Bytes>,
 ) -> Result<ObjectWriter, StoreError> {
     while let Some(chunk) = receiver.blocking_recv() {
-        if let Err(error) = writer.write_all(&chunk) {
-            writer.abandon();
-            return Err(error);
-        }
+        writer.write_all(&chunk)?;
     }
     Ok(writer)
 }
@@ -323,10 +317,6 @@ fn object_response_builder(
     is_checksum_mode_enabled: bool,
 ) -> http::response::Builder {
     let record = &selection.record;
-    let last_modified = UNIX_EPOCH
-        + Duration::from_millis(
-            u64::try_from(record.last_modified_unix_ms).expect("stored timestamps are after 1970"),
-        );
     let mut builder = Response::builder()
         .status(if selection.range.is_some() {
             StatusCode::PARTIAL_CONTENT
@@ -336,7 +326,7 @@ fn object_response_builder(
         .header("etag", header_value(&format!("\"{}\"", record.etag)))
         .header(
             "last-modified",
-            header_value(&httpdate::fmt_http_date(last_modified)),
+            header_value(&format_http_date(record.last_modified_unix_ms)),
         )
         .header("accept-ranges", "bytes");
     builder = match selection.range {

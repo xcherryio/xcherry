@@ -46,11 +46,44 @@ pub struct UploadChecksumExpectations {
     pub expected_value_base64: Option<String>,
 }
 
+/// Owns a temporary upload file and deletes it on drop unless it was published.
+#[derive(Debug)]
+pub(crate) struct TemporaryFile {
+    path: PathBuf,
+    is_published: bool,
+}
+
+impl TemporaryFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Renames the file to `destination`; afterwards the destination owns the bytes.
+    pub(crate) fn publish(mut self, destination: &Path) -> io::Result<()> {
+        fs::rename(&self.path, destination)?;
+        self.is_published = true;
+        Ok(())
+    }
+}
+
+impl Drop for TemporaryFile {
+    fn drop(&mut self) {
+        if self.is_published {
+            return;
+        }
+        if let Err(error) = fs::remove_file(&self.path) {
+            tracing::warn!(path = %self.path.display(), %error, "failed to remove unpublished upload");
+        }
+    }
+}
+
 /// Streams an upload into a temporary file while computing its MD5 and checksum.
+///
+/// Dropping the writer, or the [`StagedObject`] it produces, deletes the temporary file.
 pub struct ObjectWriter {
-    internal_version: Ulid,
+    upload_id: Ulid,
     bucket_incarnation: String,
-    temporary_path: PathBuf,
+    temporary_file: TemporaryFile,
     file: File,
     size: u64,
     md5: md5::Md5,
@@ -61,9 +94,10 @@ pub struct ObjectWriter {
 /// A fully written and verified upload that is not yet visible to readers.
 #[derive(Debug)]
 pub struct StagedObject {
-    pub(crate) internal_version: Ulid,
+    /// Names the data file; version order is assigned separately when the upload commits.
+    pub(crate) upload_id: Ulid,
     pub(crate) bucket_incarnation: String,
-    pub(crate) temporary_path: PathBuf,
+    pub(crate) temporary_file: TemporaryFile,
     pub(crate) size: u64,
     pub(crate) md5_hex: String,
     pub(crate) checksum: ObjectChecksum,
@@ -72,19 +106,22 @@ pub struct StagedObject {
 impl ObjectWriter {
     pub(crate) fn create(
         temporary_directory: &Path,
-        internal_version: Ulid,
+        upload_id: Ulid,
         bucket_incarnation: String,
         checksum_algorithm: ChecksumAlgorithm,
     ) -> Result<ObjectWriter, StoreError> {
-        let temporary_path = temporary_directory.join(format!("{internal_version}.tmp"));
+        let path = temporary_directory.join(format!("{upload_id}.tmp"));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temporary_path)?;
+            .open(&path)?;
         Ok(ObjectWriter {
-            internal_version,
+            upload_id,
             bucket_incarnation,
-            temporary_path,
+            temporary_file: TemporaryFile {
+                path,
+                is_published: false,
+            },
             file,
             size: 0,
             md5: md5::Md5::new(),
@@ -102,53 +139,43 @@ impl ObjectWriter {
         Ok(())
     }
 
-    /// Deletes the temporary file of an upload that will not be committed.
-    pub fn abandon(self) {
-        if let Err(error) = fs::remove_file(&self.temporary_path) {
-            tracing::warn!(path = %self.temporary_path.display(), %error, "failed to remove abandoned upload");
-        }
-    }
-
     /// Returns the checksum algorithm this writer computes.
     pub fn checksum_algorithm(&self) -> ChecksumAlgorithm {
         self.checksum_algorithm
     }
 
-    /// Verifies the declared digests and returns the staged upload, deleting the file on mismatch.
+    /// Verifies the declared digests and returns the staged upload; on mismatch the file is deleted.
     pub fn finish(
         self,
         expectations: &UploadChecksumExpectations,
     ) -> Result<StagedObject, StoreError> {
         let md5_bytes = self.md5.finalize();
         let checksum = self.checksum.finish();
-        let staged = StagedObject {
-            internal_version: self.internal_version,
-            bucket_incarnation: self.bucket_incarnation,
-            temporary_path: self.temporary_path,
-            size: self.size,
-            md5_hex: hex::encode(md5_bytes),
-            checksum,
-        };
         if let Some(content_md5) = &expectations.content_md5_base64 {
             let Some(declared) =
                 decode_base64(content_md5).filter(|declared| declared.len() == md5_bytes.len())
             else {
-                staged.discard();
                 return Err(StoreError::InvalidDigest);
             };
             if declared.as_slice() != md5_bytes.as_slice() {
-                staged.discard();
                 return Err(StoreError::BadDigest { algorithm: "MD5" });
             }
         }
         if let Some(expected) = &expectations.expected_value_base64
-            && expected.trim() != staged.checksum.base64_value
+            && expected.trim() != checksum.base64_value
         {
-            let algorithm = staged.checksum.algorithm.s3_name();
-            staged.discard();
-            return Err(StoreError::BadDigest { algorithm });
+            return Err(StoreError::BadDigest {
+                algorithm: checksum.algorithm.s3_name(),
+            });
         }
-        Ok(staged)
+        Ok(StagedObject {
+            upload_id: self.upload_id,
+            bucket_incarnation: self.bucket_incarnation,
+            temporary_file: self.temporary_file,
+            size: self.size,
+            md5_hex: hex::encode(md5_bytes),
+            checksum,
+        })
     }
 }
 
@@ -156,13 +183,6 @@ impl StagedObject {
     /// Returns the object size in bytes.
     pub fn size(&self) -> u64 {
         self.size
-    }
-
-    /// Removes the temporary file; failures only leave an orphan for startup cleanup.
-    pub(crate) fn discard(&self) {
-        if let Err(error) = fs::remove_file(&self.temporary_path) {
-            tracing::warn!(path = %self.temporary_path.display(), %error, "failed to remove staged upload");
-        }
     }
 }
 

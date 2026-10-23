@@ -108,6 +108,14 @@ async fn enabled_versioning_keeps_every_version() {
         .await
         .unwrap_err();
     assert_eq!(error_code_and_status(&marker_read).1, Some(405));
+    let marker_last_modified = marker_read
+        .raw_response()
+        .and_then(|response| response.headers().get("last-modified"))
+        .map(str::to_owned);
+    assert!(
+        marker_last_modified.is_some(),
+        "S3 reports the delete marker's Last-Modified on 405"
+    );
 
     let versions = target
         .client

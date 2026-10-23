@@ -89,9 +89,15 @@ impl Store {
     pub fn open(config: &StoreConfig) -> Result<Store, StoreError> {
         let data_directory = config.root_directory.join(DATA_DIRECTORY_NAME);
         let temporary_directory = config.root_directory.join(TEMPORARY_DIRECTORY_NAME);
-        fs::create_dir_all(&data_directory)?;
-        fs::create_dir_all(&temporary_directory)?;
+        let is_durable = config.durability == Durability::Strict;
+        create_directory_durably(&config.root_directory, is_durable)?;
+        create_directory_durably(&data_directory, is_durable)?;
+        create_directory_durably(&temporary_directory, is_durable)?;
         let database = Database::create(config.root_directory.join(METADATA_FILE_NAME))?;
+        // redb flushes file contents, not the directory entry of a newly created database file.
+        if is_durable {
+            crate::data_file::sync_directory(&config.root_directory)?;
+        }
         let mut version_generator = ulid::Generator::new();
         let opened_at = version_generator
             .generate()

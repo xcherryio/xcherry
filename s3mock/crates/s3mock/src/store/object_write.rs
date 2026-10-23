@@ -10,9 +10,10 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use redb::ReadableTable;
+use ulid::Ulid;
 
 use super::{
     BUCKETS, LATEST, Store, VERSIONS, create_directory_durably, decode_json, encode_json,
@@ -73,6 +74,9 @@ impl Store {
     }
 
     /// Publishes a staged upload as a new version of `key`, enforcing the write condition atomically.
+    ///
+    /// The version order is assigned in the same transaction that checks the condition, so a
+    /// successful write always becomes the current version.
     pub fn commit_put(
         &self,
         bucket: &str,
@@ -86,23 +90,11 @@ impl Store {
             write_condition,
         } = request;
         let published =
-            match self.publish_data_file(bucket, key, &staged, content_headers, user_metadata) {
-                Ok(published) => published,
-                Err(error) => {
-                    staged.discard();
-                    return Err(error);
-                }
-            };
+            self.publish_data_file(bucket, key, staged, content_headers, user_metadata)?;
         match self.commit_version(bucket, key, &published, &write_condition) {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
-                if let Err(remove_error) = fs::remove_file(&published.path) {
-                    tracing::warn!(
-                        path = %published.path.display(),
-                        error = %remove_error,
-                        "failed to remove rejected data file"
-                    );
-                }
+                remove_unreferenced_file(&published.path);
                 Err(error)
             }
         }
@@ -113,7 +105,7 @@ impl Store {
         &self,
         bucket: &str,
         key: &str,
-        staged: &StagedObject,
+        staged: StagedObject,
         content_headers: ContentHeaders,
         user_metadata: BTreeMap<String, String>,
     ) -> Result<PublishedDataFile, StoreError> {
@@ -121,9 +113,10 @@ impl Store {
         if bucket_record.incarnation != staged.bucket_incarnation {
             return Err(StoreError::NoSuchBucket(bucket.to_owned()));
         }
-        let relative_path = relative_data_file(staged.internal_version);
+        let relative_path = relative_data_file(staged.upload_id);
+        // The footer describes the upload; the commit replaces version identity and order.
         let record = VersionRecord {
-            internal_version: staged.internal_version.to_string(),
+            internal_version: staged.upload_id.to_string(),
             is_null_version: bucket_record.versioning != VersioningState::Enabled,
             is_delete_marker: false,
             size: staged.size,
@@ -131,8 +124,7 @@ impl Store {
             checksum: Some(staged.checksum.clone()),
             content_headers,
             user_metadata,
-            last_modified_unix_ms: i64::try_from(staged.internal_version.timestamp_ms())
-                .expect("ULID timestamps fit in i64"),
+            last_modified_unix_ms: unix_ms(staged.upload_id),
             data_file: Some(relative_path.clone()),
         };
         let header = DataFileHeader {
@@ -140,27 +132,31 @@ impl Store {
             key: key.to_owned(),
             record,
         };
-        data_file::append_footer(&staged.temporary_path, &header, self.is_durable())?;
+        data_file::append_footer(staged.temporary_file.path(), &header, self.is_durable())?;
         let bucket_directory = self.bucket_directory(&bucket_record);
         let path = bucket_directory.join(&relative_path);
         let shard_directory = path
             .parent()
-            .expect("data file paths have a shard directory");
+            .expect("data file paths have a shard directory")
+            .to_path_buf();
         create_directory_durably(&bucket_directory, self.is_durable())?;
-        create_directory_durably(shard_directory, self.is_durable())?;
-        fs::rename(&staged.temporary_path, &path)?;
-        if self.is_durable() {
-            data_file::sync_directory(shard_directory)?;
-        }
-        Ok(PublishedDataFile {
+        create_directory_durably(&shard_directory, self.is_durable())?;
+        staged.temporary_file.publish(&path)?;
+        let published = PublishedDataFile {
             path,
             record: header.record,
-            internal_version: staged.internal_version,
             bucket_incarnation: bucket_record.incarnation,
-        })
+        };
+        if self.is_durable()
+            && let Err(error) = data_file::sync_directory(&shard_directory)
+        {
+            remove_unreferenced_file(&published.path);
+            return Err(error.into());
+        }
+        Ok(published)
     }
 
-    /// Inserts the version in one write transaction, replacing the null version when the bucket is not versioning-enabled.
+    /// Checks the condition, assigns the version order, and inserts the version in one transaction.
     fn commit_version(
         &self,
         bucket: &str,
@@ -170,7 +166,7 @@ impl Store {
     ) -> Result<PutObjectOutcome, StoreError> {
         let transaction = self.begin_write()?;
         let mut superseded_files = Vec::new();
-        let versioning = {
+        let (versioning, internal_version) = {
             let buckets = transaction.open_table(BUCKETS)?;
             let bucket_record = require_bucket(&buckets, bucket)?;
             if bucket_record.incarnation != published.bucket_incarnation {
@@ -184,8 +180,12 @@ impl Store {
                 None => None,
             };
             check_write_condition(write_condition, current.as_ref(), bucket, key)?;
-            // Versioning may change while the body streams; metadata follows the state at commit.
+            // Write transactions are serialized, so this ULID orders versions by commit.
+            let internal_version = self.next_internal_version();
             let mut record = published.record.clone();
+            record.internal_version = internal_version.to_string();
+            record.last_modified_unix_ms = unix_ms(internal_version);
+            // Versioning may change while the body streams; metadata follows the state at commit.
             record.is_null_version = bucket_record.versioning != VersioningState::Enabled;
             if record.is_null_version {
                 for stored in load_versions(&versions, bucket, key)? {
@@ -196,16 +196,16 @@ impl Store {
                     }
                 }
             }
-            let version_key = encode_version_key(bucket, key, published.internal_version);
+            let version_key = encode_version_key(bucket, key, internal_version);
             versions.insert(version_key.as_slice(), encode_json(&record)?.as_slice())?;
             refresh_latest(&mut latest, &versions, bucket, key)?;
-            bucket_record.versioning
+            (bucket_record.versioning, internal_version)
         };
         transaction.commit()?;
         remove_superseded_files(&superseded_files);
         Ok(PutObjectOutcome {
             etag: published.record.etag.clone(),
-            version_id: version_id_for(versioning, published),
+            version_id: version_id_for(versioning, internal_version),
             checksum: published
                 .record
                 .checksum
@@ -219,8 +219,17 @@ impl Store {
 struct PublishedDataFile {
     path: PathBuf,
     record: VersionRecord,
-    internal_version: ulid::Ulid,
     bucket_incarnation: String,
+}
+
+fn remove_unreferenced_file(path: &Path) {
+    if let Err(error) = fs::remove_file(path) {
+        tracing::warn!(path = %path.display(), %error, "failed to remove unreferenced data file");
+    }
+}
+
+fn unix_ms(ulid: Ulid) -> i64 {
+    i64::try_from(ulid.timestamp_ms()).expect("ULID timestamps fit in i64")
 }
 
 fn check_write_condition(
@@ -246,10 +255,10 @@ fn check_write_condition(
     }
 }
 
-fn version_id_for(versioning: VersioningState, published: &PublishedDataFile) -> Option<String> {
+fn version_id_for(versioning: VersioningState, internal_version: Ulid) -> Option<String> {
     match versioning {
         VersioningState::Unversioned => None,
-        VersioningState::Enabled => Some(published.internal_version.to_string()),
+        VersioningState::Enabled => Some(internal_version.to_string()),
         VersioningState::Suspended => Some(super::NULL_VERSION_ID.to_owned()),
     }
 }

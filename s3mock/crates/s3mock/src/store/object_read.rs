@@ -152,6 +152,7 @@ impl Store {
                 if stored.record.is_delete_marker {
                     return Err(StoreError::MethodNotAllowedOnDeleteMarker {
                         version_id: version_id.clone(),
+                        last_modified_unix_ms: stored.record.last_modified_unix_ms,
                     });
                 }
                 stored.record

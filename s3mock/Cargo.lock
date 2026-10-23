@@ -1746,6 +1746,7 @@ dependencies = [
  "percent-encoding",
  "quick-xml",
  "s3mock",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

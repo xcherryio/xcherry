@@ -127,6 +127,10 @@ impl Store {
                 fold_common_prefix(&key, &request.prefix, &request.delimiter)
             {
                 cursor = after_prefix(bucket, &common_prefix);
+                // S3 returns only common prefixes after StartAfter.
+                if is_at_or_before(&common_prefix, request.start_after.as_deref()) {
+                    continue;
+                }
                 page.common_prefixes.push(common_prefix.clone());
                 resume_point = Some(ResumePoint::AfterCommonPrefix(common_prefix));
                 continue;
@@ -182,17 +186,22 @@ impl Store {
                 page.is_truncated = max_keys > 0;
                 break;
             }
-            entry_count += 1;
             let key = decode_object_key(&entry.key, bucket);
             if let Some(common_prefix) =
                 fold_common_prefix(&key, &request.prefix, &request.delimiter)
             {
                 cursor = after_prefix(bucket, &common_prefix);
+                // S3 returns only common prefixes after the key marker.
+                if is_at_or_before(&common_prefix, request.key_marker.as_deref()) {
+                    continue;
+                }
+                entry_count += 1;
                 page.common_prefixes.push(common_prefix.clone());
                 page.next_key_marker = Some(common_prefix);
                 page.next_version_id_marker = None;
                 continue;
             }
+            entry_count += 1;
             let record: VersionRecord = decode_json(&entry.value)?;
             let object_key = encode_object_key(bucket, &key);
             let newest = first_entry(&versions, &object_key, &after_key(bucket, &key))?
@@ -239,6 +248,10 @@ fn first_entry(
         }
         None => Ok(None),
     }
+}
+
+fn is_at_or_before(common_prefix: &str, marker: Option<&str>) -> bool {
+    marker.is_some_and(|marker| common_prefix <= marker)
 }
 
 /// Returns the common prefix that `key` folds into, if the delimiter occurs after `prefix`.

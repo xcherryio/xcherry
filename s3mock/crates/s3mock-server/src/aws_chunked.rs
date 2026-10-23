@@ -17,6 +17,8 @@ use crate::s3_error::S3Error;
 
 /// Longest chunk header or trailer line accepted, which bounds buffering of malformed input.
 const MAX_LINE_LENGTH: usize = 4096;
+/// Clients send a checksum and a signature trailer; more indicates abuse.
+const MAX_TRAILER_COUNT: usize = 8;
 
 enum DecoderState {
     ChunkHeader,
@@ -102,6 +104,11 @@ impl AwsChunkedDecoder {
                     let (name, value) = line.split_once(':').ok_or_else(|| {
                         S3Error::incomplete_body(format!("invalid aws-chunked trailer {line:?}"))
                     })?;
+                    if self.trailers.len() == MAX_TRAILER_COUNT {
+                        return Err(S3Error::incomplete_body(
+                            "the aws-chunked body has too many trailers",
+                        ));
+                    }
                     self.trailers
                         .push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
                 }
@@ -139,6 +146,9 @@ impl AwsChunkedDecoder {
             }
             return Ok(None);
         };
+        if end > MAX_LINE_LENGTH {
+            return Err(S3Error::incomplete_body("aws-chunked line is too long"));
+        }
         let line = self.buffer.split_to(end + 2);
         String::from_utf8(line[..end].to_vec())
             .map(Some)
