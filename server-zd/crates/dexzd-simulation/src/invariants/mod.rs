@@ -9,7 +9,6 @@
 //! State invariants checked after every applied command (plan sections 8 and 10).
 
 mod directory_invariants;
-mod known_apply_defects;
 mod lock_invariants;
 mod value_invariants;
 
@@ -20,7 +19,6 @@ use dexzd_keyspace::{RunId, ValueId};
 
 use crate::state_view::FlowView;
 
-pub use known_apply_defects::DefectTolerance;
 pub use lock_invariants::check_fresh_snapshot;
 
 /// A broken invariant: a stable name for grouping and a description of the evidence.
@@ -65,7 +63,6 @@ pub fn check_flow(
     flow_id: &str,
     view: &FlowView,
     memory: &CheckerMemory,
-    tolerance: DefectTolerance,
 ) -> Result<(), InvariantViolation> {
     directory_invariants::check_directory(flow_id, view)?;
     for (run_id, run) in view.runs.iter().filter(|(_, run)| run.is_complete) {
@@ -77,7 +74,7 @@ pub fn check_flow(
         lock_invariants::check_locks(&context, run)?;
         lock_invariants::check_guarded_attributes(&context, run)?;
         let genesis = memory.genesis_values.get(run_id);
-        value_invariants::check_values(&context, run, genesis, tolerance)?;
+        value_invariants::check_values(&context, run, genesis)?;
     }
     Ok(())
 }

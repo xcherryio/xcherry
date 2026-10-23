@@ -16,9 +16,7 @@ use dexzd_protocol::dexzd::v1::{
 };
 use prost::Message;
 
-use crate::invariants::{
-    CheckerMemory, DefectTolerance, InvariantViolation, check_flow, check_fresh_snapshot,
-};
+use crate::invariants::{CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot};
 use crate::memory_state::MemoryFlowState;
 use crate::state_view::{FlowView, RunSelection};
 
@@ -34,7 +32,6 @@ pub struct ApplyChecker {
     redecoded_state: MemoryFlowState,
     hasher: PartitionHasher,
     memory: CheckerMemory,
-    tolerance: DefectTolerance,
     applied_results: BTreeSet<AppliedResultIdentity>,
 }
 
@@ -48,16 +45,21 @@ struct AppliedResultIdentity {
     attempt: u32,
 }
 
+impl Default for ApplyChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApplyChecker {
     /// Creates a checker over an empty state.
-    pub fn new(tolerance: DefectTolerance) -> Self {
+    pub fn new() -> Self {
         Self {
             state: MemoryFlowState::default(),
             redecoded_state: MemoryFlowState::default(),
             hasher: PartitionHasher::new(&PARTITION_HASH_KEY, PARTITION_COUNT)
                 .expect("the fixed partition hash key and count are valid"),
             memory: CheckerMemory::default(),
-            tolerance,
             applied_results: BTreeSet::new(),
         }
     }
@@ -120,7 +122,7 @@ impl ApplyChecker {
         if is_applied {
             self.check_command_effects(command, &outcome, &view)?;
         }
-        check_flow(&command.flow_id, &view, &self.memory, self.tolerance)?;
+        check_flow(&command.flow_id, &view, &self.memory)?;
         Ok(outcome)
     }
 

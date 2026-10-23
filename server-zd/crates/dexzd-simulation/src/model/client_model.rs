@@ -136,14 +136,13 @@ pub(crate) fn start_flow(rng: &mut ChaCha8Rng, flow_id: &str) -> Command {
     })
 }
 
-/// Hard-delete writes use `hard_delete_keys`; plain writes always use [`ATTRIBUTE_KEYS`].
-pub(crate) fn set_attributes(rng: &mut ChaCha8Rng, hard_delete_keys: &[&str]) -> Command {
+/// Hard-delete and plain writes share [`ATTRIBUTE_KEYS`], so each replaces the other.
+pub(crate) fn set_attributes(rng: &mut ChaCha8Rng) -> Command {
     let mut attributes = Vec::new();
     let mut hard_delete_objects = Vec::new();
     for write_index in 0..rng.random_range(1..4_u32) {
         let key = pick(rng, ATTRIBUTE_KEYS).to_owned();
         if rng.random_bool(0.15) {
-            let key = pick(rng, hard_delete_keys).to_owned();
             let is_set = rng.random_bool(0.6);
             if is_set {
                 hard_delete_objects.push(HardDeleteObjectReference {

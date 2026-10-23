@@ -12,7 +12,7 @@ use std::fmt;
 use dexzd_protocol::dexzd::v1::{FlowCommand, command_reply, flow_command::Command};
 
 use crate::apply_checker::ApplyChecker;
-use crate::invariants::{DefectTolerance, InvariantViolation};
+use crate::invariants::InvariantViolation;
 use crate::model::CommandGenerator;
 
 /// Replays allowed while shrinking one failure.
@@ -59,8 +59,6 @@ pub struct SimulationFailure {
     pub command_index: usize,
     /// The broken invariant.
     pub violation: InvariantViolation,
-    /// Whether known apply defects were tolerated.
-    pub tolerance: DefectTolerance,
     /// The shortest command sequence found that breaks the same invariant; its last command
     /// is the one that broke it.
     pub minimal_reproduction: Vec<FlowCommand>,
@@ -75,15 +73,10 @@ impl fmt::Display for SimulationFailure {
         )?;
         writeln!(
             formatter,
-            "reproduce with: DEXZD_SIMULATION_SEED={} DEXZD_SIMULATION_COMMANDS={}{} cargo test -p \
+            "reproduce with: DEXZD_SIMULATION_SEED={} DEXZD_SIMULATION_COMMANDS={} cargo test -p \
              dexzd-simulation",
             self.seed,
             self.command_index + 1,
-            if self.tolerance == DefectTolerance::Strict {
-                " DEXZD_SIMULATION_STRICT=1"
-            } else {
-                ""
-            }
         )?;
         writeln!(
             formatter,
@@ -103,20 +96,19 @@ impl fmt::Display for SimulationFailure {
 pub fn run_seed(
     seed: u64,
     command_count: usize,
-    tolerance: DefectTolerance,
 ) -> Result<SimulationSummary, Box<SimulationFailure>> {
-    let mut checker = ApplyChecker::new(tolerance);
-    let mut generator = CommandGenerator::new(seed, tolerance);
+    let mut checker = ApplyChecker::new();
+    let mut generator = CommandGenerator::new(seed);
     let mut summary = SimulationSummary::default();
     let mut history = Vec::with_capacity(command_count);
     for command_index in 0..command_count {
-        let command = generator.next_command(&checker).map_err(|violation| {
-            failure(seed, command_index, violation, history.clone(), tolerance)
-        })?;
+        let command = generator
+            .next_command(&checker)
+            .map_err(|violation| failure(seed, command_index, violation, history.clone()))?;
         history.push(command.clone());
-        let outcome = checker.apply_and_check(&command).map_err(|violation| {
-            failure(seed, command_index, violation, history.clone(), tolerance)
-        })?;
+        let outcome = checker
+            .apply_and_check(&command)
+            .map_err(|violation| failure(seed, command_index, violation, history.clone()))?;
         let kind = command_kind(&command);
         let is_error_reply = matches!(outcome.reply.reply, Some(command_reply::Reply::Error(_)));
         let counts = if outcome.writes.is_empty() || is_error_reply {
@@ -134,11 +126,8 @@ pub fn run_seed(
 /// Applies `commands` in order to an empty state with every check.
 ///
 /// Returns the index and violation of the first failing command, or `None`.
-pub fn replay_commands(
-    commands: &[FlowCommand],
-    tolerance: DefectTolerance,
-) -> Option<(usize, InvariantViolation)> {
-    let mut checker = ApplyChecker::new(tolerance);
+pub fn replay_commands(commands: &[FlowCommand]) -> Option<(usize, InvariantViolation)> {
+    let mut checker = ApplyChecker::new();
     for (index, command) in commands.iter().enumerate() {
         if let Err(violation) = checker.apply_and_check(command) {
             return Some((index, violation));
@@ -152,24 +141,18 @@ fn failure(
     command_index: usize,
     violation: InvariantViolation,
     history: Vec<FlowCommand>,
-    tolerance: DefectTolerance,
 ) -> Box<SimulationFailure> {
-    let minimal_reproduction = shrink(history, violation.invariant, tolerance);
+    let minimal_reproduction = shrink(history, violation.invariant);
     Box::new(SimulationFailure {
         seed,
         command_index,
         violation,
-        tolerance,
         minimal_reproduction,
     })
 }
 
 /// Removes chunks of commands, halving the chunk size, while the same invariant still breaks.
-fn shrink(
-    mut commands: Vec<FlowCommand>,
-    invariant: &str,
-    tolerance: DefectTolerance,
-) -> Vec<FlowCommand> {
+fn shrink(mut commands: Vec<FlowCommand>, invariant: &str) -> Vec<FlowCommand> {
     let mut replays_left = SHRINK_REPLAY_BUDGET;
     let mut chunk_size = commands.len().div_ceil(2);
     while chunk_size > 0 && replays_left > 0 {
@@ -179,7 +162,7 @@ fn shrink(
             let mut candidate = commands[..start].to_vec();
             candidate.extend_from_slice(&commands[end..]);
             replays_left -= 1;
-            match replay_commands(&candidate, tolerance) {
+            match replay_commands(&candidate) {
                 Some((index, violation)) if violation.invariant == invariant => {
                     candidate.truncate(index + 1);
                     commands = candidate;

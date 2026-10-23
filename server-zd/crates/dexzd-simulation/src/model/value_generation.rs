@@ -20,8 +20,6 @@ pub(crate) const MAX_VALUE_BYTES: u64 = 4096;
 /// Values above this size become value-table references.
 pub(crate) const WIRE_INLINE_THRESHOLD_BYTES: u32 = 100;
 
-/// Attribute keys only hard-delete writes use while known apply defect 1 is tolerated.
-pub(crate) const HARD_DELETE_ONLY_ATTRIBUTE_KEYS: &[&str] = &["secret", "orders/9"];
 /// Attribute keys clients and Workers write. The guarded key `counter` is not among them.
 pub(crate) const ATTRIBUTE_KEYS: &[&str] = &[
     "status",

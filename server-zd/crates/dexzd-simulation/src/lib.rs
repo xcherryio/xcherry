@@ -25,8 +25,7 @@ pub use apply_simulation::{
     SimulationFailure, SimulationSummary, command_kind, replay_commands, run_seed,
 };
 pub use invariants::{
-    CheckerMemory, DefectTolerance, GUARDED_ATTRIBUTE_KEYS, InvariantViolation, check_flow,
-    check_fresh_snapshot,
+    CheckerMemory, GUARDED_ATTRIBUTE_KEYS, InvariantViolation, check_flow, check_fresh_snapshot,
 };
 pub use memory_state::MemoryFlowState;
 pub use model::{CommandGenerator, FLOW_IDS};

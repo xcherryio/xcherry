@@ -10,12 +10,8 @@
 //!
 //! Set `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_COMMANDS` for a longer budget, or
 //! `DEXZD_SIMULATION_SEED` for one seed.
-//!
-//! `DEXZD_SIMULATION_STRICT=1` stops tolerating the known apply defects.
 
-use dexzd_simulation::{
-    ApplyChecker, CommandGenerator, DefectTolerance, SimulationSummary, run_seed,
-};
+use dexzd_simulation::{ApplyChecker, CommandGenerator, SimulationSummary, run_seed};
 
 const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_COMMANDS_PER_SEED: usize = 400;
@@ -30,14 +26,6 @@ fn environment_number(name: &str) -> Option<u64> {
     )
 }
 
-fn defect_tolerance() -> DefectTolerance {
-    if environment_number("DEXZD_SIMULATION_STRICT").unwrap_or(0) != 0 {
-        DefectTolerance::Strict
-    } else {
-        DefectTolerance::TolerateKnownApplyDefects
-    }
-}
-
 #[test]
 fn apply_keeps_every_invariant_over_random_command_sequences() {
     let commands = environment_number("DEXZD_SIMULATION_COMMANDS")
@@ -49,10 +37,9 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
             (FIRST_SEED..FIRST_SEED + count).collect()
         }
     };
-    let tolerance = defect_tolerance();
     let mut total = SimulationSummary::default();
     for seed in seeds {
-        match run_seed(seed, commands, tolerance) {
+        match run_seed(seed, commands) {
             Ok(summary) => total.merge(&summary),
             Err(failure) => panic!("{failure}"),
         }
@@ -81,8 +68,8 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
 #[test]
 fn the_same_seed_proposes_and_applies_the_same_commands() {
     let run = || {
-        let mut checker = ApplyChecker::new(defect_tolerance());
-        let mut generator = CommandGenerator::new(FIRST_SEED, defect_tolerance());
+        let mut checker = ApplyChecker::new();
+        let mut generator = CommandGenerator::new(FIRST_SEED);
         let mut trace = Vec::new();
         for _ in 0..80 {
             let command = generator.next_command(&checker).expect("state decodes");

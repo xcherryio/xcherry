@@ -17,9 +17,7 @@ history event order, the timer index, and agreement of the Flow directory and ru
 cargo test -p dexzd-simulation                                   # fixed seed set
 DEXZD_SIMULATION_SEEDS=500 DEXZD_SIMULATION_COMMANDS=1000 cargo test -p dexzd-simulation
 DEXZD_SIMULATION_SEED=1592590336 cargo test -p dexzd-simulation  # reproduce one seed
-DEXZD_SIMULATION_STRICT=1 cargo test -p dexzd-simulation         # stop tolerating known apply defects
 ```
 
 A failing seed prints its seed, the failing command index, and a shrunk command sequence that
-`replay_commands` reproduces. `src/invariants/known_apply_defects.rs` lists the reported apply
-defects that the default run tolerates; delete an entry when its fix lands.
+`replay_commands` reproduces.

@@ -23,7 +23,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::apply_checker::ApplyChecker;
-use crate::invariants::{DefectTolerance, InvariantViolation};
+use crate::invariants::InvariantViolation;
 use crate::model::worker_model::Call;
 use crate::state_view::{FlowView, RunSelection, RunView};
 
@@ -37,7 +37,6 @@ const REMEMBERED_RESULTS: usize = 16;
 /// Proposes the next command from the committed state and a seeded random source.
 pub struct CommandGenerator {
     rng: ChaCha8Rng,
-    hard_delete_keys: &'static [&'static str],
     now_micros: i64,
     sent_results: Vec<FlowCommand>,
 }
@@ -66,18 +65,9 @@ enum Proposal<'view> {
 
 impl CommandGenerator {
     /// Creates a generator whose every choice derives from `seed`.
-    ///
-    /// Tolerant runs keep hard-delete writes off plain Attribute keys (known apply defect 1).
-    pub fn new(seed: u64, tolerance: DefectTolerance) -> Self {
-        let hard_delete_keys = match tolerance {
-            DefectTolerance::Strict => value_generation::ATTRIBUTE_KEYS,
-            DefectTolerance::TolerateKnownApplyDefects => {
-                value_generation::HARD_DELETE_ONLY_ATTRIBUTE_KEYS
-            }
-        };
+    pub fn new(seed: u64) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
-            hard_delete_keys,
             now_micros: START_MICROS,
             sent_results: Vec::new(),
         }
@@ -205,7 +195,7 @@ impl CommandGenerator {
             }
             Proposal::ClientWrite { run_id, run } => {
                 let body = match rng.random_range(0..40) {
-                    0..=13 => client_model::set_attributes(rng, self.hard_delete_keys),
+                    0..=13 => client_model::set_attributes(rng),
                     14..=27 => client_model::publish(rng),
                     28..=33 => client_model::delete_message(rng, run),
                     34..=35 => client_model::stop(rng),

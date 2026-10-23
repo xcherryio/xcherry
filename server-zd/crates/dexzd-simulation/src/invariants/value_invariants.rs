@@ -18,9 +18,6 @@ use dexzd_protocol::dexzd::v1::{
     StepExecutionPhase, StoredStepCompletionOutput, StoredValue, command_reply, stored_value,
 };
 
-use crate::invariants::known_apply_defects::{
-    DefectTolerance, is_superseded_garbage_row, remove_explained_holder_differences,
-};
 use crate::invariants::{InvariantViolation, RunContext};
 use crate::row_decoding::hex;
 use crate::state_view::RunView;
@@ -37,7 +34,6 @@ pub(crate) fn check_values(
     context: &RunContext<'_>,
     run: &RunView,
     genesis: Option<&BTreeSet<ValueId>>,
-    tolerance: DefectTolerance,
 ) -> Result<(), InvariantViolation> {
     let mut slots = HolderCollector::default();
     collect_slots(run, &mut slots);
@@ -72,14 +68,11 @@ pub(crate) fn check_values(
         .chain(run.value_holders.keys())
         .collect();
     for value_id in value_ids {
-        let mut expected = slots.expected.get(value_id).unwrap_or(&empty).clone();
-        let mut actual = run.value_holders.get(value_id).unwrap_or(&empty).clone();
-        if tolerance == DefectTolerance::TolerateKnownApplyDefects {
-            remove_explained_holder_differences(run, *value_id, &mut expected, &mut actual);
-        }
+        let expected = slots.expected.get(value_id).unwrap_or(&empty);
+        let actual = run.value_holders.get(value_id).unwrap_or(&empty);
         if expected != actual {
-            let missing: Vec<String> = expected.difference(&actual).map(|h| hex(h)).collect();
-            let extra: Vec<String> = actual.difference(&expected).map(|h| hex(h)).collect();
+            let missing: Vec<String> = expected.difference(actual).map(|h| hex(h)).collect();
+            let extra: Vec<String> = actual.difference(expected).map(|h| hex(h)).collect();
             return Err(InvariantViolation::new(
                 HOLDERS,
                 format!(
@@ -89,7 +82,7 @@ pub(crate) fn check_values(
             ));
         }
     }
-    check_garbage(context, run, tolerance)?;
+    check_garbage(context, run)?;
     check_hard_delete_objects(context, run)
 }
 
@@ -130,18 +123,9 @@ fn check_hard_delete_objects(
     Ok(())
 }
 
-fn check_garbage(
-    context: &RunContext<'_>,
-    run: &RunView,
-    tolerance: DefectTolerance,
-) -> Result<(), InvariantViolation> {
+fn check_garbage(context: &RunContext<'_>, run: &RunView) -> Result<(), InvariantViolation> {
     let mut garbage_by_value: BTreeMap<ValueId, Vec<u64>> = BTreeMap::new();
     for (seq, value_id, record) in &run.value_garbage {
-        let is_explained = tolerance == DefectTolerance::TolerateKnownApplyDefects
-            && is_superseded_garbage_row(run, *seq, *value_id);
-        if is_explained {
-            continue;
-        }
         garbage_by_value.entry(*value_id).or_default().push(*seq);
         let birth = run.value_births.get(value_id);
         let is_consistent = birth.is_some_and(|birth| {
