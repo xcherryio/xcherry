@@ -184,6 +184,8 @@ pub(crate) fn build_method_request(
         from_step_execution_id: step_execution.from_step_execution_id.clone(),
         recovery_error: None,
         last_heartbeat_value: values.optional(invocation.heartbeat_checkpoint.as_ref())?,
+        run_attempt: i32::try_from(run_record.current_attempt)
+            .map_err(|_| corrupt_step(step_execution, "run attempt exceeds i32"))?,
     };
     let mut attributes = Vec::with_capacity(snapshot.attributes.len());
     for attribute in &snapshot.attributes {

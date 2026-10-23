@@ -72,6 +72,7 @@ async fn sync_wait_for_and_execute_dispatch_with_go_server_context_and_complete_
     assert_eq!(context.run_id, run_id.to_string());
     assert_eq!(context.step_execution_id, "ChargeStep-1");
     assert_eq!(context.attempt, 1);
+    assert_eq!(context.run_attempt, 1);
     assert_eq!(context.flow_started_timestamp, START_MICROS / SECOND_MICROS);
     assert_eq!(
         context.first_attempt_timestamp,
