@@ -14,8 +14,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/superdurable/dex/config"
@@ -26,12 +24,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
-type zdProcess struct {
-	command *exec.Cmd
-	done    chan struct{}
-	mu      sync.Mutex
-	waitErr error
-}
+type zdProcess = childProcess
 
 type zdRunResources struct {
 	ctx             context.Context
@@ -76,61 +69,7 @@ func startZDProcess(cfg *Config, dataDirectory string, dexAddress string, logs i
 		arguments = append(arguments, "--log-dir", cfg.LogDirectory)
 	}
 	command := exec.Command(cfg.ZDBinary, arguments...)
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Start(); err != nil {
-		return nil, fmt.Errorf("start dex-server-zd: %w", err)
-	}
-	process := &zdProcess{command: command, done: make(chan struct{})}
-	go process.wait()
-	return process, nil
-}
-
-func (p *zdProcess) wait() {
-	err := p.command.Wait()
-	p.mu.Lock()
-	p.waitErr = err
-	p.mu.Unlock()
-	close(p.done)
-}
-
-func (p *zdProcess) Err() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.waitErr
-}
-
-func (p *zdProcess) Stop(timeout time.Duration) error {
-	select {
-	case <-p.done:
-		return nil
-	default:
-	}
-	if err := p.command.Process.Signal(syscall.SIGTERM); err != nil {
-		select {
-		case <-p.done:
-			return nil
-		default:
-			return fmt.Errorf("signal dex-server-zd: %w", err)
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-p.done:
-		return nil
-	case <-timer.C:
-		if err := p.command.Process.Kill(); err != nil {
-			select {
-			case <-p.done:
-				return nil
-			default:
-				return fmt.Errorf("kill dex-server-zd: %w", err)
-			}
-		}
-		<-p.done
-		return nil
-	}
+	return startChildProcess(command, logs, "dex-server-zd", true)
 }
 
 func waitForZD(ctx context.Context, address string, process *zdProcess) (*grpc.ClientConn, error) {
@@ -149,6 +88,7 @@ func waitForZD(ctx context.Context, address string, process *zdProcess) (*grpc.C
 	defer ticker.Stop()
 	services := []string{"", dexpb.FlowService_ServiceDesc.ServiceName, dexpb.WorkerTaskService_ServiceDesc.ServiceName}
 	var lastErr error
+	var lastStatusErr error
 	for {
 		allServing := true
 		for _, service := range services {
@@ -157,7 +97,12 @@ func waitForZD(ctx context.Context, address string, process *zdProcess) (*grpc.C
 			cancel()
 			if checkErr != nil || response.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 				allServing = false
-				lastErr = checkErr
+				if checkErr != nil {
+					lastErr = fmt.Errorf("%q health check: %w", service, checkErr)
+				} else {
+					lastErr = fmt.Errorf("%q health status is %s", service, response.GetStatus())
+					lastStatusErr = lastErr
+				}
 				break
 			}
 		}
@@ -166,9 +111,12 @@ func waitForZD(ctx context.Context, address string, process *zdProcess) (*grpc.C
 		}
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(fmt.Errorf("wait for dex-server-zd at %s: %w", address, errors.Join(ctx.Err(), lastErr)), connection.Close())
+			return nil, errors.Join(fmt.Errorf("wait for dex-server-zd at %s: %w", address, errors.Join(ctx.Err(), lastStatusErr, lastErr)), connection.Close())
 		case <-process.done:
-			return nil, errors.Join(fmt.Errorf("dex-server-zd exited before readiness: %v", process.Err()), connection.Close())
+			if process.Err() == nil {
+				return nil, errors.Join(errors.New("dex-server-zd exited before readiness"), connection.Close())
+			}
+			return nil, errors.Join(fmt.Errorf("dex-server-zd exited before readiness: %w", process.Err()), connection.Close())
 		case <-ticker.C:
 		}
 	}

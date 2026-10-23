@@ -11,6 +11,8 @@ package dev
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -19,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -35,6 +38,22 @@ func TestZDEngineFlags(t *testing.T) {
 	}
 	if config.Engine != "zd" || config.ZDBinary != binary {
 		t.Fatalf("zd config = %+v", config)
+	}
+	if config.ZDStartupTimeout != defaultZDStartupTimeout {
+		t.Fatalf("zd startup timeout = %s", config.ZDStartupTimeout)
+	}
+	config.StateDirectory = t.TempDir()
+	config.DexPort = 9012
+	if expected := filepath.Join(config.StateDirectory, "zd", "9012"); config.zdDataDirectory() != expected {
+		t.Fatalf("default zd data directory = %q, want %q", config.zdDataDirectory(), expected)
+	}
+	overrideDirectory := filepath.Join(t.TempDir(), "isolated")
+	config, err = parseConfig([]string{"--engine", "zd", "--zd-data-dir", overrideDirectory}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ZDDataDirectory != overrideDirectory || config.zdDataDirectory() != overrideDirectory {
+		t.Fatalf("zd data directory override = %q", config.ZDDataDirectory)
 	}
 	config, err = parseConfig(nil, &bytes.Buffer{})
 	if err != nil {
@@ -60,7 +79,7 @@ func TestZDEngineFlags(t *testing.T) {
 			t.Fatalf("--%s: expected zd incompatibility, got %v", flagName, err)
 		}
 	}
-	for _, arguments := range [][]string{{"--engine", "unknown"}, {"--zd-binary", binary}} {
+	for _, arguments := range [][]string{{"--engine", "unknown"}, {"--zd-binary", binary}, {"--zd-data-dir", overrideDirectory}, {"--engine", "zd", "--zd-data-dir", ""}} {
 		if _, err := parseConfig(arguments, &bytes.Buffer{}); err == nil {
 			t.Fatalf("accepted invalid arguments %v", arguments)
 		}
@@ -78,10 +97,13 @@ func TestZDSupervisorStartsWebAndStopsChild(t *testing.T) {
 	stoppedFile := filepath.Join(testDirectory, "stopped")
 	t.Setenv("DEX_ZD_TEST_ARGUMENTS", argumentsFile)
 	t.Setenv("DEX_ZD_TEST_STOPPED", stoppedFile)
+	dexPort, webPort := freeZDTestPorts(t)
+	dataDirectory := filepath.Join(testDirectory, "isolated-zd")
 	config, err := parseConfig([]string{
 		"--engine", "zd", "--zd-binary", binary,
-		"--dex-port", strconv.Itoa(freeZDTestPort(t)),
-		"--web-port", strconv.Itoa(freeZDTestPort(t)),
+		"--zd-data-dir", dataDirectory,
+		"--dex-port", strconv.Itoa(dexPort),
+		"--web-port", strconv.Itoa(webPort),
 		"--open=false", "--server-log-folder", filepath.Join(testDirectory, "logs"),
 	}, &bytes.Buffer{})
 	if err != nil {
@@ -94,7 +116,6 @@ func TestZDSupervisorStartsWebAndStopsChild(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() { finished <- newSupervisor(config, output, output).Run(runCtx) }()
 	waitForZDTestReady(t, output, finished)
-	dataDirectory := filepath.Join(config.StateDirectory, "zd", strconv.Itoa(config.DexPort))
 	expected := []string{"dev", "--data-dir", dataDirectory, "--listen", net.JoinHostPort(config.BindAddress, strconv.Itoa(config.DexPort)), "--log-dir", config.LogDirectory}
 	arguments, err := os.ReadFile(argumentsFile)
 	if err != nil {
@@ -126,10 +147,11 @@ func TestZDSupervisorStartsWebAndStopsChild(t *testing.T) {
 func TestZDSupervisorFailsWhenChildExitsBeforeReadiness(t *testing.T) {
 	binary := buildFakeZDBinary(t)
 	t.Setenv("DEX_ZD_TEST_EXIT_EARLY", "1")
+	dexPort, webPort := freeZDTestPorts(t)
 	config, err := parseConfig([]string{
 		"--engine", "zd", "--zd-binary", binary,
-		"--dex-port", strconv.Itoa(freeZDTestPort(t)),
-		"--web-port", strconv.Itoa(freeZDTestPort(t)),
+		"--dex-port", strconv.Itoa(dexPort),
+		"--web-port", strconv.Itoa(webPort),
 		"--open=false",
 	}, &bytes.Buffer{})
 	if err != nil {
@@ -141,6 +163,97 @@ func TestZDSupervisorFailsWhenChildExitsBeforeReadiness(t *testing.T) {
 	err = newSupervisor(config, &bytes.Buffer{}, &bytes.Buffer{}).Run(ctx)
 	if err == nil || !strings.Contains(err.Error(), "exited before readiness") {
 		t.Fatalf("expected early child exit, got %v", err)
+	}
+	if config.LogDirectory != "" || strings.Contains(err.Error(), "server log folder") {
+		t.Fatalf("zd without --server-log-folder reported an empty log folder: %v", err)
+	}
+}
+
+func TestZDProcessKillsUnresponsiveChild(t *testing.T) {
+	binary := buildFakeZDBinary(t)
+	t.Setenv("DEX_ZD_TEST_IGNORE_SIGTERM", "1")
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(freeZDTestPort(t)))
+	process, err := startZDProcess(&Config{ZDBinary: binary}, t.TempDir(), address, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if stopErr := process.Stop(time.Second); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReady()
+	connection, err := waitForZD(readyCtx, address, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := process.Stop(100 * time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("unresponsive child shutdown took too long")
+	}
+	var exitError *exec.ExitError
+	if !errors.As(process.Err(), &exitError) {
+		t.Fatalf("expected killed child exit, got %v", process.Err())
+	}
+	status, ok := exitError.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("expected SIGKILL after timeout, got %v", exitError.Sys())
+	}
+}
+
+func TestZDProcessReportsDirtyShutdown(t *testing.T) {
+	binary := buildFakeZDBinary(t)
+	t.Setenv("DEX_ZD_TEST_EXIT_ON_TERM", "1")
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(freeZDTestPort(t)))
+	process, err := startZDProcess(&Config{ZDBinary: binary}, t.TempDir(), address, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if stopErr := process.Stop(time.Second); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReady()
+	connection, err := waitForZD(readyCtx, address, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Stop(time.Second); err == nil || !strings.Contains(err.Error(), "exit status 23") {
+		t.Fatalf("expected dirty shutdown error, got %v", err)
+	}
+}
+
+func TestZDSupervisorReportsHealthTimeout(t *testing.T) {
+	binary := buildFakeZDBinary(t)
+	t.Setenv("DEX_ZD_TEST_NOT_SERVING", "1")
+	dexPort, webPort := freeZDTestPorts(t)
+	config, err := parseConfig([]string{
+		"--engine", "zd", "--zd-binary", binary,
+		"--dex-port", strconv.Itoa(dexPort),
+		"--web-port", strconv.Itoa(webPort),
+		"--open=false",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.StateDirectory = t.TempDir()
+	config.ZDStartupTimeout = 3 * time.Second
+	output := &bytes.Buffer{}
+	err = newSupervisor(config, output, output).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") || !strings.Contains(err.Error(), "dex.WorkerTaskService") || !strings.Contains(err.Error(), "NOT_SERVING") {
+		t.Fatalf("expected health status and timeout, got %v\n%s", err, output.String())
 	}
 }
 
@@ -170,6 +283,28 @@ func freeZDTestPort(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return port
+}
+
+func freeZDTestPorts(t *testing.T) (int, int) {
+	t.Helper()
+	firstListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		closeErr := firstListener.Close()
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	firstPort := firstListener.Addr().(*net.TCPAddr).Port
+	secondPort := secondListener.Addr().(*net.TCPAddr).Port
+	if err := firstListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return firstPort, secondPort
 }
 
 func waitForZDTestReady(t *testing.T, output *zdTestBuffer, finished <-chan error) {
@@ -237,13 +372,23 @@ func main() {
 	server := grpc.NewServer()
 	healthServer := health.NewServer()
 	for _, service := range []string{"", "dex.FlowService", "dex.WorkerTaskService"} {
-		healthServer.SetServingStatus(service, healthpb.HealthCheckResponse_SERVING)
+		status := healthpb.HealthCheckResponse_SERVING
+		if service == "dex.WorkerTaskService" && os.Getenv("DEX_ZD_TEST_NOT_SERVING") == "1" {
+			status = healthpb.HealthCheckResponse_NOT_SERVING
+		}
+		healthServer.SetServingStatus(service, status)
 	}
 	healthpb.RegisterHealthServer(server, healthServer)
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	if os.Getenv("DEX_ZD_TEST_IGNORE_SIGTERM") == "1" {
+		signal.Ignore(syscall.SIGTERM)
+		signal.Notify(signals, syscall.SIGINT)
+	} else {
+		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	}
 	go func() {
 		<-signals
+		if os.Getenv("DEX_ZD_TEST_EXIT_ON_TERM") == "1" { os.Exit(23) }
 		if path := os.Getenv("DEX_ZD_TEST_STOPPED"); path != "" {
 			if err := os.WriteFile(path, []byte("stopped"), 0o600); err != nil { panic(err) }
 		}

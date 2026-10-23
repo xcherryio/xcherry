@@ -192,11 +192,7 @@ func (s *supervisor) Run(ctx context.Context) (runErr error) {
 	case <-ctx.Done():
 		runErr = nil
 	case exited := <-componentExits:
-		if exited.err == nil {
-			runErr = fmt.Errorf("%s stopped unexpectedly", exited.name)
-		} else {
-			runErr = fmt.Errorf("%s stopped unexpectedly: %w", exited.name, exited.err)
-		}
+		runErr = formatComponentExit(exited, "stopped unexpectedly")
 	case <-temporalDone(temporal):
 		if temporal.Err() == nil {
 			runErr = fmt.Errorf("workflow backend stopped unexpectedly")
@@ -214,15 +210,17 @@ func (s *supervisor) runZD(ctx context.Context) (runErr error) {
 	}
 	resources := &zdRunResources{ctx: ctx, shutdownTimeout: s.cfg.ShutdownTimeout, listeners: listeners}
 	defer resources.closeInto(&runErr)
-	logDir, err := openServerLogDir(s.cfg)
-	if err != nil {
-		return err
+	if s.cfg.isExplicit("server-log-folder") {
+		logDir, err := openServerLogDir(s.cfg)
+		if err != nil {
+			return err
+		}
+		resources.logs = logDir
 	}
-	resources.logs = logDir
 	if s.cfg.StateDirectory == "" {
 		return fmt.Errorf("Dex state directory is required")
 	}
-	dataDirectory := filepath.Join(s.cfg.StateDirectory, "zd", strconv.Itoa(s.cfg.DexPort))
+	dataDirectory := s.cfg.zdDataDirectory()
 	if err := os.MkdirAll(dataDirectory, 0o700); err != nil {
 		return fmt.Errorf("create zd state directory: %w", err)
 	}
@@ -237,7 +235,7 @@ func (s *supervisor) runZD(ctx context.Context) (runErr error) {
 	}
 	resources.process = process
 
-	startupCtx, cancelStartup := context.WithTimeout(ctx, 60*time.Second)
+	startupCtx, cancelStartup := context.WithTimeout(ctx, s.cfg.ZDStartupTimeout)
 	defer cancelStartup()
 	dexConnection, err := waitForZD(startupCtx, dexAddress, process)
 	if err != nil {
@@ -279,7 +277,7 @@ func (s *supervisor) runZD(ctx context.Context) (runErr error) {
 	}
 	select {
 	case exited := <-componentExits:
-		return fmt.Errorf("%s stopped before readiness: %v", exited.name, exited.err)
+		return formatComponentExit(exited, "stopped before readiness")
 	default:
 	}
 	s.printReady(webURL, dexAddress, dataDirectory)
@@ -293,8 +291,15 @@ func (s *supervisor) runZD(ctx context.Context) (runErr error) {
 	case <-ctx.Done():
 		return nil
 	case exited := <-componentExits:
-		return fmt.Errorf("%s stopped unexpectedly: %v", exited.name, exited.err)
+		return formatComponentExit(exited, "stopped unexpectedly")
 	}
+}
+
+func formatComponentExit(exited componentExit, phase string) error {
+	if exited.err == nil {
+		return fmt.Errorf("%s %s", exited.name, phase)
+	}
+	return fmt.Errorf("%s %s: %w", exited.name, phase, exited.err)
 }
 
 func (s *supervisor) startLocalTemporal(ctx context.Context, logs io.Writer) (*temporalProcess, temporalclient.Client, error) {

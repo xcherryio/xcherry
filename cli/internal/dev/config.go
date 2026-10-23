@@ -32,6 +32,7 @@ const (
 	defaultTemporalPort       = 7233
 	defaultTemporalUIPort     = 8233
 	defaultTemporalNamespace  = "default"
+	defaultZDStartupTimeout   = 60 * time.Second
 	localSQLiteFileName       = "dex.sqlite.db"
 	localBlobStoreName        = "dex.blobs"
 	dexServerLogFileName      = "dex-server.log"
@@ -41,20 +42,21 @@ const (
 var flagOrder = []string{
 	"attribute-store-config",
 	"bind-address",
-	"engine",
-	"zd-binary",
 	"blob-store-dir",
-	"dex-port",
-	"flow-rendering-dir",
 	"connector-config-dir",
 	"connector-release-override",
-	"open",
-	"web-port",
-	"sqlite-db-filename",
-	"server-log-folder",
-	"verbose-engine-log",
+	"dex-port",
+	"engine",
 	"external-temporal-address",
 	"external-temporal-namespace",
+	"flow-rendering-dir",
+	"open",
+	"server-log-folder",
+	"sqlite-db-filename",
+	"verbose-engine-log",
+	"web-port",
+	"zd-binary",
+	"zd-data-dir",
 }
 
 type Config struct {
@@ -62,6 +64,8 @@ type Config struct {
 	Engine string
 	// ZDBinary defaults to DEX_SERVER_ZD_BINARY or dex-server-zd on PATH.
 	ZDBinary string
+	// ZDDataDirectory defaults to $HOME/.dex/zd/<dex-port> after the Dex port is selected.
+	ZDDataDirectory string
 	// BindAddress defaults to 127.0.0.1 for all owned listeners.
 	BindAddress string
 	// DexPort defaults to 8801 for the Dex gRPC server.
@@ -78,11 +82,11 @@ type Config struct {
 	TemporalUIPort int
 	// SQLiteDBFilename defaults to $HOME/.dex/dev/<temporal-port>/dex.sqlite.db in local mode.
 	SQLiteDBFilename string
-	// LogDirectory defaults to a temp directory deleted on clean exit.
+	// LogDirectory defaults to a temp directory deleted on clean exit with Temporal; zd logs to stderr by default.
 	LogDirectory string
 	// VerboseEngineLog defaults to false and writes Temporal Server info logs to temporal-engine-server.log in local mode.
 	VerboseEngineLog bool
-	// StateDirectory defaults to $HOME/.dex and stores auto-assigned Temporal SQLite files.
+	// StateDirectory defaults to $HOME/.dex and stores auto-assigned Temporal SQLite files and zd data.
 	StateDirectory string
 	// BlobStoreDirectory defaults to $HOME/.dex/blobs unless SQLiteDBFilename selects its adjacent dex.blobs store.
 	BlobStoreDirectory string
@@ -98,6 +102,8 @@ type Config struct {
 	OpenBrowser bool
 	// StartupTimeout defaults to 45 seconds.
 	StartupTimeout time.Duration
+	// ZDStartupTimeout defaults to 60 seconds.
+	ZDStartupTimeout time.Duration
 	// ShutdownTimeout defaults to 10 seconds.
 	ShutdownTimeout time.Duration
 
@@ -123,6 +129,7 @@ func parseConfig(args []string, output io.Writer) (*Config, error) {
 	flags.StringVar(&cfg.BindAddress, "bind-address", cfg.BindAddress, "address for local services")
 	flags.StringVar(&cfg.Engine, "engine", cfg.Engine, "Dex Server engine: temporal or zd")
 	flags.StringVar(&cfg.ZDBinary, "zd-binary", cfg.ZDBinary, "dex-server-zd executable (default DEX_SERVER_ZD_BINARY or PATH)")
+	flags.StringVar(&cfg.ZDDataDirectory, "zd-data-dir", "", "zd state directory (default $HOME/.dex/zd/<dex-port>)")
 	flags.StringVar(
 		&cfg.BlobStoreDirectory,
 		"blob-store-dir",
@@ -160,7 +167,7 @@ func parseConfig(args []string, output io.Writer) (*Config, error) {
 		&cfg.LogDirectory,
 		"server-log-folder",
 		"",
-		"keep server logs in this folder (default temp folder, deleted on exit)",
+		"keep server logs in this folder (Temporal defaults to a temp folder; zd logs to stderr)",
 	)
 	flags.BoolVar(
 		&cfg.VerboseEngineLog,
@@ -189,7 +196,7 @@ func parseConfig(args []string, output io.Writer) (*Config, error) {
 	cfg.explicitLocalFlags = make(map[string]bool)
 	flags.Visit(func(item *flag.Flag) {
 		switch item.Name {
-		case "dex-port", "web-port", "sqlite-db-filename", "server-log-folder", "verbose-engine-log", "external-temporal-address", "external-temporal-namespace", "attribute-store-config", "zd-binary":
+		case "dex-port", "web-port", "sqlite-db-filename", "server-log-folder", "verbose-engine-log", "external-temporal-address", "external-temporal-namespace", "attribute-store-config", "zd-binary", "zd-data-dir":
 			cfg.explicitLocalFlags[item.Name] = true
 		case "blob-store-dir":
 			cfg.explicitLocalFlags[item.Name] = true
@@ -222,6 +229,7 @@ func defaultConfig() (*Config, error) {
 		ConnectorReleaseOverrides: make(map[string]string),
 		OpenBrowser:               true,
 		StartupTimeout:            45 * time.Second,
+		ZDStartupTimeout:          defaultZDStartupTimeout,
 		ShutdownTimeout:           10 * time.Second,
 		explicitLocalFlags:        make(map[string]bool),
 		blobStoreDirectoryDefault: true,
@@ -262,8 +270,23 @@ func (c *Config) validate() error {
 			return fmt.Errorf("dex-server-zd binary %q was not found; use --zd-binary or DEX_SERVER_ZD_BINARY: %w", c.ZDBinary, err)
 		}
 		c.ZDBinary = binaryPath
-	} else if c.isExplicit("zd-binary") {
-		return fmt.Errorf("--zd-binary requires --engine zd")
+		if c.isExplicit("zd-data-dir") {
+			c.ZDDataDirectory = strings.TrimSpace(c.ZDDataDirectory)
+			if c.ZDDataDirectory == "" {
+				return fmt.Errorf("zd data directory is required")
+			}
+			dataDirectory, err := filepath.Abs(c.ZDDataDirectory)
+			if err != nil {
+				return fmt.Errorf("resolve zd data directory: %w", err)
+			}
+			c.ZDDataDirectory = dataDirectory
+		}
+	} else {
+		for _, name := range []string{"zd-binary", "zd-data-dir"} {
+			if c.isExplicit(name) {
+				return fmt.Errorf("--%s requires --engine zd", name)
+			}
+		}
 	}
 	if net.ParseIP(c.BindAddress) == nil {
 		return fmt.Errorf("bind address must be an IP address: %q", c.BindAddress)
@@ -415,6 +438,13 @@ func (c *Config) isExplicit(flagName string) bool {
 
 func (c *Config) autoSQLiteDBFilename() string {
 	return filepath.Join(c.StateDirectory, "dev", strconv.Itoa(c.TemporalPort), localSQLiteFileName)
+}
+
+func (c *Config) zdDataDirectory() string {
+	if c.ZDDataDirectory != "" {
+		return c.ZDDataDirectory
+	}
+	return filepath.Join(c.StateDirectory, "zd", strconv.Itoa(c.DexPort))
 }
 
 func (c *Config) adjacentBlobStoreDirectory() string {

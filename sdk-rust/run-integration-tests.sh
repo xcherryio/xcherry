@@ -85,7 +85,7 @@ if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
     (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
     DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
   fi
-  dev_args+=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY")
+  dev_args+=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/zd")
 else
   dev_args+=(-sqlite-db-filename "$test_dir/temporal.db")
 fi

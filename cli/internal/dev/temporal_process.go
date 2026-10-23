@@ -19,17 +19,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
-	"time"
 )
 
-type temporalProcess struct {
-	command *exec.Cmd
-	done    chan struct{}
-	mu      sync.Mutex
-	waitErr error
-}
+type temporalProcess = childProcess
 
 func startTemporalProcess(cfg *Config, logs io.Writer) (*temporalProcess, error) {
 	temporalPath, err := exec.LookPath("temporal")
@@ -52,72 +44,8 @@ func startTemporalProcess(cfg *Config, logs io.Writer) (*temporalProcess, error)
 	if cfg.VerboseEngineLog {
 		arguments = append(arguments, "--log-level", "info")
 	}
-	if logs == nil {
-		logs = io.Discard
-	}
 	command := exec.Command(temporalPath, arguments...)
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Start(); err != nil {
-		return nil, fmt.Errorf("start workflow backend: %w", err)
-	}
-	process := &temporalProcess{
-		command: command,
-		done:    make(chan struct{}),
-	}
-	go process.wait()
-	return process, nil
-}
-
-func (p *temporalProcess) wait() {
-	err := p.command.Wait()
-	p.mu.Lock()
-	p.waitErr = err
-	p.mu.Unlock()
-	close(p.done)
-}
-
-func (p *temporalProcess) Done() <-chan struct{} {
-	return p.done
-}
-
-func (p *temporalProcess) Err() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.waitErr
-}
-
-func (p *temporalProcess) Stop(timeout time.Duration) error {
-	select {
-	case <-p.done:
-		return nil
-	default:
-	}
-	if err := p.command.Process.Signal(syscall.SIGTERM); err != nil {
-		select {
-		case <-p.done:
-			return nil
-		default:
-			return fmt.Errorf("signal workflow backend: %w", err)
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-p.done:
-		return nil
-	case <-timer.C:
-		if err := p.command.Process.Kill(); err != nil {
-			select {
-			case <-p.done:
-				return nil
-			default:
-				return fmt.Errorf("kill workflow backend: %w", err)
-			}
-		}
-		<-p.done
-		return nil
-	}
+	return startChildProcess(command, logs, "workflow backend", false)
 }
 
 type serverLogDir struct {
