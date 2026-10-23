@@ -13,6 +13,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with string_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_string_value = 1;</code>
@@ -22,6 +23,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with string_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_string_value = 1;</code>
@@ -31,6 +33,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with string_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_string_value = 1;</code>
@@ -42,6 +45,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with obj_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_obj_value = 2;</code>
@@ -51,6 +55,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with obj_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_obj_value = 2;</code>
@@ -60,6 +65,7 @@ public interface ValueOrBuilder extends
   /**
    * <pre>
    * Hydrate from blob storage, then replace with obj_value.
+   * The Server chooses this reference text; clients must treat it as opaque.
    * </pre>
    *
    * <code>string internal_blob_id_for_obj_value = 2;</code>

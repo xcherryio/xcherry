@@ -578,3 +578,148 @@ fn large_attribute_values_go_to_the_value_table_and_reach_the_snapshot_as_refere
         "a reused request ID with different content is rejected"
     );
 }
+
+fn locking_options(lock_key: &str) -> StepOptions {
+    StepOptions {
+        skip_wait_for: true,
+        execute_lock_attribute_keys: vec![lock_key.to_owned()],
+        ..StepOptions::default()
+    }
+}
+
+fn is_aborted(outcome: &ApplyOutcome) -> bool {
+    is_error(&outcome.reply, 10) && outcome.writes.is_empty()
+}
+
+/// Starts a Flow whose start Step fans out into three Steps that all lock `counter`.
+fn start_three_locking_steps(harness: &mut Harness) {
+    let mut request = start_request("request-1");
+    request.step_options = Some(StepOptions {
+        skip_wait_for: true,
+        ..StepOptions::default()
+    });
+    harness.start(request);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    let movement = || StepMovement {
+        step_type: "LockStep".to_owned(),
+        step_options: Some(locking_options("counter")),
+        ..StepMovement::default()
+    };
+    harness.complete_execute(
+        "ChargeStep-1",
+        1,
+        StepDecision {
+            next_steps: vec![movement(), movement(), movement()],
+            ..StepDecision::default()
+        },
+    );
+}
+
+#[test]
+fn a_held_lock_blocks_other_attempts_and_waiters_start_in_fifo_order() {
+    let mut harness = Harness::new("order-1");
+    start_three_locking_steps(&mut harness);
+    let first = harness.start_attempt("LockStep-1", StepMethod::Execute, 1);
+    assert!(
+        first
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::InvocationStarted { .. }))
+    );
+    assert!(
+        is_aborted(&harness.start_attempt("LockStep-2", StepMethod::Execute, 1)),
+        "the lock is held"
+    );
+    let released = harness.complete_execute("LockStep-1", 1, StepDecision::default());
+    assert!(released
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, ApplyEffect::LocksReleased { lock_keys, .. } if lock_keys == &vec!["counter".to_owned()])));
+    assert!(
+        is_aborted(&harness.start_attempt("LockStep-3", StepMethod::Execute, 1)),
+        "LockStep-2 queued first"
+    );
+    let second = harness.start_attempt("LockStep-2", StepMethod::Execute, 1);
+    assert!(
+        second
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::InvocationStarted { .. }))
+    );
+}
+
+#[test]
+fn a_failed_attempt_releases_its_lock_during_backoff_and_requeues_behind_waiters() {
+    let mut harness = Harness::new("order-1");
+    start_three_locking_steps(&mut harness);
+    harness.start_attempt("LockStep-1", StepMethod::Execute, 1);
+    let failed = harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
+        invocation: Some(key("LockStep-1", StepMethod::Execute)),
+        attempt: 1,
+        kind: 1,
+        worker_error: Some(WorkerErrorResponse {
+            detail: "retry me".to_owned(),
+            ..WorkerErrorResponse::default()
+        }),
+        ..StepAttemptFailedCommand::default()
+    }));
+    assert!(
+        failed
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::LocksReleased { .. }))
+    );
+    let second = harness.start_attempt("LockStep-2", StepMethod::Execute, 1);
+    assert!(
+        second
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::InvocationStarted { .. })),
+        "another Step takes the lock while LockStep-1 backs off"
+    );
+    harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::RetryBackoff(RetryBackoffTimerId {
+                invocation: Some(key("LockStep-1", StepMethod::Execute)),
+                next_attempt: 2,
+            })),
+        }],
+    }));
+    harness.complete_execute("LockStep-2", 1, StepDecision::default());
+    assert!(
+        is_aborted(&harness.start_attempt("LockStep-1", StepMethod::Execute, 2)),
+        "the retry queued behind LockStep-3, which became pending earlier"
+    );
+    let third = harness.start_attempt("LockStep-3", StepMethod::Execute, 1);
+    assert!(
+        third
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::InvocationStarted { .. }))
+    );
+}
+
+#[test]
+fn stopping_a_flow_releases_held_locks_and_waiters() {
+    let mut harness = Harness::new("order-1");
+    start_three_locking_steps(&mut harness);
+    harness.start_attempt("LockStep-1", StepMethod::Execute, 1);
+    harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Terminate as i32,
+            ..StopFlowRequest::default()
+        }),
+    }));
+    let lock_rows = harness
+        .state
+        .rows
+        .keys()
+        .filter(|(column_family, key)| {
+            *column_family == ColumnFamily::Flow
+                && dexzd_keyspace::parse_run_key(key)
+                    .is_ok_and(|parsed| parsed.table == RunTable::LockTable)
+        })
+        .count();
+    assert_eq!(lock_rows, 0, "no lock row survives a closed Flow");
+}

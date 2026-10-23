@@ -51,4 +51,15 @@ public interface GetHistoryEventsRequestOrBuilder extends
    * @return The nextPageToken.
    */
   com.google.protobuf.ByteString getNextPageToken();
+
+  /**
+   * <pre>
+   * server-zd only: selects the run attempt whose lineage is returned. Zero selects the current
+   * run attempt.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 6;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
 }

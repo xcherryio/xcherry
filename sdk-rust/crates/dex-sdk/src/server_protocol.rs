@@ -120,6 +120,7 @@ mod tests {
                 server_version: "newer".to_string(),
                 minimum_supported_protocol_version: 1,
                 current_protocol_version: server_current,
+                server_engine: 0,
             })
             .expect("compatible interval");
             assert_eq!(negotiated, expected);
@@ -155,16 +156,19 @@ mod tests {
                 server_version: "zero".to_string(),
                 minimum_supported_protocol_version: 0,
                 current_protocol_version: 0,
+                server_engine: 0,
             },
             ServerInfo {
                 server_version: "reversed".to_string(),
                 minimum_supported_protocol_version: 2,
                 current_protocol_version: 1,
+                server_engine: 0,
             },
             ServerInfo {
                 server_version: "future".to_string(),
                 minimum_supported_protocol_version: 4,
                 current_protocol_version: 4,
+                server_engine: 0,
             },
         ] {
             let error = negotiate_server_protocol(&server_info).expect_err("incompatible interval");

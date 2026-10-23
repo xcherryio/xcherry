@@ -79,6 +79,10 @@ private static final long serialVersionUID = 0L;
   public static final int CONTINUE_AS_NEW_THRESHOLD_FIELD_NUMBER = 2;
   private int continueAsNewThreshold_ = 0;
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_threshold = 2;</code>
    * @return Whether the continueAsNewThreshold field is set.
    */
@@ -87,6 +91,10 @@ private static final long serialVersionUID = 0L;
     return ((bitField0_ & 0x00000002) != 0);
   }
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_threshold = 2;</code>
    * @return The continueAsNewThreshold.
    */
@@ -98,6 +106,10 @@ private static final long serialVersionUID = 0L;
   public static final int CONTINUE_AS_NEW_PAGE_SIZE_IN_BYTES_FIELD_NUMBER = 3;
   private int continueAsNewPageSizeInBytes_ = 0;
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
    * @return Whether the continueAsNewPageSizeInBytes field is set.
    */
@@ -106,6 +118,10 @@ private static final long serialVersionUID = 0L;
     return ((bitField0_ & 0x00000004) != 0);
   }
   /**
+   * <pre>
+   * server-zd ignores this field.
+   * </pre>
+   *
    * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
    * @return The continueAsNewPageSizeInBytes.
    */
@@ -735,6 +751,10 @@ private static final long serialVersionUID = 0L;
 
     private int continueAsNewThreshold_ ;
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_threshold = 2;</code>
      * @return Whether the continueAsNewThreshold field is set.
      */
@@ -743,6 +763,10 @@ private static final long serialVersionUID = 0L;
       return ((bitField0_ & 0x00000002) != 0);
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_threshold = 2;</code>
      * @return The continueAsNewThreshold.
      */
@@ -751,6 +775,10 @@ private static final long serialVersionUID = 0L;
       return continueAsNewThreshold_;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_threshold = 2;</code>
      * @param value The continueAsNewThreshold to set.
      * @return This builder for chaining.
@@ -763,6 +791,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_threshold = 2;</code>
      * @return This builder for chaining.
      */
@@ -775,6 +807,10 @@ private static final long serialVersionUID = 0L;
 
     private int continueAsNewPageSizeInBytes_ ;
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
      * @return Whether the continueAsNewPageSizeInBytes field is set.
      */
@@ -783,6 +819,10 @@ private static final long serialVersionUID = 0L;
       return ((bitField0_ & 0x00000004) != 0);
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
      * @return The continueAsNewPageSizeInBytes.
      */
@@ -791,6 +831,10 @@ private static final long serialVersionUID = 0L;
       return continueAsNewPageSizeInBytes_;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
      * @param value The continueAsNewPageSizeInBytes to set.
      * @return This builder for chaining.
@@ -803,6 +847,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * server-zd ignores this field.
+     * </pre>
+     *
      * <code>optional int32 continue_as_new_page_size_in_bytes = 3;</code>
      * @return This builder for chaining.
      */
