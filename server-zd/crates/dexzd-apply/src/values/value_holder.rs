@@ -52,7 +52,6 @@ pub(crate) enum ValueHolder {
     #[expect(dead_code, reason = "Used by SubFlow results (task A6).")]
     SubFlowResult { child_flow_id: String },
     /// A recorded RPC reply for request ID deduplication.
-    #[expect(dead_code, reason = "Used by RPC commits.")]
     RpcReply { request_id: String },
 }
 

@@ -16,6 +16,7 @@ mod command_scope;
 pub(crate) mod flow_close;
 pub(crate) mod flow_data;
 mod flow_start;
+mod rpc_committed;
 pub(crate) mod run_cursor;
 pub(crate) mod step_commands;
 
@@ -130,8 +131,10 @@ fn apply_run_command(
         Command::TimerSkip(skip) => {
             crate::steps::wait_conditions::apply_timer_skip(transaction, cursor, scope, skip)
         }
-        Command::RpcCommitted(_)
-        | Command::TimeTravel(_)
+        Command::RpcCommitted(command) => {
+            rpc_committed::apply_rpc_committed(transaction, cursor, scope, command)
+        }
+        Command::TimeTravel(_)
         | Command::InboxMessage(_)
         | Command::OutboxAck(_)
         | Command::HardDeleteObjectsDeleted(_)
