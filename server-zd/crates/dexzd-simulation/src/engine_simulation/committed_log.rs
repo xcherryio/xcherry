@@ -19,8 +19,10 @@ use dexzd_engine::{
 use dexzd_keyspace::row_keys::HARD_DELETE_PENDING_OBJECT;
 use dexzd_keyspace::{ColumnFamily, PartitionId, RunId, RunTable, TenantId, parse_run_key};
 use dexzd_protocol::dex::{ChannelMessage, Kv};
-use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition, OutboxRecord, stored_value};
-use dexzd_storage::LocalReadView;
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, LogPosition, NodeMeta, OutboxRecord, PartitionMeta, stored_value,
+};
+use dexzd_storage::{InMemoryLocalStore, LocalReadView, LocalStore, WriteBatch};
 use prost::Message;
 
 use crate::apply_checker::ApplyChecker;
@@ -30,7 +32,6 @@ use crate::engine_simulation::simulated_clients::ENGINE_FLOW_IDS;
 use crate::engine_simulation::simulated_object_store::StorageObservations;
 use crate::engine_simulation::workload::operation_marker;
 use crate::invariants::InvariantViolation;
-use crate::memory_state::MemoryFlowState;
 use crate::model::wire_value;
 use crate::row_decoding::hex;
 use crate::state_view::RunSelection;
@@ -87,6 +88,8 @@ struct CommittedLogState {
     /// Read states of client Flows by the generation that produced them.
     read_states: BTreeMap<String, BTreeMap<u64, FlowReadState>>,
     newest_frames: BTreeMap<u16, FrameKey>,
+    /// Command-derived partition metadata of a node that applied every canonical frame.
+    partition_metas: BTreeMap<u16, PartitionMeta>,
     open_frames: BTreeMap<(String, u16), OpenFrame>,
     first_violation: Option<InvariantViolation>,
     committed_markers: BTreeSet<String>,
@@ -119,6 +122,7 @@ impl CommittedLog {
                 generation: 0,
                 read_states: BTreeMap::new(),
                 newest_frames: BTreeMap::new(),
+                partition_metas: BTreeMap::new(),
                 open_frames: BTreeMap::new(),
                 first_violation: None,
                 committed_markers: BTreeSet::new(),
@@ -296,9 +300,36 @@ impl CommittedLog {
         ))
     }
 
-    /// Returns a copy of the shadow state, which never crashed.
-    pub(crate) fn shadow_state(&self) -> MemoryFlowState {
-        self.lock().shadow.state().clone()
+    /// Returns the store of a node that applied the canonical log and never crashed.
+    ///
+    /// Its applied positions, epochs, store lineage, and snapshot number are unset; recovery
+    /// legitimately changes them. Its hard-delete upload ledger is empty.
+    pub(crate) fn twin_store(&self, partition_count: u32) -> InMemoryLocalStore {
+        let state = self.lock();
+        let mut batch = WriteBatch::new();
+        for column_family in ColumnFamily::ALL {
+            for (key, value) in state.shadow.state().rows_with_prefix(column_family, &[]) {
+                batch.put(column_family, key, value);
+            }
+        }
+        for partition in 0..partition_count {
+            let meta = u16::try_from(partition)
+                .ok()
+                .and_then(|partition| state.partition_metas.get(&partition))
+                .cloned()
+                .unwrap_or_else(|| PartitionMeta {
+                    partition,
+                    ..PartitionMeta::default()
+                });
+            batch
+                .put_partition_meta(&meta)
+                .expect("partition metadata encodes");
+        }
+        batch.put_node_meta(&NodeMeta::default());
+        let twin = InMemoryLocalStore::new();
+        twin.write(batch)
+            .expect("the in-memory twin store accepts writes");
+        twin
     }
 
     /// Returns the shadow checker for read-only decoding.
@@ -497,6 +528,17 @@ impl CommittedLogState {
                 ));
             }
             self.remember_committed(&committed.command, &shadow_outcome);
+            let meta = self
+                .partition_metas
+                .entry(key.0)
+                .or_insert_with(|| PartitionMeta {
+                    partition: u32::from(key.0),
+                    ..PartitionMeta::default()
+                });
+            meta.last_command_timestamp_micros = meta
+                .last_command_timestamp_micros
+                .max(committed.command.proposed_at_micros);
+            meta.last_behavior_version = committed.command.behavior_version;
             canonical.push(CanonicalCommand {
                 command: committed.command,
                 outcome: shadow_outcome,

@@ -31,8 +31,8 @@ use tokio::time::Instant;
 use crate::engine_simulation::committed_log::CommittedLog;
 use crate::engine_simulation::engine_invariants::{
     check_acknowledged_writes, check_drained, check_recovered_flows,
-    check_running_attempts_redispatched, check_store_matches_shadow, outstanding_work, run_count,
-    running_attempts,
+    check_running_attempts_redispatched, check_store_matches_twin, has_empty_upload_ledger,
+    outstanding_work, run_count, running_attempts,
 };
 use crate::engine_simulation::event_trace::EventTrace;
 use crate::engine_simulation::simulated_clients::{
@@ -42,8 +42,8 @@ use crate::engine_simulation::simulated_clock::{
     SimulatedWallClock, duration_micros, elapsed_micros,
 };
 use crate::engine_simulation::simulated_node::{
-    ClusterEnvironment, LEASE_TAKEOVER_GRACE, LocalStoreStart, NodeProcess, ProcessStart,
-    copy_local_store,
+    ClusterEnvironment, LEASE_TAKEOVER_GRACE, LocalStoreStart, NodeProcess, PARTITION_COUNT,
+    ProcessStart, copy_local_store,
 };
 use crate::engine_simulation::simulated_object_store::{SharedObjectStorage, StorageObservations};
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
@@ -459,9 +459,13 @@ impl Simulation {
         }
         // Old-epoch processes may still apply frames, so only one live process is compared.
         if self.old_epoch_processes.is_empty() {
-            let shadow = self.environment.committed_log.shadow_state();
-            check_store_matches_shadow(&serving.local_store, &shadow)?;
-            self.summary.state_comparisons += 1;
+            if has_empty_upload_ledger(&serving.local_store)? {
+                let twin = self.environment.committed_log.twin_store(PARTITION_COUNT);
+                check_store_matches_twin(&serving.local_store, &twin)?;
+                self.summary.state_comparisons += 1;
+            } else {
+                self.summary.state_comparisons_skipped_for_upload_ledger += 1;
+            }
         }
         Ok(())
     }
@@ -668,9 +672,14 @@ impl Simulation {
         Ok(())
     }
 
-    /// Recovery checks: the recovered store equals the shadow and keeps the stage-1 invariants.
+    /// Recovery checks: the recovered store equals the shadow's never-crashed twin and keeps the
+    /// stage-1 invariants.
     fn check_recovered_process(&mut self) -> Result<(), InvariantViolation> {
+        let comparisons_before = self.summary.state_comparisons;
         self.check_now()?;
+        if self.summary.state_comparisons > comparisons_before {
+            self.summary.recovered_state_comparisons += 1;
+        }
         let Some(serving) = &self.serving else {
             return Ok(());
         };

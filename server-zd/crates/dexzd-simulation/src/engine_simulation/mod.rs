@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use dexzd_engine::EngineLocalStore;
+use dexzd_storage::{LocalStore, compare_store_views};
 
 use crate::invariants::InvariantViolation;
 
@@ -113,8 +114,13 @@ pub struct EngineSimulationSummary {
     pub checked_read_values: u64,
     /// Frames applied again after a recovery and compared with their first application.
     pub replayed_frames: u64,
-    /// Comparisons of a node's whole store with the shadow state.
+    /// Comparisons of a node's whole store with a never-crashed twin built from the shadow.
     pub state_comparisons: u64,
+    /// Comparisons skipped because the node's hard-delete upload ledger held uploads, which the
+    /// twin does not model.
+    pub state_comparisons_skipped_for_upload_ledger: u64,
+    /// Of the store comparisons, those made right after a crash recovery.
+    pub recovered_state_comparisons: u64,
     /// Comparisons of in-flight dispatches with committed running attempts.
     pub dispatch_comparisons: u64,
     /// Runs in the final state.
@@ -176,6 +182,9 @@ impl EngineSimulationSummary {
         self.checked_read_values += other.checked_read_values;
         self.replayed_frames += other.replayed_frames;
         self.state_comparisons += other.state_comparisons;
+        self.state_comparisons_skipped_for_upload_ledger +=
+            other.state_comparisons_skipped_for_upload_ledger;
+        self.recovered_state_comparisons += other.recovered_state_comparisons;
         self.dispatch_comparisons += other.dispatch_comparisons;
         self.final_runs += other.final_runs;
         self.recent_events.clone_from(&other.recent_events);
@@ -252,8 +261,22 @@ impl EngineSimulationFinalState {
         }
         match (&self.local_store, &other.local_store) {
             (Some(first), Some(second)) => {
-                if let Err(difference) = engine_invariants::compare_local_stores(first, second) {
-                    return Some(format!("final local stores differ: {difference}"));
+                let compared = first.consistent_view().and_then(|first_view| {
+                    let second_view = second.consistent_view()?;
+                    Ok(compare_store_views(
+                        first_view.as_ref(),
+                        second_view.as_ref(),
+                        &[],
+                    ))
+                });
+                match compared {
+                    Ok(Ok(())) => {}
+                    Ok(Err(difference)) => {
+                        return Some(format!("final local stores differ: {difference}"));
+                    }
+                    Err(error) => {
+                        return Some(format!("reading a final local store failed: {error}"));
+                    }
                 }
             }
             (None, None) => {}

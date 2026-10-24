@@ -15,7 +15,10 @@ use dexzd_engine::{EngineLocalStore, HardDeleteObjectOwner};
 use dexzd_keyspace::row_keys::HARD_DELETE_PENDING_OBJECT;
 use dexzd_keyspace::{ColumnFamily, RunTable, TenantId, parse_run_key};
 use dexzd_protocol::dexzd::v1::{OutboxRecord, RunRecord, StepInvocationPhase, StepMethod};
-use dexzd_storage::{LocalReadView, LocalStore, ScanDirection};
+use dexzd_storage::{
+    CanonicalizedStoreField, InMemoryLocalStore, LocalReadView, LocalStore, ScanDirection,
+    StateComparisonError, compare_store_views,
+};
 use prost::Message;
 
 use crate::apply_checker::ApplyChecker;
@@ -73,10 +76,38 @@ fn run_exists(shadow: &ApplyChecker, flow_id: &str, run_id: &str) -> bool {
         .any(|(id, run)| id.to_string() == run_id && run.record.is_some())
 }
 
-/// Invariant 5: the recovered store holds exactly the rows of the never-crashed shadow.
-pub(crate) fn check_store_matches_shadow(
+/// Fields a valid recovery changes; every other byte must equal the never-crashed twin.
+const RECOVERY_CANONICALIZED_FIELDS: [CanonicalizedStoreField; 4] = [
+    // Restoring a snapshot starts a new local store lineage.
+    CanonicalizedStoreField::NodeLineageId,
+    // The restored store starts a new snapshot sequence.
+    CanonicalizedStoreField::NodeLastSnapshotNumber,
+    // Recovery records progress under its new writer epoch.
+    CanonicalizedStoreField::PartitionApplied,
+    // Recovery acquires a new writer epoch.
+    CanonicalizedStoreField::PartitionAppliedEpoch,
+];
+
+/// Returns whether the node's hard-delete upload ledger is empty.
+///
+/// The ledger is node-local effect state that the committed log does not determine, so the twin
+/// holds an empty one.
+pub(crate) fn has_empty_upload_ledger(
     store: &EngineLocalStore,
-    shadow: &MemoryFlowState,
+) -> Result<bool, InvariantViolation> {
+    let node_meta = store.node_meta().map_err(|error| {
+        InvariantViolation::new(
+            "local-store-read",
+            format!("reading node metadata failed: {error}"),
+        )
+    })?;
+    Ok(node_meta.is_none_or(|meta| meta.pending_hard_delete_uploads.is_empty()))
+}
+
+/// Invariant 5: the node's store equals a never-crashed twin, except the canonicalized fields.
+pub(crate) fn check_store_matches_twin(
+    store: &EngineLocalStore,
+    twin: &InMemoryLocalStore,
 ) -> Result<(), InvariantViolation> {
     let view = store.consistent_view().map_err(|error| {
         InvariantViolation::new(
@@ -84,99 +115,17 @@ pub(crate) fn check_store_matches_shadow(
             format!("opening a view failed: {error}"),
         )
     })?;
-    for column_family in APPLIED_COLUMN_FAMILIES {
-        let engine_rows = view
-            .scan(
-                column_family,
-                None,
-                None,
-                ScanDirection::Forward,
-                usize::MAX,
-            )
-            .map_err(|error| {
+    compare_store_views(twin, view.as_ref(), &RECOVERY_CANONICALIZED_FIELDS).map_err(|error| {
+        match error {
+            StateComparisonError::Storage(error) => {
                 InvariantViolation::new("local-store-read", format!("scan failed: {error}"))
-            })?;
-        let mut shadow_rows = shadow.rows_with_prefix(column_family, &[]);
-        for (engine_key, engine_value) in &engine_rows {
-            match shadow_rows.next() {
-                Some((shadow_key, shadow_value))
-                    if shadow_key == engine_key.as_slice()
-                        && shadow_value == engine_value.as_slice() => {}
-                Some((shadow_key, _)) => {
-                    return Err(state_difference(
-                        column_family,
-                        format!(
-                            "the node has {} where the shadow has {}",
-                            hex(engine_key),
-                            hex(shadow_key)
-                        ),
-                    ));
-                }
-                None => {
-                    return Err(state_difference(
-                        column_family,
-                        format!("the node has extra row {}", hex(engine_key)),
-                    ));
-                }
             }
+            StateComparisonError::Difference(difference) => InvariantViolation::new(
+                "recovered-state-differs",
+                format!("the never-crashed twin and the node differ: {difference}"),
+            ),
         }
-        if let Some((shadow_key, _)) = shadow_rows.next() {
-            return Err(state_difference(
-                column_family,
-                format!("the node lacks row {}", hex(shadow_key)),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Compares every column family of two stores row by row, like `compare_store_views` with no
-/// canonicalized fields.
-///
-/// Returns the first differing key, or the error that stopped a read.
-pub(crate) fn compare_local_stores(
-    expected: &EngineLocalStore,
-    actual: &EngineLocalStore,
-) -> Result<(), String> {
-    let expected_view = expected
-        .consistent_view()
-        .map_err(|error| error.to_string())?;
-    let actual_view = actual
-        .consistent_view()
-        .map_err(|error| error.to_string())?;
-    for column_family in ColumnFamily::ALL {
-        let scan = |view: &dyn LocalReadView| {
-            view.scan(
-                column_family,
-                None,
-                None,
-                ScanDirection::Forward,
-                usize::MAX,
-            )
-            .map_err(|error| error.to_string())
-        };
-        let expected_rows = scan(expected_view.as_ref())?;
-        let actual_rows = scan(actual_view.as_ref())?;
-        let row_count = expected_rows.len().max(actual_rows.len());
-        if let Some(index) =
-            (0..row_count).find(|index| expected_rows.get(*index) != actual_rows.get(*index))
-        {
-            let key_of = |rows: &[(Vec<u8>, Vec<u8>)]| rows.get(index).map(|(key, _)| hex(key));
-            return Err(format!(
-                "column family {column_family:?} row {index}: {:?} vs {:?}",
-                key_of(&expected_rows),
-                key_of(&actual_rows)
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn state_difference(column_family: ColumnFamily, detail: String) -> InvariantViolation {
-    InvariantViolation::new(
-        "recovered-state-differs",
-        format!("column family {column_family:?}: {detail}"),
-    )
+    })
 }
 
 /// Invariant 4: the stage-1 Flow invariants hold on the recovered store itself.

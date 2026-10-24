@@ -178,6 +178,10 @@ fn assert_covered(total: &EngineSimulationSummary) {
         ("checked read values", total.checked_read_values),
         ("replayed frames", total.replayed_frames),
         ("state comparisons", total.state_comparisons),
+        (
+            "state comparisons after recovery",
+            total.recovered_state_comparisons,
+        ),
         ("dispatch comparisons", total.dispatch_comparisons),
     ];
     for (name, value) in checks {

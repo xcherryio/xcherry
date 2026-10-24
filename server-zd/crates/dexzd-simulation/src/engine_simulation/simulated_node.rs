@@ -43,7 +43,7 @@ use crate::engine_simulation::simulated_workers::SimulatedWorkers;
 pub(crate) const NODE_ID: &str = "node-a";
 /// Partitioning of [`crate::ApplyChecker::new`], so the shadow places Flows like the engine.
 const PARTITION_HASH_KEY: [u8; 16] = [7; 16];
-const PARTITION_COUNT: u32 = 64;
+pub(crate) const PARTITION_COUNT: u32 = 64;
 /// Object key of the cluster object, a persistent format.
 const CLUSTER_OBJECT_KEY: &str = "cluster";
 pub(crate) const LEASE_DURATION: Duration = Duration::from_secs(10);
