@@ -75,6 +75,12 @@ pub struct EngineSimulationSummary {
     pub snapshot_reads_during_start: BTreeMap<String, u64>,
     /// Commands committed without writes, by kind, such as a second result of one attempt.
     pub rejected_by_kind: BTreeMap<String, u64>,
+    /// Crashes of the serving process that interrupted committed work, by subsystem: `timers`,
+    /// `running-attempts`, `outbox`, and `pending-hard-deletes`.
+    pub crashes_with_outstanding_work: BTreeMap<String, u64>,
+    /// Interrupted outbox rows that recovered processes delivered, and interrupted hard-delete
+    /// objects that they deleted.
+    pub interrupted_work_finished: BTreeMap<String, u64>,
     /// Running attempts the quiet-point crash compared with the successor's dispatches.
     pub attempts_compared_after_quiet_crash: u64,
     /// Processes that stopped by themselves, such as after losing the lease.
@@ -145,6 +151,14 @@ impl EngineSimulationSummary {
             &other.snapshot_reads_during_start,
         );
         merge_counts(&mut self.rejected_by_kind, &other.rejected_by_kind);
+        merge_counts(
+            &mut self.crashes_with_outstanding_work,
+            &other.crashes_with_outstanding_work,
+        );
+        merge_counts(
+            &mut self.interrupted_work_finished,
+            &other.interrupted_work_finished,
+        );
         self.attempts_compared_after_quiet_crash += other.attempts_compared_after_quiet_crash;
         self.self_stopped_processes += other.self_stopped_processes;
         merge_counts(&mut self.self_stop_reasons, &other.self_stop_reasons);

@@ -8,7 +8,7 @@
 
 //! One seed's schedule: clients, crashes, restarts, takeovers, clock jumps, and invariant checks.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,7 +31,8 @@ use tokio::time::Instant;
 use crate::engine_simulation::committed_log::CommittedLog;
 use crate::engine_simulation::engine_invariants::{
     check_acknowledged_writes, check_drained, check_recovered_flows,
-    check_running_attempts_redispatched, check_store_matches_shadow, run_count, running_attempts,
+    check_running_attempts_redispatched, check_store_matches_shadow, outstanding_work, run_count,
+    running_attempts,
 };
 use crate::engine_simulation::event_trace::EventTrace;
 use crate::engine_simulation::simulated_clients::{
@@ -72,7 +73,7 @@ const START_CRASH_PROBABILITY: f64 = 0.15;
 const DRAIN_GRACE: Duration = Duration::from_secs(60);
 /// Object storage fault probabilities a seed draws from; some seeds run without faults.
 const FAULT_PROBABILITIES: [f64; 5] = [0.0, 0.001, 0.005, 0.01, 0.02];
-/// Longest wait of a crash for pipelined log writes to crash during.
+/// Longest wait of a crash for pipelined log writes or cross-Flow work to crash during.
 const PIPELINED_WRITE_WAIT: Duration = Duration::from_secs(3);
 /// Starts see fewer faults: one transient read error fails a start, and the log grows.
 const START_FAULT_DIVISOR: f64 = 4.0;
@@ -118,6 +119,10 @@ struct Simulation {
     started_processes: u64,
     fault_probability: f64,
     summary: EngineSimulationSummary,
+    /// Outbox rows undelivered at a crash, which recovered processes must deliver.
+    outbox_owed_by_recovery: BTreeSet<Vec<u8>>,
+    /// Hard-delete objects pending at a crash, by row key, which recovered processes must delete.
+    hard_deletes_owed_by_recovery: BTreeMap<Vec<u8>, String>,
 }
 
 /// Runs one seed; returns what it exercised and its final state, or the first broken invariant.
@@ -202,6 +207,8 @@ impl Simulation {
             started_processes: 0,
             fault_probability,
             summary: EngineSimulationSummary::default(),
+            outbox_owed_by_recovery: BTreeSet::new(),
+            hard_deletes_owed_by_recovery: BTreeMap::new(),
         }
     }
 
@@ -285,8 +292,10 @@ impl Simulation {
                     self.take_over_with_overlap().await?;
                 } else {
                     let kind = self.draw_restart_kind();
-                    if self.rng.random_bool(0.5) {
-                        self.wait_for_pipelined_log_writes().await;
+                    match self.rng.random_range(0..4) {
+                        0 | 1 => self.wait_for_pipelined_log_writes().await,
+                        2 => self.wait_for_cross_flow_work().await,
+                        _ => {}
                     }
                     self.crash_and_restart(kind).await?;
                 }
@@ -303,6 +312,15 @@ impl Simulation {
         };
         let deadline = Instant::now() + PIPELINED_WRITE_WAIT;
         while serving.object_store.unlanded_log_writes() < 2 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// Waits briefly until committed state holds an undelivered outbox row or a pending
+    /// hard-delete object, which the successor must then finish.
+    async fn wait_for_cross_flow_work(&self) {
+        let deadline = Instant::now() + PIPELINED_WRITE_WAIT;
+        while !self.environment.committed_log.has_cross_flow_work() && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
@@ -348,6 +366,7 @@ impl Simulation {
         let tail = Duration::from_secs(self.config.calm_tail_seconds);
         tokio::time::sleep(tail).await;
         self.wait_until_drained().await?;
+        self.check_interrupted_work_finished().await?;
         let records = self
             .client_records
             .lock()
@@ -500,6 +519,7 @@ impl Simulation {
             return Ok(());
         };
         self.serving_node.clear();
+        self.record_work_interrupted_by_crash()?;
         let clock_offset = serving.clock.offset_micros();
         let local_store = Arc::clone(&serving.local_store);
         self.trace(&format!(
@@ -529,6 +549,84 @@ impl Simulation {
             .await?;
         self.serve(process);
         self.check_recovered_process()
+    }
+
+    /// Counts the committed work a crash interrupts and remembers what recovery must finish.
+    fn record_work_interrupted_by_crash(&mut self) -> Result<(), InvariantViolation> {
+        let work = self
+            .environment
+            .committed_log
+            .with_shadow(outstanding_work)?;
+        self.trace(&format!(
+            "the crash interrupts {} timers, {} running attempts, {} undelivered outbox rows, and \
+             {} pending hard deletes",
+            work.timers,
+            work.running_attempts,
+            work.undelivered_outbox.len(),
+            work.pending_hard_deletes.len()
+        ));
+        for (subsystem, count) in [
+            ("timers", work.timers),
+            ("running-attempts", work.running_attempts),
+            ("outbox", work.undelivered_outbox.len()),
+            ("pending-hard-deletes", work.pending_hard_deletes.len()),
+        ] {
+            if count > 0 {
+                *self
+                    .summary
+                    .crashes_with_outstanding_work
+                    .entry(subsystem.to_owned())
+                    .or_default() += 1;
+            }
+        }
+        self.outbox_owed_by_recovery.extend(work.undelivered_outbox);
+        self.hard_deletes_owed_by_recovery
+            .extend(work.pending_hard_deletes);
+        Ok(())
+    }
+
+    /// Requires recovered processes to have delivered every outbox row and deleted every
+    /// hard-delete object that a crash interrupted.
+    async fn check_interrupted_work_finished(&mut self) -> Result<(), InvariantViolation> {
+        let work = self
+            .environment
+            .committed_log
+            .with_shadow(outstanding_work)?;
+        if let Some(row_key) = self
+            .outbox_owed_by_recovery
+            .iter()
+            .find(|row_key| work.undelivered_outbox.contains(*row_key))
+        {
+            return Err(InvariantViolation::new(
+                "interrupted-outbox-not-delivered",
+                format!("outbox row {row_key:02x?} undelivered at a crash was never delivered"),
+            ));
+        }
+        for (row_key, object_key) in &self.hard_deletes_owed_by_recovery {
+            let stored = self
+                .environment
+                .storage
+                .store
+                .head(object_key)
+                .await
+                .expect("the shared in-memory store reads without faults");
+            if work.pending_hard_deletes.contains_key(row_key) || stored.is_some() {
+                return Err(InvariantViolation::new(
+                    "interrupted-hard-delete-not-finished",
+                    format!("hard-delete object {object_key} pending at a crash was never deleted"),
+                ));
+            }
+        }
+        let finished = &mut self.summary.interrupted_work_finished;
+        finished.insert(
+            "outbox".to_owned(),
+            self.outbox_owed_by_recovery.len() as u64,
+        );
+        finished.insert(
+            "pending-hard-deletes".to_owned(),
+            self.hard_deletes_owed_by_recovery.len() as u64,
+        );
+        Ok(())
     }
 
     /// Starts a successor whose clock is past the lease while the old process keeps running.

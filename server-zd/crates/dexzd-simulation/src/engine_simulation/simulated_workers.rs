@@ -28,6 +28,7 @@ use rand_chacha::ChaCha8Rng;
 use tokio::sync::{mpsc, watch};
 
 use crate::engine_simulation::event_trace::EventTrace;
+use crate::engine_simulation::simulated_clients::ENGINE_FLOW_IDS;
 use crate::engine_simulation::workload::{
     MethodCallView, execute_response, heartbeat_value, rpc_response, wait_for_response,
     worker_error,
@@ -454,10 +455,12 @@ impl WorkerPoolState {
         request: &MethodRequest,
         worker_id: String,
     ) -> ScriptedEvent {
+        let may_start_sub_flows = ENGINE_FLOW_IDS.contains(&identity.flow_id.as_str());
         let output = match request {
             MethodRequest::WaitFor(request) => {
                 let call = MethodCallView {
                     step_type: &request.step_type,
+                    may_start_sub_flows,
                     is_execute: false,
                     attributes: &request.attributes,
                     loaded_channel_messages: &request.loaded_channel_messages,
@@ -471,6 +474,7 @@ impl WorkerPoolState {
             MethodRequest::Execute(request) => {
                 let call = MethodCallView {
                     step_type: &request.step_type,
+                    may_start_sub_flows,
                     is_execute: true,
                     attributes: &request.attributes,
                     loaded_channel_messages: &request.loaded_channel_messages,

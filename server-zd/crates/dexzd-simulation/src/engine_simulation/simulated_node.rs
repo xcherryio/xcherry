@@ -368,6 +368,11 @@ fn effects_config(settings: RunSettings) -> EffectsConfig {
 
 fn runtime_config(settings: RunSettings) -> RuntimeConfig {
     RuntimeConfig {
+        // As on the server, hard-delete values have an object store.
+        validation: ValidationConfig {
+            has_blob_store: true,
+            ..ValidationConfig::default()
+        },
         long_poll_default_wait: Duration::from_secs(5),
         long_poll_max_wait: Duration::from_secs(10),
         rpc_default_timeout: Duration::from_secs(5),

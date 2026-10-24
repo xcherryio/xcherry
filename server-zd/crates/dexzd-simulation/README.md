@@ -41,8 +41,10 @@ runtime with paused time, and every choice derives from one seed.
   runs and writes, because their wall clock is ahead. Wall clocks also jump forward and back.
 - **Workers and clients.** Simulated pull Workers sit behind the engine's dispatch ports. They
   succeed, fail, hang, run slowly, send heartbeats with and without values, return the same
-  attempt's result again, disconnect, or are missing. Clients start, stop, write, publish,
-  delete, invoke RPCs, and read, retrying unavailable calls with the same request ID.
+  attempt's result again, disconnect, or are missing. A WaitFor of a client's Flow may wait for
+  a child Flow, which the outbox starts; child Flows start no children of their own. Clients start, stop, write, publish,
+  delete, invoke RPCs, and read, retrying unavailable calls with the same request ID. They also
+  write and delete a hard-delete Attribute, whose values live in object storage.
 - **Determinism.** The engine runs frame applies, state reads, and snapshot uploads on the
   calling task (`BlockingWorkPlacement::CallingTaskForTest`), and every engine `select!` is
   biased. Every ID the engine persists comes from one `SeededEngineIdSourceForTest` that all
@@ -66,9 +68,12 @@ directory invariants hold on the committed history. The engine simulation adds t
 4. **Locks.** The shadow checks L1 to L4 after every command, and the recovered store passes
    `check_flow` again.
 5. **Recovered runtime equals a never-crashed one.** The recovered store equals the shadow, so
-   timers, method calls, outbox rows, and hard-delete rows match. After a crash at a quiet
-   point, the successor dispatches every attempt that was running again. After a calm tail,
-   every due timer has fired and no method call is unfinished.
+   timers, method calls, outbox rows, and hard-delete rows match. Every crash counts the timers,
+   running attempts, undelivered outbox rows, and pending hard-delete objects it interrupts.
+   Recovered processes must deliver each interrupted outbox row and delete each interrupted
+   hard-delete object from storage. After a crash at a quiet point, the successor dispatches
+   every attempt that was running again. After a calm tail, every due timer has fired, no
+   method call is unfinished, and no outbox row or hard-delete object is left waiting.
 
 The log itself is checked too. Copies of one log position must hold the same commands, and a
 partition never applies a new frame below one it already applied.
@@ -82,8 +87,10 @@ old-epoch processes started, and frames they applied, inside such a window. Log 
 landed after their process died are required, along with EpochStarts written below an
 already landed batch (the recovery void and fill path) and successors that stopped on an
 older-epoch batch at their next seq. Log cleanup deletions, snapshot restores during starts,
-and rejected duplicate results are required too.
-So are running attempts compared after the quiet crash, and live runs in the final state.
+and rejected duplicate results are required too. So are crashes that interrupted each kind of
+outstanding work, recovered deliveries and deletions of that work, running attempts compared
+after the quiet crash, and live runs in the final state. Some crashes wait until two log
+writes are in flight or cross-Flow work is outstanding.
 
 ### Not covered yet
 
@@ -96,9 +103,9 @@ These section 13.1 items need later stages:
 - Time travel rebuilds and their hashes (section 8.4); clients do not call ResetFlow.
 - Value lifecycle beyond I1: I3, liveness, reads within the window, and the G byte limit
   (section 10).
-- Hard-delete objects in storage (section 10.3); clients write no hard-delete Attributes.
-- Worker Stream writes, SubFlows and outbox delivery, and the Worker matching layer, which the
-  simulated Workers bypass.
+- Hard-delete Attributes that Workers write, and the hard-delete upload ledger after a crash
+  between upload and commit (section 10.3).
+- Worker Stream writes, and the Worker matching layer, which the simulated Workers bypass.
 - More than one node ID, and foreign writers of the manifest and lease.
 - The planted-bug acceptance list.
 

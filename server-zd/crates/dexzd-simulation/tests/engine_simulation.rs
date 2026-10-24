@@ -142,6 +142,12 @@ fn assert_covered(total: &EngineSimulationSummary) {
         (&total.old_epoch_write_attempts, "log"),
         (&total.old_epoch_write_attempts, "lease"),
         (&total.writes_landed_after_crash, "log"),
+        (&total.crashes_with_outstanding_work, "timers"),
+        (&total.crashes_with_outstanding_work, "running-attempts"),
+        (&total.crashes_with_outstanding_work, "outbox"),
+        (&total.crashes_with_outstanding_work, "pending-hard-deletes"),
+        (&total.interrupted_work_finished, "outbox"),
+        (&total.interrupted_work_finished, "pending-hard-deletes"),
         (&total.self_stop_reasons, "older-epoch-batch"),
     ] {
         assert!(

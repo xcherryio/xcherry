@@ -207,16 +207,11 @@ impl HolderCollector {
         }
     }
 
-    fn hold_outputs(&mut self, outputs: &[StoredStepCompletionOutput], holder: Option<Vec<u8>>) {
+    fn hold_flow_result_outputs(&mut self, outputs: &[StoredStepCompletionOutput]) {
         for (index, output) in outputs.iter().enumerate() {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
             let stored = output.completed_step_output.as_ref();
-            match &holder {
-                Some(holder) => self.hold(stored, holder.clone()),
-                None => {
-                    let index = u32::try_from(index).unwrap_or(u32::MAX);
-                    self.hold(stored, holder_key(0x09, &[&index.to_be_bytes()]));
-                }
-            }
+            self.hold(stored, holder_key(0x09, &[&index.to_be_bytes()]));
         }
     }
 }
@@ -295,12 +290,27 @@ fn collect_slots(run: &RunView, slots: &mut HolderCollector) {
         }
     }
     if let Some(close) = run.record.as_ref().and_then(|record| record.close.as_ref()) {
-        slots.hold_outputs(&close.results, None);
+        slots.hold_flow_result_outputs(&close.results);
     }
-    for (child_flow_id, record) in &run.sub_flow_results {
-        let holder = holder_key(0x0a, &[&length_prefixed_name(child_flow_id)]);
-        if let Some(result) = &record.result {
-            slots.hold_outputs(&result.results, Some(holder));
+    // Rows are named `<registration attempt:010>:<child Flow ID>`; each output has its holder.
+    for (row_name, record) in &run.sub_flow_results {
+        let child_flow_id = row_name
+            .split_once(':')
+            .map_or(row_name.as_str(), |(_, child_flow_id)| child_flow_id);
+        let Some(result) = &record.result else {
+            continue;
+        };
+        for (index, output) in result.results.iter().enumerate() {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            let holder = holder_key(
+                0x0e,
+                &[
+                    &record.parent_registration_attempt.to_be_bytes(),
+                    &length_prefixed_name(child_flow_id),
+                    &index.to_be_bytes(),
+                ],
+            );
+            slots.hold(output.completed_step_output.as_ref(), holder);
         }
     }
     for (kind, request_id, record) in &run.request_dedups {

@@ -8,17 +8,19 @@
 
 //! Invariants checked on a recovered node and at quiescent points.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::StateWrite;
-use dexzd_engine::EngineLocalStore;
-use dexzd_keyspace::ColumnFamily;
-use dexzd_protocol::dexzd::v1::{StepInvocationPhase, StepMethod};
+use dexzd_engine::{EngineLocalStore, HardDeleteObjectOwner};
+use dexzd_keyspace::row_keys::HARD_DELETE_PENDING_OBJECT;
+use dexzd_keyspace::{ColumnFamily, RunTable, TenantId, parse_run_key};
+use dexzd_protocol::dexzd::v1::{OutboxRecord, RunRecord, StepInvocationPhase, StepMethod};
 use dexzd_storage::{LocalReadView, LocalStore, ScanDirection};
+use prost::Message;
 
 use crate::apply_checker::ApplyChecker;
 use crate::engine_simulation::committed_log::CommittedLog;
-use crate::engine_simulation::simulated_clients::{ClientRecords, ENGINE_FLOW_IDS};
+use crate::engine_simulation::simulated_clients::ClientRecords;
 use crate::engine_simulation::simulated_workers::AttemptIdentity;
 use crate::invariants::{CheckerMemory, InvariantViolation, check_flow};
 use crate::memory_state::MemoryFlowState;
@@ -183,7 +185,7 @@ pub(crate) fn check_recovered_flows(
     shadow: &ApplyChecker,
 ) -> Result<(), InvariantViolation> {
     let state = memory_state_of(store)?;
-    for flow_id in ENGINE_FLOW_IDS {
+    for flow_id in &all_flow_ids(shadow) {
         let context = shadow.context(flow_id);
         let view = FlowView::read(
             &state,
@@ -253,7 +255,7 @@ pub(crate) fn running_attempts(
     shadow: &ApplyChecker,
 ) -> Result<BTreeSet<AttemptIdentity>, InvariantViolation> {
     let mut running = BTreeSet::new();
-    for flow_id in ENGINE_FLOW_IDS {
+    for flow_id in &all_flow_ids(shadow) {
         let view = shadow.view(flow_id, RunSelection::All)?;
         for (run_id, run) in &view.runs {
             let run_attempt = run
@@ -268,7 +270,7 @@ pub(crate) fn running_attempts(
                     continue;
                 }
                 running.insert(AttemptIdentity {
-                    flow_id: (*flow_id).to_owned(),
+                    flow_id: flow_id.clone(),
                     run_id: run_id.to_string(),
                     run_attempt: i32::try_from(run_attempt).unwrap_or(i32::MAX),
                     step_execution_id: step.step_execution_id.clone(),
@@ -301,13 +303,30 @@ pub(crate) fn check_running_attempts_redispatched(
     }
 }
 
-/// Liveness after the calm tail: no overdue timer and no unfinished method call.
+/// Liveness after the calm tail: no overdue timer, no unfinished method call, no undelivered
+/// outbox message, and no hard-delete object waiting for deletion.
 pub(crate) fn check_drained(
     shadow: &ApplyChecker,
     now_unix_micros: i64,
     overdue_after_micros: i64,
 ) -> Result<(), InvariantViolation> {
-    for flow_id in ENGINE_FLOW_IDS {
+    let work = outstanding_work(shadow)?;
+    if let Some(row_key) = work.undelivered_outbox.iter().next() {
+        return Err(InvariantViolation::new(
+            "outbox-not-delivered",
+            format!(
+                "outbox row {} is unacknowledged after the calm tail",
+                hex(row_key)
+            ),
+        ));
+    }
+    if let Some(object_key) = work.pending_hard_deletes.values().next() {
+        return Err(InvariantViolation::new(
+            "hard-delete-not-finished",
+            format!("hard-delete object {object_key} still waits for deletion after the calm tail"),
+        ));
+    }
+    for flow_id in &all_flow_ids(shadow) {
         let view = shadow.view(flow_id, RunSelection::All)?;
         if let Some(overdue) = view
             .timer_index
@@ -349,7 +368,7 @@ pub(crate) fn check_drained(
 
 /// Returns the number of runs the shadow holds.
 pub(crate) fn run_count(shadow: &ApplyChecker) -> usize {
-    ENGINE_FLOW_IDS
+    all_flow_ids(shadow)
         .iter()
         .filter_map(|flow_id| {
             shadow
@@ -358,4 +377,72 @@ pub(crate) fn run_count(shadow: &ApplyChecker) -> usize {
         })
         .map(|view| view.runs.len())
         .sum()
+}
+
+/// Returns every Flow with a run record, clients' Flows and their child Flows alike.
+pub(crate) fn all_flow_ids(shadow: &ApplyChecker) -> BTreeSet<String> {
+    shadow
+        .state()
+        .rows_with_prefix(ColumnFamily::Flow, &[])
+        .filter(|(key, _)| {
+            parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::RunRecord)
+        })
+        .filter_map(|(_, value)| RunRecord::decode(value).ok())
+        .map(|record| record.flow_id)
+        .collect()
+}
+
+/// Committed work that a node must finish, recover, or redo after a crash.
+#[derive(Debug, Default)]
+pub(crate) struct OutstandingWork {
+    /// Timer rows, which only firing or cancellation removes.
+    pub(crate) timers: usize,
+    /// Method attempts that are running.
+    pub(crate) running_attempts: usize,
+    /// Keys of outbox rows the receiver has not acknowledged.
+    pub(crate) undelivered_outbox: BTreeSet<Vec<u8>>,
+    /// Object keys of hard-delete objects waiting for deletion, by row key.
+    pub(crate) pending_hard_deletes: BTreeMap<Vec<u8>, String>,
+}
+
+/// Returns the work outstanding in the shadow's committed state.
+///
+/// Returns the work, or the violation of a run that the shadow cannot decode.
+pub(crate) fn outstanding_work(
+    shadow: &ApplyChecker,
+) -> Result<OutstandingWork, InvariantViolation> {
+    let mut work = OutstandingWork {
+        running_attempts: running_attempts(shadow)?.len(),
+        ..OutstandingWork::default()
+    };
+    for (key, value) in shadow.state().rows_with_prefix(ColumnFamily::Flow, &[]) {
+        let Ok(parsed) = parse_run_key(key) else {
+            continue;
+        };
+        match parsed.table {
+            RunTable::Timer => work.timers += 1,
+            RunTable::Outbox => {
+                let record = OutboxRecord::decode(value).map_err(|error| {
+                    InvariantViolation::new("row-decoding", format!("outbox row: {error}"))
+                })?;
+                if record.acknowledged_at_micros == 0 {
+                    work.undelivered_outbox.insert(key.to_vec());
+                }
+            }
+            RunTable::HardDeleteObject => {
+                if let Some((&HARD_DELETE_PENDING_OBJECT, object_id)) = parsed.suffix.split_first()
+                {
+                    let owner = HardDeleteObjectOwner {
+                        tenant_id: TenantId::DEFAULT,
+                        flow_hash: parsed.flow_hash,
+                        run_id: parsed.run_id,
+                    };
+                    let object_key = owner.object_key(&String::from_utf8_lossy(object_id));
+                    work.pending_hard_deletes.insert(key.to_vec(), object_key);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(work)
 }

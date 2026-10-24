@@ -12,7 +12,8 @@ use dexzd_protocol::dex::{
     AttributeWrite, ChannelCondition, ChannelMessage, ChannelMessageDeletion, ChannelValues,
     CloseDecision, CloseDecisionType, InvokeExecuteMethodResponse, InvokeWaitForMethodResponse,
     InvokeWorkerRpcResponse, Kv, RetryPolicy, StepDecision, StepDurability, StepMovement,
-    StepOptions, TimerCondition, Value, WaitingCondition, WorkerErrorResponse, value,
+    StepOptions, SubFlowCondition, TimerCondition, Value, WaitingCondition, WaitingConditionType,
+    WorkerErrorResponse, value,
 };
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
@@ -101,6 +102,8 @@ fn random_timeout_seconds(rng: &mut ChaCha8Rng) -> i32 {
 /// What a Worker sees of one method request.
 pub(crate) struct MethodCallView<'request> {
     pub(crate) step_type: &'request str,
+    /// Whether the Flow may start child Flows; only clients' Flows do, so children never nest.
+    pub(crate) may_start_sub_flows: bool,
     pub(crate) is_execute: bool,
     pub(crate) attributes: &'request [Kv],
     pub(crate) loaded_channel_messages: &'request BTreeMap<String, ChannelValues>,
@@ -120,7 +123,7 @@ pub(crate) fn wait_for_response(
 ) -> InvokeWaitForMethodResponse {
     InvokeWaitForMethodResponse {
         upsert_attributes: attribute_writes(rng, call),
-        waiting_condition: waiting_condition(rng),
+        waiting_condition: waiting_condition(rng, call),
         upsert_step_exe_locals: locals(rng),
         publish_to_channel: publications(rng),
         delete_from_channel: loaded_message_deletions(rng, call),
@@ -247,8 +250,23 @@ fn loaded_message_deletions(
         .collect()
 }
 
-fn waiting_condition(rng: &mut ChaCha8Rng) -> Option<WaitingCondition> {
+fn waiting_condition(rng: &mut ChaCha8Rng, call: &MethodCallView<'_>) -> Option<WaitingCondition> {
     match rng.random_range(0..10) {
+        4 if call.may_start_sub_flows => {
+            let start_step_type = pick(rng, STEP_TYPES);
+            Some(WaitingCondition {
+                waiting_condition_type: WaitingConditionType::AllCompleted as i32,
+                sub_flow_conditions: vec![SubFlowCondition {
+                    condition_id: "child".to_owned(),
+                    sub_flow_type: "ChildFlow".to_owned(),
+                    start_step_type: start_step_type.to_owned(),
+                    step_input: rng.random_bool(0.8).then(|| random_value(rng)),
+                    step_options: Some(engine_step_options(rng, start_step_type)),
+                    ..SubFlowCondition::default()
+                }],
+                ..WaitingCondition::default()
+            })
+        }
         0 | 1 => Some(WaitingCondition {
             channel_conditions: vec![ChannelCondition {
                 condition_id: "message".to_owned(),

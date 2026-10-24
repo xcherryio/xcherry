@@ -12,7 +12,8 @@ use dexzd_apply::{ApplyContext, ApplyOutcome, StateWrite, apply_flow_command};
 use dexzd_keyspace::row_keys::run_singleton_key;
 use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, parse_run_key};
 use dexzd_protocol::dexzd::v1::{
-    FlowCommand, RunRecord, StepInvocationKey, command_reply, flow_command::Command, stored_value,
+    FlowCommand, RunRecord, StepInvocationKey, command_reply, flow_command::Command,
+    inbox_message_command, stored_value,
 };
 use prost::Message;
 
@@ -187,6 +188,16 @@ impl ApplyChecker {
                     self.remember_genesis_values(&reply.run_id, view)?;
                 }
             }
+            // A child start creates its run only when the minted run ID now has rows.
+            Some(Command::InboxMessage(inbox))
+                if matches!(
+                    inbox.payload,
+                    Some(inbox_message_command::Payload::ChildStart(_))
+                ) && RunId::from_slice(&inbox.new_run_id)
+                    .is_ok_and(|run_id| view.runs.contains_key(&run_id)) =>
+            {
+                self.remember_genesis_values(&inbox.new_run_id, view)?;
+            }
             Some(Command::StepAttemptStarted(started)) => {
                 let run_id = RunId::from_slice(&command.run_id)
                     .map_err(|error| InvariantViolation::new("apply-error", error.to_string()))?;
@@ -205,7 +216,8 @@ impl ApplyChecker {
         Ok(())
     }
 
-    /// The new run's start Step input and initial Attributes hold the genesis pin (plan D12).
+    /// The new run's start Step input and initial Attributes hold the genesis pin (plan D12),
+    /// for a client start and a child start alike.
     fn remember_genesis_values(
         &mut self,
         run_id: &[u8],

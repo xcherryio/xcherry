@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use dexzd_engine::HARD_DELETE_OBJECT_KEY_PREFIX;
 use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
@@ -416,6 +417,13 @@ impl ObjectStore for NodeObjectStore {
         body: Bytes,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
+        if key.starts_with(HARD_DELETE_OBJECT_KEY_PREFIX) {
+            self.observe(|observations| {
+                observations
+                    .hard_delete_bodies
+                    .insert(key.to_owned(), body.clone());
+            });
+        }
         let store = Arc::clone(&self.storage.store);
         let owned_key = key.to_owned();
         let outcome = self

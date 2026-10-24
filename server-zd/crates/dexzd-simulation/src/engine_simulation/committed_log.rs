@@ -14,10 +14,12 @@ use std::sync::{Arc, Mutex};
 use dexzd_apply::{ApplyOutcome, StateWrite};
 use dexzd_engine::{
     CommittedCommandSink, CommittedFlowCommand, EngineLocalStore, FlowRuntimeRegistry,
+    HardDeleteObjectOwner,
 };
-use dexzd_keyspace::{PartitionId, RunId};
+use dexzd_keyspace::row_keys::HARD_DELETE_PENDING_OBJECT;
+use dexzd_keyspace::{ColumnFamily, PartitionId, RunId, RunTable, TenantId, parse_run_key};
 use dexzd_protocol::dex::{ChannelMessage, Kv};
-use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition};
+use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition, OutboxRecord, stored_value};
 use dexzd_storage::LocalReadView;
 use prost::Message;
 
@@ -55,10 +57,19 @@ struct OpenFrame {
 /// What a client read of one Flow may return: its newest run's Attributes and Channel messages.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FlowReadState {
-    /// Encoded wire value of each Attribute; `None` while the Flow has no run.
-    attributes: Option<BTreeMap<String, Vec<u8>>>,
+    /// Each Attribute's value as reads return it; `None` while the Flow has no run.
+    attributes: Option<BTreeMap<String, ExpectedValue>>,
     /// Encoded messages of each Channel, oldest first.
     channel_messages: BTreeMap<String, Vec<Vec<u8>>>,
+}
+
+/// An Attribute value as a read returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpectedValue {
+    /// The encoded wire value.
+    Wire(Vec<u8>),
+    /// The value stored in this hard-delete object, which reads return decoded.
+    HardDeleteObject(String),
 }
 
 /// The generations a read may observe: what its node had applied when the read began and ended.
@@ -79,6 +90,8 @@ struct CommittedLogState {
     open_frames: BTreeMap<(String, u16), OpenFrame>,
     first_violation: Option<InvariantViolation>,
     committed_markers: BTreeSet<String>,
+    /// Keys of undelivered outbox rows and of hard-delete objects waiting for deletion.
+    cross_flow_work_rows: BTreeSet<Vec<u8>>,
     applied_by_kind: BTreeMap<&'static str, u64>,
     /// Commands committed without writes, such as a second result of one attempt.
     rejected_by_kind: BTreeMap<&'static str, u64>,
@@ -109,6 +122,7 @@ impl CommittedLog {
                 open_frames: BTreeMap::new(),
                 first_violation: None,
                 committed_markers: BTreeSet::new(),
+                cross_flow_work_rows: BTreeSet::new(),
                 applied_by_kind: BTreeMap::new(),
                 rejected_by_kind: BTreeMap::new(),
                 replayed_frames: 0,
@@ -127,6 +141,11 @@ impl CommittedLog {
     /// Returns the first violation any node's frames produced.
     pub(crate) fn first_violation(&self) -> Option<InvariantViolation> {
         self.lock().first_violation.clone()
+    }
+
+    /// Whether committed state holds an undelivered outbox row or a pending hard-delete object.
+    pub(crate) fn has_cross_flow_work(&self) -> bool {
+        !self.lock().cross_flow_work_rows.is_empty()
     }
 
     pub(crate) fn has_committed_marker(&self, marker: &str) -> bool {
@@ -163,10 +182,13 @@ impl CommittedLog {
             .map_or(0, |(_, frame)| frame.generation))
     }
 
-    /// Checks that a GetAttributes response equals the newest run's Attributes at a generation
-    /// in `window`.
+    /// Checks a GetAttributes response against the newest run's Attributes in `window`.
     ///
-    /// Returns the response and the states it could have matched when it matches none.
+    /// Every other Attribute must equal one state of the window. A hard-delete Attribute may
+    /// instead show a later state of the window, since a read whose object was already deleted
+    /// reads the current object, or omits the Attribute when it has none.
+    ///
+    /// Returns a description of the mismatch when no state of the window explains the response.
     pub(crate) fn check_attribute_read(
         &self,
         flow_id: &str,
@@ -180,8 +202,51 @@ impl CommittedLog {
                 (attribute.key.clone(), value.encode_to_vec())
             })
             .collect();
-        self.check_read_against_history(flow_id, window, |state| {
-            state.attributes.as_ref() == Some(&observed)
+        // Lock order everywhere: the committed log state, then storage observations.
+        self.check_read_against_history(flow_id, window, |states| {
+            let (state, later_states) = states
+                .split_first()
+                .expect("the window holds the candidate state");
+            let Some(expected) = &state.attributes else {
+                return false;
+            };
+            if observed.keys().any(|key| !expected.contains_key(key)) {
+                return false;
+            }
+            let observations = self
+                .storage_observations
+                .lock()
+                .expect("storage observation lock is not poisoned");
+            // A hard-delete object body is the encoded value.
+            let body_matches = |object_key: &str, read: &[u8]| {
+                observations
+                    .hard_delete_bodies
+                    .get(object_key)
+                    .is_some_and(|body| body.as_ref() == read)
+            };
+            expected.iter().all(|(key, value)| {
+                let read = observed.get(key);
+                match value {
+                    ExpectedValue::Wire(encoded) => read == Some(encoded),
+                    ExpectedValue::HardDeleteObject(object_key) => {
+                        read.is_some_and(|read| body_matches(object_key, read))
+                            || later_states.iter().any(|later| {
+                                let current = later
+                                    .attributes
+                                    .as_ref()
+                                    .and_then(|attributes| attributes.get(key));
+                                match (current, read) {
+                                    (
+                                        Some(ExpectedValue::HardDeleteObject(current)),
+                                        Some(read),
+                                    ) => current != object_key && body_matches(current, read),
+                                    (Some(ExpectedValue::HardDeleteObject(_)), None) => false,
+                                    (_, read) => read.is_none(),
+                                }
+                            })
+                    }
+                }
+            })
         })
     }
 
@@ -197,7 +262,8 @@ impl CommittedLog {
         messages: &[ChannelMessage],
     ) -> Result<(), String> {
         let observed: Vec<Vec<u8>> = messages.iter().map(Message::encode_to_vec).collect();
-        self.check_read_against_history(flow_id, window, |state| {
+        self.check_read_against_history(flow_id, window, |states| {
+            let state = states[0];
             state.attributes.is_some()
                 && state
                     .channel_messages
@@ -210,7 +276,7 @@ impl CommittedLog {
         &self,
         flow_id: &str,
         window: ReadWindow,
-        matches: impl Fn(&FlowReadState) -> bool,
+        matches: impl Fn(&[&FlowReadState]) -> bool,
     ) -> Result<(), String> {
         let state = self.lock();
         let empty = BTreeMap::new();
@@ -218,8 +284,10 @@ impl CommittedLog {
         if is_state_in_window(history, window, matches) {
             return Ok(());
         }
+        let in_window = states_in_window(history, window);
         Err(format!(
-            "no committed state of generations {}..={} matches it; the newest generation is {}",
+            "no committed state of generations {}..={} matches it; the newest generation is \
+             {}; the states of the window are {in_window:?}",
             window.floor, window.ceiling, state.generation
         ))
     }
@@ -464,15 +532,69 @@ impl CommittedLogState {
         if let Some(marker) = operation_marker(command) {
             self.committed_markers.insert(marker.to_owned());
         }
+        for write in &outcome.writes {
+            self.track_cross_flow_work(write);
+        }
+    }
+
+    /// Tracks undelivered outbox rows and pending hard-delete rows as writes create and remove
+    /// them.
+    fn track_cross_flow_work(&mut self, write: &StateWrite) {
+        match write {
+            StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key,
+                value,
+            } => {
+                let Ok(parsed) = parse_run_key(key) else {
+                    return;
+                };
+                let is_work = match parsed.table {
+                    RunTable::Outbox => OutboxRecord::decode(value.as_slice())
+                        .is_ok_and(|record| record.acknowledged_at_micros == 0),
+                    RunTable::HardDeleteObject => {
+                        parsed.suffix.first() == Some(&HARD_DELETE_PENDING_OBJECT)
+                    }
+                    _ => return,
+                };
+                if is_work {
+                    self.cross_flow_work_rows.insert(key.clone());
+                } else {
+                    self.cross_flow_work_rows.remove(key);
+                }
+            }
+            StateWrite::Delete {
+                column_family: ColumnFamily::Flow,
+                key,
+            } => {
+                self.cross_flow_work_rows.remove(key);
+            }
+            StateWrite::DeleteRange {
+                column_family: ColumnFamily::Flow,
+                start,
+                end,
+            } => {
+                self.cross_flow_work_rows
+                    .retain(|key| key < start || key >= end);
+            }
+            _ => {}
+        }
     }
 }
 
-/// Whether some state in effect during `window` satisfies `matches`.
+/// Whether some state in effect during `window` satisfies `matches`, which gets that state
+/// followed by the later states of the window.
 fn is_state_in_window<T>(
     history: &BTreeMap<u64, T>,
     window: ReadWindow,
-    matches: impl Fn(&T) -> bool,
+    matches: impl Fn(&[&T]) -> bool,
 ) -> bool {
+    let states = states_in_window(history, window);
+    (0..states.len()).any(|first| matches(&states[first..]))
+}
+
+/// Returns the state in effect at the window's floor and each later state of the window.
+fn states_in_window<T>(history: &BTreeMap<u64, T>, window: ReadWindow) -> Vec<&T> {
     let at_floor = history.range(..=window.floor).next_back();
     let during = (window.ceiling > window.floor)
         .then(|| history.range(window.floor + 1..=window.ceiling))
@@ -481,7 +603,8 @@ fn is_state_in_window<T>(
     at_floor
         .into_iter()
         .chain(during)
-        .any(|(_, state)| matches(state))
+        .map(|(_, state)| state)
+        .collect()
 }
 
 /// Returns what GetAttributes and GetChannelMessages of `flow_id` return in the shadow state.
@@ -502,12 +625,23 @@ fn read_state_of(
     let Some(run) = view.runs.get(&run_id).filter(|run| run.record.is_some()) else {
         return Ok(FlowReadState::default());
     };
+    let owner = HardDeleteObjectOwner {
+        tenant_id: TenantId::DEFAULT,
+        flow_hash: shadow.context(flow_id).flow_hash,
+        run_id,
+    };
     let attributes = run
         .attributes
         .iter()
         .filter_map(|(key, record)| {
-            let value = wire_value(run_id, record.value.as_ref()?)?;
-            Some((key.clone(), value.encode_to_vec()))
+            let stored = record.value.as_ref()?;
+            let expected = match &stored.kind {
+                Some(stored_value::Kind::HardDeleteObject(object)) => {
+                    ExpectedValue::HardDeleteObject(owner.object_key(&object.object_id))
+                }
+                _ => ExpectedValue::Wire(wire_value(run_id, stored)?.encode_to_vec()),
+            };
+            Some((key.clone(), expected))
         })
         .collect();
     let mut channel_messages: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
@@ -616,7 +750,7 @@ mod tests {
     fn a_read_after_an_overwrite_must_not_return_the_overwritten_value() {
         let history = BTreeMap::from([(1, "A"), (2, "B")]);
         let reads = |observed: &str, read_window| {
-            is_state_in_window(&history, read_window, |state| *state == observed)
+            is_state_in_window(&history, read_window, |states| *states[0] == observed)
         };
         assert!(reads("A", window(1, 1)));
         assert!(reads("A", window(1, 2)));
@@ -630,7 +764,13 @@ mod tests {
     #[test]
     fn a_read_before_the_first_commit_matches_no_state() {
         let history = BTreeMap::from([(3, "A")]);
-        assert!(!is_state_in_window(&history, window(0, 2), |state| *state == "A"));
-        assert!(is_state_in_window(&history, window(0, 3), |state| *state == "A"));
+        assert!(!is_state_in_window(
+            &history,
+            window(0, 2),
+            |states| *states[0] == "A"
+        ));
+        assert!(is_state_in_window(&history, window(0, 3), |states| *states
+            [0]
+            == "A"));
     }
 }

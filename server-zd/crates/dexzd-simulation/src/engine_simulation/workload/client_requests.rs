@@ -9,10 +9,10 @@
 //! FlowService requests of simulated clients. Each write carries a unique operation marker.
 
 use dexzd_protocol::dex::{
-    AttributeWrite, ChannelMessage, DeleteChannelMessageRequest, FlowAlreadyStartedOptions,
-    FlowConfig, FlowStartOptions, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
-    InvokeRpcRequest, PublishToChannelRequest, SetAttributesRequest, StartFlowRequest,
-    StopFlowRequest, Value, WorkerTarget, value,
+    AttributeWrite, ChannelMessage, DeleteChannelMessageRequest, EncodedObject,
+    FlowAlreadyStartedOptions, FlowConfig, FlowStartOptions, FlowTimeoutHandlerOptions,
+    FlowTimeoutPolicy, IdReusePolicy, InvokeRpcRequest, PublishToChannelRequest,
+    SetAttributesRequest, StartFlowRequest, StopFlowRequest, Value, WorkerTarget, value,
 };
 use dexzd_protocol::dexzd::v1::{FlowCommand, flow_command::Command};
 use rand::RngExt;
@@ -58,6 +58,9 @@ pub(crate) fn start_flow_request(
             ..AttributeWrite::default()
         });
     }
+    if rng.random_bool(0.2) {
+        attributes.push(hard_delete_write(rng, false));
+    }
     let start_step_type = pick(rng, STEP_TYPES);
     StartFlowRequest {
         flow_id: flow_id.to_owned(),
@@ -98,7 +101,7 @@ pub(crate) fn set_attributes_request(
     marker: &str,
 ) -> SetAttributesRequest {
     let key_count = rng.random_range(1..4);
-    let attributes = distinct_keys(rng, key_count)
+    let mut attributes: Vec<AttributeWrite> = distinct_keys(rng, key_count)
         .into_iter()
         .map(|key| AttributeWrite {
             key,
@@ -110,6 +113,9 @@ pub(crate) fn set_attributes_request(
             ..AttributeWrite::default()
         })
         .collect();
+    if rng.random_bool(0.35) {
+        attributes.push(hard_delete_write(rng, true));
+    }
     SetAttributesRequest {
         flow_id: flow_id.to_owned(),
         attributes,
@@ -196,6 +202,29 @@ fn distinct_keys(rng: &mut ChaCha8Rng, count: usize) -> Vec<String> {
     keys
 }
 
+/// A write of the hard-delete Attribute: a string or an object, or null to delete it.
+fn hard_delete_write(rng: &mut ChaCha8Rng, may_delete: bool) -> AttributeWrite {
+    let label: u32 = rng.random();
+    let value = match rng.random_range(0..10) {
+        0..=2 if may_delete => null_value(),
+        0..=6 => Value {
+            kind: Some(value::Kind::StringValue(format!("secret {label}"))),
+        },
+        _ => Value {
+            kind: Some(value::Kind::ObjValue(EncodedObject {
+                encoding: "json".to_owned(),
+                payload: format!("{{\"secret\":{label}}}").into_bytes(),
+            })),
+        },
+    };
+    AttributeWrite {
+        key: HARD_DELETE_ATTRIBUTE_KEY.to_owned(),
+        value: Some(value),
+        is_hard_delete_on_null: true,
+        ..AttributeWrite::default()
+    }
+}
+
 fn marker_value(marker: &str) -> Value {
     Value {
         kind: Some(value::Kind::StringValue(marker.to_owned())),
@@ -226,3 +255,7 @@ pub(crate) fn operation_marker(command: &FlowCommand) -> Option<&str> {
 
 /// Prefix of every operation marker.
 pub(crate) const OPERATION_MARKER_PREFIX: &str = "client-op-";
+
+/// The Attribute clients write only as a hard-delete Attribute, whose values live in object
+/// storage.
+const HARD_DELETE_ATTRIBUTE_KEY: &str = "secret";

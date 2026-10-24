@@ -10,6 +10,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bytes::Bytes;
+
 use crate::engine_simulation::simulated_object_store::{FaultEffect, InjectedFault};
 
 /// What processes did to object storage, so coverage checks can show the risky paths ran.
@@ -29,6 +31,8 @@ pub(crate) struct StorageObservations {
     /// EpochStart batches written below a batch that had already landed: recovery voids or
     /// fills what lies between.
     pub(crate) epoch_starts_below_landed_batches: u64,
+    /// Bodies of hard-delete objects processes sent, by key; each key is written once.
+    pub(crate) hard_delete_bodies: BTreeMap<String, Bytes>,
 }
 
 /// Old-epoch processes before and after a successor's lease write took effect.
