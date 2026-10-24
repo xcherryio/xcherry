@@ -130,13 +130,14 @@ pub struct LocalStorageConfig {
     /// a column family with few writes keeps every log file until they reach four times the memtable
     /// budget of all column families, about 3 GiB.
     pub max_wal_bytes: u64,
-    /// Defaults to 64 MiB; once startup replays at least this many bytes of log records, the node
-    /// compacts every RocksDB column family on a background thread while it serves. Any value is
-    /// valid; 0 compacts after every startup. Compaction flushes the memtables, which releases the
-    /// write-ahead log, and drops overwritten and deleted entries. Expected disk use: about the
-    /// live data size once it finishes; while replay or compaction runs, up to the live data plus
-    /// maxWalBytes plus level-0 files that RocksDB has not compacted yet (at most four 64 MiB files
-    /// per column family). Graceful shutdown stops a running compaction.
+    /// Defaults to 16 MiB; once startup replays at least this many bytes of log records, the node
+    /// compacts every RocksDB column family on a background thread while it serves. Replay writes
+    /// about five bytes of write-ahead log per record byte, so the default compacts once replay has
+    /// left about 80 MiB of log. Any value is valid; 0 compacts after every startup. Compaction
+    /// flushes the memtables, which releases the write-ahead log, and drops overwritten and deleted
+    /// entries. Expected disk use: about the live data size right after the compaction; otherwise
+    /// at most the live data plus maxWalBytes plus level-0 files that RocksDB has not compacted yet
+    /// (at most four 64 MiB files per column family). Graceful shutdown stops a running compaction.
     pub compact_after_replay_bytes: u64,
 }
 
@@ -146,7 +147,7 @@ impl Default for LocalStorageConfig {
             directory: PathBuf::new(),
             block_cache_bytes: 256 * 1024 * 1024,
             max_wal_bytes: 256 * 1024 * 1024,
-            compact_after_replay_bytes: 64 * 1024 * 1024,
+            compact_after_replay_bytes: 16 * 1024 * 1024,
         }
     }
 }

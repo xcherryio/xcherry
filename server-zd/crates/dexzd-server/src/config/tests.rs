@@ -139,7 +139,7 @@ fn replay_and_local_store_disk_settings_reach_the_engine_node() {
     );
     assert_eq!(
         defaults.engine_node.recovery.compact_after_replay_bytes,
-        64 * 1024 * 1024
+        16 * 1024 * 1024
     );
 
     let parsed = Config::parse_yaml(

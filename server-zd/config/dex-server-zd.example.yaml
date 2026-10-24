@@ -17,7 +17,7 @@ localStorage:
   # Caps RocksDB write-ahead log files; the store stays near live data plus this cap.
   maxWalBytes: 268435456
   # Compacts the store in the background after startup replays this many log record bytes.
-  compactAfterReplayBytes: 67108864
+  compactAfterReplayBytes: 16777216
 commit:
   batchWindow: 20ms
   maxInFlight: 4

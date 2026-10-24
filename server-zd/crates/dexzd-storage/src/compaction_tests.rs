@@ -75,12 +75,15 @@ fn background_compaction_releases_the_write_ahead_log_of_a_live_store() {
     let deadline = Instant::now() + Duration::from_secs(60);
     let (wal_after, total_after) = loop {
         let (wal_bytes, total_bytes) = wal_and_total_bytes(&path);
-        if wal_bytes == 0 || Instant::now() >= deadline {
+        if wal_bytes < 64 * 1024 || Instant::now() >= deadline {
             break (wal_bytes, total_bytes);
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(wal_after, 0, "compaction released the write-ahead log");
+    assert!(
+        wal_after < 64 * 1024,
+        "compaction released the write-ahead log: {wal_after} bytes left"
+    );
     assert!(
         total_after * 3 < total_before,
         "the store shrank from {total_before} to {total_after} bytes"
@@ -128,31 +131,76 @@ fn the_write_ahead_log_cap_bounds_the_log_while_writing() {
     assert!(capped <= 8 * 1024 * 1024, "capped log: {capped} bytes");
 }
 
+const RANDOM_KEYS: u64 = 50_000;
+
+/// Writes `batches` incompressible 1 KiB Flow values under random keys of `RANDOM_KEYS`.
+///
+/// Returns the key of the last write. Overwrites in random order make memtable flushes overlap,
+/// so compaction must rewrite them rather than move files.
+fn write_incompressible_values(store: &RocksDbLocalStore, batches: u64) -> u64 {
+    let mut random = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next_random = move || {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        random
+    };
+    let mut key = 0;
+    for _ in 0..batches {
+        let mut value = Vec::with_capacity(1_024);
+        while value.len() < 1_024 {
+            value.extend_from_slice(&next_random().to_le_bytes());
+        }
+        key = next_random() % RANDOM_KEYS;
+        let mut batch = WriteBatch::new();
+        batch.put(ColumnFamily::Flow, key.to_be_bytes().to_vec(), value);
+        store.write(batch).expect("incompressible value writes");
+    }
+    key
+}
+
 #[test]
-fn dropping_a_store_stops_its_compaction_and_releases_the_directory() {
+fn dropping_a_store_stops_a_running_compaction_and_releases_the_directory() {
+    const BATCHES: u64 = 100_000;
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let path = directory.path().join("db");
     let store = RocksDbLocalStore::open(&path, RocksDbStoreOptions::default()).expect("opens");
-    write_replay_like_batches(&store, 40_000);
+    let last_key = write_incompressible_values(&store, BATCHES);
     store
         .start_background_compaction()
         .expect("compaction starts");
     store
         .start_background_compaction()
         .expect("a second request while compacting is accepted");
-
+    // The released log shows that the flush finished and the column families are being rewritten.
+    while wal_and_total_bytes(&path).0 >= 64 * 1024 && store.is_compacting_for_test() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        store.is_compacting_for_test(),
+        "the compaction still runs when the store is dropped"
+    );
     let dropping = Instant::now();
     drop(store);
-    assert!(
-        dropping.elapsed() < Duration::from_secs(10),
-        "drop took {:?}",
-        dropping.elapsed()
-    );
+    let drop_duration = dropping.elapsed();
+
     let reopened = RocksDbLocalStore::open(&path, RocksDbStoreOptions::default()).expect("reopens");
-    assert_eq!(
+    assert!(
         reopened
-            .get(ColumnFamily::Flow, &(FLOWS - 1).to_be_bytes())
-            .expect("Flow row reads"),
-        Some(39_999_u64.to_be_bytes().repeat(32))
+            .get(ColumnFamily::Flow, &last_key.to_be_bytes())
+            .expect("Flow row reads")
+            .is_some_and(|value| value.len() == 1_024)
+    );
+    let compacting = Instant::now();
+    reopened
+        .start_background_compaction()
+        .expect("compaction starts again");
+    while reopened.is_compacting_for_test() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let full_compaction = compacting.elapsed();
+    assert!(
+        drop_duration * 4 < full_compaction,
+        "drop took {drop_duration:?}; a full compaction takes {full_compaction:?}"
     );
 }

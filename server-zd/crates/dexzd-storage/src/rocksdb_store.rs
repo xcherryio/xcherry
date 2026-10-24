@@ -15,7 +15,7 @@ use std::time::Instant;
 use dexzd_keyspace::ColumnFamily;
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, CompactOptions, DB, DBCompressionType,
-    Direction, IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
+    Direction, FlushOptions, IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
 };
 
 use crate::local_store::{
@@ -94,8 +94,8 @@ impl RocksDbLocalStore {
 
     /// Compacts every column family on a background thread, unless a compaction is running.
     ///
-    /// Compaction first flushes each memtable, which lets RocksDB delete the write-ahead log files
-    /// they kept, then rewrites the column family without overwritten and deleted entries. Reads
+    /// Compaction first flushes every memtable, which lets RocksDB delete the write-ahead log files
+    /// they kept, then rewrites each column family without overwritten and deleted entries. Reads
     /// and writes continue meanwhile. Dropping the store stops the compaction and waits for its
     /// thread, which takes no longer than closing the store.
     ///
@@ -125,6 +125,15 @@ impl RocksDbLocalStore {
             thread,
         });
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_compacting_for_test(&self) -> bool {
+        self.compaction
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|running| !running.thread.is_finished())
     }
 
     pub(crate) fn checkpoint(&self, directory: &Path) -> StorageResult<()> {
@@ -181,19 +190,28 @@ impl BackgroundCompaction {
     }
 }
 
-/// Compacts the column families in turn until all are done or `is_cancelled` is set.
+/// Flushes every column family, then compacts them in turn until all are done or `is_cancelled`
+/// is set.
 fn compact_column_families(db: &DB, is_cancelled: &AtomicBool) {
     let started = Instant::now();
+    let handles: Vec<_> = ColumnFamily::ALL
+        .into_iter()
+        .map(|cf| {
+            db.cf_handle(cf.name())
+                .expect("all column families are opened")
+        })
+        .collect();
+    // One flush of all memtables releases the write-ahead log before the slower rewrites.
+    if let Err(error) = db.flush_cfs_opt(&handles, &FlushOptions::default()) {
+        tracing::warn!(%error, "could not flush the local store before compacting it");
+    }
     let mut options = CompactOptions::default();
     // Lets automatic compactions keep running while serving writes.
     options.set_exclusive_manual_compaction(false);
-    for cf in ColumnFamily::ALL {
+    for handle in handles {
         if is_cancelled.load(Ordering::SeqCst) {
             break;
         }
-        let handle = db
-            .cf_handle(cf.name())
-            .expect("all column families are opened");
         db.compact_range_cf_opt(handle, None::<&[u8]>, None::<&[u8]>, &options);
     }
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
