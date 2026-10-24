@@ -849,6 +849,7 @@ impl EffectHarness {
         let (runner, tasks) = EffectRunner::new(
             &config,
             EffectDependencies {
+                metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
                 dispatcher: Arc::clone(&dispatcher) as _,
                 hard_delete_objects: hard_delete_objects.clone(),
                 partition_hasher: hasher.clone(),

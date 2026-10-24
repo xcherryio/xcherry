@@ -16,6 +16,7 @@
 
 mod file_download;
 mod in_memory;
+mod instrumented;
 mod object_store_error;
 mod s3;
 mod s3_error;
@@ -24,6 +25,7 @@ mod startup_self_check;
 use std::path::Path;
 
 pub use in_memory::{FaultAction, FaultInjector, InMemoryObjectStore};
+pub use instrumented::InstrumentedObjectStore;
 pub use object_store_error::{ObjectStoreError, ObjectStoreErrorKind, ObjectStoreOperation};
 pub use s3::{S3Credentials, S3ObjectStore, S3ObjectStoreConfig};
 pub use startup_self_check::{StartupSelfCheckError, StartupSelfCheckFailure, startup_self_check};

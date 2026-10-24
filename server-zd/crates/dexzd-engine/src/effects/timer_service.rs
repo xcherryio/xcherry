@@ -125,6 +125,17 @@ impl PartitionTimerService {
                 .get(key)
                 .is_some_and(|(retry_at, _)| *retry_at > now)
         };
+        let oldest_due = entries
+            .iter()
+            .filter(|(key, entry)| {
+                entry.fire_at_micros <= now_micros && !is_waiting(&self.retry_after, key)
+            })
+            .map(|(_, entry)| entry.fire_at_micros)
+            .min();
+        self.context
+            .metrics
+            .timer_lag
+            .set_due(self.partition.0 as usize, oldest_due);
 
         let mut runs: Vec<(RunLocation, Vec<TimerId>)> = Vec::new();
         let mut run_positions: BTreeMap<RunLocation, usize> = BTreeMap::new();
@@ -157,6 +168,10 @@ impl PartitionTimerService {
             for result in futures::future::join_all(proposals).await {
                 result?;
             }
+            self.context
+                .metrics
+                .timer_lag
+                .set_due(self.partition.0 as usize, None);
             let fired_at = Instant::now();
             for key in fired_keys {
                 let delay = self

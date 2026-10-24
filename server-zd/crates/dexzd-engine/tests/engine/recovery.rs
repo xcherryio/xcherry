@@ -326,6 +326,7 @@ async fn submissions_during_recovery_are_unavailable() {
     let node = EngineNode::start(
         &config,
         EngineNodeDependencies {
+            metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
             object_store: cluster.object_store.clone(),
             clock: cluster.clock.clone(),
             applier: Arc::new(CountingApplier::default()),

@@ -15,6 +15,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dexzd_clock::WallClock;
+use dexzd_metrics::NodeMetrics;
 use dexzd_protocol::dex::{
     self, DispatchTaskErrorReason, InvokeExecuteMethodRequest, InvokeWaitForMethodRequest,
     InvokeWorkerRpcRequest, PollWorkerTask, PollWorkerTaskCancelTask, PollWorkerTaskFrame,
@@ -31,9 +32,9 @@ use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
 use crate::MatchingConfig;
-
 mod queue_state;
 mod worker_protocol;
+use queue_state::QueuedTaskMetric;
 pub use worker_protocol::WorkerTaskService;
 
 /// The unmodified Worker request carried by a pull task.
@@ -152,6 +153,7 @@ pub struct WorkerDispatch {
 }
 
 struct DispatchInner {
+    metrics: NodeMetrics,
     config: MatchingConfig,
     clock: Arc<dyn WallClock>,
     registry: Mutex<Registry>,
@@ -217,6 +219,15 @@ struct QueuePick {
 impl WorkerDispatch {
     /// Creates a matching owner using the supplied Go-compatible defaults and wall clock.
     pub fn new(config: MatchingConfig, clock: Arc<dyn WallClock>) -> Self {
+        Self::new_with_metrics(config, clock, NodeMetrics::unregistered())
+    }
+
+    /// Creates a matching owner with the process-local metric handles.
+    pub fn new_with_metrics(
+        config: MatchingConfig,
+        clock: Arc<dyn WallClock>,
+        metrics: NodeMetrics,
+    ) -> Self {
         assert!(config.max_streams > 0 && config.max_concurrent_tasks_cap > 0);
         assert!(
             config.max_queue_length > 0
@@ -228,6 +239,7 @@ impl WorkerDispatch {
         let (shutdown, _) = watch::channel(false);
         Self {
             inner: Arc::new(DispatchInner {
+                metrics,
                 config,
                 clock,
                 registry: Mutex::new(Registry::default()),
@@ -390,6 +402,8 @@ impl WorkerDispatch {
         unknown: &mut bool,
     ) -> Option<DispatchOutcome> {
         let _queue_lease = self.acquire_queue(request.tenant_id, queue_name);
+        let mut queued_task =
+            QueuedTaskMetric::new(self.inner.metrics.matching_queued_tasks.clone());
         let mut shutdown = self.inner.shutdown.subscribe();
         while Instant::now() < queue_end {
             if *shutdown.borrow() {
@@ -424,6 +438,7 @@ impl WorkerDispatch {
                     }
                     continue;
                 }
+                queued_task.set_waiting(false);
                 let assigned = DispatchEvent::Assigned {
                     app_worker_id: worker.app_worker_id.clone(),
                 };
@@ -456,6 +471,7 @@ impl WorkerDispatch {
                 match attempt {
                     AttemptOutcome::Final(outcome) => return Some(*outcome),
                     AttemptOutcome::Capacity => {
+                        queued_task.set_waiting(true);
                         *unavailable = true;
                         let backoff = capacity_backoffs
                             .entry(worker.id)
@@ -466,6 +482,7 @@ impl WorkerDispatch {
                         excluded_streams.insert(worker.id, Instant::now() + *backoff);
                     }
                     AttemptOutcome::UnknownName => {
+                        queued_task.set_waiting(true);
                         *unknown = true;
                         excluded_worker_ids.insert(worker.app_worker_id.clone());
                         if is_sticky {
@@ -473,6 +490,7 @@ impl WorkerDispatch {
                         }
                     }
                     AttemptOutcome::Disconnected => {
+                        queued_task.set_waiting(true);
                         *unavailable = true;
                         excluded_streams.insert(worker.id, dispatch_end);
                     }
@@ -813,6 +831,7 @@ impl WorkerDispatch {
         let Some(worker) = registry.streams.remove(&id) else {
             return;
         };
+        self.inner.metrics.matching_worker_streams.dec();
         let worker_key = (worker.tenant_id, worker.app_worker_id.clone());
         if let Some(count) = registry.worker_counts.get_mut(&worker_key) {
             *count -= 1;

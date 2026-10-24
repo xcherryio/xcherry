@@ -38,6 +38,14 @@ impl Default for ApiConfig {
     }
 }
 
+/// Configures the separate, unauthenticated OpenMetrics HTTP listener.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsConfig {
+    /// Defaults to empty, disabling metrics. Set a bind address such as 127.0.0.1:9090; never expose this unauthenticated endpoint publicly.
+    pub listen: String,
+}
+
 /// Controls pull Worker dispatch waits, registration capacity, and idle pings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]

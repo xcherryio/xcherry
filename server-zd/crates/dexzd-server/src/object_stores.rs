@@ -8,8 +8,10 @@
 
 use std::sync::Arc;
 
+use dexzd_metrics::NodeMetrics;
 use dexzd_object_store::{
-    ObjectStore, S3Credentials, S3ObjectStore, S3ObjectStoreConfig, startup_self_check,
+    InstrumentedObjectStore, ObjectStore, S3Credentials, S3ObjectStore, S3ObjectStoreConfig,
+    startup_self_check,
 };
 
 use crate::ServerError;
@@ -28,6 +30,7 @@ impl ObjectStores {
     pub(crate) async fn connect(
         config: &ObjectStoreConfig,
         multipart_threshold_bytes: u64,
+        metrics: &NodeMetrics,
     ) -> Result<Self, ServerError> {
         let primary_config = S3ObjectStoreConfig {
             endpoint: non_empty(&config.endpoint),
@@ -40,10 +43,15 @@ impl ObjectStores {
             )?,
             ..S3ObjectStoreConfig::new(config.region.clone(), config.bucket.clone())
         };
-        let primary = connect_store(primary_config, multipart_threshold_bytes).await?;
+        let primary = connect_store(primary_config, multipart_threshold_bytes, metrics).await?;
         let hard_delete = match &config.hard_delete_store {
             Some(location) => {
-                connect_store(location_config(location)?, multipart_threshold_bytes).await?
+                connect_store(
+                    location_config(location)?,
+                    multipart_threshold_bytes,
+                    metrics,
+                )
+                .await?
             }
             None => primary.clone(),
         };
@@ -73,6 +81,7 @@ fn location_config(
 async fn connect_store(
     mut config: S3ObjectStoreConfig,
     multipart_threshold_bytes: u64,
+    metrics: &NodeMetrics,
 ) -> Result<Arc<dyn ObjectStore>, ServerError> {
     config.multipart_threshold = usize::try_from(multipart_threshold_bytes).map_err(|_| {
         ServerError::ConfigValueOutOfRange {
@@ -86,10 +95,11 @@ async fn connect_store(
             bucket: bucket.clone(),
             source,
         })?;
-    startup_self_check(&store)
+    let instrumented = InstrumentedObjectStore::new(Arc::new(store), metrics.clone());
+    startup_self_check(&instrumented)
         .await
         .map_err(|source| ServerError::ObjectStoreSelfCheck { bucket, source })?;
-    Ok(Arc::new(store))
+    Ok(Arc::new(instrumented))
 }
 
 fn s3_credentials(

@@ -1,0 +1,16 @@
+[package]
+name = "dexzd-metrics"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+prometheus-client.workspace = true
+rustix.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

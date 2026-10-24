@@ -38,6 +38,7 @@
   "server-zd": {
     "layers": {
       "dexzd-protocol": 0,
+      "dexzd-metrics": 0,
       "dexzd-clock": 1,
       "dexzd-keyspace": 1,
       "dexzd-object-store": 1,

@@ -49,6 +49,7 @@ impl Default for RecoveryConfig {
 pub(crate) struct ReplayedLog {
     pub(crate) epoch_start_seq: u64,
     pub(crate) next_seq: u64,
+    pub(crate) replayed_bytes: u64,
 }
 
 pub(crate) struct LogReplay<'a> {
@@ -112,7 +113,10 @@ impl LogReplay<'_> {
             open_log
         };
         self.compact_after_bulk_replay(replayed_bytes);
-        Ok(replayed)
+        Ok(ReplayedLog {
+            replayed_bytes,
+            ..replayed
+        })
     }
 
     /// Applies the batches of a closed stream after `(seq, epoch)` up to `end_seq`.
@@ -226,6 +230,7 @@ impl LogReplay<'_> {
             ReplayedLog {
                 epoch_start_seq: recovered.epoch_start_seq,
                 next_seq: recovered.next_seq,
+                replayed_bytes: 0,
             },
             replayed_bytes,
         ))

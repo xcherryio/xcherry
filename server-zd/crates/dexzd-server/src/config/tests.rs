@@ -45,6 +45,7 @@ fn example_declares_every_default_key_and_value() {
     assert_eq!(parsed.values.max_value_bytes, 16 * 1024 * 1024);
     assert_eq!(parsed.api.grpc_max_message_bytes, 32 * 1024 * 1024);
     assert_eq!(parsed.api.max_wait_seconds, 60);
+    assert!(parsed.metrics.listen.is_empty());
     assert_eq!(parsed.matching.dispatch_wait, Duration::from_secs(10));
     assert_eq!(parsed.stream_store.backend, StreamStoreBackend::Disabled);
     assert_eq!(

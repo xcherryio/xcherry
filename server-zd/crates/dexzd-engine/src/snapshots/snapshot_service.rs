@@ -32,6 +32,7 @@ use crate::snapshots::{SnapshotConfig, SnapshotError};
 
 /// Takes snapshots on schedule, records them in the manifest, and cleans up old objects.
 pub(crate) struct SnapshotService {
+    pub(crate) metrics: Arc<dexzd_metrics::NodeMetrics>,
     pub(crate) store: Arc<EngineLocalStore>,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) clock: Arc<dyn WallClock>,
@@ -142,6 +143,21 @@ impl SnapshotService {
     /// Nothing is published or deleted once the node stops serving or another epoch owns the
     /// cluster.
     pub(crate) async fn take_snapshot(&self) -> Result<SnapshotReference, SnapshotError> {
+        let started = Instant::now();
+        let result = self.do_take_snapshot().await;
+        match &result {
+            Ok(_) => {
+                self.metrics.record_snapshot(dexzd_metrics::Outcome::Ok);
+                self.metrics
+                    .snapshot_last_duration
+                    .set(started.elapsed().as_secs_f64());
+            }
+            Err(_) => self.metrics.record_snapshot(dexzd_metrics::Outcome::Error),
+        }
+        result
+    }
+
+    async fn do_take_snapshot(&self) -> Result<SnapshotReference, SnapshotError> {
         let _operation_guard = self.acquire_operation_lock().await;
         self.fence.ensure_serving()?;
         let stream = &self.log_cleanup.stream;
@@ -205,6 +221,14 @@ impl SnapshotService {
         .await;
         self.restore_catalog(catalog).await;
         cleanup_result?;
+        let snapshot_bytes = manifest
+            .files
+            .iter()
+            .map(|file| file.size_bytes)
+            .sum::<u64>();
+        self.metrics
+            .snapshot_last_bytes
+            .set(i64::try_from(snapshot_bytes).unwrap_or(i64::MAX));
         Ok(reference)
     }
 

@@ -74,6 +74,8 @@ pub struct EngineNodeConfig {
 
 /// Shared services the node runs on.
 pub struct EngineNodeDependencies {
+    /// Process-local metric handles for this node.
+    pub metrics: Arc<dexzd_metrics::NodeMetrics>,
     /// Object storage that holds the cluster metadata, logs, and snapshots.
     pub object_store: Arc<dyn ObjectStore>,
     /// Wall clock for command timestamps and lease expiry.
@@ -86,6 +88,7 @@ pub struct EngineNodeDependencies {
 
 /// A node serving its log stream. After a fatal failure it stops serving; then exit non-zero.
 pub struct EngineNode {
+    metrics: Arc<dexzd_metrics::NodeMetrics>,
     committer: CommandCommitter,
     state: Arc<CommitState>,
     appliers: Arc<PartitionApplierPool>,
@@ -128,6 +131,7 @@ impl EngineNode {
     {
         validate_config(config)?;
         let EngineNodeDependencies {
+            metrics,
             object_store,
             clock,
             applier,
@@ -142,27 +146,38 @@ impl EngineNode {
         )
         .await?;
         let partition_count = unleased_metadata.partition_count();
+        metrics
+            .behavior_version
+            .set(i64::from(unleased_metadata.behavior_version));
+        metrics.set_role(dexzd_metrics::NodeRole::Standby);
         let cluster_id = unleased_metadata.cluster_id()?;
         let Some(lease) = config
             .lease
-            .acquire_until_cancelled_with_holder_process_id(
+            .acquire_until_cancelled_with_metrics(
                 object_store.clone(),
                 clock.clone(),
                 &config.node,
                 cancellation,
                 id_source.lease_holder_process_id(),
+                metrics.as_ref().clone(),
             )
             .await?
         else {
             return Ok(None);
         };
         let epoch = lease.epoch();
+        metrics
+            .lease_epoch
+            .set(i64::try_from(epoch).unwrap_or(i64::MAX));
+        metrics.set_role(dexzd_metrics::NodeRole::Recovering);
+        let recovery_started = std::time::Instant::now();
         tracing::info!(node_id = %config.node.node_id, epoch, partition_count, "engine node recovering");
         let state = Arc::new(CommitState::new(partition_count));
         let mut tasks = RunningTasks::default();
         tasks.spawn(watch_lease(
             lease.subscribe(),
             state.clone(),
+            metrics.clone(),
             tasks.cancellation.clone(),
         ));
         // Every failure from here on must release the lease, or a successor waits for it to expire.
@@ -179,6 +194,9 @@ impl EngineNode {
             let metadata = unleased_metadata
                 .read_under_lease(object_store.as_ref(), &config.node, epoch)
                 .await?;
+            metrics
+                .behavior_version
+                .set(i64::from(metadata.behavior_version));
             let stream = StreamIdentity {
                 cluster_id,
                 node_id: config.node.node_id.clone(),
@@ -257,13 +275,14 @@ impl EngineNode {
             .run()
             .await?;
             committer.seed_stamp_watermarks(&applied_command_timestamps(&store)?);
-            let (pipeline, committed_batches) = CommitPipeline::start(
+            let (pipeline, committed_batches) = CommitPipeline::start_with_metrics(
                 object_store.clone(),
                 clock.clone(),
                 stream.clone(),
                 epoch,
                 replayed.next_seq,
                 config.commit.pipeline_config(),
+                metrics.as_ref().clone(),
             )?;
             let progress = Arc::new(CommitProgress {
                 committed_log_bytes: AtomicU64::new(0),
@@ -346,9 +365,17 @@ impl EngineNode {
                 catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
                 last_snapshot_routed_seq: AtomicU64::new(0),
                 blocking_work: config.blocking_work,
+                metrics: metrics.clone(),
             });
             tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
+            metrics
+                .recovery_last_duration
+                .set(recovery_started.elapsed().as_secs_f64());
+            metrics
+                .recovery_last_replayed_bytes
+                .set(i64::try_from(replayed.replayed_bytes).unwrap_or(i64::MAX));
             tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");
+            metrics.set_role(dexzd_metrics::NodeRole::Serving);
             Ok((committer, applied_positions, snapshots))
         }
         .await;
@@ -361,6 +388,7 @@ impl EngineNode {
                     lease,
                 } = starting.take_parts();
                 Ok(Some(Self {
+                    metrics,
                     committer,
                     state,
                     appliers: appliers.expect("the applier pool starts before the node serves"),
@@ -372,6 +400,8 @@ impl EngineNode {
             }
             Err(error) => {
                 starting.release_after_failure().await;
+                metrics.lease_epoch.set(0);
+                metrics.set_role(dexzd_metrics::NodeRole::Standby);
                 Err(error)
             }
         }
@@ -420,6 +450,8 @@ impl EngineNode {
     /// Returns `Ok` once this process no longer holds the lease, and [`LeaseReleaseError`] when the
     /// release was rejected or timed out; the lease then stays held until it expires.
     pub async fn shutdown(self) -> Result<(), LeaseReleaseError> {
+        self.metrics.set_role(dexzd_metrics::NodeRole::Draining);
+        let metrics = self.metrics.clone();
         let Self {
             state,
             appliers,
@@ -436,6 +468,9 @@ impl EngineNode {
         }
         .stop_and_release_lease(Some(&applied_positions))
         .await;
+        if released.is_ok() {
+            metrics.lease_epoch.set(0);
+        }
         tracing::info!("engine node stopped");
         released
     }
@@ -612,12 +647,14 @@ fn applied_command_timestamps(
 async fn watch_lease(
     mut status: watch::Receiver<LeaseStatus>,
     state: Arc<CommitState>,
+    metrics: Arc<dexzd_metrics::NodeMetrics>,
     cancellation: CancellationToken,
 ) {
     loop {
         let current = status.borrow_and_update().clone();
         let deadline = match current {
             LeaseStatus::Lost(detail) => {
+                metrics.lease_epoch.set(0);
                 state.stop(NodeStopReason::LeaseLost { detail });
                 return;
             }
@@ -628,6 +665,7 @@ async fn watch_lease(
             () = cancellation.cancelled() => return,
             changed = status.changed() => {
                 if changed.is_err() {
+                    metrics.lease_epoch.set(0);
                     state.stop(NodeStopReason::LeaseLost {
                         detail: "lease renewal stopped".to_owned(),
                     });
@@ -635,6 +673,7 @@ async fn watch_lease(
                 }
             }
             () = tokio::time::sleep_until(deadline) => {
+                metrics.lease_epoch.set(0);
                 state.stop(NodeStopReason::LeaseLost {
                     detail: "lease validity expired before renewal".to_owned(),
                 });

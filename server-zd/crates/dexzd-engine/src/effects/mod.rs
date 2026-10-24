@@ -234,6 +234,8 @@ pub(crate) enum TrackedWork {
 
 /// Dependencies of the effect runner, passed once to [`EffectRunner::new`].
 pub struct EffectDependencies {
+    /// Process-local metrics for timer lag.
+    pub metrics: Arc<dexzd_metrics::NodeMetrics>,
     /// Worker transport for method attempts.
     pub dispatcher: Arc<dyn MethodDispatcher>,
     /// Hard-delete object operations.
@@ -252,6 +254,7 @@ pub struct EffectDependencies {
 
 /// Shared state of every effect task.
 pub(crate) struct EffectContext {
+    pub(crate) metrics: Arc<dexzd_metrics::NodeMetrics>,
     pub(crate) config: EffectsConfig,
     pub(crate) runtime: Arc<dyn EffectRuntime>,
     pub(crate) dispatcher: Arc<dyn MethodDispatcher>,
@@ -450,6 +453,7 @@ impl EffectTasks {
                 .clamp(1, Semaphore::MAX_PERMITS),
         ));
         let context = Arc::new(EffectContext {
+            metrics: self.dependencies.metrics,
             config: self.config,
             runtime,
             dispatcher: self.dependencies.dispatcher,

@@ -12,6 +12,7 @@ mod command_line_options;
 mod component_configs;
 pub mod config;
 mod embedded_s3;
+mod metrics_server;
 mod object_stores;
 mod runtime_hooks;
 mod server_logging;

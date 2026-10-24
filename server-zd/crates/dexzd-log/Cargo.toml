@@ -12,6 +12,7 @@ publish.workspace = true
 bytes.workspace = true
 dexzd-clock.workspace = true
 dexzd-keyspace.workspace = true
+dexzd-metrics.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 futures.workspace = true

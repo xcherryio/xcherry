@@ -9,17 +9,20 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytes.workspace = true
 async-trait.workspace = true
 dexzd-clock.workspace = true
 dexzd-cluster-metadata.workspace = true
 dexzd-engine.workspace = true
 dexzd-keyspace.workspace = true
+dexzd-metrics.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 dexzd-search.workspace = true
 dexzd-stream-store.workspace = true
 dexzd-visibility-query.workspace = true
 futures.workspace = true
+http-body = "1"
 prost.workspace = true
 prost-types.workspace = true
 thiserror.workspace = true
@@ -27,6 +30,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
+tower-layer.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

@@ -85,6 +85,7 @@ pub(crate) async fn start_engine_node(
     EngineNode::start(
         config,
         EngineNodeDependencies {
+            metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
             object_store,
             clock,
             applier: Arc::new(DeterministicCommandApplier),

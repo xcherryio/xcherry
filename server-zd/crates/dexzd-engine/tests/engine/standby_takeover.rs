@@ -266,6 +266,7 @@ pub(crate) fn start_node(
         let node = EngineNode::start(
             &config,
             EngineNodeDependencies {
+                metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
                 object_store,
                 clock,
                 applier: applier.clone(),

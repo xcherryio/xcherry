@@ -27,5 +27,7 @@ pub use flow_service::{
     MINIMUM_SUPPORTED_PROTOCOL_VERSION,
 };
 pub use flow_service_config::FlowServiceConfig;
+mod request_metrics;
 pub use health_status::{HEALTH_SERVICE_NAMES, HealthStatus};
+pub use request_metrics::RequestMetricsLayer;
 pub use stream_operations::StreamOperations;

@@ -535,6 +535,7 @@ impl TestCluster {
         let node = EngineNode::start(
             config,
             EngineNodeDependencies {
+                metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
                 object_store: self.object_store.clone(),
                 clock: self.clock.clone(),
                 applier: applier.clone(),

@@ -15,6 +15,16 @@ use super::{Config, ConfigError, CredentialSource, SearchBackend};
 impl Config {
     /// Checks cross-section limits and reports the first failing camelCase YAML field path.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.metrics.listen.is_empty() {
+            self.metrics
+                .listen
+                .parse::<std::net::SocketAddr>()
+                .map_err(|_| ConfigError::Invalid {
+                    field: "metrics.listen",
+                    message: "must be empty or a socket bind address such as 127.0.0.1:9090"
+                        .to_owned(),
+                })?;
+        }
         self.validate_cluster_and_storage()?;
         self.validate_commit_and_recovery()?;
         self.validate_values_and_api()?;

@@ -14,6 +14,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use dexzd_clock::WallClock;
 use dexzd_keyspace::validate_node_identifier;
+use dexzd_metrics::NodeMetrics;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -92,6 +93,27 @@ impl CommitPipeline {
         next_seq: u64,
         config: CommitPipelineConfig,
     ) -> Result<(Self, mpsc::Receiver<CommittedBatch>), LogError> {
+        Self::start_with_metrics(
+            store,
+            clock,
+            stream,
+            epoch,
+            next_seq,
+            config,
+            NodeMetrics::unregistered(),
+        )
+    }
+
+    /// Starts a pipeline with the node's process-local metric handles.
+    pub fn start_with_metrics(
+        store: Arc<dyn ObjectStore>,
+        clock: Arc<dyn WallClock>,
+        stream: StreamIdentity,
+        epoch: u64,
+        next_seq: u64,
+        config: CommitPipelineConfig,
+        metrics: NodeMetrics,
+    ) -> Result<(Self, mpsc::Receiver<CommittedBatch>), LogError> {
         if epoch == 0
             || next_seq == 0
             || config.max_in_flight == 0
@@ -109,6 +131,7 @@ impl CommitPipeline {
         let (committed_sender, committed_receiver) = mpsc::channel(config.max_in_flight * 2);
         let admission = Arc::new(Semaphore::new(config.max_pending_bytes as usize));
         let runtime = PipelineRuntime {
+            metrics,
             store,
             clock,
             stream,
@@ -221,9 +244,12 @@ impl PendingBatch {
 struct InFlightBatch {
     batch: PendingBatch,
     outcome: Option<Result<(), LogError>>,
+    sealed_at: Instant,
+    encoded_bytes: u64,
 }
 
 struct PipelineRuntime {
+    metrics: NodeMetrics,
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,
     stream: StreamIdentity,
@@ -238,6 +264,7 @@ async fn run_pipeline(
     mut receiver: mpsc::Receiver<Proposal>,
 ) {
     let PipelineRuntime {
+        metrics,
         store,
         clock,
         stream,
@@ -275,6 +302,7 @@ async fn run_pipeline(
                 return;
             };
             next_seq = incremented;
+            let sealed_at = Instant::now();
             let content = BatchContent {
                 stream: stream.clone(),
                 epoch,
@@ -304,6 +332,7 @@ async fn run_pipeline(
                 }
             };
             let store = store.clone();
+            let encoded_bytes = body.len() as u64;
             let stream = stream.clone();
             let head_deadline = config.head_deadline;
             writes.spawn(async move {
@@ -317,6 +346,8 @@ async fn run_pipeline(
                 InFlightBatch {
                     batch,
                     outcome: None,
+                    sealed_at,
+                    encoded_bytes,
                 },
             );
         }
@@ -331,7 +362,15 @@ async fn run_pipeline(
             result = writes.join_next(), if !writes.is_empty() => {
                 match result {
                     Some(Ok((seq, outcome))) => {
-                        if let Some(batch) = in_flight.get_mut(&seq) { batch.outcome = Some(outcome); }
+                        if let Some(batch) = in_flight.get_mut(&seq) {
+                            if outcome.is_ok() {
+                                metrics.commit_batches.inc();
+                                metrics.commit_records.inc_by(batch.batch.proposals.len() as u64);
+                                metrics.commit_bytes.inc_by(batch.encoded_bytes);
+                                metrics.commit_latency.observe(batch.sealed_at.elapsed().as_secs_f64());
+                            }
+                            batch.outcome = Some(outcome);
+                        }
                     }
                     _ => {
                         fail_all(&mut open, &mut ready, &mut in_flight, ProposalFailure::Unavailable);

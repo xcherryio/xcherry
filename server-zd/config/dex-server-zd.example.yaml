@@ -55,6 +55,9 @@ api:
   grpcMaxMessageBytes: 33554432
   maxWaitSeconds: 60
   defaultRpcTimeout: 60s
+metrics:
+  # Empty disables the unauthenticated HTTP GET /metrics endpoint. Never expose it publicly.
+  listen: ""
 matching:
   dispatchWait: 10s
   stickyWait: 5s

@@ -52,6 +52,7 @@ async fn start_deterministic_node(
     let node = EngineNode::start(
         config,
         EngineNodeDependencies {
+            metrics: Arc::new(dexzd_metrics::NodeMetrics::unregistered()),
             object_store: cluster.object_store.clone(),
             clock: cluster.clock.clone(),
             applier: Arc::new(DeterministicCommandApplier),

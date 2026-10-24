@@ -10,7 +10,9 @@ publish.workspace = true
 
 [dependencies]
 dexzd-clock.workspace = true
+dexzd-metrics.workspace = true
 dexzd-protocol.workspace = true
+prometheus-client.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

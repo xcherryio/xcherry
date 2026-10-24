@@ -12,6 +12,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use dexzd_clock::WallClock;
 use dexzd_keyspace::validate_node_identifier;
+use dexzd_metrics::{NodeMetrics, Outcome};
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use dexzd_protocol::dexzd::v1::NodeLease;
 use prost::Message;
@@ -84,6 +85,29 @@ impl LeaseConfig {
             self,
             Some(cancellation),
             holder_process_id,
+            None,
+        )
+        .await
+    }
+
+    /// Acquires a process-specific lease and records its renewal outcomes.
+    pub async fn acquire_until_cancelled_with_metrics(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        clock: Arc<dyn WallClock>,
+        node: &NodeConfig,
+        cancellation: &mut watch::Receiver<bool>,
+        holder_process_id: String,
+        metrics: NodeMetrics,
+    ) -> Result<Option<LeaseHandle>, MetadataError> {
+        acquire_lease_inner(
+            store,
+            clock,
+            node,
+            self,
+            Some(cancellation),
+            holder_process_id,
+            Some(metrics),
         )
         .await
     }
@@ -209,6 +233,7 @@ impl Drop for LeaseHandle {
 }
 
 struct LeaseOwner {
+    metrics: Option<NodeMetrics>,
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,
     key: String,
@@ -242,7 +267,8 @@ pub async fn acquire_lease_with_holder_process_id(
     config: &LeaseConfig,
     holder_process_id: String,
 ) -> Result<LeaseHandle, MetadataError> {
-    let acquired = acquire_lease_inner(store, clock, node, config, None, holder_process_id).await?;
+    let acquired =
+        acquire_lease_inner(store, clock, node, config, None, holder_process_id, None).await?;
     Ok(acquired.expect("a lease acquisition without cancellation must complete"))
 }
 
@@ -253,6 +279,7 @@ async fn acquire_lease_inner(
     config: &LeaseConfig,
     mut cancellation: Option<&mut watch::Receiver<bool>>,
     process_id: String,
+    metrics: Option<NodeMetrics>,
 ) -> Result<Option<LeaseHandle>, MetadataError> {
     let duration_micros =
         i64::try_from(config.duration.as_micros()).map_err(|_| MetadataError::InvalidConfig {
@@ -396,6 +423,7 @@ async fn acquire_lease_inner(
         let (status, mut receiver) = watch::channel(LeaseStatus::ValidUntil(valid_until));
         let mut pending = PendingLease {
             owner: Some(LeaseOwner {
+                metrics: metrics.clone(),
                 store,
                 clock,
                 key,
@@ -595,10 +623,18 @@ impl LeaseOwner {
     }
 
     async fn renew_before_deadline(&mut self) -> Result<(), MetadataError> {
-        match tokio::time::timeout_at(self.current_valid_until, self.renew()).await {
+        let result = match tokio::time::timeout_at(self.current_valid_until, self.renew()).await {
             Ok(result) => result,
             Err(_) => Err(self.lost("renewal exceeded local lease deadline")),
+        };
+        if let Some(metrics) = &self.metrics {
+            metrics.record_lease_renewal(if result.is_ok() {
+                Outcome::Ok
+            } else {
+                Outcome::Error
+            });
         }
+        result
     }
 
     async fn renew(&mut self) -> Result<(), MetadataError> {

@@ -15,6 +15,7 @@ example, it supports only pull Workers).
 | `dexzd-protocol` | Generated protobuf and gRPC code for the public protocol and internal formats |
 | `dexzd-keyspace` | Identifiers, partition hashing, key encodings, value references |
 | `dexzd-clock` | Wall-clock abstraction for real and simulated time |
+| `dexzd-metrics` | Fixed, process-local OpenMetrics registry and recording handles |
 | `dexzd-object-store` | Object storage interface, S3 implementation, fault-injecting test implementation |
 | `dexzd-visibility-query` | Visibility query parser and type checker |
 | `dexzd-log` | Command log batches and the conditional-write commit protocol |
@@ -32,6 +33,39 @@ example, it supports only pull Workers).
 
 Crate layers are registered in `script/rust-crate-layers.json`; a crate may depend only on crates
 in the same or a lower layer.
+
+## Metrics
+
+Set `metrics.listen` to a bind address such as `127.0.0.1:9090` to serve plain HTTP `GET /metrics` on a listener separate from `api.listen`. The default empty string disables it. The endpoint is unauthenticated; never expose it publicly. Other paths return 404. The response uses OpenMetrics text with `application/openmetrics-text; version=1.0.0; charset=utf-8`. Metrics are available while a node is recovering or standing by.
+
+Every label value is from a closed set. No series has a Flow, Flow type, partition, tenant, or key label.
+
+| Name | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `dexzd_build_info` | gauge, always 1 | `version` | Binary version |
+| `dexzd_behavior_version` | gauge | — | Cluster's current version barrier used by new commands |
+| `dexzd_node_role` | gauge, 1 for current role and 0 otherwise | `role`: starting, standby, recovering, serving, draining | Lifecycle state |
+| `dexzd_lease_epoch` | gauge | — | Owner epoch held by this node, 0 when none |
+| `dexzd_lease_renewals_total` | counter | `outcome`: ok, error | Lease renewal attempts |
+| `dexzd_api_requests_total` | counter | `rpc_class`: flow_write, flow_read, search, worker_poll, worker_respond; `code`: gRPC status code in snake_case | Public API calls by final status; unary calls at completion, Worker streams once at close, unauthenticated calls included, health checks excluded |
+| `dexzd_commit_batches_total` | counter | — | Durably committed batches |
+| `dexzd_commit_records_total` | counter | — | Committed commands |
+| `dexzd_commit_bytes_total` | counter | — | Committed batch bytes |
+| `dexzd_commit_latency_seconds` | histogram, buckets 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5 | — | Batch seal to durable acknowledgement |
+| `dexzd_object_store_requests_total` | counter | `operation`: put, get, list, delete; `object_kind`: log, snapshot, manifest, lease, other | Object storage requests; multipart upload counts once as put |
+| `dexzd_object_store_request_errors_total` | counter | `operation`: put, get, list, delete | Failed requests after SDK retries |
+| `dexzd_object_store_put_bytes_total` | counter | — | Uploaded bytes |
+| `dexzd_snapshots_total` | counter | `outcome`: ok, error | Snapshot attempts |
+| `dexzd_snapshot_last_duration_seconds` | gauge | — | Duration of the last successful snapshot |
+| `dexzd_snapshot_last_bytes` | gauge | — | Size of the last successful snapshot |
+| `dexzd_recovery_last_duration_seconds` | gauge | — | Duration of the last completed recovery or takeover replay |
+| `dexzd_recovery_last_replayed_bytes` | gauge | — | Uncompressed command record bytes replayed by the last recovery |
+| `dexzd_local_storage_bytes` | gauge | — | Local SST and WAL bytes, sampled at scrape time |
+| `dexzd_timer_lag_seconds` | gauge | — | Age of the oldest due timer not yet fired, 0 when none |
+| `dexzd_matching_queued_tasks` | gauge | — | Worker tasks waiting for a poll across all Flow types |
+| `dexzd_matching_worker_streams` | gauge | — | Open Worker poll streams |
+
+On Linux, the scrape also includes `process_resident_memory_bytes`, `process_cpu_seconds_total`, `process_open_fds`, and `process_start_time_seconds`. These process metrics are absent on other platforms.
 
 ## Running
 
