@@ -1,0 +1,143 @@
+name: Server ZD Simulation Nightly
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seed_count:
+        description: Number of consecutive apply simulation seeds
+        required: true
+        default: 500
+        type: number
+      command_count:
+        description: Commands per apply simulation seed
+        required: true
+        default: 1000
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-zd-simulation-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "4"
+  RUST_BACKTRACE: "1"
+  RUSTUP_TOOLCHAIN: "1.97.1"
+
+jobs:
+  apply-simulation:
+    name: Apply simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: server-zd
+    env:
+      DEXZD_SIMULATION_SEEDS: ${{ inputs.seed_count || 500 }}
+      DEXZD_SIMULATION_COMMANDS: ${{ inputs.command_count || 1000 }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Install libclang for the RocksDB bindings
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-zd
+          shared-key: server-zd-test
+          save-if: false
+      - name: Validate apply simulation budget
+        shell: bash
+        run: |
+          if ! [[ "$DEXZD_SIMULATION_SEEDS" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$DEXZD_SIMULATION_COMMANDS" =~ ^[1-9][0-9]*$ ]] ||
+             (( ${#DEXZD_SIMULATION_SEEDS} > 4 || ${#DEXZD_SIMULATION_COMMANDS} > 4 )) ||
+             (( DEXZD_SIMULATION_SEEDS > 1000 || DEXZD_SIMULATION_COMMANDS > 2000 )) ||
+             (( DEXZD_SIMULATION_SEEDS * DEXZD_SIMULATION_COMMANDS > 500000 )); then
+            echo 'Use 1–1000 seeds, 1–2000 commands per seed, and at most 500000 random commands.' >&2
+            exit 1
+          fi
+      - name: Choose random base seed
+        run: |
+          base_seed=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]')
+          echo "DEXZD_SIMULATION_BASE_SEED=$base_seed" >> "$GITHUB_ENV"
+          echo "Base seed: $base_seed"
+      - name: Run apply simulation
+        id: apply
+        shell: bash
+        env:
+          DEXZD_SIMULATION_FAILURE_DIR: ${{ runner.temp }}/dexzd-simulation-failures
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=1m 50m cargo test -p dexzd-simulation --test apply_invariants apply_keeps_every_invariant_over_random_command_sequences -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-simulation.log"
+      - name: Summarize apply simulation
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Apply simulation"
+            echo "Base seed: ${DEXZD_SIMULATION_BASE_SEED:-not selected}"
+            echo "Seed count: $DEXZD_SIMULATION_SEEDS; commands per seed: $DEXZD_SIMULATION_COMMANDS"
+            echo "Result: ${{ steps.apply.outcome }}"
+            echo
+            if compgen -G "$RUNNER_TEMP/dexzd-simulation-failures/*.txt" > /dev/null; then
+              echo "### Failing seeds"
+              echo "Run reproduction commands from \`server-zd/\`."
+              for report in "$RUNNER_TEMP"/dexzd-simulation-failures/*.txt; do
+                seed=${report##*/}
+                seed=${seed%.txt}
+                reproduction=$(grep -m1 '^reproduce with:' "$report")
+                echo "- Seed $seed: \`${reproduction#reproduce with: }\`"
+              done
+              echo
+              echo "Download the failure artifact for each command index and reproduction sequence."
+            else
+              echo "No invariant failures were recorded."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload apply simulation failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dexzd-apply-simulation-failures
+          path: |
+            ${{ runner.temp }}/dexzd-simulation-failures/
+            ${{ runner.temp }}/dexzd-simulation.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  engine-simulation:
+    name: Engine simulation (pending test target)
+    if: ${{ vars.DEXZD_ENGINE_SIMULATION_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: server-zd
+    env:
+      DEXZD_SIMULATION_SEEDS: ${{ inputs.seed_count || 500 }}
+      DEXZD_SIMULATION_COMMANDS: ${{ inputs.command_count || 1000 }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Install libclang for the RocksDB bindings
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-zd
+          shared-key: server-zd-test
+          save-if: false
+      - name: Choose random base seed
+        run: |
+          base_seed=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]')
+          echo "DEXZD_SIMULATION_BASE_SEED=$base_seed" >> "$GITHUB_ENV"
+          echo "Base seed: $base_seed"
+      - name: Run engine simulation
+        run: cargo test -p dexzd-simulation --test engine_invariants -- --nocapture
