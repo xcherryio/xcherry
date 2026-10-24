@@ -77,17 +77,20 @@ pub(crate) fn apply_step_decision(
                 return Ok(Ok(()));
             }
             CloseDecisionType::ForceFail => {
-                if let Err(rejection) = collect_output(transaction, cursor, &output())? {
-                    return Ok(Err(rejection));
-                }
+                // As in the Go Server: no result is kept, and a string close input is the message.
+                let message = match close
+                    .close_input
+                    .as_ref()
+                    .and_then(|value| value.kind.as_ref())
+                {
+                    Some(dexzd_protocol::dex::value::Kind::StringValue(text)) => text.clone(),
+                    _ => String::new(),
+                };
                 close_flow(
                     transaction,
                     cursor,
                     scope,
-                    FlowClosing::failed(
-                        FlowErrorType::StepDecisionFailingFlow,
-                        "the Step decision failed the Flow",
-                    ),
+                    FlowClosing::failed(FlowErrorType::StepDecisionFailingFlow, message),
                 )?;
                 return Ok(Ok(()));
             }

@@ -1314,3 +1314,32 @@ fn an_oversized_input_without_a_start_step_type_is_rejected() {
     assert!(is_error(&outcome.reply, 3), "{:?}", outcome.reply);
     assert!(outcome.writes.is_empty());
 }
+
+#[test]
+fn force_fail_uses_the_string_close_input_as_the_message_and_keeps_no_result() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.complete_wait_for("ChargeStep-1", 1);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    let decision = StepDecision {
+        close_decision: Some(CloseDecision {
+            close_decision_type: CloseDecisionType::ForceFail as i32,
+            close_input: Some(string_value("a failing message")),
+            ..CloseDecision::default()
+        }),
+        ..StepDecision::default()
+    };
+
+    harness.complete_execute("ChargeStep-1", 1, decision);
+
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    let close = record.close.expect("the run is closed");
+    assert_eq!(
+        close.error_type,
+        dexzd_protocol::dex::FlowErrorType::StepDecisionFailingFlow as i32
+    );
+    assert_eq!(close.error_message, "a failing message");
+    assert!(close.results.is_empty(), "ForceFail keeps no Flow result");
+}
