@@ -185,9 +185,6 @@ fn test_model_input_workflow() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_workflow_config_override() {
-    if skip_if_server_zd("Continue-As-New") {
-        return;
-    }
     let environment = DexDevTestEnvironment::start(Registry::new().register(BasicWorkflow::new()));
     let workflow = BasicWorkflow::new();
     let flow_id = flow_id("config-override");
