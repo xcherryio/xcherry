@@ -10,6 +10,7 @@ members = [
     "crates/dexzd-log",
     "crates/dexzd-object-store",
     "crates/dexzd-protocol",
+    "crates/dexzd-request-validation",
     "crates/dexzd-search",
     "crates/dexzd-server",
     "crates/dexzd-simulation",
@@ -43,6 +44,7 @@ dexzd-keyspace = { path = "crates/dexzd-keyspace" }
 dexzd-log = { path = "crates/dexzd-log" }
 dexzd-object-store = { path = "crates/dexzd-object-store" }
 dexzd-protocol = { path = "crates/dexzd-protocol" }
+dexzd-request-validation = { path = "crates/dexzd-request-validation" }
 dexzd-search = { path = "crates/dexzd-search" }
 dexzd-server = { path = "crates/dexzd-server" }
 dexzd-storage = { path = "crates/dexzd-storage" }
@@ -57,6 +59,7 @@ protoc-bin-vendored = "3.2"
 rand = "0.10"
 rand_chacha = "0.10"
 rocksdb = { version = "0.25", default-features = false, features = ["lz4", "zstd", "bindgen-runtime"] }
+s3mock = { path = "../s3mock/crates/s3mock" }
 s3mock-server = { path = "../s3mock/crates/s3mock-server" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
