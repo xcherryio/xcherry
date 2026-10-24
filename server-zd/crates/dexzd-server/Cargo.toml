@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 dexzd-api.workspace = true
+dexzd-apply.workspace = true
 dexzd-clock.workspace = true
 dexzd-cluster-metadata.workspace = true
 dexzd-engine.workspace = true

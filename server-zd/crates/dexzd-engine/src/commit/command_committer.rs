@@ -124,7 +124,6 @@ impl CommandCommitter {
         command.epoch = inner.epoch;
         command.behavior_version = inner.behavior_version;
         command.command_id.clone_from(&command_id);
-        let (responder, ticket) = CommitTicket::new_pair();
         let mut stamps = self.lock_stamps();
         let watermark = stamps.last_stamped_micros[usize::from(partition.0)];
         command.proposed_at_micros = inner
@@ -144,6 +143,7 @@ impl CommandCommitter {
             .ok_or_else(|| CommitError::Unavailable {
                 detail: "the commit backlog is full".to_owned(),
             })?;
+        let (responder, ticket) = CommitTicket::new_pair();
         inner.state.register(
             command_id.clone(),
             PendingCommand {
@@ -157,23 +157,33 @@ impl CommandCommitter {
             waits_for_commit: urgency == CommitUrgency::Prompt,
         };
         if stamps.proposals.send(proposal).is_err() {
-            drop(inner.state.take(&command_id));
             let reason = inner
                 .state
                 .stop_reason()
                 .unwrap_or(NodeStopReason::Shutdown);
-            return Err(CommitError::NodeStopping {
+            let error = CommitError::NodeStopping {
                 detail: reason.to_string(),
-            });
+            };
+            if let Some(pending) = inner.state.take(&command_id) {
+                pending.responder.resolve(Err(error.clone()));
+            }
+            return Err(error);
         }
         stamps.last_stamped_micros[usize::from(partition.0)] = command.proposed_at_micros;
         drop(stamps);
         Ok((command, ticket))
     }
 
-    /// Returns a view of committed state. Reads block, so use it on a blocking-pool thread.
-    pub fn committed_view(&self) -> CommittedStateView {
-        CommittedStateView::new(self.inner.store.clone())
+    /// Returns a consistent view of committed state. Reads block, so use it on a
+    /// blocking-pool thread.
+    ///
+    /// Fails with [`CommitError::Unavailable`] when the local store cannot open a view.
+    pub fn committed_view(&self) -> Result<CommittedStateView, CommitError> {
+        CommittedStateView::open(self.inner.store.clone()).map_err(|error| {
+            CommitError::Unavailable {
+                detail: format!("local store cannot open a consistent view: {error}"),
+            }
+        })
     }
 
     /// Compares speculative and committed outcomes when debug replay checks are on.
@@ -218,7 +228,7 @@ impl FlowCommandCommitter for CommandCommitter {
     }
 
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
-        Ok(Box::new(CommandCommitter::committed_view(self)))
+        Ok(Box::new(CommandCommitter::committed_view(self)?))
     }
 
     fn check_speculative_outcome(

@@ -6,8 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
@@ -16,9 +16,9 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
     CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
-    CommittedFlowCommand, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
-    EngineServices, EngineStartError, LocalStoreConfig, PartitionRuntimeRebuilder,
-    RuntimeRebuildError, SnapshotConfig,
+    CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
+    EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -32,6 +32,7 @@ pub(crate) const PARTITION_COUNT: u32 = 4;
 pub(crate) const FAILING_FLOW: &str = "fails-to-apply";
 pub(crate) const PANICKING_FLOW: &str = "panics-in-apply";
 pub(crate) const NONDETERMINISTIC_FLOW: &str = "applies-nondeterministically";
+pub(crate) const BLOCKING_FLOW: &str = "blocks-in-apply";
 
 /// Wall clock that follows Tokio's paused clock, with an adjustable offset.
 pub(crate) struct TestClock {
@@ -66,11 +67,45 @@ impl WallClock for TestClock {
 pub(crate) struct CountingApplier {
     applied: Mutex<Vec<FlowCommand>>,
     nondeterministic_counter: AtomicU64,
+    /// Holds commands of [`BLOCKING_FLOW`] until opened.
+    pub(crate) gate: ApplyGate,
 }
 
 impl CountingApplier {
     pub(crate) fn applied_commands(&self) -> Vec<FlowCommand> {
         self.applied.lock().expect("applied lock").clone()
+    }
+}
+
+/// Blocks an apply call on its blocking-pool thread until the test opens it.
+#[derive(Default)]
+pub(crate) struct ApplyGate {
+    has_entered: AtomicBool,
+    is_open: Mutex<bool>,
+    opened: Condvar,
+}
+
+impl ApplyGate {
+    /// Yields instead of sleeping: paused time does not advance while a blocking task runs.
+    pub(crate) async fn wait_until_entered(&self) {
+        while !self.has_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    pub(crate) fn open(&self) {
+        *self.is_open.lock().expect("gate lock") = true;
+        self.opened.notify_all();
+    }
+
+    fn pass(&self) {
+        self.has_entered.store(true, Ordering::SeqCst);
+        let is_open = self.is_open.lock().expect("gate lock");
+        drop(
+            self.opened
+                .wait_while(is_open, |is_open| !*is_open)
+                .expect("gate lock"),
+        );
     }
 }
 
@@ -92,6 +127,7 @@ impl CommandApplier for CountingApplier {
                 });
             }
             PANICKING_FLOW => panic!("scripted apply panic"),
+            BLOCKING_FLOW => self.gate.pass(),
             _ => {}
         }
         let counter_key = counter_key(context, &command.flow_id);
@@ -359,7 +395,16 @@ impl TestNode {
 
     /// Returns the committed counter of `flow_id`.
     pub(crate) async fn committed_count(&self, flow_id: &str) -> u64 {
-        let view = self.node.committer().committed_view();
+        let view = self
+            .node
+            .committer()
+            .committed_view()
+            .expect("committed view opens");
+        self.count_in_view(view, flow_id).await
+    }
+
+    /// Returns the counter of `flow_id` as `view` sees it.
+    pub(crate) async fn count_in_view(&self, view: CommittedStateView, flow_id: &str) -> u64 {
         let key = counter_key(&self.context(flow_id), flow_id);
         tokio::task::spawn_blocking(move || {
             view.get(ColumnFamily::Flow, &key)

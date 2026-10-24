@@ -22,6 +22,23 @@ use crate::harness::{
     CountingApplier, FAILING_FLOW, PARTITION_COUNT, RecordingRuntime, TestCluster,
 };
 
+/// Writes a barrier this binary does not support, as a newer binary's upgrade would.
+async fn raise_version_barrier_as_a_newer_binary(cluster: &TestCluster, behavior_version: u32) {
+    dexzd_cluster_metadata::update_manifest(
+        cluster.object_store.as_ref(),
+        cluster.clock.as_ref(),
+        |manifest| {
+            manifest
+                .version_barrier
+                .get_or_insert_default()
+                .behavior_version = behavior_version;
+            Ok(dexzd_cluster_metadata::ManifestChange::Changed)
+        },
+    )
+    .await
+    .expect("barrier raised");
+}
+
 fn all_partitions() -> Vec<PartitionId> {
     (0..PARTITION_COUNT)
         .map(|partition| PartitionId(u16::try_from(partition).expect("partition fits u16")))
@@ -181,14 +198,7 @@ async fn a_newer_version_barrier_fails_startup() {
     let mut cluster = TestCluster::new();
     let first = cluster.start_in_memory().await;
     first.node.shutdown().await;
-    dexzd_cluster_metadata::raise_version_barrier(
-        cluster.object_store.as_ref(),
-        cluster.clock.as_ref(),
-        99,
-        1,
-    )
-    .await
-    .expect("barrier raised");
+    raise_version_barrier_as_a_newer_binary(&cluster, 99).await;
     let config = cluster.config(LocalStoreConfig::InMemory);
     let result = cluster
         .start(

@@ -15,16 +15,17 @@ use std::time::Duration;
 use dexzd_api::{
     AttributeIndexes, DexFlowService, FlowServiceDependencies, HealthStatus, StreamOperations,
 };
+use dexzd_apply::FlowStateReader;
 use dexzd_clock::{SystemWallClock, WallClock};
 use dexzd_engine::{
-    CommandApplier, DeterministicCommandApplier, EffectDependencies, EffectRunner,
-    EffectTasksHandle, EngineNode, EngineNodeDependencies, EngineRuntimeHooks, EngineServices,
-    FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects, NodeMetaUploadLedger,
-    NodeStopReason,
+    CommandApplier, CommandCommitter, DeterministicCommandApplier, EffectDependencies,
+    EffectRunner, EffectTasksHandle, EngineNode, EngineNodeDependencies, EngineRuntimeHooks,
+    EngineServices, FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects,
+    NodeMetaUploadLedger, NodeStopReason,
 };
 use dexzd_protocol::dex::worker_task_service_server::WorkerTaskServiceServer;
-use dexzd_search::SearchBackend;
-use dexzd_search::builtin::BuiltinSearchBackend;
+use dexzd_search::builtin::{BuiltinSearchBackend, CommittedSearchViewProvider};
+use dexzd_search::{SearchBackend, SearchError};
 use dexzd_stream_store::StreamStore;
 use dexzd_worker_dispatch::WorkerDispatch;
 use tokio::net::TcpListener;
@@ -387,7 +388,9 @@ fn search_backend(
                     field: "search.builtinScanBudgetDocuments",
                 })?;
             let backend = BuiltinSearchBackend::with_scan_budget(
-                Arc::new(engine.committer().committed_view()),
+                Arc::new(CommittedSearchViews {
+                    committer: engine.committer().clone(),
+                }),
                 partition_count,
                 scan_budget,
             )
@@ -406,5 +409,20 @@ fn search_backend(
 async fn close_stream_store(stream_store: &StreamStore) {
     if let Err(error) = stream_store.close().await {
         tracing::warn!(%error, "Stream Store did not close cleanly");
+    }
+}
+
+/// Opens committed state views of the engine for builtin SearchFlows.
+struct CommittedSearchViews {
+    committer: CommandCommitter,
+}
+
+impl CommittedSearchViewProvider for CommittedSearchViews {
+    fn committed_view(&self) -> Result<Arc<dyn FlowStateReader + Send + Sync>, SearchError> {
+        let view = self
+            .committer
+            .committed_view()
+            .map_err(|error| SearchError::Unavailable(error.to_string()))?;
+        Ok(Arc::new(view))
     }
 }

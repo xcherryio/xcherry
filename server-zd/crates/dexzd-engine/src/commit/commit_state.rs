@@ -8,8 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use dexzd_keyspace::PartitionId;
 use tokio::sync::{OwnedSemaphorePermit, watch};
@@ -77,6 +77,8 @@ struct PendingCommands {
 pub(crate) struct CommitState {
     lifecycle: watch::Sender<NodeState>,
     pending: Mutex<PendingCommands>,
+    /// Appliers hold it for reading while they write; `stop` holds it for writing.
+    store_writes: RwLock<()>,
     halted_partitions: Vec<AtomicBool>,
 }
 
@@ -86,6 +88,7 @@ impl CommitState {
         Self {
             lifecycle,
             pending: Mutex::new(PendingCommands::default()),
+            store_writes: RwLock::new(()),
             halted_partitions: (0..partition_count)
                 .map(|_| AtomicBool::new(false))
                 .collect(),
@@ -107,14 +110,22 @@ impl CommitState {
     }
 
     /// Stops the node once; later reasons are ignored. Fails every pending command.
+    ///
+    /// Waits for in-progress applier writes, so never call it while holding [`Self::begin_store_write`].
     pub(crate) fn stop(&self, reason: NodeStopReason) {
-        let is_first_stop = self.lifecycle.send_if_modified(|state| {
-            if matches!(state, NodeState::Stopped(_)) {
-                return false;
-            }
-            *state = NodeState::Stopped(reason.clone());
-            true
-        });
+        let is_first_stop = {
+            let _store_writes = self
+                .store_writes
+                .write()
+                .expect("store write lock is not poisoned");
+            self.lifecycle.send_if_modified(|state| {
+                if matches!(state, NodeState::Stopped(_)) {
+                    return false;
+                }
+                *state = NodeState::Stopped(reason.clone());
+                true
+            })
+        };
         if !is_first_stop {
             return;
         }
@@ -133,6 +144,17 @@ impl CommitState {
                 detail: reason.to_string(),
             }));
         }
+    }
+
+    /// Admits one applier write to the local store, or returns `None` once the node stopped.
+    ///
+    /// A failed ticket must never be followed by a write, so `stop` waits for admitted writes.
+    pub(crate) fn begin_store_write(&self) -> Option<RwLockReadGuard<'_, ()>> {
+        let store_write = self
+            .store_writes
+            .read()
+            .expect("store write lock is not poisoned");
+        self.stop_reason().is_none().then_some(store_write)
     }
 
     pub(crate) fn check_serving(&self) -> Result<(), CommitError> {
@@ -175,9 +197,11 @@ impl CommitState {
     ) -> Result<(), CommitError> {
         let mut pending = self.lock_pending();
         if let Some(reason) = &pending.stop_reason {
-            return Err(CommitError::NodeStopping {
+            let error = CommitError::NodeStopping {
                 detail: reason.to_string(),
-            });
+            };
+            command.responder.resolve(Err(error.clone()));
+            return Err(error);
         }
         pending.by_command_id.insert(command_id, command);
         Ok(())
