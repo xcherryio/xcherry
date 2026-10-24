@@ -415,9 +415,6 @@ fn run_probe(client: &Client) -> String {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn pull_worker_test_end_to_end() {
-    if skip_if_server_zd("push Workers") {
-        return;
-    }
     let server_address =
         std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
     let cache_directory = tempfile::tempdir().expect("create pull cache directory");
@@ -519,22 +516,25 @@ fn pull_worker_test_end_to_end() {
         Err(mpsc::TryRecvError::Empty)
     ));
 
-    let push = DexDevTestEnvironment::start_push(Registry::new().register(BasicWorkflow::new()));
-    let push_id = flow_id("rust-push-alongside-pull");
-    push.client
-        .start_flow(&BasicWorkflow::new(), &push_id, 0)
-        .expect("start push Flow");
-    assert_eq!(
-        2,
+    // C18: server-zd rejects push Worker targets.
+    if !skip_if_server_zd("push Workers") {
+        let push =
+            DexDevTestEnvironment::start_push(Registry::new().register(BasicWorkflow::new()));
+        let push_id = flow_id("rust-push-alongside-pull");
         push.client
-            .wait_for_flow_with_timeout(&push_id, Duration::from_secs(30))
-            .expect("complete push Flow")
-            .single_output::<i32>()
-            .expect("push result")
-    );
+            .start_flow(&BasicWorkflow::new(), &push_id, 0)
+            .expect("start push Flow");
+        assert_eq!(
+            2,
+            push.client
+                .wait_for_flow_with_timeout(&push_id, Duration::from_secs(30))
+                .expect("complete push Flow")
+                .single_output::<i32>()
+                .expect("push result")
+        );
+    }
     drop(worker_b);
     drop(client);
-    drop(push);
     cache.close().expect("close pull cache");
 }
 

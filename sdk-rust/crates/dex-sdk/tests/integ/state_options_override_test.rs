@@ -18,6 +18,7 @@ use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_state_options_override_workflow() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }
