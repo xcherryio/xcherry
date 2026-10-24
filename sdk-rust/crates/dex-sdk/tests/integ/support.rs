@@ -29,6 +29,14 @@ static SERVER_ENGINE: OnceLock<ServerEngine> = OnceLock::new();
     reason = "Rust integration tests have no skip API"
 )]
 pub(crate) fn skip_if_server_zd(feature: &str) -> bool {
+    if !is_server_zd() {
+        return false;
+    }
+    println!("server-zd does not support {feature}");
+    true
+}
+
+pub(crate) fn is_server_zd() -> bool {
     let server_engine = SERVER_ENGINE.get_or_init(|| {
         let server_address =
             std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
@@ -44,11 +52,7 @@ pub(crate) fn skip_if_server_zd(feature: &str) -> bool {
                 .server_engine()
         })
     });
-    if *server_engine != ServerEngine::Zd {
-        return false;
-    }
-    println!("server-zd does not support {feature}");
-    true
+    *server_engine == ServerEngine::Zd
 }
 
 pub(crate) struct DexDevTestEnvironment {

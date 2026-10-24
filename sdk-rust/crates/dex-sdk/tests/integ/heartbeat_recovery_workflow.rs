@@ -17,7 +17,7 @@ use dex_sdk::{
     StepDurability, StepList, StepOptions, Stream,
 };
 
-use crate::support::is_pull_mode;
+use crate::support::{is_pull_mode, is_server_zd};
 
 pub(crate) static HEARTBEAT_PROGRESS: LazyLock<Stream<String>> =
     LazyLock::new(|| Stream::new("rust-heartbeat-progress", 1 << 20));
@@ -96,7 +96,10 @@ impl Step for AsyncHeartbeatStep {
     type Input = ();
 
     fn execute(&self, context: &mut Context, _input: ()) -> HandlerResult<StepDecision> {
-        let expected_heartbeat = if is_pull_mode() && context.attempt() > 2 {
+        // C2: server-zd persists ASYNC heartbeat checkpoints from the first attempt.
+        let expected_heartbeat = if (is_server_zd() && context.attempt() > 1)
+            || (is_pull_mode() && context.attempt() > 2)
+        {
             Some(Some(format!("local-{}", context.attempt() - 1)))
         } else {
             None
