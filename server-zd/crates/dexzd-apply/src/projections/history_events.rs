@@ -23,6 +23,7 @@ use dexzd_protocol::dexzd::v1::{
 use crate::ApplyError;
 use crate::command_handlers::run_cursor::{RunCursor, timestamp};
 use crate::state_access::FlowTransaction;
+use crate::steps::wait_conditions::wire_condition_results;
 use crate::values::wire_value;
 
 pub(crate) fn record_flow_started(
@@ -101,7 +102,10 @@ fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEve
             .input
             .as_ref()
             .map(|stored| wire_value(cursor.rows, stored)),
-        condition_results: None,
+        condition_results: step
+            .condition_results
+            .as_ref()
+            .map(|results| wire_condition_results(cursor.rows, results)),
         attributes: step
             .invocation
             .as_ref()

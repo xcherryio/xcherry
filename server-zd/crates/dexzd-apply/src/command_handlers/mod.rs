@@ -17,7 +17,7 @@ pub(crate) mod flow_close;
 pub(crate) mod flow_data;
 mod flow_start;
 pub(crate) mod run_cursor;
-mod step_commands;
+pub(crate) mod step_commands;
 
 pub(crate) use command_replies::unimplemented_reply;
 pub(crate) use command_scope::{CommandScope, HandlerOutput};
@@ -127,8 +127,10 @@ fn apply_run_command(
         Command::TimersFired(fired) => {
             step_commands::apply_timers_fired(transaction, cursor, scope, fired)
         }
+        Command::TimerSkip(skip) => {
+            crate::steps::wait_conditions::apply_timer_skip(transaction, cursor, scope, skip)
+        }
         Command::RpcCommitted(_)
-        | Command::TimerSkip(_)
         | Command::TimeTravel(_)
         | Command::InboxMessage(_)
         | Command::OutboxAck(_)
