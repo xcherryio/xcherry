@@ -144,6 +144,10 @@ impl ComponentConfigs {
             max_worker_request_bytes: grpc_max_message_bytes,
             default_max_value_bytes: max_value_bytes,
             hydrate_before_dispatch: config.values.hydrate_before_dispatch,
+            max_blocking_state_reads: to_usize(
+                "limits.maxBlockingStateReads",
+                u64::from(config.limits.max_blocking_state_reads),
+            )?,
             ..EffectsConfig::default()
         };
         let matching = MatchingConfig {
