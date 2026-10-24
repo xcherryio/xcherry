@@ -9,10 +9,36 @@
 //! Cross-Flow messages through the outbox and inbox (plan section 9.5): child Flow starts and
 //! completion reports. Implemented by task A6; the backbone only defines the entry points.
 
+use dexzd_protocol::dex::SubFlowCondition;
+
 use crate::ApplyError;
 use crate::command_handlers::CommandScope;
 use crate::command_handlers::run_cursor::RunCursor;
 use crate::state_access::FlowTransaction;
+use crate::values::ValueRejection;
+
+/// Starts the child Flows of a WaitFor's SubFlow conditions through the outbox, one per
+/// condition with the matching ID of `child_flow_ids`.
+///
+/// Returns `Ok(Err(..))` when a start value must be rejected as the Worker's invalid result.
+pub(crate) fn start_child_flows(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+    parent_step_execution_id: &str,
+    sub_flow_conditions: &[SubFlowCondition],
+    child_flow_ids: &[String],
+) -> Result<Result<(), ValueRejection>, ApplyError> {
+    let _ = (
+        transaction,
+        cursor,
+        scope,
+        parent_step_execution_id,
+        sub_flow_conditions,
+        child_flow_ids,
+    );
+    Ok(Ok(()))
+}
 
 /// Writes a completion report to the parent's inbox through the outbox when this run is a
 /// child Flow.
