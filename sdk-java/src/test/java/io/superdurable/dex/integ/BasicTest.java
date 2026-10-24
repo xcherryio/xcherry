@@ -208,6 +208,7 @@ public final class BasicTest {
 
     @Test
     void testSubFlowPartialResultsSurviveContinueAsNewWithoutRestart() throws Exception {
+        // C3: server-zd never continues a run as new.
         IntegrationTestWaits.skipIfServerZD("Continue-As-New");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
@@ -356,7 +357,6 @@ public final class BasicTest {
 
     @Test
     void testWorkflowConfigOverride() throws Exception {
-        IntegrationTestWaits.skipIfServerZD("Continue-As-New");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
                 WORKFLOW)) {
