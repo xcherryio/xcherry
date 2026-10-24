@@ -254,6 +254,7 @@ pub(crate) fn finish_step(
         }
     }
     crate::steps::wait_conditions::release_condition_results(transaction, cursor, step)?;
+    step.wait_for_pull_routing = None;
     step.phase = phase as i32;
     step.completed_seq = cursor.seq;
     cursor.rows.put_step_execution(transaction, step);
