@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 public class OrderProcessingIntegTest {
     @Test
     void orderProcessingHappyPath() {
+        ServerZDSkips.skipWhenServerZD("failure policies");
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String flowId = environment.newFlowId("order-processing");
         final String runId = environment.client().startFlow(
@@ -58,6 +59,7 @@ public class OrderProcessingIntegTest {
 
     @Test
     void orderProcessingReminderThenShip() throws InterruptedException {
+        ServerZDSkips.skipWhenServerZD("failure policies");
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String flowId = environment.newFlowId("order-processing-reminder");
         environment.client().startFlow(
@@ -99,6 +101,7 @@ public class OrderProcessingIntegTest {
 
     @Test
     void orderProcessingShipFailureRefunds() {
+        ServerZDSkips.skipWhenServerZD("failure policies");
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String flowId = environment.newFlowId("order-processing-refund");
         environment.client().startFlow(

@@ -29,8 +29,30 @@ for arg in "$@"; do
   esac
 done
 
+export DEX_INTEG_ENGINE="${DEX_INTEG_ENGINE:-temporal}"
+if [[ "$DEX_INTEG_ENGINE" != temporal && "$DEX_INTEG_ENGINE" != zd ]]; then
+  echo "DEX_INTEG_ENGINE must be temporal or zd" >&2
+  exit 2
+fi
+default_worker_mode=push
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_worker_mode=pull
+fi
+export DEX_EXAMPLES_WORKER_MODE="${DEX_EXAMPLES_WORKER_MODE:-$default_worker_mode}"
+if [[ "$DEX_EXAMPLES_WORKER_MODE" != push && "$DEX_EXAMPLES_WORKER_MODE" != pull ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && "$DEX_EXAMPLES_WORKER_MODE" == push ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE=push is not supported with DEX_INTEG_ENGINE=zd" >&2
+  exit 2
+fi
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)
+if [[ -n "${DEX_SERVER_ZD_BINARY:-}" && "$DEX_SERVER_ZD_BINARY" == */* ]]; then
+  DEX_SERVER_ZD_BINARY="$(cd "$(dirname "$DEX_SERVER_ZD_BINARY")" && pwd)/$(basename "$DEX_SERVER_ZD_BINARY")"
+fi
 entity_store_dir="$repo_root/examples/entity-store"
 compose_project="dex-java-examples-$$"
 dex_port="${DEX_JAVA_EXAMPLES_DEX_PORT:-19803}"
@@ -81,17 +103,30 @@ fi
   GOWORK=off go build -trimpath -o "$binary_dir/dexcli" ./cmd/dexcli
 )
 
-docker compose -p "$compose_project" \
-  -f "$entity_store_dir/docker-compose.yml" up --detach --wait
-entity_store_started=true
+if [[ "$DEX_INTEG_ENGINE" == zd && -z "${DEX_SERVER_ZD_BINARY:-}" ]]; then
+  (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
+  DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
+fi
+
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  dev_args=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/zd")
+else
+  # server-zd does not support Attribute Store sync, so only temporal runs start the entity store.
+  docker compose -p "$compose_project" \
+    -f "$entity_store_dir/docker-compose.yml" up --detach --wait
+  entity_store_started=true
+  dev_args=(
+    -attribute-store-config "$entity_store_dir/attribute-store.yaml"
+    -sqlite-db-filename "$test_dir/temporal.db"
+  )
+fi
 
 "$binary_dir/dexcli" dev \
-  -attribute-store-config "$entity_store_dir/attribute-store.yaml" \
+  "${dev_args[@]}" \
   -bind-address 127.0.0.1 \
   -dex-port "$dex_port" \
   -web-port "$web_port" \
   -open=false \
-  -sqlite-db-filename "$test_dir/temporal.db" \
   >>"$log_file" 2>&1 &
 dexcli_pid=$!
 

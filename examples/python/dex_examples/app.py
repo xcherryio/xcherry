@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import time
 from typing import Any, Callable
@@ -126,6 +127,10 @@ from dex_examples.products.order_processing.order_processing_flow import OrderPr
 from dex_examples.products.signup.user_signup_flow import UserOnboardingFlow
 from dex_examples.products.subscription.subscription_flow import SubscriptionFlow
 from dex_examples.shared.my_dependency_service import MyDependencyService
+from dex_examples.shared.worker_mode import (
+    PULL_REGISTRATION_TIMEOUT_SECONDS,
+    new_example_pull_worker_options,
+)
 
 
 class ExampleApp:
@@ -270,16 +275,9 @@ class ExampleApp:
         self.blob_cache = open_blob_cache(
             BlobCacheConfig(str(config.blob_cache_dir), 1 << 30)
         )
-        worker_options = WorkerOptions(
-            bind_address=config.worker_bind_address,
-            server_address=config.server_address,
-            worker_target=(
-                WorkerTarget(config.worker_target)
-                if config.worker_target
-                else None
-            ),
+        self.worker = AsyncWorker(
+            self.registry, self.blob_cache, _new_worker_options(config)
         )
-        self.worker = AsyncWorker(self.registry, self.blob_cache, worker_options)
         self._client = AsyncClient(
             self.registry,
             self.blob_cache,
@@ -289,6 +287,9 @@ class ExampleApp:
             ),
         )
         self._worker_task: asyncio.Task[None] | None = None
+        self._is_worker_closed = False
+        self._is_mcp_registry_closed = False
+        self._is_blob_cache_closed = False
 
     @property
     def client(self) -> AsyncClient:
@@ -300,25 +301,102 @@ class ExampleApp:
         return self._client
 
     async def start_worker(self) -> None:
+        """Starts the MCP registry and Worker, closing this app if startup fails.
+
+        Raises:
+            BaseException: The original startup or registration error.
+        """
         if self._worker_task is not None:
             return
-        await self.mcp_registry.start()
-        self._worker_task = asyncio.create_task(self.worker.start())
-        await _await_worker(self.worker.worker_target.address, self._worker_task)
+        try:
+            await self.mcp_registry.start()
+            self._worker_task = asyncio.create_task(self.worker.start())
+            if self.config.worker_mode.is_pull:
+                await self.worker.wait_pull_registered(
+                    timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
+                )
+                return
+            await _await_worker(self.worker.worker_target.address, self._worker_task)
+        except BaseException:
+            try:
+                await self.close()
+            except Exception:
+                _logger.exception("failed to close ExampleApp after startup failed")
+            raise
 
     async def close(self) -> None:
+        """Closes the Client, Worker, Worker task, MCP registry, and BlobCache.
+
+        Every close step runs even when an earlier step fails. A later call
+        retries only the steps that have not completed. A failed Worker task is
+        logged rather than raised.
+
+        Raises:
+            Exception: The first failure from a close step.
+        """
+        close_errors: list[Exception] = []
         if self._client is not None:
-            await self._client.close()
-            self._client = None
-        await self.worker.close()
-        if self._worker_task is not None:
             try:
-                await asyncio.wait_for(self._worker_task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._worker_task.cancel()
+                await self._client.close()
+                self._client = None
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_worker_closed:
+            try:
+                await self.worker.close()
+                self._is_worker_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        if self._worker_task is not None:
+            await self._await_closed_worker_task(self._worker_task)
             self._worker_task = None
-        await self.mcp_registry.close()
-        self.blob_cache.close()
+        if not self._is_mcp_registry_closed:
+            try:
+                await self.mcp_registry.close()
+                self._is_mcp_registry_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_blob_cache_closed:
+            try:
+                self.blob_cache.close()
+                self._is_blob_cache_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        _raise_first_close_error(close_errors)
+
+    async def _await_closed_worker_task(self, worker_task: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.wait_for(worker_task, timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            worker_task.cancel()
+        except Exception:
+            _logger.exception("Worker task failed")
+
+_logger = logging.getLogger(__name__)
+
+
+def _raise_first_close_error(close_errors: list[Exception]) -> None:
+    for error in close_errors[1:]:
+        _logger.error("another close step failed", exc_info=error)
+    if close_errors:
+        raise close_errors[0]
+
+
+def _new_worker_options(config: ExamplesConfig) -> WorkerOptions:
+    if config.worker_mode.is_pull:
+        return WorkerOptions(
+            server_address=config.server_address,
+            pull=new_example_pull_worker_options(),
+        )
+    return WorkerOptions(
+        bind_address=config.worker_bind_address,
+        server_address=config.server_address,
+        worker_target=(
+            WorkerTarget(config.worker_target)
+            if config.worker_target
+            else None
+        ),
+    )
 
 
 async def _await_worker(address: str, worker_task: asyncio.Task[None]) -> None:

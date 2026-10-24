@@ -37,14 +37,19 @@ async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     config = ExamplesConfig.from_env()
     app_state = ExampleApp(config)
-    await app_state.start_worker()
     try:
+        await app_state.start_worker()
         await start_cron_schedule(app_state)
 
         host, port = parse_http_address(config.http_address)
+        worker_description = (
+            "pull worker"
+            if config.worker_mode.is_pull
+            else f"worker {app_state.worker.worker_target.address}"
+        )
         print(
             f"Dex Python examples listening on http://{config.http_address} "
-            f"(worker {app_state.worker.worker_target.address})"
+            f"({worker_description})"
         )
         await create_app(app_state).run_task(host=host, port=port)
     finally:

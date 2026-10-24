@@ -13,10 +13,11 @@
 // limitations under the License.
 
 mod common;
+mod worker_harness;
 
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -26,12 +27,14 @@ use common::{
 };
 use dex_examples_rust::patterns::polling::FakeJobService;
 use dex_examples_rust::server::build_router;
+use dex_examples_rust::shared::{WorkerMode, example_pull_worker_options};
 use dex_examples_rust::{create_example_registry, create_worker_registry};
 use dex_sdk::{
     BlobCache, BlobCacheConfig, Client, ClientOptions, SdkResult, Worker, WorkerOptions,
     WorkerTarget,
 };
 use tempfile::TempDir;
+use worker_harness::{await_pull_registration, read_worker_mode};
 
 struct FlowSmokeEnvironment {
     _client: Arc<Client>,
@@ -58,7 +61,11 @@ impl FlowSmokeEnvironment {
             .expect("open Rust flow smoke cache"),
         );
         let polling_jobs = Arc::new(FakeJobService::default());
-        let worker_target = WorkerTarget::new(worker_address.clone());
+        let worker_mode = read_worker_mode();
+        let worker_target = match worker_mode {
+            WorkerMode::Push => WorkerTarget::new(worker_address.clone()),
+            WorkerMode::Pull => WorkerTarget::pull(),
+        };
         let client = Arc::new(
             Client::try_new(
                 create_example_registry(Arc::clone(&polling_jobs))
@@ -70,15 +77,21 @@ impl FlowSmokeEnvironment {
             )
             .expect("create Rust flow smoke Client"),
         );
+        let worker_options = match worker_mode {
+            WorkerMode::Push => WorkerOptions::new()
+                .server_address(&server_address)
+                .bind_address(&worker_address)
+                .worker_target(worker_target),
+            WorkerMode::Pull => WorkerOptions::new()
+                .server_address(&server_address)
+                .pull(example_pull_worker_options()),
+        };
         let worker = Arc::new(
             Worker::try_new(
                 create_worker_registry(Arc::clone(&client), Arc::clone(&polling_jobs))
                     .expect("register Rust Worker examples"),
                 Arc::clone(&cache),
-                WorkerOptions::new()
-                    .server_address(&server_address)
-                    .bind_address(&worker_address)
-                    .worker_target(worker_target),
+                worker_options,
             )
             .expect("create Rust flow smoke Worker"),
         );
@@ -87,7 +100,10 @@ impl FlowSmokeEnvironment {
             .name("dex-rust-flow-smoke-worker".to_string())
             .spawn(move || thread_worker.start())
             .expect("start Rust flow smoke Worker thread");
-        await_worker(worker_port, &worker_thread);
+        match worker_mode {
+            WorkerMode::Push => await_worker(worker_port, &worker_thread),
+            WorkerMode::Pull => await_pull_registration(&worker),
+        }
         client.health_check().expect("Dex health check");
 
         let http_port = available_worker_port();
@@ -427,22 +443,58 @@ fn parallel_subflows_entry(
     }
 }
 
+/// Starts the shared environment once so every flow smoke test reuses one Worker.
+fn shared_flow_smoke_environment() -> &'static FlowSmokeEnvironment {
+    static ENVIRONMENT: OnceLock<FlowSmokeEnvironment> = OnceLock::new();
+    ENVIRONMENT.get_or_init(FlowSmokeEnvironment::start)
+}
+
+/// Declares one filterable test per catalog entry that some engines reject.
+macro_rules! dedicated_flow_smoke_entry_tests {
+    ($($test_name:ident => $entry_name:literal,)*) => {
+        const DEDICATED_FLOW_SMOKE_ENTRY_NAMES: &[&str] = &[$($entry_name),*];
+        $(
+            #[test]
+            #[ignore = "requires dexcli dev"]
+            fn $test_name() {
+                run_dedicated_flow_smoke_entry($entry_name);
+            }
+        )*
+    };
+}
+
+dedicated_flow_smoke_entry_tests! {
+    flow_smoke_products_money_transfer => "products/money-transfer",
+    flow_smoke_products_order_processing => "products/order-processing",
+    flow_smoke_patterns_polling => "patterns/polling",
+    flow_smoke_patterns_entity_store => "patterns/entity-store",
+    flow_smoke_patterns_manual_recovery => "patterns/manual-recovery",
+    flow_smoke_patterns_recovery => "patterns/recovery",
+    flow_smoke_primitives_step_options_override => "primitives/step/options-override",
+}
+
+fn run_dedicated_flow_smoke_entry(entry_name: &str) {
+    let environment = shared_flow_smoke_environment();
+    let mut http_client = FlowSmokeHttpClient::new(environment.http_base_url.clone());
+    let entry = flow_smoke_catalog(&mut http_client)
+        .into_iter()
+        .find(|entry| entry.name == entry_name)
+        .unwrap_or_else(|| panic!("flow smoke entry {entry_name} is not in the catalog"));
+    run_flow_smoke_entry(&http_client, &entry);
+}
+
 #[test]
 #[ignore = "requires dexcli dev"]
 fn flow_smoke_all_registered_flows_via_controller() {
-    let environment = FlowSmokeEnvironment::start();
+    let environment = shared_flow_smoke_environment();
     let mut http_client = FlowSmokeHttpClient::new(environment.http_base_url.clone());
     let catalog = flow_smoke_catalog(&mut http_client);
     assert!(!catalog.is_empty(), "flow smoke catalog is empty");
-    for entry in catalog {
-        let result = http_client.trigger_get(entry.path, &entry.query);
-        assert!(
-            !result.flow_id.is_empty(),
-            "{}: controller response did not include flowID",
-            entry.name
-        );
-        assert_flow_smoke_start_step(&entry, &result.flow_id, &result.run_id);
-        assert_flow_smoke_no_unexpected_failures(&entry, &result.flow_id, &result.run_id);
+    for entry in catalog
+        .iter()
+        .filter(|entry| !DEDICATED_FLOW_SMOKE_ENTRY_NAMES.contains(&entry.name))
+    {
+        run_flow_smoke_entry(&http_client, entry);
     }
     for (name, path) in [
         (
@@ -468,6 +520,17 @@ fn flow_smoke_all_registered_flows_via_controller() {
         );
         assert_flow_smoke_no_unexpected_failures(&entry, &result.flow_id, &result.run_id);
     }
+}
+
+fn run_flow_smoke_entry(http_client: &FlowSmokeHttpClient, entry: &FlowSmokeEntry) {
+    let result = http_client.trigger_get(entry.path, &entry.query);
+    assert!(
+        !result.flow_id.is_empty(),
+        "{}: controller response did not include flowID",
+        entry.name
+    );
+    assert_flow_smoke_start_step(entry, &result.flow_id, &result.run_id);
+    assert_flow_smoke_no_unexpected_failures(entry, &result.flow_id, &result.run_id);
 }
 
 fn available_worker_port() -> u16 {

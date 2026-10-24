@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 public class PollingIntegTest {
     @Test
     void pollingStreamsJobProgressAndCompletesWithJobResult() {
+        ServerZDSkips.skipWhenServerZD("failure policies");
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String flowId = environment.newFlowId("pattern-polling");
         environment.client().startFlow(

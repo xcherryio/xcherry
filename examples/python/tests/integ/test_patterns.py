@@ -46,6 +46,7 @@ from tests.integ.conftest import (
     LONG_WAIT_TIMEOUT,
     WAIT_TIMEOUT,
     flow_status_or_none,
+    skip_when_server_zd,
     wait_until,
 )
 
@@ -140,6 +141,7 @@ async def test_manual_recovery_retry_completes(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("manual-recovery")
     await client.start_flow(app.manual_recovery, flow_id, True, start_options())
     await client.invoke_rpc(app.manual_recovery.retry, flow_id)
@@ -169,6 +171,7 @@ async def test_polling_streams_job_progress_and_completes_with_job_result(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("pattern-polling")
     await client.start_flow(app.polling, flow_id, None, start_options())
 
@@ -190,6 +193,7 @@ async def test_failure_recovery(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("failure policies")
     flow_id = new_flow_id("recovery")
     await client.start_flow(
         app.failure_recovery,
@@ -279,6 +283,7 @@ async def test_entity_store_profile_lifecycle(
     client: AsyncClient,
     new_flow_id: Callable[[str], str],
 ) -> None:
+    skip_when_server_zd("Attribute Store sync")
     flow_id = new_flow_id("entity-store")
     profile = UserProfile(
         "Ada Lovelace",

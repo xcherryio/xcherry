@@ -24,6 +24,7 @@ import {
   awaitCondition,
   releaseIntegEnvironment,
 } from "./environment.js";
+import { skipWhenServerZd } from "../server-zd.js";
 
 test.before(async () => {
   await acquireIntegEnvironment();
@@ -33,7 +34,7 @@ test.after(async () => {
   await releaseIntegEnvironment();
 });
 
-test("orderProcessingHappyPath", async () => {
+test("orderProcessingHappyPath", { skip: skipWhenServerZd("failure policies") }, async () => {
   const environment = await acquireIntegEnvironment();
   const flowId = environment.newFlowId("order-processing");
   const runId = await environment.client.startFlow(
@@ -64,7 +65,7 @@ test("orderProcessingHappyPath", async () => {
   assert.equal(output, `shipped:${flowId}`);
 });
 
-test("orderProcessingReminderThenShip", async () => {
+test("orderProcessingReminderThenShip", { skip: skipWhenServerZd("failure policies") }, async () => {
   const environment = await acquireIntegEnvironment();
   const flowId = environment.newFlowId("order-processing-reminder");
   await environment.client.startFlow(
@@ -116,7 +117,7 @@ test("orderProcessingReminderThenShip", async () => {
   assert.equal(output, `shipped:${flowId}`);
 });
 
-test("orderProcessingShipFailureRefunds", async () => {
+test("orderProcessingShipFailureRefunds", { skip: skipWhenServerZd("failure policies") }, async () => {
   const environment = await acquireIntegEnvironment();
   const flowId = environment.newFlowId("order-processing-refund");
   await environment.client.startFlow(

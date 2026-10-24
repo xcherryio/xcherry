@@ -31,6 +31,8 @@ export interface FlowSmokeEntry {
   readonly name: string;
   readonly trigger: (context: FlowSmokeContext) => Promise<FlowSmokeTriggerResult>;
   readonly flags: FlowSmokeFlags;
+  /** Feature that makes server-zd reject this sample. */
+  readonly serverZdUnsupportedFeature?: string;
 }
 
 export interface FlowSmokeContext {
