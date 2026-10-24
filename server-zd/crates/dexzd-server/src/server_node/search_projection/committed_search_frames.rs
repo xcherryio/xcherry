@@ -381,4 +381,27 @@ mod tests {
         assert_eq!(queue.len(), 1, "freed bytes let new frames queue again");
         assert!(frames.rebuild_requests().is_empty());
     }
+
+    #[test]
+    fn frame_count_overflow_coalesces_into_a_partition_rebuild() {
+        let max_queued_bytes = 1024 * 1024;
+        let (frames, mut queue) = CommittedSearchFrames::new(2, max_queued_bytes);
+        for run_number in 1..=20 {
+            commit_frame(&frames, run_number);
+        }
+        assert_eq!(queue.len(), 2);
+        assert!(frames.lock_tracking().queued_bytes < max_queued_bytes);
+        assert_eq!(frames.rebuild_requests(), vec![PARTITION]);
+        assert_eq!(frames.lock_tracking().rebuild_requests.len(), 1);
+        frames.publish_projected_through();
+        assert_eq!(*frames.projected_through.borrow(), Some(0));
+
+        while let Ok(frame) = queue.try_recv() {
+            frames.finish_projected_frame(&frame);
+        }
+        frames.finish_rebuild(PARTITION, frames.last_sequence());
+        frames.publish_projected_through();
+        assert_eq!(*frames.projected_through.borrow(), Some(20));
+        assert!(frames.rebuild_requests().is_empty());
+    }
 }
