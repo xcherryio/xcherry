@@ -20,7 +20,7 @@ use dexzd_engine::{
     EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks, EngineServices,
     EngineStartError, FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects,
     LocalStoreConfig, NodeMetaUploadLedger, NodeStopReason, RecoveryConfig, RuntimeConfig,
-    SnapshotConfig, default_run_settings,
+    SnapshotConfig, SystemEngineIdSource, default_run_settings,
 };
 use dexzd_keyspace::{ColumnFamily, KEY_LAYOUT_VERSION};
 use dexzd_object_store::{InMemoryObjectStore, ObjectStore, WriteCondition};
@@ -184,6 +184,7 @@ impl NodeProcess {
                 object_store: object_store_port,
                 clock: wall_clock,
                 applier,
+                id_source: Arc::new(SystemEngineIdSource),
             },
             move |services: EngineServices| {
                 let partition_hasher = services.partition_hasher.clone();
