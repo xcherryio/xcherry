@@ -20,10 +20,10 @@ use dexzd_storage::{
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::blocking_work::BlockingWorkPlacement;
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
+use crate::engine_id_source::EngineIdSource;
 use crate::snapshots::log_cleanup::LogCleanup;
 use crate::snapshots::ownership_fence::OwnershipFence;
 use crate::snapshots::snapshot_retention::{SnapshotCatalog, SnapshotRetention};
@@ -43,6 +43,7 @@ pub(crate) struct SnapshotService {
     pub(crate) cluster_id: [u8; 16],
     /// Epoch of this process; every batch it routes carries it.
     pub(crate) epoch: u64,
+    pub(crate) id_source: Arc<dyn EngineIdSource>,
     pub(crate) node_meta_lock: Arc<std::sync::Mutex<()>>,
     pub(crate) config: SnapshotConfig,
     /// Holds manifests retention has read; its operation lock serializes snapshots and cleanup.
@@ -235,6 +236,7 @@ impl SnapshotService {
             created_at_unix_micros: self.clock.now_unix_micros(),
         };
         let node_meta_lock = self.node_meta_lock.clone();
+        let id_source = self.id_source.clone();
         let created = match self.blocking_work {
             BlockingWorkPlacement::BlockingThreadPool => {
                 let runtime = tokio::runtime::Handle::current();
@@ -244,8 +246,11 @@ impl SnapshotService {
                     let _node_meta_guard = node_meta_lock
                         .lock()
                         .expect("node metadata lock is not poisoned");
-                    let snapshot_number =
-                        prepare_snapshot_number(&store, should_prepare_snapshot_lineage)?;
+                    let snapshot_number = prepare_snapshot_number(
+                        &store,
+                        id_source.as_ref(),
+                        should_prepare_snapshot_lineage,
+                    )?;
                     runtime.block_on(create_store_snapshot(
                         &store,
                         &upload_store,
@@ -263,7 +268,11 @@ impl SnapshotService {
                     let _node_meta_guard = node_meta_lock
                         .lock()
                         .expect("node metadata lock is not poisoned");
-                    prepare_snapshot_number(&store, should_prepare_snapshot_lineage)
+                    prepare_snapshot_number(
+                        &store,
+                        id_source.as_ref(),
+                        should_prepare_snapshot_lineage,
+                    )
                 };
                 match snapshot_number {
                     Ok(snapshot_number) => {
@@ -318,6 +327,7 @@ impl SnapshotService {
 /// Returns a storage error when NodeMeta cannot be read or written.
 fn prepare_snapshot_number(
     store: &EngineLocalStore,
+    id_source: &dyn EngineIdSource,
     should_prepare_snapshot_lineage: bool,
 ) -> Result<u64, StorageError> {
     if should_prepare_snapshot_lineage {
@@ -325,7 +335,7 @@ fn prepare_snapshot_number(
             .node_meta()?
             .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
         // Reused local stores retain their lineage; rotate it before this owner's first upload.
-        node_meta.lineage_id = Uuid::now_v7().as_bytes().to_vec();
+        node_meta.lineage_id = id_source.lineage_id().as_bytes().to_vec();
         node_meta.last_snapshot_number = 0;
         store.put_node_meta(&node_meta)?;
     }

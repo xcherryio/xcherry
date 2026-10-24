@@ -269,6 +269,7 @@ pub(crate) fn start_node(
                 object_store,
                 clock,
                 applier: applier.clone(),
+                id_source: Arc::new(dexzd_engine::SystemEngineIdSource),
             },
             move |_services: EngineServices| EngineRuntimeHooks {
                 committed_commands: factory_runtime.clone(),
