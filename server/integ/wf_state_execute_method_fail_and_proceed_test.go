@@ -26,6 +26,8 @@ func TestStateExecuteMethodFailAndProceedTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C21: server-zd rejects Step failure policies.
+	requireGoServerSetting(t, "Step failure policies")
 	for i := 0; i < *repeatIntegTest; i++ {
 		doTestStateExecuteMethodFailAndProceed(
 			t,
@@ -98,6 +100,8 @@ func TestStateExecuteTimeoutRecoveryTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C21: server-zd rejects Step failure policies.
+	requireGoServerSetting(t, "Step failure policies")
 	doTestStateExecuteTimeoutRecovery(t, service.BackendTypeTemporal)
 }
 

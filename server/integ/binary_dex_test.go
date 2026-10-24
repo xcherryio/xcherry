@@ -9,6 +9,7 @@
 package integ
 
 import (
+	"context"
 	"net"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/config"
+	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/service"
 	"github.com/superdurable/dex/service/common/ptr"
 	"google.golang.org/grpc"
@@ -140,7 +142,7 @@ func startFakeBinaryDexProcess(t *testing.T, mode string) (string, *binaryDexPro
 	return address, process
 }
 
-func TestBinaryDexLauncherWithoutConfig(t *testing.T) {
+func TestBinaryDexLauncherDisablesStreamsByDefault(t *testing.T) {
 	executable, err := os.Executable()
 	require.NoError(t, err)
 	previousBinary, previousEngine, previousMode := *dexServerBinary, *dexServerEngine, *integWorkerMode
@@ -154,7 +156,11 @@ func TestBinaryDexLauncherWithoutConfig(t *testing.T) {
 	startBinaryDexService(t, DexServiceTestConfig{BackendType: service.BackendTypeTemporal})
 	receiptBytes, err := os.ReadFile(receiptPath)
 	require.NoError(t, err)
-	require.NotContains(t, strings.Split(string(receiptBytes), "\n"), "--config")
+	arguments := strings.Split(string(receiptBytes), "\n")
+	require.Equal(t, "--config", arguments[len(arguments)-2])
+	configurationBytes, err := os.ReadFile(arguments[len(arguments)-1])
+	require.NoError(t, err)
+	require.Equal(t, "streamStore:\n    backend: disabled\n", string(configurationBytes))
 }
 
 func runFakeBinaryDex() int {
@@ -189,6 +195,7 @@ func runFakeBinaryDex() int {
 	}
 	healthServer.SetServingStatus("", healthStatus)
 	healthpb.RegisterHealthServer(server, healthServer)
+	dexpb.RegisterFlowServiceServer(server, &fakeBinaryFlowService{})
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM)
 	go func() {
@@ -201,4 +208,15 @@ func runFakeBinaryDex() int {
 		return 5
 	}
 	return 0
+}
+
+type fakeBinaryFlowService struct {
+	dexpb.UnimplementedFlowServiceServer
+}
+
+func (*fakeBinaryFlowService) SyncAttributeIndexes(
+	context.Context,
+	*dexpb.SyncAttributeIndexRequest,
+) (*dexpb.SyncAttributeIndexResponse, error) {
+	return &dexpb.SyncAttributeIndexResponse{}, nil
 }

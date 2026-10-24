@@ -60,14 +60,11 @@ func startBinaryDexService(t *testing.T, testConfig DexServiceTestConfig) *integ
 	dataDirectory := t.TempDir()
 	address, err := reserveBinaryDexAddress()
 	require.NoError(t, err)
-	arguments := []string{"dev", "--data-dir", dataDirectory, "--listen", address}
-	if len(configuration) > 0 {
-		configurationPath := filepath.Join(dataDirectory, "integ-config.yaml")
-		configurationBytes, marshalErr := yaml.Marshal(configuration)
-		require.NoError(t, marshalErr)
-		require.NoError(t, os.WriteFile(configurationPath, configurationBytes, 0o600))
-		arguments = append(arguments, "--config", configurationPath)
-	}
+	configurationPath := filepath.Join(dataDirectory, "integ-config.yaml")
+	configurationBytes, err := yaml.Marshal(configuration)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configurationPath, configurationBytes, 0o600))
+	arguments := []string{"dev", "--data-dir", dataDirectory, "--listen", address, "--config", configurationPath}
 	outputPath := filepath.Join(dataDirectory, "server.log")
 	outputFile, err := os.Create(outputPath)
 	require.NoError(t, err)
@@ -97,10 +94,19 @@ func startBinaryDexService(t *testing.T, testConfig DexServiceTestConfig) *integ
 	connection, err := newDexClientConnection(address, config.DefaultGrpcMaxMessageBytes)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	flowServiceClient := dexpb.NewFlowServiceClient(connection)
+	// Each process starts empty; the Temporal dev server predefines these search attributes.
+	registrationCtx, cancelRegistration := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelRegistration()
+	_, err = flowServiceClient.SyncAttributeIndexes(
+		registrationCtx,
+		&dexpb.SyncAttributeIndexRequest{AttributeIndexes: localDexDevTestAttributeIndexes},
+	)
+	require.NoError(t, err)
 	runtime := &integRuntime{
 		PublicAddress: address,
 		FlowClient: &externalDexFlowClient{
-			FlowServiceClient: dexpb.NewFlowServiceClient(connection),
+			FlowServiceClient: flowServiceClient,
 			maxWaitSeconds:    int32(12),
 		},
 		defaultFlowConfig: &dexpb.FlowConfig{StepDurability: ptr.Any(dexpb.StepDurability_STEP_DURABILITY_SYNC)},
@@ -148,7 +154,8 @@ func binaryDexConfig(testConfig DexServiceTestConfig) (map[string]any, string) {
 		testConfig.AttributeStore.SyncRetryPolicy != nil {
 		return nil, "Attribute Store"
 	}
-	if testConfig.StreamStore.Backend != "" && testConfig.StreamStore.Backend != config.StreamStoreBackendMemory {
+	if streamStoreBackend := testConfig.StreamStore.EffectiveBackend(); streamStoreBackend != config.StreamStoreBackendMemory &&
+		streamStoreBackend != config.StreamStoreBackendDisabled {
 		return nil, "external Stream Store"
 	}
 	if testConfig.Auth != nil {
@@ -197,9 +204,7 @@ func binaryDexConfig(testConfig DexServiceTestConfig) (map[string]any, string) {
 			configuration["matching"] = matchingConfig
 		}
 	}
-	if streamStoreConfig := binaryStreamStoreConfig(testConfig.StreamStore); len(streamStoreConfig) > 0 {
-		configuration["streamStore"] = streamStoreConfig
-	}
+	configuration["streamStore"] = binaryStreamStoreConfig(testConfig.StreamStore)
 	return configuration, ""
 }
 
@@ -227,10 +232,8 @@ func binaryMatchingConfig(settings *config.MatchingConfig) map[string]any {
 }
 
 func binaryStreamStoreConfig(settings config.StreamStoreConfig) map[string]any {
-	configuration := make(map[string]any)
-	if settings.Backend != "" {
-		configuration["backend"] = settings.Backend
-	}
+	// server-zd dev enables memory Streams by default; the Go Server disables them.
+	configuration := map[string]any{"backend": settings.EffectiveBackend()}
 	for name, value := range map[string]int64{
 		"maxMessageBytes":               settings.MaxMessageBytes,
 		"estimatedMessageOverheadBytes": settings.EstimatedMessageOverheadBytes,
@@ -333,6 +336,10 @@ func requireGoServerSetting(t *testing.T, setting string) {
 	if *dexServerBinary != "" {
 		t.Skipf("server-zd does not support %s", setting)
 	}
+}
+
+func isServerZDBinaryMode() bool {
+	return *dexServerBinary != ""
 }
 
 func requireTemporalOnly(t *testing.T) {

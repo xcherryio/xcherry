@@ -29,6 +29,10 @@ use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 use super::search_result::response_entry;
 
+pub(super) const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SCHEMA_SETUP_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Waits for an application-defined projection watermark before reading search results.
 #[async_trait]
 pub trait ProjectionVisibilityWait: Send + Sync {
@@ -63,9 +67,8 @@ impl ParadeDbSearchBackend {
         for slot_index in 0..pool_size {
             let mut slot = ConnectionSlot::open(configuration).await?;
             if slot_index == 0 {
-                ensure_schema(&mut slot.client)
-                    .await
-                    .map_err(schema_search_error)?;
+                slot.ensure_schema_with_timeout(SCHEMA_SETUP_TIMEOUT)
+                    .await?;
             }
             slots.push(Mutex::new(slot));
         }
@@ -81,29 +84,40 @@ impl ParadeDbSearchBackend {
 
     async fn query(&self, statement: &SqlStatement) -> Result<Vec<Row>, SearchError> {
         let mut slot = self.lock_next_slot().await;
-        if slot.client.is_closed() {
+        if slot.is_disconnected() {
             slot.reconnect(&self.configuration).await?;
         }
-        match slot
-            .client
-            .query_typed(&statement.sql, &statement.typed_parameter_refs())
-            .await
-        {
-            Ok(rows) => Ok(rows),
-            Err(error) if is_connection_error(&error) => {
-                slot.reconnect(&self.configuration).await?;
+        for attempt in 0..2 {
+            match tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
                 slot.client
-                    .query_typed(&statement.sql, &statement.typed_parameter_refs())
-                    .await
-                    .map_err(|error| {
-                        classify_database_error("query ParadeDB visibility runs", error)
-                    })
+                    .query_typed(&statement.sql, &statement.typed_parameter_refs()),
+            )
+            .await
+            {
+                Ok(Ok(rows)) => return Ok(rows),
+                Ok(Err(error)) if is_transient_database_error(&error) && attempt == 0 => {
+                    slot.reconnect(&self.configuration).await?;
+                }
+                Ok(Err(error)) => {
+                    return Err(classify_database_error(
+                        "query ParadeDB visibility runs",
+                        error,
+                    ));
+                }
+                Err(_) => {
+                    slot.invalidate();
+                    if attempt == 0 {
+                        slot.reconnect(&self.configuration).await?;
+                    } else {
+                        return Err(SearchError::Unavailable(format!(
+                            "query ParadeDB visibility runs timed out after {DATABASE_OPERATION_TIMEOUT:?}"
+                        )));
+                    }
+                }
             }
-            Err(error) => Err(classify_database_error(
-                "query ParadeDB visibility runs",
-                error,
-            )),
         }
+        unreachable!("the query returns on its second attempt")
     }
 
     pub(super) async fn lock_next_slot(&self) -> PooledConnectionSlot<'_> {
@@ -168,14 +182,24 @@ impl Drop for PooledConnectionSlot<'_> {
 pub(super) struct ConnectionSlot {
     pub(super) client: Client,
     connection_task: JoinHandle<()>,
+    is_invalidated: bool,
 }
 
 impl ConnectionSlot {
     pub(super) async fn open(configuration: &Config) -> Result<Self, SearchError> {
-        let (client, connection) = configuration
-            .connect(NoTls)
-            .await
-            .map_err(|error| classify_database_error("connect to ParadeDB", error))?;
+        let connect_timeout = configuration
+            .get_connect_timeout()
+            .copied()
+            .unwrap_or(DATABASE_CONNECT_TIMEOUT);
+        let (client, connection) =
+            tokio::time::timeout(connect_timeout, configuration.connect(NoTls))
+                .await
+                .map_err(|_| {
+                    SearchError::Unavailable(format!(
+                        "connect to ParadeDB timed out after {connect_timeout:?}"
+                    ))
+                })?
+                .map_err(|error| classify_database_error("connect to ParadeDB", error))?;
         let connection_task = tokio::spawn(async move {
             if let Err(error) = connection.await {
                 tracing::error!(%error, "ParadeDB search connection closed");
@@ -184,13 +208,35 @@ impl ConnectionSlot {
         Ok(Self {
             client,
             connection_task,
+            is_invalidated: false,
         })
+    }
+
+    async fn ensure_schema_with_timeout(&mut self, timeout: Duration) -> Result<(), SearchError> {
+        match tokio::time::timeout(timeout, ensure_schema(&mut self.client)).await {
+            Ok(result) => result.map_err(schema_search_error),
+            Err(_) => {
+                self.invalidate();
+                Err(SearchError::Unavailable(format!(
+                    "ensure ParadeDB visibility schema timed out after {timeout:?}"
+                )))
+            }
+        }
     }
 
     pub(super) async fn reconnect(&mut self, configuration: &Config) -> Result<(), SearchError> {
         let replacement = Self::open(configuration).await?;
         *self = replacement;
         Ok(())
+    }
+
+    pub(super) fn is_disconnected(&self) -> bool {
+        self.is_invalidated || self.client.is_closed() || self.connection_task.is_finished()
+    }
+
+    pub(super) fn invalidate(&mut self) {
+        self.is_invalidated = true;
+        self.connection_task.abort();
     }
 }
 
@@ -294,32 +340,284 @@ fn translation_error(error: SqlTranslationError) -> SearchError {
     SearchError::InvalidArgument(error.to_string())
 }
 
-pub(super) fn is_connection_error(error: &tokio_postgres::Error) -> bool {
-    error.is_closed()
-        || error.as_db_error().is_some_and(|database_error| {
-            let sqlstate = database_error.code().code();
-            sqlstate.starts_with("08") || sqlstate.starts_with("57P0")
-        })
+pub(super) fn is_transient_database_error(error: &tokio_postgres::Error) -> bool {
+    error
+        .as_db_error()
+        .is_none_or(|database_error| is_transient_sqlstate(database_error.code().code()))
+}
+
+fn is_transient_sqlstate(sqlstate: &str) -> bool {
+    sqlstate.starts_with("08")
+        || sqlstate.starts_with("53")
+        || matches!(
+            sqlstate,
+            "55P03" | "57014" | "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+        )
 }
 
 pub(super) fn classify_database_error(
     operation: &str,
     error: tokio_postgres::Error,
 ) -> SearchError {
-    let sqlstate = error
-        .as_db_error()
-        .map_or("none", |database_error| database_error.code().code());
-    let message = format!("{operation} (SQLSTATE {sqlstate}): {error}");
-    if is_connection_error(&error) {
+    let message = format!("{operation}: {}", database_error_message(&error));
+    if is_transient_database_error(&error) {
         SearchError::Unavailable(message)
     } else {
         SearchError::Internal(message)
     }
 }
 
+pub(super) fn database_error_message(error: &tokio_postgres::Error) -> String {
+    let Some(database_error) = error.as_db_error() else {
+        return format!("SQLSTATE none: {error}");
+    };
+    let mut message = format!(
+        "SQLSTATE {}: {}",
+        database_error.code().code(),
+        database_error.message()
+    );
+    if let Some(detail) = database_error.detail() {
+        message.push_str(&format!("; detail: {detail}"));
+    }
+    if let Some(constraint) = database_error.constraint() {
+        message.push_str(&format!("; constraint: {constraint}"));
+    }
+    message
+}
+
 fn schema_search_error(error: SchemaError) -> SearchError {
     match error {
         SchemaError::Database { operation, source } => classify_database_error(operation, source),
         SchemaError::NewerVersion { .. } => SearchError::Internal(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio_postgres::{Config, NoTls};
+
+    use super::{ConnectionSlot, classify_database_error, is_transient_database_error};
+    use crate::SearchError;
+
+    #[tokio::test]
+    async fn classifies_transient_and_permanent_sqlstates() {
+        for (sqlstate, is_transient) in [
+            ("08006", true),
+            ("08P01", true),
+            ("53100", true),
+            ("55P03", true),
+            ("57014", true),
+            ("57P01", true),
+            ("57P02", true),
+            ("57P03", true),
+            ("57P04", true),
+            ("57P05", true),
+            ("40001", true),
+            ("40P01", true),
+            ("57P06", false),
+            ("40002", false),
+            ("40P02", false),
+            ("23505", false),
+            ("54023", false),
+        ] {
+            let error = rejected_startup_error(sqlstate).await;
+            assert_eq!(
+                error
+                    .as_db_error()
+                    .map(|database_error| database_error.code().code()),
+                Some(sqlstate)
+            );
+            assert_eq!(
+                is_transient_database_error(&error),
+                is_transient,
+                "{sqlstate}"
+            );
+            let classified = classify_database_error("connect to ParadeDB", error);
+            match (is_transient, classified) {
+                (true, SearchError::Unavailable(message))
+                | (false, SearchError::Internal(message)) => {
+                    assert!(message.contains(&format!("SQLSTATE {sqlstate}")));
+                }
+                (_, classified) => panic!("SQLSTATE {sqlstate} classified as {classified:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_error_without_sqlstate_is_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let error = match configuration.connect(NoTls).await {
+            Ok(_) => panic!("the closed startup connection cannot connect"),
+            Err(error) => error,
+        };
+        server.await.expect("fake server closes the connection");
+        assert!(error.as_db_error().is_none());
+        assert!(is_transient_database_error(&error));
+        assert!(matches!(
+            classify_database_error("connect to ParadeDB", error),
+            SearchError::Unavailable(message) if message.contains("SQLSTATE none")
+        ));
+    }
+
+    #[tokio::test]
+    async fn schema_setup_timeout_retires_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+            stream
+                .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+                .await
+                .expect("server accepts startup");
+            assert_eq!(stream.read_u8().await.expect("schema query starts"), b'Q');
+            let query_length = stream.read_u32().await.expect("query has a length");
+            let mut query = vec![0; query_length as usize - 4];
+            stream
+                .read_exact(&mut query)
+                .await
+                .expect("client sends schema query");
+            let mut next_byte = [0];
+            assert_eq!(stream.read(&mut next_byte).await.expect("socket closes"), 0);
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let mut slot = ConnectionSlot::open(&configuration)
+            .await
+            .expect("fake server accepts startup");
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            slot.ensure_schema_with_timeout(Duration::from_millis(50)),
+        )
+        .await
+        .expect("schema setup has a client-side deadline");
+        assert!(matches!(
+            result,
+            Err(SearchError::Unavailable(message)) if message.contains("schema") && message.contains("timed out")
+        ));
+        assert!(slot.is_disconnected());
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("stalled connection closes promptly")
+            .expect("stalled connection is retired");
+    }
+
+    async fn rejected_startup_error(sqlstate: &str) -> tokio_postgres::Error {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let response = format!("SFATAL\0VFATAL\0C{sqlstate}\0Mforced rejection\0\0");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+            let mut message = vec![b'E'];
+            message.extend_from_slice(&((response.len() + 4) as u32).to_be_bytes());
+            message.extend_from_slice(response.as_bytes());
+            stream
+                .write_all(&message)
+                .await
+                .expect("server rejects startup");
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let error = match configuration.connect(NoTls).await {
+            Ok(_) => panic!("the rejected startup cannot connect"),
+            Err(error) => error,
+        };
+        server.await.expect("fake server sends its rejection");
+        error
+    }
+
+    #[tokio::test]
+    async fn reconnects_after_a_stalled_postgres_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let mut connections = Vec::new();
+            for connection_number in 0..3 {
+                let (mut stream, _) = listener.accept().await.expect("client connects");
+                let startup_length = stream.read_u32().await.expect("startup has a length");
+                let mut startup = vec![0; startup_length as usize - 4];
+                stream
+                    .read_exact(&mut startup)
+                    .await
+                    .expect("client sends startup parameters");
+                if connection_number != 1 {
+                    stream
+                        .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+                        .await
+                        .expect("server accepts startup");
+                }
+                connections.push(stream);
+            }
+            pending::<()>().await;
+        });
+        let mut configuration = tokio_postgres::Config::new();
+        configuration
+            .host("127.0.0.1")
+            .port(port)
+            .user("test")
+            .dbname("test")
+            .connect_timeout(Duration::from_secs(1));
+
+        let mut slot = ConnectionSlot::open(&configuration)
+            .await
+            .expect("initial connection opens");
+        slot.invalidate();
+        assert!(slot.reconnect(&configuration).await.is_err());
+        assert!(slot.is_disconnected());
+        slot.reconnect(&configuration)
+            .await
+            .expect("a fresh connection replaces the failed slot");
+        assert!(!slot.is_disconnected());
+        server.abort();
+        let error = server.await.expect_err("fake server is aborted");
+        assert!(error.is_cancelled());
     }
 }

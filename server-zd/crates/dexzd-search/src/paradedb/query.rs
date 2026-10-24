@@ -137,6 +137,13 @@ impl Renderer {
     ) -> Result<String, SqlTranslationError> {
         match expression {
             Expression::True => Ok("TRUE".to_owned()),
+            Expression::NoMatch(predicate) => {
+                let source = self.field_source(predicate)?;
+                Ok(format!(
+                    "CASE WHEN {} IS NULL THEN NULL ELSE FALSE END",
+                    source.expression
+                ))
+            }
             Expression::Not(inner) => Ok(format!("NOT ({})", self.render_expression(inner)?)),
             Expression::And(children) => self.render_children(children, "AND"),
             Expression::Or(children) => self.render_children(children, "OR"),
@@ -452,7 +459,7 @@ fn contains_application_field(expression: &Expression) -> bool {
         Expression::And(children) | Expression::Or(children) => {
             children.iter().any(contains_application_field)
         }
-        Expression::Predicate(predicate) => !matches!(
+        Expression::Predicate(predicate) | Expression::NoMatch(predicate) => !matches!(
             predicate.field(),
             "WorkflowId"
                 | "RunId"
