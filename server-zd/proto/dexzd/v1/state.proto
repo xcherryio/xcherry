@@ -130,8 +130,16 @@ message RunRecord {
   int64 retention_deadline_micros = 28;
   // A Step returned GracefulComplete; the attempt completes once no user Step is active.
   bool is_graceful_completion_requested = 29;
+  // Semantic events that left the window; the window holds semantic_event_count minus this.
+  uint64 pruned_semantic_event_count = 30;
+  // Size of the latest checkpoint's rows; the checkpoint rule's attempt state size.
+  uint64 last_checkpoint_state_bytes = 31;
+  // Next history seq to inspect when window advancement crosses a long bookkeeping span.
+  uint64 window_scan_seq = 32;
   // Additional parents attached to this child run through SubFlow reuse.
   repeated ParentFlowReference attached_parents = 40;
+  // Largest timestamp of a pruned semantic point; earlier reset times target a pruned point.
+  int64 last_pruned_semantic_timestamp_micros = 55;
 }
 
 // Close details of a closed attempt.
@@ -157,6 +165,15 @@ message RunStorageUsage {
   uint64 history_bytes = 4;
 }
 
+// Small Flow row indexed by history seq, kind, and attempt for bounded window scans and accounting.
+message HistoryRowMetadata {
+  uint64 row_size_bytes = 1;
+  bool is_semantic = 2;
+  bool is_external_input = 3;
+  uint32 attempt = 4;
+  int64 timestamp_micros = 5;
+}
+
 // Row of RunTable::AttemptRecord, keyed by attempt (4 bytes big-endian).
 message AttemptRecord {
   uint32 attempt = 1;
@@ -167,6 +184,9 @@ message AttemptRecord {
   uint64 start_seq = 4;
   int64 created_at_micros = 5;
   string reason = 6;
+  // Seqs of the retained checkpoints of this attempt, ascending. The first is the start
+  // checkpoint.
+  repeated uint64 checkpoint_seqs = 7;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -242,6 +262,8 @@ message StepExecutionRecord {
   // True for the Flow timeout handler `sys:timeout_handler-1`.
   bool is_timeout_handler = 14;
   uint64 completed_seq = 15;
+  // Retained through Execute until the Step finishes or is canceled.
+  dex.PullRouting wait_for_pull_routing = 16;
 }
 
 // Phase of one logical method call.
@@ -273,6 +295,8 @@ message StepInvocationRecord {
   StoredValue heartbeat_checkpoint = 11;
   int64 backoff_fires_at_micros = 12;
   dex.PullRouting pull_routing = 13;
+  // Resolved at method scheduling and kept across retries.
+  dex.StepDurability effective_durability = 15;
 }
 
 // Exactly what a Worker receives for one attempt, with values kept as stored values.
@@ -466,6 +490,19 @@ message HistoryRecord {
   repeated dex.FlowHistoryEvent events = 7;
   // Debug builds only: hash of the attempt state after this command.
   bytes state_hash = 8;
+  // Method calls whose first attempt became pending; time travel targets use them.
+  repeated HistoryStepMethodPending pending_step_methods = 9;
+  // TimeTravel only: external input it reapplied, in order, so later travels before it reapply it.
+  repeated FlowCommand reapplied_inputs = 10;
+}
+
+// A Step method call whose first attempt became pending.
+message HistoryStepMethodPending {
+  string step_execution_id = 1;
+  string step_type = 2;
+  StepMethod method = 3;
+  // True when the same command created the Step execution.
+  bool is_step_created = 4;
 }
 
 // Row of RunTable::Checkpoint (column family `history`), keyed by attempt (4 bytes) and seq
@@ -474,6 +511,16 @@ message CheckpointRecord {
   uint32 attempt = 1;
   uint64 seq = 2;
   repeated CheckpointRow rows = 3;
+  // Attempt-scoped fields of the run record at this point.
+  CheckpointRunStatus run_status = 4;
+}
+
+// The attempt-scoped part of a RunRecord: status, close details, and graceful completion.
+message CheckpointRunStatus {
+  dex.FlowStatus status = 1;
+  int64 closed_at_micros = 2;
+  FlowCloseRecord close = 3;
+  bool is_graceful_completion_requested = 4;
 }
 
 // One attempt-scoped state row: its table byte, key suffix, and encoded value.

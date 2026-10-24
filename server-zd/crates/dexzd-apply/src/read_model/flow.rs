@@ -253,15 +253,14 @@ fn active_step_state(view: &RunView<'_>, step: &StepExecutionRecord) -> ActiveSt
         })
         .collect();
     let invocation = step.invocation.as_ref();
-    let (wait_for_pull_routing, execute_pull_routing) = match invocation {
-        Some(invocation) if invocation.method == StepMethod::WaitFor as i32 => {
-            (invocation.pull_routing.clone(), None)
-        }
-        Some(invocation) if invocation.method == StepMethod::Execute as i32 => {
-            (None, invocation.pull_routing.clone())
-        }
-        _ => (None, None),
-    };
+    let wait_for_pull_routing = step.wait_for_pull_routing.clone().or_else(|| {
+        invocation
+            .filter(|invocation| invocation.method == StepMethod::WaitFor as i32)
+            .and_then(|invocation| invocation.pull_routing.clone())
+    });
+    let execute_pull_routing = invocation
+        .filter(|invocation| invocation.method == StepMethod::Execute as i32)
+        .and_then(|invocation| invocation.pull_routing.clone());
     ActiveStepExecutionState {
         step_execution_id: step.step_execution_id.clone(),
         from_step_execution_id: step.from_step_execution_id.clone(),

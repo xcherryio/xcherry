@@ -22,6 +22,8 @@ use super::wire_value::encode_wire_value;
 pub struct SearchRow {
     /// Tenant scope of the run.
     pub tenant_id: String,
+    /// Partition that owns the run.
+    pub partition_id: i32,
     /// Stable run identifier.
     pub run_id: String,
     /// Flow identifier.
@@ -94,6 +96,7 @@ impl SearchRow {
     ) -> Result<Self, SearchRowError> {
         let mut row = Self {
             tenant_id: tenant_column_value(tenant_id),
+            partition_id: 0,
             run_id: required_string(document, "RunId")?,
             workflow_id: required_string(document, "WorkflowId")?,
             workflow_type: required_string(document, "WorkflowType")?,

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { stringCodec } from "../../src/index.js";
-import { flowId, withEnvironment } from "./environment.js";
+import { flowId, isServerZD, withEnvironment } from "./environment.js";
 import {
   StepHeartbeatFlow,
   type HeartbeatScenario,
@@ -43,6 +43,7 @@ test("regular retries restore heartbeat presence and preserve details across Str
 test("async local attempts write Streams and restore only regular heartbeats", async () => {
   const flow = new StepHeartbeatFlow();
   flow.scenario = "local";
+  flow.isServerZD = await isServerZD();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("typescript-heartbeat-local");
     await client.startFlow(flow, id, "local" satisfies HeartbeatScenario);

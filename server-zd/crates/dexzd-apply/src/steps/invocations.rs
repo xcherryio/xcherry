@@ -11,6 +11,7 @@
 //! Locks are held only while an attempt runs. Waiting calls queue FIFO per key by the seq at
 //! which they became pending; apply re-checks what the owner proposed.
 
+use dexzd_protocol::dex::StepDurability;
 use dexzd_protocol::dexzd::v1::{
     LockWaiterRecord, StepExecutionRecord, StepInvocationKey, StepInvocationPhase,
     StepInvocationRecord, StepMethod,
@@ -77,6 +78,11 @@ pub(crate) fn make_invocation_pending(
         release_heartbeat_checkpoint(transaction, cursor, &step.step_execution_id, other_method)?;
         previous = None;
     }
+    let effective_durability = previous
+        .as_ref()
+        .map(|invocation| invocation.effective_durability)
+        .filter(|durability| *durability != StepDurability::Unspecified as i32)
+        .unwrap_or_else(|| effective_method_durability(cursor, step, method));
     step.invocation = Some(StepInvocationRecord {
         method: method as i32,
         phase: StepInvocationPhase::Pending as i32,
@@ -84,6 +90,7 @@ pub(crate) fn make_invocation_pending(
         first_attempt_at_micros,
         pending_since_seq: cursor.seq,
         lock_keys,
+        effective_durability,
         last_failure: previous
             .as_ref()
             .and_then(|invocation| invocation.last_failure.clone()),
@@ -99,6 +106,30 @@ pub(crate) fn make_invocation_pending(
         attempt,
     });
     Ok(())
+}
+
+fn effective_method_durability(
+    cursor: &RunCursor,
+    step: &StepExecutionRecord,
+    method: StepMethod,
+) -> i32 {
+    let options = step.options.as_ref();
+    let override_durability = match method {
+        StepMethod::WaitFor => options.map_or(0, |options| options.wait_for_durability_override),
+        StepMethod::Execute | StepMethod::Unspecified => {
+            options.map_or(0, |options| options.execute_durability_override)
+        }
+    };
+    if override_durability != StepDurability::Unspecified as i32 {
+        return override_durability;
+    }
+    cursor
+        .record
+        .flow_config
+        .as_ref()
+        .and_then(|config| config.step_durability)
+        .filter(|durability| *durability != StepDurability::Unspecified as i32)
+        .unwrap_or(StepDurability::Sync as i32)
 }
 
 /// Releases the invocation's heartbeat checkpoint, if any, when the invocation ends for good.
