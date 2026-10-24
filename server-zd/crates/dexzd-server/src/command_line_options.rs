@@ -29,6 +29,8 @@ pub struct CommandLineOptions {
 pub enum ServerCommand {
     /// Runs a single-node development Server with an embedded S3 emulator.
     Dev(DevCommandOptions),
+    /// Runs a Server node from a YAML configuration file against external object storage.
+    Serve(ServeCommandOptions),
 }
 
 /// Options of `dex-server-zd dev`. `dexcli dev -engine zd` depends on these exact flags.
@@ -46,6 +48,14 @@ pub struct DevCommandOptions {
     /// Optional YAML file with configuration overrides.
     #[arg(long)]
     pub config: Option<PathBuf>,
+}
+
+/// Options of `dex-server-zd serve`.
+#[derive(Debug, Args)]
+pub struct ServeCommandOptions {
+    /// YAML configuration file; `config/dex-server-zd.example.yaml` lists every key and default.
+    #[arg(long)]
+    pub config: PathBuf,
 }
 
 #[cfg(test)]
@@ -69,7 +79,9 @@ mod tests {
             "/tmp/zd.yaml",
         ])
         .unwrap();
-        let ServerCommand::Dev(dev) = options.command;
+        let ServerCommand::Dev(dev) = options.command else {
+            panic!("dev parses as the dev command");
+        };
         assert_eq!(dev.data_dir.to_str(), Some("/tmp/zd"));
         assert_eq!(dev.listen.to_string(), "127.0.0.1:9901");
         assert_eq!(dev.log_dir.unwrap().to_str(), Some("/tmp/zd-logs"));
@@ -81,7 +93,9 @@ mod tests {
         let options =
             CommandLineOptions::try_parse_from(["dex-server-zd", "dev", "--data-dir", "/tmp/zd"])
                 .unwrap();
-        let ServerCommand::Dev(dev) = options.command;
+        let ServerCommand::Dev(dev) = options.command else {
+            panic!("dev parses as the dev command");
+        };
         assert_eq!(dev.listen.to_string(), "127.0.0.1:8801");
         assert!(dev.log_dir.is_none());
     }
@@ -97,6 +111,33 @@ mod tests {
                 "/tmp/zd",
                 "--listen",
                 "localhost",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn serve_command_requires_a_config_file() {
+        let options = CommandLineOptions::try_parse_from([
+            "dex-server-zd",
+            "serve",
+            "--config",
+            "/etc/dex/dex-server-zd.yaml",
+        ])
+        .unwrap();
+        let ServerCommand::Serve(serve) = options.command else {
+            panic!("serve parses as the serve command");
+        };
+        assert_eq!(serve.config.to_str(), Some("/etc/dex/dex-server-zd.yaml"));
+        assert!(CommandLineOptions::try_parse_from(["dex-server-zd", "serve"]).is_err());
+        assert!(
+            CommandLineOptions::try_parse_from([
+                "dex-server-zd",
+                "serve",
+                "--config",
+                "/etc/dex/dex-server-zd.yaml",
+                "--listen",
+                "127.0.0.1:8801",
             ])
             .is_err()
         );

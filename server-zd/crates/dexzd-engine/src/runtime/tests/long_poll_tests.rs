@@ -186,6 +186,7 @@ async fn wait_for_flow_times_out_with_long_poll_time_out() {
         .unwrap_err();
     assert_eq!(error.grpc_code(), grpc_code::DEADLINE_EXCEEDED);
     assert_eq!(error.sub_status(), ErrorSubStatus::LongPollTimeOut);
+    assert_eq!(error.to_string(), crate::WAIT_FOR_FLOW_TIMEOUT_MESSAGE);
     let error = harness
         .registry
         .wait_for_flow(TENANT, wait_for_flow_request("missing", 2))
@@ -306,12 +307,17 @@ async fn wait_for_step_completion_distinguishes_request_and_call_timeouts() {
         .await
         .unwrap_err();
     assert_eq!(error.sub_status(), ErrorSubStatus::RequestTimeout);
+    assert_eq!(
+        error.to_string(),
+        crate::STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE
+    );
     let error = harness
         .registry
         .wait_for_step_completion(TENANT, request(0))
         .await
         .unwrap_err();
     assert_eq!(error.sub_status(), ErrorSubStatus::LongPollTimeOut);
+    assert_eq!(error.to_string(), crate::WAIT_CALL_DEADLINE_MESSAGE);
 }
 
 fn put_approve_step(

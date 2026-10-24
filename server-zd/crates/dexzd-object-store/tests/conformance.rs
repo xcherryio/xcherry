@@ -402,6 +402,7 @@ async fn s3_conformance(durability: Durability) {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     config.multipart_threshold = 5 * 1024 * 1024;
     config.multipart_part_size = 5 * 1024 * 1024;
@@ -593,11 +594,84 @@ fn static_credentials_debug_redacts_sensitive_values() {
     config.credentials = S3Credentials::Static {
         access_key_id: "visible-key-identifier".to_owned(),
         secret_access_key: "visible-secret-key".to_owned(),
+        session_token: Some("visible-session-token".to_owned()),
     };
     let debug = format!("{config:?}");
     assert!(!debug.contains("visible-key-identifier"));
     assert!(!debug.contains("visible-secret-key"));
+    assert!(!debug.contains("visible-session-token"));
     assert!(debug.contains("[REDACTED]"));
+}
+
+/// Answers requests with 404 and returns the first lowercase request line and headers.
+async fn capture_request_headers(credentials: S3Credentials) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the capture listener binds");
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "capture-bucket");
+    config.endpoint = Some(format!(
+        "http://{}",
+        listener.local_addr().expect("the listener has an address")
+    ));
+    config.force_path_style = true;
+    config.credentials = credentials;
+    let store = S3ObjectStore::new(config)
+        .await
+        .expect("the capture store is configured");
+    let (captured_sender, captured) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("the client connects");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.expect("the request is read");
+                assert!(read > 0, "the client closed before sending headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .expect("the response is written");
+            stream.shutdown().await.expect("the response is flushed");
+            if captured_sender
+                .send(String::from_utf8_lossy(&request).to_lowercase())
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    let head = store.head("object").await;
+    server.abort();
+    let mut captured = captured;
+    let request = captured.recv().await.expect("one request was captured");
+    assert!(
+        !matches!(head, Ok(Some(_))),
+        "the capture endpoint stores no object"
+    );
+    request
+}
+
+#[tokio::test]
+async fn static_session_token_is_sent_and_anonymous_requests_are_unsigned() {
+    let signed = capture_request_headers(S3Credentials::Static {
+        access_key_id: "capture-key".to_owned(),
+        secret_access_key: "capture-secret".to_owned(),
+        session_token: Some("capture-session-token".to_owned()),
+    })
+    .await;
+    assert!(signed.contains("\r\nx-amz-security-token: capture-session-token\r\n"));
+    assert!(signed.contains("\r\nauthorization: aws4-hmac-sha256 credential=capture-key/"));
+    let unsigned = capture_request_headers(S3Credentials::Anonymous).await;
+    assert!(!unsigned.contains("\r\nauthorization:"), "{unsigned}");
+    assert!(
+        !unsigned.contains("\r\nx-amz-security-token:"),
+        "{unsigned}"
+    );
 }
 
 #[tokio::test]
@@ -678,6 +752,7 @@ async fn s3_missing_bucket_and_access_denied_are_permanent() {
     missing.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let missing = S3ObjectStore::new(missing)
         .await
@@ -719,12 +794,52 @@ async fn s3_missing_bucket_and_access_denied_are_permanent() {
         ObjectStoreErrorKind::Permanent
     );
 
+    let mut session = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
+    session.endpoint = Some(endpoint.clone());
+    session.force_path_style = true;
+    session.credentials = S3Credentials::Static {
+        access_key_id: "s3mock".to_owned(),
+        secret_access_key: "s3mock".to_owned(),
+        session_token: Some("temporary-session".to_owned()),
+    };
+    let session = S3ObjectStore::new(session)
+        .await
+        .expect("the conformance operation succeeds");
+    assert!(matches!(
+        session
+            .put(
+                "session-object",
+                Bytes::from_static(b"body"),
+                WriteCondition::CreateOnly
+            )
+            .await
+            .expect("a request signed with a session token verifies"),
+        WriteOutcome::Written { .. }
+    ));
+
+    let mut anonymous = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
+    anonymous.endpoint = Some(endpoint.clone());
+    anonymous.force_path_style = true;
+    anonymous.credentials = S3Credentials::Anonymous;
+    let anonymous = S3ObjectStore::new(anonymous)
+        .await
+        .expect("the conformance operation succeeds");
+    assert_eq!(
+        anonymous
+            .get("session-object")
+            .await
+            .expect_err("strict verification rejects unsigned requests")
+            .kind,
+        ObjectStoreErrorKind::Permanent
+    );
+
     let mut forbidden = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
     forbidden.endpoint = Some(endpoint);
     forbidden.force_path_style = true;
     forbidden.credentials = S3Credentials::Static {
         access_key_id: "wrong".to_owned(),
         secret_access_key: "wrong".to_owned(),
+        session_token: None,
     };
     let forbidden = S3ObjectStore::new(forbidden)
         .await
@@ -833,6 +948,7 @@ async fn s3_conflicts_and_ambiguous_writes() {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let object_store = S3ObjectStore::new(config)
         .await
@@ -1000,6 +1116,7 @@ async fn s3_conflicts_and_ambiguous_writes() {
     timeout_config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let timeout_store = S3ObjectStore::new(timeout_config)
         .await
@@ -1097,6 +1214,7 @@ async fn s3_connection_refused_is_transient() {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let store = S3ObjectStore::new(config)
         .await
