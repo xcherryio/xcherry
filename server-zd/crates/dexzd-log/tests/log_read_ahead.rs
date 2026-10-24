@@ -851,3 +851,53 @@ async fn open_stream_recovery_returns_to_full_depth_after_a_large_batch() {
         );
     }
 }
+
+/// Delays every batch GET and every listing of the log by fixed latencies.
+struct LogLatency {
+    get: Duration,
+    list: Duration,
+}
+
+impl FaultInjector for LogLatency {
+    fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        match operation {
+            _ if !key.starts_with("log/") => FaultAction::Proceed,
+            ObjectStoreOperation::Get => FaultAction::Delay(self.get),
+            ObjectStoreOperation::List => FaultAction::Delay(self.list),
+            _ => FaultAction::Proceed,
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn read_ahead_keeps_full_depth_across_listing_pages_at_hundred_ms_lists() {
+    const BATCHES: u64 = 3_200;
+    let latency = Arc::new(LogLatency {
+        get: GET_DELAY,
+        list: Duration::from_millis(100),
+    });
+    let objects = (1..=BATCHES)
+        .map(|seq| (seq, batch(1, seq, 1_024)))
+        .collect();
+    let store = store_with_injector(latency, objects).await;
+    let stream = stream();
+    let mut reader = OrderedBatchReader::new(&store, &stream, 1, Some(BATCHES), read_ahead(64));
+    let (seq, _) = reader
+        .next_batch()
+        .await
+        .expect("seq 1 reads")
+        .expect("seq 1 is in range");
+    assert_eq!(seq, 1);
+    let started = Instant::now();
+    let mut later_batches = 0_u64;
+    while let Some((seq, batch)) = reader.next_batch().await.expect("batch reads") {
+        assert_eq!(batch.expect("every seq holds a batch").header.seq, seq);
+        later_batches += 1;
+    }
+    assert_eq!(later_batches, BATCHES - 1);
+    let batches_per_second = later_batches as f64 / started.elapsed().as_secs_f64();
+    assert!(
+        batches_per_second >= FULL_DEPTH_MINIMUM_RATE,
+        "{batches_per_second:.0} batches/s across listing pages"
+    );
+}

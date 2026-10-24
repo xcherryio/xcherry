@@ -217,14 +217,18 @@ impl<'a> OrderedBatchReader<'a> {
         self.start_listing();
     }
 
-    /// Lists the next page once fewer than a window of listed sizes remain.
+    /// Lists the next page once fewer than a page of listed sizes remain, hiding LIST latency.
     fn start_listing(&mut self) {
         let listing = &mut self.listing;
+        let listed_ahead = self
+            .config
+            .max_read_ahead_batches
+            .max(LIST_PAGE_KEYS as usize);
         if self.next_seq_to_read.is_none()
             || listing.is_listing
             || listing.error.is_some()
             || listing.listed_through >= self.last_seq
-            || listing.sizes.len() >= self.config.max_read_ahead_batches
+            || listing.sizes.len() >= listed_ahead
         {
             return;
         }
