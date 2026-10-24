@@ -88,6 +88,8 @@ pub(crate) async fn delete_pending_hard_delete_objects(
 }
 
 /// Deletes the run's hard-delete object prefix, then proposes `RunPurge`.
+///
+/// Apply requests it only after deciding a purge that never postpones, so deletion is safe.
 pub(crate) async fn purge_run(
     context: &EffectContext,
     flow: &FlowAddress,

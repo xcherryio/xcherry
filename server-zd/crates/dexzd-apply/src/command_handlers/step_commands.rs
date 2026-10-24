@@ -135,6 +135,7 @@ pub(crate) fn apply_timers_fired(
     command: &TimersFiredCommand,
 ) -> Result<HandlerResult, ApplyError> {
     let mut is_any_applied = false;
+    let mut is_retention_fired = false;
     for timer in &command.timers {
         let is_retention = matches!(
             timer.kind,
@@ -154,11 +155,7 @@ pub(crate) fn apply_timers_fired(
             Some(timer_id::Kind::FlowTimeout(_)) => {
                 apply_flow_timeout(transaction, &mut cursor, scope)?
             }
-            Some(timer_id::Kind::Retention(_)) => {
-                cursor.record.is_purging = true;
-                let run_id = cursor.run_id();
-                cursor.add_effect(crate::ApplyEffect::RunPurgeRequested { run_id });
-            }
+            Some(timer_id::Kind::Retention(_)) => is_retention_fired = true,
             Some(timer_id::Kind::WaitCondition(wait_timer)) => {
                 crate::steps::wait_conditions::on_timer_fired(
                     transaction,
@@ -179,6 +176,10 @@ pub(crate) fn apply_timers_fired(
     }
     if !is_any_applied {
         return Ok(HandlerResult::Rejected(ok_reply()));
+    }
+    if is_retention_fired {
+        // Decided after every timer, so the outbox check sees this command's final rows.
+        crate::cross_flow::on_retention_fired(transaction, &mut cursor, scope)?;
     }
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,

@@ -7,59 +7,89 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_apply::{ApplyContext, ApplyEffect, FlowStateReader};
 use dexzd_keyspace::row_keys::{outbox_key, run_singleton_key};
-use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
+use dexzd_keyspace::{ColumnFamily, RunId, RunTable};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
     WriteCondition,
 };
 use dexzd_protocol::dex::{
-    FlowResult, FlowStatus, InvokeWaitForMethodResponse, StepOptions, SubFlowCondition,
-    WaitingCondition, WaitingConditionType,
+    FlowResult, FlowStatus, InvokeWaitForMethodResponse, StepOptions, StopFlowRequest, StopType,
+    SubFlowCondition, Value, WaitingCondition, WaitingConditionType,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, ChildFlowCompletedMessage, CommandErrorReply, CommandReply, CrossFlowEndpoint,
-    HardDeleteObjectReference, InboxMessageCommand, OutboxRecord, RunRecord, RunSettings,
-    StoredValue, command_reply, flow_command, inbox_message_command, outbox_record, stored_value,
+    ChildFlowCompletedMessage, CommandErrorReply, CommandReply, CrossFlowEndpoint, FlowCommand,
+    FlowStopCommand, InboxMessageCommand, OutboxRecord, RunRecord, RunSettings, command_reply,
+    flow_command, inbox_message_command, outbox_record,
 };
 use prost::Message;
 use tokio::sync::Notify;
 
+use super::hard_delete_tests::set_hard_delete_attribute;
 use super::{
-    DurableState, EffectHarness, RecordedCommand, ok_override, ok_reply, settings, start_request,
+    DurableState, EffectHarness, RecordedCommand, is_error_reply, ok_override, ok_reply, settings,
+    start_request, string_value,
 };
-use crate::effects::EffectsConfig;
-use crate::runtime::RuntimeEffectSink;
+use crate::effects::{EffectsConfig, decode_hard_delete_value};
 use crate::runtime::read_operations::state_rows::read_run;
+use crate::runtime::{CommitUrgency, RuntimeEffectSink, RuntimeError};
 
 const MESSAGE_ID: [u8; 16] = [9; 16];
 
-struct GateAfterRunObjectDeletion {
+/// Lets a fixed number of Lists of one run's hard-delete prefix through, then fails the rest.
+struct PurgeStepGate {
     run_prefix: std::sync::Mutex<Option<String>>,
-    run_list_count: AtomicUsize,
+    allowed_lists: AtomicUsize,
     entered: Notify,
 }
 
-impl FaultInjector for GateAfterRunObjectDeletion {
+impl PurgeStepGate {
+    fn new() -> Self {
+        Self {
+            run_prefix: std::sync::Mutex::new(None),
+            allowed_lists: AtomicUsize::new(usize::MAX),
+            entered: Notify::new(),
+        }
+    }
+
+    fn gate_run(&self, prefix: String, allowed_lists: usize) {
+        *self.run_prefix.lock().expect("gate lock") = Some(prefix);
+        self.allowed_lists.store(allowed_lists, Ordering::SeqCst);
+    }
+
+    fn open(&self) {
+        self.allowed_lists.store(usize::MAX, Ordering::SeqCst);
+    }
+}
+
+impl FaultInjector for PurgeStepGate {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
-        if operation == ObjectStoreOperation::List
+        let is_run_listing = operation == ObjectStoreOperation::List
             && self
                 .run_prefix
                 .lock()
                 .expect("gate lock")
                 .as_ref()
-                .is_some_and(|prefix| key == prefix)
-            && self.run_list_count.fetch_add(1, Ordering::SeqCst) == 1
-        {
-            self.entered.notify_one();
-            return FaultAction::Delay(Duration::from_secs(3600));
+                .is_some_and(|prefix| key == prefix);
+        if !is_run_listing {
+            return FaultAction::Proceed;
         }
-        FaultAction::Proceed
+        let is_allowed = self
+            .allowed_lists
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |allowed| {
+                allowed.checked_sub(1)
+            })
+            .is_ok();
+        if is_allowed {
+            return FaultAction::Proceed;
+        }
+        self.entered.notify_one();
+        FaultAction::FailBeforeEffect
     }
 }
 
@@ -210,101 +240,6 @@ pub(super) async fn put_object(harness: &EffectHarness, key: &str) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_run_is_hidden_after_its_objects_are_deleted_before_run_purge_commits() {
-    let gate = Arc::new(GateAfterRunObjectDeletion {
-        run_prefix: std::sync::Mutex::new(None),
-        run_list_count: AtomicUsize::new(0),
-        entered: Notify::new(),
-    });
-    let durable = DurableState {
-        objects: Arc::new(InMemoryObjectStore::with_injector(gate.clone())),
-        ..DurableState::new()
-    };
-    let harness = EffectHarness::with_config(durable, EffectsConfig::default());
-    harness.rebuild_all_partitions().await;
-    let run_id = harness.start_flow(start_request("order-1"), settings());
-    let owner = harness
-        .hard_delete_objects
-        .owner_of(&EffectHarness::flow("order-1"), run_id);
-    let object_key = owner.object_key("secret");
-    *gate.run_prefix.lock().expect("gate lock") = Some(owner.object_key_prefix());
-    put_object(&harness, &object_key).await;
-    harness
-        .runtime
-        .state
-        .lock()
-        .expect("state lock")
-        .put_message(
-            ColumnFamily::Flow,
-            run_key(owner.flow_hash, run_id, RunTable::Attribute, b"secret"),
-            &AttributeRecord {
-                value: Some(StoredValue {
-                    kind: Some(stored_value::Kind::HardDeleteObject(
-                        HardDeleteObjectReference {
-                            object_id: "secret".to_owned(),
-                            is_string_value: true,
-                            ..HardDeleteObjectReference::default()
-                        },
-                    )),
-                }),
-                ..AttributeRecord::default()
-            },
-        );
-    mark_purging(&harness, "order-1", run_id);
-    let mut run_record = harness.run_record("order-1", run_id);
-    run_record.status = FlowStatus::Completed as i32;
-    harness
-        .runtime
-        .state
-        .lock()
-        .expect("state lock")
-        .put_message(
-            ColumnFamily::Flow,
-            run_singleton_key(owner.flow_hash, run_id, RunTable::RunRecord),
-            &run_record,
-        );
-
-    harness.runner.handle(
-        &EffectHarness::flow("order-1"),
-        &[ApplyEffect::RunPurgeRequested { run_id }],
-        true,
-    );
-    gate.entered.notified().await;
-
-    assert!(
-        harness
-            .durable
-            .objects
-            .get(&object_key)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        harness
-            .runtime
-            .commands_matching(|command| matches!(command, flow_command::Command::RunPurge(_)))
-            .is_empty()
-    );
-    let flow = EffectHarness::flow("order-1");
-    let context = ApplyContext {
-        partition: harness.partition_of("order-1"),
-        flow_hash: owner.flow_hash,
-    };
-    let error = read_run(&harness.runtime.snapshot(), context, &flow, "")
-        .expect_err("a purging run is absent from client reads");
-    assert_eq!(error.grpc_code(), crate::runtime::grpc_code::NOT_FOUND);
-    assert_eq!(
-        error.sub_status(),
-        dexzd_protocol::dex::ErrorSubStatus::FlowNotExists
-    );
-
-    tokio::time::advance(Duration::from_secs(3600)).await;
-    harness.settle().await;
-    harness.shutdown().await;
-}
-
-#[tokio::test(start_paused = true)]
 async fn retention_purge_deletes_the_hard_delete_prefix_then_proposes_run_purge() {
     let harness = EffectHarness::new();
     harness.rebuild_all_partitions().await;
@@ -401,8 +336,11 @@ fn child_settings_config() -> EffectsConfig {
 
 /// Starts "parent" and answers its WaitFor with one SubFlow condition; apply writes the
 /// child start into the parent's outbox.
-async fn start_parent_waiting_for_a_child(harness: &EffectHarness) -> RunId {
-    let parent_run = harness.start_flow(start_request("parent"), settings());
+async fn start_parent_waiting_for_a_child(
+    harness: &EffectHarness,
+    run_settings: RunSettings,
+) -> RunId {
+    let parent_run = harness.start_flow(start_request("parent"), run_settings);
     harness
         .dispatcher
         .next_dispatch()
@@ -509,7 +447,7 @@ async fn child_starts_are_delivered_with_a_new_run_id_and_the_configured_setting
     let config = child_settings_config();
     let harness = EffectHarness::with_config(DurableState::new(), config.clone());
     harness.rebuild_all_partitions().await;
-    let parent_run = start_parent_waiting_for_a_child(&harness).await;
+    let parent_run = start_parent_waiting_for_a_child(&harness, settings()).await;
 
     let inbox = inbox_messages(&harness);
     assert_eq!(inbox.len(), 1);
@@ -547,7 +485,7 @@ async fn a_redelivered_child_start_with_a_new_run_id_starts_the_child_only_once(
         matches!(command, flow_command::Command::OutboxAck(_))
     }));
     first.rebuild_all_partitions().await;
-    let parent_run = start_parent_waiting_for_a_child(&first).await;
+    let parent_run = start_parent_waiting_for_a_child(&first, settings()).await;
     let first_delivery = inbox_messages(&first).remove(0).0;
     assert!(child_run_exists(&first, &first_delivery.new_run_id));
     let durable = first.durable.clone();
@@ -582,7 +520,7 @@ async fn receiver_errors_are_retried_without_acknowledging_and_survive_a_restart
         .runtime
         .add_override(unavailable_inbox_override(usize::MAX));
     first.rebuild_all_partitions().await;
-    let parent_run = start_parent_waiting_for_a_child(&first).await;
+    let parent_run = start_parent_waiting_for_a_child(&first, settings()).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     first.settle().await;
     let rejected = inbox_messages(&first);
@@ -619,4 +557,279 @@ async fn receiver_errors_are_retried_without_acknowledging_and_survive_a_restart
         0
     );
     second.shutdown().await;
+}
+
+const SHORT_RETENTION: Duration = Duration::from_secs(60);
+
+fn short_retention_settings() -> RunSettings {
+    RunSettings {
+        retention_after_close_micros: 60 * super::SECOND_MICROS,
+        ..settings()
+    }
+}
+
+fn terminate_run(harness: &EffectHarness, flow_id: &str, run_id: RunId) {
+    let command = FlowCommand {
+        flow_id: flow_id.to_owned(),
+        run_id: run_id.as_bytes().to_vec(),
+        command: Some(flow_command::Command::FlowStop(FlowStopCommand {
+            request: Some(StopFlowRequest {
+                flow_id: flow_id.to_owned(),
+                stop_type: StopType::Terminate as i32,
+                ..StopFlowRequest::default()
+            }),
+        })),
+        ..FlowCommand::default()
+    };
+    let reply = harness
+        .runtime
+        .commit(
+            &EffectHarness::flow(flow_id),
+            command,
+            CommitUrgency::Prompt,
+        )
+        .expect("stop commits");
+    assert!(!is_error_reply(&reply), "stop failed: {reply:?}");
+}
+
+fn run_record_if_exists(
+    harness: &EffectHarness,
+    flow_id: &str,
+    run_id: RunId,
+) -> Option<RunRecord> {
+    let run = harness.run_location(flow_id, run_id);
+    harness
+        .runtime
+        .snapshot()
+        .get(
+            ColumnFamily::Flow,
+            &run_singleton_key(run.flow_hash, run.run_id, RunTable::RunRecord),
+        )
+        .expect("memory reads never fail")
+        .map(|bytes| RunRecord::decode(bytes.as_slice()).expect("the run record decodes"))
+}
+
+async fn hard_delete_value(harness: &EffectHarness, object_key: &str) -> Option<Value> {
+    harness
+        .durable
+        .objects
+        .get(object_key)
+        .await
+        .expect("object reads succeed")
+        .map(|content| decode_hard_delete_value(object_key, &content.bytes).expect("decodes"))
+}
+
+fn client_read_error(harness: &EffectHarness, flow_id: &str) -> Option<RuntimeError> {
+    let flow = EffectHarness::flow(flow_id);
+    let flow_hash = harness.hasher.flow_hash(flow.tenant_id, flow_id);
+    let context = ApplyContext {
+        partition: harness.hasher.partition_of(flow_hash),
+        flow_hash,
+    };
+    read_run(&harness.runtime.snapshot(), context, &flow, "").err()
+}
+
+fn assert_hidden_from_client_reads(harness: &EffectHarness, flow_id: &str) {
+    let error = client_read_error(harness, flow_id).expect("a purging run is unreadable");
+    assert_eq!(error.grpc_code(), crate::runtime::grpc_code::NOT_FOUND);
+    assert_eq!(
+        error.sub_status(),
+        dexzd_protocol::dex::ErrorSubStatus::FlowNotExists
+    );
+}
+
+fn run_purges(harness: &EffectHarness) -> Vec<RecordedCommand> {
+    harness
+        .runtime
+        .commands_matching(|command| matches!(command, flow_command::Command::RunPurge(_)))
+}
+
+/// Replies UNAVAILABLE to every InboxMessage while `is_rejecting` is set.
+fn switchable_unavailable_inbox_override(is_rejecting: Arc<AtomicBool>) -> super::CommandOverride {
+    Box::new(move |command, _| {
+        let is_inbox = matches!(
+            command.command,
+            Some(flow_command::Command::InboxMessage(_))
+        );
+        (is_inbox && is_rejecting.load(Ordering::SeqCst)).then(unavailable_reply)
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pending_outbox_postpones_retention_before_any_hard_delete_object_is_deleted() {
+    let harness = EffectHarness::new();
+    let is_child_start_rejected = Arc::new(AtomicBool::new(true));
+    harness
+        .runtime
+        .add_override(switchable_unavailable_inbox_override(Arc::clone(
+            &is_child_start_rejected,
+        )));
+    harness.rebuild_all_partitions().await;
+    let parent_run = start_parent_waiting_for_a_child(&harness, short_retention_settings()).await;
+    let object_id =
+        set_hard_delete_attribute(&harness, "parent", parent_run, "secret", "classified").await;
+    let object_key = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("parent"), parent_run)
+        .object_key(&object_id);
+    terminate_run(&harness, "parent", parent_run);
+    let first_deadline = harness
+        .run_record("parent", parent_run)
+        .retention_deadline_micros;
+
+    tokio::time::sleep(SHORT_RETENTION + Duration::from_secs(1)).await;
+    harness.settle().await;
+    assert!(
+        outbox_acks(&harness).is_empty(),
+        "the child start is still unacknowledged"
+    );
+    assert_eq!(
+        hard_delete_value(&harness, &object_key).await,
+        Some(string_value("classified")),
+        "postponing retention keeps every hard-delete value"
+    );
+    let postponed = harness.run_record("parent", parent_run);
+    assert!(!postponed.is_purging, "a postponed run stays readable");
+    assert!(postponed.retention_deadline_micros > first_deadline);
+    assert!(client_read_error(&harness, "parent").is_none());
+    assert!(run_purges(&harness).is_empty());
+
+    is_child_start_rejected.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(3600)).await;
+    harness.settle().await;
+    assert_eq!(outbox_acks(&harness).len(), 1);
+    let purges = run_purges(&harness);
+    assert_eq!(purges.len(), 1);
+    assert_eq!(purges[0].reply, ok_reply());
+    assert!(run_record_if_exists(&harness, "parent", parent_run).is_none());
+    assert_eq!(hard_delete_value(&harness, &object_key).await, None);
+    harness.shutdown().await;
+}
+
+/// Where the node stops in the retention purge sequence.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PurgeCrashPoint {
+    BeforeRetentionDecision,
+    BeforeObjectDeletion,
+    DuringObjectDeletion,
+    BeforeRunPurgeCommit,
+    AfterRunPurgeCommit,
+}
+
+/// Stops the node at `crash_point`, restarts it from durable state, and checks the purge finishes.
+async fn assert_purge_recovers_after_a_crash(crash_point: PurgeCrashPoint) {
+    let gate = Arc::new(PurgeStepGate::new());
+    let durable = DurableState {
+        objects: Arc::new(InMemoryObjectStore::with_injector(gate.clone())),
+        ..DurableState::new()
+    };
+    let first = EffectHarness::with_config(durable.clone(), EffectsConfig::default());
+    first.rebuild_all_partitions().await;
+    let run_id = first.start_flow(start_request("order-1"), short_retention_settings());
+    let owner = first
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let mut object_keys = Vec::new();
+    for (key, text) in [("secret", "classified"), ("token", "opaque")] {
+        let object_id = set_hard_delete_attribute(&first, "order-1", run_id, key, text).await;
+        object_keys.push(owner.object_key(&object_id));
+    }
+    terminate_run(&first, "order-1", run_id);
+    let allowed_lists = match crash_point {
+        PurgeCrashPoint::BeforeObjectDeletion | PurgeCrashPoint::DuringObjectDeletion => Some(0),
+        PurgeCrashPoint::BeforeRunPurgeCommit => Some(1),
+        PurgeCrashPoint::BeforeRetentionDecision | PurgeCrashPoint::AfterRunPurgeCommit => None,
+    };
+    if let Some(allowed_lists) = allowed_lists {
+        gate.gate_run(owner.object_key_prefix(), allowed_lists);
+    }
+    if crash_point != PurgeCrashPoint::BeforeRetentionDecision {
+        tokio::time::sleep(SHORT_RETENTION + Duration::from_secs(1)).await;
+    }
+    if allowed_lists.is_some() {
+        gate.entered.notified().await;
+        assert!(first.run_record("order-1", run_id).is_purging);
+        assert_hidden_from_client_reads(&first, "order-1");
+        assert!(run_purges(&first).is_empty());
+    }
+    match crash_point {
+        PurgeCrashPoint::BeforeRetentionDecision => {
+            assert!(!first.run_record("order-1", run_id).is_purging);
+            assert!(client_read_error(&first, "order-1").is_none());
+        }
+        PurgeCrashPoint::BeforeObjectDeletion => {
+            for object_key in &object_keys {
+                assert!(hard_delete_value(&first, object_key).await.is_some());
+            }
+        }
+        PurgeCrashPoint::DuringObjectDeletion => {
+            // A partly deleted prefix, as when a batch delete stops midway.
+            first
+                .durable
+                .objects
+                .delete(&object_keys[0])
+                .await
+                .expect("delete succeeds");
+            assert!(hard_delete_value(&first, &object_keys[1]).await.is_some());
+        }
+        PurgeCrashPoint::BeforeRunPurgeCommit => {
+            for object_key in &object_keys {
+                assert_eq!(hard_delete_value(&first, object_key).await, None);
+            }
+        }
+        PurgeCrashPoint::AfterRunPurgeCommit => {
+            first.settle().await;
+            assert_eq!(run_purges(&first).len(), 1);
+            assert!(run_record_if_exists(&first, "order-1", run_id).is_none());
+        }
+    }
+    first.shutdown().await;
+
+    gate.open();
+    let second = EffectHarness::with_config(durable, EffectsConfig::default());
+    second.rebuild_all_partitions().await;
+    tokio::time::sleep(SHORT_RETENTION + Duration::from_secs(1)).await;
+    second.settle().await;
+    let purges = run_purges(&second);
+    if crash_point == PurgeCrashPoint::AfterRunPurgeCommit {
+        assert!(purges.is_empty(), "a committed purge leaves no work");
+    } else {
+        assert_eq!(purges.len(), 1, "{crash_point:?}");
+        assert_eq!(purges[0].reply, ok_reply());
+    }
+    assert!(run_record_if_exists(&second, "order-1", run_id).is_none());
+    assert_hidden_from_client_reads(&second, "order-1");
+    let remaining = second
+        .durable
+        .objects
+        .list(&owner.object_key_prefix(), None, 1000)
+        .await
+        .expect("list succeeds");
+    assert!(remaining.objects.is_empty(), "{crash_point:?}");
+    second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_before_the_retention_decision_commits_purges_after_restart() {
+    assert_purge_recovers_after_a_crash(PurgeCrashPoint::BeforeRetentionDecision).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_after_the_purge_decision_before_object_deletion_purges_after_restart() {
+    assert_purge_recovers_after_a_crash(PurgeCrashPoint::BeforeObjectDeletion).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_during_object_deletion_purges_after_restart() {
+    assert_purge_recovers_after_a_crash(PurgeCrashPoint::DuringObjectDeletion).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_after_object_deletion_before_run_purge_commits_purges_after_restart() {
+    assert_purge_recovers_after_a_crash(PurgeCrashPoint::BeforeRunPurgeCommit).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_after_run_purge_commits_leaves_no_purge_work() {
+    assert_purge_recovers_after_a_crash(PurgeCrashPoint::AfterRunPurgeCommit).await;
 }
