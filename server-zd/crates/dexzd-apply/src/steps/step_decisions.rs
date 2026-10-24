@@ -15,6 +15,8 @@ use dexzd_protocol::dexzd::v1::{
     StepExecutionPhase, StepExecutionRecord, StoredStepCompletionOutput,
 };
 
+use prost::Message;
+
 use crate::ApplyError;
 use crate::command_handlers::CommandScope;
 use crate::command_handlers::flow_close::{FlowClosing, close_flow};
@@ -81,17 +83,30 @@ pub(crate) fn apply_step_decision(
                 return Ok(Ok(()));
             }
             CloseDecisionType::ForceFail => {
-                if let Err(rejection) = collect_output(transaction, cursor, &output())? {
-                    return Ok(Err(rejection));
+                if let Some(input) = &close.close_input {
+                    let size_bytes = u64::try_from(input.encoded_len()).unwrap_or(u64::MAX);
+                    let max_value_bytes = cursor.value_limits().max_value_bytes;
+                    if size_bytes > max_value_bytes {
+                        return Ok(Err(ValueRejection::TooLarge {
+                            size_bytes,
+                            max_value_bytes,
+                        }));
+                    }
                 }
+                // As in the Go Server: no result is kept, and a string close input is the message.
+                let message = match close
+                    .close_input
+                    .as_ref()
+                    .and_then(|value| value.kind.as_ref())
+                {
+                    Some(dexzd_protocol::dex::value::Kind::StringValue(text)) => text.clone(),
+                    _ => String::new(),
+                };
                 close_flow(
                     transaction,
                     cursor,
                     scope,
-                    FlowClosing::failed(
-                        FlowErrorType::StepDecisionFailingFlow,
-                        "the Step decision failed the Flow",
-                    ),
+                    FlowClosing::failed(FlowErrorType::StepDecisionFailingFlow, message),
                 )?;
                 return Ok(Ok(()));
             }
