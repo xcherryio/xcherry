@@ -6,7 +6,7 @@ patch_directory="$repository_root/server-zd/testdata/seeded-bugs"
 scratch_root="$(mktemp -d "${TMPDIR:-/tmp}/dexzd-seeded-bugs.XXXXXX")"
 baseline_worktree="$scratch_root/baseline"
 mutant_worktree="$scratch_root/mutant"
-target_directory="$scratch_root/target"
+baseline_target_directory="$scratch_root/targets/baseline"
 seed_count=64
 commands_per_seed=400
 time_limit_seconds=300
@@ -34,6 +34,12 @@ trap cleanup EXIT
 run_simulation() {
   local source_directory="$1"
   local log_path="$2"
+  local target_directory="$3"
+  if [[ -e "$target_directory" ]]; then
+    echo "Cargo target already exists before build: $target_directory" >&2
+    return 1
+  fi
+  echo "Cargo target: $target_directory"
   python3 - "$source_directory/server-zd" "$log_path" "$seed_count" "$commands_per_seed" "$time_limit_seconds" "$target_directory" <<'PY'
 import os
 from pathlib import Path
@@ -80,9 +86,15 @@ PY
 baseline_log="$scratch_root/baseline.log"
 echo "Checking unpatched simulation: $seed_count seeds, $commands_per_seed commands per seed"
 git -C "$repository_root" worktree add --detach "$baseline_worktree" HEAD >/dev/null
-if ! run_simulation "$baseline_worktree" "$baseline_log"; then
+if ! run_simulation "$baseline_worktree" "$baseline_log" "$baseline_target_directory"; then
   echo "Unpatched simulation failed or exceeded ${time_limit_seconds}s:" >&2
   tail -n 35 "$baseline_log" >&2
+  exit 1
+fi
+baseline_source_path="$(cd "$baseline_worktree" && pwd -P)/server-zd/crates/dexzd-simulation"
+if ! grep -F 'Compiling dexzd-simulation' "$baseline_log" | grep -Fq "$baseline_source_path" &&
+   ! grep -F 'Compiling dexzd-simulation' "$baseline_log" | grep -Fq "$baseline_worktree/server-zd/crates/dexzd-simulation"; then
+  echo "Unpatched simulation did not freshly compile dexzd-simulation from $baseline_worktree" >&2
   exit 1
 fi
 git -C "$repository_root" worktree remove --force "$baseline_worktree"
@@ -104,8 +116,9 @@ for name in wall-clock hash-map-iteration immediate-reclaim retry-stale-snapshot
   fi
   git -C "$mutant_worktree" apply "$patch_path"
   log_path="$scratch_root/$name.log"
+  mutant_target_directory="$scratch_root/targets/$name"
   echo "Checking $name: $seed_count seeds, $commands_per_seed commands per seed"
-  if run_simulation "$mutant_worktree" "$log_path"; then
+  if run_simulation "$mutant_worktree" "$log_path" "$mutant_target_directory"; then
     echo "UNDETECTED: $name passed the simulation" >&2
     gap_count=$((gap_count + 1))
   else
