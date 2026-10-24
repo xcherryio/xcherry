@@ -141,6 +141,9 @@ pub struct ValuesConfig {
     /// Defaults to 16 MiB; maximum serialized size of one application value before an API or Worker rejection.
     pub max_value_bytes: u64,
     /// Defaults to false; when true, load referenced values before Worker dispatch instead of sending references.
+    /// Client reads (GetAttributes, GetChannelMessages, GetFlowState, WaitForFlow results) and InvokeRPC,
+    /// including its Worker request, then also return complete values. GetHistoryEvents keeps references,
+    /// which LoadBlobs resolves.
     pub hydrate_before_dispatch: bool,
     /// Defaults to 64 KiB; values at or above this size use RocksDB BlobDB locally after committed apply.
     pub blob_db_min_value_bytes: u64,

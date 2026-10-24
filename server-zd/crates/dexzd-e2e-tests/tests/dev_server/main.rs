@@ -9,6 +9,7 @@
 //! End-to-end tests of `dex-server-zd dev` through the public gRPC protocol.
 
 mod harness;
+mod value_hydration;
 mod wait_deadlines;
 
 use std::collections::BTreeMap;

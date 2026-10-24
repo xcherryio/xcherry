@@ -134,6 +134,7 @@ impl ComponentConfigs {
             long_poll_default_wait: max_wait,
             long_poll_max_wait: max_wait,
             rpc_default_timeout: config.api.default_rpc_timeout,
+            hydrate_value_references: config.values.hydrate_before_dispatch,
             run_settings,
             validation: validation.clone(),
             ..RuntimeConfig::default()
@@ -142,6 +143,7 @@ impl ComponentConfigs {
             heartbeat_batch_window: config.commit.batch_window,
             max_worker_request_bytes: grpc_max_message_bytes,
             default_max_value_bytes: max_value_bytes,
+            hydrate_before_dispatch: config.values.hydrate_before_dispatch,
             ..EffectsConfig::default()
         };
         let matching = MatchingConfig {

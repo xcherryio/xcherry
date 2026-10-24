@@ -25,7 +25,7 @@ use tokio::time::Instant;
 
 use crate::long_poll::WaitInterest;
 use crate::runtime::read_operations::state_rows::{
-    ResolvedRun, WireValue, decode_row, is_closed_status, read_run, wire_value,
+    ResolvedRun, WireValue, decode_row, is_closed_status, read_run, response_value,
 };
 use crate::runtime::{FlowAddress, FlowRuntimeRegistry, RuntimeError, grpc_code};
 
@@ -75,6 +75,7 @@ impl FlowRuntimeRegistry {
             call_deadline: Instant::now() + self.wait_time(request.wait_time_seconds),
             request_deadline: None,
         };
+        let is_hydrating = self.inner.config.hydrate_value_references;
         self.long_poll(
             &flow,
             WaitInterest::FlowClose,
@@ -85,7 +86,9 @@ impl FlowRuntimeRegistry {
                 if !is_closed_status(run.record.status) {
                     return Ok(None);
                 }
-                Ok(Some(flow_result(&run, request.needs_results)))
+                let result =
+                    flow_result(state, context, &run, request.needs_results, is_hydrating)?;
+                Ok(Some(result))
             },
         )
         .await
@@ -343,8 +346,14 @@ impl FlowRuntimeRegistry {
 }
 
 /// Returns the run's result; Step outputs above the inline threshold are value references that the
-/// client loads with LoadBlobs.
-fn flow_result(run: &ResolvedRun, needs_results: bool) -> FlowResult {
+/// client loads with LoadBlobs, unless `is_hydrating` loads them here.
+fn flow_result(
+    state: &dyn FlowStateReader,
+    context: ApplyContext,
+    run: &ResolvedRun,
+    needs_results: bool,
+    is_hydrating: bool,
+) -> Result<FlowResult, RuntimeError> {
     let close = run.record.close.clone().unwrap_or_default();
     let mut result = FlowResult {
         flow_status: run.record.status,
@@ -354,21 +363,23 @@ fn flow_result(run: &ResolvedRun, needs_results: bool) -> FlowResult {
     };
     if needs_results && run.record.status == FlowStatus::Completed as i32 {
         for output in close.results {
-            let value = output
-                .completed_step_output
-                .as_ref()
-                .and_then(|stored| match wire_value(stored, run.run_id)? {
-                    WireValue::Value(value) => Some(value),
-                    WireValue::HardDeleteObject(_) => None,
-                });
+            let value = match output.completed_step_output.as_ref() {
+                Some(stored) => {
+                    response_value(state, context.flow_hash, run.run_id, stored, is_hydrating)?
+                }
+                None => None,
+            };
             result.results.push(StepCompletionOutput {
                 completed_step_type: output.completed_step_type,
                 completed_step_execution_id: output.completed_step_execution_id,
-                completed_step_output: value,
+                completed_step_output: match value {
+                    Some(WireValue::Value(value)) => Some(value),
+                    Some(WireValue::HardDeleteObject(_)) | None => None,
+                },
             });
         }
     }
-    result
+    Ok(result)
 }
 
 /// Matches like the Go Server: strings and booleans by equality; type mismatches never match.

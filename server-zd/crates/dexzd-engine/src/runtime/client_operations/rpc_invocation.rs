@@ -29,7 +29,8 @@ use crate::runtime::client_operations::hard_delete_uploads::hard_delete_referenc
 use crate::runtime::client_operations::request_fingerprint::request_fingerprint;
 use crate::runtime::client_operations::unstamped_flow_command;
 use crate::runtime::read_operations::state_rows::{
-    ResolvedRun, WireValue, load_complete_value, read_run, scan_run_rows, wire_value,
+    ResolvedRun, WireValue, hydrate_value_reference, load_complete_value, read_run, response_value,
+    scan_run_rows,
 };
 use crate::runtime::{
     FlowAddress, FlowRuntimeRegistry, RpcInvokeError, RuntimeError, WorkerRpcInvocation,
@@ -78,6 +79,7 @@ impl FlowRuntimeRegistry {
             // Writes proposed before the locks were taken must be in the snapshot (plan 8.3, L2).
             self.sync_barrier(&flow).await?;
         }
+        let is_hydrating = self.inner.config.hydrate_value_references;
         let snapshot = {
             let committed = self.inner.dependencies.committer.committed_view()?;
             build_rpc_snapshot(
@@ -86,6 +88,7 @@ impl FlowRuntimeRegistry {
                 &flow,
                 &run_id.to_string(),
                 &request,
+                is_hydrating,
             )?
         };
         let run = snapshot.run.clone();
@@ -125,9 +128,19 @@ impl FlowRuntimeRegistry {
             )
         })?;
         if !is_transactional && !has_rpc_effects(&result.response) {
-            return Ok(InvokeRpcResponse {
-                output: result.response.output,
-            });
+            let mut output = result.response.output;
+            if is_hydrating && let Some(output) = output.as_mut() {
+                let committed = self.inner.dependencies.committer.committed_view()?;
+                if !hydrate_value_reference(committed.as_ref(), context.flow_hash, run_id, output)?
+                {
+                    return Err(RuntimeError::rejected(
+                        grpc_code::FAILED_PRECONDITION,
+                        ErrorSubStatus::WorkerApiError,
+                        "worker RPC output is a value reference that names no value of this run",
+                    ));
+                }
+            }
+            return Ok(InvokeRpcResponse { output });
         }
         let output = self
             .commit_rpc(&flow, &run, request, result, is_transactional)
@@ -221,15 +234,30 @@ impl FlowRuntimeRegistry {
     }
 }
 
+/// Reads the run's Attributes and Channels into the Worker request, with complete values when
+/// `is_hydrating`.
+///
+/// Returns `INVALID_ARGUMENT` when hydrating and the RPC input is a value reference that names no
+/// value of the run.
 fn build_rpc_snapshot(
     state: &dyn FlowStateReader,
     context: ApplyContext,
     flow: &FlowAddress,
     run_id: &str,
     request: &InvokeRpcRequest,
+    is_hydrating: bool,
 ) -> Result<RpcSnapshot, RuntimeError> {
     let run = read_run(state, context, flow, run_id)?;
     let run_id = run.run_id;
+    let mut input = request.input.clone();
+    if is_hydrating
+        && let Some(input) = input.as_mut()
+        && !hydrate_value_reference(state, context.flow_hash, run_id, input)?
+    {
+        return Err(RuntimeError::invalid_argument(
+            "RPC input is a value reference that names no value of this run",
+        ));
+    }
     let attribute_selections = sorted_unique(&request.load_attribute_map_instances);
     let channel_names = sorted_unique(&request.load_channel_names);
     let channel_selections = sorted_unique(&request.load_channel_map_instances);
@@ -244,10 +272,10 @@ fn build_rpc_snapshot(
         if !is_selected(&key, &attribute_selections) {
             continue;
         }
-        let Some(value) = record
-            .value
-            .as_ref()
-            .and_then(|stored| wire_value(stored, run_id))
+        let Some(stored) = record.value.as_ref() else {
+            continue;
+        };
+        let Some(value) = response_value(state, context.flow_hash, run_id, stored, is_hydrating)?
         else {
             continue;
         };
@@ -296,7 +324,7 @@ fn build_rpc_snapshot(
         }
     }
     for channel_name in loaded_channels {
-        let messages = read_channel_messages(state, context, run_id, &channel_name)?;
+        let messages = read_channel_messages(state, context, run_id, &channel_name, is_hydrating)?;
         loaded_channel_messages.insert(channel_name, ChannelValues { messages });
     }
 
@@ -309,7 +337,7 @@ fn build_rpc_snapshot(
         }),
         flow_type: run.record.flow_type.clone(),
         rpc_name: request.rpc_name.clone(),
-        input: request.input.clone(),
+        input,
         attributes,
         channel_infos,
         loaded_channel_messages,
@@ -329,6 +357,7 @@ fn read_channel_messages(
     context: ApplyContext,
     run_id: RunId,
     channel_name: &str,
+    is_hydrating: bool,
 ) -> Result<Vec<ChannelMessage>, RuntimeError> {
     let suffix_prefix = channel_name_prefix(channel_name);
     let rows: Vec<(Vec<u8>, ChannelMessageRecord)> = scan_run_rows(
@@ -338,20 +367,22 @@ fn read_channel_messages(
         RunTable::ChannelMessage,
         &suffix_prefix,
     )?;
-    Ok(rows
-        .into_iter()
-        .map(|(_, record)| ChannelMessage {
-            value: record
-                .value
-                .as_ref()
-                .and_then(|stored| match wire_value(stored, run_id)? {
-                    WireValue::Value(value) => Some(value),
-                    WireValue::HardDeleteObject(_) => None,
-                }),
+    let mut messages = Vec::with_capacity(rows.len());
+    for (_, record) in rows {
+        let value = match record.value.as_ref() {
+            Some(stored) => response_value(state, context.flow_hash, run_id, stored, is_hydrating)?,
+            None => None,
+        };
+        messages.push(ChannelMessage {
+            value: match value {
+                Some(WireValue::Value(value)) => Some(value),
+                Some(WireValue::HardDeleteObject(_)) | None => None,
+            },
             channel_name: record.channel_name,
             message_id: record.message_id,
-        })
-        .collect())
+        });
+    }
+    Ok(messages)
 }
 
 /// Ordinary Attributes are always loaded; AttributeMap instances only when selected exactly
