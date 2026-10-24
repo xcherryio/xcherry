@@ -399,6 +399,7 @@ async def _async_pull_worker_handles_flow() -> None:
 
 
 def test_subflow_can_override_push_parent_with_pull_child() -> None:
+    # C18: the parent Flow runs on a push Worker, which server-zd rejects.
     skip_if_server_zd("push Workers")
     server_address = os.environ.get("DEX_SERVER_ADDRESS", "127.0.0.1:8801")
     observations: queue.Queue[tuple[str, str]] = queue.Queue()

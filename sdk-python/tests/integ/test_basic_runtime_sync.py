@@ -119,7 +119,6 @@ def test_model_input_workflow() -> None:
 
 
 def test_flow_config_override() -> None:
-    skip_if_server_zd("Continue-As-New")
     flow = BasicFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("config-override")

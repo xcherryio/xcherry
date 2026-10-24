@@ -145,7 +145,6 @@ async def _model_input_workflow() -> None:
 
 
 def test_flow_config_override() -> None:
-    skip_if_server_zd("Continue-As-New")
     asyncio.run(_flow_config_override())
 
 

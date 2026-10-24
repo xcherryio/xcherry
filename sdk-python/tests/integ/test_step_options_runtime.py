@@ -32,7 +32,6 @@ WAIT_TIMEOUT = timedelta(seconds=30)
 
 
 def test_skip_wait_for_execute_only_steps() -> None:
-    skip_if_server_zd("Continue-As-New")
     flow = ExecuteOnlyFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("skip-wait-for")
