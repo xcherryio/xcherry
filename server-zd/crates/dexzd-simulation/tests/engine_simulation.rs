@@ -8,8 +8,10 @@
 
 //! Engine simulation over a fixed seed set; the crate README lists its environment variables.
 
+use std::path::PathBuf;
+
 use dexzd_simulation::{
-    EngineSimulationConfig, EngineSimulationSummary, run_engine_seed,
+    EngineSimulationConfig, EngineSimulationFailure, EngineSimulationSummary, run_engine_seed,
     run_engine_seed_with_final_state,
 };
 
@@ -37,7 +39,11 @@ fn configured() -> (Vec<u64>, EngineSimulationConfig, bool) {
         Some(seed) => (vec![seed], config, true),
         None => {
             let count = environment_number("DEXZD_SIMULATION_SEEDS").unwrap_or(DEFAULT_SEED_COUNT);
-            ((FIRST_SEED..FIRST_SEED + count).collect(), config, false)
+            let first_seed = environment_number("DEXZD_SIMULATION_BASE_SEED").unwrap_or(FIRST_SEED);
+            let end_seed = first_seed
+                .checked_add(count)
+                .expect("simulation seed range overflow");
+            ((first_seed..end_seed).collect(), config, false)
         }
     }
 }
@@ -45,11 +51,15 @@ fn configured() -> (Vec<u64>, EngineSimulationConfig, bool) {
 #[test]
 fn the_engine_keeps_every_invariant_through_faults_and_crashes() {
     let (seeds, config, is_single_seed) = configured();
+    let failure_directory = std::env::var_os("DEXZD_SIMULATION_FAILURE_DIR").map(PathBuf::from);
     let mut total = EngineSimulationSummary::default();
     for seed in seeds {
         match run_engine_seed(seed, &config) {
             Ok(summary) => total.merge(&summary),
-            Err(failure) => panic!("{failure}"),
+            Err(failure) => {
+                write_failure_report(failure_directory.as_ref(), &failure);
+                panic!("{failure}");
+            }
         }
     }
     if std::env::var_os("DEXZD_SIMULATION_PRINT_EVENTS").is_some() {
@@ -59,10 +69,30 @@ fn the_engine_keeps_every_invariant_through_faults_and_crashes() {
     }
     total.recent_events.clear();
     println!("engine simulation coverage: {total:#?}");
+    println!(
+        "twin comparisons: {} compared, {} skipped while hard-delete uploads were pending",
+        total.state_comparisons, total.state_comparisons_skipped_for_upload_ledger
+    );
     if is_single_seed {
         return;
     }
     assert_covered(&total);
+}
+
+/// Publishes `<seed>.txt` by renaming, so a collector never reads a partial report.
+fn write_failure_report(directory: Option<&PathBuf>, failure: &EngineSimulationFailure) {
+    let Some(directory) = directory else {
+        return;
+    };
+    std::fs::create_dir_all(directory).expect("create engine simulation failure directory");
+    let pending_report = directory.join(format!("{}.tmp", failure.seed));
+    std::fs::write(&pending_report, failure.to_string())
+        .expect("write engine simulation failure report");
+    std::fs::rename(
+        pending_report,
+        directory.join(format!("{}.txt", failure.seed)),
+    )
+    .expect("publish engine simulation failure report");
 }
 
 /// The fixed seed set must exercise every fault, crash, and Worker behavior the harness models.

@@ -95,7 +95,9 @@ directory invariants hold on the committed history. The engine simulation adds t
    family of the node's store with it. Only the four fields that recovery legitimately changes
    are canonicalized: the store lineage, the snapshot number, and each partition's applied
    position and epoch. The twin cannot model the node-local hard-delete upload ledger, so a
-   comparison is skipped and counted while the ledger holds uploads. The recovered store equals
+   comparison is skipped and counted while the ledger holds uploads. The summary field
+   `state_comparisons_skipped_for_upload_ledger` holds the count, and the test prints it on its
+   `twin comparisons:` line next to the comparisons that ran. The recovered store equals
    the twin, so timers, method calls, outbox rows, and hard-delete rows match. Every crash
    counts the timers, running attempts, undelivered outbox rows, and pending hard-delete objects
    it interrupts.
@@ -155,3 +157,18 @@ when both tests run. A failing seed prints its reproduction command and the last
 twice and requires identical raw traces, final local stores, and stored objects, leases
 included. It compares the two final local stores with `compare_store_views` and no canonicalized
 fields.
+
+`DEXZD_SIMULATION_BASE_SEED` replaces the fixed set's first seed, so a run covers
+`DEXZD_SIMULATION_SEEDS` consecutive seeds from there. `DEXZD_SIMULATION_FAILURE_DIR` names a
+directory that receives a `<seed>.txt` report for a failing seed before the test panics. Each
+report holds the violation, the reproduction command, and the last 400 trace events.
+
+### Nightly
+
+The nightly job picks a random 32-bit base seed and runs 250 seeds of 300 simulated seconds.
+That budget takes about 16 minutes on a recent laptop and leaves room for a runner three times
+slower. Manual runs accept 64–1,000 seeds and 60–1,200 seconds per seed, with at most 75,000
+simulated seconds in total. Every run needs at least 64 seeds because the coverage assertions
+still apply. The test stops at the first failing seed and has a 55-minute command limit. The
+job uploads the log and any failure report even when the command fails. Its summary lists each
+failing seed's reproduction command and the `twin comparisons:` line.
