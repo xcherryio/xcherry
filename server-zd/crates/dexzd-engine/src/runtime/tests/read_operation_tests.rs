@@ -9,8 +9,8 @@
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference, run_key};
 use dexzd_protocol::dex::{
     ChannelMessage, EncodedObject, ErrorSubStatus, FlowStatus, GetAttributesRequest,
-    GetChannelMessagesRequest, GetFlowStateRequest, GetFlowSummaryRequest, LoadBlobRequestEntry,
-    LoadBlobsRequest, PublishToChannelRequest, Value, value,
+    GetChannelMessagesRequest, GetFlowStateRequest, GetFlowSummaryRequest, GetHistoryEventsRequest,
+    LoadBlobRequestEntry, LoadBlobsRequest, PublishToChannelRequest, Value, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, HardDeleteObjectReference, PermissionSetRecord, StoredValue, StoredValueId,
@@ -384,9 +384,9 @@ async fn load_blobs_checks_the_owning_flow_and_omits_missing_values() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn read_model_operations_report_unimplemented_until_the_read_model_lands() {
+async fn flow_state_and_history_are_read_through_the_read_model() {
     let harness = RuntimeHarness::new();
-    let error = harness
+    let missing = harness
         .registry
         .get_flow_state(
             TENANT,
@@ -397,5 +397,30 @@ async fn read_model_operations_report_unimplemented_until_the_read_model_lands()
         )
         .await
         .unwrap_err();
-    assert_eq!(error.grpc_code(), grpc_code::UNIMPLEMENTED);
+    assert_eq!(missing.grpc_code(), grpc_code::NOT_FOUND);
+
+    start_flow(&harness, "order-1").await.unwrap();
+    harness
+        .registry
+        .get_flow_state(
+            TENANT,
+            GetFlowStateRequest {
+                flow_id: "order-1".to_owned(),
+                ..GetFlowStateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    let missing_history = harness
+        .registry
+        .get_history_events(
+            TENANT,
+            GetHistoryEventsRequest {
+                flow_id: "order-2".to_owned(),
+                ..GetHistoryEventsRequest::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(missing_history.grpc_code(), grpc_code::NOT_FOUND);
 }
