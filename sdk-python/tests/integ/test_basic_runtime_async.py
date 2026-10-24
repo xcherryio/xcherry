@@ -145,7 +145,6 @@ async def _model_input_workflow() -> None:
 
 
 def test_flow_config_override() -> None:
-    skip_if_server_zd("Continue-As-New")
     asyncio.run(_flow_config_override())
 
 
@@ -208,6 +207,7 @@ async def _wait_for_step_completion() -> None:
 
 
 def test_proceed_on_wait_failure() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     asyncio.run(_proceed_on_wait_failure())
 
@@ -237,6 +237,7 @@ async def _mixed_wait_styles() -> None:
 
 
 def test_movement_options_do_not_mutate_step_defaults() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     asyncio.run(_movement_options_do_not_mutate_step_defaults())
 

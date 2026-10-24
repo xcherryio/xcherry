@@ -11,24 +11,28 @@
 //! Set `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_COMMANDS` for a longer budget, or
 //! `DEXZD_SIMULATION_SEED` for one seed.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use dexzd_keyspace::row_keys::value_row_key;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId};
-use dexzd_protocol::dex::{FlowResetType, ResetFlowRequest};
+use dexzd_protocol::dex::{FlowResetType, ResetFlowRequest, value};
 use dexzd_protocol::dexzd::v1::{
     StoredValue, TimeTravelCommand, command_reply, flow_command::Command, stored_value,
 };
 use dexzd_simulation::{
-    ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, RunSelection, SimulationSummary,
-    run_seed,
+    ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, RunSelection, SimulationFailure,
+    SimulationSummary, run_seed,
 };
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_COMMANDS_PER_SEED: usize = 400;
+const MAX_SEED_COUNT: u64 = 1000;
+const MAX_COMMANDS_PER_SEED: usize = 2000;
+const MAX_RANDOM_COMMANDS: u64 = 500_000;
 /// First seed of the fixed set; any constant keeps the set reproducible.
 const FIRST_SEED: u64 = 0x5eed_0000;
 type RecordedAttributeValues = BTreeMap<String, (ValueId, Vec<u8>)>;
+const REGRESSION_SEEDS: &str = include_str!("../regression-seeds.txt");
 
 fn environment_number(name: &str) -> Option<u64> {
     let text = std::env::var(name).ok()?;
@@ -38,24 +42,66 @@ fn environment_number(name: &str) -> Option<u64> {
     )
 }
 
+fn environment_command_count() -> usize {
+    let commands =
+        environment_number("DEXZD_SIMULATION_COMMANDS").unwrap_or(DEFAULT_COMMANDS_PER_SEED as u64);
+    assert!(
+        (1..=MAX_COMMANDS_PER_SEED as u64).contains(&commands),
+        "DEXZD_SIMULATION_COMMANDS must be an integer from 1 to {MAX_COMMANDS_PER_SEED}"
+    );
+    commands as usize
+}
+
 #[test]
 fn apply_keeps_every_invariant_over_random_command_sequences() {
-    let commands = environment_number("DEXZD_SIMULATION_COMMANDS")
-        .map_or(DEFAULT_COMMANDS_PER_SEED, |count| count as usize);
-    let seeds: Vec<u64> = match environment_number("DEXZD_SIMULATION_SEED") {
-        Some(seed) => vec![seed],
+    let commands = environment_command_count();
+    let seeds: BTreeMap<u64, usize> = match environment_number("DEXZD_SIMULATION_SEED") {
+        Some(seed) => BTreeMap::from([(seed, commands)]),
         None => {
             let count = environment_number("DEXZD_SIMULATION_SEEDS").unwrap_or(DEFAULT_SEED_COUNT);
-            (FIRST_SEED..FIRST_SEED + count).collect()
+            assert!(
+                (1..=MAX_SEED_COUNT).contains(&count),
+                "DEXZD_SIMULATION_SEEDS must be an integer from 1 to {MAX_SEED_COUNT}"
+            );
+            assert!(
+                count * commands as u64 <= MAX_RANDOM_COMMANDS,
+                "random simulation budget exceeds {MAX_RANDOM_COMMANDS} commands"
+            );
+            let first_seed = environment_number("DEXZD_SIMULATION_BASE_SEED").unwrap_or(FIRST_SEED);
+            let end_seed = first_seed
+                .checked_add(count)
+                .expect("simulation seed range overflow");
+            let mut seeds: BTreeMap<u64, usize> = (first_seed..end_seed)
+                .map(|seed| (seed, commands))
+                .collect();
+            for (seed, regression_commands) in regression_seed_cases() {
+                seeds
+                    .entry(seed)
+                    .and_modify(|count| *count = (*count).max(regression_commands))
+                    .or_insert(regression_commands);
+            }
+            seeds
         }
     };
+    let failure_directory = std::env::var_os("DEXZD_SIMULATION_FAILURE_DIR").map(PathBuf::from);
+    let mut failing_seeds = Vec::new();
     let mut total = SimulationSummary::default();
-    for seed in seeds {
-        match run_seed(seed, commands) {
+    for (seed, command_count) in seeds {
+        match run_seed(seed, command_count, |failure| {
+            write_failure_report(failure_directory.as_ref(), failure);
+        }) {
             Ok(summary) => total.merge(&summary),
-            Err(failure) => panic!("{failure}"),
+            Err(failure) => {
+                write_failure_report(failure_directory.as_ref(), &failure);
+                failing_seeds.push(seed);
+                break;
+            }
         }
     }
+    assert!(
+        failing_seeds.is_empty(),
+        "simulation failed for seeds: {failing_seeds:?}"
+    );
     println!("simulation coverage: {total:#?}");
     for kind in [
         "FlowStart",
@@ -81,6 +127,44 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
             "the seed set never had apply reject an {class} for its size: {total:#?}"
         );
     }
+}
+
+#[expect(clippy::print_stderr, reason = "test failures need a console report")]
+fn write_failure_report(directory: Option<&PathBuf>, failure: &SimulationFailure) {
+    let report = failure.to_string();
+    eprintln!("{report}");
+    if let Some(directory) = directory {
+        std::fs::create_dir_all(directory).expect("create simulation failure directory");
+        let pending_report = directory.join(format!("{}.tmp", failure.seed));
+        std::fs::write(&pending_report, report).expect("write simulation failure report");
+        std::fs::rename(
+            pending_report,
+            directory.join(format!("{}.txt", failure.seed)),
+        )
+        .expect("publish simulation failure report");
+    }
+}
+
+fn regression_seed_cases() -> Vec<(u64, usize)> {
+    REGRESSION_SEEDS
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            let seed = fields
+                .next()
+                .expect("regression seed is missing")
+                .parse()
+                .expect("regression seed is not a number");
+            let command_count = fields
+                .next()
+                .expect("regression command count is missing")
+                .parse()
+                .expect("regression command count is not a number");
+            assert!(fields.next().is_none(), "regression seed has extra fields");
+            (seed, command_count)
+        })
+        .collect()
 }
 
 #[test]
@@ -112,6 +196,7 @@ fn overwritten_and_deleted_attributes_are_restored_with_their_values_after_trave
         let mut checker = ApplyChecker::new();
         let mut generator = CommandGenerator::new(seed);
         let mut point_values: BTreeMap<(RunId, u64), RecordedAttributeValues> = BTreeMap::new();
+        let mut explicit_deletions: BTreeMap<(RunId, String), u64> = BTreeMap::new();
         for _ in 0..DEFAULT_COMMANDS_PER_SEED {
             let command = generator.next_command(&checker).expect("state decodes");
             let pretravel_attributes = match &command.command {
@@ -190,8 +275,28 @@ fn overwritten_and_deleted_attributes_are_restored_with_their_values_after_trave
                     );
                     if previous_attributes.contains_key(key) {
                         restored_overwritten += 1;
-                    } else {
+                    } else if explicit_deletions
+                        .get(&(run_id, key.clone()))
+                        .is_some_and(|deletion_seq| *deletion_seq > target_seq)
+                    {
                         restored_deleted += 1;
+                    }
+                }
+            }
+            if !outcome.writes.is_empty()
+                && let Some(Command::AttributesSet(set)) = &command.command
+                && let Some(request) = &set.request
+            {
+                let run_id = RunId::from_slice(&command.run_id).expect("generated run ID");
+                if let Some(run) = view.runs.get(&run_id) {
+                    let deletion_seq = run.record.as_ref().expect("run record").next_run_seq - 1;
+                    for write in &request.attributes {
+                        let is_explicit_delete = write.value.as_ref().is_none_or(|value| {
+                            matches!(value.kind, None | Some(value::Kind::NullValue(_)))
+                        });
+                        if is_explicit_delete && !run.attributes.contains_key(&write.key) {
+                            explicit_deletions.insert((run_id, write.key.clone()), deletion_seq);
+                        }
                     }
                 }
             }

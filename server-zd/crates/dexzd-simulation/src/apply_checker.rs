@@ -139,7 +139,13 @@ impl ApplyChecker {
             .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
         let touched_runs = touched_runs(&outcome);
         let view = self.view(&command.flow_id, RunSelection::Only(&touched_runs))?;
-        remember_window_points(&view, &mut self.memory);
+        remember_window_points(
+            &command.flow_id,
+            &view,
+            &mut self.memory,
+            &self.state,
+            context.flow_hash,
+        )?;
         if is_applied {
             self.check_command_effects(command, &outcome, &view)?;
         }

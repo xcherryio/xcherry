@@ -18,9 +18,9 @@ use dexzd_log::{
 };
 use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::LogPosition;
-use uuid::Uuid;
 
 use crate::commit::{CommitState, EngineLocalStore, PartitionApplierPool, PartitionFrame};
+use crate::engine_id_source::EngineIdSource;
 use crate::recovery::local_store_opening::{AppliedPosition, lowest_applied_position};
 use crate::recovery::node_streams::NodeStreams;
 use crate::recovery::{EngineStartError, describe_lost_ownership};
@@ -55,6 +55,7 @@ pub(crate) struct LogReplay<'a> {
     pub(crate) config: &'a RecoveryConfig,
     pub(crate) object_store: &'a dyn ObjectStore,
     pub(crate) clock: &'a dyn WallClock,
+    pub(crate) id_source: &'a dyn EngineIdSource,
     pub(crate) cluster_id: [u8; 16],
     pub(crate) streams: &'a NodeStreams,
     pub(crate) store: &'a EngineLocalStore,
@@ -171,7 +172,7 @@ impl LogReplay<'_> {
         stream: &StreamIdentity,
         (applied_seq, applied_epoch): (u64, u64),
     ) -> Result<(ReplayedLog, u64), EngineStartError> {
-        let writer_process_id = Uuid::now_v7().to_string();
+        let writer_process_id = self.id_source.writer_process_id();
         let mut recovery = StreamRecovery::after_applied(
             StreamRecoveryInputs {
                 store: self.object_store,

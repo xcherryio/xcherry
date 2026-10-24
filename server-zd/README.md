@@ -148,6 +148,24 @@ make build-server            # builds target/release/dex-server-zd
 Local tests use only the in-process s3mock (`../s3mock`) or the in-memory object store. They need
 no docker, MinIO, or Temporal.
 
+### Persistent format testdata
+
+`testdata/v<N>` holds a recorded log, snapshot, cluster metadata, and committed state.
+`cargo test -p dexzd-engine --test format_compat` checks that the current code decodes every
+version and replays it to the recorded state. Recorded versions are immutable; a pinned digest
+of every file fails the test when a byte changes. The scripted workload must also reproduce the
+newest version byte for byte, so a change to the bytes the engine writes for it needs a new
+version.
+
+Add the next version in the change that does any of the following:
+
+- changes `proto/dexzd/`, the key layout, the object storage layout, or the snapshot format;
+- adds a command kind, a state table, an index kind, or an object kind;
+- adds a behavior version;
+- prepares a release whose persisted data differs from the newest version.
+
+`testdata/README.md` describes the generator and the steps.
+
 ## Rules specific to server-zd
 
 - `dexzd-apply` must be deterministic. It never reads clocks, random numbers, configuration, the

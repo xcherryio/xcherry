@@ -61,6 +61,7 @@ fn test_heartbeat_recovery_and_local_fallback() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_no_output_handler_reaches_heartbeat_timeout() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }

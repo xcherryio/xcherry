@@ -79,8 +79,15 @@ pub struct CheckerMemory {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WindowPointState {
-    pub(crate) references: BTreeSet<(ValueId, u64)>,
+    pub(crate) references: BTreeSet<WindowValueReference>,
     pub(crate) attribute_values: BTreeSet<ValueId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct WindowValueReference {
+    pub(crate) value_id: ValueId,
+    pub(crate) size_bytes: u64,
+    pub(crate) content_hash: u64,
 }
 
 /// Attribute keys that only lock-holding attempts write, for the lost-update check (L2).

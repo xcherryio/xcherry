@@ -96,6 +96,7 @@ test("SubFlow default reuse restarts a failed execution across parent reset", as
 });
 
 test("SubFlow partial results survive continue-as-new without restart", async (context) => {
+  // C3: server-zd never continues a run as new.
   if (await skipIfServerZD(context, "Continue-As-New")) return;
   const completed = new BasicFlow();
   const delayed = new TimerFlow();

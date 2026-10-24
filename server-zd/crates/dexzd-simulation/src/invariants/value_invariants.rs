@@ -10,7 +10,9 @@
 //!
 //! Expected holders derive from state slots and pins, using apply's permanent holder key encoding.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hasher;
 
 use dexzd_keyspace::row_keys::{length_prefixed_name, value_row_key};
 use dexzd_keyspace::{ColumnFamily, FlowHash, RunTable, ValueId};
@@ -20,7 +22,9 @@ use dexzd_protocol::dexzd::v1::{
 };
 use prost::Message;
 
-use crate::invariants::{CheckerMemory, InvariantViolation, RunContext, WindowPointState};
+use crate::invariants::{
+    CheckerMemory, InvariantViolation, RunContext, WindowPointState, WindowValueReference,
+};
 use crate::memory_state::MemoryFlowState;
 use crate::row_decoding::hex;
 use crate::state_view::{FlowView, RunView};
@@ -92,29 +96,60 @@ pub(crate) fn check_values(
     check_hard_delete_objects(context, run)
 }
 
-pub(crate) fn remember_window_points(view: &FlowView, memory: &mut CheckerMemory) {
+pub(crate) fn remember_window_points(
+    flow_id: &str,
+    view: &FlowView,
+    memory: &mut CheckerMemory,
+    state: &MemoryFlowState,
+    flow_hash: FlowHash,
+) -> Result<(), InvariantViolation> {
     for (run_id, run) in view.runs.iter().filter(|(_, run)| run.is_complete) {
+        let context = RunContext { flow_id, run_id };
         let window_start = run
             .record
             .as_ref()
             .map_or(0, |record| record.window_start_seq);
         let points = memory.window_points.entry(*run_id).or_default();
         points.retain(|seq, _| *seq >= window_start);
-        let current_references = collect_references(run);
+        let new_semantic_points: Vec<u64> = run
+            .history
+            .iter()
+            .filter_map(|(seq, history)| {
+                (history.is_semantic && *seq >= window_start && !points.contains_key(seq))
+                    .then_some(*seq)
+            })
+            .collect();
+        let Some(first_seq) = new_semantic_points.first().copied() else {
+            continue;
+        };
+        let current_references = collect_references(run)
+            .into_iter()
+            .map(|(value_id, size_bytes)| {
+                let (_, content_hash) =
+                    read_window_value_content(&context, first_seq, value_id, state, flow_hash)?;
+                Ok(WindowValueReference {
+                    value_id,
+                    size_bytes,
+                    content_hash,
+                })
+            })
+            .collect::<Result<BTreeSet<_>, InvariantViolation>>()?;
         let current_attribute_values: BTreeSet<ValueId> = run
             .attributes
             .values()
             .filter_map(|attribute| table_value_id(attribute.value.as_ref()))
             .collect();
-        for (seq, history) in &run.history {
-            if history.is_semantic && *seq >= window_start {
-                points.entry(*seq).or_insert_with(|| WindowPointState {
+        for seq in new_semantic_points {
+            points.insert(
+                seq,
+                WindowPointState {
                     references: current_references.clone(),
                     attribute_values: current_attribute_values.clone(),
-                });
-            }
+                },
+            );
         }
     }
+    Ok(())
 }
 
 fn collect_references(run: &RunView) -> BTreeSet<(ValueId, u64)> {
@@ -155,17 +190,19 @@ fn check_window_references(
                     format!("{context} semantic point {seq} has no recorded state"),
                 )
             })?;
-        for (value_id, size_bytes) in &point.references {
-            let birth = run.value_births.get(value_id);
-            if !run.value_rows.contains(value_id)
-                || !birth.is_some_and(|birth| birth.size_bytes == *size_bytes)
+        for reference in &point.references {
+            let birth = run.value_births.get(&reference.value_id);
+            if !run.value_rows.contains(&reference.value_id)
+                || !birth.is_some_and(|birth| birth.size_bytes == reference.size_bytes)
             {
                 return Err(InvariantViolation::new(
                     WINDOW_REFERENCE,
                     format!(
-                        "{context} semantic point {seq} references unreadable value {value_id:?} \
-                         of {size_bytes} bytes (value row: {}, birth: {birth:?})",
-                        run.value_rows.contains(value_id)
+                        "{context} semantic point {seq} references unreadable value {:?} \
+                         of {} bytes (value row: {}, birth: {birth:?})",
+                        reference.value_id,
+                        reference.size_bytes,
+                        run.value_rows.contains(&reference.value_id)
                     ),
                 ));
             }
@@ -197,35 +234,64 @@ pub(crate) fn check_window_value_content(
                     format!("{context} semantic point {seq} has no recorded state"),
                 )
             })?;
-        for (value_id, size_bytes) in &point.references {
-            let key = value_row_key(flow_hash, *context.run_id, RunTable::Value, *value_id);
-            let content_size = match state.row(ColumnFamily::Value, &key) {
-                Some(bytes) => ValueRecord::decode(bytes)
-                    .map_err(|error| {
-                        InvariantViolation::new(
-                            WINDOW_REFERENCE,
-                            format!(
-                                "{context} semantic point {seq} value {value_id:?} cannot decode: {error}"
-                            ),
-                        )
-                    })?
-                    .value
-                    .map(|value| u64::try_from(value.encoded_len()).unwrap_or(u64::MAX)),
-                None => None,
-            };
-            let birth_size = run.value_births.get(value_id).map(|birth| birth.size_bytes);
-            if content_size != Some(*size_bytes) || birth_size != Some(*size_bytes) {
+        for reference in &point.references {
+            let (content_size, content_hash) =
+                read_window_value_content(context, *seq, reference.value_id, state, flow_hash)?;
+            let birth_size = run
+                .value_births
+                .get(&reference.value_id)
+                .map(|birth| birth.size_bytes);
+            if content_size != reference.size_bytes
+                || birth_size != Some(reference.size_bytes)
+                || content_hash != reference.content_hash
+            {
                 return Err(InvariantViolation::new(
                     WINDOW_REFERENCE,
                     format!(
-                        "{context} semantic point {seq} references unreadable value {value_id:?} \
-                         of {size_bytes} bytes (content size: {content_size:?}, birth size: {birth_size:?})"
+                        "{context} semantic point {seq} value {:?} changed \
+                         (expected size: {}, content size: {content_size}, birth size: {birth_size:?}, \
+                         expected hash: {}, content hash: {content_hash})",
+                        reference.value_id, reference.size_bytes, reference.content_hash,
                     ),
                 ));
             }
         }
     }
     Ok(())
+}
+
+fn read_window_value_content(
+    context: &RunContext<'_>,
+    seq: u64,
+    value_id: ValueId,
+    state: &MemoryFlowState,
+    flow_hash: FlowHash,
+) -> Result<(u64, u64), InvariantViolation> {
+    let key = value_row_key(flow_hash, *context.run_id, RunTable::Value, value_id);
+    let bytes = state.row(ColumnFamily::Value, &key).ok_or_else(|| {
+        InvariantViolation::new(
+            WINDOW_REFERENCE,
+            format!("{context} semantic point {seq} value {value_id:?} has no row"),
+        )
+    })?;
+    let record = ValueRecord::decode(bytes).map_err(|error| {
+        InvariantViolation::new(
+            WINDOW_REFERENCE,
+            format!("{context} semantic point {seq} value {value_id:?} cannot decode: {error}"),
+        )
+    })?;
+    let value = record.value.ok_or_else(|| {
+        InvariantViolation::new(
+            WINDOW_REFERENCE,
+            format!("{context} semantic point {seq} value {value_id:?} has no content"),
+        )
+    })?;
+    let mut hasher = DefaultHasher::new();
+    hasher.write(bytes);
+    Ok((
+        u64::try_from(value.encoded_len()).unwrap_or(u64::MAX),
+        hasher.finish(),
+    ))
 }
 
 /// Every hard-delete Attribute has exactly one current object row naming its object.
@@ -478,6 +544,12 @@ mod retained_point_tests {
             kind: Some(value::Kind::StringValue("retained".to_owned())),
         };
         let size_bytes = u64::try_from(value.encoded_len()).expect("test value size fits u64");
+        let original_bytes = ValueRecord {
+            value: Some(value.clone()),
+        }
+        .encode_to_vec();
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&original_bytes);
         let run = RunView {
             record: Some(RunRecord {
                 window_start_seq: 1,
@@ -503,7 +575,11 @@ mod retained_point_tests {
         let points = BTreeMap::from([(
             1,
             WindowPointState {
-                references: BTreeSet::from([(value_id, size_bytes)]),
+                references: BTreeSet::from([WindowValueReference {
+                    value_id,
+                    size_bytes,
+                    content_hash: hasher.finish(),
+                }]),
                 attribute_values: BTreeSet::new(),
             },
         )]);
@@ -535,10 +611,28 @@ mod retained_point_tests {
                     .expect_err("retained point must have readable value bytes");
             assert_eq!(violation.invariant, WINDOW_REFERENCE);
         }
+        let replacement = ValueRecord {
+            value: Some(Value {
+                kind: Some(value::Kind::StringValue("replaced".to_owned())),
+            }),
+        };
+        assert_eq!(
+            replacement.value.as_ref().map(Message::encoded_len),
+            Some(size_bytes as usize)
+        );
+        state.commit(&[StateWrite::Put {
+            column_family: ColumnFamily::Value,
+            key: key.clone(),
+            value: replacement.encode_to_vec(),
+        }]);
+        let violation =
+            check_window_value_content(&context, &run, Some(&points), &state, flow_hash)
+                .expect_err("equal-size replacement must not match the retained value");
+        assert_eq!(violation.invariant, WINDOW_REFERENCE);
         state.commit(&[StateWrite::Put {
             column_family: ColumnFamily::Value,
             key,
-            value: ValueRecord { value: Some(value) }.encode_to_vec(),
+            value: original_bytes,
         }]);
         check_window_value_content(&context, &run, Some(&points), &state, flow_hash)
             .expect("matching value content is readable");

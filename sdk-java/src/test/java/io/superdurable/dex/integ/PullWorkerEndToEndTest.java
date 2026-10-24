@@ -59,7 +59,6 @@ public final class PullWorkerEndToEndTest {
 
     @Test
     void routesStickyStepsRpcAndDrainWhilePushStillWorks() throws Exception {
-        IntegrationTestWaits.skipIfServerZD("push Workers");
         final String address = System.getProperty("dex.test.serverAddress", "127.0.0.1:8801");
         final BlockingQueue<String> observations = new LinkedBlockingQueue<String>();
         final CountDownLatch firstRelease = new CountDownLatch(1);
@@ -136,6 +135,10 @@ public final class PullWorkerEndToEndTest {
             }
         }
 
+        // C18: server-zd rejects push Worker targets.
+        if (IntegrationTestWaits.isServerZD()) {
+            return;
+        }
         final PushFlow registered = new PushFlow();
         try (DexDevTestEnvironment push = DexDevTestEnvironment.startPush(
                 cacheDirectory.resolve("push"), registered)) {
