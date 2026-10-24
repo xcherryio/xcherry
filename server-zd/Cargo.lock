@@ -1154,6 +1154,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tower-layer",
  "tracing",
  "tracing-subscriber",
 ]

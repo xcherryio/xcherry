@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+mod client_deadline;
+
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -295,6 +297,9 @@ impl ServerNode {
             tonic::transport::Server::builder()
                 .http2_keepalive_interval(Some(KEEPALIVE_INTERVAL))
                 .http2_keepalive_timeout(Some(KEEPALIVE_TIMEOUT))
+                .layer(tower_layer::layer_fn(
+                    client_deadline::client_deadline_layer,
+                ))
                 .add_service(health_server)
                 .add_service(flow_service.into_server(grpc_max_message_bytes))
                 .add_service(worker_task_service)
