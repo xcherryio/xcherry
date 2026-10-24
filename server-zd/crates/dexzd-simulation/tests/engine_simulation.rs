@@ -8,6 +8,7 @@
 
 //! Engine simulation over a fixed seed set; the crate README lists its environment variables.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use dexzd_simulation::{
@@ -19,6 +20,7 @@ const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_ACTIVE_SECONDS: u64 = 120;
 /// First seed of the fixed set; any constant keeps the set reproducible.
 const FIRST_SEED: u64 = 0xe5e5_0000;
+const REGRESSION_SEEDS: &str = include_str!("../engine-regression-seeds.txt");
 
 fn environment_number(name: &str) -> Option<u64> {
     let text = std::env::var(name).ok()?;
@@ -28,32 +30,65 @@ fn environment_number(name: &str) -> Option<u64> {
     )
 }
 
-/// Returns the seeds to run, the configuration, and whether one seed was requested.
-fn configured() -> (Vec<u64>, EngineSimulationConfig, bool) {
-    let config = EngineSimulationConfig {
-        active_seconds: environment_number("DEXZD_SIMULATION_SECONDS")
-            .unwrap_or(DEFAULT_ACTIVE_SECONDS),
-        ..EngineSimulationConfig::default()
-    };
+/// Returns the active seconds of each seed to run, and whether one seed was requested.
+fn configured() -> (BTreeMap<u64, u64>, bool) {
+    let active_seconds =
+        environment_number("DEXZD_SIMULATION_SECONDS").unwrap_or(DEFAULT_ACTIVE_SECONDS);
     match environment_number("DEXZD_SIMULATION_SEED") {
-        Some(seed) => (vec![seed], config, true),
+        Some(seed) => (BTreeMap::from([(seed, active_seconds)]), true),
         None => {
             let count = environment_number("DEXZD_SIMULATION_SEEDS").unwrap_or(DEFAULT_SEED_COUNT);
             let first_seed = environment_number("DEXZD_SIMULATION_BASE_SEED").unwrap_or(FIRST_SEED);
             let end_seed = first_seed
                 .checked_add(count)
                 .expect("simulation seed range overflow");
-            ((first_seed..end_seed).collect(), config, false)
+            let mut seeds: BTreeMap<u64, u64> = (first_seed..end_seed)
+                .map(|seed| (seed, active_seconds))
+                .collect();
+            // A longer active phase replays the same trajectory up to the regression's failure.
+            for (seed, regression_seconds) in regression_seed_cases() {
+                seeds
+                    .entry(seed)
+                    .and_modify(|seconds| *seconds = (*seconds).max(regression_seconds))
+                    .or_insert(regression_seconds);
+            }
+            (seeds, false)
         }
     }
 }
 
+fn regression_seed_cases() -> Vec<(u64, u64)> {
+    REGRESSION_SEEDS
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            let seed = fields
+                .next()
+                .expect("regression seed is missing")
+                .parse()
+                .expect("regression seed is not a number");
+            let active_seconds = fields
+                .next()
+                .expect("regression active seconds are missing")
+                .parse()
+                .expect("regression active seconds are not a number");
+            assert!(fields.next().is_none(), "regression seed has extra fields");
+            (seed, active_seconds)
+        })
+        .collect()
+}
+
 #[test]
 fn the_engine_keeps_every_invariant_through_faults_and_crashes() {
-    let (seeds, config, is_single_seed) = configured();
+    let (seeds, is_single_seed) = configured();
     let failure_directory = std::env::var_os("DEXZD_SIMULATION_FAILURE_DIR").map(PathBuf::from);
     let mut total = EngineSimulationSummary::default();
-    for seed in seeds {
+    for (seed, active_seconds) in seeds {
+        let config = EngineSimulationConfig {
+            active_seconds,
+            ..EngineSimulationConfig::default()
+        };
         match run_engine_seed(seed, &config) {
             Ok(summary) => total.merge(&summary),
             Err(failure) => {

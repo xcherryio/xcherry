@@ -161,7 +161,9 @@ included. It compares the two final local stores with `compare_store_views` and 
 fields.
 
 `DEXZD_SIMULATION_BASE_SEED` replaces the fixed set's first seed, so a run covers
-`DEXZD_SIMULATION_SEEDS` consecutive seeds from there. `DEXZD_SIMULATION_FAILURE_DIR` names a
+`DEXZD_SIMULATION_SEEDS` consecutive seeds from there. Every run except a single-seed run also
+covers each line of `engine-regression-seeds.txt`: a decimal seed and the active seconds it
+failed with. A seed in both runs for the longer active phase, whose trajectory starts the same. `DEXZD_SIMULATION_FAILURE_DIR` names a
 directory that receives a `<seed>.txt` report for a failing seed before the test panics. Each
 report holds the violation, the reproduction command, and the last 400 trace events.
 
