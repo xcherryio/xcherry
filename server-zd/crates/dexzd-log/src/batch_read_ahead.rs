@@ -6,32 +6,27 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::{Future, pending};
 use std::pin::pin;
 
-use dexzd_object_store::ObjectStore;
+use bytes::Bytes;
+use dexzd_object_store::{ObjectListing, ObjectStore};
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::batch_codec::{DecodedBatch, LogError, StreamIdentity, decode_batch};
-use crate::stream_recovery::validate_batch_identity;
+use crate::stream_recovery::{
+    LIST_PAGE_KEYS, batch_key_prefix_length, parse_listed_seq, validate_batch_identity,
+};
 
 /// How far log replay reads batches ahead of the batch it applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogReadAheadConfig {
     /// Defaults to 64; most batches read but not yet returned, counting reads in flight.
-    ///
-    /// Replay throughput is about this many batches per object-store GET round trip, so 64 at a
-    /// 10 ms GET latency allows about 6,400 batches per second. Must be positive.
     pub max_read_ahead_batches: usize,
-    /// Defaults to 64 MiB; record bytes that batches read ahead may hold.
-    ///
-    /// A read starts only while the fetched batches waiting to be returned, plus the largest batch
-    /// seen so far for each read in flight, fit in this budget. Read-ahead memory therefore stays
-    /// near this budget while batch sizes are steady, and below this budget plus
-    /// `max_read_ahead_batches` times the largest batch in any case, whatever the length of the
-    /// log. Must be positive.
+    /// Defaults to 64 MiB; most batch object bytes that read-ahead reserves. A larger batch is
+    /// read alone.
     pub max_buffered_bytes: usize,
 }
 
@@ -58,15 +53,35 @@ pub struct OrderedBatchReader<'a> {
     next_seq_to_return: Option<u64>,
     /// Next seq to read, or `None` after `last_seq` was read.
     next_seq_to_read: Option<u64>,
-    in_flight: FuturesUnordered<BoxFuture<'a, (u64, BatchRead)>>,
-    fetched: BTreeMap<u64, BatchRead>,
-    fetched_bytes: usize,
-    /// Record bytes of the largest batch fetched so far, charged to each read in flight.
-    largest_batch_bytes: usize,
+    in_flight: FuturesUnordered<BoxFuture<'a, ReadEvent>>,
+    fetched: BTreeMap<u64, ObjectRead>,
+    listing: ListedObjectSizes,
+    /// Bytes reserved by each seq read but not yet returned, in seq order.
+    reservations: VecDeque<usize>,
+    /// Kept until the next call, so the batch being applied stays charged.
+    returned_reservation: usize,
+    reserved_bytes: usize,
 }
 
-/// One GET of a batch: the decoded batch and its record bytes, or `None` when the seq is empty.
-type BatchRead = Result<Option<(DecodedBatch, usize)>, LogError>;
+/// One GET: the object bytes, or `None` when the seq is empty.
+type ObjectRead = Result<Option<Bytes>, LogError>;
+
+enum ReadEvent {
+    Object(u64, ObjectRead),
+    Listing(Result<ObjectListing, LogError>),
+}
+
+/// Object sizes from a paged listing of the stream, kept only for seqs not read yet.
+struct ListedObjectSizes {
+    prefix: String,
+    next_start_after: String,
+    /// Listed seqs not read yet with their object sizes, in seq order.
+    sizes: VecDeque<(u64, usize)>,
+    /// Every seq through this one that existed when listed is in `sizes` or was read.
+    listed_through: u64,
+    is_listing: bool,
+    error: Option<LogError>,
+}
 
 impl<'a> OrderedBatchReader<'a> {
     /// Creates a reader of `stream` from `first_seq` through `last_seq`, or without an upper
@@ -81,7 +96,9 @@ impl<'a> OrderedBatchReader<'a> {
         config: LogReadAheadConfig,
     ) -> Self {
         let last_seq = last_seq.unwrap_or(u64::MAX);
+        let listed_through = first_seq.saturating_sub(1);
         let first_seq = (first_seq <= last_seq).then_some(first_seq);
+        let first_key = stream.batch_key(listed_through);
         Self {
             store,
             stream,
@@ -91,36 +108,55 @@ impl<'a> OrderedBatchReader<'a> {
             next_seq_to_read: first_seq,
             in_flight: FuturesUnordered::new(),
             fetched: BTreeMap::new(),
-            fetched_bytes: 0,
-            largest_batch_bytes: 0,
+            listing: ListedObjectSizes {
+                prefix: first_key[..batch_key_prefix_length(&first_key)].to_owned(),
+                next_start_after: first_key,
+                sizes: VecDeque::new(),
+                listed_through,
+                is_listing: false,
+                error: None,
+            },
+            reservations: VecDeque::new(),
+            returned_reservation: 0,
+            reserved_bytes: 0,
         }
     }
 
     /// Returns the next seq with its batch, or with `None` when the store has no batch there.
     ///
-    /// Returns `Ok(None)` once every seq through the last one was returned, and the first read,
-    /// decode, or stream identity error in seq order.
+    /// Releases the batch returned by the previous call. Returns `Ok(None)` once every seq
+    /// through the last one was returned, and the first listing, read, decode, or stream identity
+    /// error in seq order.
     pub async fn next_batch(&mut self) -> Result<Option<(u64, Option<DecodedBatch>)>, LogError> {
+        self.reserved_bytes -= std::mem::take(&mut self.returned_reservation);
         let Some(seq) = self.next_seq_to_return else {
             return Ok(None);
         };
         loop {
             self.start_reads();
             if let Some(read) = self.fetched.remove(&seq) {
+                self.returned_reservation = self
+                    .reservations
+                    .pop_front()
+                    .expect("a fetched seq holds the oldest reservation");
                 self.next_seq_to_return = seq.checked_add(1).filter(|next| *next <= self.last_seq);
-                let batch = read?.map(|(batch, bytes)| {
-                    self.fetched_bytes -= bytes;
-                    batch
-                });
                 self.start_reads();
+                let batch = read?
+                    .map(|body| decode_stream_batch(&body, self.stream, seq))
+                    .transpose()?;
                 return Ok(Some((seq, batch)));
             }
-            let (read_seq, read) = self
+            if self.next_seq_to_read == Some(seq)
+                && let Some(error) = self.listing.error.take()
+            {
+                return Err(error);
+            }
+            let event = self
                 .in_flight
                 .next()
                 .await
-                .expect("the read of the next seq to return is in flight until it is fetched");
-            self.keep_fetched(read_seq, read);
+                .expect("the next seq to return is read or listed until it is fetched");
+            self.keep(event);
         }
     }
 
@@ -138,59 +174,165 @@ impl<'a> OrderedBatchReader<'a> {
         }
     }
 
-    /// Waits for one read in flight, keeps its result, and starts more reads within the budget.
+    /// Waits for one read or listing in flight, keeps its result, and starts more reads.
     ///
-    /// Never finishes while no read is in flight. Cancel safe: it awaits only the next read.
+    /// Never finishes while nothing is in flight. Cancel safe: it awaits only the next result.
     async fn finish_one_read(&mut self) {
-        let Some((seq, read)) = self.in_flight.next().await else {
+        let Some(event) = self.in_flight.next().await else {
             return pending().await;
         };
-        self.keep_fetched(seq, read);
+        self.keep(event);
         self.start_reads();
     }
 
-    fn keep_fetched(&mut self, seq: u64, read: BatchRead) {
-        if let Ok(Some((_, bytes))) = &read {
-            self.fetched_bytes += bytes;
-            self.largest_batch_bytes = self.largest_batch_bytes.max(*bytes);
+    fn keep(&mut self, event: ReadEvent) {
+        match event {
+            ReadEvent::Object(seq, read) => {
+                self.fetched.insert(seq, read);
+            }
+            ReadEvent::Listing(page) => self.listing.keep_page(page, self.last_seq),
         }
-        self.fetched.insert(seq, read);
     }
 
-    /// Starts reads in seq order while the read-ahead window and byte budget allow.
+    /// Starts reads in seq order while the window and byte budget allow, then lists ahead.
     fn start_reads(&mut self) {
-        while let Some(seq) = self.next_seq_to_read {
-            let outstanding = self.in_flight.len() + self.fetched.len();
-            let projected_bytes = self.fetched_bytes.saturating_add(
-                (self.in_flight.len() + 1).saturating_mul(self.largest_batch_bytes),
-            );
-            // One outstanding read is always allowed, so a batch above the budget still loads.
-            if outstanding > 0
-                && (outstanding >= self.config.max_read_ahead_batches
-                    || projected_bytes > self.config.max_buffered_bytes)
-            {
-                return;
+        while let Some(seq) = self.next_seq_to_read
+            && self.reservations.len() < self.config.max_read_ahead_batches
+            && let Some(listed_bytes) = self.listing.size_of(seq)
+        {
+            // A seq missing from the listing has an unknown size, so it is read alone.
+            let reservation = listed_bytes.unwrap_or(self.config.max_buffered_bytes);
+            let fits = listed_bytes.is_some()
+                && self.reserved_bytes.saturating_add(reservation)
+                    <= self.config.max_buffered_bytes;
+            if self.reserved_bytes > 0 && !fits {
+                break;
             }
-            self.in_flight
-                .push(Box::pin(read_batch(self.store, self.stream, seq)));
+            self.listing.forget_through(seq);
+            self.reservations.push_back(reservation);
+            self.reserved_bytes += reservation;
+            self.in_flight.push(Box::pin(read_object(
+                self.store,
+                self.stream,
+                seq,
+                listed_bytes,
+            )));
             self.next_seq_to_read = seq.checked_add(1).filter(|next| *next <= self.last_seq);
         }
+        self.start_listing();
+    }
+
+    /// Lists the next page once fewer than a window of listed sizes remain.
+    fn start_listing(&mut self) {
+        let listing = &mut self.listing;
+        if self.next_seq_to_read.is_none()
+            || listing.is_listing
+            || listing.error.is_some()
+            || listing.listed_through >= self.last_seq
+            || listing.sizes.len() >= self.config.max_read_ahead_batches
+        {
+            return;
+        }
+        listing.is_listing = true;
+        let store = self.store;
+        let prefix = listing.prefix.clone();
+        let start_after = listing.next_start_after.clone();
+        self.in_flight.push(Box::pin(async move {
+            let page = store
+                .list(&prefix, Some(&start_after), LIST_PAGE_KEYS)
+                .await;
+            ReadEvent::Listing(page.map_err(LogError::from))
+        }));
     }
 }
 
-async fn read_batch(
+impl ListedObjectSizes {
+    /// Returns `None` until a listing covers `seq`, then its listed size, or `Some(None)` when
+    /// the listing did not show it.
+    fn size_of(&self, seq: u64) -> Option<Option<usize>> {
+        (seq <= self.listed_through).then(|| {
+            self.sizes
+                .front()
+                .filter(|(listed_seq, _)| *listed_seq == seq)
+                .map(|(_, bytes)| *bytes)
+        })
+    }
+
+    fn forget_through(&mut self, seq: u64) {
+        while self
+            .sizes
+            .front()
+            .is_some_and(|(listed_seq, _)| *listed_seq <= seq)
+        {
+            self.sizes.pop_front();
+        }
+    }
+
+    fn keep_page(&mut self, page: Result<ObjectListing, LogError>, last_seq: u64) {
+        self.is_listing = false;
+        if let Err(error) = self.try_keep_page(page, last_seq) {
+            self.error = Some(error);
+        }
+    }
+
+    fn try_keep_page(
+        &mut self,
+        page: Result<ObjectListing, LogError>,
+        last_seq: u64,
+    ) -> Result<(), LogError> {
+        let page = page?;
+        let prefix_length = self.prefix.len();
+        let mut sizes = Vec::with_capacity(page.objects.len());
+        for object in &page.objects {
+            let seq = parse_listed_seq(&object.key, prefix_length)?;
+            if seq > self.listed_through && seq <= last_seq {
+                sizes.push((seq, usize::try_from(object.size).unwrap_or(usize::MAX)));
+            }
+        }
+        let listed_through = match (&page.next_start_after, page.objects.last()) {
+            (None, _) => u64::MAX,
+            (Some(_), Some(last)) => parse_listed_seq(&last.key, prefix_length)?,
+            (Some(_), None) => self.listed_through,
+        };
+        self.sizes.extend(sizes);
+        self.listed_through = listed_through;
+        if let Some(next_start_after) = page.next_start_after {
+            self.next_start_after = next_start_after;
+        }
+        Ok(())
+    }
+}
+
+/// Reads one object, failing when a listed size differs from the bytes read.
+async fn read_object(
     store: &dyn ObjectStore,
     stream: &StreamIdentity,
     seq: u64,
-) -> (u64, BatchRead) {
+    listed_bytes: Option<usize>,
+) -> ReadEvent {
     let read = async {
         let Some(object) = store.get(&stream.batch_key(seq)).await? else {
             return Ok(None);
         };
-        let batch = decode_batch(&object.bytes)?;
-        validate_batch_identity(&batch, stream, seq)?;
-        let bytes = batch.records.iter().map(|record| record.bytes.len()).sum();
-        Ok(Some((batch, bytes)))
+        if let Some(listed_bytes) = listed_bytes
+            && object.bytes.len() != listed_bytes
+        {
+            return Err(LogError::Corrupt(format!(
+                "batch at seq {seq} has {} bytes, but its listing showed {listed_bytes}",
+                object.bytes.len()
+            )));
+        }
+        Ok(Some(object.bytes))
     };
-    (seq, read.await)
+    ReadEvent::Object(seq, read.await)
+}
+
+fn decode_stream_batch(
+    body: &[u8],
+    stream: &StreamIdentity,
+    seq: u64,
+) -> Result<DecodedBatch, LogError> {
+    let batch = decode_batch(body)?;
+    validate_batch_identity(&batch, stream, seq)?;
+    Ok(batch)
 }

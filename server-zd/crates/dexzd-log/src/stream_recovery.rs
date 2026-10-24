@@ -21,7 +21,7 @@ use crate::batch_codec::{
 use crate::batch_read_ahead::{LogReadAheadConfig, OrderedBatchReader};
 
 const RECOVERY_WRITE_DEADLINE: Duration = Duration::from_secs(10);
-const LIST_PAGE_KEYS: u32 = 1_000;
+pub(crate) const LIST_PAGE_KEYS: u32 = 1_000;
 
 #[derive(Debug)]
 pub struct RecoveredStream {
@@ -157,7 +157,7 @@ pub struct StreamRecovery<'a> {
 
 enum RecoveryPhase<'a> {
     /// Reading from `from_seq` up to the first missing seq.
-    Reading(OrderedBatchReader<'a>),
+    Reading(Box<OrderedBatchReader<'a>>),
     /// Writing the EpochStart at the first missing seq; a batch found there is examined instead.
     WritingEpochStart { deadline: Instant },
     /// No step remains.
@@ -227,9 +227,9 @@ impl<'a> StreamRecovery<'a> {
             seq: from_seq,
             effective_epoch: effective_epoch_at_start,
             void_sequences: Vec::new(),
-            phase: RecoveryPhase::Reading(OrderedBatchReader::new(
+            phase: RecoveryPhase::Reading(Box::new(OrderedBatchReader::new(
                 store, stream, from_seq, None, read_ahead,
-            )),
+            ))),
         })
     }
 
@@ -533,12 +533,12 @@ async fn ensure_batches_after_start_were_not_deleted(
 }
 
 /// Returns the length of the stream prefix of `batch_key`, up to its last `/`.
-fn batch_key_prefix_length(batch_key: &str) -> usize {
+pub(crate) fn batch_key_prefix_length(batch_key: &str) -> usize {
     batch_key.rfind('/').expect("a batch key ends with /<seq>") + 1
 }
 
 /// Returns the seq that a listed key of the stream names, or [`LogError::Corrupt`] for another name.
-fn parse_listed_seq(key: &str, prefix_length: usize) -> Result<u64, LogError> {
+pub(crate) fn parse_listed_seq(key: &str, prefix_length: usize) -> Result<u64, LogError> {
     key[prefix_length..]
         .parse::<u64>()
         .map_err(|_| LogError::Corrupt(format!("log stream holds an object named {key}")))

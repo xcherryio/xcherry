@@ -72,9 +72,10 @@ Startup proceeds in this order:
    true.
 3. The node restores `localStorage.directory` from the latest snapshot and the command log. The
    directory is a cache; an empty one is rebuilt from object storage. Replay keeps up to
-   `recovery.readAheadBatches` log reads in flight and applies batches in log order as they
-   arrive. After a replay of at least `localStorage.compactAfterReplayBytes`, the local store is
-   compacted in the background while the node serves.
+   `recovery.readAheadBatches` log reads in flight, holding at most `recovery.readAheadBytes` of
+   log objects or one larger batch, and applies batches in log order as they arrive. After a
+   replay of at least `localStorage.compactAfterReplayBytes`, the local store is compacted in the
+   background while the node serves.
 4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
    `api.listen`.
 

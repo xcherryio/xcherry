@@ -6,8 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -32,29 +33,53 @@ impl WallClock for FixedClock {
     }
 }
 
-/// Delays each batch GET by an amount chosen per seq, fails GETs of chosen seqs, and counts GETs.
+/// Delays each batch GET by an amount chosen per seq, fails GETs of chosen seqs while armed, and
+/// counts GETs.
 struct BatchGetFaults {
     delay_of_seq: Box<dyn Fn(u64) -> Duration + Send + Sync>,
     failing_seqs: Vec<u64>,
+    /// Set by [`Self::fail_until_next_batch_put`] and cleared by the next batch PUT.
+    is_failing: AtomicBool,
+    failed_gets: AtomicUsize,
     started_gets: AtomicUsize,
 }
 
 impl BatchGetFaults {
     fn delaying(delay_of_seq: impl Fn(u64) -> Duration + Send + Sync + 'static) -> Arc<Self> {
+        Self::failing(delay_of_seq, Vec::new())
+    }
+
+    fn failing(
+        delay_of_seq: impl Fn(u64) -> Duration + Send + Sync + 'static,
+        failing_seqs: Vec<u64>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             delay_of_seq: Box::new(delay_of_seq),
-            failing_seqs: Vec::new(),
+            failing_seqs,
+            is_failing: AtomicBool::new(false),
+            failed_gets: AtomicUsize::new(0),
             started_gets: AtomicUsize::new(0),
         })
+    }
+
+    fn fail_until_next_batch_put(&self) {
+        self.is_failing.store(true, Ordering::SeqCst);
     }
 
     fn started_gets(&self) -> usize {
         self.started_gets.load(Ordering::SeqCst)
     }
+
+    fn failed_gets(&self) -> usize {
+        self.failed_gets.load(Ordering::SeqCst)
+    }
 }
 
 impl FaultInjector for BatchGetFaults {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if operation == ObjectStoreOperation::Put && key.starts_with("log/") {
+            self.is_failing.store(false, Ordering::SeqCst);
+        }
         if operation != ObjectStoreOperation::Get || !key.starts_with("log/") {
             return FaultAction::Proceed;
         }
@@ -64,7 +89,8 @@ impl FaultInjector for BatchGetFaults {
             .next()
             .and_then(|seq| seq.parse::<u64>().ok())
             .expect("a batch key ends with its seq");
-        if self.failing_seqs.contains(&seq) {
+        if self.failing_seqs.contains(&seq) && self.is_failing.load(Ordering::SeqCst) {
+            self.failed_gets.fetch_add(1, Ordering::SeqCst);
             return FaultAction::FailBeforeEffect;
         }
         match (self.delay_of_seq)(seq) {
@@ -100,6 +126,31 @@ fn batch(epoch: u64, seq: u64, record_bytes: usize) -> Bytes {
     .expect("test batch encodes")
 }
 
+/// Returns a batch whose one record holds `record_bytes` pseudo-random bytes that zstd cannot shrink.
+fn incompressible_batch(epoch: u64, seq: u64, record_bytes: usize) -> Bytes {
+    let mut state = seq.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let record: Vec<u8> = (0..record_bytes)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state.to_le_bytes()[0]
+        })
+        .collect();
+    encode_batch(&BatchContent {
+        stream: stream(),
+        epoch,
+        seq,
+        sealed_at_unix_micros: 42,
+        records: vec![BatchRecord {
+            partition: 2,
+            bytes: Bytes::from(record),
+        }],
+        epoch_start_writer: None,
+    })
+    .expect("test batch encodes")
+}
+
 fn epoch_start(epoch: u64, seq: u64) -> Bytes {
     encode_batch(&BatchContent {
         stream: stream(),
@@ -116,7 +167,14 @@ async fn store_with(
     faults: Arc<BatchGetFaults>,
     objects: Vec<(u64, Bytes)>,
 ) -> InMemoryObjectStore {
-    let store = InMemoryObjectStore::with_injector(faults);
+    store_with_injector(faults, objects).await
+}
+
+async fn store_with_injector(
+    injector: Arc<dyn FaultInjector>,
+    objects: Vec<(u64, Bytes)>,
+) -> InMemoryObjectStore {
+    let store = InMemoryObjectStore::with_injector(injector);
     for (seq, body) in objects {
         store
             .put(&stream().batch_key(seq), body, WriteCondition::CreateOnly)
@@ -284,31 +342,50 @@ async fn recovery_fences_on_a_newer_epoch_under_reordered_get_completion() {
 
 #[tokio::test(start_paused = true)]
 async fn reads_past_the_first_missing_seq_never_reach_recovery() {
-    let mut objects: Vec<(u64, Bytes)> = (1..=5).map(|seq| (seq, batch(1, seq, 64))).collect();
-    objects.push((7, batch(1, 7, 64)));
+    let objects: Vec<(u64, Bytes)> = (1..=10).map(|seq| (seq, batch(1, seq, 64))).collect();
     for depth in [1, 64] {
-        let faults = Arc::new(BatchGetFaults {
-            delay_of_seq: Box::new(|seq| Duration::from_millis(30_u64.saturating_sub(seq))),
-            // Sequential recovery never reads these seqs: they are after the hole at 6 and unlisted.
-            failing_seqs: vec![9, 10],
-            started_gets: AtomicUsize::new(0),
+        // Seq 6 is listed, then deleted before its delayed GET, so reads ahead pass the gap.
+        let faults = BatchGetFaults::failing(
+            |seq| {
+                if seq == 6 {
+                    Duration::from_millis(10)
+                } else {
+                    Duration::ZERO
+                }
+            },
+            // Sequential recovery reads these seqs only after it writes the EpochStart at 6.
+            vec![8, 9],
+        );
+        let store = Arc::new(store_with(faults.clone(), objects.clone()).await);
+        faults.fail_until_next_batch_put();
+        let deletion = tokio::spawn({
+            let store = store.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                store
+                    .delete(&stream().batch_key(6))
+                    .await
+                    .expect("seq 6 is deleted");
+            }
         });
-        let store = store_with(faults.clone(), objects.clone()).await;
         let outcome = recover(&store, 1, 2, read_ahead(depth))
             .await
             .unwrap_or_else(|error| panic!("depth {depth}: {error}"));
+        deletion.await.expect("the deletion finishes");
         assert_eq!(
             outcome,
             RecoveryOutcome {
                 applied: vec![1, 2, 3, 4, 5],
-                voided: vec![7],
+                voided: vec![7, 8, 9, 10],
                 epoch_start_seq: 6,
-                next_seq: 8,
+                next_seq: 11,
             },
             "depth {depth}"
         );
         if depth > 1 {
-            assert!(faults.started_gets() > 10, "depth {depth} read ahead");
+            assert_eq!(faults.failed_gets(), 2, "depth {depth} read past the gap");
+        } else {
+            assert_eq!(faults.failed_gets(), 0, "depth {depth}");
         }
     }
 }
@@ -382,18 +459,23 @@ async fn closed_range_read_ahead_scales_and_never_reads_past_the_last_seq() {
 async fn read_ahead_stays_within_its_window_and_byte_budget_on_a_large_log() {
     const BATCHES: u64 = 5_000;
     const RECORD_BYTES: usize = 4_096;
+    let objects: Vec<(u64, Bytes)> = (1..=BATCHES)
+        .map(|seq| (seq, incompressible_batch(1, seq, RECORD_BYTES)))
+        .collect();
+    let largest_object = objects
+        .iter()
+        .map(|(_, body)| body.len())
+        .max()
+        .expect("the log holds batches");
     let cases = [
         // Only the window binds: at most 32 batches are read but not yet returned.
         (32, 64 * 1024 * 1024, 32),
-        // The byte budget binds once the first batch shows the batch size.
-        (64, 8 * RECORD_BYTES, 8),
+        // The byte budget binds: it holds the batch being applied and 8 read ahead.
+        (64, 9 * largest_object, 8),
     ];
     for (depth, max_buffered_bytes, steady_bound) in cases {
         let faults = BatchGetFaults::delaying(seeded_delay(11));
-        let objects = (1..=BATCHES)
-            .map(|seq| (seq, batch(1, seq, RECORD_BYTES)))
-            .collect();
-        let store = store_with(faults.clone(), objects).await;
+        let store = store_with(faults.clone(), objects.clone()).await;
         let stream = stream();
         let mut reader = OrderedBatchReader::new(
             &store,
@@ -427,4 +509,245 @@ async fn read_ahead_stays_within_its_window_and_byte_budget_on_a_large_log() {
         assert_eq!(returned, BATCHES as usize);
         assert_eq!(most_outstanding, steady_bound, "read-ahead fills its limit");
     }
+}
+
+/// Tracks the object bytes of batch GETs that started before the caller released their batch.
+///
+/// The caller releases a returned batch by asking for the next one, which the test reports
+/// through [`Self::release_through`] just before each call.
+struct BufferedBytesProbe {
+    object_sizes: BTreeMap<u64, usize>,
+    max_buffered_bytes: usize,
+    delay_of_seq: Box<dyn Fn(u64) -> Duration + Send + Sync>,
+    state: Mutex<BufferedBytes>,
+}
+
+#[derive(Default)]
+struct BufferedBytes {
+    released_through: u64,
+    unreleased_seqs: BTreeSet<u64>,
+    peak_bytes: usize,
+    peak_bytes_of_several_batches: usize,
+    /// GET starts that held more than the budget in more than one batch.
+    overruns: Vec<String>,
+}
+
+impl BufferedBytesProbe {
+    fn new(
+        objects: &[(u64, Bytes)],
+        max_buffered_bytes: usize,
+        delay_of_seq: impl Fn(u64) -> Duration + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            object_sizes: objects
+                .iter()
+                .map(|(seq, body)| (*seq, body.len()))
+                .collect(),
+            max_buffered_bytes,
+            delay_of_seq: Box::new(delay_of_seq),
+            state: Mutex::new(BufferedBytes::default()),
+        })
+    }
+
+    fn release_through(&self, seq: u64) {
+        let mut state = self.state.lock().expect("probe lock");
+        state.released_through = seq;
+        state.unreleased_seqs.retain(|unreleased| *unreleased > seq);
+    }
+
+    /// Returns the peak bytes held, the peak held by more than one batch, and the overruns.
+    fn report(&self) -> (usize, usize, Vec<String>) {
+        let state = self.state.lock().expect("probe lock");
+        (
+            state.peak_bytes,
+            state.peak_bytes_of_several_batches,
+            state.overruns.clone(),
+        )
+    }
+}
+
+impl FaultInjector for BufferedBytesProbe {
+    fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if operation != ObjectStoreOperation::Get || !key.starts_with("log/") {
+            return FaultAction::Proceed;
+        }
+        let seq = key
+            .rsplit('/')
+            .next()
+            .and_then(|seq| seq.parse::<u64>().ok())
+            .expect("a batch key ends with its seq");
+        let mut state = self.state.lock().expect("probe lock");
+        if seq > state.released_through {
+            state.unreleased_seqs.insert(seq);
+        }
+        let held: usize = state
+            .unreleased_seqs
+            .iter()
+            .map(|seq| self.object_sizes.get(seq).copied().unwrap_or(0))
+            .sum();
+        state.peak_bytes = state.peak_bytes.max(held);
+        if state.unreleased_seqs.len() > 1 {
+            state.peak_bytes_of_several_batches = state.peak_bytes_of_several_batches.max(held);
+            if held > self.max_buffered_bytes {
+                let overrun = format!(
+                    "GET of seq {seq} holds {held} bytes in seqs {:?}",
+                    state.unreleased_seqs
+                );
+                state.overruns.push(overrun);
+            }
+        }
+        match (self.delay_of_seq)(seq) {
+            delay if delay.is_zero() => FaultAction::Proceed,
+            delay => FaultAction::Delay(delay),
+        }
+    }
+}
+
+const UNEVEN_BUDGET: usize = 512 * 1024;
+const UNEVEN_LAST_SEQ: u64 = 160;
+const OVERSIZED_SEQ: u64 = 40;
+
+/// Batches of 1 KiB, 32 KiB, and 128 KiB in pseudo-random order, and one above the budget.
+fn uneven_log() -> Vec<(u64, Bytes)> {
+    (1..=UNEVEN_LAST_SEQ)
+        .map(|seq| {
+            let record_bytes = if seq == OVERSIZED_SEQ {
+                3 * UNEVEN_BUDGET / 2
+            } else {
+                [1_024, 32 * 1024, 128 * 1024][(seeded_delay(17)(seq).as_millis() % 3) as usize]
+            };
+            (seq, incompressible_batch(1, seq, record_bytes))
+        })
+        .collect()
+}
+
+/// Delays the first GET by a second, so every later read finishes before it.
+fn slow_first_get(seq: u64) -> Duration {
+    if seq == 1 {
+        Duration::from_secs(1)
+    } else {
+        seeded_delay(5)(seq)
+    }
+}
+
+fn assert_within_budget(probe: &BufferedBytesProbe, path: &str) {
+    let (peak_bytes, peak_bytes_of_several_batches, overruns) = probe.report();
+    assert!(overruns.is_empty(), "{path}: {overruns:#?}");
+    assert!(
+        peak_bytes >= 3 * UNEVEN_BUDGET / 2,
+        "{path}: the oversized batch was read, peak {peak_bytes}"
+    );
+    assert!(
+        peak_bytes_of_several_batches >= UNEVEN_BUDGET / 2,
+        "{path}: read-ahead used the budget, peak {peak_bytes_of_several_batches}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn uneven_batches_behind_a_slow_first_get_stay_within_the_byte_budget() {
+    let config = LogReadAheadConfig {
+        max_read_ahead_batches: 64,
+        max_buffered_bytes: UNEVEN_BUDGET,
+    };
+    let objects = uneven_log();
+    let stream = stream();
+
+    let probe = BufferedBytesProbe::new(&objects, UNEVEN_BUDGET, slow_first_get);
+    let store = store_with_injector(probe.clone(), objects.clone()).await;
+    let mut reader = OrderedBatchReader::new(&store, &stream, 1, Some(UNEVEN_LAST_SEQ), config);
+    let mut returned = Vec::new();
+    loop {
+        probe.release_through(returned.last().copied().unwrap_or(0));
+        let Some((seq, batch)) = reader.next_batch().await.expect("batch reads") else {
+            break;
+        };
+        assert_eq!(batch.expect("every seq holds a batch").header.seq, seq);
+        returned.push(seq);
+        reader
+            .read_ahead_while(tokio::time::sleep(Duration::from_millis(2)))
+            .await;
+    }
+    assert_eq!(returned, (1..=UNEVEN_LAST_SEQ).collect::<Vec<_>>());
+    assert_within_budget(&probe, "closed stream");
+
+    let probe = BufferedBytesProbe::new(&objects, UNEVEN_BUDGET, slow_first_get);
+    let store = store_with_injector(probe.clone(), objects).await;
+    let mut recovery = StreamRecovery::from_seq(
+        StreamRecoveryInputs {
+            store: &store,
+            clock: &FixedClock,
+            stream: &stream,
+            new_epoch: 2,
+            writer_process_id: "recovering-writer",
+            read_ahead: config,
+        },
+        1,
+        0,
+    )
+    .expect("recovery starts");
+    let mut applied = Vec::new();
+    let recovered = loop {
+        probe.release_through(applied.last().copied().unwrap_or(0));
+        match recovery.next_step().await.expect("recovery step succeeds") {
+            StreamRecoveryStep::Apply(batch) => {
+                applied.push(batch.header.seq);
+                recovery
+                    .read_ahead_while(tokio::time::sleep(Duration::from_millis(2)))
+                    .await;
+            }
+            StreamRecoveryStep::Recovered(recovered) => break recovered,
+        }
+    };
+    assert_eq!(applied, (1..=UNEVEN_LAST_SEQ).collect::<Vec<_>>());
+    assert_eq!(recovered.epoch_start_seq, UNEVEN_LAST_SEQ + 1);
+    assert_within_budget(&probe, "open stream");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_batch_rewritten_after_its_listing_fails_at_its_seq() {
+    let objects: Vec<(u64, Bytes)> = (1..=5)
+        .map(|seq| (seq, incompressible_batch(1, seq, 1_024)))
+        .collect();
+    let faults = BatchGetFaults::delaying(|seq| {
+        if seq == 3 {
+            Duration::from_millis(50)
+        } else {
+            Duration::ZERO
+        }
+    });
+    let store = store_with(faults, objects).await;
+    let stream = stream();
+    let mut reader = OrderedBatchReader::new(&store, &stream, 1, Some(5), read_ahead(64));
+    let (seq, _) = reader
+        .next_batch()
+        .await
+        .expect("seq 1 reads")
+        .expect("seq 1 is in range");
+    assert_eq!(seq, 1);
+    // The GET of seq 3 started at its listed size and reads the larger object after its delay.
+    reader
+        .read_ahead_while(async {
+            let key = stream.batch_key(3);
+            store.delete(&key).await.expect("seq 3 is deleted");
+            store
+                .put(
+                    &key,
+                    incompressible_batch(1, 3, 64 * 1024),
+                    WriteCondition::CreateOnly,
+                )
+                .await
+                .expect("seq 3 is rewritten");
+        })
+        .await;
+    let (seq, _) = reader
+        .next_batch()
+        .await
+        .expect("seq 2 reads")
+        .expect("seq 2 is in range");
+    assert_eq!(seq, 2);
+    let result = reader.next_batch().await;
+    assert!(
+        matches!(&result, Err(LogError::Corrupt(detail)) if detail.contains("seq 3")),
+        "{result:?}"
+    );
 }

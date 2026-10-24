@@ -110,9 +110,10 @@ pub struct RecoveryConfig {
     /// flight. Replay reads about this many batches per object-store GET round trip, so 64 at a
     /// 10 ms GET latency allows about 6,400 batches per second. Must be between 1 and 1024.
     pub read_ahead_batches: u32,
-    /// Defaults to 64 MiB; no new read starts while batches read ahead hold this many record bytes.
-    /// Read-ahead memory stays below this value plus readAheadBatches times the largest batch.
-    /// Must be positive.
+    /// Defaults to 64 MiB; log object bytes that replay may hold read ahead. Each read reserves
+    /// its batch's listed object size, and the reservation lasts until the batch is applied. A
+    /// batch larger than this value is read alone, so the log objects held never exceed the
+    /// larger of this value and the largest batch. Must be positive.
     pub read_ahead_bytes: u64,
 }
 
