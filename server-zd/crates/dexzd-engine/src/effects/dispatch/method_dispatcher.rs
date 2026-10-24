@@ -43,10 +43,10 @@ pub struct MethodDispatchStartError {
     pub detail: String,
 }
 
-/// Ordered Worker frames and the single outcome of one dispatch. Dropping it cancels the
-/// Worker task.
+/// Ordered Worker frames, assignment changes, and the single outcome of one dispatch.
+/// Dropping it cancels the Worker task.
 pub trait MethodDispatchSession: Send {
-    /// Returns the next Worker frame or the final outcome, then `None`.
+    /// Returns the next Worker frame, assignment change, or the final outcome, then `None`.
     fn next_event(&mut self) -> BoxFuture<'_, Option<DispatchEvent>>;
     /// Asks the Worker to stop the task.
     fn cancel(&self);

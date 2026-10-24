@@ -68,7 +68,7 @@ pub struct DispatchRequest {
     pub dispatch_wait: Option<Duration>,
 }
 
-/// One ordered frame from the Worker or the terminal dispatch outcome.
+/// One ordered frame from the Worker, an assignment change, or the terminal dispatch outcome.
 #[derive(Debug)]
 pub enum DispatchEvent {
     /// The task was sent to this Worker, which may still reject it before any output.
@@ -125,7 +125,8 @@ pub struct DispatchHandle {
 }
 
 impl DispatchHandle {
-    /// Returns the next Worker output or the single final outcome, then returns `None`.
+    /// Returns the next Worker output, assignment change, or the single final outcome, then
+    /// returns `None`.
     pub async fn next(&mut self) -> Option<DispatchEvent> {
         self.events.recv().await
     }
