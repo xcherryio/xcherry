@@ -63,7 +63,7 @@ jobs:
         env:
           DEXZD_SIMULATION_FAILURE_DIR: ${{ runner.temp }}/dexzd-simulation-failures
         run: |
-          cargo test -p dexzd-simulation --test apply_invariants -- --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-simulation.log"
+          cargo test -p dexzd-simulation --test apply_invariants apply_keeps_every_invariant_over_random_command_sequences -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-simulation.log"
       - name: Summarize apply simulation
         if: always()
         shell: bash
