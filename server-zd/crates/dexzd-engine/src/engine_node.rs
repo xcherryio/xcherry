@@ -203,6 +203,15 @@ impl EngineNode {
                 node_meta_lock: node_meta_lock.clone(),
                 local_store: store.clone(),
             });
+            let pre_replay_semantic_points = if config.commit.debug_replay_checks {
+                FrameApplier::pre_replay_semantic_points(store.as_ref())?
+            } else {
+                std::collections::BTreeSet::new()
+            };
+            tracing::debug!(
+                unverifiable_semantic_points = pre_replay_semantic_points.len(),
+                "semantic points present before log replay lack independent hashes"
+            );
             let appliers = Arc::new(PartitionApplierPool::start(
                 FrameApplier {
                     store: store.clone(),
@@ -212,6 +221,9 @@ impl EngineNode {
                     committed_commands: runtime.committed_commands.clone(),
                     is_checking_replay: config.commit.debug_replay_checks,
                     semantic_point_hashes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                    pre_replay_semantic_points,
+                    verified_time_travels: AtomicU64::new(0),
+                    unverifiable_time_travels: AtomicU64::new(0),
                 },
                 config.commit.applier_lanes,
                 config.commit.applier_queue_frames,
@@ -368,6 +380,11 @@ impl EngineNode {
     /// Returns partitions that stopped applying commands after an apply failure.
     pub fn halted_partitions(&self) -> Vec<PartitionId> {
         self.state.halted_partitions()
+    }
+
+    /// Returns verified and snapshot-only time-travel target counts, in that order.
+    pub fn time_travel_verification_counts(&self) -> (u64, u64) {
+        self.appliers.time_travel_verification_counts()
     }
 
     /// Takes a snapshot now, records it in the manifest, and deletes covered objects.

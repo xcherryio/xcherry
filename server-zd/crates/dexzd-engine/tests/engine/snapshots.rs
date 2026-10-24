@@ -6,22 +6,160 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_engine::{CommitUrgency, LocalStoreConfig, NodeStopReason};
+use dexzd_engine::{
+    CommitUrgency, DeterministicCommandApplier, EngineNode, EngineNodeConfig,
+    EngineNodeDependencies, EngineRuntimeHooks, EngineServices, LocalStoreConfig, NodeStopReason,
+};
+use dexzd_keyspace::{PartitionHasher, RunId, TenantId};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
     WriteCondition,
 };
-use dexzd_protocol::dexzd::v1::SnapshotManifest;
-use dexzd_storage::RocksDbStoreOptions;
+use dexzd_protocol::dex::{
+    FlowResetType, FlowTimeoutPolicy, ResetFlowRequest, StartFlowRequest, WorkerTarget,
+};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, FlowStartCommand, RunSettings, SnapshotManifest, TimeTravelCommand, command_reply,
+    flow_command::Command,
+};
+use dexzd_storage::{RestoredLocalStore, RocksDbStoreOptions};
 use prost::Message;
 use tokio::sync::Notify;
 
 use crate::harness::{CountingApplier, PARTITION_COUNT, RecordingRuntime, TestCluster};
+
+async fn start_deterministic_node(
+    cluster: &TestCluster,
+    config: &EngineNodeConfig,
+) -> (
+    EngineNode,
+    Arc<RestoredLocalStore>,
+    PartitionHasher,
+    Arc<RecordingRuntime>,
+) {
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_factory = captured.clone();
+    let runtime = Arc::new(RecordingRuntime::default());
+    let runtime_for_factory = runtime.clone();
+    let node = EngineNode::start(
+        config,
+        EngineNodeDependencies {
+            object_store: cluster.object_store.clone(),
+            clock: cluster.clock.clone(),
+            applier: Arc::new(DeterministicCommandApplier),
+        },
+        move |services: EngineServices| {
+            *captured_for_factory.lock().expect("capture lock") =
+                Some((services.local_store, services.partition_hasher));
+            EngineRuntimeHooks {
+                committed_commands: runtime_for_factory.clone(),
+                rebuilder: runtime_for_factory,
+            }
+        },
+    )
+    .await
+    .expect("deterministic node starts");
+    let (store, hasher) = captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("services captured");
+    (node, store, hasher, runtime)
+}
+
+async fn commit_flow_start(node: &EngineNode, hasher: &PartitionHasher, flow_id: &str) -> RunId {
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
+    let context = dexzd_apply::ApplyContext {
+        partition: hasher.partition_of(flow_hash),
+        flow_hash,
+    };
+    let run_id = RunId([9; 16]);
+    let command = FlowCommand {
+        flow_id: flow_id.to_owned(),
+        command: Some(Command::FlowStart(FlowStartCommand {
+            new_run_id: run_id.0.to_vec(),
+            request: Some(StartFlowRequest {
+                flow_id: flow_id.to_owned(),
+                flow_type: "ReplayFlow".to_owned(),
+                start_step_type: "StartStep".to_owned(),
+                request_id: "start-replay-flow".to_owned(),
+                ..StartFlowRequest::default()
+            }),
+            settings: Some(RunSettings {
+                history_window_semantic_events: 10_000,
+                history_prune_chunk_semantic_events: 1000,
+                max_retained_superseded_bytes: 256 << 20,
+                retention_after_close_micros: 7 * 24 * 3600 * 1_000_000,
+                wire_inline_threshold_bytes: 100,
+                max_value_bytes: 16 << 20,
+                checkpoint_min_written_bytes: 1 << 20,
+                checkpoint_max_commands: 10_000,
+                request_dedup_capacity: 1000,
+                max_run_state_bytes: 1 << 30,
+                max_active_step_executions: 10_000,
+            }),
+            resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
+            worker_target: Some(WorkerTarget {
+                is_pull_mode: true,
+                ..WorkerTarget::default()
+            }),
+            hard_delete_objects: Vec::new(),
+            request_fingerprint: Vec::new(),
+        })),
+        ..FlowCommand::default()
+    };
+    let (_, ticket) = node
+        .committer()
+        .submit(context, command, CommitUrgency::Prompt)
+        .expect("start submitted");
+    let committed = ticket.wait().await.expect("start committed");
+    assert!(matches!(
+        committed.outcome.reply.reply,
+        Some(command_reply::Reply::StartFlow(_))
+    ));
+    run_id
+}
+
+async fn submit_time_travel(
+    node: &EngineNode,
+    hasher: &PartitionHasher,
+    flow_id: &str,
+    run_id: RunId,
+) -> (
+    FlowCommand,
+    Result<dexzd_engine::CommittedCommand, dexzd_engine::CommitError>,
+) {
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
+    let context = dexzd_apply::ApplyContext {
+        partition: hasher.partition_of(flow_hash),
+        flow_hash,
+    };
+    let command = FlowCommand {
+        flow_id: flow_id.to_owned(),
+        run_id: run_id.0.to_vec(),
+        command: Some(Command::TimeTravel(TimeTravelCommand {
+            request: Some(ResetFlowRequest {
+                flow_id: flow_id.to_owned(),
+                reset_type: FlowResetType::Beginning as i32,
+                run_attempt: 1,
+                reason: "replay verification".to_owned(),
+                skip_writes_reapply: true,
+                ..ResetFlowRequest::default()
+            }),
+        })),
+        ..FlowCommand::default()
+    };
+    let (stamped, ticket) = node
+        .committer()
+        .submit(context, command, CommitUrgency::Prompt)
+        .expect("travel submitted");
+    (stamped, ticket.wait().await)
+}
 
 #[derive(Default)]
 struct DelayedSnapshotDelete {
@@ -199,6 +337,28 @@ async fn restart_restores_the_snapshot_and_replays_only_later_batches() {
         )
     });
     second.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_only_time_travel_target_is_counted_as_unverifiable() {
+    let cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.commit.debug_replay_checks = true;
+    let (first, _, hasher, _) = start_deterministic_node(&cluster, &config).await;
+    let run_id = commit_flow_start(&first, &hasher, "snapshot-only-flow").await;
+    first.take_snapshot().await.expect("snapshot succeeds");
+    drop(first);
+
+    let (second, _, hasher, replayed_runtime) = start_deterministic_node(&cluster, &config).await;
+    assert!(replayed_runtime.committed_commands().is_empty());
+    let (_, result) = submit_time_travel(&second, &hasher, "snapshot-only-flow", run_id).await;
+    let committed = result.expect("snapshot-only target remains usable");
+    assert!(matches!(
+        committed.outcome.reply.reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    assert_eq!(second.time_travel_verification_counts(), (0, 1));
+    second.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]

@@ -6,21 +6,23 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_apply::diagnostics::{current_semantic_point_hash, time_travel_target_hash};
 use dexzd_apply::{ApplyContext, ApplyOutcome};
-use dexzd_keyspace::{PartitionHasher, PartitionId, RunId, TenantId};
-use dexzd_protocol::dexzd::v1::{
-    FlowCommand, LogPosition, LogRecord, PartitionMeta, command_reply, flow_command::Command,
-    log_record,
+use dexzd_keyspace::{
+    ColumnFamily, PartitionHasher, PartitionId, RunId, RunTable, TenantId, parse_run_key,
 };
-use dexzd_storage::{LocalReadView, LocalStore};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, HistoryRecord, LogPosition, LogRecord, PartitionMeta, command_reply,
+    flow_command::Command, log_record,
+};
+use dexzd_storage::{LocalReadView, LocalStore, ScanDirection, StorageError};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -56,6 +58,7 @@ enum LaneWork {
 
 /// Applies committed partition frames on lanes; partition `p` always uses lane `p % lanes`.
 pub(crate) struct PartitionApplierPool {
+    frame_applier: Arc<FrameApplier>,
     lanes: Vec<mpsc::Sender<LaneWork>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     cancellation: CancellationToken,
@@ -69,6 +72,9 @@ pub(crate) struct FrameApplier {
     pub(crate) committed_commands: Arc<dyn CommittedCommandSink>,
     pub(crate) is_checking_replay: bool,
     pub(crate) semantic_point_hashes: Mutex<BTreeMap<(RunId, u32, u64), [u8; 16]>>,
+    pub(crate) pre_replay_semantic_points: BTreeSet<(RunId, u32, u64)>,
+    pub(crate) verified_time_travels: AtomicU64,
+    pub(crate) unverifiable_time_travels: AtomicU64,
 }
 
 impl PartitionApplierPool {
@@ -97,6 +103,7 @@ impl PartitionApplierPool {
             tasks.push(lane_task);
         }
         Self {
+            frame_applier,
             lanes,
             tasks: Mutex::new(tasks),
             cancellation,
@@ -146,6 +153,17 @@ impl PartitionApplierPool {
                 tracing::error!(error = %error, "partition applier lane failed");
             }
         }
+    }
+
+    pub(crate) fn time_travel_verification_counts(&self) -> (u64, u64) {
+        (
+            self.frame_applier
+                .verified_time_travels
+                .load(Ordering::Relaxed),
+            self.frame_applier
+                .unverifiable_time_travels
+                .load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -332,6 +350,43 @@ enum FrameFailure {
 }
 
 impl FrameApplier {
+    pub(crate) fn pre_replay_semantic_points(
+        store: &dyn LocalReadView,
+    ) -> Result<BTreeSet<(RunId, u32, u64)>, StorageError> {
+        let mut points = BTreeSet::new();
+        let mut start = None;
+        loop {
+            let rows = store.scan(
+                ColumnFamily::History,
+                start.as_deref(),
+                None,
+                ScanDirection::Forward,
+                256,
+            )?;
+            if rows.is_empty() {
+                break;
+            }
+            for (key, value) in &rows {
+                let parsed = parse_run_key(key)
+                    .map_err(|error| StorageError::Invalid(format!("history key: {error}")))?;
+                if parsed.table == RunTable::HistoryRecord {
+                    let history = HistoryRecord::decode(value.as_slice())?;
+                    if history.is_semantic {
+                        points.insert((parsed.run_id, history.attempt, history.seq));
+                    }
+                }
+            }
+            let mut next = rows
+                .last()
+                .expect("a nonempty page has a last key")
+                .0
+                .clone();
+            next.push(0);
+            start = Some(next);
+        }
+        Ok(points)
+    }
+
     fn apply_frame(&self, frame: PartitionFrame) {
         let partition = frame.partition;
         if self.state.is_partition_halted(partition) {
@@ -554,6 +609,31 @@ impl FrameApplier {
         if let Some(expected) = hashes.get(&key) {
             compare_semantic_point_hash(expected, &target, command, position)
                 .map_err(FrameFailure::Halt)?;
+            self.verified_time_travels.fetch_add(1, Ordering::Relaxed);
+        } else if self.pre_replay_semantic_points.contains(&key) {
+            let unverifiable_count = self
+                .unverifiable_time_travels
+                .fetch_add(1, Ordering::Relaxed)
+                + 1;
+            tracing::debug!(
+                flow_id = %command.flow_id,
+                log_seq = position.seq,
+                run_id = %target.run_id,
+                run_attempt = target.run_attempt,
+                run_seq = target.run_seq,
+                unverifiable_count,
+                "time-travel target predates replay and has no independent hash"
+            );
+        } else {
+            return Err(FrameFailure::Halt(format!(
+                "time-travel verification has no expected hash for Flow {} command {:?} at log seq {} semantic key ({}, {}, {})",
+                command.flow_id,
+                command.command_id,
+                position.seq,
+                target.run_id,
+                target.run_attempt,
+                target.run_seq
+            )));
         }
         Ok(())
     }
