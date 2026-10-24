@@ -50,13 +50,14 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
             .all(|pair| pair[0].proposed_at_micros < pair[1].proposed_at_micros)
     );
     assert_eq!(test.committed_count("order-flow").await, 3);
+    // Shutdown joins the applier lanes, which hand each command to the runtime after its ticket.
+    test.node.shutdown().await;
     let published = test.runtime.committed_command_ids("order-flow");
     let submitted: Vec<Vec<u8>> = stamped
         .into_iter()
         .map(|command| command.command_id)
         .collect();
     assert_eq!(published, submitted);
-    test.node.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

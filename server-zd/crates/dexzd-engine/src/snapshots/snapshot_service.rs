@@ -159,7 +159,7 @@ impl SnapshotService {
         let node_meta_lock = self.node_meta_lock.clone();
         // Checkpoints and file hashing block, so the whole upload runs on the blocking pool.
         tokio::task::spawn_blocking(move || {
-            // create_snapshot reads NodeMeta first and writes it back last.
+            // create_snapshot reads NodeMeta first and writes it back before it publishes the manifest.
             let _node_meta_guard = node_meta_lock
                 .lock()
                 .expect("node metadata lock is not poisoned");

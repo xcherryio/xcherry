@@ -378,6 +378,9 @@ async fn voided_batches_after_takeover_keep_submission_order() {
         submitted_ids.push(command.command_id);
         ticket.wait().await.expect("command commits");
     }
+    assert_eq!(second.committed_count("void-flow").await, 5);
+    // Shutdown joins the applier lanes, which hand each command to the runtime after its ticket.
+    second.node.shutdown().await;
     let committed_ids: Vec<Vec<u8>> = second
         .runtime
         .committed_commands()
@@ -386,5 +389,4 @@ async fn voided_batches_after_takeover_keep_submission_order() {
         .map(|committed| committed.command.command_id)
         .collect();
     assert_eq!(committed_ids, submitted_ids);
-    second.node.shutdown().await;
 }
