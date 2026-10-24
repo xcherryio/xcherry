@@ -13,7 +13,7 @@ use tokio_postgres::types::{ToSql, Type};
 
 use super::MIGRATION_SQL;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 const SCHEMA_ADVISORY_LOCK: i64 = 5_589_034_107_693_961_330;
 
 /// A failure while creating or checking the ParadeDB visibility schema.
@@ -68,7 +68,8 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             operation: "lock migration of",
             source,
         })?;
-    if is_current_version(schema_version(&transaction).await?)? {
+    let previous_version = schema_version(&transaction).await?;
+    if is_current_version(previous_version)? {
         return commit_schema(transaction).await;
     }
     transaction
@@ -85,13 +86,15 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             operation: "migrate",
             source,
         })?;
-    transaction
-        .batch_execute("TRUNCATE TABLE dexzd_visibility_runs, dexzd_visibility_progress")
-        .await
-        .map_err(|source| SchemaError::Database {
-            operation: "clear older projection in",
-            source,
-        })?;
+    if previous_version.is_none_or(|version| version < 2) {
+        transaction
+            .batch_execute("TRUNCATE TABLE dexzd_visibility_runs, dexzd_visibility_progress, dexzd_visibility_skipped_documents")
+            .await
+            .map_err(|source| SchemaError::Database {
+                operation: "clear older projection in",
+                source,
+            })?;
+    }
     transaction
         .execute_typed(
             "INSERT INTO dexzd_visibility_schema_version (id, version) VALUES (1, $1::integer) ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version",

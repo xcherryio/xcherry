@@ -21,7 +21,7 @@ use prost::Message;
 use tokio_postgres::{Client, Config};
 
 use super::super::ParadeDbSearchBackend;
-use super::{ParadeDbProjector, ProjectionError, SearchDocumentChange};
+use super::{ParadeDbProjector, ProjectionError, ProjectionMetricRecorder, SearchDocumentChange};
 use crate::{SearchBackend, SearchError, SearchRequest};
 
 #[derive(Default)]
@@ -87,6 +87,22 @@ impl FlowStateReader for CommittedDocuments {
 struct FailingDocuments {
     documents: CommittedDocuments,
     reads: AtomicUsize,
+}
+
+#[derive(Default)]
+struct CountingProjectionMetrics(AtomicUsize);
+
+impl ProjectionMetricRecorder for CountingProjectionMetrics {
+    fn record_skipped_search_document(
+        &self,
+        partition_id: PartitionId,
+        tenant_id: TenantId,
+        _run_id: RunId,
+    ) {
+        assert_eq!(partition_id, PartitionId(4));
+        assert_eq!(tenant_id, TenantId(17));
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 impl FlowStateReader for FailingDocuments {
@@ -167,6 +183,27 @@ async fn listed_runs(backend: &ParadeDbSearchBackend, tenant_id: TenantId) -> Ve
         .collect()
 }
 
+async fn skipped_reason(
+    backend: &ParadeDbSearchBackend,
+    tenant_id: TenantId,
+    run_id: RunId,
+) -> Option<String> {
+    let slot = backend.lock_next_slot().await;
+    let tenant_column = tenant_id.0.to_string();
+    let run_column = run_id.to_string();
+    slot.client
+        .query_typed_opt(
+            "SELECT reason FROM dexzd_visibility_skipped_documents WHERE tenant_id = $1::text AND run_id = $2::text",
+            &[
+                (&tenant_column as &(dyn tokio_postgres::types::ToSql + Sync), tokio_postgres::types::Type::TEXT),
+                (&run_column, tokio_postgres::types::Type::TEXT),
+            ],
+        )
+        .await
+        .expect("read skipped document")
+        .map(|row| row.get(0))
+}
+
 #[cfg(test)]
 pub(crate) async fn run_projector_scenarios_for_test(
     database_url: &str,
@@ -191,7 +228,11 @@ pub(crate) async fn run_projector_scenarios_for_test(
                 .await
                 .expect("create schema on empty database"),
         );
-        let projector = Arc::new(ParadeDbProjector::new(backend.clone()));
+        let metrics = Arc::new(CountingProjectionMetrics::default());
+        let projector = Arc::new(ParadeDbProjector::new_with_metric_recorder(
+            backend.clone(),
+            metrics.clone(),
+        ));
         let schema_row = {
             let slot = backend.lock_next_slot().await;
             slot.client
@@ -202,7 +243,7 @@ pub(crate) async fn run_projector_scenarios_for_test(
                 .await
                 .expect("read created schema version")
         };
-        assert_eq!(schema_row.get::<_, i32>(0), 2);
+        assert_eq!(schema_row.get::<_, i32>(0), 3);
         assert_eq!(projector.read_progress(PartitionId(4)).await.unwrap(), None);
         let mut locked_slot = backend.lock_next_slot().await;
         let table_lock = locked_slot
@@ -284,34 +325,40 @@ pub(crate) async fn run_projector_scenarios_for_test(
                 .await,
             Err(ProjectionError::PositionMismatch { .. })
         ));
-        assert!(matches!(
-            projector
-                .apply_batch(
-                    partition_id,
-                    Some(&position(10)),
-                    &position(13),
-                    &[SearchDocumentChange::Upsert {
-                        tenant_id,
-                        run_id: first_run,
-                        encoded_document: vec![0xff],
-                    }],
-                )
-                .await,
-            Err(ProjectionError::InvalidState(_))
-        ));
-        assert_eq!(
-            projector.read_progress(partition_id).await.unwrap(),
-            Some(position(10))
-        );
-        assert_eq!(
-            listed_runs(&backend, tenant_id).await,
-            [first_run.to_string()]
-        );
-        let second_record = document(tenant_id, second_run, 1);
         projector
             .apply_batch(
                 partition_id,
                 Some(&position(10)),
+                &position(11),
+                &[SearchDocumentChange::Upsert {
+                    tenant_id,
+                    run_id: first_run,
+                    encoded_document: vec![0xff],
+                }],
+            )
+            .await
+            .expect("skip poison document and advance progress");
+        assert_eq!(
+            projector.read_progress(partition_id).await.unwrap(),
+            Some(position(11))
+        );
+        assert!(listed_runs(&backend, tenant_id).await.is_empty());
+        assert!(
+            skipped_reason(&backend, tenant_id, first_run)
+                .await
+                .is_some_and(|reason| reason.contains("decode committed search document"))
+        );
+        assert_eq!(metrics.0.load(Ordering::Relaxed), 1);
+        projector
+            .apply_batch(partition_id, Some(&position(10)), &position(11), &[])
+            .await
+            .expect("skip replay without recording poison twice");
+        assert_eq!(metrics.0.load(Ordering::Relaxed), 1);
+        let second_record = document(tenant_id, second_run, 1);
+        projector
+            .apply_batch(
+                partition_id,
+                Some(&position(11)),
                 &position(13),
                 &[
                     upsert(tenant_id, first_run, &changed_record),
@@ -324,6 +371,7 @@ pub(crate) async fn run_projector_scenarios_for_test(
             projector.read_progress(partition_id).await.unwrap(),
             Some(position(13))
         );
+        assert_eq!(skipped_reason(&backend, tenant_id, first_run).await, None);
         projector
             .apply_batch(
                 partition_id,
@@ -353,7 +401,7 @@ pub(crate) async fn run_projector_scenarios_for_test(
             .expect("project another partition");
         let new_owner_position = LogPosition {
             node_id: "replacement-node".into(),
-            incarnation: 1,
+            incarnation: 0,
             seq: 1,
         };
         projector
@@ -411,6 +459,14 @@ pub(crate) async fn run_projector_scenarios_for_test(
             rebuilt_run,
             &rebuilt_record,
         );
+        let poison_run = RunId([6; 16]);
+        committed_view.insert(
+            partition_id,
+            tenant_id,
+            FlowHash(10),
+            poison_run,
+            &document(TenantId(18), poison_run, 1),
+        );
         let committed_view: Arc<dyn FlowStateReader + Send + Sync> = Arc::new(committed_view);
         assert_send(projector.rebuild_partition(
             partition_id,
@@ -430,6 +486,26 @@ pub(crate) async fn run_projector_scenarios_for_test(
         assert_eq!(listed.len(), 2);
         assert!(listed.contains(&rebuilt_run.to_string()));
         assert!(listed.contains(&other_run.to_string()));
+        assert!(!listed.contains(&poison_run.to_string()));
+        assert!(
+            skipped_reason(&backend, tenant_id, poison_run)
+                .await
+                .is_some()
+        );
+        assert_eq!(metrics.0.load(Ordering::Relaxed), 2);
+        projector
+            .apply_batch(
+                partition_id,
+                Some(&position(19)),
+                &position(20),
+                &[SearchDocumentChange::Delete {
+                    tenant_id,
+                    run_id: poison_run,
+                }],
+            )
+            .await
+            .expect("clear skipped document on purge");
+        assert_eq!(skipped_reason(&backend, tenant_id, poison_run).await, None);
         assert!(matches!(
             projector
                 .rebuild_partition(partition_id, &position(17), committed_view.clone())
@@ -476,7 +552,7 @@ pub(crate) async fn run_projector_scenarios_for_test(
                 }
             };
             let projecting = async {
-                for sequence in 20..=39 {
+                for sequence in 21..=39 {
                     projection_writer
                         .apply_batch(
                             partition_id,
@@ -539,6 +615,30 @@ pub(crate) async fn run_projector_scenarios_for_test(
         drop(inspected_slots);
         drop(projector);
         drop(backend);
+
+        admin_client
+            .batch_execute(&format!(
+                "DROP TABLE {schema_name}.dexzd_visibility_skipped_documents; \
+                 UPDATE {schema_name}.dexzd_visibility_schema_version SET version = 2 WHERE id = 1"
+            ))
+            .await
+            .expect("simulate schema version without skipped-document records");
+        let version_two_backend = Arc::new(
+            ParadeDbSearchBackend::connect(&configuration, 1, None, Duration::from_secs(2))
+                .await
+                .expect("upgrade schema version two"),
+        );
+        let version_two_projector = ParadeDbProjector::new(version_two_backend.clone());
+        assert_eq!(
+            version_two_projector
+                .read_progress(partition_id)
+                .await
+                .unwrap(),
+            Some(position(if pool_size == 2 { 44 } else { 39 }))
+        );
+        assert_eq!(listed_runs(&version_two_backend, tenant_id).await.len(), 2);
+        drop(version_two_projector);
+        drop(version_two_backend);
 
         admin_client
             .batch_execute(&format!(

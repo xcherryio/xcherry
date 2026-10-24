@@ -31,6 +31,24 @@ struct RebuildPage {
     changes: Vec<SearchDocumentChange>,
 }
 
+struct SkippedSearchDocument {
+    partition_id: PartitionId,
+    tenant_id: TenantId,
+    run_id: RunId,
+    reason: String,
+}
+
+/// Receives a countable event for each committed search document omitted from ParadeDB.
+pub trait ProjectionMetricRecorder: Send + Sync {
+    /// Records a document omitted because its committed value cannot be indexed.
+    fn record_skipped_search_document(
+        &self,
+        partition_id: PartitionId,
+        tenant_id: TenantId,
+        run_id: RunId,
+    );
+}
+
 /// A failure while projecting committed run documents.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -84,13 +102,29 @@ pub enum ProjectionError {
 /// Projects committed partition documents through the search backend's shared connection pool.
 pub struct ParadeDbProjector {
     backend: Arc<ParadeDbSearchBackend>,
+    metric_recorder: Option<Arc<dyn ProjectionMetricRecorder>>,
 }
 
 impl ParadeDbProjector {
     /// Shares the backend's `pool_size` connections with SearchFlows requests.
     #[must_use]
     pub fn new(backend: Arc<ParadeDbSearchBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            metric_recorder: None,
+        }
+    }
+
+    /// Shares backend connections and reports committed poison documents to `metric_recorder`.
+    #[must_use]
+    pub fn new_with_metric_recorder(
+        backend: Arc<ParadeDbSearchBackend>,
+        metric_recorder: Arc<dyn ProjectionMetricRecorder>,
+    ) -> Self {
+        Self {
+            backend,
+            metric_recorder: Some(metric_recorder),
+        }
     }
 
     /// Returns the last committed log position for one partition, if any.
@@ -151,7 +185,8 @@ impl ParadeDbProjector {
                 slot.reconnect(self.backend.configuration()).await?;
                 continue;
             }
-            return result;
+            drop(slot);
+            return result.map(|skipped| self.record_skipped_documents(skipped));
         }
     }
 
@@ -181,7 +216,27 @@ impl ParadeDbProjector {
                 slot.reconnect(self.backend.configuration()).await?;
                 continue;
             }
-            return result;
+            drop(slot);
+            return result.map(|skipped| self.record_skipped_documents(skipped));
+        }
+    }
+
+    fn record_skipped_documents(&self, skipped_documents: Vec<SkippedSearchDocument>) {
+        for skipped in skipped_documents {
+            tracing::error!(
+                partition_id = skipped.partition_id.0,
+                tenant_id = skipped.tenant_id.0,
+                run_id = %skipped.run_id,
+                reason = %skipped.reason,
+                "committed search document omitted from ParadeDB projection"
+            );
+            if let Some(recorder) = &self.metric_recorder {
+                recorder.record_skipped_search_document(
+                    skipped.partition_id,
+                    skipped.tenant_id,
+                    skipped.run_id,
+                );
+            }
         }
     }
 }
@@ -192,17 +247,18 @@ async fn apply_batch_transaction(
     previous_position: Option<&LogPosition>,
     applied_position: &LogPosition,
     changes: &[SearchDocumentChange],
-) -> Result<(), ProjectionError> {
+) -> Result<Vec<SkippedSearchDocument>, ProjectionError> {
     let transaction = client
         .transaction()
         .await
         .map_err(|source| database_error("begin", source))?;
     let current = lock_progress(&transaction, partition_id).await?;
     if is_replay(current.as_ref(), applied_position) {
-        return transaction
+        transaction
             .commit()
             .await
-            .map_err(|source| database_error("commit replay of", source));
+            .map_err(|source| database_error("commit replay of", source))?;
+        return Ok(Vec::new());
     }
     if current.as_ref() != previous_position {
         return Err(ProjectionError::PositionMismatch {
@@ -212,14 +268,18 @@ async fn apply_batch_transaction(
             offered: applied_position.clone(),
         });
     }
+    let mut skipped_documents = Vec::new();
     for change in changes {
-        apply_change(&transaction, partition_id, change).await?;
+        if let Some(skipped) = apply_change(&transaction, partition_id, change).await? {
+            skipped_documents.push(skipped);
+        }
     }
     update_progress(&transaction, partition_id, applied_position).await?;
     transaction
         .commit()
         .await
-        .map_err(|source| database_error("commit", source))
+        .map_err(|source| database_error("commit", source))?;
+    Ok(skipped_documents)
 }
 
 async fn rebuild_transaction(
@@ -227,7 +287,7 @@ async fn rebuild_transaction(
     partition_id: PartitionId,
     applied_position: &LogPosition,
     committed_view: Arc<dyn FlowStateReader + Send + Sync>,
-) -> Result<(), ProjectionError> {
+) -> Result<Vec<SkippedSearchDocument>, ProjectionError> {
     let transaction = client
         .transaction()
         .await
@@ -250,7 +310,15 @@ async fn rebuild_transaction(
         )
         .await
         .map_err(|source| database_error("remove stale rows from", source))?;
+    transaction
+        .execute_typed(
+            "DELETE FROM dexzd_visibility_skipped_documents WHERE partition_id = $1::integer",
+            &[(&partition_number as &(dyn ToSql + Sync), Type::INT4)],
+        )
+        .await
+        .map_err(|source| database_error("remove stale skipped documents from", source))?;
     let (mut start, end) = partition_index_range(partition_id, IndexKind::SearchDocument);
+    let mut skipped_documents = Vec::new();
     loop {
         let view = committed_view.clone();
         let scan_start = start.clone();
@@ -271,14 +339,17 @@ async fn rebuild_transaction(
         };
         start = next_start;
         for change in changes {
-            apply_change(&transaction, partition_id, &change).await?;
+            if let Some(skipped) = apply_change(&transaction, partition_id, &change).await? {
+                skipped_documents.push(skipped);
+            }
         }
     }
     update_progress(&transaction, partition_id, applied_position).await?;
     transaction
         .commit()
         .await
-        .map_err(|source| database_error("commit rebuild of", source))
+        .map_err(|source| database_error("commit rebuild of", source))?;
+    Ok(skipped_documents)
 }
 
 fn read_rebuild_page(
@@ -331,34 +402,104 @@ async fn apply_change(
     transaction: &Transaction<'_>,
     partition_id: PartitionId,
     change: &SearchDocumentChange,
-) -> Result<(), ProjectionError> {
+) -> Result<Option<SkippedSearchDocument>, ProjectionError> {
     match change {
         SearchDocumentChange::Upsert {
             tenant_id,
             run_id,
             encoded_document,
-        } => {
-            let row = row_from_document(partition_id, *tenant_id, *run_id, encoded_document)?;
-            let statement = upsert_statement(&row);
-            execute_statement(transaction, &statement).await?;
-        }
+        } => match row_from_document(partition_id, *tenant_id, *run_id, encoded_document) {
+            Ok(row) => {
+                let statement = upsert_statement(&row);
+                execute_statement(transaction, &statement).await?;
+                delete_skipped_document(transaction, *tenant_id, *run_id).await?;
+            }
+            Err(reason) => {
+                delete_search_row(transaction, partition_id, *tenant_id, *run_id).await?;
+                record_skipped_document(transaction, partition_id, *tenant_id, *run_id, &reason)
+                    .await?;
+                return Ok(Some(SkippedSearchDocument {
+                    partition_id,
+                    tenant_id: *tenant_id,
+                    run_id: *run_id,
+                    reason: reason.to_string(),
+                }));
+            }
+        },
         SearchDocumentChange::Delete { tenant_id, run_id } => {
-            let tenant_column = super::super::tenant_column_value(*tenant_id);
-            let partition_number = i32::from(partition_id.0);
-            let run_column = run_id.to_string();
-            transaction
-                .execute_typed(
-                    "DELETE FROM dexzd_visibility_runs WHERE tenant_id = $1::text AND partition_id = $2::integer AND run_id = $3::text",
-                    &[
-                        (&tenant_column as &(dyn ToSql + Sync), Type::TEXT),
-                        (&partition_number, Type::INT4),
-                        (&run_column, Type::TEXT),
-                    ],
-                )
-                .await
-                .map_err(|source| database_error("delete run from", source))?;
+            delete_search_row(transaction, partition_id, *tenant_id, *run_id).await?;
+            delete_skipped_document(transaction, *tenant_id, *run_id).await?;
         }
     }
+    Ok(None)
+}
+
+async fn record_skipped_document(
+    transaction: &Transaction<'_>,
+    partition_id: PartitionId,
+    tenant_id: TenantId,
+    run_id: RunId,
+    reason: &ProjectionError,
+) -> Result<(), ProjectionError> {
+    let tenant_column = super::super::tenant_column_value(tenant_id);
+    let partition_number = i32::from(partition_id.0);
+    let run_column = run_id.to_string();
+    let reason_column = reason.to_string();
+    transaction
+        .execute_typed(
+            "INSERT INTO dexzd_visibility_skipped_documents (tenant_id, partition_id, run_id, reason) VALUES ($1::text, $2::integer, $3::text, $4::text) ON CONFLICT (tenant_id, run_id) DO UPDATE SET partition_id = EXCLUDED.partition_id, reason = EXCLUDED.reason",
+            &[
+                (&tenant_column as &(dyn ToSql + Sync), Type::TEXT),
+                (&partition_number, Type::INT4),
+                (&run_column, Type::TEXT),
+                (&reason_column, Type::TEXT),
+            ],
+        )
+        .await
+        .map_err(|source| database_error("record skipped document in", source))?;
+    Ok(())
+}
+
+async fn delete_skipped_document(
+    transaction: &Transaction<'_>,
+    tenant_id: TenantId,
+    run_id: RunId,
+) -> Result<(), ProjectionError> {
+    let tenant_column = super::super::tenant_column_value(tenant_id);
+    let run_column = run_id.to_string();
+    transaction
+        .execute_typed(
+            "DELETE FROM dexzd_visibility_skipped_documents WHERE tenant_id = $1::text AND run_id = $2::text",
+            &[
+                (&tenant_column as &(dyn ToSql + Sync), Type::TEXT),
+                (&run_column, Type::TEXT),
+            ],
+        )
+        .await
+        .map_err(|source| database_error("clear skipped document from", source))?;
+    Ok(())
+}
+
+async fn delete_search_row(
+    transaction: &Transaction<'_>,
+    partition_id: PartitionId,
+    tenant_id: TenantId,
+    run_id: RunId,
+) -> Result<(), ProjectionError> {
+    let tenant_column = super::super::tenant_column_value(tenant_id);
+    let partition_number = i32::from(partition_id.0);
+    let run_column = run_id.to_string();
+    transaction
+        .execute_typed(
+            "DELETE FROM dexzd_visibility_runs WHERE tenant_id = $1::text AND partition_id = $2::integer AND run_id = $3::text",
+            &[
+                (&tenant_column as &(dyn ToSql + Sync), Type::TEXT),
+                (&partition_number, Type::INT4),
+                (&run_column, Type::TEXT),
+            ],
+        )
+        .await
+        .map_err(|source| database_error("delete run from", source))?;
     Ok(())
 }
 
@@ -486,7 +627,7 @@ fn position_from_row(row: &tokio_postgres::Row) -> Result<Option<LogPosition>, P
 }
 
 fn validate_position(position: &LogPosition) -> Result<(), ProjectionError> {
-    if position.node_id.is_empty() || position.incarnation == 0 || position.seq == 0 {
+    if position.node_id.is_empty() || position.seq == 0 {
         return Err(ProjectionError::InvalidState("invalid log position".into()));
     }
     i64::try_from(position.seq)
@@ -509,4 +650,21 @@ fn database_error(operation: &'static str, source: tokio_postgres::Error) -> Pro
 fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {
     !has_retried
         && matches!(result, Err(ProjectionError::Database { source, .. }) if is_connection_error(source))
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_protocol::dexzd::v1::LogPosition;
+
+    use super::validate_position;
+
+    #[test]
+    fn permits_zero_incarnation_with_positive_sequence() {
+        let position = LogPosition {
+            node_id: "node".into(),
+            incarnation: 0,
+            seq: 1,
+        };
+        assert!(validate_position(&position).is_ok());
+    }
 }

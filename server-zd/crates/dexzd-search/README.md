@@ -21,7 +21,9 @@ inside a transaction and refuses a schema version newer than this binary.
 The first setup needs a role that can create `pg_search`, or the extension must
 already be installed. One database schema belongs to one Dex cluster because
 projection progress and rebuilds are partition scoped. Upgrading from the
-earlier schema clears derived rows and progress, so rebuild every partition.
+version-one schema clears derived rows and progress, so rebuild every partition.
+Upgrading version two adds skipped-document records without clearing runs.
+The caller should retry startup after a schema migration lock timeout.
 
 Forward only committed apply outcomes to the projector. Concatenate every
 outcome of one partition frame in apply order with
@@ -31,4 +33,11 @@ method writes data and progress in one transaction. Sparse log sequences are
 normal; a stored position that differs from the caller's previous position
 requires a rebuild. On a mismatch or queue overflow, obtain a consistent
 committed local view and call `rebuild_partition` with that view's applied
-position. Projection failures must not affect command commits.
+position. Only the current partition owner may project or rebuild a partition.
+Projection failures must not affect command commits.
+
+An unindexable committed document is recorded in
+`dexzd_visibility_skipped_documents`, omitted from search, and logged as an
+error. Construct the projector with `new_with_metric_recorder` to count these
+events. A later valid upsert or delete removes its skipped-document record.
+The progress position still advances after the skip.
