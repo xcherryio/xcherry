@@ -41,9 +41,15 @@ pub(crate) struct CommittedSearchFrames {
 struct FrameTracking {
     open_frames: BTreeMap<PartitionId, OpenSearchFrame>,
     last_sequence: u64,
+    /// Open and queued frames; frames waiting for a rebuild move to `rebuild_requests`.
     unprojected: BTreeMap<u64, PartitionId>,
-    /// The newest frame sequence of each partition that only a rebuild can project.
-    rebuild_requests: BTreeMap<PartitionId, u64>,
+    rebuild_requests: BTreeMap<PartitionId, RebuildRequest>,
+}
+
+/// Frame sequences of one partition that only a rebuild can project; a range bounds memory.
+struct RebuildRequest {
+    first_sequence: u64,
+    last_sequence: u64,
 }
 
 struct OpenSearchFrame {
@@ -152,12 +158,12 @@ impl CommittedSearchFrames {
             .retain(|frame_sequence, frame_partition| {
                 *frame_partition != partition || *frame_sequence > sequence
             });
-        if tracking
-            .rebuild_requests
-            .get(&partition)
-            .is_some_and(|requested| *requested <= sequence)
-        {
-            tracking.rebuild_requests.remove(&partition);
+        if let Some(request) = tracking.rebuild_requests.get_mut(&partition) {
+            if request.last_sequence <= sequence {
+                tracking.rebuild_requests.remove(&partition);
+            } else {
+                request.first_sequence = request.first_sequence.max(sequence + 1);
+            }
         }
     }
 
@@ -167,19 +173,26 @@ impl CommittedSearchFrames {
         tracking
             .unprojected
             .retain(|frame_sequence, _| *frame_sequence > sequence);
-        tracking
-            .rebuild_requests
-            .retain(|_, requested| *requested > sequence);
+        tracking.rebuild_requests.retain(|_, request| {
+            request.first_sequence = request.first_sequence.max(sequence + 1);
+            request.last_sequence > sequence
+        });
     }
 
     /// Lets read-your-writes waits pass for every frame the projection has made searchable.
     pub(crate) fn publish_projected_through(&self) {
         let projected_through = {
             let tracking = self.lock_tracking();
-            tracking
-                .unprojected
-                .first_key_value()
-                .map_or(tracking.last_sequence, |(sequence, _)| sequence - 1)
+            let first_unprojected = tracking.unprojected.keys().next().copied();
+            let first_to_rebuild = tracking
+                .rebuild_requests
+                .values()
+                .map(|request| request.first_sequence)
+                .min();
+            match first_unprojected.into_iter().chain(first_to_rebuild).min() {
+                Some(sequence) => sequence - 1,
+                None => tracking.last_sequence,
+            }
         };
         self.projected_through.send_if_modified(|published| {
             let is_newer = published.is_none_or(|published| published < projected_through);
@@ -191,12 +204,22 @@ impl CommittedSearchFrames {
     }
 
     fn request_rebuild(&self, tracking: &mut FrameTracking, partition: PartitionId, sequence: u64) {
-        let previous = tracking.rebuild_requests.insert(partition, sequence);
-        if previous.is_none() {
-            tracing::warn!(
-                partition = partition.0,
-                "a committed frame could not be queued for the search projection; rebuilding its partition"
-            );
+        tracking.unprojected.remove(&sequence);
+        match tracking.rebuild_requests.get_mut(&partition) {
+            Some(request) => request.last_sequence = sequence,
+            None => {
+                tracing::warn!(
+                    partition = partition.0,
+                    "a committed frame could not be queued for the search projection; rebuilding its partition"
+                );
+                tracking.rebuild_requests.insert(
+                    partition,
+                    RebuildRequest {
+                        first_sequence: sequence,
+                        last_sequence: sequence,
+                    },
+                );
+            }
         }
         self.rebuild_requested.notify_one();
     }
