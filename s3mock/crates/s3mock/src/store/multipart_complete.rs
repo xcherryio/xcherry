@@ -83,6 +83,7 @@ impl Store {
             &request.parts,
             &stored_parts,
             upload.checksum_algorithm.is_some(),
+            upload.checksum_algorithm.is_some() && upload.checksum_type == ChecksumType::Composite,
         )?;
         let full_object_algorithm = match upload.checksum_type {
             ChecksumType::FullObject => upload
@@ -212,6 +213,7 @@ fn select_parts<'stored>(
     listed: &[CompletedPart],
     stored: &'stored [PartRecord],
     is_checksummed: bool,
+    requires_part_checksums: bool,
 ) -> Result<Vec<&'stored PartRecord>, StoreError> {
     if listed.is_empty() {
         return Err(StoreError::InvalidRequest(
@@ -238,10 +240,12 @@ fn select_parts<'stored>(
         if listed_part.etag.trim().trim_matches('"') != part.etag {
             return Err(invalid_part());
         }
-        if let Some(checksum) = &listed_part.checksum_base64
-            && checksum.trim() != part.checksum.base64_value
-        {
-            return Err(invalid_part());
+        match &listed_part.checksum_base64 {
+            Some(checksum) if checksum.trim() != part.checksum.base64_value => {
+                return Err(invalid_part());
+            }
+            None if requires_part_checksums => return Err(invalid_part()),
+            _ => {}
         }
         selected.push(part);
     }
