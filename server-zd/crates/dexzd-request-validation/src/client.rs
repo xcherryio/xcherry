@@ -202,6 +202,13 @@ fn validate_invoke_rpc(request: &InvokeRpcRequest) -> Result<(), ValidationError
             "RPC timeout must be non-negative",
         ));
     }
+    // Matches the Go Server's normalizeLockKeys: only an empty key is rejected.
+    if request.lock_attribute_keys.iter().any(String::is_empty) {
+        return Err(invalid(
+            "lock_attribute_keys",
+            "lock attribute key is empty",
+        ));
+    }
     validate_state_selections(
         "load",
         &request.load_attribute_map_instances,
