@@ -77,7 +77,6 @@ pub fn reencode_row(
         RunTable::HistoryRowMetadata => reencode::<HistoryRowMetadata>(value),
         RunTable::Checkpoint => reencode::<CheckpointRecord>(value),
         RunTable::SearchDocument => reencode::<SearchDocumentRecord>(value),
-        RunTable::HistoryRowMetadata => reencode::<HistoryRowMetadata>(value),
         RunTable::ValueHolder | RunTable::RequestDedupOrder => Ok(value.to_vec()),
     };
     result.map_err(|detail| error(table_name, detail))
@@ -116,7 +115,6 @@ fn table_name(table: RunTable) -> &'static str {
         RunTable::Checkpoint => "Checkpoint",
         RunTable::SearchDocument => "SearchDocument",
         RunTable::RequestDedupOrder => "RequestDedupOrder",
-        RunTable::HistoryRowMetadata => "HistoryRowMetadata",
     }
 }
 

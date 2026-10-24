@@ -274,8 +274,7 @@ impl FlowView {
             | RunTable::HistoryRowMetadata
             | RunTable::Checkpoint
             | RunTable::SearchDocument
-            | RunTable::RequestDedupOrder
-            | RunTable::HistoryRowMetadata => {}
+            | RunTable::RequestDedupOrder => {}
         }
         Ok(())
     }
