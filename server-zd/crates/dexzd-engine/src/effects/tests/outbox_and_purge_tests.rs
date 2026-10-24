@@ -11,28 +11,57 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_apply::{ApplyEffect, FlowStateReader};
+use dexzd_apply::{ApplyContext, ApplyEffect, FlowStateReader};
 use dexzd_keyspace::row_keys::{outbox_key, run_singleton_key};
-use dexzd_keyspace::{ColumnFamily, RunId, RunTable};
-use dexzd_object_store::{ObjectStore, WriteCondition};
+use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
+use dexzd_object_store::{
+    FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
+    WriteCondition,
+};
 use dexzd_protocol::dex::{
     FlowResult, FlowStatus, InvokeWaitForMethodResponse, StepOptions, SubFlowCondition,
     WaitingCondition, WaitingConditionType,
 };
 use dexzd_protocol::dexzd::v1::{
-    ChildFlowCompletedMessage, CommandErrorReply, CommandReply, CrossFlowEndpoint,
-    InboxMessageCommand, OutboxRecord, RunRecord, RunSettings, command_reply, flow_command,
-    inbox_message_command, outbox_record,
+    AttributeRecord, ChildFlowCompletedMessage, CommandErrorReply, CommandReply, CrossFlowEndpoint,
+    HardDeleteObjectReference, InboxMessageCommand, OutboxRecord, RunRecord, RunSettings,
+    StoredValue, command_reply, flow_command, inbox_message_command, outbox_record, stored_value,
 };
 use prost::Message;
+use tokio::sync::Notify;
 
 use super::{
     DurableState, EffectHarness, RecordedCommand, ok_override, ok_reply, settings, start_request,
 };
 use crate::effects::EffectsConfig;
 use crate::runtime::RuntimeEffectSink;
+use crate::runtime::read_operations::state_rows::read_run;
 
 const MESSAGE_ID: [u8; 16] = [9; 16];
+
+struct GateAfterRunObjectDeletion {
+    run_prefix: std::sync::Mutex<Option<String>>,
+    run_list_count: AtomicUsize,
+    entered: Notify,
+}
+
+impl FaultInjector for GateAfterRunObjectDeletion {
+    fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if operation == ObjectStoreOperation::List
+            && self
+                .run_prefix
+                .lock()
+                .expect("gate lock")
+                .as_ref()
+                .is_some_and(|prefix| key == prefix)
+            && self.run_list_count.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            self.entered.notify_one();
+            return FaultAction::Delay(Duration::from_secs(3600));
+        }
+        FaultAction::Proceed
+    }
+}
 
 fn seed_outbox_message(
     harness: &EffectHarness,
@@ -178,6 +207,101 @@ pub(super) async fn put_object(harness: &EffectHarness, key: &str) {
         .put(key, Bytes::from_static(b"x"), WriteCondition::Unconditional)
         .await
         .expect("put succeeds");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_is_hidden_after_its_objects_are_deleted_before_run_purge_commits() {
+    let gate = Arc::new(GateAfterRunObjectDeletion {
+        run_prefix: std::sync::Mutex::new(None),
+        run_list_count: AtomicUsize::new(0),
+        entered: Notify::new(),
+    });
+    let durable = DurableState {
+        objects: Arc::new(InMemoryObjectStore::with_injector(gate.clone())),
+        ..DurableState::new()
+    };
+    let harness = EffectHarness::with_config(durable, EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    let run_id = harness.start_flow(start_request("order-1"), settings());
+    let owner = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let object_key = owner.object_key("secret");
+    *gate.run_prefix.lock().expect("gate lock") = Some(owner.object_key_prefix());
+    put_object(&harness, &object_key).await;
+    harness
+        .runtime
+        .state
+        .lock()
+        .expect("state lock")
+        .put_message(
+            ColumnFamily::Flow,
+            run_key(owner.flow_hash, run_id, RunTable::Attribute, b"secret"),
+            &AttributeRecord {
+                value: Some(StoredValue {
+                    kind: Some(stored_value::Kind::HardDeleteObject(
+                        HardDeleteObjectReference {
+                            object_id: "secret".to_owned(),
+                            is_string_value: true,
+                            ..HardDeleteObjectReference::default()
+                        },
+                    )),
+                }),
+                ..AttributeRecord::default()
+            },
+        );
+    mark_purging(&harness, "order-1", run_id);
+    let mut run_record = harness.run_record("order-1", run_id);
+    run_record.status = FlowStatus::Completed as i32;
+    harness
+        .runtime
+        .state
+        .lock()
+        .expect("state lock")
+        .put_message(
+            ColumnFamily::Flow,
+            run_singleton_key(owner.flow_hash, run_id, RunTable::RunRecord),
+            &run_record,
+        );
+
+    harness.runner.handle(
+        &EffectHarness::flow("order-1"),
+        &[ApplyEffect::RunPurgeRequested { run_id }],
+        true,
+    );
+    gate.entered.notified().await;
+
+    assert!(
+        harness
+            .durable
+            .objects
+            .get(&object_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        harness
+            .runtime
+            .commands_matching(|command| matches!(command, flow_command::Command::RunPurge(_)))
+            .is_empty()
+    );
+    let flow = EffectHarness::flow("order-1");
+    let context = ApplyContext {
+        partition: harness.partition_of("order-1"),
+        flow_hash: owner.flow_hash,
+    };
+    let error = read_run(&harness.runtime.snapshot(), context, &flow, "")
+        .expect_err("a purging run is absent from client reads");
+    assert_eq!(error.grpc_code(), crate::runtime::grpc_code::NOT_FOUND);
+    assert_eq!(
+        error.sub_status(),
+        dexzd_protocol::dex::ErrorSubStatus::FlowNotExists
+    );
+
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    harness.settle().await;
+    harness.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

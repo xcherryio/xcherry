@@ -172,14 +172,13 @@ impl FlowRuntimeRegistry {
         } = snapshot;
         for (index, object) in hard_delete_attributes {
             let value = self
-                .inner
-                .dependencies
-                .hard_delete_reader
-                .read_hard_delete_value(flow, run.run_id, &object)
-                .await
-                .map_err(|error| RuntimeError::Unavailable {
-                    detail: error.to_string(),
-                })?;
+                .read_hard_delete_attribute(
+                    flow,
+                    run.run_id,
+                    &worker_request.attributes[index].key,
+                    object,
+                )
+                .await?;
             worker_request.attributes[index].value = value;
         }
         worker_request
