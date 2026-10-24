@@ -27,11 +27,13 @@ use tonic_health::pb::health_client::HealthClient;
 
 use super::workload::{Workload, WorkloadWorker};
 use crate::harness;
-use crate::{NODE_ID, PRIMARY_BUCKET, PRIMARY_PREFIX, SHUTDOWN_BUDGET};
+use crate::{NODE_ID, PRIMARY_BUCKET, PRIMARY_PREFIX};
 
 const LOG_TAIL_LINES: usize = 150;
 const READINESS_SERVICE_NAMES: [&str; 3] = ["", "dex.FlowService", "dex.WorkerTaskService"];
 const STARTUP_BUDGET: Duration = Duration::from_secs(30);
+/// Exceeds the server's 14.5 s shutdown total, with slack for a loaded machine.
+pub(crate) const PROCESS_SHUTDOWN_BUDGET: Duration = Duration::from_secs(20);
 /// Bounds one readiness probe; a process binds its port before it holds the lease.
 const READINESS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -418,7 +420,7 @@ impl SupervisedNode {
             .incarnation
             .take()
             .expect("a supervised node has an incarnation between calls");
-        let status = incarnation.process.terminate(SHUTDOWN_BUDGET).await;
+        let status = incarnation.process.terminate(PROCESS_SHUTDOWN_BUDGET).await;
         assert_eq!(status.code(), Some(0), "{}", incarnation.process.log());
         incarnation.worker.stop().await;
     }
@@ -448,7 +450,7 @@ impl SupervisedNode {
                 }
                 Err(error) => {
                     // A serving process rejects a Worker stream only while it stops.
-                    process.wait_for_exit(SHUTDOWN_BUDGET).await;
+                    process.wait_for_exit(PROCESS_SHUTDOWN_BUDGET).await;
                     eprintln!("{name}: the Worker did not register before the exit: {error}");
                     self.accept_stale_batch_stop(process);
                 }

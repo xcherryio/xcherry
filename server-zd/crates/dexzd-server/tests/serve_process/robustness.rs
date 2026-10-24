@@ -12,17 +12,16 @@ mod inspection;
 mod processes;
 mod workload;
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::SHUTDOWN_BUDGET;
 use crate::harness::free_loopback_address;
 use inspection::{ObjectStoreInspector, first_log_batch_key};
 use processes::{
-    DurableEmulator, RobustnessProcess, RobustnessServeConfig, ServeFleet, SupervisedNode,
-    replay_field,
+    DurableEmulator, PROCESS_SHUTDOWN_BUDGET, RobustnessProcess, RobustnessServeConfig, ServeFleet,
+    SupervisedNode, replay_field,
 };
 use workload::Workload;
 
@@ -38,6 +37,9 @@ const SNAPSHOT_BUDGET: Duration = Duration::from_secs(30);
 const OBJECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Longer than the freeze, so a call in flight at the freeze sees the resumed owner's reply.
 const FROZEN_OWNER_CALL_TIMEOUT: Duration = Duration::from_secs(20);
+/// Adds time for the resumed owner to detect the takeover before it shuts down.
+const FENCED_OWNER_EXIT_BUDGET: Duration =
+    PROCESS_SHUTDOWN_BUDGET.saturating_add(Duration::from_secs(5));
 
 /// SIGKILL under load, restarting on the same directory, loses no acknowledged write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -116,7 +118,7 @@ async fn lost_local_directory_restores_from_snapshot_and_log_tail() {
     let load = workload.start_load(address, "snapshotting", CHAIN_STARTERS, CALL_TIMEOUT);
     wait_for_snapshots_and_log_cleanup(&inspector, &mut process).await;
     load.stop().await;
-    let status = process.terminate(SHUTDOWN_BUDGET).await;
+    let status = process.terminate(PROCESS_SHUTDOWN_BUDGET).await;
     assert_eq!(status.code(), Some(0), "{}", process.log());
     worker.stop().await;
     let manifest_keys = inspector.snapshot_manifest_keys().await;
@@ -228,6 +230,8 @@ async fn frozen_owner_is_fenced() {
     );
 
     owner.send_signal("STOP").await;
+    // The kill command has exited, so the owner seals nothing after this instant until SIGCONT.
+    let frozen_at_unix_micros = unix_micros_now();
     let standby_channel = standby.wait_until_serving().await;
     let standby_lease = inspector.node_lease().await;
     assert!(
@@ -248,7 +252,7 @@ async fn frozen_owner_is_fenced() {
     let acknowledged_before_resume = workload.acknowledged_count();
 
     owner.send_signal("CONT").await;
-    let owner_status = owner.wait_for_exit(SHUTDOWN_BUDGET).await;
+    let owner_status = owner.wait_for_exit(FENCED_OWNER_EXIT_BUDGET).await;
     assert_eq!(owner_status.code(), Some(1), "{}", owner.log());
     load.stop().await;
     owner_worker.stop().await;
@@ -266,8 +270,23 @@ async fn frozen_owner_is_fenced() {
         i64::MIN,
         "the standby's lease must not be released"
     );
+    let mut late_owner_batch_count = 0;
     for header in inspector.log_batch_headers().await {
-        if header.seq >= epoch_start_seq {
+        if header.epoch == owner_epoch {
+            assert!(
+                header.sealed_at_unix_micros <= frozen_at_unix_micros,
+                "the resumed owner sealed seq {} at {} after the freeze at {frozen_at_unix_micros}",
+                header.seq,
+                header.sealed_at_unix_micros
+            );
+        }
+        if header.seq < epoch_start_seq {
+            continue;
+        }
+        // A PUT sent before the freeze may land late; replay voids it or the standby stops.
+        if header.epoch == owner_epoch {
+            late_owner_batch_count += 1;
+        } else {
             assert_eq!(
                 header.epoch, standby_lease.epoch,
                 "seq {} was written by epoch {} after the standby's EpochStart at {epoch_start_seq}",
@@ -279,13 +298,21 @@ async fn frozen_owner_is_fenced() {
     let standby_worker = workload.start_worker(standby_channel.clone()).await;
     let report = workload.verify(standby_channel).await;
     eprintln!(
-        "frozen_owner_is_fenced: EpochStart at seq {epoch_start_seq}; {} calls acknowledged after the resume; {report}",
+        "frozen_owner_is_fenced: EpochStart at seq {epoch_start_seq}; {late_owner_batch_count} owner batches sealed before the freeze landed after it; {} calls acknowledged after the resume; {report}",
         workload.acknowledged_count() - acknowledged_before_resume
     );
-    let standby_status = standby.terminate(SHUTDOWN_BUDGET).await;
+    let standby_status = standby.terminate(PROCESS_SHUTDOWN_BUDGET).await;
     assert_eq!(standby_status.code(), Some(0), "{}", standby.log());
     standby_worker.stop().await;
     emulator.shutdown().await;
+}
+
+/// Returns the wall clock in the unit and epoch of `LogBatchHeader.sealed_at_unix_micros`.
+fn unix_micros_now() -> i64 {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the wall clock is after the Unix epoch");
+    i64::try_from(elapsed.as_micros()).expect("the wall clock fits in i64 microseconds")
 }
 
 /// Polls until two snapshots exist and log cleanup has deleted the first log batch.
