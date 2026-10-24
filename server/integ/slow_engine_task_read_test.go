@@ -22,14 +22,19 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
-	slowEngineTaskFlowType        = "slow_engine_task"
-	slowEngineTaskIdleStepType    = "idle"
-	slowEngineTaskIdleChannelName = "never-published"
-	holdEngineTaskRPCName         = "holdEngineTask"
-	readFlowRPCName               = "readFlow"
+	slowEngineTaskFlowType              = "slow_engine_task"
+	slowEngineTaskIdleStepType          = "idle"
+	slowEngineTaskIdleChannelName       = "never-published"
+	slowEngineTaskAttributeKey          = "progress"
+	slowEngineTaskStartAttributeValue   = "committed-at-start"
+	slowEngineTaskHeldRPCAttributeValue = "written-by-held-rpc"
+	holdEngineTaskRPCName               = "holdEngineTask"
+	readFlowRPCName                     = "readFlow"
+	getProgressAttributeRPCName         = "getProgressAttribute"
 )
 
 // slowEngineTaskHandler keeps a transactional RPC handler busy, which keeps the Flow's engine task open.
@@ -64,7 +69,8 @@ func (h *slowEngineTaskHandler) InvokeWorkerRPC(
 	ctx context.Context,
 	request *dexpb.InvokeWorkerRPCRequest,
 ) (*dexpb.InvokeWorkerRPCResponse, error) {
-	if request.GetRpcName() == holdEngineTaskRPCName {
+	switch request.GetRpcName() {
+	case holdEngineTaskRPCName:
 		h.holdStartedOnce.Do(func() { close(h.holdStarted) })
 		holdTimer := time.NewTimer(h.holdDuration)
 		defer holdTimer.Stop()
@@ -73,6 +79,21 @@ func (h *slowEngineTaskHandler) InvokeWorkerRPC(
 		case <-ctx.Done():
 			return nil, status.FromContextError(ctx.Err()).Err()
 		}
+		return &dexpb.InvokeWorkerRPCResponse{
+			Output: stringValue(request.GetRpcName()),
+			UpsertAttributes: []*dexpb.AttributeWrite{{
+				Key:   slowEngineTaskAttributeKey,
+				Value: stringValue(slowEngineTaskHeldRPCAttributeValue),
+			}},
+		}, nil
+	case getProgressAttributeRPCName:
+		// Returning no effects keeps this RPC a pure read of the loaded snapshot.
+		for _, attribute := range request.GetAttributes() {
+			if attribute.GetKey() == slowEngineTaskAttributeKey {
+				return &dexpb.InvokeWorkerRPCResponse{Output: attribute.GetValue()}, nil
+			}
+		}
+		return nil, status.Errorf(codes.NotFound, "Attribute %q was not loaded", slowEngineTaskAttributeKey)
 	}
 	return &dexpb.InvokeWorkerRPCResponse{Output: stringValue(request.GetRpcName())}, nil
 }
@@ -124,16 +145,21 @@ func testDeadlineLessReadsReportRequestTimeout(t *testing.T) {
 	holdResult := holdEngineTask(t, runtime, flowID, handler, 18)
 
 	readStarted := time.Now()
+	var rpcResponse *dexpb.InvokeRPCResponse
+	var attributesResponse *dexpb.GetAttributesResponse
 	var rpcErr, attributesErr error
 	var reads sync.WaitGroup
 	reads.Add(2)
 	go func() {
 		defer reads.Done()
-		_, rpcErr = runtime.FlowClient.InvokeRPC(context.Background(), newReadFlowRPCRequest(flowID))
+		rpcResponse, rpcErr = runtime.FlowClient.InvokeRPC(
+			context.Background(),
+			newGetProgressAttributeRPCRequest(flowID),
+		)
 	}()
 	go func() {
 		defer reads.Done()
-		_, attributesErr = runtime.FlowClient.GetAttributes(context.Background(), &dexpb.GetAttributesRequest{
+		attributesResponse, attributesErr = runtime.FlowClient.GetAttributes(context.Background(), &dexpb.GetAttributesRequest{
 			FlowId:  flowID,
 			AllKeys: true,
 		})
@@ -143,12 +169,18 @@ func testDeadlineLessReadsReportRequestTimeout(t *testing.T) {
 		// server-zd reads a committed snapshot instead of waiting for the transactional RPC.
 		require.NoError(t, rpcErr)
 		require.NoError(t, attributesErr)
+		requireStringValue(t, slowEngineTaskStartAttributeValue, rpcResponse.GetOutput())
+		requireSlowEngineTaskAttribute(t, slowEngineTaskStartAttributeValue, attributesResponse)
 	} else {
 		requireReadRequestTimeout(t, rpcErr)
 		requireReadRequestTimeout(t, attributesErr)
 	}
 	require.Less(t, time.Since(readStarted), 14*time.Second)
 	require.NoError(t, <-holdResult)
+	if isServerZDBinaryMode() {
+		// The held RPC's write must commit, or the start-value assertions prove nothing.
+		requireSlowEngineTaskAttribute(t, slowEngineTaskHeldRPCAttributeValue, getSlowEngineTaskAttributes(t, runtime, flowID))
+	}
 	stopSlowEngineTaskFlow(t, runtime, flowID)
 }
 
@@ -188,6 +220,40 @@ func newReadFlowRPCRequest(flowID string) *dexpb.InvokeRPCRequest {
 	}
 }
 
+func newGetProgressAttributeRPCRequest(flowID string) *dexpb.InvokeRPCRequest {
+	return &dexpb.InvokeRPCRequest{
+		RequestId:      newRequestID(),
+		FlowId:         flowID,
+		RpcName:        getProgressAttributeRPCName,
+		TimeoutSeconds: 5,
+	}
+}
+
+func getSlowEngineTaskAttributes(t *testing.T, runtime *integRuntime, flowID string) *dexpb.GetAttributesResponse {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	response, err := runtime.FlowClient.GetAttributes(ctx, &dexpb.GetAttributesRequest{
+		FlowId:  flowID,
+		AllKeys: true,
+	})
+	require.NoError(t, err)
+	return response
+}
+
+func requireSlowEngineTaskAttribute(t *testing.T, expectedValue string, response *dexpb.GetAttributesResponse) {
+	t.Helper()
+	attributes := response.GetAttributes()
+	require.Len(t, attributes, 1, "attributes: %v", attributes)
+	require.Equal(t, slowEngineTaskAttributeKey, attributes[0].GetKey())
+	requireStringValue(t, expectedValue, attributes[0].GetValue())
+}
+
+func requireStringValue(t *testing.T, expected string, actual *dexpb.Value) {
+	t.Helper()
+	require.True(t, proto.Equal(stringValue(expected), actual), "expected %q, got %v", expected, actual)
+}
+
 func requireReadRequestTimeout(t *testing.T, err error) {
 	t.Helper()
 	require.Equal(t, codes.DeadlineExceeded, status.Code(err), "read error: %v", err)
@@ -216,7 +282,12 @@ func startSlowEngineTaskFlow(
 		FlowType:           slowEngineTaskFlowType,
 		FlowTimeoutSeconds: 60,
 		StartStepType:      slowEngineTaskIdleStepType,
-		FlowStartOptions:   withWorkerTarget(nil, workerTarget),
+		FlowStartOptions: withWorkerTarget(&dexpb.FlowStartOptions{
+			Attributes: []*dexpb.AttributeWrite{{
+				Key:   slowEngineTaskAttributeKey,
+				Value: stringValue(slowEngineTaskStartAttributeValue),
+			}},
+		}, workerTarget),
 	})
 	require.NoError(t, err)
 	return runtime, flowID
