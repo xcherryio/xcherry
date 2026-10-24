@@ -54,6 +54,7 @@ fn seed_outbox_message(
         )),
         written_seq: 3,
         acknowledged_at_micros,
+        held_values: Vec::new(),
     };
     harness.runtime.state.lock().expect("lock").put_message(
         ColumnFamily::Flow,

@@ -132,14 +132,17 @@ pub(crate) fn apply_timers_fired(
 ) -> Result<HandlerResult, ApplyError> {
     let mut is_any_applied = false;
     for timer in &command.timers {
-        let is_retention = matches!(timer.kind, Some(timer_id::Kind::Retention(_)));
-        if !is_retention && timer.run_attempt != cursor.attempt() {
-            continue;
-        }
+        let is_retention = matches!(
+            timer.kind,
+            Some(timer_id::Kind::Retention(_) | timer_id::Kind::OutboxRetention(_))
+        );
         if disarm_timer(transaction, &cursor, timer)?.is_none() {
             continue;
         }
         is_any_applied = true;
+        if !is_retention && timer.run_attempt != cursor.attempt() {
+            continue;
+        }
         match &timer.kind {
             Some(timer_id::Kind::RetryBackoff(backoff)) => {
                 apply_retry_backoff_fired(transaction, &mut cursor, backoff)?;

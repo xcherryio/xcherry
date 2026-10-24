@@ -181,6 +181,7 @@ impl FlowRuntimeRegistry {
                 hard_delete_objects: Vec::new(),
                 request_fingerprint: fingerprint,
                 pull_routing: result.pull_routing,
+                is_transactional,
             }),
         );
         if is_transactional {
