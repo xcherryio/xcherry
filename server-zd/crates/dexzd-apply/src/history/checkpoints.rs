@@ -10,7 +10,7 @@
 
 use dexzd_keyspace::row_keys::checkpoint_key;
 use dexzd_keyspace::{ColumnFamily, parse_run_key};
-use dexzd_protocol::dexzd::v1::{CheckpointRecord, HistoryStepMethodPending};
+use dexzd_protocol::dexzd::v1::{CheckpointRecord, HistoryStepMethodPending, StepInvocationKey};
 
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::history::attempt_scope::{ATTEMPT_SCOPED_TABLES, read_attempt_rows, run_status_of};
@@ -18,24 +18,30 @@ use crate::history::window::advance_window_if_full;
 use crate::state_access::FlowTransaction;
 use crate::{ApplyEffect, ApplyError};
 
-/// Method calls whose first attempt became pending. A fork's re-dispatched calls are not new.
+/// Method calls whose first attempt became pending. A fork's re-dispatched calls are not new;
+/// calls its reapplied input made pending are.
 pub(crate) fn pending_step_methods(
     transaction: &FlowTransaction<'_>,
     cursor: &RunCursor,
 ) -> Result<Vec<HistoryStepMethodPending>, ApplyError> {
-    if cursor.starts_attempt {
-        return Ok(Vec::new());
-    }
+    let first_pending: Vec<&StepInvocationKey> = if cursor.starts_attempt {
+        cursor.reapplied_pending_invocations.iter().collect()
+    } else {
+        cursor
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                ApplyEffect::InvocationPending {
+                    invocation,
+                    attempt: 1,
+                    ..
+                } => Some(invocation),
+                _ => None,
+            })
+            .collect()
+    };
     let mut pending: Vec<HistoryStepMethodPending> = Vec::new();
-    for effect in &cursor.effects {
-        let ApplyEffect::InvocationPending {
-            invocation,
-            attempt: 1,
-            ..
-        } = effect
-        else {
-            continue;
-        };
+    for invocation in first_pending {
         let is_recorded = pending.iter().any(|recorded| {
             recorded.step_execution_id == invocation.step_execution_id
                 && recorded.method == invocation.method

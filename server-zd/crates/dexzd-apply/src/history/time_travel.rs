@@ -446,14 +446,17 @@ fn reapply_external_inputs(
         values = replayed.values;
         events.extend(replayed.events);
         // Dispatch follows the final restored state instead.
-        cursor
-            .effects
-            .extend(output.effects.into_iter().filter(|effect| {
-                !matches!(
-                    effect,
-                    ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. }
-                )
-            }));
+        for effect in output.effects {
+            match effect {
+                ApplyEffect::InvocationPending {
+                    invocation,
+                    attempt: 1,
+                    ..
+                } => cursor.reapplied_pending_invocations.push(invocation),
+                ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. } => {}
+                other => cursor.effects.push(other),
+            }
+        }
     }
     cursor.record = required_run_record(transaction, cursor)?;
     cursor.values = values;
