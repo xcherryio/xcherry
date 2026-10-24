@@ -6,15 +6,20 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use dexzd_apply::diagnostics::{current_semantic_point_hash, time_travel_target_hash};
 use dexzd_apply::{ApplyContext, ApplyOutcome};
-use dexzd_keyspace::{PartitionHasher, PartitionId, TenantId};
-use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition, LogRecord, PartitionMeta, log_record};
+use dexzd_keyspace::{PartitionHasher, PartitionId, RunId, TenantId};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, LogPosition, LogRecord, PartitionMeta, command_reply, flow_command::Command,
+    log_record,
+};
 use dexzd_storage::{LocalReadView, LocalStore};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot};
@@ -25,7 +30,7 @@ use crate::command_applier::CommandApplier;
 use crate::commit::commit_state::{
     CommitState, NodeStopReason, PendingCommand, partition_stopped_error,
 };
-use crate::commit::replay_checks::compare_repeated_apply;
+use crate::commit::replay_checks::{compare_repeated_apply, compare_semantic_point_hash};
 use crate::commit::staged_state_reader::StagedStateReader;
 use crate::commit::{CommitProgress, EngineLocalStore};
 use crate::recovery::CommittedCommandSink;
@@ -63,6 +68,7 @@ pub(crate) struct FrameApplier {
     pub(crate) state: Arc<CommitState>,
     pub(crate) committed_commands: Arc<dyn CommittedCommandSink>,
     pub(crate) is_checking_replay: bool,
+    pub(crate) semantic_point_hashes: Mutex<BTreeMap<(RunId, u32, u64), [u8; 16]>>,
 }
 
 impl PartitionApplierPool {
@@ -376,8 +382,19 @@ impl FrameApplier {
         let mut last_command_timestamp_micros = meta.last_command_timestamp_micros;
         let mut last_behavior_version = meta.last_behavior_version;
         for DecodedCommand { command, context } in commands {
-            let outcome = self.apply_command(&context, &reader, &command)?;
+            let outcome = self.apply_command(&context, &reader, &command, &frame.position)?;
+            if self.is_checking_replay
+                && matches!(
+                    &outcome.reply.reply,
+                    Some(command_reply::Reply::TimeTravel(_))
+                )
+            {
+                self.check_time_travel_target(&context, &reader, &command, &frame.position)?;
+            }
             reader.stage(&outcome.writes);
+            if self.is_checking_replay {
+                self.record_semantic_point(&context, &reader, &outcome, &command)?;
+            }
             last_command_timestamp_micros =
                 last_command_timestamp_micros.max(command.proposed_at_micros);
             last_behavior_version = command.behavior_version;
@@ -502,14 +519,91 @@ impl FrameApplier {
         context: &ApplyContext,
         reader: &StagedStateReader<'_>,
         command: &FlowCommand,
+        position: &LogPosition,
     ) -> Result<ApplyOutcome, FrameFailure> {
         let outcome = self.apply_catching_panics(context, reader, command)?;
         if self.is_checking_replay {
             let repeated = self.apply_catching_panics(context, reader, command)?;
-            compare_repeated_apply(&outcome, &repeated)
+            compare_repeated_apply(command, context.partition, position, &outcome, &repeated)
                 .map_err(|mismatch| FrameFailure::Halt(mismatch.to_string()))?;
         }
         Ok(outcome)
+    }
+
+    fn check_time_travel_target(
+        &self,
+        context: &ApplyContext,
+        reader: &StagedStateReader<'_>,
+        command: &FlowCommand,
+        position: &LogPosition,
+    ) -> Result<(), FrameFailure> {
+        let target = time_travel_target_hash(context, reader, command).map_err(|error| {
+            FrameFailure::Halt(format!(
+                "time-travel diagnostic for Flow {} at seq {} failed: {error}",
+                command.flow_id, position.seq
+            ))
+        })?;
+        let Some(target) = target else {
+            return Ok(());
+        };
+        let hashes = self
+            .semantic_point_hashes
+            .lock()
+            .expect("semantic point hash lock is not poisoned");
+        let key = (target.run_id, target.run_attempt, target.run_seq);
+        if let Some(expected) = hashes.get(&key) {
+            compare_semantic_point_hash(expected, &target, command, position)
+                .map_err(FrameFailure::Halt)?;
+        }
+        Ok(())
+    }
+
+    fn record_semantic_point(
+        &self,
+        context: &ApplyContext,
+        reader: &StagedStateReader<'_>,
+        outcome: &ApplyOutcome,
+        command: &FlowCommand,
+    ) -> Result<(), FrameFailure> {
+        if !outcome.writes.is_empty() && matches!(&command.command, Some(Command::RunPurge(_))) {
+            let run_id = RunId::from_slice(&command.run_id).map_err(|error| {
+                FrameFailure::Halt(format!(
+                    "RunPurge command {:?} has invalid run ID: {error}",
+                    command.command_id
+                ))
+            })?;
+            self.semantic_point_hashes
+                .lock()
+                .expect("semantic point hash lock is not poisoned")
+                .retain(|(stored_run_id, _, _), _| *stored_run_id != run_id);
+            return Ok(());
+        }
+        let Some(run_id) = outcome.run_id else {
+            return Ok(());
+        };
+        let point = current_semantic_point_hash(context, reader, run_id, &command.command_id)
+            .map_err(|error| {
+                FrameFailure::Halt(format!(
+                    "semantic-point diagnostic for Flow {} command {:?} failed: {error}",
+                    command.flow_id, command.command_id
+                ))
+            })?;
+        if let Some(point) = point {
+            let mut hashes = self
+                .semantic_point_hashes
+                .lock()
+                .expect("semantic point hash lock is not poisoned");
+            hashes.retain(|(run_id, _, run_seq), _| {
+                *run_id != point.run_id
+                    || *run_seq >= point.window_start_seq
+                    || *run_seq == point.genesis_seq
+            });
+            hashes.insert(
+                (point.run_id, point.run_attempt, point.run_seq),
+                point.state_hash,
+            );
+        }
+        Ok(())
     }
 
     fn apply_catching_panics(

@@ -11,9 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use dexzd_apply::{
-    ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
-};
+use dexzd_apply::{ApplyContext, ApplyError, ApplyOutcome, FlowStateReader, StateWrite};
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
@@ -156,15 +154,14 @@ impl CommandApplier for CountingApplier {
         let mut event_key = counter_key.clone();
         event_key.push(0xFF);
         event_key.extend_from_slice(&next.to_be_bytes());
-        let mut effects = Vec::new();
-        if command.flow_id == NONDETERMINISTIC_FLOW {
-            effects.push(ApplyEffect::TimerArmed {
-                fire_at_micros: i64::try_from(
-                    self.nondeterministic_counter.fetch_add(1, Ordering::SeqCst),
-                )
-                .expect("counter fits i64"),
-            });
-        }
+        let event_value = if command.flow_id == NONDETERMINISTIC_FLOW {
+            self.nondeterministic_counter
+                .fetch_add(1, Ordering::SeqCst)
+                .to_be_bytes()
+                .to_vec()
+        } else {
+            command.proposed_at_micros.to_be_bytes().to_vec()
+        };
         Ok(ApplyOutcome {
             writes: vec![
                 StateWrite::Put {
@@ -175,10 +172,10 @@ impl CommandApplier for CountingApplier {
                 StateWrite::Put {
                     column_family: ColumnFamily::Flow,
                     key: event_key,
-                    value: command.proposed_at_micros.to_be_bytes().to_vec(),
+                    value: event_value,
                 },
             ],
-            effects,
+            effects: Vec::new(),
             reply: CommandReply::default(),
             run_id: None,
         })

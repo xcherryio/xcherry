@@ -211,6 +211,7 @@ impl EngineNode {
                     state: state.clone(),
                     committed_commands: runtime.committed_commands.clone(),
                     is_checking_replay: config.commit.debug_replay_checks,
+                    semantic_point_hashes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
                 },
                 config.commit.applier_lanes,
                 config.commit.applier_queue_frames,

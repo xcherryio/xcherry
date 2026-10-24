@@ -192,13 +192,14 @@ impl CommandCommitter {
     pub fn check_speculative_outcome(
         &self,
         partition: PartitionId,
+        command: &FlowCommand,
         speculative: &ApplyOutcome,
         committed: &CommittedCommand,
     ) -> Result<(), ReplayMismatch> {
         if !self.inner.is_checking_replay {
             return Ok(());
         }
-        compare_speculative_outcome(speculative, committed).inspect_err(|mismatch| {
+        compare_speculative_outcome(speculative, command, partition, committed).inspect_err(|mismatch| {
             tracing::error!(partition = partition.0, mismatch = %mismatch, "speculative outcome differs from committed outcome");
             self.inner.state.halt_partition(partition);
         })
@@ -234,12 +235,19 @@ impl FlowCommandCommitter for CommandCommitter {
     fn check_speculative_outcome(
         &self,
         partition: PartitionId,
+        command: &FlowCommand,
         speculative: &ApplyOutcome,
         committed: &CommittedCommand,
     ) -> Result<(), crate::runtime::ReplayMismatch> {
-        CommandCommitter::check_speculative_outcome(self, partition, speculative, committed)
-            .map_err(|mismatch| crate::runtime::ReplayMismatch {
-                detail: mismatch.to_string(),
-            })
+        CommandCommitter::check_speculative_outcome(
+            self,
+            partition,
+            command,
+            speculative,
+            committed,
+        )
+        .map_err(|mismatch| crate::runtime::ReplayMismatch {
+            detail: mismatch.to_string(),
+        })
     }
 }

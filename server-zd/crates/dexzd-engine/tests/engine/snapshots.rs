@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_engine::{LocalStoreConfig, NodeStopReason};
+use dexzd_engine::{CommitUrgency, LocalStoreConfig, NodeStopReason};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
     WriteCondition,
@@ -151,12 +151,53 @@ async fn restart_restores_the_snapshot_and_replays_only_later_batches() {
     let first = cluster.start_in_memory().await;
     first.commit_prompt("restore-flow", 3).await;
     first.node.take_snapshot().await.expect("snapshot succeeds");
-    first.commit_prompt("restore-flow", 2).await;
+    let mut last_committed_command = None;
+    for _ in 0..2 {
+        let (command, ticket) = first
+            .submit("restore-flow", CommitUrgency::Prompt)
+            .expect("submit tail command");
+        ticket.wait().await.expect("tail command commits");
+        last_committed_command = Some(command);
+    }
+    let last_committed_command = last_committed_command.expect("tail has a command");
+    let continuous = first
+        .node
+        .committer()
+        .committed_view()
+        .expect("continuous state view");
     drop(first);
 
     let second = cluster.start_in_memory().await;
-    assert_eq!(second.applier.applied_commands().len(), 2);
+    assert_eq!(
+        second.applier.applied_commands().len(),
+        2 * (1 + usize::from(cfg!(debug_assertions)))
+    );
     assert_eq!(second.committed_count("restore-flow").await, 5);
+    let recovered = second
+        .node
+        .committer()
+        .committed_view()
+        .expect("recovered state view");
+    dexzd_storage::compare_store_views(
+        &continuous,
+        &recovered,
+        &[
+            // Restoring a snapshot starts a new local store lineage.
+            dexzd_storage::CanonicalizedStoreField::NodeLineageId,
+            // The restored store starts a new snapshot sequence.
+            dexzd_storage::CanonicalizedStoreField::NodeLastSnapshotNumber,
+            // Recovery records progress under its new writer epoch.
+            dexzd_storage::CanonicalizedStoreField::PartitionApplied,
+            // Recovery acquires a new writer epoch.
+            dexzd_storage::CanonicalizedStoreField::PartitionAppliedEpoch,
+        ],
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "snapshot plus log differs after Flow {} command {:?}: {error}",
+            last_committed_command.flow_id, last_committed_command.command_id
+        )
+    });
     second.node.shutdown().await.expect("lease released");
 }
 
@@ -197,7 +238,10 @@ async fn log_batches_are_deleted_only_after_a_snapshot_is_old_enough() {
 
     let restarted = cluster.start_in_memory().await;
     assert_eq!(restarted.committed_count("cleanup-flow").await, 5);
-    assert_eq!(restarted.applier.applied_commands().len(), 1);
+    assert_eq!(
+        restarted.applier.applied_commands().len(),
+        1 + usize::from(cfg!(debug_assertions))
+    );
     restarted.node.shutdown().await.expect("lease released");
 }
 

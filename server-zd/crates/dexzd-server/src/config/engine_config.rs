@@ -33,6 +33,9 @@ impl Default for ClusterConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommitConfig {
+    /// Defaults to None, which enables checks in debug builds and disables them in release builds.
+    /// An explicit value overrides the build default for commit replay and time-travel checks.
+    pub debug_replay_checks: Option<bool>,
     /// Defaults to 20 ms; maximum time an unsealed batch waits for more commands.
     #[serde(with = "humantime_serde")]
     pub batch_window: Duration,
@@ -47,6 +50,7 @@ pub struct CommitConfig {
 impl Default for CommitConfig {
     fn default() -> Self {
         Self {
+            debug_replay_checks: None,
             batch_window: Duration::from_millis(20),
             max_in_flight: 4,
             seal_at_bytes: 4 * 1024 * 1024,

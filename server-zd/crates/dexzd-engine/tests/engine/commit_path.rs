@@ -9,10 +9,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use dexzd_apply::StateWrite;
 use dexzd_engine::{
-    CommitError, CommitUrgency, FlowCommandCommitter, LocalStoreConfig, NodeStopReason,
-    ReplayCheck, SpeculativeOutcomeMismatch,
+    CommitConfig, CommitError, CommitUrgency, FlowCommandCommitter, LocalStoreConfig,
+    NodeStopReason, ReplayCheck, SpeculativeOutcomeMismatch,
 };
+
+#[test]
+fn replay_checks_follow_the_build_profile_by_default() {
+    assert_eq!(
+        CommitConfig::default().debug_replay_checks,
+        cfg!(debug_assertions)
+    );
+}
 use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::{
@@ -231,6 +240,7 @@ async fn repeated_apply_check_stops_a_nondeterministic_partition() {
         .expect("submit succeeds");
     let error = ticket.wait().await.expect_err("apply differs");
     assert!(is_partition_stopped(&error), "{error:?}");
+    assert!(format!("{error:?}").contains("partition"));
     assert_eq!(test.applier.applied_commands().len(), 6);
     test.node.shutdown().await.expect("lease released");
 }
@@ -250,20 +260,27 @@ async fn speculative_outcome_check_compares_only_when_enabled() {
             .await
             .expect("node starts");
         let partition = test.context("speculative-flow").partition;
-        let (_, ticket) = test
+        let (command, ticket) = test
             .submit("speculative-flow", CommitUrgency::Prompt)
             .expect("submit succeeds");
         let committed = ticket.wait().await.expect("command commits");
         let committer = test.node.committer();
         committer
-            .check_speculative_outcome(partition, &committed.outcome, &committed)
+            .check_speculative_outcome(partition, &command, &committed.outcome, &committed)
             .expect("identical outcomes match");
         let mut diverged = committed.outcome.clone();
-        diverged.writes.pop();
-        let result = committer.check_speculative_outcome(partition, &diverged, &committed);
+        let StateWrite::Put { value, .. } = &mut diverged.writes[0] else {
+            panic!("first write puts a counter");
+        };
+        value[0] ^= 1;
+        let result =
+            committer.check_speculative_outcome(partition, &command, &diverged, &committed);
         if is_checking {
             let mismatch = result.expect_err("different outcomes mismatch");
             assert_eq!(mismatch.check, ReplayCheck::SpeculativeVersusCommitted);
+            assert!(mismatch.to_string().contains("speculative-flow command"));
+            assert!(mismatch.to_string().contains("Flow/"));
+            assert!(mismatch.to_string().contains("byte 0"));
             assert_eq!(test.node.halted_partitions(), vec![partition]);
         } else {
             result.expect("checks are disabled");
@@ -288,18 +305,18 @@ async fn a_speculative_mismatch_reported_by_the_runtime_stops_the_partition() {
         .expect("node starts");
     let other_flow = test.flow_in_other_partition(&["seam-flow"]);
     let partition = test.context("seam-flow").partition;
-    let (_, ticket) = test
+    let (command, ticket) = test
         .submit("seam-flow", CommitUrgency::Prompt)
         .expect("submit succeeds");
     let committed = ticket.wait().await.expect("command commits");
     let committer: &dyn FlowCommandCommitter = test.node.committer();
     committer
-        .check_speculative_outcome(partition, &committed.outcome, &committed)
+        .check_speculative_outcome(partition, &command, &committed.outcome, &committed)
         .expect("identical outcomes match");
     let mut diverged = committed.outcome.clone();
     diverged.writes.pop();
     let mismatch: SpeculativeOutcomeMismatch = committer
-        .check_speculative_outcome(partition, &diverged, &committed)
+        .check_speculative_outcome(partition, &command, &diverged, &committed)
         .expect_err("different outcomes mismatch");
     assert!(mismatch.detail.contains("speculative versus committed"));
     assert_eq!(test.node.halted_partitions(), vec![partition]);
@@ -358,7 +375,7 @@ async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
         .into_iter()
         .filter(|command| command.flow_id == BLOCKING_FLOW)
         .count();
-    assert_eq!(replayed, 1);
+    assert_eq!(replayed, 1 + usize::from(config.commit.debug_replay_checks));
     assert_eq!(second.committed_count(BLOCKING_FLOW).await, 1);
     second.node.shutdown().await.expect("lease released");
 }
