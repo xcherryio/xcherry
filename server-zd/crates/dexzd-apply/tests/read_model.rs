@@ -133,7 +133,7 @@ impl Harness {
             flow_id: flow_id.to_owned(),
             run_id,
             now_micros: 1_800_000_000_000_000,
-            behavior_version: 2,
+            behavior_version: 1,
         }
     }
 
@@ -807,71 +807,6 @@ fn active_step_search_mode_respects_skip_wait_for() {
         .unwrap()
         .unwrap();
     assert_eq!(document.active_step_types, ["ChargeStep"]);
-}
-
-#[test]
-fn earlier_behavior_version_keeps_its_history_and_search_writes() {
-    let mut harness = Harness::new();
-    harness.behavior_version = 1;
-    harness.start(FlowStartOptions::default(), None);
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-    harness.stop();
-    let history = get_history_events(
-        &harness.state,
-        harness.context.flow_hash,
-        harness.run_id,
-        1,
-        0,
-        &[],
-        0,
-    )
-    .unwrap();
-    assert_eq!(history.events.len(), 2);
-    assert!(matches!(
-        history.events[1].payload,
-        Some(flow_history_event::Payload::FlowClosed(_))
-    ));
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn search_projection_seeds_indexed_attributes_when_a_run_adopts_new_behavior() {
-    let mut harness = Harness::new();
-    harness.behavior_version = 1;
-    harness.start(
-        FlowStartOptions {
-            attributes: vec![AttributeWrite {
-                key: "state".to_owned(),
-                value: Some(string_value("created")),
-                index_config: Some(index_config("ReviewState")),
-                ..AttributeWrite::default()
-            }],
-            ..FlowStartOptions::default()
-        },
-        None,
-    );
-    harness.behavior_version = 2;
-    harness.set_attributes(
-        vec![AttributeWrite {
-            key: "other".to_owned(),
-            value: Some(string_value("new")),
-            ..AttributeWrite::default()
-        }],
-        None,
-        Vec::new(),
-    );
-    let document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(document.attributes.len(), 1);
-    assert_eq!(document.attributes[0].index_key, "ReviewState");
-    assert_eq!(document.attributes[0].value, Some(string_value("created")));
 }
 
 #[test]

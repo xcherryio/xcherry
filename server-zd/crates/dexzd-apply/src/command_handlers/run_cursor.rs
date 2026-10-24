@@ -216,9 +216,7 @@ impl RunCursor {
             },
         );
         history::after_command(transaction, &mut self, kind)?;
-        if scope.behavior_version.has_search_projection() {
-            search_document::refresh_search_document(transaction, &self, scope)?;
-        }
+        search_document::refresh_search_document(transaction, &self, scope)?;
         self.rows.put_run_record(transaction, &self.record);
         if scope.is_replay {
             reconcile_run_storage(transaction, &mut self)?;
