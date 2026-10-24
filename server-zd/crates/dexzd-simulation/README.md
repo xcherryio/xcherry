@@ -88,7 +88,9 @@ directory invariants hold on the committed history. The engine simulation adds t
 3. **One result per attempt.** The shadow rejects a second applied result (S2). Any frame
    applied again after recovery must reproduce its first outcome exactly.
 4. **Locks.** The shadow checks L1 to L4 after every command, and the recovered store passes
-   `check_flow` again.
+   `check_flow` again. An old-epoch process may have applied frames the successor has not, so
+   the check uses the window points the shadow retained at the store's applied position. The
+   summary field `recovered_checks_with_older_window_points` counts checks that needed them.
 5. **Recovered runtime equals a never-crashed one.** The twin is the store of a node that
    applied the canonical log and never crashed: the shadow's rows, partition metadata derived
    from the canonical commands, and node metadata. `compare_store_views` compares every column

@@ -47,6 +47,8 @@ struct CanonicalCommand {
 struct CanonicalFrame {
     /// Count of new frames the shadow accepted up to and including this one.
     generation: u64,
+    /// Commands the shadow had applied once it applied this frame.
+    shadow_applied_commands: u64,
     commands: Vec<CanonicalCommand>,
 }
 
@@ -169,25 +171,24 @@ impl CommittedLog {
         flow_id: &str,
     ) -> Result<u64, String> {
         let state = self.lock();
-        let partition = state.shadow.context(flow_id).partition;
-        let meta = store
-            .partition_meta(partition)
-            .map_err(|error| format!("reading partition {} metadata: {error}", partition.0))?;
-        let Some(applied) = meta.and_then(|meta| meta.applied) else {
-            return Ok(0);
-        };
-        let lowest: FrameKey = (partition.0, String::new(), 0, 0);
-        let applied_key: FrameKey = (
-            partition.0,
-            applied.node_id,
-            applied.incarnation,
-            applied.seq,
-        );
         Ok(state
-            .frames
-            .range(lowest..=applied_key)
-            .next_back()
-            .map_or(0, |(_, frame)| frame.generation))
+            .newest_applied_frame(store, flow_id)?
+            .map_or(0, |frame| frame.generation))
+    }
+
+    /// Returns how many commands the shadow had applied at the newest canonical frame of
+    /// `flow_id`'s partition in `store`.
+    ///
+    /// Returns zero before the store applied any frame of the partition, or the read error.
+    pub(crate) fn applied_shadow_commands(
+        &self,
+        store: &EngineLocalStore,
+        flow_id: &str,
+    ) -> Result<u64, String> {
+        let state = self.lock();
+        Ok(state
+            .newest_applied_frame(store, flow_id)?
+            .map_or(0, |frame| frame.shadow_applied_commands))
     }
 
     /// Checks a GetAttributes response against the newest run's Attributes in `window`.
@@ -440,6 +441,36 @@ impl CommittedLog {
 }
 
 impl CommittedLogState {
+    /// Returns the newest canonical frame of `flow_id`'s partition at or below the store's
+    /// applied position.
+    ///
+    /// Returns `None` before the store applied any frame of the partition, or the read error.
+    fn newest_applied_frame(
+        &self,
+        store: &EngineLocalStore,
+        flow_id: &str,
+    ) -> Result<Option<&CanonicalFrame>, String> {
+        let partition = self.shadow.context(flow_id).partition;
+        let meta = store
+            .partition_meta(partition)
+            .map_err(|error| format!("reading partition {} metadata: {error}", partition.0))?;
+        let Some(applied) = meta.and_then(|meta| meta.applied) else {
+            return Ok(None);
+        };
+        let lowest: FrameKey = (partition.0, String::new(), 0, 0);
+        let applied_key: FrameKey = (
+            partition.0,
+            applied.node_id,
+            applied.incarnation,
+            applied.seq,
+        );
+        Ok(self
+            .frames
+            .range(lowest..=applied_key)
+            .next_back()
+            .map(|(_, frame)| frame))
+    }
+
     fn record_violation(&mut self, violation: InvariantViolation, trace: &EventTrace) {
         trace.record(&format!("violation {violation}"));
         if self.first_violation.is_none() {
@@ -562,6 +593,7 @@ impl CommittedLogState {
             key,
             CanonicalFrame {
                 generation: self.generation,
+                shadow_applied_commands: self.shadow.applied_commands(),
                 commands: canonical,
             },
         );
@@ -781,6 +813,9 @@ impl CommittedCommandSink for ObservingCommandSink {
             .finish_frame(&self.process_label, partition, position);
     }
 }
+
+#[cfg(test)]
+mod recovered_flow_tests;
 
 #[cfg(test)]
 mod tests {

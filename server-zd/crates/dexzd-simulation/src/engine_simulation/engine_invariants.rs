@@ -129,28 +129,47 @@ pub(crate) fn check_store_matches_twin(
 }
 
 /// Invariant 4: the stage-1 Flow invariants hold on the recovered store itself.
+///
+/// Returns whether some run was checked with window points older than the shadow's current ones,
+/// or the first violation.
 pub(crate) fn check_recovered_flows(
     store: &EngineLocalStore,
-    shadow: &ApplyChecker,
-) -> Result<(), InvariantViolation> {
+    committed_log: &CommittedLog,
+) -> Result<bool, InvariantViolation> {
     let state = memory_state_of(store)?;
-    for flow_id in &all_flow_ids(shadow) {
-        let context = shadow.context(flow_id);
-        let view = FlowView::read(
-            &state,
-            context.flow_hash,
-            context.partition,
-            RunSelection::All,
-        )
-        .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
-        check_flow(flow_id, &view, &recovered_memory(&view, shadow))?;
+    let mut has_older_window_points = false;
+    for flow_id in &committed_log.with_shadow(all_flow_ids) {
+        // An old-epoch process may have applied frames this store has not.
+        let applied_commands = committed_log
+            .applied_shadow_commands(store, flow_id)
+            .map_err(|detail| InvariantViolation::new("local-store-read", detail))?;
+        committed_log.with_shadow(|shadow| {
+            let context = shadow.context(flow_id);
+            let view = FlowView::read(
+                &state,
+                context.flow_hash,
+                context.partition,
+                RunSelection::All,
+            )
+            .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
+            let memory = recovered_memory(&view, shadow, applied_commands);
+            has_older_window_points |= memory.window_points.iter().any(|(run_id, points)| {
+                *points != shadow.window_points_after(run_id, shadow.applied_commands())
+            });
+            check_flow(flow_id, &view, &memory)
+        })?;
     }
-    Ok(())
+    Ok(has_older_window_points)
 }
 
 /// Genesis holders as the store records them; the shadow already checked them command by command.
 /// Window points come from the shadow, which recorded each point while it was current.
-fn recovered_memory(view: &FlowView, shadow: &ApplyChecker) -> CheckerMemory {
+/// They are the points retained once the shadow had applied `applied_commands` commands.
+fn recovered_memory(
+    view: &FlowView,
+    shadow: &ApplyChecker,
+    applied_commands: u64,
+) -> CheckerMemory {
     let genesis_values = view
         .runs
         .iter()
@@ -167,7 +186,12 @@ fn recovered_memory(view: &FlowView, shadow: &ApplyChecker) -> CheckerMemory {
     let window_points = view
         .runs
         .keys()
-        .filter_map(|run_id| Some((*run_id, shadow.window_points(run_id)?.clone())))
+        .map(|run_id| {
+            (
+                *run_id,
+                shadow.window_points_after(run_id, applied_commands),
+            )
+        })
         .collect();
     CheckerMemory {
         genesis_values,

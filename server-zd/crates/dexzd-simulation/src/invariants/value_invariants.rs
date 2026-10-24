@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 
 use dexzd_keyspace::row_keys::{length_prefixed_name, value_row_key};
-use dexzd_keyspace::{ColumnFamily, FlowHash, RunTable, ValueId};
+use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, RunTable, ValueId};
 use dexzd_protocol::dexzd::v1::{
     StepExecutionPhase, StoredStepCompletionOutput, StoredValue, ValueRecord, command_reply,
     stored_value,
@@ -96,13 +96,18 @@ pub(crate) fn check_values(
     check_hard_delete_objects(context, run)
 }
 
+/// Records the new semantic points of each completely decoded run and drops those its window
+/// advanced past.
+///
+/// Returns the dropped points by run and seq, or the violation of an unreadable referenced value.
 pub(crate) fn remember_window_points(
     flow_id: &str,
     view: &FlowView,
     memory: &mut CheckerMemory,
     state: &MemoryFlowState,
     flow_hash: FlowHash,
-) -> Result<(), InvariantViolation> {
+) -> Result<BTreeMap<RunId, BTreeMap<u64, WindowPointState>>, InvariantViolation> {
+    let mut pruned_points = BTreeMap::new();
     for (run_id, run) in view.runs.iter().filter(|(_, run)| run.is_complete) {
         let context = RunContext { flow_id, run_id };
         let window_start = run
@@ -110,7 +115,11 @@ pub(crate) fn remember_window_points(
             .as_ref()
             .map_or(0, |record| record.window_start_seq);
         let points = memory.window_points.entry(*run_id).or_default();
-        points.retain(|seq, _| *seq >= window_start);
+        let retained = points.split_off(&window_start);
+        let pruned = std::mem::replace(points, retained);
+        if !pruned.is_empty() {
+            pruned_points.insert(*run_id, pruned);
+        }
         let new_semantic_points: Vec<u64> = run
             .history
             .iter()
@@ -149,7 +158,7 @@ pub(crate) fn remember_window_points(
             );
         }
     }
-    Ok(())
+    Ok(pruned_points)
 }
 
 fn collect_references(run: &RunView) -> BTreeSet<(ValueId, u64)> {

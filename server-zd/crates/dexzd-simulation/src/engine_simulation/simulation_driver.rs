@@ -683,9 +683,10 @@ impl Simulation {
         let Some(serving) = &self.serving else {
             return Ok(());
         };
-        self.environment
-            .committed_log
-            .with_shadow(|shadow| check_recovered_flows(&serving.local_store, shadow))
+        if check_recovered_flows(&serving.local_store, &self.environment.committed_log)? {
+            self.summary.recovered_checks_with_older_window_points += 1;
+        }
+        Ok(())
     }
 
     /// Starts processes until one serves. A failed start is retried; endless failure is a bug.

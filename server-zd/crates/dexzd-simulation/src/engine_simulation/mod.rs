@@ -121,6 +121,9 @@ pub struct EngineSimulationSummary {
     pub state_comparisons_skipped_for_upload_ledger: u64,
     /// Of the store comparisons, those made right after a crash recovery.
     pub recovered_state_comparisons: u64,
+    /// Recovered-store checks that used the window points of a position behind the shadow, as
+    /// after an old-epoch process applied frames the successor had not.
+    pub recovered_checks_with_older_window_points: u64,
     /// Comparisons of in-flight dispatches with committed running attempts.
     pub dispatch_comparisons: u64,
     /// Runs in the final state.
@@ -185,6 +188,8 @@ impl EngineSimulationSummary {
         self.state_comparisons_skipped_for_upload_ledger +=
             other.state_comparisons_skipped_for_upload_ledger;
         self.recovered_state_comparisons += other.recovered_state_comparisons;
+        self.recovered_checks_with_older_window_points +=
+            other.recovered_checks_with_older_window_points;
         self.dispatch_comparisons += other.dispatch_comparisons;
         self.final_runs += other.final_runs;
         self.recent_events.clone_from(&other.recent_events);
