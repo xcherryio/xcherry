@@ -493,10 +493,13 @@ async fn paradedb_outage_overflows_the_queue_and_rebuilds_every_committed_write(
     proxy.restore();
 
     let mut retry = tokio::time::interval(Duration::from_millis(200));
+    let mut last_search_result = String::new();
     let projected = tokio::time::timeout(Duration::from_secs(90), async {
         loop {
             retry.tick().await;
-            match search_greeting_flows(&mut flow_client).await {
+            let search_result = search_greeting_flows(&mut flow_client).await;
+            last_search_result = format!("{search_result:?}");
+            match search_result {
                 Ok(entries) => {
                     if let Some(entry) = entries.into_iter().find(|entry| entry.flow_id == flow_id)
                         && entry.indexed_attributes.len() >= WRITE_COUNT
@@ -510,7 +513,12 @@ async fn paradedb_outage_overflows_the_queue_and_rebuilds_every_committed_write(
         }
     })
     .await
-    .expect("the partition rebuild makes every committed write searchable");
+    .unwrap_or_else(|error| {
+        panic!(
+            "the partition rebuild makes every committed write searchable: {error}; last SearchFlows result: {last_search_result}; server log: {}",
+            server.log()
+        )
+    });
     for write_number in 0..WRITE_COUNT {
         let attribute_name = format!("outage-{write_number:04}");
         let expected_value = string_value(&format!("{write_number:04}-{value_text}"));

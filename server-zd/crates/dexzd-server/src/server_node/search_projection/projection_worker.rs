@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use dexzd_apply::FlowStateReader;
 use dexzd_engine::{CommandCommitter, CommittedStateView};
 use dexzd_keyspace::{ColumnFamily, PartitionId, partition_meta_key};
@@ -192,25 +193,7 @@ impl SearchProjectionWorker {
     }
 
     async fn rebuild_partition(&mut self, partition: PartitionId) {
-        let mut retry_delay = RetryDelay::default();
-        loop {
-            // Every frame through this sequence is committed before the view opens.
-            let covered_sequence = self.frames.last_sequence();
-            match self.try_rebuild_partition(partition).await {
-                Ok(()) => {
-                    self.frames.finish_rebuild(partition, covered_sequence);
-                    return;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        partition = partition.0,
-                        %error,
-                        "rebuilding the search projection of a partition failed; retrying"
-                    );
-                    retry_delay.wait().await;
-                }
-            }
-        }
+        retry_partition_rebuild(self, partition).await;
     }
 
     async fn try_rebuild_partition(
@@ -266,6 +249,56 @@ impl SearchProjectionWorker {
     }
 }
 
+#[async_trait]
+trait PartitionRebuilder: Send {
+    fn last_sequence(&self) -> u64;
+    async fn attempt_rebuild(
+        &mut self,
+        partition: PartitionId,
+    ) -> Result<(), SearchProjectionError>;
+    fn finish_rebuild(&self, partition: PartitionId, covered_sequence: u64);
+}
+
+#[async_trait]
+impl PartitionRebuilder for SearchProjectionWorker {
+    fn last_sequence(&self) -> u64 {
+        self.frames.last_sequence()
+    }
+
+    async fn attempt_rebuild(
+        &mut self,
+        partition: PartitionId,
+    ) -> Result<(), SearchProjectionError> {
+        self.try_rebuild_partition(partition).await
+    }
+
+    fn finish_rebuild(&self, partition: PartitionId, covered_sequence: u64) {
+        self.frames.finish_rebuild(partition, covered_sequence);
+    }
+}
+
+async fn retry_partition_rebuild(rebuilder: &mut impl PartitionRebuilder, partition: PartitionId) {
+    let mut retry_delay = RetryDelay::default();
+    loop {
+        // Every frame through this sequence is committed before the view opens.
+        let covered_sequence = rebuilder.last_sequence();
+        match rebuilder.attempt_rebuild(partition).await {
+            Ok(()) => {
+                rebuilder.finish_rebuild(partition, covered_sequence);
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    partition = partition.0,
+                    %error,
+                    "rebuilding the search projection of a partition failed; retrying"
+                );
+                retry_delay.wait().await;
+            }
+        }
+    }
+}
+
 /// Doubles the wait after each failed attempt, up to [`MAX_RETRY_DELAY`].
 struct RetryDelay {
     next: Duration,
@@ -283,5 +316,70 @@ impl RetryDelay {
     async fn wait(&mut self) {
         tokio::time::sleep(self.next).await;
         self.next = (self.next * 2).min(MAX_RETRY_DELAY);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use dexzd_keyspace::PartitionId;
+
+    use super::{PartitionRebuilder, SearchProjectionError, retry_partition_rebuild};
+
+    struct RecoveringRebuilder {
+        attempts: u64,
+        finished: Mutex<Option<(PartitionId, u64)>>,
+    }
+
+    #[async_trait]
+    impl PartitionRebuilder for RecoveringRebuilder {
+        fn last_sequence(&self) -> u64 {
+            self.attempts
+        }
+
+        async fn attempt_rebuild(
+            &mut self,
+            _partition: PartitionId,
+        ) -> Result<(), SearchProjectionError> {
+            self.attempts += 1;
+            if self.attempts < 3 {
+                return Err(SearchProjectionError::CommittedState {
+                    detail: "search backend unavailable".into(),
+                });
+            }
+            Ok(())
+        }
+
+        fn finish_rebuild(&self, partition: PartitionId, covered_sequence: u64) {
+            *self
+                .finished
+                .lock()
+                .expect("fake rebuild record is unlocked") = Some((partition, covered_sequence));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rebuild_retries_until_the_search_backend_recovers() {
+        let partition = PartitionId(3);
+        let mut rebuilder = RecoveringRebuilder {
+            attempts: 0,
+            finished: Mutex::new(None),
+        };
+        let started = tokio::time::Instant::now();
+        retry_partition_rebuild(&mut rebuilder, partition).await;
+        assert_eq!(rebuilder.attempts, 3);
+        assert_eq!(
+            tokio::time::Instant::now() - started,
+            std::time::Duration::from_millis(300)
+        );
+        assert_eq!(
+            *rebuilder
+                .finished
+                .lock()
+                .expect("fake rebuild record is unlocked"),
+            Some((partition, 2))
+        );
     }
 }
