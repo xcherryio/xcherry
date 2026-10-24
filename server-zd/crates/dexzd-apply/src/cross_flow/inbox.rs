@@ -170,10 +170,14 @@ fn apply_child_start(
         } else {
             timeout_policy
         };
+    let child_settings = command.settings.unwrap_or_default();
+    // The parent already admitted startup values; restore the child's limit before committing the run.
+    let mut admitted_start_settings = child_settings;
+    admitted_start_settings.max_value_bytes = u64::MAX;
     let run_start = RunStart {
         new_run_id: &command.new_run_id,
         request: &request,
-        settings: &command.settings.unwrap_or_default(),
+        settings: &admitted_start_settings,
         resolved_timeout_policy,
         flow_config: config,
         hard_delete_objects: &[],
@@ -186,13 +190,13 @@ fn apply_child_start(
             .ok_or_else(|| ApplyError::InvariantViolation {
                 detail: "child start applied without a run ID".to_owned(),
             })?;
-        put_inbox_dedup(
-            transaction,
-            RunRows::new(transaction.context().flow_hash, run_id),
-            source,
-            &command.message_id,
-            1,
-        );
+        let rows = RunRows::new(transaction.context().flow_hash, run_id);
+        let mut record = rows
+            .run_record(transaction)?
+            .ok_or_else(|| invalid_cross_flow_message("started child run has no run record"))?;
+        record.settings = Some(child_settings);
+        rows.put_run_record(transaction, &record);
+        put_inbox_dedup(transaction, rows, source, &command.message_id, 1);
         output.reply = ok_reply();
     } else if let HandlerResult::Rejected(reply) = &result {
         return Err(invalid_cross_flow_message(format!(
@@ -270,7 +274,7 @@ fn apply_child_completed(
     let Some(record) = rows.run_record(transaction)? else {
         return Ok(HandlerResult::Rejected(ok_reply()));
     };
-    if record.is_purging || record.status != FlowStatus::Running as i32 {
+    if record.is_purging {
         return Ok(HandlerResult::Rejected(ok_reply()));
     }
     if inbox_is_duplicate(transaction, rows, source, &command.message_id)? {
@@ -350,13 +354,15 @@ fn apply_child_completed(
         },
     );
     put_inbox_dedup(transaction, rows, source, &command.message_id, cursor.seq);
-    crate::steps::wait_conditions::on_child_result(
-        transaction,
-        &mut cursor,
-        scope,
-        &completed.child_flow_id,
-        registration_attempt,
-    )?;
+    if cursor.record.status == FlowStatus::Running as i32 {
+        crate::steps::wait_conditions::on_child_result(
+            transaction,
+            &mut cursor,
+            scope,
+            &completed.child_flow_id,
+            registration_attempt,
+        )?;
+    }
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,
         scope,

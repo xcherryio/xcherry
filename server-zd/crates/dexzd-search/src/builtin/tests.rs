@@ -6,9 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use dexzd_apply::{FlowStateReader, StateReadError, StateRow};
 use dexzd_keyspace::row_keys::{flow_list_index_key, run_singleton_key, tenant_run_index_key};
@@ -20,7 +20,7 @@ use dexzd_visibility_query::{
 };
 use prost::Message;
 
-use super::{BuiltinSearchBackend, IndexedDocument};
+use super::{BuiltinSearchBackend, CommittedSearchViewProvider, IndexedDocument};
 use crate::{SearchBackend, SearchError, SearchRequest};
 
 #[derive(Default)]
@@ -28,6 +28,33 @@ struct MemoryState {
     rows: BTreeMap<(ColumnFamily, Vec<u8>), Vec<u8>>,
     scanned_kinds: Mutex<Vec<u8>>,
     scan_batch_limit: AtomicUsize,
+    scan_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+}
+
+struct MemoryViewProvider {
+    view: RwLock<Arc<MemoryState>>,
+    openings: AtomicUsize,
+}
+
+impl MemoryViewProvider {
+    fn new(view: Arc<MemoryState>) -> Arc<Self> {
+        Arc::new(Self {
+            view: RwLock::new(view),
+            openings: AtomicUsize::new(0),
+        })
+    }
+
+    fn replace(&self, view: Arc<MemoryState>) {
+        *self.view.write().expect("view lock") = view;
+    }
+}
+
+impl CommittedSearchViewProvider for MemoryViewProvider {
+    fn committed_view(&self) -> Result<Arc<dyn FlowStateReader + Send + Sync>, SearchError> {
+        self.openings.fetch_add(1, Ordering::Relaxed);
+        let view = self.view.read().expect("view lock").clone();
+        Ok(view)
+    }
 }
 
 impl MemoryState {
@@ -95,6 +122,10 @@ impl FlowStateReader for MemoryState {
         end: &[u8],
         limit: usize,
     ) -> Result<Vec<StateRow>, StateReadError> {
+        let scan_hook = self.scan_hook.lock().expect("scan hook lock").take();
+        if let Some(scan_hook) = scan_hook {
+            scan_hook();
+        }
         if column_family == ColumnFamily::PartitionIndex {
             self.scanned_kinds
                 .lock()
@@ -185,7 +216,8 @@ fn fixture() -> (Arc<MemoryState>, Vec<SearchDocumentRecord>) {
 async fn searches_all_partitions_and_pages_in_default_order() {
     let (state, _) = fixture();
     state.scan_batch_limit.store(1, Ordering::Relaxed);
-    let backend = BuiltinSearchBackend::new(state.clone(), 3).expect("backend");
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(state.clone()), 3).expect("backend");
     let fields = fields();
     let first = backend
         .search(request("", None, 2, &fields))
@@ -254,7 +286,7 @@ async fn searches_all_partitions_and_pages_in_default_order() {
 #[tokio::test]
 async fn rejects_changed_and_corrupt_tokens() {
     let (state, _) = fixture();
-    let backend = BuiltinSearchBackend::new(state, 3).expect("backend");
+    let backend = BuiltinSearchBackend::new(MemoryViewProvider::new(state), 3).expect("backend");
     let fields = fields();
     let first = backend
         .search(request("", None, 1, &fields))
@@ -276,16 +308,100 @@ async fn rejects_changed_and_corrupt_tokens() {
             .await,
         Err(SearchError::InvalidArgument(_))
     ));
-    assert!(matches!(
-        backend.search(request("", None, 0, &fields)).await,
-        Err(SearchError::InvalidArgument(_))
-    ));
+    assert_eq!(
+        backend
+            .search(request("", None, 0, &fields))
+            .await
+            .expect("default page")
+            .entries
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn defaults_and_clamps_page_size() {
+    let mut state = MemoryState::default();
+    for partition in 0..4_u16 {
+        for ordinal in 1..=251_u8 {
+            let mut document = record(
+                7,
+                ordinal,
+                "Checkout",
+                FlowStatus::Running,
+                i64::from(ordinal),
+                0,
+            );
+            document.run_id[14] = partition as u8;
+            state.insert(partition, 7, ordinal, document);
+        }
+    }
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 4).expect("backend");
+    let fields = fields();
+    for requested_size in [0, usize::MAX] {
+        let first = backend
+            .search(request("", None, requested_size, &fields))
+            .await
+            .expect("first bounded page");
+        assert_eq!(first.entries.len(), crate::search_backend::MAX_PAGE_SIZE);
+        let token = first.next_page_token.expect("remaining runs");
+        let second = backend
+            .search(request("", Some(&token), requested_size, &fields))
+            .await
+            .expect("second bounded page");
+        assert_eq!(second.entries.len(), 4);
+        assert!(second.next_page_token.is_none());
+    }
+}
+
+#[tokio::test]
+async fn each_search_uses_one_consistent_committed_view() {
+    let mut first_state = MemoryState::default();
+    first_state.insert(0, 7, 1, record(7, 1, "Checkout", FlowStatus::Running, 1, 0));
+    first_state.insert(1, 7, 2, record(7, 2, "Checkout", FlowStatus::Running, 2, 0));
+    let first_state = Arc::new(first_state);
+    let mut next_state = MemoryState::default();
+    next_state.insert(0, 7, 3, record(7, 3, "Checkout", FlowStatus::Running, 3, 0));
+    let next_state = Arc::new(next_state);
+    let provider = MemoryViewProvider::new(first_state.clone());
+    first_state
+        .scan_hook
+        .lock()
+        .expect("scan hook lock")
+        .replace(Box::new({
+            let provider = provider.clone();
+            move || provider.replace(next_state.clone())
+        }));
+    let backend = BuiltinSearchBackend::new(provider.clone(), 2).expect("backend");
+    let fields = fields();
+    let first = backend
+        .search(request("", None, 10, &fields))
+        .await
+        .expect("first committed view");
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|entry| entry.flow_id.as_str())
+            .collect::<Vec<_>>(),
+        ["flow-2", "flow-1"]
+    );
+    assert_eq!(provider.openings.load(Ordering::Relaxed), 1);
+    let second = backend
+        .search(request("", None, 10, &fields))
+        .await
+        .expect("next committed view");
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(second.entries[0].flow_id, "flow-3");
+    assert_eq!(provider.openings.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
 async fn enforces_scan_budget_and_tenant_scope() {
     let (state, _) = fixture();
-    let backend = BuiltinSearchBackend::with_scan_budget(state, 3, 2).expect("backend");
+    let backend = BuiltinSearchBackend::with_scan_budget(MemoryViewProvider::new(state), 3, 2)
+        .expect("backend");
     let fields = fields();
     assert!(
         matches!(backend.search(request("", None, 10, &fields)).await, Err(SearchError::ResourceExhausted(message)) if message.contains("ParadeDB"))
@@ -329,7 +445,8 @@ async fn applies_compatibility_and_attribute_values() {
         2,
         record(7, 2, "Checkout", FlowStatus::ContinuedAsNew, 2, 3),
     );
-    let backend = BuiltinSearchBackend::new(Arc::new(state), 2).expect("backend");
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 2).expect("backend");
     let fields = fields();
     let engine = backend
         .search(request("WorkflowType = 'Engine'", None, 10, &fields))
@@ -372,41 +489,57 @@ async fn applies_compatibility_and_attribute_values() {
 }
 
 #[tokio::test]
-async fn seeded_documents_match_the_shared_evaluator() {
+async fn random_documents_with_sort_ties_match_the_shared_evaluator() {
     let mut state = MemoryState::default();
     let mut records = Vec::new();
-    for ordinal in 1..=60 {
-        let status = if ordinal % 5 == 0 {
+    let mut random_state = 0x9ed7_01a3_4c28_5b6f_u64;
+    let mut sort_keys = BTreeSet::new();
+    for ordinal in 1..=120_u8 {
+        let status = if next_pseudorandom(&mut random_state).is_multiple_of(5) {
             FlowStatus::Running
         } else {
             FlowStatus::Completed
         };
-        let flow_type = if ordinal % 3 == 0 {
+        let flow_type = if next_pseudorandom(&mut random_state).is_multiple_of(3) {
             "Billing"
         } else {
             "Checkout"
         };
+        let start = 1 + (next_pseudorandom(&mut random_state) % 5) as i64;
         let close = if status == FlowStatus::Running {
             0
         } else {
-            i64::from(ordinal) * 10
+            start + 1 + (next_pseudorandom(&mut random_state) % 4) as i64
         };
-        let mut document = record(7, ordinal, flow_type, status, i64::from(ordinal), close);
-        if ordinal % 4 != 0 {
+        sort_keys.insert((
+            status == FlowStatus::Running,
+            (close != 0).then_some(close),
+            start,
+        ));
+        let mut document = record(7, ordinal, flow_type, status, start, close);
+        if !next_pseudorandom(&mut random_state).is_multiple_of(4) {
             document.attributes.push(SearchAttributeValue {
                 index_key: "Color".into(),
                 index_type: IndexType::Keyword.into(),
                 value: Some(dex::Value {
                     kind: Some(dex::value::Kind::StringValue(
-                        if ordinal % 2 == 0 { "red" } else { "blue" }.into(),
+                        if next_pseudorandom(&mut random_state).is_multiple_of(2) {
+                            "red"
+                        } else {
+                            "blue"
+                        }
+                        .into(),
                     )),
                 }),
             });
         }
-        state.insert(u16::from(ordinal % 3), 7, ordinal, document.clone());
+        let partition = (next_pseudorandom(&mut random_state) % 3) as u16;
+        state.insert(partition, 7, ordinal, document.clone());
         records.push(document);
     }
-    let backend = BuiltinSearchBackend::new(Arc::new(state), 3).expect("backend");
+    assert!(sort_keys.len() < records.len());
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 3).expect("backend");
     let fields = fields();
     for text in [
         "",
@@ -452,4 +585,11 @@ async fn seeded_documents_match_the_shared_evaluator() {
         }
         assert_eq!(actual_ids, expected_ids, "{text}");
     }
+}
+
+fn next_pseudorandom(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state >> 32
 }

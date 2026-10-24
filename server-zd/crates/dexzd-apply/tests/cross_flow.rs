@@ -24,19 +24,20 @@ use dexzd_keyspace::{
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowConfig, FlowErrorType, FlowStatus,
     FlowTimeoutHandlerOptions, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, StartFlowRequest, StepDecision, StepOptions, StopFlowRequest,
-    StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, Value, WaitingCondition,
-    WaitingConditionType, WorkerTarget, value,
+    InvokeWaitForMethodResponse, SetAttributesRequest, StartFlowRequest, StepDecision, StepOptions,
+    StopFlowRequest, StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, Value,
+    WaitingCondition, WaitingConditionType, WorkerTarget, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand, FlowStartCommand, FlowStopCommand,
-    FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
-    HardDeleteObjectsDeletedCommand, InboxMessageCommand, OutboxAckCommand, OutboxRecord,
-    OutboxRetentionTimerId, ParentFlowReference, RetentionTimerId, RunPurgeCommand, RunRecord,
-    RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase,
-    StepExecutionRecord, StepInvocationKey, StepMethod, StepMethodCompletedCommand,
-    SubFlowResultRecord, TimerId, TimersFiredCommand, command_reply, flow_command::Command,
-    inbox_message_command, outbox_record, step_method_completed_command, timer_id,
+    AttributeRecord, AttributesSetCommand, ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand,
+    FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord,
+    HardDeleteObjectReference, HardDeleteObjectsDeletedCommand, InboxMessageCommand,
+    OutboxAckCommand, OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, RetentionTimerId,
+    RunPurgeCommand, RunRecord, RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand,
+    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
+    StepMethodCompletedCommand, SubFlowResultRecord, TimerId, TimersFiredCommand, command_reply,
+    flow_command::Command, inbox_message_command, outbox_record, step_method_completed_command,
+    timer_id,
 };
 use prost::Message;
 
@@ -289,6 +290,15 @@ impl Harness {
         outbox: &OutboxRecord,
         new_run_id: [u8; 16],
     ) -> ApplyOutcome {
+        self.deliver_start_outbox_with_settings(outbox, new_run_id, settings())
+    }
+
+    fn deliver_start_outbox_with_settings(
+        &mut self,
+        outbox: &OutboxRecord,
+        new_run_id: [u8; 16],
+        child_settings: RunSettings,
+    ) -> ApplyOutcome {
         let outbox_record::Payload::ChildStart(start) =
             outbox.payload.clone().expect("child start payload")
         else {
@@ -306,7 +316,7 @@ impl Harness {
                 source,
                 payload: Some(inbox_message_command::Payload::ChildStart(start)),
                 new_run_id: new_run_id.to_vec(),
-                settings: Some(settings()),
+                settings: Some(child_settings),
             }),
         )
     }
@@ -566,6 +576,90 @@ fn wait_for_starts_child_and_completion_wakes_parent() {
         }),
     ));
     assert!(harness.outbox("parent", PARENT_RUN).is_empty());
+}
+
+#[test]
+fn child_start_accepts_values_admitted_by_parent_with_a_larger_limit() {
+    let mut harness = Harness::new();
+    harness.start_parent();
+    assert_ok(&harness.submit_sub_flow_wait(SubFlowCondition {
+        condition_id: "child".to_owned(),
+        sub_flow_type: "ChildFlow".to_owned(),
+        start_step_type: "ChildStep".to_owned(),
+        step_input: Some(Value {
+            kind: Some(value::Kind::StringValue("input".repeat(100))),
+        }),
+        step_options: Some(StepOptions {
+            skip_wait_for: true,
+            ..StepOptions::default()
+        }),
+        options: Some(SubFlowOptions {
+            attributes: vec![AttributeWrite {
+                key: "large-attribute".to_owned(),
+                value: Some(Value {
+                    kind: Some(value::Kind::StringValue("attribute".repeat(100))),
+                }),
+                ..AttributeWrite::default()
+            }],
+            ..SubFlowOptions::default()
+        }),
+        ..SubFlowCondition::default()
+    }));
+    let start = harness
+        .outbox("parent", PARENT_RUN)
+        .pop()
+        .expect("parent admitted child start");
+    let mut child_settings = settings();
+    child_settings.max_value_bytes = 128;
+    assert_ok(&harness.deliver_start_outbox_with_settings(&start, FIRST_CHILD_RUN, child_settings));
+    assert_eq!(
+        harness
+            .record(CHILD_ID, FIRST_CHILD_RUN)
+            .settings
+            .expect("child settings")
+            .max_value_bytes,
+        128
+    );
+    let step = harness.step(CHILD_ID, FIRST_CHILD_RUN, "ChildStep-1");
+    assert!(step.input.is_some());
+    let child_hash = harness.hasher.flow_hash(TenantId::DEFAULT, CHILD_ID);
+    let attribute_key = run_named_key(
+        child_hash,
+        RunId(FIRST_CHILD_RUN),
+        RunTable::Attribute,
+        "large-attribute",
+    );
+    let attribute_bytes = harness
+        .state
+        .get(ColumnFamily::Flow, &attribute_key)
+        .expect("memory reads")
+        .expect("child attribute exists");
+    let attribute = AttributeRecord::decode(attribute_bytes.as_slice()).expect("attribute decodes");
+    assert!(attribute.value.is_some());
+    let later_write = harness.apply(
+        CHILD_ID,
+        &FIRST_CHILD_RUN,
+        Command::AttributesSet(AttributesSetCommand {
+            request: Some(SetAttributesRequest {
+                attributes: vec![AttributeWrite {
+                    key: "too-large-later".to_owned(),
+                    value: Some(Value {
+                        kind: Some(value::Kind::StringValue("later".repeat(100))),
+                    }),
+                    ..AttributeWrite::default()
+                }],
+                request_id: "later-write".to_owned(),
+                ..SetAttributesRequest::default()
+            }),
+            request_fingerprint: vec![1],
+            ..AttributesSetCommand::default()
+        }),
+    );
+    assert!(matches!(
+        later_write.reply.reply,
+        Some(command_reply::Reply::Error(error)) if error.grpc_code == 3
+    ));
+    assert!(later_write.writes.is_empty());
 }
 
 #[test]
@@ -895,15 +989,11 @@ fn pending_outbox_defers_purge_and_purging_child_start_retries() {
 }
 
 #[test]
-fn closed_parent_discards_completion_and_abnormal_child_restarts() {
+fn closed_parent_stores_completion_for_restored_wait_and_abnormal_child_restarts() {
     let mut harness = Harness::new();
     harness.start_parent();
-    harness.deliver_child_start(
-        START_MESSAGE,
-        FIRST_CHILD_RUN,
-        "first",
-        SubFlowReusePolicy::Unspecified,
-    );
+    let start = harness.register_sub_flow_wait(SubFlowReusePolicy::Unspecified);
+    assert_ok(&harness.deliver_start_outbox(&start, FIRST_CHILD_RUN));
     harness.apply(
         "parent",
         &PARENT_RUN,
@@ -925,9 +1015,34 @@ fn closed_parent_discards_completion_and_abnormal_child_restarts() {
         }),
     );
     let report = harness.outbox(CHILD_ID, FIRST_CHILD_RUN).pop().unwrap();
-    let ignored = harness.deliver_completion(&report);
-    assert_ok(&ignored);
-    assert!(ignored.writes.is_empty());
+    let stored = harness.deliver_completion(&report);
+    assert_ok(&stored);
+    assert!(!stored.writes.is_empty());
+    let parent_hash = harness.hasher.flow_hash(TenantId::DEFAULT, "parent");
+    let result_key = run_named_key(
+        parent_hash,
+        RunId(PARENT_RUN),
+        RunTable::SubFlowResult,
+        &format!("{:010}:{CHILD_ID}", 1),
+    );
+    let result_bytes = harness
+        .state
+        .get(ColumnFamily::Flow, &result_key)
+        .expect("memory reads")
+        .expect("closed parent keeps the result");
+    let result = SubFlowResultRecord::decode(result_bytes.as_slice()).expect("result decodes");
+    assert_eq!(result.parent_registration_attempt, 1);
+    assert_eq!(
+        result.result.expect("stored result").flow_status,
+        FlowStatus::Terminated as i32
+    );
+    assert_eq!(
+        harness.record("parent", PARENT_RUN).status,
+        FlowStatus::Terminated as i32
+    );
+    let duplicate = harness.deliver_completion(&report);
+    assert_ok(&duplicate);
+    assert!(duplicate.writes.is_empty());
     let restarted = harness.deliver_child_start(
         [5; 16],
         SECOND_CHILD_RUN,
