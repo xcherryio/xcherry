@@ -417,13 +417,18 @@ fn parse_int_literal(value: &str, field: &str, offset: usize) -> Result<i64, Que
 }
 
 fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, QueryError> {
-    let invalid = || {
-        QueryError::new(
-            offset,
-            format!("invalid DOUBLE literal for {field}: {value:?} is not a decimal number"),
-        )
+    let number: f64 = match value.parse() {
+        Ok(number) => number,
+        Err(_) => {
+            return Err(invalid_numeric_literal(
+                "DOUBLE",
+                value,
+                field,
+                offset,
+                "decimal number",
+            ));
+        }
     };
-    let number: f64 = value.parse().map_err(|_| invalid())?;
     if number.is_finite() {
         Ok(number)
     } else if value.bytes().any(|byte| byte.is_ascii_digit()) {
@@ -433,8 +438,27 @@ fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, 
         ))
     } else {
         // Rust parses NaN and infinity names, which no DOUBLE value can match.
-        Err(invalid())
+        Err(invalid_numeric_literal(
+            "DOUBLE",
+            value,
+            field,
+            offset,
+            "decimal number",
+        ))
     }
+}
+
+fn invalid_numeric_literal(
+    index_type: &str,
+    value: &str,
+    field: &str,
+    offset: usize,
+    syntax: &str,
+) -> QueryError {
+    QueryError::new(
+        offset,
+        format!("invalid {index_type} literal for {field}: {value:?} is not a {syntax}"),
+    )
 }
 
 fn describe(kind: &TokenKind) -> String {
