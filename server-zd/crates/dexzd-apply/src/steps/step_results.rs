@@ -25,10 +25,10 @@ use crate::command_handlers::run_cursor::RunCursor;
 use crate::projections::history_events;
 use crate::state_access::FlowTransaction;
 use crate::steps::attempt_snapshot::compute_attempt_snapshot;
-use crate::steps::invocations::can_take_locks;
+use crate::steps::invocations::{can_take_locks, release_heartbeat_checkpoint};
 use crate::steps::{
     InvocationEnd, RetryDecision, apply_step_decision, decide_retry, end_running_attempt,
-    make_invocation_pending, start_attempt, wait_conditions,
+    finish_step, make_invocation_pending, start_attempt, wait_conditions,
 };
 use crate::values::{ValueHolder, ValueRejection, release_stored_value, store_value};
 use crate::{ApplyEffect, ApplyError};
@@ -43,6 +43,8 @@ pub(crate) enum StepCommandOutcome {
     /// The Worker's result is invalid in a way only apply can see; apply it as a non-retryable
     /// failure of the attempt instead.
     RejectedResult(ValueRejection),
+    /// The result is missing or belongs to the other method; also a non-retryable failure.
+    MismatchedResult(String),
 }
 
 fn stale_reply(detail: &str) -> CommandReply {
@@ -186,7 +188,6 @@ pub(crate) fn apply_attempt_failed(
     else {
         return Ok(StepCommandOutcome::Ignored(ok_reply()));
     };
-    end_running_attempt(transaction, cursor, &mut step, InvocationEnd::Finished)?;
     let worker_error = command.worker_error.clone().unwrap_or_default();
     let failure = StepMethodFailure {
         backend_error: if command.server_detail.is_empty() {
@@ -226,6 +227,11 @@ pub(crate) fn apply_attempt_failed(
         worker_error.retry_after_seconds,
         command.is_non_retryable,
     );
+    if decision == RetryDecision::Exhausted {
+        // Recorded before the attempt ends so the event keeps the final attempt snapshot.
+        history_events::record_method_failed(transaction, cursor, &step, method, &failure)?;
+    }
+    end_running_attempt(transaction, cursor, &mut step, InvocationEnd::Finished)?;
     match decision {
         RetryDecision::RetryAt { fires_at_micros } => {
             let next_attempt = command.attempt + 1;
@@ -240,15 +246,16 @@ pub(crate) fn apply_attempt_failed(
             cursor.rows.put_step_execution(transaction, &step);
         }
         RetryDecision::Exhausted => {
-            if let Some(invocation) = step.invocation.as_mut() {
-                invocation.last_failure = Some(failure.clone());
+            // The attempt already ended, so finish_step must not report it as canceled.
+            if let Some(mut invocation) = step.invocation.take() {
+                release_heartbeat_checkpoint(
+                    transaction,
+                    cursor,
+                    &step.step_execution_id,
+                    &mut invocation,
+                )?;
             }
-            history_events::record_method_failed(transaction, cursor, &step, method, &failure)?;
-            step.phase = StepExecutionPhase::Failed as i32;
-            step.completed_seq = cursor.seq;
-            step.invocation = None;
-            wait_conditions::release_condition_results(transaction, cursor, &mut step)?;
-            cursor.rows.put_step_execution(transaction, &step);
+            finish_step(transaction, cursor, &mut step, StepExecutionPhase::Failed)?;
             let message = format!(
                 "Step execution {} failed after {} attempts: {}",
                 step.step_execution_id, command.attempt, failure.backend_error
@@ -397,6 +404,12 @@ pub(crate) fn apply_method_completed(
     else {
         return Ok(StepCommandOutcome::Ignored(ok_reply()));
     };
+    let Some(response) = response_for_invocation(&step, command) else {
+        return Ok(StepCommandOutcome::MismatchedResult(format!(
+            "the Worker result for Step execution {} does not match its running method",
+            step.step_execution_id
+        )));
+    };
     if !command.app_worker_id.is_empty() {
         cursor.record.sticky_app_worker_id = command.app_worker_id.clone();
     }
@@ -412,8 +425,8 @@ pub(crate) fn apply_method_completed(
         release_stored_value(transaction, cursor.rows, &checkpoint, &holder, cursor.seq)?;
     }
     step.invocation = None;
-    let outcome = match &command.response {
-        Some(step_method_completed_command::Response::WaitFor(response)) => {
+    let outcome = match response {
+        step_method_completed_command::Response::WaitFor(response) => {
             let effects = crate::command_handlers::flow_data::MethodEffects {
                 writes: &response.upsert_attributes,
                 deletions: &response.delete_from_channel,
@@ -439,7 +452,7 @@ pub(crate) fn apply_method_completed(
                 response.waiting_condition.as_ref(),
             )?
         }
-        Some(step_method_completed_command::Response::Execute(response)) => {
+        step_method_completed_command::Response::Execute(response) => {
             let effects = crate::command_handlers::flow_data::MethodEffects {
                 writes: &response.upsert_attributes,
                 deletions: &response.delete_from_channel,
@@ -465,10 +478,23 @@ pub(crate) fn apply_method_completed(
                 response.step_decision.as_ref(),
             )?
         }
-        None => Ok(()),
     };
     if let Err(rejection) = outcome {
         return Ok(StepCommandOutcome::RejectedResult(rejection));
     }
     Ok(StepCommandOutcome::Applied(ok_reply()))
+}
+
+/// The completed response when it exists and belongs to the invocation's running method.
+fn response_for_invocation<'command>(
+    step: &StepExecutionRecord,
+    command: &'command StepMethodCompletedCommand,
+) -> Option<&'command step_method_completed_command::Response> {
+    let method = step.invocation.as_ref()?.method;
+    let response = command.response.as_ref()?;
+    let is_matching_method = match response {
+        step_method_completed_command::Response::WaitFor(_) => method == StepMethod::WaitFor as i32,
+        step_method_completed_command::Response::Execute(_) => method == StepMethod::Execute as i32,
+    };
+    is_matching_method.then_some(response)
 }

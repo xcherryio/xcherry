@@ -19,6 +19,7 @@ from dex import (
 )
 
 from .environment import DexDevTestEnvironment
+from .flow_service_client import skip_if_server_zd
 from .execute_only_flow import ExecuteOnlyFlow
 from .shared import unique_id
 from .state_options_flow import StateOptionsFlow
@@ -31,6 +32,7 @@ WAIT_TIMEOUT = timedelta(seconds=30)
 
 
 def test_skip_wait_for_execute_only_steps() -> None:
+    skip_if_server_zd("Continue-As-New")
     flow = ExecuteOnlyFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("skip-wait-for")
@@ -58,6 +60,7 @@ def test_state_options_locks() -> None:
 
 
 def test_movement_options_override_step_defaults() -> None:
+    skip_if_server_zd("Step failure policies")
     flow = StateOptionsOverrideFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("state-options-override")
@@ -68,6 +71,7 @@ def test_movement_options_override_step_defaults() -> None:
 
 
 def test_execute_failure_recovery_with_wait_for() -> None:
+    skip_if_server_zd("Step failure policies")
     flow = StateRecoveryFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("state-recovery")
@@ -79,6 +83,7 @@ def test_execute_failure_recovery_with_wait_for() -> None:
 
 
 def test_execute_failure_recovery_without_wait_for() -> None:
+    skip_if_server_zd("Step failure policies")
     flow = StateRecoveryNoWaitFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("state-recovery-no-wait")
