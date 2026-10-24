@@ -12,8 +12,8 @@
 
 mod harness;
 mod lease_release;
-mod standby_takeover;
 mod standby_health;
+mod standby_takeover;
 
 use std::time::Duration;
 

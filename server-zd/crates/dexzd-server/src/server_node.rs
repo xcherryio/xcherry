@@ -202,9 +202,10 @@ impl GrpcServer {
         }
     }
 
-    async fn abort(self) {
+    async fn abort(mut self) {
+        self.stop.cancel();
         self.task.abort();
-        match self.task.await {
+        match (&mut self.task).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => tracing::warn!(%error, "startup gRPC server failed"),
             Err(join_error) if join_error.is_cancelled() => {}
@@ -212,6 +213,13 @@ impl GrpcServer {
                 tracing::warn!(%join_error, "startup gRPC server task failed");
             }
         }
+    }
+}
+
+impl Drop for GrpcServer {
+    fn drop(&mut self) {
+        self.stop.cancel();
+        self.task.abort();
     }
 }
 
@@ -444,18 +452,10 @@ impl ServerNode {
     /// Serves until shutdown is requested or the node stops, then tears everything down.
     async fn serve(
         self,
-        grpc: GrpcServer,
+        mut grpc: GrpcServer,
         shutdown_request: CancellationToken,
         embedded_s3: Option<EmbeddedS3>,
     ) -> Result<(), ServerError> {
-        let GrpcServer {
-            health,
-            flow_service_gate,
-            worker_task_service_gate,
-            max_message_bytes: grpc_max_message_bytes,
-            stop: grpc_stop,
-            task: mut grpc_server,
-        } = grpc;
         let Self {
             engine,
             registry,
@@ -467,11 +467,12 @@ impl ServerNode {
         } = self;
         let worker_task_service =
             WorkerTaskServiceServer::new(dispatch.service_for_tenant(DEFAULT_TENANT_ID))
-                .max_decoding_message_size(grpc_max_message_bytes)
-                .max_encoding_message_size(grpc_max_message_bytes);
-        flow_service_gate.activate(flow_service.into_server(grpc_max_message_bytes));
-        worker_task_service_gate.activate(worker_task_service);
-        health.set_serving().await;
+                .max_decoding_message_size(grpc.max_message_bytes)
+                .max_encoding_message_size(grpc.max_message_bytes);
+        grpc.flow_service_gate
+            .activate(flow_service.into_server(grpc.max_message_bytes));
+        grpc.worker_task_service_gate.activate(worker_task_service);
+        grpc.health.set_serving().await;
         let node_stopped = engine.wait_for_stop();
         let registry_halted = registry.halted();
         let outcome = tokio::select! {
@@ -482,7 +483,7 @@ impl ServerNode {
                     detail: "the Flow runtime registry halted".to_owned(),
                 },
             }),
-            served = &mut grpc_server => Err(match served {
+            served = &mut grpc.task => Err(match served {
                 Ok(Ok(())) => ServerError::ServingTaskFailed {
                     detail: "the gRPC server stopped unexpectedly".to_owned(),
                 },
@@ -495,12 +496,12 @@ impl ServerNode {
             Err(error) => tracing::error!(%error, "dex-server-zd stopping after a failure"),
         }
         let mut teardown = BoundedTeardown::default();
-        health.set_not_serving().await;
+        grpc.health.set_not_serving().await;
         dispatch.shutdown();
         registry.close_long_polls();
-        grpc_stop.cancel();
-        if !grpc_server.is_finished() {
-            match tokio::time::timeout(GRPC_DRAIN_BUDGET, &mut grpc_server).await {
+        grpc.stop.cancel();
+        if !grpc.task.is_finished() {
+            match tokio::time::timeout(GRPC_DRAIN_BUDGET, &mut grpc.task).await {
                 Ok(Ok(Ok(()))) => {}
                 Ok(Ok(Err(error))) => {
                     tracing::warn!(%error, "gRPC server stopped with an error");
@@ -508,7 +509,7 @@ impl ServerNode {
                 Ok(Err(error)) => tracing::warn!(%error, "gRPC server task failed"),
                 Err(_) => {
                     tracing::warn!("open gRPC calls did not finish in time; closing them");
-                    grpc_server.abort();
+                    grpc.task.abort();
                 }
             }
         }
