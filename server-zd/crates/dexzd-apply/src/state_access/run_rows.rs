@@ -8,16 +8,18 @@
 
 use dexzd_keyspace::row_keys::{
     RequestKind, attempt_record_key, channel_message_key, channel_name_prefix, history_record_key,
-    prefix_range, request_dedup_key, request_dedup_order_key, run_named_key, run_singleton_key,
+    history_row_metadata_key, prefix_range, request_dedup_key, request_dedup_order_key,
+    run_named_key, run_singleton_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, FlowHash, RunId, RunTable, TenantId, flow_directory_key, run_table_prefix,
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, ChannelMessageRecord, ChannelMetaRecord, FlowDirectoryRecord,
-    HistoryRecord, LockRecord, PermissionSetRecord, RequestDedupRecord, RunRecord,
-    SearchDocumentRecord, StepCounterRecord, StepExecutionRecord,
+    HistoryRecord, HistoryRowMetadata, LockRecord, PermissionSetRecord, RequestDedupRecord,
+    RunRecord, SearchDocumentRecord, StepCounterRecord, StepExecutionRecord,
 };
+use prost::Message;
 
 use crate::ApplyError;
 use crate::state_access::FlowTransaction;
@@ -86,10 +88,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn attempt_record(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -454,13 +452,27 @@ impl RunRows {
         record: &HistoryRecord,
     ) {
         let key = history_record_key(self.flow_hash, self.run_id, record.seq);
+        let row_size_bytes = u64::try_from(key.len() + record.encoded_len())
+            .expect("a history record fits in a u64 byte count");
         transaction.put_message(ColumnFamily::History, key, record);
+        transaction.put_message(
+            ColumnFamily::Flow,
+            history_row_metadata_key(
+                self.flow_hash,
+                self.run_id,
+                record.seq,
+                RunTable::HistoryRecord,
+                0,
+            ),
+            &HistoryRowMetadata {
+                row_size_bytes,
+                is_semantic: record.is_semantic,
+                is_external_input: record.is_external_input,
+                attempt: record.attempt,
+            },
+        );
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn history_record(
         &self,
         transaction: &FlowTransaction<'_>,

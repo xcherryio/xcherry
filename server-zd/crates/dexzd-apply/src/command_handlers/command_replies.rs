@@ -16,6 +16,7 @@ pub(crate) mod grpc_code {
     pub(crate) const INVALID_ARGUMENT: i32 = 3;
     pub(crate) const NOT_FOUND: i32 = 5;
     pub(crate) const ALREADY_EXISTS: i32 = 6;
+    pub(crate) const RESOURCE_EXHAUSTED: i32 = 8;
     pub(crate) const FAILED_PRECONDITION: i32 = 9;
     pub(crate) const ABORTED: i32 = 10;
     pub(crate) const UNIMPLEMENTED: i32 = 12;
