@@ -182,8 +182,8 @@ fn check_garbage(context: &RunContext<'_>, run: &RunView) -> Result<(), Invarian
 #[derive(Default)]
 struct HolderCollector {
     expected: BTreeMap<ValueId, BTreeSet<Vec<u8>>>,
-    /// Every table value reachable from state, with the size its reference records.
-    references: BTreeMap<ValueId, u64>,
+    /// Every table value reference reachable from state: value and the size it records.
+    references: BTreeSet<(ValueId, u64)>,
 }
 
 impl HolderCollector {
@@ -197,7 +197,7 @@ impl HolderCollector {
             run_seq: id.run_seq,
             index_in_command: id.index_in_command,
         };
-        self.references.insert(value_id, reference.size_bytes);
+        self.references.insert((value_id, reference.size_bytes));
         Some(value_id)
     }
 
@@ -266,6 +266,15 @@ fn collect_slots(run: &RunView, slots: &mut HolderCollector) {
                 }
             }
         }
+        // Apply has no holder kind for SubFlow condition results yet; check only liveness and size.
+        for output in step
+            .condition_results
+            .iter()
+            .flat_map(|results| &results.sub_flow_results)
+            .flat_map(|result| &result.results)
+        {
+            slots.reach(output.completed_step_output.as_ref());
+        }
         let Some(invocation) = &step.invocation else {
             continue;
         };
@@ -313,4 +322,79 @@ fn holder_key(kind: u8, parts: &[&[u8]]) -> Vec<u8> {
         encoded.extend_from_slice(part);
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_keyspace::RunId;
+    use dexzd_protocol::dexzd::v1::{
+        AttributeRecord, StoredValueId, StoredValueReference, ValueBirthRecord,
+    };
+
+    use super::*;
+
+    fn table_value(size_bytes: u64) -> StoredValue {
+        StoredValue {
+            kind: Some(stored_value::Kind::TableValue(StoredValueReference {
+                value_id: Some(StoredValueId {
+                    run_seq: 3,
+                    index_in_command: 0,
+                }),
+                size_bytes,
+                is_string_value: true,
+            })),
+        }
+    }
+
+    /// `notes` and `status` share one value; only `notes`, visited first, records a wrong size.
+    fn run_sharing_one_value(notes_size_bytes: u64) -> RunView {
+        let value_id = ValueId {
+            run_seq: 3,
+            index_in_command: 0,
+        };
+        let mut run = RunView {
+            is_complete: true,
+            ..RunView::default()
+        };
+        for (key, size_bytes) in [("notes", notes_size_bytes), ("status", 500)] {
+            run.attributes.insert(
+                key.to_owned(),
+                AttributeRecord {
+                    value: Some(table_value(size_bytes)),
+                    ..AttributeRecord::default()
+                },
+            );
+            run.value_holders
+                .entry(value_id)
+                .or_default()
+                .insert(holder_key(0x02, &[&length_prefixed_name(key)]));
+        }
+        run.value_births.insert(
+            value_id,
+            ValueBirthRecord {
+                size_bytes: 500,
+                written_seq: 3,
+                garbage_seq: 0,
+            },
+        );
+        run.value_rows.insert(value_id);
+        run
+    }
+
+    fn check(run: &RunView) -> Result<(), InvariantViolation> {
+        let run_id = RunId([1; 16]);
+        let context = RunContext {
+            flow_id: "order-1",
+            run_id: &run_id,
+        };
+        check_values(&context, run, None)
+    }
+
+    #[test]
+    fn one_wrong_reference_size_is_not_hidden_by_another_holder() {
+        check(&run_sharing_one_value(500)).expect("both references record the birth size");
+        let violation = check(&run_sharing_one_value(499))
+            .expect_err("the notes reference records a wrong size");
+        assert_eq!(violation.invariant, REFERENCE, "{violation}");
+    }
 }

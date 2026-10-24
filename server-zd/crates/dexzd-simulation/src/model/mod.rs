@@ -14,6 +14,8 @@ mod client_model;
 mod value_generation;
 mod worker_model;
 
+pub(crate) use value_generation::MAX_VALUE_BYTES;
+
 use std::collections::BTreeSet;
 
 use dexzd_keyspace::RunId;

@@ -14,6 +14,7 @@
 
 mod apply_checker;
 mod apply_simulation;
+mod invalid_client_inputs;
 mod invariants;
 mod memory_state;
 mod model;
@@ -23,6 +24,10 @@ mod state_view;
 pub use apply_checker::ApplyChecker;
 pub use apply_simulation::{
     SimulationFailure, SimulationSummary, command_kind, replay_commands, run_seed,
+};
+pub use invalid_client_inputs::{
+    INVALID_CLIENT_INPUT_CLASSES, OVERSIZED_ATTRIBUTE_VALUE, OVERSIZED_CHANNEL_MESSAGE,
+    check_invalid_client_input_rejected, invalid_client_input,
 };
 pub use invariants::{
     CheckerMemory, GUARDED_ATTRIBUTE_KEYS, InvariantViolation, check_flow, check_fresh_snapshot,

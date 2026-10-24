@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::{ApplyContext, ApplyOutcome, StateWrite, apply_flow_command};
 use dexzd_keyspace::row_keys::run_singleton_key;
@@ -16,6 +16,7 @@ use dexzd_protocol::dexzd::v1::{
 };
 use prost::Message;
 
+use crate::invalid_client_inputs::{check_invalid_client_input_rejected, invalid_client_input};
 use crate::invariants::{CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot};
 use crate::memory_state::MemoryFlowState;
 use crate::state_view::{FlowView, RunSelection};
@@ -33,6 +34,7 @@ pub struct ApplyChecker {
     hasher: PartitionHasher,
     memory: CheckerMemory,
     applied_results: BTreeSet<AppliedResultIdentity>,
+    size_rejections: BTreeMap<&'static str, usize>,
 }
 
 /// One result of one attempt (S2): at most one may ever be applied.
@@ -61,6 +63,7 @@ impl ApplyChecker {
                 .expect("the fixed partition hash key and count are valid"),
             memory: CheckerMemory::default(),
             applied_results: BTreeSet::new(),
+            size_rejections: BTreeMap::new(),
         }
     }
 
@@ -78,6 +81,11 @@ impl ApplyChecker {
         }
     }
 
+    /// Invalid client inputs apply rejected for their value size, by invalid input class.
+    pub fn size_rejections(&self) -> &BTreeMap<&'static str, usize> {
+        &self.size_rejections
+    }
+
     /// Decodes `flow_id`: every run record, and every row of the runs `selection` names.
     ///
     /// Returns a violation when a row does not decode.
@@ -91,7 +99,8 @@ impl ApplyChecker {
             .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))
     }
 
-    /// Applies `command` three times (A2), commits its writes, and checks the Flow's invariants.
+    /// Applies `command` three times (A2), rejects invalid client inputs, commits the writes,
+    /// and checks the Flow's invariants.
     ///
     /// Returns the outcome, or the first violated invariant.
     pub fn apply_and_check(
@@ -109,6 +118,11 @@ impl ApplyChecker {
         compare_outcomes("A2-apply-twice", &outcome, &repeated)?;
         let redecoded = apply(&self.redecoded_state)?;
         compare_outcomes("A2-apply-redecoded", &outcome, &redecoded)?;
+        if let Some(class) = invalid_client_input(command)
+            && check_invalid_client_input_rejected(class, &outcome)?
+        {
+            *self.size_rejections.entry(class).or_default() += 1;
+        }
         let is_applied = !outcome.writes.is_empty();
         if is_applied {
             self.record_applied_result(command)?;

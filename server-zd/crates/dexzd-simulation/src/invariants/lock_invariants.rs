@@ -8,9 +8,13 @@
 
 //! Method calls, locks, and snapshots (plan sections 8.1 and 8.3: L1, L2, L3, S5).
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use dexzd_protocol::dex::ChannelInfo;
 use dexzd_protocol::dexzd::v1::{
-    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepInvocationPhase,
-    StepInvocationRecord, StepMethod, StoredValue, TimerId, timer_id,
+    LoadedChannelMessagesRecord, MethodSnapshotRecord, StepExecutionPhase, StepExecutionRecord,
+    StepInvocationKey, StepInvocationPhase, StepInvocationRecord, StepMethod, StoredKeyValue,
+    TimerId, timer_id,
 };
 use prost::Message;
 
@@ -222,85 +226,160 @@ pub(crate) fn check_guarded_attributes(
     Ok(())
 }
 
-/// S5: a just-started attempt's snapshot equals the committed Attributes and loaded Channel messages.
+/// S5: a just-started attempt's snapshot equals the one its Step options select from committed rows.
 pub fn check_fresh_snapshot(
     run: &RunView,
     step_execution_id: &str,
 ) -> Result<(), InvariantViolation> {
     let step = run.step_executions.get(step_execution_id);
-    let Some(snapshot) = step
-        .and_then(|step| step.invocation.as_ref())
-        .and_then(|invocation| invocation.snapshot.as_ref())
-    else {
+    let Some((step, invocation, snapshot)) = step.and_then(|step| {
+        let invocation = step.invocation.as_ref()?;
+        Some((step, invocation, invocation.snapshot.as_ref()?))
+    }) else {
         return Err(InvariantViolation::new(
             FRESH_SNAPSHOT,
             format!("started Step execution {step_execution_id} has no snapshot"),
         ));
     };
-    for attribute in &snapshot.attributes {
-        let current = run
-            .attributes
-            .get(&attribute.key)
-            .and_then(|record| record.value.as_ref());
-        if attribute.value.as_ref() != current {
-            return Err(stale(
-                step_execution_id,
-                &attribute.key,
-                attribute.value.as_ref(),
-                current,
-            ));
-        }
+    let expected = expected_snapshot(run, step, invocation.method);
+    let differences = [
+        ("Attributes", snapshot.attributes != expected.attributes),
+        (
+            "Channel infos",
+            snapshot.channel_infos != expected.channel_infos,
+        ),
+        (
+            "loaded Channel messages",
+            snapshot.loaded_channel_messages != expected.loaded_channel_messages,
+        ),
+        (
+            "loaded AttributeMap instances",
+            snapshot.loaded_attribute_map_instances != expected.loaded_attribute_map_instances,
+        ),
+        (
+            "loaded Channel names",
+            snapshot.loaded_channel_names != expected.loaded_channel_names,
+        ),
+        (
+            "loaded ChannelMap instances",
+            snapshot.loaded_channel_map_instances != expected.loaded_channel_map_instances,
+        ),
+        (
+            "condition results",
+            snapshot.condition_results != expected.condition_results,
+        ),
+    ];
+    match differences.iter().find(|(_, is_different)| *is_different) {
+        Some((part, _)) => Err(InvariantViolation::new(
+            FRESH_SNAPSHOT,
+            format!(
+                "started Step execution {step_execution_id} attempt {} read stale {part}: \
+                 snapshot {snapshot:?}, committed state selects {expected:?}",
+                invocation.attempt
+            ),
+        )),
+        None => Ok(()),
     }
-    for (key, record) in &run.attributes {
-        let is_plain = !key.contains('/');
-        let is_read = snapshot
-            .attributes
-            .iter()
-            .any(|attribute| attribute.key == *key);
-        if is_plain && !is_read {
-            return Err(stale(step_execution_id, key, None, record.value.as_ref()));
-        }
-    }
-    for loaded in &snapshot.loaded_channel_messages {
-        let current: Vec<_> = run
-            .channel_messages
-            .iter()
-            .filter(|message| message.channel_name == loaded.channel_name)
-            .collect();
-        let is_same = current.len() == loaded.messages.len()
-            && current
-                .iter()
-                .zip(&loaded.messages)
-                .all(|(current, read)| *current == read);
-        if !is_same {
-            return Err(InvariantViolation::new(
-                FRESH_SNAPSHOT,
-                format!(
-                    "started Step execution {step_execution_id} read {} messages of Channel {} \
-                     but {} are pending",
-                    loaded.messages.len(),
-                    loaded.channel_name,
-                    current.len()
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
-fn stale(
-    step_execution_id: &str,
-    key: &str,
-    read: Option<&StoredValue>,
-    current: Option<&StoredValue>,
-) -> InvariantViolation {
-    InvariantViolation::new(
-        FRESH_SNAPSHOT,
-        format!(
-            "started Step execution {step_execution_id} read Attribute {key} as {read:?} but the \
-             committed value is {current:?}"
-        ),
-    )
+/// The snapshot the Step options of `method` select from the committed rows (plan C17).
+fn expected_snapshot(
+    run: &RunView,
+    step: &StepExecutionRecord,
+    method: i32,
+) -> MethodSnapshotRecord {
+    let options = step.options.clone().unwrap_or_default();
+    let is_wait_for = method == StepMethod::WaitFor as i32;
+    let (attribute_map_instances, channel_names, channel_map_instances) = if is_wait_for {
+        (
+            options.wait_for_load_attribute_map_instances,
+            options.wait_for_load_channel_names,
+            options.wait_for_load_channel_map_instances,
+        )
+    } else {
+        (
+            options.execute_load_attribute_map_instances,
+            options.execute_load_channel_names,
+            options.execute_load_channel_map_instances,
+        )
+    };
+    let attribute_map_instances = sorted_unique(attribute_map_instances);
+    let channel_names = sorted_unique(channel_names);
+    let channel_map_instances = sorted_unique(channel_map_instances);
+    let attributes = run
+        .attributes
+        .iter()
+        .filter(|(key, _)| !key.contains('/') || is_selected(key, &attribute_map_instances))
+        .map(|(key, record)| StoredKeyValue {
+            key: key.clone(),
+            value: record.value.clone(),
+        })
+        .collect();
+    let channel_infos: BTreeMap<String, ChannelInfo> = run
+        .channel_metas
+        .iter()
+        .filter(|(_, meta)| meta.pending_count > 0)
+        .map(|(name, meta)| {
+            let size = i32::try_from(meta.pending_count).unwrap_or(i32::MAX);
+            (name.clone(), ChannelInfo { size })
+        })
+        .collect();
+    // Prefix instances load only Channels with pending messages; exact names load even when empty.
+    let mut loaded_names: BTreeSet<String> = channel_names.iter().cloned().collect();
+    for instance in &channel_map_instances {
+        if instance.ends_with('/') {
+            loaded_names.extend(
+                channel_infos
+                    .keys()
+                    .filter(|name| name.starts_with(instance.as_str()))
+                    .cloned(),
+            );
+        } else {
+            loaded_names.insert(instance.clone());
+        }
+    }
+    let loaded_channel_messages = loaded_names
+        .into_iter()
+        .map(|channel_name| LoadedChannelMessagesRecord {
+            messages: run
+                .channel_messages
+                .iter()
+                .filter(|message| message.channel_name == channel_name)
+                .cloned()
+                .collect(),
+            channel_name,
+        })
+        .collect();
+    MethodSnapshotRecord {
+        attributes,
+        channel_infos,
+        loaded_channel_messages,
+        loaded_attribute_map_instances: attribute_map_instances,
+        loaded_channel_names: channel_names,
+        loaded_channel_map_instances: channel_map_instances,
+        condition_results: if is_wait_for {
+            None
+        } else {
+            step.condition_results.clone()
+        },
+    }
+}
+
+fn sorted_unique(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// A map key is selected exactly or by a `map/` prefix.
+fn is_selected(key: &str, instances: &[String]) -> bool {
+    instances.iter().any(|instance| {
+        if instance.ends_with('/') {
+            key.starts_with(instance.as_str())
+        } else {
+            key == instance
+        }
+    })
 }
 
 fn invocation_key(
@@ -321,4 +400,155 @@ fn current_invocation<'run>(
         .get(&key.step_execution_id)
         .and_then(|step| step.invocation.as_ref())
         .filter(|invocation| invocation.method == key.method)
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_protocol::dex::{StepOptions, Value, value};
+    use dexzd_protocol::dexzd::v1::{
+        AttributeRecord, ChannelMessageRecord, ChannelMetaRecord, LockRecord, StoredValue,
+        stored_value,
+    };
+
+    use super::*;
+
+    const STEP: &str = "step-2";
+
+    fn inline(text: &str) -> Option<StoredValue> {
+        Some(StoredValue {
+            kind: Some(stored_value::Kind::InlineValue(Value {
+                kind: Some(value::Kind::StringValue(text.to_owned())),
+            })),
+        })
+    }
+
+    fn message(enqueued_seq: u64) -> ChannelMessageRecord {
+        ChannelMessageRecord {
+            channel_name: "inbox".to_owned(),
+            message_id: format!("message-{enqueued_seq}"),
+            value: inline("hello"),
+            enqueued_seq,
+        }
+    }
+
+    /// `step-2` took lock `status` from a finished holder after two inbox publications.
+    fn run_after_lock_handoff() -> RunView {
+        let key = StepInvocationKey {
+            step_execution_id: STEP.to_owned(),
+            method: StepMethod::Execute as i32,
+        };
+        let snapshot = MethodSnapshotRecord {
+            attributes: vec![StoredKeyValue {
+                key: "status".to_owned(),
+                value: inline("paid"),
+            }],
+            channel_infos: [("inbox".to_owned(), ChannelInfo { size: 2 })].into(),
+            loaded_channel_messages: vec![LoadedChannelMessagesRecord {
+                channel_name: "inbox".to_owned(),
+                messages: vec![message(10), message(20)],
+            }],
+            loaded_channel_names: vec!["inbox".to_owned()],
+            ..MethodSnapshotRecord::default()
+        };
+        let step = StepExecutionRecord {
+            step_execution_id: STEP.to_owned(),
+            options: Some(StepOptions {
+                execute_lock_attribute_keys: vec!["status".to_owned()],
+                execute_load_channel_names: vec!["inbox".to_owned()],
+                ..StepOptions::default()
+            }),
+            phase: StepExecutionPhase::Execute as i32,
+            invocation: Some(StepInvocationRecord {
+                method: StepMethod::Execute as i32,
+                phase: StepInvocationPhase::Running as i32,
+                attempt: 1,
+                lock_keys: vec!["status".to_owned()],
+                snapshot: Some(snapshot),
+                ..StepInvocationRecord::default()
+            }),
+            ..StepExecutionRecord::default()
+        };
+        RunView {
+            is_complete: true,
+            attributes: [(
+                "status".to_owned(),
+                AttributeRecord {
+                    value: inline("paid"),
+                    ..AttributeRecord::default()
+                },
+            )]
+            .into(),
+            channel_messages: vec![message(10), message(20)],
+            channel_metas: [(
+                "inbox".to_owned(),
+                ChannelMetaRecord {
+                    pending_count: 2,
+                    claimed_count: 0,
+                },
+            )]
+            .into(),
+            step_executions: [(STEP.to_owned(), step)].into(),
+            locks: [(
+                "status".to_owned(),
+                LockRecord {
+                    holder: Some(key),
+                    holder_attempt: 1,
+                    waiters: Vec::new(),
+                },
+            )]
+            .into(),
+            ..RunView::default()
+        }
+    }
+
+    fn snapshot_mut(run: &mut RunView) -> &mut MethodSnapshotRecord {
+        run.step_executions
+            .get_mut(STEP)
+            .and_then(|step| step.invocation.as_mut())
+            .and_then(|invocation| invocation.snapshot.as_mut())
+            .expect("the fixture's Step is running with a snapshot")
+    }
+
+    fn assert_stale(run: &RunView) {
+        let violation =
+            check_fresh_snapshot(run, STEP).expect_err("the snapshot predates the committed rows");
+        assert_eq!(violation.invariant, FRESH_SNAPSHOT, "{violation}");
+    }
+
+    #[test]
+    fn a_fresh_snapshot_after_a_lock_handoff_passes() {
+        check_fresh_snapshot(&run_after_lock_handoff(), STEP).expect("the snapshot is fresh");
+    }
+
+    #[test]
+    fn a_stale_channel_count_is_rejected() {
+        let mut run = run_after_lock_handoff();
+        snapshot_mut(&mut run).channel_infos =
+            [("inbox".to_owned(), ChannelInfo { size: 1 })].into();
+        assert_stale(&run);
+    }
+
+    #[test]
+    fn an_omitted_requested_channel_is_rejected() {
+        let mut run = run_after_lock_handoff();
+        snapshot_mut(&mut run).loaded_channel_messages.clear();
+        assert_stale(&run);
+    }
+
+    #[test]
+    fn an_unselected_attribute_map_instance_is_rejected() {
+        let mut run = run_after_lock_handoff();
+        run.attributes.insert(
+            "orders/1".to_owned(),
+            AttributeRecord {
+                value: inline("open"),
+                ..AttributeRecord::default()
+            },
+        );
+        snapshot_mut(&mut run).attributes.push(StoredKeyValue {
+            key: "orders/1".to_owned(),
+            value: inline("open"),
+        });
+        assert_stale(&run);
+    }
 }

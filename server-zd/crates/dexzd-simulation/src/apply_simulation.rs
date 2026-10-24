@@ -27,6 +27,8 @@ pub struct SimulationSummary {
     pub applied_by_kind: BTreeMap<&'static str, usize>,
     /// Commands rejected without writes, by command kind.
     pub rejected_by_kind: BTreeMap<&'static str, usize>,
+    /// Invalid client inputs rejected for their value size, by invalid input class.
+    pub size_rejections: BTreeMap<&'static str, usize>,
     /// Rows in the final state.
     pub final_row_count: usize,
 }
@@ -46,6 +48,9 @@ impl SimulationSummary {
         }
         for (kind, count) in &other.rejected_by_kind {
             *self.rejected_by_kind.entry(kind).or_default() += count;
+        }
+        for (class, count) in &other.size_rejections {
+            *self.size_rejections.entry(class).or_default() += count;
         }
     }
 }
@@ -119,6 +124,7 @@ pub fn run_seed(
         *counts.entry(kind).or_default() += 1;
         summary.commands += 1;
     }
+    summary.size_rejections = checker.size_rejections().clone();
     summary.final_row_count = checker.state().row_count();
     Ok(summary)
 }

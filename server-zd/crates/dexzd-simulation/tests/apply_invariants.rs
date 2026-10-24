@@ -11,7 +11,9 @@
 //! Set `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_COMMANDS` for a longer budget, or
 //! `DEXZD_SIMULATION_SEED` for one seed.
 
-use dexzd_simulation::{ApplyChecker, CommandGenerator, SimulationSummary, run_seed};
+use dexzd_simulation::{
+    ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, SimulationSummary, run_seed,
+};
 
 const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_COMMANDS_PER_SEED: usize = 400;
@@ -61,6 +63,12 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
         assert!(
             total.applied(kind) > 0,
             "the seed set never applied a {kind} command: {total:#?}"
+        );
+    }
+    for class in INVALID_CLIENT_INPUT_CLASSES {
+        assert!(
+            total.size_rejections.get(class).copied().unwrap_or(0) > 0,
+            "the seed set never had apply reject an {class} for its size: {total:#?}"
         );
     }
 }
