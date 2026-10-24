@@ -55,6 +55,17 @@ impl EffectRuntime for FlowRuntimeRegistry {
         })
     }
 
+    fn sync_barrier<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+    ) -> BoxFuture<'a, Result<(), EffectRuntimeError>> {
+        Box::pin(async move {
+            FlowRuntimeRegistry::sync_barrier(self, flow)
+                .await
+                .map_err(effect_runtime_error)
+        })
+    }
+
     fn try_start_invocation<'a>(
         &'a self,
         flow: &'a FlowAddress,

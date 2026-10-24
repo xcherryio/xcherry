@@ -15,6 +15,8 @@ use crate::runtime::CommitError;
 
 /// gRPC status codes the runtime reports.
 pub mod grpc_code {
+    /// `UNKNOWN`.
+    pub const UNKNOWN: i32 = 2;
     /// `INVALID_ARGUMENT`.
     pub const INVALID_ARGUMENT: i32 = 3;
     /// `DEADLINE_EXCEEDED`.
