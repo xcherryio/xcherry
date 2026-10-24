@@ -191,6 +191,7 @@ impl FlowRuntimeRegistry {
                 hard_delete_objects: hard_delete_references(uploads.as_ref()),
                 request_fingerprint: fingerprint,
                 pull_routing: result.pull_routing,
+                is_transactional,
             }),
         );
         if is_transactional {
