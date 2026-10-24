@@ -59,6 +59,24 @@ pub(crate) struct ClusterEnvironment {
 }
 
 impl ClusterEnvironment {
+    /// Returns a new process's view of the shared store, with its own fault draws.
+    pub(crate) fn node_object_store(
+        &self,
+        process_label: &str,
+        fault_seed: u64,
+        fault_probability: f64,
+    ) -> Arc<NodeObjectStore> {
+        let object_store = Arc::new(NodeObjectStore::new(
+            Arc::clone(&self.shared_store),
+            process_label.to_owned(),
+            fault_seed,
+            Arc::clone(&self.trace),
+            Arc::clone(&self.injected_faults),
+        ));
+        object_store.set_fault_probability(fault_probability);
+        object_store
+    }
+
     /// Writes the cluster object before any node starts, so its hash key is not random.
     pub(crate) async fn bootstrap_cluster_object(&self, random_bytes: [u8; 16]) {
         let mut cluster_id = random_bytes;
@@ -98,8 +116,7 @@ pub(crate) struct ProcessStart {
     pub(crate) process_label: String,
     pub(crate) local_store: LocalStoreStart,
     pub(crate) clock_offset_micros: i64,
-    pub(crate) fault_seed: u64,
-    pub(crate) fault_probability: f64,
+    pub(crate) object_store: Arc<NodeObjectStore>,
 }
 
 /// A running node process.
@@ -130,17 +147,8 @@ impl NodeProcess {
             process_label,
             local_store,
             clock_offset_micros,
-            fault_seed,
-            fault_probability,
+            object_store,
         } = start;
-        let object_store = Arc::new(NodeObjectStore::new(
-            Arc::clone(&environment.shared_store),
-            process_label.clone(),
-            fault_seed,
-            Arc::clone(&environment.trace),
-            Arc::clone(&environment.injected_faults),
-        ));
-        object_store.set_fault_probability(fault_probability);
         let clock = Arc::new(SimulatedWallClock::new(
             environment.origin,
             clock_offset_micros,

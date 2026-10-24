@@ -140,8 +140,9 @@ impl NodeObjectStore {
                 .or_default() += 1;
         }
         self.trace.record(&format!(
-            "{} object-store {operation} {key} {fault:?} applied={is_effect_applied}",
-            self.process_label
+            "{} object-store {operation} {} {fault:?} applied={is_effect_applied}",
+            self.process_label,
+            without_content_hash(key)
         ));
         CallPlan {
             fault,
@@ -217,6 +218,20 @@ impl NodeObjectStore {
                 ))
             }
         }
+    }
+}
+
+/// Snapshot file keys end with a hash of content that holds engine UUIDs; the trace omits it.
+fn without_content_hash(key: &str) -> &str {
+    match key.rsplit_once('.') {
+        Some((stem, hash))
+            if key.starts_with("snapshot/")
+                && hash.len() == 16
+                && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            stem
+        }
+        _ => key,
     }
 }
 

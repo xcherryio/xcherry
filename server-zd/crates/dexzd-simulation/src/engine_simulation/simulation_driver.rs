@@ -51,6 +51,8 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const OLD_EPOCH_LIFETIME: Duration = Duration::from_secs(15);
 /// A due timer may wait this long before the calm tail counts it as never fired.
 const TIMER_FIRING_SLACK: Duration = Duration::from_secs(10);
+/// Probability that a process crashes at a random point while it starts.
+const START_CRASH_PROBABILITY: f64 = 0.15;
 /// Longest wait after the calm tail for unfinished work to finish.
 const DRAIN_GRACE: Duration = Duration::from_secs(60);
 /// Object storage fault probabilities a seed draws from; some seeds run without faults.
@@ -481,7 +483,7 @@ impl Simulation {
         local_store: LocalStoreStart,
         clock_offset_micros: i64,
     ) -> Result<NodeProcess, InvariantViolation> {
-        let existing = match &local_store {
+        let mut existing = match &local_store {
             LocalStoreStart::Lost => None,
             LocalStoreStart::Existing(store) => Some(Arc::clone(store)),
         };
@@ -489,17 +491,41 @@ impl Simulation {
         for _ in 0..MAX_START_ATTEMPTS {
             self.started_processes += 1;
             let process_label = format!("p{}", self.started_processes);
+            let object_store = self.environment.node_object_store(
+                &process_label,
+                self.rng.random(),
+                self.fault_probability / START_FAULT_DIVISOR,
+            );
             let start = ProcessStart {
                 process_label: process_label.clone(),
                 local_store: existing.as_ref().map_or(LocalStoreStart::Lost, |store| {
                     LocalStoreStart::Existing(Arc::clone(store))
                 }),
                 clock_offset_micros,
-                fault_seed: self.rng.random(),
-                fault_probability: self.fault_probability / START_FAULT_DIVISOR,
+                object_store: Arc::clone(&object_store),
             };
             let clock = SimulatedWallClock::new(self.environment.origin, clock_offset_micros);
-            match NodeProcess::start(&self.environment, start).await {
+            let crash_after = self
+                .rng
+                .random_bool(START_CRASH_PROBABILITY)
+                .then(|| Duration::from_millis(self.rng.random_range(0..2_000)));
+            let started = match crash_after {
+                Some(delay) => tokio::select! {
+                    biased;
+                    started = NodeProcess::start(&self.environment, start) => Some(started),
+                    () = tokio::time::sleep(delay) => None,
+                },
+                None => Some(NodeProcess::start(&self.environment, start).await),
+            };
+            let Some(started) = started else {
+                // Recovery died at an arbitrary await point; its disk keeps what it wrote so far.
+                object_store.cut_off();
+                existing = existing.map(|store| copy_local_store(&store));
+                self.summary.crashes_during_start += 1;
+                self.trace(&format!("{process_label} crashes while it starts"));
+                continue;
+            };
+            match started {
                 Ok(process) => {
                     process
                         .object_store

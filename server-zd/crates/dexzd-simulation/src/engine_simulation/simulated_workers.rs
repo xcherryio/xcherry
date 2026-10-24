@@ -83,6 +83,10 @@ pub(crate) enum WorkerBehavior {
     RpcSucceed,
     RpcFail,
     RpcTimeout,
+    /// A heartbeat frame that carries a checkpoint value.
+    HeartbeatWithValue,
+    /// A heartbeat frame without a value, which clears the checkpoint.
+    HeartbeatWithoutValue,
 }
 
 /// One timed event of a scripted dispatch; `None` waits until the dispatch is canceled.
@@ -382,7 +386,9 @@ impl WorkerPoolState {
             WorkerBehavior::NoWorker
             | WorkerBehavior::RpcSucceed
             | WorkerBehavior::RpcFail
-            | WorkerBehavior::RpcTimeout => {
+            | WorkerBehavior::RpcTimeout
+            | WorkerBehavior::HeartbeatWithValue
+            | WorkerBehavior::HeartbeatWithoutValue => {
                 script.push(ScriptedEvent {
                     waits_for_release: false,
                     delay: Duration::from_millis(self.rng.random_range(10..1_000)),
@@ -407,6 +413,12 @@ impl WorkerPoolState {
         }
         for _ in 0..self.rng.random_range(0..3) {
             let value = heartbeat_value(&mut self.rng);
+            let kind = if value.is_some() {
+                WorkerBehavior::HeartbeatWithValue
+            } else {
+                WorkerBehavior::HeartbeatWithoutValue
+            };
+            *self.behaviors.entry(kind).or_default() += 1;
             let output = match request {
                 MethodRequest::WaitFor(_) => {
                     poll_worker_task_frame::Output::WaitFor(InvokeWaitForMethodOutput {

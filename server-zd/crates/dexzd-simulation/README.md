@@ -21,3 +21,78 @@ DEXZD_SIMULATION_SEED=1592590336 cargo test -p dexzd-simulation  # reproduce one
 
 A failing seed prints its seed, the failing command index, and a shrunk command sequence that
 `replay_commands` reproduces.
+
+## Engine simulation
+
+The second stage runs the real engine: `EngineNode`, the Flow runtime registry, and the effect
+runner, assembled as the server assembles them. Everything runs on one current-thread Tokio
+runtime with paused time, and every choice derives from one seed.
+
+- **Object storage.** One shared `InMemoryObjectStore` has S3 conditional-write semantics. Each
+  node process sees it through its own seeded fault layer. The layer injects slow responses,
+  HTTP 5xx and 503, 409 conflicts, timeouts, and lost responses. A failed or timed-out write may
+  still take effect. Old-epoch processes produce real 412 races.
+- **Processes.** A crash first cuts the process off from storage; writes already on the wire may
+  still land. The successor's local store is kept, lost (restored from the newest snapshot), or
+  rolled back to an earlier copy. Some successors take over while the old-epoch process still
+  runs and writes, because their wall clock is ahead. Wall clocks also jump forward and back.
+- **Workers and clients.** Simulated pull Workers sit behind the engine's dispatch ports. They
+  succeed, fail, hang, run slowly, send heartbeats with and without values, return the same
+  attempt's result again, disconnect, or are missing. Clients start, stop, write, publish,
+  delete, invoke RPCs, and read, retrying unavailable calls with the same request ID.
+- **Determinism.** The engine runs frame applies, state reads, and snapshot uploads on the
+  calling task (`BlockingWorkPlacement::CallingTaskForTest`), and every engine `select!` is
+  biased. The trace replaces engine-minted UUIDs with first-appearance ordinals.
+
+### Invariants
+
+A shadow `ApplyChecker` collects the canonical committed log from every process's applied
+frames. It runs the stage-1 checks on every new command, so the lock, snapshot, value, and
+directory invariants hold on the committed history. The engine simulation adds these checks:
+
+1. **Acknowledged writes survive.** Every write a client saw succeed is in the canonical log,
+   and every recovered store equals the shadow row for row.
+2. **No speculative reads.** Every Attribute value and Channel message a client read was
+   committed before the read returned.
+3. **One result per attempt.** The shadow rejects a second applied result (S2). Any frame
+   applied again after recovery must reproduce its first outcome exactly.
+4. **Locks.** The shadow checks L1 to L4 after every command, and the recovered store passes
+   `check_flow` again.
+5. **Recovered runtime equals a never-crashed one.** The recovered store equals the shadow, so
+   timers, method calls, outbox rows, and hard-delete rows match. After a crash at a quiet
+   point, the successor dispatches every attempt that was running again. After a calm tail,
+   every due timer has fired and no method call is unfinished.
+
+The log itself is checked too. Copies of one log position must hold the same commands, and a
+partition never applies a new frame below one it already applied.
+
+### Not covered yet
+
+These section 13.1 items need later stages:
+
+- Byte-identical snapshots across dispatches of one attempt, and Step input, locals, and
+  condition results unchanged across attempts (section 8.1). The shadow checks only fresh
+  snapshots (S5).
+- Eventual progress of lock waiters beyond the calm-tail check (section 8.3).
+- Time travel rebuilds and their hashes (section 8.4); clients do not call ResetFlow.
+- Value lifecycle beyond I1: I3, liveness, reads within the window, and the G byte limit
+  (section 10).
+- Hard-delete objects in storage (section 10.3); clients write no hard-delete Attributes.
+- Worker Stream writes, SubFlows and outbox delivery, and the Worker matching layer, which the
+  simulated Workers bypass.
+- More than one node ID, and foreign writers of the manifest and lease.
+- The planted-bug acceptance list.
+
+### Running
+
+```bash
+cargo test -p dexzd-simulation --test engine_simulation         # 64 seeds of 120 s, about a minute
+DEXZD_SIMULATION_SEEDS=1000 DEXZD_SIMULATION_SECONDS=600 \
+  cargo test -p dexzd-simulation --test engine_simulation          # longer budget
+DEXZD_SIMULATION_SEED=7 cargo test -p dexzd-simulation --test engine_simulation -- --nocapture
+```
+
+`DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_SEED` also select the apply simulation's seeds
+when both tests run. A failing seed prints its reproduction command and the last 400 trace events.
+`DEXZD_SIMULATION_PRINT_EVENTS=1` prints the trace tail of a passing seed. A self-test runs seeds
+twice and requires identical trace hashes.

@@ -11,6 +11,8 @@
 //! This first stage drives `dexzd-apply` alone with a seeded model of clients, the owner, and Workers.
 //!
 //! [`ApplyChecker`] checks determinism and the plan's state invariants after every command.
+//!
+//! [`run_engine_seed`] runs the second stage: the engine itself on simulated storage and crashes.
 
 mod apply_checker;
 mod apply_simulation;

@@ -53,6 +53,8 @@ pub struct EngineSimulationSummary {
     pub restarts_by_local_store: BTreeMap<String, u64>,
     /// Successors that took over while the old-epoch process still ran.
     pub old_epoch_overlaps: u64,
+    /// Processes that crashed during recovery, before they served.
+    pub crashes_during_start: u64,
     /// Processes that stopped by themselves, such as after losing the lease.
     pub self_stopped_processes: u64,
     /// Failed process starts, by error kind.
@@ -93,6 +95,7 @@ impl EngineSimulationSummary {
             &other.restarts_by_local_store,
         );
         self.old_epoch_overlaps += other.old_epoch_overlaps;
+        self.crashes_during_start += other.crashes_during_start;
         self.self_stopped_processes += other.self_stopped_processes;
         merge_counts(&mut self.start_failures, &other.start_failures);
         self.clock_jumps += other.clock_jumps;
