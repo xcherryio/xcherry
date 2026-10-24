@@ -12,6 +12,9 @@ use dexzd_protocol::dex::SearchFlowsResponseEntry;
 use dexzd_visibility_query::FieldRegistry;
 use thiserror::Error;
 
+pub(crate) const DEFAULT_PAGE_SIZE: usize = 1_000;
+pub(crate) const MAX_PAGE_SIZE: usize = 1_000;
+
 /// Inputs to one tenant-scoped SearchFlows page.
 #[derive(Debug, Clone, Copy)]
 pub struct SearchRequest<'a> {
@@ -19,7 +22,7 @@ pub struct SearchRequest<'a> {
     pub tenant_id: TenantId,
     /// Visibility query text, including optional ordering.
     pub query: &'a str,
-    /// Maximum number of entries to return.
+    /// Maximum entries to return; zero defaults to 1,000, and larger requests cap at 1,000.
     pub page_size: usize,
     /// Opaque position returned by the previous page.
     pub page_token: Option<&'a str>,

@@ -9,8 +9,6 @@
 use dexzd_protocol::dex::ErrorSubStatus;
 use dexzd_protocol::dexzd::v1::{CommandErrorReply, CommandReply, EmptyReply, command_reply};
 
-use crate::command_handlers::CommandScope;
-
 /// gRPC status codes used in replies.
 pub(crate) mod grpc_code {
     pub(crate) const INVALID_ARGUMENT: i32 = 3;
@@ -19,7 +17,6 @@ pub(crate) mod grpc_code {
     pub(crate) const RESOURCE_EXHAUSTED: i32 = 8;
     pub(crate) const FAILED_PRECONDITION: i32 = 9;
     pub(crate) const ABORTED: i32 = 10;
-    pub(crate) const UNIMPLEMENTED: i32 = 12;
 }
 
 pub(crate) fn ok_reply() -> CommandReply {
@@ -40,16 +37,4 @@ pub(crate) fn error_reply(
             message: message.into(),
         })),
     }
-}
-
-/// Reply for commands whose handler has not landed yet.
-pub(crate) fn unimplemented_reply(scope: &CommandScope<'_>) -> CommandReply {
-    error_reply(
-        grpc_code::UNIMPLEMENTED,
-        ErrorSubStatus::Uncategorized,
-        format!(
-            "server-zd cannot apply this command yet (Flow {})",
-            scope.flow_id()
-        ),
-    )
 }

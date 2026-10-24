@@ -234,6 +234,8 @@ message RpcCommittedCommand {
   repeated HardDeleteObjectReference hard_delete_objects = 4;
   bytes request_fingerprint = 5;
   dex.PullRouting pull_routing = 6;
+  // Owner-resolved RPC mode, including locks and server configuration.
+  bool is_transactional = 7;
 }
 
 // Identifies a timer. Timers of an abandoned run attempt never fire.

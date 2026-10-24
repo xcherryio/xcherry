@@ -21,6 +21,7 @@ use dexzd_protocol::dexzd::v1::{
 
 use crate::ApplyError;
 use crate::state_access::FlowTransaction;
+use crate::values::{ValueHolder, release_stored_value};
 
 /// Upper bound for scans that read a whole table of one run.
 pub(crate) const WHOLE_TABLE: usize = usize::MAX;
@@ -388,6 +389,31 @@ impl RunRows {
                 run_table_prefix(self.flow_hash, self.run_id, RunTable::RequestDedup);
             evicted_key.push(*kind_byte);
             evicted_key.extend_from_slice(request_id_bytes);
+            if *kind_byte == RequestKind::InvokeRpc as u8 {
+                let previous: Option<RequestDedupRecord> =
+                    transaction.get_message(ColumnFamily::Flow, &evicted_key, "request dedup")?;
+                if let Some(output) = previous
+                    .as_ref()
+                    .and_then(|previous| previous.reply.as_ref())
+                    .and_then(|reply| reply.reply.as_ref())
+                    .and_then(|reply| match reply {
+                        dexzd_protocol::dexzd::v1::command_reply::Reply::Rpc(rpc) => {
+                            rpc.output.as_ref()
+                        }
+                        _ => None,
+                    })
+                {
+                    let request_id = std::str::from_utf8(request_id_bytes).map_err(|error| {
+                        ApplyError::InvariantViolation {
+                            detail: format!("RPC dedup request ID is invalid UTF-8: {error}"),
+                        }
+                    })?;
+                    let holder = ValueHolder::RpcReply {
+                        request_id: request_id.to_owned(),
+                    };
+                    release_stored_value(transaction, *self, output, &holder, record.recorded_seq)?;
+                }
+            }
             transaction.delete(ColumnFamily::Flow, evicted_key);
         }
         Ok(())

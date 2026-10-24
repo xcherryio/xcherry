@@ -16,8 +16,8 @@ use prost::Message;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::page_token::PagePosition;
 use crate::SearchError;
+use crate::page_token::PagePosition;
 
 pub(super) struct IndexedDocument {
     record: SearchDocumentRecord,

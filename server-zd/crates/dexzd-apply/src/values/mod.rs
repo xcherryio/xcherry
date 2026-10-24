@@ -101,6 +101,36 @@ pub(crate) struct ValueLimits {
     pub(crate) max_value_bytes: u64,
 }
 
+/// Checks a Worker value without creating state rows or holders.
+pub(crate) fn validate_value(
+    transaction: &FlowTransaction<'_>,
+    rows: RunRows,
+    limits: ValueLimits,
+    value: &Value,
+) -> Result<Result<(), ValueRejection>, ApplyError> {
+    if let Some(reference_text) = reference_text(value) {
+        let Some(reference) = parse_own_reference(reference_text, rows) else {
+            return Ok(Err(ValueRejection::UnknownReference {
+                reference: reference_text.to_owned(),
+            }));
+        };
+        if value_birth(transaction, rows, reference.value_id)?.is_none() {
+            return Ok(Err(ValueRejection::UnknownReference {
+                reference: reference_text.to_owned(),
+            }));
+        }
+        return Ok(Ok(()));
+    }
+    let size_bytes = u64::try_from(value.encoded_len()).unwrap_or(u64::MAX);
+    if size_bytes > limits.max_value_bytes {
+        return Ok(Err(ValueRejection::TooLarge {
+            size_bytes,
+            max_value_bytes: limits.max_value_bytes,
+        }));
+    }
+    Ok(Ok(()))
+}
+
 /// Stores `value` for `holder` and returns how state rows keep it.
 ///
 /// References that a Worker echoed back must name a live value of this run (plan R1').
