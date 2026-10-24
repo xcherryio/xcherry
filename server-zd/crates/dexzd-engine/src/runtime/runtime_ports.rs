@@ -12,7 +12,8 @@
 use dexzd_apply::ApplyEffect;
 use dexzd_keyspace::RunId;
 use dexzd_protocol::dex::{
-    InvokeWorkerRpcRequest, InvokeWorkerRpcResponse, PullRouting, Value, WorkerErrorResponse,
+    AttributeWrite, InvokeWorkerRpcRequest, InvokeWorkerRpcResponse, PullRouting, Value,
+    WorkerErrorResponse,
 };
 use dexzd_protocol::dexzd::v1::HardDeleteObjectReference;
 use futures::future::BoxFuture;
@@ -121,4 +122,72 @@ pub trait HardDeleteValueReader: Send + Sync + 'static {
         run_id: RunId,
         object: &'a HardDeleteObjectReference,
     ) -> BoxFuture<'a, Result<Option<Value>, HardDeleteReadError>>;
+}
+
+/// Hard-delete Attribute values that one command uploaded before it was proposed.
+///
+/// The runtime puts [`Self::references`] into the command and hands the value back to
+/// [`HardDeleteValueUploader::finish_hard_delete_uploads`] once the command's outcome is known.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[must_use = "uploads must be finished once the command's outcome is known"]
+pub struct HardDeleteUploads {
+    /// One reference per uploaded write; `write_index` is the write's index in the command's
+    /// write list.
+    pub references: Vec<HardDeleteObjectReference>,
+    /// Object storage keys of the uploaded objects, which identify the uploads when they finish.
+    pub object_keys: Vec<String>,
+}
+
+/// What became of a command whose hard-delete values were uploaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HardDeleteUploadOutcome {
+    /// The command committed and apply stored the objects. Keep the objects and clear their
+    /// pending-upload records.
+    Committed,
+    /// Nothing references the objects: the command was never submitted, or apply rejected it.
+    /// Delete the objects and clear their pending-upload records.
+    NotCommitted,
+    /// The command may be in the log: its commit failed or the registry halted. Keep the objects
+    /// and their pending-upload records; recovery decides from committed state.
+    Unknown,
+}
+
+/// Error from uploading or finishing hard-delete Attribute values.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("hard-delete object storage failed: {detail}")]
+pub struct HardDeleteUploadError {
+    /// Store message.
+    pub detail: String,
+}
+
+/// Uploads hard-delete Attribute values to object storage before the runtime proposes the
+/// command that writes them, so the values never enter the log. The hard-delete object store
+/// implements it.
+///
+/// The runtime uploads the writes of StartFlow, SetAttributes, and committed RPC effects, and
+/// finishes every successful upload exactly once. A caller that drops its request future
+/// between the two calls skips the finish; pending-upload recovery then handles those uploads.
+pub trait HardDeleteValueUploader: Send + Sync + 'static {
+    /// Uploads every hard-delete string or object value in `writes` as a new object of `flow`'s
+    /// run `run_id`. It may replace each uploaded value in `writes`; apply reads the value from
+    /// the object reference.
+    ///
+    /// Returns the uploads, with one reference per uploaded write. Returns
+    /// [`HardDeleteUploadError`] when object storage fails; nothing is left to finish then.
+    fn upload_hard_delete_values<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+        run_id: RunId,
+        writes: &'a mut [AttributeWrite],
+    ) -> BoxFuture<'a, Result<HardDeleteUploads, HardDeleteUploadError>>;
+
+    /// Finishes one command's uploads once it committed, was rejected, or failed.
+    ///
+    /// Returns [`HardDeleteUploadError`] when the cleanup fails; the runtime logs it and the
+    /// command's result stands.
+    fn finish_hard_delete_uploads(
+        &self,
+        uploads: HardDeleteUploads,
+        outcome: HardDeleteUploadOutcome,
+    ) -> BoxFuture<'_, Result<(), HardDeleteUploadError>>;
 }

@@ -31,8 +31,8 @@ use crate::runtime::rpc_locks::{
 use crate::runtime::speculative_overlay::{CommittedMatch, OverlayEntry, OwnedOverlayView};
 use crate::runtime::{
     CommitTicket, CommitUrgency, CommittedFlowCommand, FlowAddress, FlowCommandCommitter,
-    HardDeleteValueReader, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, RuntimeError,
-    grpc_code,
+    HardDeleteValueReader, HardDeleteValueUploader, RpcWorkerInvoker, RuntimeConfig,
+    RuntimeEffectSink, RuntimeError, grpc_code,
 };
 
 /// Components the runtime calls.
@@ -49,6 +49,8 @@ pub struct FlowRuntimeDependencies {
     pub rpc_invoker: Arc<dyn RpcWorkerInvoker>,
     /// Reads hard-delete Attribute values.
     pub hard_delete_reader: Arc<dyn HardDeleteValueReader>,
+    /// Uploads hard-delete Attribute values before their commands are proposed.
+    pub hard_delete_uploader: Arc<dyn HardDeleteValueUploader>,
 }
 
 /// A pending method call that waits for its locks (plan 8.3).
