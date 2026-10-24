@@ -289,28 +289,19 @@ pub(crate) fn wire_value(rows: RunRows, stored: &StoredValue) -> Value {
 
 /// Reads the complete value, or `None` if a table value was already collected.
 pub(crate) fn load_stored_value(
-    state: &dyn FlowStateReader,
-    rows: RunRows,
-    stored: &StoredValue,
-) -> Result<Option<Value>, ApplyError> {
-    decode_stored_value(rows, stored, |key| Ok(state.get(ColumnFamily::Value, key)?))
-}
-
-/// Like [`load_stored_value`], but sees the transaction's buffered writes.
-pub(crate) fn load_transaction_stored_value(
     transaction: &FlowTransaction<'_>,
     rows: RunRows,
     stored: &StoredValue,
 ) -> Result<Option<Value>, ApplyError> {
-    decode_stored_value(rows, stored, |key| {
+    load_stored_value_with(rows, stored, |key| {
         transaction.get(ColumnFamily::Value, key)
     })
 }
 
-fn decode_stored_value(
+fn load_stored_value_with(
     rows: RunRows,
     stored: &StoredValue,
-    get_value_row: impl FnOnce(&[u8]) -> Result<Option<Vec<u8>>, ApplyError>,
+    read_value_row: impl Fn(&[u8]) -> Result<Option<Vec<u8>>, ApplyError>,
 ) -> Result<Option<Value>, ApplyError> {
     match &stored.kind {
         Some(stored_value::Kind::InlineValue(value)) => Ok(Some(value.clone())),
@@ -319,7 +310,7 @@ fn decode_stored_value(
                 return Ok(None);
             };
             let key = value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id);
-            let record = get_value_row(&key)?;
+            let record = read_value_row(&key)?;
             let record = record
                 .map(|bytes| {
                     ValueRecord::decode(bytes.as_slice()).map_err(|error| {
@@ -370,7 +361,7 @@ pub(crate) fn complete_value_for_outbox(
         birth.size_bytes,
         is_string_reference(value),
     );
-    let complete = load_transaction_stored_value(transaction, rows, &stored)?.ok_or_else(|| {
+    let complete = load_stored_value(transaction, rows, &stored)?.ok_or_else(|| {
         ApplyError::InvariantViolation {
             detail: "live SubFlow reference has no value row".to_owned(),
         }
@@ -403,10 +394,10 @@ pub fn load_for_wire(
     if parsed.run_id != run_id {
         return Ok(None);
     }
-    load_stored_value(
-        state,
+    load_stored_value_with(
         RunRows::new(flow_hash, run_id),
         &table_value(parsed.value_id, 0, false),
+        |key| Ok(state.get(ColumnFamily::Value, key)?),
     )
 }
 

@@ -25,7 +25,7 @@ use crate::ApplyError;
 use crate::command_handlers::CommandScope;
 use crate::command_handlers::run_cursor::RunCursor;
 use crate::state_access::FlowTransaction;
-use crate::values::load_transaction_stored_value;
+use crate::values::load_stored_value;
 
 const MAX_SEARCH_VALUE_BYTES: usize = 256 * 1024;
 
@@ -104,8 +104,7 @@ pub(crate) fn refresh_search_document(
             let Some(stored) = attribute.value.as_ref() else {
                 continue;
             };
-            let Some(value) = load_transaction_stored_value(transaction, cursor.rows, stored)?
-            else {
+            let Some(value) = load_stored_value(transaction, cursor.rows, stored)? else {
                 continue;
             };
             if let Some(indexed_value) =

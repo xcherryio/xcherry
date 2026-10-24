@@ -20,7 +20,9 @@ mod rpc_committed;
 pub(crate) mod run_cursor;
 pub(crate) mod step_commands;
 
-pub(crate) use command_scope::{CommandScope, HandlerOutput, ReplayedCommandOutput};
+pub(crate) use command_scope::{
+    CommandScope, HandlerOutput, ReplayedCommandCounters, ReplayedCommandOutput,
+};
 
 use dexzd_protocol::dex::ErrorSubStatus;
 use dexzd_protocol::dexzd::v1::flow_command::Command;
@@ -254,6 +256,9 @@ pub(crate) fn apply_run_command(
         Command::TimersFired(fired) => {
             step_commands::apply_timers_fired(transaction, cursor, scope, fired)
         }
+        Command::TimeTravel(travel) => {
+            crate::history::apply_time_travel(transaction, cursor, scope, travel)
+        }
         Command::OutboxAck(ack) => {
             crate::cross_flow::apply_outbox_ack(transaction, cursor, scope, ack)
         }
@@ -270,9 +275,6 @@ pub(crate) fn apply_run_command(
         }
         Command::RpcCommitted(command) => {
             rpc_committed::apply_rpc_committed(transaction, cursor, scope, command)
-        }
-        Command::TimeTravel(travel) => {
-            crate::history::apply_time_travel(transaction, cursor, scope, travel)
         }
         Command::InboxMessage(_) | Command::RunPurge(_) => Err(ApplyError::InvariantViolation {
             detail: "cross-Flow command routed to the wrong handler".to_owned(),

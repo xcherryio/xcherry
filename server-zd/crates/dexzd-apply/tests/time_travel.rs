@@ -23,22 +23,23 @@ use dexzd_keyspace::{
     flow_directory_key, parse_run_key,
 };
 use dexzd_protocol::dex::{
-    AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, DeleteChannelMessageRequest,
-    FlowResetStepMethod, FlowResetType, FlowStatus, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, PublishToChannelRequest, ResetFlowRequest, SetAttributesRequest,
+    AttributeWrite, ChannelMessage, ChannelMessageDeletion, CloseDecision, CloseDecisionType,
+    DeleteChannelMessageRequest, FlowResetStepMethod, FlowResetType, FlowStatus, FlowTimeoutPolicy,
+    InvokeExecuteMethodResponse, InvokeRpcRequest, InvokeWaitForMethodResponse,
+    InvokeWorkerRpcResponse, PublishToChannelRequest, ResetFlowRequest, SetAttributesRequest,
     SkipTimerRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions, TimerCondition,
     Value, WaitingCondition, WaitingConditionType, WorkerErrorResponse, WorkerTarget,
     flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, AttributesSetCommand, ChannelMessageDeleteCommand,
-    ChannelPublishCommand, CheckpointRecord, CommandReply, FlowCommand, FlowDirectoryRecord,
-    FlowStartCommand, HardDeleteObjectRecord, HardDeleteObjectReference, HistoryRecord,
-    RetryBackoffTimerId, RpcCommittedCommand, RunRecord, RunSettings, StepAttemptFailedCommand,
-    StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord, StepInvocationKey,
-    StepInvocationPhase, StepMethod, StepMethodCompletedCommand, TimeTravelCommand, TimerId,
-    TimerRecord, TimerSkipCommand, TimersFiredCommand, ValueRecord, command_reply,
-    flow_command::Command, step_method_completed_command, stored_value, timer_id,
+    ChannelMetaRecord, ChannelPublishCommand, CheckpointRecord, CommandReply, FlowCommand,
+    FlowDirectoryRecord, FlowStartCommand, HardDeleteObjectRecord, HardDeleteObjectReference,
+    HistoryRecord, RetryBackoffTimerId, RpcCommittedCommand, RunRecord, RunSettings,
+    StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord,
+    StepInvocationKey, StepInvocationPhase, StepMethod, StepMethodCompletedCommand,
+    TimeTravelCommand, TimerId, TimerRecord, TimerSkipCommand, TimersFiredCommand, ValueRecord,
+    command_reply, flow_command::Command, step_method_completed_command, stored_value, timer_id,
 };
 use prost::Message;
 
@@ -1534,7 +1535,7 @@ fn an_unexpected_reapply_rejection_is_an_invariant_violation() {
         request: Some(reapplying(reset(FlowResetType::Beginning))),
     }));
     let error = apply_flow_command(&harness.context, &harness.state, &command)
-        .expect_err("an unimplemented reapplied input fails apply");
+        .expect_err("an invalid reapplied input fails apply");
     assert!(
         matches!(error, ApplyError::InvariantViolation { .. }),
         "{error:?}"
@@ -1576,37 +1577,6 @@ fn a_restored_large_value_survives_window_pruning() {
         value_row(&harness, overwritten_seq).is_none(),
         "the abandoned attempt's value was released and pruned"
     );
-}
-
-#[test]
-fn the_checkpoint_byte_threshold_follows_the_current_state_size() {
-    let mut harness = Harness::with_settings(RunSettings {
-        wire_inline_threshold_bytes: 1 << 20,
-        checkpoint_min_written_bytes: 200,
-        ..settings()
-    });
-    harness.start(start_request());
-    harness.set_attribute("big", &"x".repeat(20_000), "");
-    let big_seq = harness.last_seq();
-    assert_eq!(harness.run_record().last_checkpoint_seq, big_seq);
-    let cleared = harness.apply(Command::AttributesSet(AttributesSetCommand {
-        request: Some(SetAttributesRequest {
-            attributes: vec![AttributeWrite {
-                key: "big".to_owned(),
-                value: None,
-                ..AttributeWrite::default()
-            }],
-            ..SetAttributesRequest::default()
-        }),
-        hard_delete_objects: Vec::new(),
-        request_fingerprint: Vec::new(),
-    }));
-    assert!(is_ok(&cleared.reply));
-    for index in 0..10 {
-        harness.set_attribute(&format!("small-{index}"), &"y".repeat(1000), "");
-    }
-    // The 20 KB state at the last checkpoint would need 20 KB of writes.
-    assert!(harness.run_record().last_checkpoint_seq > big_seq);
 }
 
 fn set_hard_delete_attribute(harness: &mut Harness, attribute_key: &str, object_id: &str) {
@@ -1689,4 +1659,218 @@ fn time_travel_keeps_hard_delete_attributes_current() {
         })
         .collect();
     assert_eq!(referenced, vec!["object-2".to_owned()]);
+}
+
+fn publish_large(harness: &mut Harness, channel_name: &str, message_id: &str) {
+    let outcome = harness.apply(Command::ChannelPublish(ChannelPublishCommand {
+        request: Some(PublishToChannelRequest {
+            messages: vec![ChannelMessage {
+                channel_name: channel_name.to_owned(),
+                value: Some(string_value(&message_id.repeat(200))),
+                message_id: message_id.to_owned(),
+            }],
+            ..PublishToChannelRequest::default()
+        }),
+    }));
+    assert!(is_ok(&outcome.reply), "PublishToChannel applies");
+}
+
+fn pending_count(harness: &Harness, channel_name: &str) -> u64 {
+    harness
+        .attempt_rows()
+        .iter()
+        .find(|((table, suffix), _)| {
+            *table == RunTable::ChannelMeta as u8 && suffix == channel_name.as_bytes()
+        })
+        .map(|(_, value)| {
+            ChannelMetaRecord::decode(value.as_slice())
+                .expect("Channel meta decodes")
+                .pending_count
+        })
+        .unwrap_or(0)
+}
+
+fn value_holder_count(harness: &Harness) -> usize {
+    let run = harness.run();
+    harness
+        .state
+        .rows
+        .keys()
+        .filter(|(column_family, key)| {
+            *column_family == ColumnFamily::Flow
+                && parse_run_key(key).is_ok_and(|parsed| {
+                    parsed.run_id == run && parsed.table == RunTable::ValueHolder
+                })
+        })
+        .count()
+}
+
+#[test]
+fn reapplied_publications_to_one_channel_stay_distinct() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    let genesis_holders = value_holder_count(&harness);
+    publish_large(&mut harness, "orders", "m1");
+    publish_large(&mut harness, "orders", "m2");
+    let (attempt, _) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(harness.channel_message_count(), 2);
+    assert_eq!(pending_count(&harness, "orders"), 2);
+    assert_eq!(value_holder_count(&harness), genesis_holders + 2);
+    let after_reapply = harness.attempt_rows();
+    let fork_time = harness
+        .history_record(harness.last_seq())
+        .unwrap()
+        .timestamp_micros;
+    harness.travel_to(ResetFlowRequest {
+        run_attempt: attempt as i32,
+        ..reset_to_time(fork_time)
+    });
+    assert_eq!(harness.attempt_rows(), after_reapply);
+    assert_eq!(value_holder_count(&harness), genesis_holders + 2);
+    let deleted = harness.apply(Command::ChannelMessageDelete(ChannelMessageDeleteCommand {
+        request: Some(DeleteChannelMessageRequest {
+            channel_name: "orders".to_owned(),
+            message_id: "m1".to_owned(),
+            request_id: "delete-m1".to_owned(),
+            ..DeleteChannelMessageRequest::default()
+        }),
+        request_fingerprint: vec![1],
+    }));
+    assert!(is_ok(&deleted.reply), "{:?}", deleted.reply);
+    assert_eq!(harness.channel_message_count(), 1);
+    assert_eq!(pending_count(&harness, "orders"), 1);
+    assert_eq!(value_holder_count(&harness), genesis_holders + 1);
+}
+
+#[test]
+fn a_shrinking_command_checkpoints_against_the_size_after_it() {
+    let mut harness = Harness::with_settings(RunSettings {
+        wire_inline_threshold_bytes: 1 << 20,
+        checkpoint_min_written_bytes: 200,
+        ..settings()
+    });
+    harness.start(start_request());
+    harness.set_attribute("big", &"x".repeat(20_000), "");
+    let big_seq = harness.last_seq();
+    assert_eq!(harness.run_record().last_checkpoint_seq, big_seq);
+    // Overwrites add written bytes without growing the state.
+    for index in 0..5 {
+        harness.set_attribute("small", &format!("{index}").repeat(1000), "");
+    }
+    assert_eq!(harness.run_record().last_checkpoint_seq, big_seq);
+    let shrinking = harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes: vec![
+                AttributeWrite {
+                    key: "big".to_owned(),
+                    value: None,
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "small".to_owned(),
+                    value: Some(string_value(&"z".repeat(1000))),
+                    ..AttributeWrite::default()
+                },
+            ],
+            ..SetAttributesRequest::default()
+        }),
+        hard_delete_objects: Vec::new(),
+        request_fingerprint: Vec::new(),
+    }));
+    assert!(is_ok(&shrinking.reply));
+    // Against the 20 KB state before the command, 6 KB of writes would not checkpoint.
+    assert_eq!(harness.run_record().last_checkpoint_seq, harness.last_seq());
+}
+
+fn commit_rpc(
+    harness: &mut Harness,
+    request_id: &str,
+    response: InvokeWorkerRpcResponse,
+    is_transactional: bool,
+) {
+    let outcome = harness.apply(Command::RpcCommitted(RpcCommittedCommand {
+        request: Some(InvokeRpcRequest {
+            flow_id: "order-1".to_owned(),
+            rpc_name: "updateOrder".to_owned(),
+            request_id: request_id.to_owned(),
+            ..InvokeRpcRequest::default()
+        }),
+        response: Some(response),
+        app_worker_id: "worker-rpc".to_owned(),
+        request_fingerprint: request_id.as_bytes().to_vec(),
+        is_transactional,
+        ..RpcCommittedCommand::default()
+    }));
+    assert!(
+        matches!(outcome.reply.reply, Some(command_reply::Reply::Rpc(_))),
+        "RPC commit: {:?}",
+        outcome.reply
+    );
+}
+
+fn rpc_attribute_write(attribute_key: &str) -> InvokeWorkerRpcResponse {
+    InvokeWorkerRpcResponse {
+        upsert_attributes: vec![AttributeWrite {
+            key: attribute_key.to_owned(),
+            value: Some(string_value("from RPC")),
+            ..AttributeWrite::default()
+        }],
+        ..InvokeWorkerRpcResponse::default()
+    }
+}
+
+#[test]
+fn reapply_restores_committed_rpc_effects() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    commit_rpc(&mut harness, "rpc-1", rpc_attribute_write("from-rpc"), true);
+    harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(harness.attribute_keys(), vec!["from-rpc".to_owned()]);
+    let fork = harness.history_record(harness.last_seq()).unwrap();
+    assert_eq!(fork.reapplied_inputs.len(), 1);
+    // The reapplied input carries its original request ID, so a later travel reapplies it again.
+    harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(harness.attribute_keys(), vec!["from-rpc".to_owned()]);
+}
+
+#[test]
+fn reapply_skips_a_transactional_rpc_whose_deletions_no_longer_hold() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    // A Worker result publishes m1; Worker results are not external input.
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    let published = harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                publish_to_channel: vec![ChannelMessage {
+                    channel_name: "orders".to_owned(),
+                    value: Some(string_value("m1")),
+                    message_id: "m1".to_owned(),
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        app_worker_id: "worker-a".to_owned(),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert!(is_ok(&published.reply), "{:?}", published.reply);
+    let deleting = InvokeWorkerRpcResponse {
+        delete_from_channel: vec![ChannelMessageDeletion {
+            channel_name: "orders".to_owned(),
+            message_id: "m1".to_owned(),
+        }],
+        ..rpc_attribute_write("from-rpc")
+    };
+    commit_rpc(&mut harness, "rpc-1", deleting, true);
+    assert_eq!(harness.channel_message_count(), 0);
+    let (attempt, _) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(harness.run_record().current_attempt, attempt);
+    assert!(
+        harness.attribute_keys().is_empty(),
+        "the RPC is skipped as a whole"
+    );
+    let fork = harness.history_record(harness.last_seq()).unwrap();
+    assert_eq!(fork.reapplied_inputs.len(), 1);
 }

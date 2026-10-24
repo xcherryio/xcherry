@@ -2281,3 +2281,47 @@ fn id_reuse_records_the_previous_runs_termination_as_a_replayable_stop() {
         "replaying the recorded stop rebuilds the previous run exactly"
     );
 }
+
+#[test]
+fn a_flow_without_a_start_step_type_starts_without_any_step() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.start_step_type = String::new();
+
+    let outcome = harness.start(request);
+
+    assert!(
+        matches!(&outcome.reply.reply, Some(command_reply::Reply::StartFlow(reply)) if !reply.is_existing_run),
+        "{:?}",
+        outcome.reply
+    );
+    assert!(pending_invocations(&outcome).is_empty());
+    let step_prefix = run_singleton_key(
+        harness.context.flow_hash,
+        harness.harness_run_id(),
+        RunTable::StepExecution,
+    );
+    assert!(
+        !harness
+            .state
+            .rows
+            .keys()
+            .any(|(_, key)| key.starts_with(&step_prefix)),
+        "no Step execution exists"
+    );
+    assert_eq!(harness.run_record().status, FlowStatus::Running as i32);
+    harness.set_attribute("status", string_value("ready"), "set-1");
+}
+
+#[test]
+fn an_oversized_input_without_a_start_step_type_is_rejected() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.start_step_type = String::new();
+    request.step_input = Some(string_value(&"i".repeat(17 << 20)));
+
+    let outcome = harness.start(request);
+
+    assert!(is_error(&outcome.reply, 3), "{:?}", outcome.reply);
+    assert!(outcome.writes.is_empty());
+}

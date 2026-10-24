@@ -16,16 +16,16 @@ use dexzd_protocol::dex::{
     ErrorSubStatus, FlowStatus, TimeTravelForkHistoryEvent, flow_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttemptRecord, CommandReply, FlowCommand, RetentionTimerId, RunRecord, StepExecutionRecord,
-    StepInvocationKey, StepInvocationPhase, TimeTravelCommand, TimeTravelReply, TimerId,
-    TimerRecord, command_reply, flow_command::Command, timer_id,
+    AttemptRecord, CommandErrorReply, CommandReply, FlowCommand, RetentionTimerId, RunRecord,
+    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, TimeTravelCommand,
+    TimeTravelReply, TimerId, TimerRecord, command_reply, flow_command::Command, timer_id,
 };
 use prost::Message;
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::flow_close::update_directory_status;
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
-use crate::command_handlers::{CommandScope, HandlerResult};
+use crate::command_handlers::{CommandScope, HandlerResult, ReplayedCommandCounters};
 use crate::history::attempt_scope::{
     AttemptRow, decode_timer_id, hex, holder_rows, read_attempt_rows, run_status_of, set_run_status,
 };
@@ -136,9 +136,9 @@ pub(crate) fn apply_time_travel(
         &holder_rows(&restored_rows, &run_status_of(&cursor.record)),
         cursor.seq,
     )?;
-    apply_received_child_results(transaction, &mut cursor, scope)?;
     let reapplied_events =
         reapply_external_inputs(transaction, &mut cursor, scope, &reapplied_inputs)?;
+    apply_received_child_results(transaction, &mut cursor, scope)?;
     let final_rows = read_attempt_rows(transaction, cursor.rows)?;
     dispatch_restored_invocations(&mut cursor, &final_rows)?;
     cursor.add_event(flow_history_event::Payload::TimeTravelFork(
@@ -338,14 +338,32 @@ fn update_run_lifecycle(
     update_directory_status(transaction, cursor, scope)
 }
 
-/// Completes restored SubFlow conditions from received child results (C15); tasks A3 and A6.
+/// Completes restored SubFlow conditions from received child results (C15), even without reapply.
 fn apply_received_child_results(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
     scope: &CommandScope<'_>,
 ) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, scope);
+    let effects_before = cursor.effects.len();
+    crate::cross_flow::complete_restored_sub_flow_waits(transaction, cursor, scope)?;
+    let effects = cursor.effects.split_off(effects_before);
+    keep_fork_effects(cursor, effects);
     Ok(())
+}
+
+/// Keeps effects of work folded into the fork; dispatch follows the final restored state instead.
+fn keep_fork_effects(cursor: &mut RunCursor, effects: Vec<ApplyEffect>) {
+    for effect in effects {
+        match effect {
+            ApplyEffect::InvocationPending {
+                invocation,
+                attempt: 1,
+                ..
+            } => cursor.fork_pending_invocations.push(invocation),
+            ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. } => {}
+            other => cursor.effects.push(other),
+        }
+    }
 }
 
 /// Re-dispatches the restored calls: running attempts with their stored snapshots and attempt
@@ -401,7 +419,10 @@ fn reapply_external_inputs(
     let behavior_version = BehaviorVersion::from_command(scope.command.behavior_version)?;
     let rows = cursor.rows;
     rows.put_run_record(transaction, &cursor.record);
-    let mut values = std::mem::replace(&mut cursor.values, ValueIdAllocator::new(cursor.seq));
+    let mut counters = ReplayedCommandCounters {
+        values: std::mem::replace(&mut cursor.values, ValueIdAllocator::new(cursor.seq)),
+        next_channel_message_index: cursor.next_channel_message_index,
+    };
     for input in inputs {
         cursor.reapplied_inputs.push(input.clone());
         let record = required_run_record(transaction, cursor)?;
@@ -409,7 +430,7 @@ fn reapply_external_inputs(
         if record.status != FlowStatus::Running as i32 {
             continue;
         }
-        let command = reapplied_command(input, scope);
+        let command = reapplied_command(input, scope, cursor.attempt());
         let Some(body) = &command.command else {
             return Err(ApplyError::InvariantViolation {
                 detail: "a recorded external input has no command body".to_owned(),
@@ -429,7 +450,7 @@ fn reapply_external_inputs(
             let reader = TransactionReader::new(transaction);
             let mut input_transaction = FlowTransaction::new(&reader, transaction.context());
             let input_cursor =
-                RunCursor::for_reapplied_input(rows, record, cursor.seq, values.clone());
+                RunCursor::for_reapplied_input(rows, record, cursor.seq, counters.clone());
             match crate::command_handlers::apply_run_command(
                 &mut input_transaction,
                 input_cursor,
@@ -451,23 +472,13 @@ fn reapply_external_inputs(
                 detail: "a reapplied input recorded its own history".to_owned(),
             });
         };
-        values = replayed.values;
+        counters = replayed.counters;
         events.extend(replayed.events);
-        // Dispatch follows the final restored state instead.
-        for effect in output.effects {
-            match effect {
-                ApplyEffect::InvocationPending {
-                    invocation,
-                    attempt: 1,
-                    ..
-                } => cursor.reapplied_pending_invocations.push(invocation),
-                ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. } => {}
-                other => cursor.effects.push(other),
-            }
-        }
+        keep_fork_effects(cursor, output.effects);
     }
     cursor.record = required_run_record(transaction, cursor)?;
-    cursor.values = values;
+    cursor.values = counters.values;
+    cursor.next_channel_message_index = counters.next_channel_message_index;
     Ok(events)
 }
 
@@ -478,12 +489,16 @@ fn is_skippable_rejection(body: &Command, reply: &CommandReply) -> bool {
     };
     match body {
         Command::TimerSkip(_) => error.grpc_code == grpc_code::INVALID_ARGUMENT,
-        Command::ChannelMessageDelete(_) => {
-            error.grpc_code == grpc_code::NOT_FOUND
-                && error.sub_status == ErrorSubStatus::ChannelMessageNotFound as i32
-        }
+        Command::ChannelMessageDelete(_) => is_missing_channel_message(error),
+        // A transactional RPC whose deletions no longer hold is skipped as a whole.
+        Command::RpcCommitted(rpc) => rpc.is_transactional && is_missing_channel_message(error),
         _ => false,
     }
+}
+
+fn is_missing_channel_message(error: &CommandErrorReply) -> bool {
+    error.grpc_code == grpc_code::NOT_FOUND
+        && error.sub_status == ErrorSubStatus::ChannelMessageNotFound as i32
 }
 
 fn required_run_record(
@@ -498,8 +513,12 @@ fn required_run_record(
         })
 }
 
-/// Clears request IDs, which the run-scoped deduplication table would otherwise answer.
-fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowCommand {
+/// Replaces request IDs, which the run-scoped deduplication table would otherwise answer.
+fn reapplied_command(
+    input: &FlowCommand,
+    scope: &CommandScope<'_>,
+    run_attempt: u32,
+) -> FlowCommand {
     let mut command = input.clone();
     command.proposed_at_micros = scope.now_micros;
     command.expected_run_attempt = 0;
@@ -521,8 +540,15 @@ fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowComma
             }
         }
         Some(Command::RpcCommitted(rpc)) => {
+            rpc.hard_delete_objects.clear();
+            if let Some(response) = rpc.response.as_mut() {
+                response
+                    .upsert_attributes
+                    .retain(|write| !write.is_hard_delete_on_null);
+            }
+            // RPC commits require a request ID, so each attempt reapplies under its own.
             if let Some(request) = rpc.request.as_mut() {
-                request.request_id.clear();
+                request.request_id = format!("{}:time-travel-{run_attempt}", request.request_id);
             }
         }
         _ => {}

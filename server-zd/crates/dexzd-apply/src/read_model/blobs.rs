@@ -14,7 +14,7 @@ use dexzd_protocol::dexzd::v1::{StoredValue, StoredValueId, StoredValueReference
 
 use crate::FlowStateReader;
 use crate::read_model::{ReadModelError, RunView};
-use crate::values::load_transaction_stored_value;
+use crate::values::load_stored_value;
 
 /// Loads references under each entry's Flow; missing and hard-delete values are omitted.
 pub fn load_blobs(
@@ -83,7 +83,7 @@ pub fn load_blobs(
                 is_string_value,
             })),
         };
-        if let Some(value) = load_transaction_stored_value(&view.transaction, view.rows, &stored)? {
+        if let Some(value) = load_stored_value(&view.transaction, view.rows, &stored)? {
             values.insert(reference_text.clone(), value);
         }
     }

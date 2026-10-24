@@ -27,8 +27,7 @@ use crate::command_handlers::{CommandScope, HandlerResult};
 use crate::state_access::FlowTransaction;
 use crate::steps::arm_timer;
 use crate::values::{
-    ValueHolder, ValueRejection, complete_value_for_outbox, load_transaction_stored_value,
-    release_stored_value,
+    ValueHolder, ValueRejection, complete_value_for_outbox, load_stored_value, release_stored_value,
 };
 
 const OUTBOX_RETENTION_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
@@ -410,7 +409,7 @@ pub(crate) fn report_terminal_to_parent(
             .completed_step_output
             .as_ref()
             .map(|stored| {
-                load_transaction_stored_value(transaction, cursor.rows, stored)?.ok_or_else(|| {
+                load_stored_value(transaction, cursor.rows, stored)?.ok_or_else(|| {
                     ApplyError::InvariantViolation {
                         detail: "stored child output has no value row".to_owned(),
                     }

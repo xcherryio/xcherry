@@ -13,7 +13,9 @@ use dexzd_protocol::dexzd::v1::{
 };
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
-use crate::command_handlers::{CommandScope, HandlerOutput, ReplayedCommandOutput};
+use crate::command_handlers::{
+    CommandScope, HandlerOutput, ReplayedCommandCounters, ReplayedCommandOutput,
+};
 use crate::history;
 use crate::projections::search_document;
 use crate::state_access::{FlowTransaction, RunRows};
@@ -54,6 +56,8 @@ pub(crate) struct RunCursor {
     pub(crate) seq: u64,
     pub(crate) values: ValueIdAllocator,
     pub(crate) indexed_attribute_writes: Vec<AttributeWrite>,
+    /// Next index of a Channel message this command publishes.
+    pub(crate) next_channel_message_index: u64,
     events: Vec<flow_history_event::Payload>,
     pub(crate) effects: Vec<ApplyEffect>,
     /// Set by TimeTravel: the command starts a new attempt and writes its start checkpoint.
@@ -61,8 +65,8 @@ pub(crate) struct RunCursor {
     pub(crate) history_window_page_used: bool,
     /// Set by TimeTravel: input it reapplied, recorded so later travels reapply it again.
     pub(crate) reapplied_inputs: Vec<FlowCommand>,
-    /// Set by TimeTravel: method calls its reapplied input made pending for the first time.
-    pub(crate) reapplied_pending_invocations: Vec<StepInvocationKey>,
+    /// Set by TimeTravel: first-attempt method calls that reapply or child results made pending.
+    pub(crate) fork_pending_invocations: Vec<StepInvocationKey>,
 }
 
 impl RunCursor {
@@ -106,10 +110,11 @@ impl RunCursor {
         rows: RunRows,
         record: RunRecord,
         seq: u64,
-        values: ValueIdAllocator,
+        counters: ReplayedCommandCounters,
     ) -> Self {
         Self {
-            values,
+            values: counters.values,
+            next_channel_message_index: counters.next_channel_message_index,
             ..Self::with_seq(rows, record, seq)
         }
     }
@@ -132,12 +137,13 @@ impl RunCursor {
             seq,
             values: ValueIdAllocator::new(seq),
             indexed_attribute_writes: Vec::new(),
+            next_channel_message_index: 0,
             events: Vec::new(),
             effects: Vec::new(),
             starts_attempt: false,
             history_window_page_used: false,
             reapplied_inputs: Vec::new(),
-            reapplied_pending_invocations: Vec::new(),
+            fork_pending_invocations: Vec::new(),
         }
     }
 
@@ -247,7 +253,10 @@ impl RunCursor {
             run_id: Some(self.rows.run_id),
             replayed: Some(ReplayedCommandOutput {
                 events: self.events,
-                values: self.values,
+                counters: ReplayedCommandCounters {
+                    values: self.values,
+                    next_channel_message_index: self.next_channel_message_index,
+                },
             }),
         }
     }

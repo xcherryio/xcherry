@@ -25,7 +25,7 @@ pub(crate) fn pending_step_methods(
     cursor: &RunCursor,
 ) -> Result<Vec<HistoryStepMethodPending>, ApplyError> {
     let first_pending: Vec<&StepInvocationKey> = if cursor.starts_attempt {
-        cursor.reapplied_pending_invocations.iter().collect()
+        cursor.fork_pending_invocations.iter().collect()
     } else {
         cursor
             .effects
@@ -72,6 +72,7 @@ pub(crate) fn after_command(
     kind: HistoryKind,
 ) -> Result<(), ApplyError> {
     let written_bytes = attempt_write_bytes(transaction, cursor);
+    let current_state_bytes = state_bytes_after_command(transaction, cursor)?;
     let record = &mut cursor.record;
     record.written_bytes_since_checkpoint = record
         .written_bytes_since_checkpoint
@@ -81,7 +82,6 @@ pub(crate) fn after_command(
     let has_enough_commands = settings.checkpoint_max_commands > 0
         && record.commands_since_checkpoint >= settings.checkpoint_max_commands;
     // A shrunk state lowers the bar; appends alone never catch up with the current size.
-    let current_state_bytes = record.storage.unwrap_or_default().state_row_bytes;
     let written_threshold = settings
         .checkpoint_min_written_bytes
         .max(current_state_bytes.min(record.last_checkpoint_state_bytes));
@@ -93,6 +93,19 @@ pub(crate) fn after_command(
         advance_window_if_full(transaction, cursor)?;
     }
     Ok(())
+}
+
+/// The run's state row bytes after this command's writes so far.
+fn state_bytes_after_command(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+) -> Result<u64, ApplyError> {
+    // Value accounting reads the committed totals from the record until finish reconciles.
+    let committed_storage = cursor.record.storage;
+    crate::values::reconcile_run_storage(transaction, cursor)?;
+    let state_bytes = cursor.record.storage.unwrap_or_default().state_row_bytes;
+    cursor.record.storage = committed_storage;
+    Ok(state_bytes)
 }
 
 /// Writes the checkpoint of the current attempt at the command's seq.

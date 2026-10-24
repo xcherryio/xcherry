@@ -37,13 +37,6 @@ pub(crate) fn sub_flow_result_key(
 }
 
 /// Re-evaluates restored waits using each condition's original registration attempt.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "A4 calls this after time travel restores attempt rows."
-    )
-)]
 pub(crate) fn complete_restored_sub_flow_waits(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
