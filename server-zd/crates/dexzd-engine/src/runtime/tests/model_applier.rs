@@ -9,6 +9,7 @@
 //! A small deterministic stand-in for apply that writes real state rows for a few commands.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{
@@ -39,6 +40,8 @@ pub(crate) struct ModelApplier {
     pub(crate) applied: Mutex<Vec<FlowCommand>>,
     /// Runs at the start of every apply call.
     pub(crate) apply_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Applies unscripted commands with the real apply instead of the model.
+    pub(crate) uses_real_apply: AtomicBool,
 }
 
 impl CommandApplier for ModelApplier {
@@ -55,6 +58,9 @@ impl CommandApplier for ModelApplier {
         self.applied.lock().unwrap().push(command.clone());
         if let Some(scripted) = self.scripted.lock().unwrap().pop_front() {
             return scripted;
+        }
+        if self.uses_real_apply.load(Ordering::SeqCst) {
+            return dexzd_apply::apply_flow_command(context, state, command);
         }
         Ok(apply_model(context, state, command))
     }

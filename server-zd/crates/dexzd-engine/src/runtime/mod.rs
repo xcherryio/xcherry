@@ -34,6 +34,7 @@ pub use registry::{
 pub use runtime_config::{RuntimeConfig, default_run_settings};
 pub use runtime_error::{RuntimeError, grpc_code};
 pub use runtime_ports::{
-    HardDeleteReadError, HardDeleteValueReader, RpcInvokeError, RpcWorkerInvoker,
+    HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome, HardDeleteUploads,
+    HardDeleteValueReader, HardDeleteValueUploader, RpcInvokeError, RpcWorkerInvoker,
     RuntimeEffectSink, WorkerRpcInvocation, WorkerRpcResult,
 };

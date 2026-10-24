@@ -336,6 +336,55 @@ async fn rpc_with_effects_commits_and_returns_the_committed_output() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn rpc_channel_publications_get_new_message_ids_before_proposing() {
+    let harness = RuntimeHarness::new();
+    start_flow(&harness, "order-1").await.unwrap();
+    let publication = |message_id: &str| ChannelMessage {
+        channel_name: "orders".to_owned(),
+        value: Some(string_value("shipped")),
+        message_id: message_id.to_owned(),
+    };
+    harness
+        .rpc_invoker
+        .results
+        .lock()
+        .unwrap()
+        .push_back(Ok(WorkerRpcResult {
+            response: InvokeWorkerRpcResponse {
+                publish_to_channel: vec![publication(""), publication("worker-chosen")],
+                ..InvokeWorkerRpcResponse::default()
+            },
+            app_worker_id: "worker-1".to_owned(),
+            pull_routing: None,
+        }));
+
+    harness
+        .drive(harness.registry.invoke_rpc(TENANT, rpc_request("order-1")))
+        .await
+        .unwrap();
+
+    let last = harness.submitted().last().cloned().unwrap();
+    let Some(flow_command::Command::RpcCommitted(rpc)) = last.command else {
+        panic!("expected RpcCommitted");
+    };
+    let message_ids: Vec<uuid::Uuid> = rpc
+        .response
+        .unwrap()
+        .publish_to_channel
+        .iter()
+        .map(|message| message.message_id.parse().unwrap())
+        .collect();
+    assert_eq!(message_ids.len(), 2);
+    assert!(
+        message_ids
+            .iter()
+            .all(|message_id| message_id.get_version_num() == 7),
+        "{message_ids:?}"
+    );
+    assert_ne!(message_ids[0], message_ids[1]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn worker_rpc_errors_map_to_client_errors() {
     let harness = RuntimeHarness::new();
     start_flow(&harness, "order-1").await.unwrap();

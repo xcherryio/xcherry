@@ -18,9 +18,10 @@ use dexzd_apply::{
     StateWrite,
 };
 use dexzd_keyspace::{ColumnFamily, PartitionHasher, PartitionId, RunId};
-use dexzd_protocol::dex::Value;
+use dexzd_protocol::dex::{AttributeWrite, Value, value};
 use dexzd_protocol::dexzd::v1::{FlowCommand, HardDeleteObjectReference, LogPosition};
 use futures::future::BoxFuture;
+use prost::Message;
 use tokio::sync::Notify;
 
 use crate::CommandApplier;
@@ -28,7 +29,8 @@ use crate::runtime::tests::model_applier::ModelApplier;
 use crate::runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
-    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteValueReader, ReplayMismatch,
+    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome,
+    HardDeleteUploads, HardDeleteValueReader, HardDeleteValueUploader, ReplayMismatch,
     RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, WorkerRpcInvocation,
     WorkerRpcResult,
 };
@@ -281,6 +283,88 @@ impl HardDeleteValueReader for FakeHardDeleteReader {
     }
 }
 
+/// One recorded upload call: the Flow, the run, and the writes as the runtime passed them.
+pub(crate) type RecordedUpload = (FlowAddress, RunId, Vec<AttributeWrite>);
+
+/// Uploads hard-delete values into memory, replaces each with an empty value, and records every
+/// finish; optionally fails, skips a write, or waits for a release signal first.
+#[derive(Default)]
+pub(crate) struct FakeHardDeleteUploader {
+    pub(crate) upload_errors: Mutex<VecDeque<HardDeleteUploadError>>,
+    pub(crate) uploads: Mutex<Vec<RecordedUpload>>,
+    pub(crate) finished: Mutex<Vec<(HardDeleteUploads, HardDeleteUploadOutcome)>>,
+    /// Leaves the write at this index without an object, as a faulty uploader would.
+    pub(crate) skipped_write_index: Mutex<Option<usize>>,
+    pub(crate) entered: Notify,
+    pub(crate) gate: Mutex<Option<Arc<Notify>>>,
+    next_object_number: AtomicU64,
+}
+
+impl FakeHardDeleteUploader {
+    pub(crate) fn finished(&self) -> Vec<(HardDeleteUploads, HardDeleteUploadOutcome)> {
+        self.finished.lock().unwrap().clone()
+    }
+}
+
+impl HardDeleteValueUploader for FakeHardDeleteUploader {
+    fn upload_hard_delete_values<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+        run_id: RunId,
+        writes: &'a mut [AttributeWrite],
+    ) -> BoxFuture<'a, Result<HardDeleteUploads, HardDeleteUploadError>> {
+        Box::pin(async move {
+            self.uploads
+                .lock()
+                .unwrap()
+                .push((flow.clone(), run_id, writes.to_vec()));
+            self.entered.notify_one();
+            let gate = self.gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
+            if let Some(error) = self.upload_errors.lock().unwrap().pop_front() {
+                return Err(error);
+            }
+            let skipped_write_index = *self.skipped_write_index.lock().unwrap();
+            let mut uploads = HardDeleteUploads::default();
+            for (write_index, write) in writes.iter_mut().enumerate() {
+                if !write.is_hard_delete_on_null || skipped_write_index == Some(write_index) {
+                    continue;
+                }
+                let is_string_value =
+                    match write.value.as_ref().and_then(|value| value.kind.as_ref()) {
+                        Some(value::Kind::StringValue(_)) => true,
+                        Some(value::Kind::ObjValue(_)) => false,
+                        _ => continue,
+                    };
+                let number = self.next_object_number.fetch_add(1, Ordering::SeqCst) + 1;
+                let object_id = format!("object-{number}");
+                let size_bytes =
+                    u64::try_from(write.value.as_ref().map_or(0, Message::encoded_len)).unwrap();
+                uploads.object_keys.push(format!("{run_id}/{object_id}"));
+                uploads.references.push(HardDeleteObjectReference {
+                    write_index: u32::try_from(write_index).unwrap(),
+                    object_id,
+                    size_bytes,
+                    is_string_value,
+                });
+                write.value = Some(Value { kind: None });
+            }
+            Ok(uploads)
+        })
+    }
+
+    fn finish_hard_delete_uploads(
+        &self,
+        uploads: HardDeleteUploads,
+        outcome: HardDeleteUploadOutcome,
+    ) -> BoxFuture<'_, Result<(), HardDeleteUploadError>> {
+        self.finished.lock().unwrap().push((uploads, outcome));
+        Box::pin(async { Ok(()) })
+    }
+}
+
 /// Rewrites a committed outcome, to simulate nondeterministic apply.
 pub(crate) type OutcomeTamper = Box<dyn Fn(&mut ApplyOutcome) + Send + Sync>;
 
@@ -293,6 +377,7 @@ pub(crate) struct RuntimeHarness {
     pub(crate) effects: Arc<RecordingEffectSink>,
     pub(crate) rpc_invoker: Arc<FakeRpcInvoker>,
     pub(crate) hard_delete_reader: Arc<FakeHardDeleteReader>,
+    pub(crate) hard_delete_uploader: Arc<FakeHardDeleteUploader>,
     pub(crate) tamper: Mutex<Option<OutcomeTamper>>,
     /// Partitions whose commit failed; like the real pipeline, they persist nothing afterwards.
     failed_partitions: Mutex<BTreeSet<PartitionId>>,
@@ -314,6 +399,7 @@ impl RuntimeHarness {
         let effects = Arc::new(RecordingEffectSink::default());
         let rpc_invoker = Arc::new(FakeRpcInvoker::default());
         let hard_delete_reader = Arc::new(FakeHardDeleteReader::default());
+        let hard_delete_uploader = Arc::new(FakeHardDeleteUploader::default());
         let registry = FlowRuntimeRegistry::new(
             config,
             FlowRuntimeDependencies {
@@ -323,6 +409,7 @@ impl RuntimeHarness {
                 effects: effects.clone(),
                 rpc_invoker: rpc_invoker.clone(),
                 hard_delete_reader: hard_delete_reader.clone(),
+                hard_delete_uploader: hard_delete_uploader.clone(),
             },
         );
         Self {
@@ -333,6 +420,7 @@ impl RuntimeHarness {
             effects,
             rpc_invoker,
             hard_delete_reader,
+            hard_delete_uploader,
             tamper: Mutex::new(None),
             failed_partitions: Mutex::new(BTreeSet::new()),
         }

@@ -25,7 +25,7 @@ use tokio::time::Instant;
 
 use crate::long_poll::WaitInterest;
 use crate::runtime::read_operations::state_rows::{
-    ResolvedRun, decode_row, is_closed_status, load_complete_value, read_run,
+    ResolvedRun, WireValue, decode_row, is_closed_status, read_run, wire_value,
 };
 use crate::runtime::{FlowAddress, FlowRuntimeRegistry, RuntimeError, grpc_code};
 
@@ -67,7 +67,7 @@ impl FlowRuntimeRegistry {
                 if !is_closed_status(run.record.status) {
                     return Ok(None);
                 }
-                flow_result(state, context, &run, request.needs_results).map(Some)
+                Ok(Some(flow_result(&run, request.needs_results)))
             },
         )
         .await
@@ -311,12 +311,9 @@ impl FlowRuntimeRegistry {
     }
 }
 
-fn flow_result(
-    state: &dyn FlowStateReader,
-    context: ApplyContext,
-    run: &ResolvedRun,
-    needs_results: bool,
-) -> Result<FlowResult, RuntimeError> {
+/// Returns the run's result; Step outputs above the inline threshold are value references that the
+/// client loads with LoadBlobs.
+fn flow_result(run: &ResolvedRun, needs_results: bool) -> FlowResult {
     let close = run.record.close.clone().unwrap_or_default();
     let mut result = FlowResult {
         flow_status: run.record.status,
@@ -326,10 +323,13 @@ fn flow_result(
     };
     if needs_results && run.record.status == FlowStatus::Completed as i32 {
         for output in close.results {
-            let value = match output.completed_step_output.as_ref() {
-                Some(stored) => load_complete_value(state, context.flow_hash, run.run_id, stored)?,
-                None => None,
-            };
+            let value = output
+                .completed_step_output
+                .as_ref()
+                .and_then(|stored| match wire_value(stored, run.run_id)? {
+                    WireValue::Value(value) => Some(value),
+                    WireValue::HardDeleteObject(_) => None,
+                });
             result.results.push(StepCompletionOutput {
                 completed_step_type: output.completed_step_type,
                 completed_step_execution_id: output.completed_step_execution_id,
@@ -337,7 +337,7 @@ fn flow_result(
             });
         }
     }
-    Ok(result)
+    result
 }
 
 /// Matches like the Go Server: strings and booleans by equality; type mismatches never match.

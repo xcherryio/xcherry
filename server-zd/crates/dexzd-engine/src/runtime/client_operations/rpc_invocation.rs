@@ -25,6 +25,7 @@ use dexzd_request_validation::{
     ClientRequest, WorkerResponse, validate_client_request, validate_worker_response,
 };
 
+use crate::runtime::client_operations::hard_delete_uploads::hard_delete_references;
 use crate::runtime::client_operations::request_fingerprint::request_fingerprint;
 use crate::runtime::client_operations::unstamped_flow_command;
 use crate::runtime::read_operations::state_rows::{
@@ -172,14 +173,22 @@ impl FlowRuntimeRegistry {
         is_transactional: bool,
     ) -> Result<InvokeRpcResponse, RuntimeError> {
         let fingerprint = request_fingerprint(&request);
+        let mut response = result.response;
+        // Apply cannot mint IDs, so every publication gets a new one, as Go's AssignIDs does.
+        for message in &mut response.publish_to_channel {
+            message.message_id = uuid::Uuid::now_v7().to_string();
+        }
+        let uploads = self
+            .upload_hard_delete_values(flow, run.run_id, &mut response.upsert_attributes)
+            .await?;
         let mut command = unstamped_flow_command(
             flow,
             Some(run.run_id),
             flow_command::Command::RpcCommitted(RpcCommittedCommand {
                 request: Some(request),
-                response: Some(result.response),
+                response: Some(response),
                 app_worker_id: result.app_worker_id,
-                hard_delete_objects: Vec::new(),
+                hard_delete_objects: hard_delete_references(uploads.as_ref()),
                 request_fingerprint: fingerprint,
                 pull_routing: result.pull_routing,
                 is_transactional,
@@ -190,7 +199,7 @@ impl FlowRuntimeRegistry {
             command.expected_run_attempt = run.record.current_attempt;
         }
         let reply = self
-            .propose_client_command(flow, |_| Ok(command.clone()))
+            .propose_client_command_with_uploads(flow, uploads, |_| Ok(command.clone()))
             .await?;
         let command_reply::Reply::Rpc(rpc_reply) = reply else {
             return Err(RuntimeError::Internal {

@@ -8,6 +8,7 @@
 
 //! Client write operations: validate, build the command, propose it, and wait for its commit.
 
+mod hard_delete_uploads;
 mod request_fingerprint;
 mod rpc_invocation;
 
@@ -24,6 +25,9 @@ use dexzd_protocol::dexzd::v1::{
 };
 use dexzd_request_validation::{ClientRequest, validate_client_request};
 
+use crate::runtime::client_operations::hard_delete_uploads::{
+    committed_reply, hard_delete_references, has_hard_delete_values,
+};
 use crate::runtime::client_operations::request_fingerprint::request_fingerprint;
 use crate::runtime::read_operations::state_rows::resolve_command_run;
 use crate::runtime::registry::ProposalScope;
@@ -52,9 +56,19 @@ impl FlowRuntimeRegistry {
             } else {
                 request.flow_timeout_policy
             };
+        let new_run_id = RunId(uuid::Uuid::now_v7().into_bytes());
+        let fingerprint = request_fingerprint(&request);
+        let mut request = request;
+        let uploads = match request.flow_start_options.as_mut() {
+            Some(options) => {
+                self.upload_hard_delete_values(&flow, new_run_id, &mut options.attributes)
+                    .await?
+            }
+            None => None,
+        };
         let start = FlowStartCommand {
-            new_run_id: uuid::Uuid::now_v7().as_bytes().to_vec(),
-            request_fingerprint: request_fingerprint(&request),
+            new_run_id: new_run_id.as_bytes().to_vec(),
+            request_fingerprint: fingerprint,
             request: Some(request),
             settings: Some(self.inner.config.run_settings),
             resolved_timeout_policy,
@@ -63,11 +77,11 @@ impl FlowRuntimeRegistry {
                 is_pull_mode: true,
                 ..WorkerTarget::default()
             }),
-            hard_delete_objects: Vec::new(),
+            hard_delete_objects: hard_delete_references(uploads.as_ref()),
         };
         let command = unstamped_flow_command(&flow, None, flow_command::Command::FlowStart(start));
         let reply = self
-            .propose_client_command(&flow, |_| Ok(command.clone()))
+            .propose_client_command_with_uploads(&flow, uploads, |_| Ok(command.clone()))
             .await?;
         match reply {
             command_reply::Reply::StartFlow(started) => {
@@ -112,12 +126,54 @@ impl FlowRuntimeRegistry {
         )?;
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
         let fingerprint = request_fingerprint(&request);
-        self.propose_targeted(&flow, &request.run_id.clone(), |_| {
+        if !has_hard_delete_values(&request.attributes) {
+            return self
+                .propose_targeted(&flow, &request.run_id.clone(), |_| {
+                    flow_command::Command::AttributesSet(AttributesSetCommand {
+                        request: Some(request.clone()),
+                        hard_delete_objects: Vec::new(),
+                        request_fingerprint: fingerprint.clone(),
+                    })
+                })
+                .await
+                .and_then(expect_ok_reply);
+        }
+        // The uploaded objects belong to one run, so the command targets the run resolved first.
+        let run_id = {
+            let state = self.flow_state_reader(&flow, true)?;
+            resolve_command_run(
+                state.as_ref(),
+                self.flow_context(&flow),
+                &flow,
+                &request.run_id,
+            )?
+        };
+        let requested_run_id = request.run_id.clone();
+        let mut request = request;
+        let uploads = self
+            .upload_hard_delete_values(&flow, run_id, &mut request.attributes)
+            .await?;
+        let command = unstamped_flow_command(
+            &flow,
+            Some(run_id),
             flow_command::Command::AttributesSet(AttributesSetCommand {
-                request: Some(request.clone()),
-                hard_delete_objects: Vec::new(),
-                request_fingerprint: fingerprint.clone(),
-            })
+                hard_delete_objects: hard_delete_references(uploads.as_ref()),
+                request_fingerprint: fingerprint,
+                request: Some(request),
+            }),
+        );
+        self.propose_client_command_with_uploads(&flow, uploads, |scope| {
+            let current =
+                resolve_command_run(scope.state, scope.context, &flow, &requested_run_id)?;
+            if current != run_id {
+                return Err(RuntimeError::Unavailable {
+                    detail: format!(
+                        "the current run of Flow {} changed while its hard-delete values uploaded",
+                        flow.flow_id
+                    ),
+                });
+            }
+            Ok(command.clone())
         })
         .await
         .and_then(expect_ok_reply)
@@ -271,22 +327,26 @@ impl FlowRuntimeRegistry {
     pub(crate) async fn propose_client_command(
         &self,
         flow: &FlowAddress,
-        mut build: impl FnMut(&mut ProposalScope<'_>) -> Result<FlowCommand, RuntimeError>,
+        build: impl FnMut(&mut ProposalScope<'_>) -> Result<FlowCommand, RuntimeError>,
     ) -> Result<command_reply::Reply, RuntimeError> {
+        self.propose_and_wait_for_commit(flow, build)
+            .await
+            .and_then(committed_reply)
+    }
+
+    /// Proposes a client command promptly and returns the committed command.
+    async fn propose_and_wait_for_commit(
+        &self,
+        flow: &FlowAddress,
+        mut build: impl FnMut(&mut ProposalScope<'_>) -> Result<FlowCommand, RuntimeError>,
+    ) -> Result<CommittedCommand, RuntimeError> {
         let proposal = self
             .propose_with(flow, CommitUrgency::Prompt, |scope| {
                 build(scope).map(|command| Some((command, ())))
             })
             .await?;
         let (result, ()) = proposal.expect("client builders always propose");
-        let committed = self.wait_for_commit(flow, result.ticket).await?;
-        match committed.outcome.reply.reply {
-            Some(command_reply::Reply::Error(error)) => Err(RuntimeError::from_reply(&error)),
-            Some(reply) => Ok(reply),
-            None => Err(RuntimeError::Internal {
-                detail: "apply returned an empty reply".to_owned(),
-            }),
-        }
+        self.wait_for_commit(flow, result.ticket).await
     }
 
     /// Waits for a proposed command's commit.
