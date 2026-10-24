@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
-    CommitConfig, CommittedCommandSink, CommittedFlowCommand, DeterministicCommandApplier,
-    EngineIdSource, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
-    LocalStoreConfig, PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError,
-    SnapshotConfig,
+    BlockingWorkPlacement, CommitConfig, CommittedCommandSink, CommittedFlowCommand,
+    DeterministicCommandApplier, EngineIdSource, EngineNode, EngineNodeConfig,
+    EngineNodeDependencies, EngineRuntimeHooks, LocalStoreConfig, PartitionRuntimeRebuilder,
+    RecoveryConfig, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::PartitionId;
 use dexzd_object_store::InMemoryObjectStore;
@@ -71,6 +71,7 @@ pub(crate) fn engine_node_config(
             ..SnapshotConfig::default()
         },
         recovery: RecoveryConfig::default(),
+        blocking_work: BlockingWorkPlacement::BlockingThreadPool,
     }
 }
 
