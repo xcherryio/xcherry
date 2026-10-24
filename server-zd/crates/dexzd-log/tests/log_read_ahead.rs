@@ -751,3 +751,106 @@ async fn a_batch_rewritten_after_its_listing_fails_at_its_seq() {
         "{result:?}"
     );
 }
+
+/// Sizes of the large batch before the small ones, as fractions of the budget.
+const LARGE_BATCH_FRACTIONS: [(usize, usize); 2] = [(3, 4), (3, 2)];
+const SMALL_BATCHES: u64 = 640;
+const LARGE_THEN_SMALL_BUDGET: usize = 1024 * 1024;
+
+/// Seq 1 holds a batch of `large_bytes` and seqs 2 through 641 hold 1 KiB batches.
+fn large_then_small_log(large_bytes: usize) -> Vec<(u64, Bytes)> {
+    let mut objects = vec![(1, incompressible_batch(1, 1, large_bytes))];
+    objects.extend((2..=SMALL_BATCHES + 1).map(|seq| (seq, incompressible_batch(1, seq, 1_024))));
+    objects
+}
+
+fn large_then_small_config() -> LogReadAheadConfig {
+    LogReadAheadConfig {
+        max_read_ahead_batches: 64,
+        max_buffered_bytes: LARGE_THEN_SMALL_BUDGET,
+    }
+}
+
+/// A 10 ms GET at depth 64 allows 6,400 batches per second.
+const FULL_DEPTH_MINIMUM_RATE: f64 = 0.8 * 64.0 * 100.0;
+
+#[tokio::test(start_paused = true)]
+async fn closed_stream_read_ahead_returns_to_full_depth_after_a_large_batch() {
+    for (numerator, denominator) in LARGE_BATCH_FRACTIONS {
+        let large_bytes = LARGE_THEN_SMALL_BUDGET * numerator / denominator;
+        let faults = BatchGetFaults::delaying(|_| GET_DELAY);
+        let store = store_with(faults, large_then_small_log(large_bytes)).await;
+        let stream = stream();
+        let mut reader = OrderedBatchReader::new(
+            &store,
+            &stream,
+            1,
+            Some(SMALL_BATCHES + 1),
+            large_then_small_config(),
+        );
+        let (seq, _) = reader
+            .next_batch()
+            .await
+            .expect("the large batch reads")
+            .expect("seq 1 is in range");
+        assert_eq!(seq, 1);
+        let started = Instant::now();
+        let mut small_batches = 0_u64;
+        while let Some((seq, batch)) = reader.next_batch().await.expect("batch reads") {
+            assert_eq!(batch.expect("every seq holds a batch").header.seq, seq);
+            small_batches += 1;
+        }
+        assert_eq!(small_batches, SMALL_BATCHES);
+        let batches_per_second = SMALL_BATCHES as f64 / started.elapsed().as_secs_f64();
+        assert!(
+            batches_per_second >= FULL_DEPTH_MINIMUM_RATE,
+            "after a {large_bytes}-byte batch: {batches_per_second:.0} batches/s"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn open_stream_recovery_returns_to_full_depth_after_a_large_batch() {
+    for (numerator, denominator) in LARGE_BATCH_FRACTIONS {
+        let large_bytes = LARGE_THEN_SMALL_BUDGET * numerator / denominator;
+        let faults = BatchGetFaults::delaying(|_| GET_DELAY);
+        let store = store_with(faults, large_then_small_log(large_bytes)).await;
+        let stream = stream();
+        let mut recovery = StreamRecovery::from_seq(
+            StreamRecoveryInputs {
+                store: &store,
+                clock: &FixedClock,
+                stream: &stream,
+                new_epoch: 2,
+                writer_process_id: "recovering-writer",
+                read_ahead: large_then_small_config(),
+            },
+            1,
+            0,
+        )
+        .expect("recovery starts");
+        let mut started = None;
+        let mut last_applied = None;
+        let mut small_batches = 0_u64;
+        loop {
+            match recovery.next_step().await.expect("recovery step succeeds") {
+                StreamRecoveryStep::Apply(batch) if batch.header.seq == 1 => {
+                    started = Some(Instant::now());
+                }
+                StreamRecoveryStep::Apply(_) => {
+                    small_batches += 1;
+                    last_applied = Some(Instant::now());
+                }
+                StreamRecoveryStep::Recovered(_) => break,
+            }
+        }
+        assert_eq!(small_batches, SMALL_BATCHES);
+        let elapsed = last_applied.expect("small batches applied")
+            - started.expect("the large batch applied");
+        let batches_per_second = SMALL_BATCHES as f64 / elapsed.as_secs_f64();
+        assert!(
+            batches_per_second >= FULL_DEPTH_MINIMUM_RATE,
+            "after a {large_bytes}-byte batch: {batches_per_second:.0} batches/s"
+        );
+    }
+}
