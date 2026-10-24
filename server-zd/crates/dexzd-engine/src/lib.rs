@@ -9,16 +9,30 @@
 //! Runtime that proposes, commits, and applies server-zd commands and runs their effects: dispatch, timers, deliveries, and recovery.
 
 mod command_applier;
+mod commit;
+mod engine_node;
 mod long_poll;
+mod recovery;
 mod runtime;
+mod snapshots;
 
-pub use command_applier::CommandApplier;
+pub use command_applier::{CommandApplier, DeterministicCommandApplier};
+pub use commit::{
+    CommandCommitter, CommitConfig, CommittedStateView, EngineLocalStore, NodeStopReason,
+    ReplayCheck, ReplayMismatch,
+};
+pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
+pub use recovery::{
+    CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    PartitionRuntimeRebuilder, RuntimeRebuildError,
+};
+pub use runtime::ReplayMismatch as SpeculativeOutcomeMismatch;
 pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
     CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
     FlowRuntimeRegistry, HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome,
     HardDeleteUploads, HardDeleteValueReader, HardDeleteValueUploader, PendingInvocation,
-    ProposalResult, ReplayMismatch, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig,
-    RuntimeEffectSink, RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings,
-    grpc_code,
+    ProposalResult, RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink,
+    RuntimeError, WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
 };
+pub use snapshots::{SnapshotConfig, SnapshotError};

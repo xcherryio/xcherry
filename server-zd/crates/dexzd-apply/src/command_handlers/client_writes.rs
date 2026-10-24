@@ -259,8 +259,13 @@ pub(crate) fn apply_flow_stop(
     }
     let stop_type = StopType::try_from(request.stop_type).unwrap_or(StopType::Unspecified);
     let closing = match stop_type {
-        StopType::Unspecified | StopType::Cancel => FlowClosing::canceled(request.reason.clone()),
-        StopType::Terminate => FlowClosing::terminated(request.reason.clone()),
+        StopType::Unspecified | StopType::Cancel => FlowClosing::canceled(),
+        StopType::Terminate => FlowClosing::terminated(if request.reason.is_empty() {
+            // The Go Server's default termination reason, spelling included.
+            "Force termiantion from user".to_owned()
+        } else {
+            request.reason.clone()
+        }),
         StopType::Fail => {
             let reason = if request.reason.is_empty() {
                 "fail by client".to_owned()

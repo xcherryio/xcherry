@@ -9,10 +9,10 @@
 use dexzd_keyspace::{ColumnFamily, FLOW_DIRECTORY_KEY_TAG, RunTable, parse_run_key};
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, ChannelMessageRecord, ChannelMetaRecord, ChannelWaiterRecord,
-    CheckpointRecord, FlowDirectoryRecord, HardDeleteObjectRecord, HistoryRecord, InboxDedupRecord,
-    LockRecord, OutboxRecord, PermissionSetRecord, RequestDedupRecord, RunRecord,
-    SearchDocumentRecord, StepCounterRecord, StepExecutionRecord, SubFlowResultRecord, TimerRecord,
-    ValueBirthRecord, ValueGarbageRecord, ValueRecord,
+    CheckpointRecord, FlowDirectoryRecord, HardDeleteObjectRecord, HistoryRecord,
+    HistoryRowMetadata, InboxDedupRecord, LockRecord, OutboxRecord, PermissionSetRecord,
+    RequestDedupRecord, RunRecord, SearchDocumentRecord, StepCounterRecord, StepExecutionRecord,
+    SubFlowResultRecord, TimerRecord, ValueBirthRecord, ValueGarbageRecord, ValueRecord,
 };
 use prost::Message;
 
@@ -74,6 +74,7 @@ pub fn reencode_row(
         RunTable::ValueGarbage => reencode::<ValueGarbageRecord>(value),
         RunTable::HardDeleteObject => reencode::<HardDeleteObjectRecord>(value),
         RunTable::HistoryRecord => reencode::<HistoryRecord>(value),
+        RunTable::HistoryRowMetadata => reencode::<HistoryRowMetadata>(value),
         RunTable::Checkpoint => reencode::<CheckpointRecord>(value),
         RunTable::SearchDocument => reencode::<SearchDocumentRecord>(value),
         RunTable::ValueHolder | RunTable::RequestDedupOrder => Ok(value.to_vec()),
@@ -110,6 +111,7 @@ fn table_name(table: RunTable) -> &'static str {
         RunTable::ValueGarbage => "ValueGarbage",
         RunTable::HardDeleteObject => "HardDeleteObject",
         RunTable::HistoryRecord => "HistoryRecord",
+        RunTable::HistoryRowMetadata => "HistoryRowMetadata",
         RunTable::Checkpoint => "Checkpoint",
         RunTable::SearchDocument => "SearchDocument",
         RunTable::RequestDedupOrder => "RequestDedupOrder",
