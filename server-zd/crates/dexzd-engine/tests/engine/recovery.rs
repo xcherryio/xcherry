@@ -78,7 +78,7 @@ async fn restart_after_crash_replays_the_log_into_a_new_store() {
     assert_eq!(after_restart.epoch, 2);
     assert!(after_restart.proposed_at_micros > last_before_crash.proposed_at_micros);
     assert_eq!(second.committed_count("crash-flow").await, committed + 1);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -98,7 +98,7 @@ async fn restart_with_the_same_rocksdb_store_applies_only_new_batches() {
         .await
         .expect("node starts");
     first.commit_prompt("rocks-flow", 4).await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 
     let second = cluster
         .start(
@@ -112,7 +112,7 @@ async fn restart_with_the_same_rocksdb_store_applies_only_new_batches() {
     assert_eq!(second.committed_count("rocks-flow").await, 4);
     second.commit_prompt("rocks-flow", 1).await;
     assert_eq!(second.committed_count("rocks-flow").await, 5);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -133,7 +133,7 @@ async fn an_unreadable_rocksdb_store_is_set_aside_and_rebuilt() {
         .await
         .expect("node starts");
     first.commit_prompt("corrupt-flow", 2).await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
     std::fs::write(store_directory.join("CURRENT"), b"not a manifest name\n")
         .expect("corrupt the store");
 
@@ -152,7 +152,7 @@ async fn an_unreadable_rocksdb_store_is_set_aside_and_rebuilt() {
         .filter(|entry| entry.file_name().to_string_lossy().contains(".discarded-"))
         .count();
     assert_eq!(set_aside, 1);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -166,7 +166,7 @@ async fn a_halted_partition_stays_halted_after_restart() {
         .expect("submit succeeds");
     assert!(ticket.wait().await.is_err());
     first.commit_prompt(&healthy_flow, 1).await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 
     let second = cluster.start_in_memory().await;
     assert_eq!(second.node.halted_partitions(), vec![failing_partition]);
@@ -178,7 +178,7 @@ async fn a_halted_partition_stays_halted_after_restart() {
     );
     assert_eq!(second.committed_count(&healthy_flow).await, 1);
     second.commit_prompt(&healthy_flow, 1).await;
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -200,7 +200,7 @@ async fn a_failed_runtime_rebuild_fails_startup() {
         .start_with(&successor_config)
         .await
         .expect("the successor takes the released lease");
-    successor.node.shutdown().await;
+    successor.node.shutdown().await.expect("lease released");
 }
 
 /// Runs in real time: paused time does not advance while the blocked apply runs.
@@ -226,16 +226,19 @@ async fn shutdown_releases_the_lease_when_an_applier_lane_is_stuck() {
         .await;
     // Open before asserting, so a failure does not leave the stuck lane blocked.
     first.applier.gate.open();
-    assert!(shutdown.is_ok(), "shutdown abandons the stuck applier lane");
+    assert!(
+        matches!(shutdown, Ok(Ok(()))),
+        "shutdown abandons the stuck applier lane and releases the lease"
+    );
     let successor = successor.expect("the successor takes the released lease");
-    successor.node.shutdown().await;
+    successor.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_newer_version_barrier_fails_startup() {
     let mut cluster = TestCluster::new();
     let first = cluster.start_in_memory().await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
     raise_version_barrier_as_a_newer_binary(&cluster, 99).await;
     let config = cluster.config(LocalStoreConfig::InMemory);
     let result = cluster
@@ -310,7 +313,7 @@ async fn a_newer_epoch_in_the_log_fences_the_node() {
         Err(CommitError::NodeStopping { .. })
     ));
     assert_eq!(test.node.wait_for_stop().await, NodeStopReason::Fenced);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -355,7 +358,7 @@ async fn submissions_during_recovery_are_unavailable() {
         matches!(&rejection, Some(CommitError::Unavailable { detail }) if detail.contains("recovering")),
         "{rejection:?}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -390,7 +393,7 @@ async fn replayed_frames_finish_after_their_last_command() {
         assert_frames_finish_after_their_commands(&replayed_events),
         3
     );
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -453,7 +456,7 @@ async fn voided_batches_after_takeover_keep_submission_order() {
     }
     assert_eq!(second.committed_count("void-flow").await, 5);
     // Shutdown joins the applier lanes, which hand each command to the runtime after its ticket.
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
     let committed_ids: Vec<Vec<u8>> = second
         .runtime
         .committed_commands()
