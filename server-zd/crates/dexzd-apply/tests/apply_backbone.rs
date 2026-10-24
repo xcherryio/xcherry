@@ -1454,3 +1454,25 @@ fn a_terminated_flow_keeps_the_reason_only_in_history() {
         vec!["terminated".to_owned()]
     );
 }
+
+#[test]
+fn an_empty_termination_reason_uses_the_go_default_in_history() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+
+    let stopped = harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Terminate as i32,
+            ..StopFlowRequest::default()
+        }),
+    }));
+
+    assert_eq!(
+        flow_closed_messages(&stopped),
+        vec!["Force termiantion from user".to_owned()]
+    );
+    assert_eq!(
+        harness.run_record().close.expect("closed").error_message,
+        ""
+    );
+}
