@@ -79,8 +79,11 @@ pub(crate) fn refresh_search_document(
         })
         .map(|(_, step)| step.step_type)
         .collect();
+    // Time travel replaces Attribute rows, so indexed values are rebuilt from the restored rows.
+    let is_time_travel = matches!(scope.command.command.as_ref(), Some(Command::TimeTravel(_)));
     let mut indexed: BTreeMap<String, SearchAttributeValue> = old_document
         .as_ref()
+        .filter(|_| !is_time_travel)
         .map(|document| {
             document
                 .attributes
@@ -89,7 +92,7 @@ pub(crate) fn refresh_search_document(
                 .collect()
         })
         .unwrap_or_default();
-    if old_document.is_none() {
+    if old_document.is_none() || is_time_travel {
         let mut attributes = cursor.rows.attributes(transaction)?;
         attributes.sort_by(|(left_key, left), (right_key, right)| {
             (left.written_seq, left_key).cmp(&(right.written_seq, right_key))

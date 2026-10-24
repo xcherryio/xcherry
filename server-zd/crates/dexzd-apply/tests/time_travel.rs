@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_apply::read_model::get_search_document;
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateReadError, StateRow,
     StateWrite, apply_flow_command,
@@ -25,7 +26,7 @@ use dexzd_keyspace::{
 use dexzd_protocol::dex::{
     AttributeWrite, ChannelMessage, ChannelMessageDeletion, CloseDecision, CloseDecisionType,
     DeleteChannelMessageRequest, FlowResetStepMethod, FlowResetType, FlowStatus, FlowTimeoutPolicy,
-    InvokeExecuteMethodResponse, InvokeRpcRequest, InvokeWaitForMethodResponse,
+    IndexConfig, InvokeExecuteMethodResponse, InvokeRpcRequest, InvokeWaitForMethodResponse,
     InvokeWorkerRpcResponse, PublishToChannelRequest, ResetFlowRequest, SetAttributesRequest,
     SkipTimerRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions, TimerCondition,
     Value, WaitingCondition, WaitingConditionType, WorkerErrorResponse, WorkerTarget,
@@ -1940,4 +1941,61 @@ fn reapply_skips_a_transactional_rpc_whose_deletions_no_longer_hold() {
     );
     let fork = harness.history_record(harness.last_seq()).unwrap();
     assert_eq!(fork.reapplied_inputs.len(), 1);
+}
+
+fn set_indexed_attribute(harness: &mut Harness, attribute_key: &str, text: &str) {
+    let outcome = harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes: vec![AttributeWrite {
+                key: attribute_key.to_owned(),
+                value: Some(string_value(text)),
+                index_config: Some(IndexConfig {
+                    enable: true,
+                    index_key: "ReviewState".to_owned(),
+                    ..IndexConfig::default()
+                }),
+                ..AttributeWrite::default()
+            }],
+            ..SetAttributesRequest::default()
+        }),
+        hard_delete_objects: Vec::new(),
+        request_fingerprint: Vec::new(),
+    }));
+    assert!(is_ok(&outcome.reply), "SetAttributes applies");
+}
+
+fn indexed_values(harness: &Harness) -> Vec<(String, Option<Value>)> {
+    get_search_document(&harness.state, harness.context.flow_hash, harness.run())
+        .expect("the search document reads")
+        .expect("the run has a search document")
+        .attributes
+        .into_iter()
+        .map(|attribute| (attribute.index_key, attribute.value))
+        .collect()
+}
+
+#[test]
+fn time_travel_rebuilds_indexed_attributes_from_the_restored_state() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    set_indexed_attribute(&mut harness, "state", "new");
+    let new_time = harness
+        .history_record(harness.last_seq())
+        .unwrap()
+        .timestamp_micros;
+    set_indexed_attribute(&mut harness, "state", "ready");
+    let ready = vec![("ReviewState".to_owned(), Some(string_value("ready")))];
+    assert_eq!(indexed_values(&harness), ready);
+    harness.travel_to(reset_to_time(new_time));
+    assert_eq!(
+        indexed_values(&harness),
+        vec![("ReviewState".to_owned(), Some(string_value("new")))]
+    );
+    harness.travel_to(reapplying(ResetFlowRequest {
+        run_attempt: 1,
+        ..reset_to_time(new_time)
+    }));
+    assert_eq!(indexed_values(&harness), ready);
+    harness.travel_to(reset(FlowResetType::Beginning));
+    assert!(indexed_values(&harness).is_empty());
 }
