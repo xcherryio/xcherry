@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dexzd_clock::WallClock;
+use dexzd_cluster_metadata::ManifestChange;
 use dexzd_log::StreamIdentity;
 use dexzd_object_store::ObjectStore;
-use dexzd_protocol::dexzd::v1::SnapshotManifest;
-use prost::Message;
+use dexzd_protocol::dexzd::v1::{Manifest, SnapshotManifest};
 
 use crate::snapshots::SnapshotError;
+use crate::snapshots::ownership_fence::OwnershipFence;
 
 const LISTING_PAGE_SIZE: u32 = 1000;
 
@@ -23,103 +24,130 @@ const LISTING_PAGE_SIZE: u32 = 1000;
 pub(crate) struct LogCleanup {
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) clock: Arc<dyn WallClock>,
+    /// The stream this node serves; older incarnations of the node are cleaned up too.
     pub(crate) stream: StreamIdentity,
     pub(crate) partition_count: u32,
     pub(crate) deletion_delay: Duration,
+}
+
+/// The lowest batch every partition applied, ordered by incarnation, then seq.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CoveredPosition {
+    incarnation: u32,
+    seq: u64,
 }
 
 impl LogCleanup {
     /// Deletes covered batches.
     ///
     /// Returns the first retained seq, or `None` when no snapshot is old enough.
-    pub(crate) async fn run_once(&self, lineage: &str) -> Result<Option<u64>, SnapshotError> {
-        let Some(first_retained_seq) = self.covered_bound(lineage).await? else {
+    ///
+    /// Covered batches of older incarnations are deleted too. `snapshots` are the retained
+    /// snapshots of this node. `published` is the snapshot the manifest points to, which
+    /// recovery restores, so the bound never passes it.
+    pub(crate) async fn run_once(
+        &self,
+        snapshots: &[&SnapshotManifest],
+        published: &SnapshotManifest,
+        fence: &OwnershipFence,
+    ) -> Result<Option<u64>, SnapshotError> {
+        let Some(covered) = self.covered_position(snapshots, published) else {
             return Ok(None);
         };
-        self.record_first_retained_seq(first_retained_seq).await?;
-        let deleted = self.delete_batches_before(first_retained_seq).await?;
+        fence
+            .update_manifest(|manifest| self.retain_segments_from(manifest, covered))
+            .await?;
+        fence.ensure_serving()?;
+        let deleted = self.delete_batches_before(covered).await?;
         if deleted > 0 {
             tracing::info!(
-                first_retained_seq,
+                incarnation = covered.incarnation,
+                first_retained_seq = covered.seq,
                 deleted,
                 "deleted log batches covered by snapshots"
             );
         }
-        Ok(Some(first_retained_seq))
+        Ok(Some(covered.seq))
     }
 
-    async fn covered_bound(&self, lineage: &str) -> Result<Option<u64>, SnapshotError> {
-        let prefix = format!("snapshot/{}/{lineage}/manifest/", self.stream.node_id);
-        let keys = self.list_keys(&prefix, None).await?;
+    /// Returns the position covered by the newest snapshot older than the delay, never beyond
+    /// the published snapshot.
+    fn covered_position(
+        &self,
+        snapshots: &[&SnapshotManifest],
+        published: &SnapshotManifest,
+    ) -> Option<CoveredPosition> {
         let delay_micros = i64::try_from(self.deletion_delay.as_micros()).unwrap_or(i64::MAX);
         let newest_allowed_micros = self.clock.now_unix_micros().saturating_sub(delay_micros);
-        for key in keys.iter().rev() {
-            let Some(content) = self.object_store.get(key).await? else {
-                continue;
-            };
-            let manifest = SnapshotManifest::decode(content.bytes)?;
-            if manifest.created_at_unix_micros > newest_allowed_micros {
-                continue;
-            }
-            return Ok(self.min_applied_seq(&manifest));
-        }
-        Ok(None)
+        let old_enough = snapshots
+            .iter()
+            .rev()
+            .filter(|manifest| manifest.created_at_unix_micros <= newest_allowed_micros)
+            .find_map(|manifest| self.lowest_applied_position(manifest))?;
+        Some(old_enough.min(self.lowest_applied_position(published)?))
     }
 
-    fn min_applied_seq(&self, manifest: &SnapshotManifest) -> Option<u64> {
-        let positions: Vec<u64> = manifest
+    /// Returns `None` unless the manifest holds a position of this node for every partition.
+    fn lowest_applied_position(&self, manifest: &SnapshotManifest) -> Option<CoveredPosition> {
+        let positions: Vec<CoveredPosition> = manifest
             .partition_positions
             .iter()
             .filter_map(|position| position.applied.as_ref())
-            .filter(|applied| {
-                applied.node_id == self.stream.node_id
-                    && applied.incarnation == self.stream.incarnation
+            .filter(|applied| applied.node_id == self.stream.node_id)
+            .map(|applied| CoveredPosition {
+                incarnation: applied.incarnation,
+                seq: applied.seq,
             })
-            .map(|applied| applied.seq)
             .collect();
         if positions.len() < self.partition_count as usize {
             return None;
         }
-        positions.into_iter().min().filter(|seq| *seq > 1)
+        positions.into_iter().min()
     }
 
     /// Records the bound in the manifest before deleting, so recovery never reads below it.
-    async fn record_first_retained_seq(
+    ///
+    /// Drops closed segments of older incarnations and raises the start of the covered one.
+    fn retain_segments_from(
         &self,
-        first_retained_seq: u64,
-    ) -> Result<(), SnapshotError> {
-        dexzd_cluster_metadata::update_manifest(
-            self.object_store.as_ref(),
-            self.clock.as_ref(),
-            |manifest| {
-                let mut change = dexzd_cluster_metadata::ManifestChange::Unchanged;
-                for segment in manifest
-                    .partitions
-                    .iter_mut()
-                    .flat_map(|partition| partition.segments.iter_mut())
+        manifest: &mut Manifest,
+        covered: CoveredPosition,
+    ) -> ManifestChange {
+        let mut change = ManifestChange::Unchanged;
+        for partition in &mut manifest.partitions {
+            let segment_count = partition.segments.len();
+            partition.segments.retain(|segment| {
+                segment.node_id != self.stream.node_id
+                    || segment.is_open
+                    || segment.incarnation >= covered.incarnation
+            });
+            if partition.segments.len() != segment_count {
+                change = ManifestChange::Changed;
+            }
+            for segment in &mut partition.segments {
+                if segment.node_id == self.stream.node_id
+                    && segment.incarnation == covered.incarnation
+                    && segment.start_seq < covered.seq
                 {
-                    if segment.is_open
-                        && segment.node_id == self.stream.node_id
-                        && segment.incarnation == self.stream.incarnation
-                        && segment.start_seq < first_retained_seq
-                    {
-                        segment.start_seq = first_retained_seq;
-                        change = dexzd_cluster_metadata::ManifestChange::Changed;
-                    }
+                    segment.start_seq = covered.seq;
+                    change = ManifestChange::Changed;
                 }
-                Ok(change)
-            },
-        )
-        .await?;
-        Ok(())
+            }
+        }
+        change
     }
 
-    async fn delete_batches_before(&self, first_retained_seq: u64) -> Result<usize, SnapshotError> {
-        let prefix = format!(
-            "log/{}/{:010}/",
-            self.stream.node_id, self.stream.incarnation
-        );
-        let bound_key = self.stream.batch_key(first_retained_seq);
+    /// Deletes every batch of this node's streams that sorts before the covered position.
+    async fn delete_batches_before(
+        &self,
+        covered: CoveredPosition,
+    ) -> Result<usize, SnapshotError> {
+        let prefix = format!("log/{}/", self.stream.node_id);
+        let bound_key = StreamIdentity {
+            incarnation: covered.incarnation,
+            ..self.stream.clone()
+        }
+        .batch_key(covered.seq);
         let mut deleted = 0;
         let mut start_after = None;
         loop {
@@ -144,25 +172,6 @@ impl LogCleanup {
             }
             if is_last_page || reached_bound {
                 return Ok(deleted);
-            }
-        }
-    }
-
-    async fn list_keys(
-        &self,
-        prefix: &str,
-        mut start_after: Option<String>,
-    ) -> Result<Vec<String>, SnapshotError> {
-        let mut keys = Vec::new();
-        loop {
-            let page = self
-                .object_store
-                .list(prefix, start_after.as_deref(), LISTING_PAGE_SIZE)
-                .await?;
-            keys.extend(page.objects.into_iter().map(|object| object.key));
-            match page.next_start_after {
-                Some(next) => start_after = Some(next),
-                None => return Ok(keys),
             }
         }
     }

@@ -20,7 +20,10 @@ pub(crate) use invocations::{
     InvocationEnd, configured_method_timeout_seconds, end_running_attempt, make_invocation_pending,
     start_attempt,
 };
-pub(crate) use retry_backoff::{RetryDecision, decide_retry};
+pub(crate) use retry_backoff::{
+    DEFAULT_BACKOFF_COEFFICIENT, DEFAULT_INITIAL_INTERVAL_SECONDS,
+    DEFAULT_MAXIMUM_INTERVAL_SECONDS, DEFAULT_TOTAL_DURATION_SECONDS, RetryDecision, decide_retry,
+};
 pub(crate) use step_creation::{NewStepExecution, create_step_execution};
 pub(crate) use step_decisions::{
     apply_step_decision, cancel_steps_by_type, complete_gracefully_if_ready, finish_step, is_active,

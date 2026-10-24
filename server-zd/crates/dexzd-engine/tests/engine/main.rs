@@ -10,5 +10,7 @@
 
 mod commit_path;
 mod harness;
+mod node_identity;
 mod recovery;
+mod snapshot_fencing;
 mod snapshots;

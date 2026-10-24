@@ -231,7 +231,14 @@ pub(crate) fn apply_attempt_failed(
     );
     if decision == RetryDecision::Exhausted {
         // Recorded before the attempt ends so the event keeps the final attempt snapshot.
-        history_events::record_method_failed(transaction, cursor, &step, method, &failure)?;
+        history_events::record_method_failed(
+            transaction,
+            cursor,
+            &step,
+            method,
+            &failure,
+            scope.now_micros,
+        )?;
     }
     end_running_attempt(transaction, cursor, &mut step, InvocationEnd::Finished)?;
     match decision {
@@ -420,7 +427,13 @@ pub(crate) fn apply_method_completed(
             &condition.sub_flow_conditions,
         )
     {
-        history_events::record_method_completed(transaction, cursor, &step, command)?;
+        history_events::record_method_completed(
+            transaction,
+            cursor,
+            &step,
+            command,
+            scope.now_micros,
+        )?;
         close_flow(
             transaction,
             cursor,
@@ -432,7 +445,7 @@ pub(crate) fn apply_method_completed(
     if !command.app_worker_id.is_empty() {
         cursor.record.sticky_app_worker_id = command.app_worker_id.clone();
     }
-    history_events::record_method_completed(transaction, cursor, &step, command)?;
+    history_events::record_method_completed(transaction, cursor, &step, command, scope.now_micros)?;
     end_running_attempt(transaction, cursor, &mut step, InvocationEnd::Finished)?;
     if let Some(invocation) = step.invocation.as_mut()
         && let Some(checkpoint) = invocation.heartbeat_checkpoint.take()

@@ -16,16 +16,21 @@ use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::{Manifest, SnapshotReference};
 
 use crate::recovery::EngineStartError;
+use crate::recovery::node_streams::NodeStreams;
 
 /// The validated cluster object and manifest that a starting node works with.
 pub(crate) struct ClusterMetadata {
     pub(crate) cluster: ClusterBootstrap,
     pub(crate) manifest: Manifest,
     pub(crate) behavior_version: u32,
+    /// This node's recorded log streams, checked against its configured identity.
+    pub(crate) streams: NodeStreams,
 }
 
 impl ClusterMetadata {
     /// Creates the cluster and manifest on first start; validates both on later starts.
+    ///
+    /// Rejects a node ID or incarnation that the manifest contradicts before the node takes a lease.
     pub(crate) async fn bootstrap_or_validate(
         object_store: &dyn ObjectStore,
         clock: &dyn WallClock,
@@ -62,10 +67,12 @@ impl ClusterMetadata {
                 newest_supported: BehaviorVersion::CURRENT.number(),
             });
         }
+        let streams = NodeStreams::from_manifest(&manifest, node)?;
         Ok(Self {
             cluster,
             manifest,
             behavior_version,
+            streams,
         })
     }
 
@@ -91,20 +98,5 @@ impl ClusterMetadata {
             partition.snapshot.as_ref() == Some(first) && partition.owner_node_id == node_id
         });
         (is_complete && first.node_id == node_id).then_some(first)
-    }
-
-    /// Returns the first retained log seq of this node's open log segment.
-    pub(crate) fn first_retained_seq(&self, node_id: &str, incarnation: u32) -> u64 {
-        self.manifest
-            .partitions
-            .iter()
-            .flat_map(|partition| &partition.segments)
-            .filter(|segment| {
-                segment.is_open && segment.node_id == node_id && segment.incarnation == incarnation
-            })
-            .map(|segment| segment.start_seq)
-            .max()
-            .unwrap_or(1)
-            .max(1)
     }
 }

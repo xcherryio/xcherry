@@ -21,7 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::command_applier::CommandApplier;
 use crate::commit::EngineLocalStore;
-use crate::commit::commit_state::{CommitState, NodeStopReason, partition_stopped_error};
+use crate::commit::commit_state::{
+    CommitState, NodeStopReason, PendingCommand, partition_stopped_error,
+};
 use crate::commit::replay_checks::compare_repeated_apply;
 use crate::commit::staged_state_reader::StagedStateReader;
 use crate::recovery::CommittedCommandSink;
@@ -226,6 +228,7 @@ struct AppliedCommand {
     command: FlowCommand,
     context: ApplyContext,
     outcome: ApplyOutcome,
+    pending: Option<PendingCommand>,
 }
 
 enum FrameFailure {
@@ -254,7 +257,7 @@ impl FrameApplier {
         }
     }
 
-    /// Returns `None` when the local store already contains the frame.
+    /// Returns `None` when the local store already contains the frame or the node stopped.
     fn try_apply_frame(
         &self,
         frame: &PartitionFrame,
@@ -270,7 +273,7 @@ impl FrameApplier {
         if meta
             .applied
             .as_ref()
-            .is_some_and(|applied| applied.seq >= frame.position.seq)
+            .is_some_and(|applied| is_at_or_after(applied, &frame.position))
         {
             return Ok(None);
         }
@@ -293,6 +296,7 @@ impl FrameApplier {
                 command,
                 context,
                 outcome,
+                pending: None,
             });
         }
         let mut batch = reader.into_batch();
@@ -305,9 +309,17 @@ impl FrameApplier {
                 applied_epoch: frame.epoch,
             })
             .map_err(|error| FrameFailure::StoreFailed(error.to_string()))?;
+        // Recovery replays a frame skipped after the stop.
+        let Some(_store_write) = self.state.begin_store_write() else {
+            return Ok(None);
+        };
         store
             .write(batch)
             .map_err(|error| FrameFailure::StoreFailed(error.to_string()))?;
+        // Taken under the write admission, so `stop` cannot fail these tickets after the write.
+        for command in &mut applied {
+            command.pending = self.state.take(&command.command.command_id);
+        }
         Ok(Some(applied))
     }
 
@@ -339,7 +351,7 @@ impl FrameApplier {
             if meta
                 .applied
                 .as_ref()
-                .is_some_and(|applied| applied.seq >= position.seq)
+                .is_some_and(|applied| is_at_or_after(applied, position))
             {
                 continue;
             }
@@ -355,7 +367,12 @@ impl FrameApplier {
         if batch.operations().is_empty() {
             return;
         }
-        if let Err(error) = store.write(batch) {
+        // Advancing past a frame skipped after the stop would lose it.
+        let written = match self.state.begin_store_write() {
+            Some(_store_write) => store.write(batch),
+            None => return,
+        };
+        if let Err(error) = written {
             self.state.stop(NodeStopReason::LocalStoreFailed {
                 detail: error.to_string(),
             });
@@ -432,13 +449,14 @@ impl FrameApplier {
             command,
             context,
             outcome,
+            pending,
         } in applied
         {
             let committed = CommittedCommand {
                 outcome,
                 position: frame.position.clone(),
             };
-            if let Some(pending) = self.state.take(&command.command_id) {
+            if let Some(pending) = pending {
                 pending.responder.resolve(Ok(committed.clone()));
             }
             self.committed_commands
@@ -448,6 +466,8 @@ impl FrameApplier {
                     committed,
                 });
         }
+        self.committed_commands
+            .finish_frame(frame.partition, &frame.position);
     }
 
     fn reject_frame(&self, frame: &PartitionFrame) {
@@ -466,6 +486,11 @@ impl FrameApplier {
             }
         }
     }
+}
+
+/// Positions of one node order by incarnation, then seq; incarnations only increase.
+fn is_at_or_after(applied: &LogPosition, position: &LogPosition) -> bool {
+    (applied.incarnation, applied.seq) >= (position.incarnation, position.seq)
 }
 
 fn hex(bytes: &[u8]) -> String {

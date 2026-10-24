@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::commit::EngineLocalStore;
 use crate::recovery::EngineStartError;
+use crate::recovery::node_streams::NodeStreams;
 
 /// Where the node keeps its local state.
 #[derive(Debug, Clone)]
@@ -38,8 +39,17 @@ pub enum LocalStoreConfig {
 /// What recovery needs to decide whether the local store can be reused.
 pub(crate) struct LocalStoreRequirements<'a> {
     pub(crate) snapshot: Option<&'a SnapshotReference>,
-    pub(crate) first_retained_seq: u64,
+    pub(crate) streams: &'a NodeStreams,
     pub(crate) partition_count: u32,
+}
+
+/// The lowest applied batch over every partition, ordered by incarnation, then seq.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppliedPosition {
+    pub(crate) incarnation: u32,
+    pub(crate) seq: u64,
+    /// Epoch of that batch; see `PartitionMeta.applied_epoch`.
+    pub(crate) epoch: u64,
 }
 
 pub(crate) async fn open_local_store(
@@ -72,12 +82,8 @@ pub(crate) async fn open_local_store(
             None => RestoredLocalStore::Memory(InMemoryLocalStore::new()),
         },
     };
-    let resumes_at = min_applied_seq(&store, requirements.partition_count)? + 1;
-    if resumes_at < requirements.first_retained_seq {
-        return Err(EngineStartError::LogUnavailable {
-            first_retained_seq: requirements.first_retained_seq,
-            resumes_at,
-        });
+    if let Some(gap) = find_unreplayable_gap(&store, requirements)? {
+        return Err(gap);
     }
     Ok(Arc::new(store))
 }
@@ -90,17 +96,12 @@ async fn open_rocksdb_store(
 ) -> Result<RestoredLocalStore, EngineStartError> {
     if is_nonempty_directory(directory)? {
         match RocksDbLocalStore::open(directory, options) {
-            Ok(store) => {
-                let resumes_at = min_applied_seq(&store, requirements.partition_count)? + 1;
-                if resumes_at >= requirements.first_retained_seq {
-                    return Ok(RestoredLocalStore::RocksDb(store));
+            Ok(store) => match find_unreplayable_gap(&store, requirements)? {
+                None => return Ok(RestoredLocalStore::RocksDb(store)),
+                Some(gap) => {
+                    tracing::warn!(gap = %gap, "the retained log cannot update the local store; restoring the newest snapshot");
                 }
-                tracing::warn!(
-                    resumes_at,
-                    first_retained_seq = requirements.first_retained_seq,
-                    "local store is older than the retained log; restoring the newest snapshot"
-                );
-            }
+            },
             Err(error) => {
                 tracing::warn!(error = %error, "local store cannot be opened; restoring the newest snapshot");
             }
@@ -117,33 +118,68 @@ async fn open_rocksdb_store(
     }
 }
 
-/// Returns the lowest applied seq over every partition; 0 when a partition applied nothing.
-pub(crate) fn min_applied_seq(
+/// Returns why the retained log cannot bring `store` up to date, or `None` when it can.
+fn find_unreplayable_gap(
     store: &dyn LocalReadView,
-    partition_count: u32,
-) -> Result<u64, EngineStartError> {
-    Ok(lowest_applied_position(store, partition_count)?.0)
+    requirements: &LocalStoreRequirements<'_>,
+) -> Result<Option<EngineStartError>, EngineStartError> {
+    let applied = lowest_applied_position(store, requirements.partition_count)?;
+    let open_incarnation = requirements.streams.open_segment().incarnation;
+    if let Some(applied) = applied
+        && applied.incarnation > open_incarnation
+    {
+        return Ok(Some(EngineStartError::InvalidMetadata {
+            detail: format!(
+                "the local store applied incarnation {}, newer than the recorded incarnation \
+                 {open_incarnation}",
+                applied.incarnation
+            ),
+        }));
+    }
+    for segment in &requirements.streams.segments {
+        let resumes_at = match applied {
+            Some(applied) if applied.incarnation > segment.incarnation => continue,
+            Some(applied) if applied.incarnation == segment.incarnation => applied.seq + 1,
+            _ => 1,
+        };
+        if resumes_at < segment.start_seq {
+            return Ok(Some(EngineStartError::LogUnavailable {
+                incarnation: segment.incarnation,
+                first_retained_seq: segment.start_seq,
+                resumes_at,
+            }));
+        }
+    }
+    Ok(None)
 }
 
-/// Returns the (seq, epoch) of the lowest applied batch over every partition, or (0, 0) when
-/// a partition applied nothing.
+/// Returns the lowest applied position over every partition, or `None` when a partition
+/// applied nothing.
 pub(crate) fn lowest_applied_position(
     store: &dyn LocalReadView,
     partition_count: u32,
-) -> Result<(u64, u64), EngineStartError> {
+) -> Result<Option<AppliedPosition>, EngineStartError> {
     let metas = store.partition_metas()?;
     if metas.len() < partition_count as usize {
-        return Ok((0, 0));
+        return Ok(None);
     }
-    Ok(metas
-        .iter()
-        .map(|meta| {
-            meta.applied
-                .as_ref()
-                .map_or((0, 0), |applied| (applied.seq, meta.applied_epoch))
-        })
-        .min()
-        .unwrap_or((0, 0)))
+    let mut lowest: Option<AppliedPosition> = None;
+    for meta in &metas {
+        let Some(applied) = &meta.applied else {
+            return Ok(None);
+        };
+        let position = AppliedPosition {
+            incarnation: applied.incarnation,
+            seq: applied.seq,
+            epoch: meta.applied_epoch,
+        };
+        if lowest.is_none_or(|lowest| {
+            (position.incarnation, position.seq) < (lowest.incarnation, lowest.seq)
+        }) {
+            lowest = Some(position);
+        }
+    }
+    Ok(lowest)
 }
 
 fn is_nonempty_directory(directory: &Path) -> Result<bool, EngineStartError> {

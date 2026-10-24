@@ -9,9 +9,10 @@
 use std::sync::{Arc, Mutex};
 
 use dexzd_keyspace::{PartitionHasher, PartitionId};
+use dexzd_protocol::dexzd::v1::LogPosition;
 use futures::future::BoxFuture;
 
-use crate::commit::CommandCommitter;
+use crate::commit::{CommandCommitter, EngineLocalStore};
 use crate::runtime::CommittedFlowCommand;
 
 /// Engine services handed to the runtime factory before the log is replayed.
@@ -22,6 +23,8 @@ pub struct EngineServices {
     pub partition_hasher: PartitionHasher,
     /// Hold it around every read-modify-write of the local store's NodeMeta.
     pub node_meta_lock: Arc<Mutex<()>>,
+    /// The local store, for runtime state kept in NodeMeta such as pending hard-delete uploads.
+    pub local_store: Arc<EngineLocalStore>,
 }
 
 /// What the runtime factory returns: where committed commands go and how partitions rebuild.
@@ -38,6 +41,9 @@ pub trait CommittedCommandSink: Send + Sync + 'static {
     ///
     /// Replayed commands arrive before rebuild with an older epoch; rebuild owns their effects.
     fn apply_committed(&self, committed: CommittedFlowCommand);
+
+    /// Called once after the last [`Self::apply_committed`] of each applied frame, replayed frames included.
+    fn finish_frame(&self, _partition: PartitionId, _position: &LogPosition) {}
 }
 
 /// Rebuilds a partition's runtime work from committed state; the node already accepts commands.

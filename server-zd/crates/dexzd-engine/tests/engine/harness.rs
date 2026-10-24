@@ -6,8 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
@@ -16,22 +17,29 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
     CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
-    CommittedFlowCommand, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
-    EngineServices, EngineStartError, LocalStoreConfig, PartitionRuntimeRebuilder,
-    RuntimeRebuildError, SnapshotConfig,
+    CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
+    EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
 };
-use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
-use dexzd_protocol::dexzd::v1::{AttributesSetCommand, CommandReply, FlowCommand, flow_command};
+use dexzd_object_store::{
+    FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
+};
+use dexzd_protocol::dexzd::v1::{
+    AttributesSetCommand, CommandReply, FlowCommand, LogPosition, Manifest, NodeLease, flow_command,
+};
 use futures::future::BoxFuture;
+use prost::Message;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 pub(crate) const PARTITION_COUNT: u32 = 4;
 pub(crate) const FAILING_FLOW: &str = "fails-to-apply";
 pub(crate) const PANICKING_FLOW: &str = "panics-in-apply";
 pub(crate) const NONDETERMINISTIC_FLOW: &str = "applies-nondeterministically";
+pub(crate) const BLOCKING_FLOW: &str = "blocks-in-apply";
 
 /// Wall clock that follows Tokio's paused clock, with an adjustable offset.
 pub(crate) struct TestClock {
@@ -66,11 +74,45 @@ impl WallClock for TestClock {
 pub(crate) struct CountingApplier {
     applied: Mutex<Vec<FlowCommand>>,
     nondeterministic_counter: AtomicU64,
+    /// Holds commands of [`BLOCKING_FLOW`] until opened.
+    pub(crate) gate: ApplyGate,
 }
 
 impl CountingApplier {
     pub(crate) fn applied_commands(&self) -> Vec<FlowCommand> {
         self.applied.lock().expect("applied lock").clone()
+    }
+}
+
+/// Blocks an apply call on its blocking-pool thread until the test opens it.
+#[derive(Default)]
+pub(crate) struct ApplyGate {
+    has_entered: AtomicBool,
+    is_open: Mutex<bool>,
+    opened: Condvar,
+}
+
+impl ApplyGate {
+    /// Yields instead of sleeping: paused time does not advance while a blocking task runs.
+    pub(crate) async fn wait_until_entered(&self) {
+        while !self.has_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    pub(crate) fn open(&self) {
+        *self.is_open.lock().expect("gate lock") = true;
+        self.opened.notify_all();
+    }
+
+    fn pass(&self) {
+        self.has_entered.store(true, Ordering::SeqCst);
+        let is_open = self.is_open.lock().expect("gate lock");
+        drop(
+            self.opened
+                .wait_while(is_open, |is_open| !*is_open)
+                .expect("gate lock"),
+        );
     }
 }
 
@@ -92,6 +134,7 @@ impl CommandApplier for CountingApplier {
                 });
             }
             PANICKING_FLOW => panic!("scripted apply panic"),
+            BLOCKING_FLOW => self.gate.pass(),
             _ => {}
         }
         let counter_key = counter_key(context, &command.flow_id);
@@ -149,12 +192,20 @@ pub(crate) fn decode_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes.try_into().expect("counter has eight bytes"))
 }
 
-/// Records rebuilt partitions and every committed command.
+/// Records rebuilt partitions, every committed command, and every frame end.
 #[derive(Default)]
 pub(crate) struct RecordingRuntime {
     rebuilt: Mutex<Vec<PartitionId>>,
     committed: Mutex<Vec<CommittedFlowCommand>>,
+    sink_events: Mutex<Vec<(PartitionId, SinkEvent)>>,
     failing_partition: Option<PartitionId>,
+}
+
+/// One call the committed command sink received, with the frame position it carried.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SinkEvent {
+    Applied(LogPosition),
+    FrameFinished(LogPosition),
 }
 
 impl RecordingRuntime {
@@ -181,15 +232,70 @@ impl RecordingRuntime {
             .map(|committed| committed.command.command_id)
             .collect()
     }
+
+    /// Returns the sink calls for `partition` in the order they arrived.
+    pub(crate) fn sink_events_of(&self, partition: PartitionId) -> Vec<SinkEvent> {
+        self.sink_events
+            .lock()
+            .expect("sink event lock")
+            .iter()
+            .filter(|(event_partition, _)| *event_partition == partition)
+            .map(|(_, event)| event.clone())
+            .collect()
+    }
+
+    fn record_sink_event(&self, partition: PartitionId, event: SinkEvent) {
+        self.sink_events
+            .lock()
+            .expect("sink event lock")
+            .push((partition, event));
+    }
 }
 
 impl CommittedCommandSink for RecordingRuntime {
     fn apply_committed(&self, committed: CommittedFlowCommand) {
+        self.record_sink_event(
+            committed.context.partition,
+            SinkEvent::Applied(committed.committed.position.clone()),
+        );
         self.committed
             .lock()
             .expect("committed lock")
             .push(committed);
     }
+
+    fn finish_frame(&self, partition: PartitionId, position: &LogPosition) {
+        self.record_sink_event(partition, SinkEvent::FrameFinished(position.clone()));
+    }
+}
+
+/// Asserts that every frame ends with one `FrameFinished` right after its last command.
+///
+/// Returns the number of frames in `events`.
+pub(crate) fn assert_frames_finish_after_their_commands(events: &[SinkEvent]) -> usize {
+    let mut open_frame: Option<&LogPosition> = None;
+    let mut finished_frames = 0;
+    for event in events {
+        match event {
+            SinkEvent::Applied(position) => {
+                if let Some(open) = open_frame {
+                    assert_eq!(open, position, "a frame ended without finish_frame");
+                }
+                open_frame = Some(position);
+            }
+            SinkEvent::FrameFinished(position) => {
+                assert_eq!(
+                    open_frame,
+                    Some(position),
+                    "finish_frame did not follow a command of its frame"
+                );
+                open_frame = None;
+                finished_frames += 1;
+            }
+        }
+    }
+    assert_eq!(open_frame, None, "the last frame has no finish_frame");
+    finished_frames
 }
 
 impl PartitionRuntimeRebuilder for RecordingRuntime {
@@ -210,25 +316,119 @@ impl PartitionRuntimeRebuilder for RecordingRuntime {
     }
 }
 
-/// Fails every write under a key prefix once switched on.
+/// One armed delay: the next `operation` on a key that `matches_prefix` or equals `key`.
+struct DelayedOperation {
+    operation: ObjectStoreOperation,
+    key: String,
+    matches_prefix: bool,
+    delay: Duration,
+}
+
+/// Fails writes under a key prefix, fails writes of one key after some succeed, or delays one
+/// operation, once switched on. Records every operation it sees.
 #[derive(Default)]
 pub(crate) struct SwitchableFaults {
     failing_put_prefix: Mutex<Option<String>>,
+    /// Key whose writes fail once the remaining count of allowed writes is zero.
+    limited_put: Mutex<Option<(String, usize)>>,
+    delayed: Mutex<Option<DelayedOperation>>,
+    delayed_entered: Notify,
+    operations: Mutex<Vec<(ObjectStoreOperation, String)>>,
 }
 
 impl SwitchableFaults {
     pub(crate) fn fail_puts_under(&self, prefix: &str) {
         *self.failing_put_prefix.lock().expect("fault lock") = Some(prefix.to_owned());
     }
+
+    /// Lets `allowed` more writes of exactly `key` succeed, then fails the rest.
+    pub(crate) fn fail_puts_of_after(&self, key: &str, allowed: usize) {
+        *self.limited_put.lock().expect("fault lock") = Some((key.to_owned(), allowed));
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.failing_put_prefix.lock().expect("fault lock") = None;
+        *self.limited_put.lock().expect("fault lock") = None;
+        *self.delayed.lock().expect("fault lock") = None;
+    }
+
+    /// Delays the next read of exactly `key` by `delay`.
+    pub(crate) fn delay_next_get_of(&self, key: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Get, key, false, delay);
+    }
+
+    /// Delays the next write of a key under `prefix` by `delay`.
+    pub(crate) fn delay_next_put_under(&self, prefix: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Put, prefix, true, delay);
+    }
+
+    /// Waits until the operation armed by a `delay_next_*` call starts waiting.
+    pub(crate) async fn wait_until_delayed_operation_entered(&self) {
+        self.delayed_entered.notified().await;
+    }
+
+    /// Counts recorded operations of one kind whose key satisfies `is_counted`.
+    pub(crate) fn count_operations(
+        &self,
+        operation: ObjectStoreOperation,
+        is_counted: impl Fn(&str) -> bool,
+    ) -> usize {
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .iter()
+            .filter(|(recorded, key)| *recorded == operation && is_counted(key))
+            .count()
+    }
+
+    fn arm_delay(
+        &self,
+        operation: ObjectStoreOperation,
+        key: &str,
+        matches_prefix: bool,
+        delay: Duration,
+    ) {
+        *self.delayed.lock().expect("fault lock") = Some(DelayedOperation {
+            operation,
+            key: key.to_owned(),
+            matches_prefix,
+            delay,
+        });
+    }
 }
 
 impl FaultInjector for SwitchableFaults {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .push((operation, key.to_owned()));
+        let armed = self.delayed.lock().expect("fault lock").take_if(|delayed| {
+            delayed.operation == operation
+                && if delayed.matches_prefix {
+                    key.starts_with(&delayed.key)
+                } else {
+                    key == delayed.key
+                }
+        });
+        if let Some(delayed) = armed {
+            self.delayed_entered.notify_one();
+            return FaultAction::Delay(delayed.delay);
+        }
+        if operation != ObjectStoreOperation::Put {
+            return FaultAction::Proceed;
+        }
+        if let Some((limited_key, allowed)) = &mut *self.limited_put.lock().expect("fault lock")
+            && limited_key == key
+        {
+            if *allowed == 0 {
+                return FaultAction::FailBeforeEffect;
+            }
+            *allowed -= 1;
+        }
         let failing = self.failing_put_prefix.lock().expect("fault lock");
         match failing.as_deref() {
-            Some(prefix) if operation == ObjectStoreOperation::Put && key.starts_with(prefix) => {
-                FaultAction::FailBeforeEffect
-            }
+            Some(prefix) if key.starts_with(prefix) => FaultAction::FailBeforeEffect,
             _ => FaultAction::Proceed,
         }
     }
@@ -311,13 +511,50 @@ impl TestCluster {
 
     pub(crate) async fn start_in_memory(&mut self) -> TestNode {
         let config = self.config(LocalStoreConfig::InMemory);
+        self.start_with(&config).await.expect("node starts")
+    }
+
+    /// Starts a node with a fresh applier and runtime.
+    pub(crate) async fn start_with(
+        &mut self,
+        config: &EngineNodeConfig,
+    ) -> Result<TestNode, EngineStartError> {
         self.start(
-            &config,
+            config,
             Arc::new(CountingApplier::default()),
             Arc::new(RecordingRuntime::default()),
         )
         .await
-        .expect("node starts")
+    }
+
+    pub(crate) async fn cluster_manifest(&self) -> Manifest {
+        dexzd_cluster_metadata::read_manifest(self.object_store.as_ref())
+            .await
+            .expect("read cluster manifest")
+            .expect("cluster manifest exists")
+    }
+
+    /// Replaces the node lease with an expired one, as a successor's takeover would.
+    pub(crate) async fn expire_lease_of(&self, node_id: &str) {
+        let key = format!("lease/{node_id}");
+        let current = self
+            .object_store
+            .get(&key)
+            .await
+            .expect("read lease")
+            .expect("lease exists");
+        let mut lease = NodeLease::decode(current.bytes).expect("decode lease");
+        lease.holder_process_id = "taken-over-by-a-test".to_owned();
+        lease.expires_at_unix_micros = 0;
+        lease.version += 1;
+        self.object_store
+            .put(
+                &key,
+                lease.encode_to_vec().into(),
+                dexzd_object_store::WriteCondition::Unconditional,
+            )
+            .await
+            .expect("overwrite lease");
     }
 }
 
@@ -359,7 +596,16 @@ impl TestNode {
 
     /// Returns the committed counter of `flow_id`.
     pub(crate) async fn committed_count(&self, flow_id: &str) -> u64 {
-        let view = self.node.committer().committed_view();
+        let view = self
+            .node
+            .committer()
+            .committed_view()
+            .expect("committed view opens");
+        self.count_in_view(view, flow_id).await
+    }
+
+    /// Returns the counter of `flow_id` as `view` sees it.
+    pub(crate) async fn count_in_view(&self, view: CommittedStateView, flow_id: &str) -> u64 {
         let key = counter_key(&self.context(flow_id), flow_id);
         tokio::task::spawn_blocking(move || {
             view.get(ColumnFamily::Flow, &key)

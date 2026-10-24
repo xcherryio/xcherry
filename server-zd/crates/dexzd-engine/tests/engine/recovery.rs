@@ -19,7 +19,8 @@ use dexzd_object_store::{ObjectStore, WriteCondition};
 use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::{
-    CountingApplier, FAILING_FLOW, PARTITION_COUNT, RecordingRuntime, TestCluster,
+    CountingApplier, FAILING_FLOW, PARTITION_COUNT, RecordingRuntime, SinkEvent, TestCluster,
+    assert_frames_finish_after_their_commands,
 };
 
 /// Writes a barrier this binary does not support, as a newer binary's upgrade would.
@@ -321,6 +322,41 @@ async fn submissions_during_recovery_are_unavailable() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn replayed_frames_finish_after_their_last_command() {
+    let mut cluster = TestCluster::new();
+    let first = cluster.start_in_memory().await;
+    let tickets: Vec<_> = (0..3)
+        .map(|_| {
+            first
+                .submit("replay-frame-flow", CommitUrgency::Batched)
+                .expect("submit succeeds")
+                .1
+        })
+        .collect();
+    for ticket in tickets {
+        ticket.wait().await.expect("command commits");
+    }
+    first.commit_prompt("replay-frame-flow", 2).await;
+    drop(first);
+
+    let second = cluster.start_in_memory().await;
+    let partition = second.context("replay-frame-flow").partition;
+    let replayed_events = second.runtime.sink_events_of(partition);
+    assert_eq!(
+        replayed_events
+            .iter()
+            .filter(|event| matches!(event, SinkEvent::Applied(_)))
+            .count(),
+        5
+    );
+    assert_eq!(
+        assert_frames_finish_after_their_commands(&replayed_events),
+        3
+    );
+    second.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn voided_batches_after_takeover_keep_submission_order() {
     let mut cluster = TestCluster::new();
     let first = cluster.start_in_memory().await;
@@ -378,6 +414,9 @@ async fn voided_batches_after_takeover_keep_submission_order() {
         submitted_ids.push(command.command_id);
         ticket.wait().await.expect("command commits");
     }
+    assert_eq!(second.committed_count("void-flow").await, 5);
+    // Shutdown joins the applier lanes, which hand each command to the runtime after its ticket.
+    second.node.shutdown().await;
     let committed_ids: Vec<Vec<u8>> = second
         .runtime
         .committed_commands()
@@ -386,5 +425,4 @@ async fn voided_batches_after_takeover_keep_submission_order() {
         .map(|committed| committed.command.command_id)
         .collect();
     assert_eq!(committed_ids, submitted_ids);
-    second.node.shutdown().await;
 }

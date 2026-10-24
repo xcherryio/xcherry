@@ -12,17 +12,37 @@ use dexzd_apply::{FlowStateReader, StateReadError, StateRow};
 use dexzd_keyspace::ColumnFamily;
 use dexzd_storage::{LocalReadView, ScanDirection, StorageError};
 
+use dexzd_storage::LocalStore;
+
 use crate::commit::EngineLocalStore;
 
-/// Committed state in the local store. Reads block, so use it on a blocking-pool thread.
-#[derive(Clone)]
+type StoreReadView<'store> = Box<dyn LocalReadView + Send + Sync + 'store>;
+
+self_cell::self_cell!(
+    /// A local store consistent view that keeps its store alive.
+    struct OwnedStoreReadView {
+        owner: Arc<EngineLocalStore>,
+        #[covariant]
+        dependent: StoreReadView,
+    }
+);
+
+/// Committed state at one point in time: later writes stay invisible.
+///
+/// Reads block, so use it on a blocking-pool thread.
 pub struct CommittedStateView {
-    store: Arc<EngineLocalStore>,
+    view: OwnedStoreReadView,
 }
 
 impl CommittedStateView {
-    pub(crate) fn new(store: Arc<EngineLocalStore>) -> Self {
-        Self { store }
+    /// Opens a consistent view of the local store.
+    pub(crate) fn open(store: Arc<EngineLocalStore>) -> Result<Self, StorageError> {
+        let view = OwnedStoreReadView::try_new(store, |store| store.consistent_view())?;
+        Ok(Self { view })
+    }
+
+    fn read_view(&self) -> &dyn LocalReadView {
+        self.view.borrow_dependent().as_ref()
     }
 }
 
@@ -32,7 +52,7 @@ impl FlowStateReader for CommittedStateView {
         column_family: ColumnFamily,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StateReadError> {
-        read_row(self.store.as_ref(), column_family, key)
+        read_row(self.read_view(), column_family, key)
     }
 
     fn scan(
@@ -42,7 +62,7 @@ impl FlowStateReader for CommittedStateView {
         end: &[u8],
         limit: usize,
     ) -> Result<Vec<StateRow>, StateReadError> {
-        scan_rows(self.store.as_ref(), column_family, start, end, limit)
+        scan_rows(self.read_view(), column_family, start, end, limit)
     }
 }
 

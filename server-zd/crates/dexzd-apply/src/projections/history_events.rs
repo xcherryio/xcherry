@@ -10,14 +10,14 @@
 
 use dexzd_protocol::dex::{
     FlowClosedHistoryEvent, FlowExecutionId, FlowInitialStart, FlowStartedOrContinuedHistoryEvent,
-    Kv, PendingStepMethodPhase, StepCompletionOutput, StepExecuteCompletedEvent,
+    Kv, PendingStepMethodPhase, RetryPolicy, StepCompletionOutput, StepExecuteCompletedEvent,
     StepExecuteCompletedOutput, StepExecuteFailedEvent, StepMethodEventContext,
     StepMethodEventInput, StepMethodFailedOutput, StepMethodFailure, StepMethodOptions,
     StepMethodPendingEvent, StepWaitForCompletedEvent, StepWaitForCompletedOutput,
     StepWaitForFailedEvent, flow_history_event, flow_started_or_continued_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
-    StartFlowReply, StepExecutionRecord, StepInvocationPhase, StepMethod,
+    StartFlowReply, StepExecutionRecord, StepInvocationPhase, StepInvocationRecord, StepMethod,
     StepMethodCompletedCommand, step_method_completed_command,
 };
 
@@ -25,7 +25,14 @@ use crate::ApplyError;
 use crate::command_handlers::run_cursor::{RunCursor, timestamp};
 use crate::state_access::FlowTransaction;
 use crate::steps::wait_conditions::wire_condition_results;
+use crate::steps::{
+    DEFAULT_BACKOFF_COEFFICIENT, DEFAULT_INITIAL_INTERVAL_SECONDS,
+    DEFAULT_MAXIMUM_INTERVAL_SECONDS, DEFAULT_TOTAL_DURATION_SECONDS,
+};
 use crate::values::wire_value;
+
+const DEFAULT_METHOD_TIMEOUT_SECONDS: i32 = 2 * 60 * 60;
+const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: i32 = 60;
 
 pub(crate) fn record_flow_started(
     cursor: &mut RunCursor,
@@ -94,36 +101,15 @@ pub(crate) fn record_method_pending(
         return;
     };
     let method = StepMethod::try_from(invocation.method).unwrap_or(StepMethod::Unspecified);
-    let options = step.options.as_ref();
-    let (timeout_seconds, retry_policy, durability) = match method {
-        StepMethod::WaitFor => (
-            options.map_or(0, |options| options.wait_for_timeout_seconds),
-            options.and_then(|options| options.wait_for_retry_policy),
-            options.map_or(0, |options| options.wait_for_durability_override),
-        ),
-        StepMethod::Execute | StepMethod::Unspecified => (
-            options.map_or(0, |options| options.execute_timeout_seconds),
-            options.and_then(|options| options.execute_retry_policy),
-            options.map_or(0, |options| options.execute_durability_override),
-        ),
+    let final_attempt = if invocation.phase == StepInvocationPhase::Running as i32 {
+        invocation.attempt
+    } else if invocation.last_failure.is_some() {
+        invocation.attempt.saturating_sub(1)
+    } else {
+        invocation.attempt
     };
-    let started_at = invocation.attempt_started_at_micros;
-    let mut context = method_context(step, invocation.attempt, started_at);
-    context.durability = durability;
-    context.method_options = Some(StepMethodOptions {
-        timeout_seconds,
-        retry_policy,
-        heartbeat_timeout_seconds: options.map_or(0, |options| options.heartbeat_timeout_seconds),
-    });
-    context.last_failure_info = invocation.last_failure.clone();
+    let mut context = method_context(step, invocation, method, final_attempt, closed_at_micros);
     context.pull_routing = invocation.pull_routing.clone();
-    let duration_micros = closed_at_micros.saturating_sub(invocation.first_attempt_at_micros);
-    if invocation.first_attempt_at_micros > 0 && duration_micros >= 0 {
-        context.duration = Some(prost_types::Duration {
-            seconds: duration_micros / 1_000_000,
-            nanos: i32::try_from(duration_micros % 1_000_000).unwrap_or(0) * 1000,
-        });
-    }
     let input = method_input(cursor, step);
     let pending = StepMethodPendingEvent {
         input: Some(input),
@@ -145,17 +131,79 @@ pub(crate) fn record_method_pending(
 
 fn method_context(
     step: &StepExecutionRecord,
+    invocation: &StepInvocationRecord,
+    method: StepMethod,
     attempt: u32,
-    started_at_micros: i64,
+    event_at_micros: i64,
 ) -> StepMethodEventContext {
+    let started_at_micros = if invocation.attempt_started_at_micros > 0 {
+        invocation.attempt_started_at_micros
+    } else {
+        invocation.first_attempt_at_micros
+    };
+    let duration_micros = event_at_micros.saturating_sub(started_at_micros);
     StepMethodEventContext {
         step_execution_id: step.step_execution_id.clone(),
         from_step_execution_id: step.from_step_execution_id.clone(),
         step_type: step.step_type.clone(),
+        durability: invocation.effective_durability,
         final_attempt: i32::try_from(attempt).unwrap_or(i32::MAX),
-        started_time: (started_at_micros > 0).then(|| timestamp(started_at_micros)),
+        started_time: Some(timestamp(started_at_micros)),
+        duration: Some(prost_types::Duration {
+            seconds: duration_micros / 1_000_000,
+            nanos: i32::try_from(duration_micros % 1_000_000)
+                .expect("fractional microseconds fit i32")
+                * 1000,
+        }),
+        method_options: Some(effective_method_options(step, method)),
+        last_failure_info: invocation.last_failure.clone(),
         ..StepMethodEventContext::default()
     }
+}
+
+fn effective_method_options(step: &StepExecutionRecord, method: StepMethod) -> StepMethodOptions {
+    let options = step.options.as_ref();
+    let (timeout_seconds, retry_policy) = match method {
+        StepMethod::WaitFor => (
+            options.map_or(0, |options| options.wait_for_timeout_seconds),
+            options.and_then(|options| options.wait_for_retry_policy.as_ref()),
+        ),
+        StepMethod::Execute | StepMethod::Unspecified => (
+            options.map_or(0, |options| options.execute_timeout_seconds),
+            options.and_then(|options| options.execute_retry_policy.as_ref()),
+        ),
+    };
+    let heartbeat_timeout_seconds = options.map_or(0, |options| options.heartbeat_timeout_seconds);
+    StepMethodOptions {
+        timeout_seconds: if timeout_seconds > 0 {
+            timeout_seconds
+        } else {
+            DEFAULT_METHOD_TIMEOUT_SECONDS
+        },
+        retry_policy: Some(effective_retry_policy(retry_policy)),
+        heartbeat_timeout_seconds: if heartbeat_timeout_seconds > 0 {
+            heartbeat_timeout_seconds
+        } else {
+            DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
+        },
+    }
+}
+
+fn effective_retry_policy(policy: Option<&RetryPolicy>) -> RetryPolicy {
+    let mut effective = policy.cloned().unwrap_or_default();
+    if effective.initial_interval_seconds <= 0 {
+        effective.initial_interval_seconds = DEFAULT_INITIAL_INTERVAL_SECONDS as i32;
+    }
+    if effective.backoff_coefficient <= 0.0 || effective.backoff_coefficient.is_nan() {
+        effective.backoff_coefficient = DEFAULT_BACKOFF_COEFFICIENT as f32;
+    }
+    if effective.maximum_interval_seconds <= 0 {
+        effective.maximum_interval_seconds = DEFAULT_MAXIMUM_INTERVAL_SECONDS as i32;
+    }
+    if effective.total_duration_seconds <= 0 {
+        effective.total_duration_seconds = DEFAULT_TOTAL_DURATION_SECONDS as i32;
+    }
+    effective
 }
 
 fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEventInput {
@@ -218,13 +266,23 @@ pub(crate) fn record_method_completed(
     cursor: &mut RunCursor,
     step: &StepExecutionRecord,
     command: &StepMethodCompletedCommand,
+    completed_at_micros: i64,
 ) -> Result<(), ApplyError> {
     let _ = transaction;
-    let started_at = step
+    let invocation = step
         .invocation
         .as_ref()
-        .map_or(0, |invocation| invocation.attempt_started_at_micros);
-    let mut context = method_context(step, command.attempt, started_at);
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: "completed Step method has no invocation".to_owned(),
+        })?;
+    let method = StepMethod::try_from(invocation.method).unwrap_or(StepMethod::Unspecified);
+    let mut context = method_context(
+        step,
+        invocation,
+        method,
+        command.attempt,
+        completed_at_micros,
+    );
     context.pull_routing = command.pull_routing.clone();
     let input = method_input(cursor, step);
     let payload = match &command.response {
@@ -268,15 +326,18 @@ pub(crate) fn record_method_failed(
     step: &StepExecutionRecord,
     method: StepMethod,
     failure: &StepMethodFailure,
+    failed_at_micros: i64,
 ) -> Result<(), ApplyError> {
     let _ = transaction;
-    let started_at = step
+    let invocation = step
         .invocation
         .as_ref()
-        .map_or(0, |invocation| invocation.attempt_started_at_micros);
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: "failed Step method has no invocation".to_owned(),
+        })?;
     let attempt = u32::try_from(failure.attempt).unwrap_or(0);
-    let mut context = method_context(step, attempt, started_at);
-    context.last_failure_info = Some(failure.clone());
+    let mut context = method_context(step, invocation, method, attempt, failed_at_micros);
+    context.pull_routing = failure.pull_routing.clone();
     let input = method_input(cursor, step);
     let output = Some(StepMethodFailedOutput {
         failure: Some(failure.clone()),
