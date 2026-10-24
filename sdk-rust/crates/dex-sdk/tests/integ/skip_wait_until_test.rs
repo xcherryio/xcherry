@@ -14,14 +14,11 @@ use dex_sdk::{Client, FlowConfig, Registry, SdkResult, StartFlowOptions};
 
 use crate::skip_wait_until_mixed_wait_workflow::SkipWaitUntilMixedWaitWorkflow;
 use crate::skip_wait_until_workflow::SkipWaitUntilWorkflow;
-use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
+use crate::support::{DexDevTestEnvironment, flow_id};
 
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_skip_wait_until() {
-    if skip_if_server_zd("Continue-As-New") {
-        return;
-    }
     let environment =
         DexDevTestEnvironment::start(Registry::new().register(SkipWaitUntilWorkflow::new()));
     let workflow = SkipWaitUntilWorkflow::new();
