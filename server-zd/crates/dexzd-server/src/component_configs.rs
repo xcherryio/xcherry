@@ -139,7 +139,6 @@ impl ComponentConfigs {
             ..RuntimeConfig::default()
         };
         let effects = EffectsConfig {
-            dispatch_wait: config.matching.dispatch_wait,
             heartbeat_batch_window: config.commit.batch_window,
             max_worker_request_bytes: grpc_max_message_bytes,
             default_max_value_bytes: max_value_bytes,
