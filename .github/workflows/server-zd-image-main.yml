@@ -1,0 +1,111 @@
+name: Server ZD image main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-zd-image-main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Resolve selected ref
+    runs-on: ubuntu-24.04
+    outputs:
+      short_sha: ${{ steps.version.outputs.short_sha }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve image metadata
+        id: version
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA:0:7}"
+          base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "version=${base_version}-dev.g${short_sha}" >> "${GITHUB_OUTPUT}"
+
+  publish:
+    name: Publish digest ${{ matrix.arch }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push native image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server-zd/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
+          outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
+          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=min
+      - name: Save digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-zd-main-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Publish main tags
+    needs: [metadata, publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: server-zd-main-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create main manifests
+        shell: bash
+        env:
+          IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd
+          SHORT_SHA: ${{ needs.metadata.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -type f -printf '%f\n' | sort)
+          [[ "${#digests[@]}" -eq 2 ]] || {
+            echo "Expected two platform digests, found ${#digests[@]}" >&2
+            exit 1
+          }
+          sources=()
+          for digest in "${digests[@]}"; do
+            sources+=("${IMAGE}@sha256:${digest}")
+          done
+          docker buildx imagetools create \
+            -t "${IMAGE}:main" -t "${IMAGE}:main-${SHORT_SHA}" "${sources[@]}"
+          docker buildx imagetools inspect "${IMAGE}:main-${SHORT_SHA}"

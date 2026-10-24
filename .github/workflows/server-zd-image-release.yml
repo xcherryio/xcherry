@@ -1,0 +1,324 @@
+name: Server ZD image release
+
+on:
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Server ZD image semantic version without the v prefix
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - server-zd/Dockerfile
+      - .dockerignore
+      - .github/workflows/server-zd-image-release.yml
+      - .github/workflows/server-zd-image-main.yml
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and smoke test both architectures without publishing
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-zd-image-release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  metadata:
+    name: Resolve image version
+    if: inputs.version != '' || github.event_name != 'release' || startsWith(github.event.release.tag_name, 'server-zd/v')
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve version and publishing mode
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            base_version="${INPUT_VERSION#v}"
+            publish=true
+          elif [[ "${EVENT_NAME}" == "release" ]]; then
+            base_version="${RELEASE_TAG#server-zd/v}"
+            publish=true
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${GITHUB_REF}" == refs/tags/server-zd/v* ]]; then
+              base_version="${GITHUB_REF#refs/tags/server-zd/v}"
+            else
+              base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+            fi
+            publish=false
+            if [[ "${DRY_RUN}" == "false" ]]; then
+              if [[ "${GITHUB_REF}" != refs/tags/server-zd/v* ]]; then
+                echo 'Publishing requires selecting a server-zd/vX.Y.Z tag' >&2
+                exit 1
+              fi
+              publish=true
+            fi
+          else
+            base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+            publish=false
+          fi
+          if [[ ! "${base_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid server-zd image version: ${base_version}" >&2
+            exit 1
+          fi
+          version="${base_version}"
+          if [[ "${publish}" != true ]]; then
+            version="${base_version}-smoke.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+
+  smoke:
+    name: Smoke ${{ matrix.arch }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build native smoke image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server-zd/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: dex-server-zd:smoke
+          build-args: |
+            SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
+          cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
+          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=min
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build grpcurl
+        run: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3
+      - name: Smoke CLI, health, startup failure, and shutdown
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          go_path="$(go env GOPATH)"
+          export PATH="${go_path}/bin:${PATH}"
+          version_output="$(docker run --rm dex-server-zd:smoke --version)"
+          [[ "${version_output}" == "dex-server-zd ${EXPECTED_VERSION}" ]] || {
+            echo "Unexpected version: ${version_output}" >&2
+            exit 1
+          }
+          cat > "${RUNNER_TEMP}/health.proto" <<'PROTO'
+          syntax = "proto3";
+          package grpc.health.v1;
+          service Health {
+            rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+          }
+          message HealthCheckRequest { string service = 1; }
+          message HealthCheckResponse {
+            enum ServingStatus {
+              UNKNOWN = 0;
+              SERVING = 1;
+              NOT_SERVING = 2;
+              SERVICE_UNKNOWN = 3;
+            }
+            ServingStatus status = 1;
+          }
+          PROTO
+          health_check() {
+            grpcurl -plaintext -max-time 2 \
+              -import-path "${RUNNER_TEMP}" -proto health.proto \
+              -d '{}' 127.0.0.1:8801 grpc.health.v1.Health/Check
+          }
+          stop_container() {
+            local container_name
+            container_name="$1"
+            timeout 30s docker stop --time 25 "${container_name}" >/dev/null
+            local exit_status
+            exit_status="$(docker wait "${container_name}")"
+            [[ "${exit_status}" == 0 ]] || {
+              docker logs "${container_name}" >&2
+              echo "${container_name} exited ${exit_status}" >&2
+              exit 1
+            }
+            docker rm "${container_name}" >/dev/null
+          }
+          cleanup() {
+            docker rm -f dex-zd-smoke-dev dex-zd-smoke-unreachable >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name dex-zd-smoke-dev -p 8801:8801 \
+            dex-server-zd:smoke dev --data-dir /tmp/zd --listen 0.0.0.0:8801 >/dev/null
+          serving=false
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            if health_check 2>/dev/null | grep -q '"status": "SERVING"'; then
+              serving=true
+              break
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' dex-zd-smoke-dev)" != true ]]; then
+              docker logs dex-zd-smoke-dev >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          [[ "${serving}" == true ]] || {
+            docker logs dex-zd-smoke-dev >&2
+            echo 'dev did not become SERVING' >&2
+            exit 1
+          }
+          stop_container dex-zd-smoke-dev
+          cat > "${RUNNER_TEMP}/unreachable.yaml" <<'CONFIG'
+          cluster:
+            nodeId: smoke
+          objectStore:
+            endpoint: http://127.0.0.1:9
+            region: us-east-1
+            bucket: unreachable
+            forcePathStyle: true
+            credentialsSource: anonymous
+          localStorage:
+            directory: /tmp/zd
+          api:
+            listen: 0.0.0.0:8801
+          CONFIG
+          docker run -d --name dex-zd-smoke-unreachable -p 8801:8801 \
+            -v "${RUNNER_TEMP}/unreachable.yaml:/etc/dex-server-zd/config.yaml:ro" \
+            dex-server-zd:smoke >/dev/null
+          deadline=$((SECONDS + 60))
+          while (( SECONDS < deadline )); do
+            if [[ "$(docker inspect -f '{{.State.Running}}' dex-zd-smoke-unreachable)" != true ]]; then
+              break
+            fi
+            health_response="$(health_check 2>/dev/null || true)"
+            if [[ "${health_response}" == *'"status": "SERVING"'* ]]; then
+              echo 'unreachable object store unexpectedly became SERVING' >&2
+              exit 1
+            fi
+            sleep 0.25
+          done
+          if [[ "$(docker inspect -f '{{.State.Running}}' dex-zd-smoke-unreachable)" == true ]]; then
+            docker logs dex-zd-smoke-unreachable >&2
+            echo 'unreachable object store did not fail startup within 60 seconds' >&2
+            exit 1
+          fi
+          exit_status="$(docker wait dex-zd-smoke-unreachable)"
+          [[ "${exit_status}" =~ ^[0-9]+$ && "${exit_status}" != 0 ]] || {
+            docker logs dex-zd-smoke-unreachable >&2
+            echo "Expected nonzero startup failure, got ${exit_status}" >&2
+            exit 1
+          }
+          docker logs dex-zd-smoke-unreachable 2>&1 | grep -q 'failed the startup check'
+          docker rm dex-zd-smoke-unreachable >/dev/null
+      - uses: docker/login-action@v4
+        if: needs.metadata.outputs.publish == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push native image by digest
+        if: needs.metadata.outputs.publish == 'true'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server-zd/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
+          outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
+      - name: Save digest
+        if: needs.metadata.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        if: needs.metadata.outputs.publish == 'true'
+        with:
+          name: server-zd-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Publish multi-arch tags
+    if: needs.metadata.outputs.publish == 'true'
+    needs: [metadata, smoke]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: server-zd-image-latest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: server-zd-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create version and eligible latest manifests
+        shell: bash
+        env:
+          IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd
+          VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -type f -printf '%f\n' | sort)
+          [[ "${#digests[@]}" -eq 2 ]] || {
+            echo "Expected two platform digests, found ${#digests[@]}" >&2
+            exit 1
+          }
+          sources=()
+          for digest in "${digests[@]}"; do
+            sources+=("${IMAGE}@sha256:${digest}")
+          done
+          tags=(-t "${IMAGE}:${VERSION}")
+          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${RELEASE_PRERELEASE}" != true ]]; then
+            if release_prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/server-zd/v${VERSION}" --jq .prerelease 2>/dev/null)"; then
+              if [[ "${release_prerelease}" == false ]]; then
+                remote_tags="$(git ls-remote --tags --refs origin 'refs/tags/server-zd/v*')"
+                latest_stable_version="$(printf '%s\n' "${remote_tags}" | sed -nE 's@.*refs/tags/server-zd/v([0-9]+\.[0-9]+\.[0-9]+)$@\1@p' | sort -V | tail -n 1)"
+                if [[ "${VERSION}" == "${latest_stable_version}" ]]; then
+                  tags+=(-t "${IMAGE}:latest")
+                fi
+              fi
+            else
+              echo "No readable GitHub release for server-zd/v${VERSION}; latest unchanged"
+            fi
+          fi
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"

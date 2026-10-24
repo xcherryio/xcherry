@@ -124,6 +124,27 @@ releases its lease and exits 1.
 
 Logs go to standard error. `RUST_LOG` filters them; the default level is `info`.
 
+### Container image
+
+The `dex-server-zd` image is published for `linux/amd64` and `linux/arm64`. Its entrypoint is
+`/usr/local/bin/dex-server-zd`. By default it runs `serve --config /etc/dex-server-zd/config.yaml`;
+mount a production config at that path. The image includes
+`/etc/dex-server-zd/dex-server-zd.example.yaml` as a reference, not as its active config.
+Mount a writable directory for `localStorage.directory` and set that directory in the config.
+The process runs as UID 10001 and GID 10001. Make the data volume writable by that identity,
+for example by setting Kubernetes `fsGroup: 10001` or changing the directory ownership to
+`10001:10001`.
+
+Port 8801 serves the API and `grpc.health.v1` on `api.listen`. Kubernetes gRPC probes can call
+that service directly. Health is NOT_SERVING during startup and SERVING after recovery completes.
+If the object store startup check fails, the container exits with an error. Docker and Kubernetes
+send SIGTERM directly to the process; it stops accepting work, releases its lease, and normally
+exits 0 within 14.5 seconds.
+
+Release tags `server-zd/vX.Y.Z` publish `dex-server-zd:X.Y.Z` and `dex-server-zd:latest`.
+The manually dispatched main-image workflow builds its selected ref and publishes
+`dex-server-zd:main` and `dex-server-zd:main-<short-sha>` without changing `latest`.
+
 ### dev
 
 ```bash
