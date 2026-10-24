@@ -439,6 +439,100 @@ async fn relaxed_s3_conformance() {
     s3_conformance(Durability::Relaxed).await;
 }
 
+#[tokio::test]
+async fn anonymous_s3_file_uploads_preserve_checksums() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let store = Store::open(&StoreConfig {
+        root_directory: directory.path().join("s3"),
+        durability: Durability::Relaxed,
+        etag_mode: EtagMode::Opaque,
+    })
+    .expect("the emulator store opens");
+    store
+        .create_bucket("anonymous-file-uploads", false)
+        .expect("the bucket is created");
+    let store = Arc::new(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the emulator binds");
+    let server = s3mock_server::start(Arc::clone(&store), listener).expect("the emulator starts");
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "anonymous-file-uploads");
+    config.endpoint = Some(format!("http://{}", server.local_address()));
+    config.force_path_style = true;
+    config.credentials = S3Credentials::Anonymous;
+    config.multipart_threshold = 5 * 1024 * 1024;
+    config.multipart_part_size = 5 * 1024 * 1024;
+    let object_store = S3ObjectStore::new(config)
+        .await
+        .expect("the anonymous client is configured");
+
+    let single_file = directory.path().join("single-file");
+    let single_body = b"anonymous single-file upload";
+    tokio::fs::write(&single_file, single_body)
+        .await
+        .expect("the single-part file is written");
+    object_store
+        .put_file("single", &single_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous single-part upload succeeds");
+    assert_eq!(
+        object_store
+            .get("single")
+            .await
+            .expect("the single-part download succeeds")
+            .expect("the single-part object exists")
+            .bytes,
+        Bytes::from_static(single_body)
+    );
+    let single_checksum = store
+        .head_object(
+            "anonymous-file-uploads",
+            "single",
+            &s3mock::ObjectReadRequest::default(),
+        )
+        .expect("the single-part object is readable")
+        .record
+        .checksum
+        .expect("the single-part object has a checksum");
+    assert_eq!(single_checksum.algorithm, s3mock::ChecksumAlgorithm::Crc32);
+    assert_eq!(
+        single_checksum.base64_value,
+        s3mock::ChecksumAlgorithm::Crc32.base64_checksum(single_body)
+    );
+
+    let multipart_file = directory.path().join("multipart-file");
+    let multipart_body = vec![0x5a; 6 * 1024 * 1024];
+    tokio::fs::write(&multipart_file, &multipart_body)
+        .await
+        .expect("the multipart file is written");
+    object_store
+        .put_file("multipart", &multipart_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous multipart upload succeeds");
+    assert_eq!(
+        object_store
+            .get("multipart")
+            .await
+            .expect("the multipart download succeeds")
+            .expect("the multipart object exists")
+            .bytes,
+        Bytes::from(multipart_body)
+    );
+    assert!(
+        store
+            .head_object(
+                "anonymous-file-uploads",
+                "multipart",
+                &s3mock::ObjectReadRequest::default()
+            )
+            .expect("the multipart object is readable")
+            .record
+            .checksum
+            .is_some()
+    );
+    server.shutdown().await;
+}
+
 #[derive(Default)]
 struct ScriptedFaults {
     actions: std::sync::Mutex<std::collections::VecDeque<dexzd_object_store::FaultAction>>,

@@ -17,7 +17,9 @@ use aws_sdk_s3::config::{
 };
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{
+    ChecksumAlgorithm, CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier,
+};
 use bytes::Bytes;
 
 use crate::file_download::TemporaryDownloadFile;
@@ -405,6 +407,7 @@ impl S3ObjectStore {
                 .upload_id(upload_id)
                 .part_number(part_number)
                 .body(ByteStream::from(buffer))
+                .checksum_algorithm(ChecksumAlgorithm::Crc32)
                 .send()
                 .await
                 .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, false, error))?;
@@ -486,7 +489,8 @@ impl S3ObjectStore {
         if size >= self.multipart_threshold as u64 {
             return self.put_multipart_file(key, path, condition).await;
         }
-        let body = ByteStream::from_path(path).await.map_err(|error| {
+        // Anonymous HTTP uploads cannot supply the SDK's deferred streaming signer.
+        let body = tokio::fs::read(path).await.map_err(|error| {
             ObjectStoreError::new(
                 ObjectStoreOperation::Put,
                 key,
@@ -502,7 +506,8 @@ impl S3ObjectStore {
             .put_object()
             .bucket(&self.bucket)
             .key(self.full_key(key))
-            .body(body);
+            .body(ByteStream::from(Bytes::from(body)))
+            .checksum_algorithm(ChecksumAlgorithm::Crc32);
         request = match condition {
             WriteCondition::Unconditional => request,
             WriteCondition::CreateOnly => request.if_none_match("*"),
