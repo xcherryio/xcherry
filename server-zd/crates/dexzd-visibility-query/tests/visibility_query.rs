@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 
 use dexzd_protocol::dex::IndexType;
 use dexzd_visibility_query::{
-    FieldRegistry, SearchDocument, SearchValue, SortDirection, compare_documents, evaluate,
-    parse_and_check,
+    Expression, FieldRegistry, Literal, Operator, SearchDocument, SearchValue, SortDirection,
+    compare_documents, evaluate, parse_and_check,
 };
 
 #[derive(Default)]
@@ -222,13 +222,10 @@ fn errors_have_byte_offsets_and_specific_reasons() {
             7,
             "invalid INT literal for int1: \"seven\"",
         ),
-        ("int1 = '7.5'", 7, "is not a whole number"),
-        ("int1 = '1e3'", 7, "is not a whole number"),
         ("int1 = ''", 7, "invalid INT literal"),
         ("int1 = ' 7'", 7, "invalid INT literal"),
         ("int1 = '9223372036854775808'", 7, "out of range"),
         ("int1 IN (6, 'x')", 12, "invalid INT literal"),
-        ("int1 BETWEEN '6' AND '8.5'", 21, "invalid INT literal"),
         ("int1 = 1e3", 7, "expected Int literal"),
         (
             "double1 = 'abc'",
@@ -280,6 +277,84 @@ fn errors_have_byte_offsets_and_specific_reasons() {
         let error = parse_and_check(query, &registry()).expect_err(query);
         assert_eq!(error.offset, offset, "{query}: {error}");
         assert!(error.message.contains(reason), "{query}: {error}");
+    }
+}
+
+#[test]
+fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
+    let seven = Document::default().with("int1", SearchValue::Int(7));
+    let eight = Document::default().with("int1", SearchValue::Int(8));
+    let negative_two = Document::default().with("int1", SearchValue::Int(-2));
+    let two = Document::default().with("int1", SearchValue::Int(2));
+    let three = Document::default().with("int1", SearchValue::Int(3));
+    let thousand = Document::default().with("int1", SearchValue::Int(1000));
+    let exact = Document::default().with("int1", SearchValue::Int(9_007_199_254_740_993));
+    let missing = Document::default();
+    for query in ["int1 = '7.0'", "int1 = '7e0'", "int1 = '7.'"] {
+        assert!(evaluate(&check(query), &seven), "{query}");
+    }
+    assert!(evaluate(&check("int1 = '1e3'"), &thousand));
+    for query in ["int1 = '9007199254740993'", "int1 = '9007199254740993.0'"] {
+        assert!(evaluate(&check(query), &exact), "{query}");
+        assert!(!evaluate(&check(query), &seven), "{query}");
+    }
+    for query in ["int1 = '7.5'", "int1 IN ('7.5')"] {
+        assert!(matches!(check(query).expression(), Expression::NoMatch(_)));
+        assert!(!evaluate(&check(query), &seven), "{query}");
+        assert!(!evaluate(&check(query), &eight), "{query}");
+        assert!(!evaluate(&check(format!("NOT {query}").as_str()), &missing));
+    }
+    assert!(evaluate(&check("int1 IN ('7', '7.5')"), &seven));
+    assert!(!evaluate(&check("int1 IN ('7', '7.5')"), &eight));
+    assert!(evaluate(&check("int1 > '7.5'"), &eight));
+    assert!(!evaluate(&check("int1 > '7.5'"), &seven));
+    assert!(evaluate(&check("int1 <= '-1.5'"), &negative_two));
+    assert!(!evaluate(&check("int1 <= '-1.5'"), &two));
+    assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &two));
+    assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &three));
+    assert!(!evaluate(&check("int1 BETWEEN '1.5' AND '1.6'"), &two));
+    assert!(evaluate(&check("int1 != '7.5'"), &seven));
+    assert!(!evaluate(&check("int1 != '7.5'"), &missing));
+    assert!(evaluate(&check("int1 NOT IN ('7.5')"), &seven));
+    assert!(!evaluate(&check("int1 NOT IN ('7.5')"), &missing));
+
+    let query = check("int1 BETWEEN '1.5' AND '3.5'");
+    let Expression::Predicate(predicate) = query.expression() else {
+        panic!("BETWEEN must remain an INT predicate");
+    };
+    assert_eq!(predicate.operator(), Operator::Between);
+    assert!(matches!(
+        predicate.literals(),
+        [Literal::Int(2), Literal::Int(3)]
+    ));
+    assert!(matches!(
+        check("int1 = '9007199254740993.0'").expression(),
+        Expression::Predicate(predicate)
+            if matches!(predicate.literals(), [Literal::Int(9_007_199_254_740_993)])
+    ));
+}
+
+#[test]
+fn quoted_int_rejects_invalid_and_out_of_range_values() {
+    for value in [
+        "0x1p2", "Inf", "NaN", "1_0", " 7", "7 ", "7d", "7f", "1e", ".", "",
+    ] {
+        let query = format!("int1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(
+            error.message.contains("invalid INT literal"),
+            "{query}: {error}"
+        );
+    }
+    for value in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        "9.223372036854775808e18",
+        "1e1000",
+    ] {
+        let query = format!("int1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{query}: {error}");
     }
 }
 

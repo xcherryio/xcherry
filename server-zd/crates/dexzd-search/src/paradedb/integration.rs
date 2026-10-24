@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -166,6 +166,40 @@ async fn paradedb_matches_builtin_evaluator() {
             Some(6_000_000_000),
         )
         .with("tags", SearchValue::StringArray(Vec::new())),
+        run(
+            "r5",
+            "flow-e",
+            "Completed",
+            5_000_000_000,
+            Some(7_000_000_000),
+        )
+        .with("number", SearchValue::Int(9_007_199_254_740_993))
+        .with("double", SearchValue::Double(0.25)),
+        run(
+            "r6",
+            "flow-f",
+            "Completed",
+            6_000_000_000,
+            Some(8_000_000_000),
+        )
+        .with("number", SearchValue::Int(-2))
+        .with("double", SearchValue::Double(-3.0)),
+        run(
+            "r7",
+            "flow-g",
+            "Completed",
+            7_000_000_000,
+            Some(9_000_000_000),
+        )
+        .with("number", SearchValue::Int(1000)),
+        run(
+            "r8",
+            "flow-h",
+            "Completed",
+            8_000_000_000,
+            Some(10_000_000_000),
+        )
+        .with("number", SearchValue::Int(3)),
     ];
     let (registry, application_fields) = fields();
     let parity_tenant_id = TenantId(3);
@@ -233,6 +267,18 @@ async fn paradedb_matches_builtin_evaluator() {
         "number IN ('2', 7)",
         "number BETWEEN '3' AND '+6'",
         "number != '5'",
+        "number = '7.0'",
+        "number = '1e3'",
+        "number = '9007199254740993'",
+        "number = '9007199254740993.0'",
+        "number = '7.5'",
+        "number IN ('7', '7.5')",
+        "number > '7.5'",
+        "number <= '-1.5'",
+        "number BETWEEN '1.5' AND '3.5'",
+        "number != '7.5'",
+        "number NOT IN ('7.5')",
+        "NOT number = '7.5'",
         "double < 3.0",
         "double = '1.5'",
         "double IN ('1.5', 3.5)",
@@ -281,7 +327,7 @@ async fn paradedb_matches_builtin_evaluator() {
     for (input, expected_ids) in [
         ("number = '7'", vec!["r2"]),
         ("number IN ('2', 7)", vec!["r1", "r2"]),
-        ("number BETWEEN '3' AND '+6'", vec!["r3"]),
+        ("number BETWEEN '3' AND '+6'", vec!["r8", "r3"]),
         ("double = '1.5'", vec!["r1"]),
         ("double IN ('1.5', 3.5)", vec!["r1", "r2"]),
         ("double BETWEEN '2' AND '3.0'", vec!["r3"]),
@@ -298,6 +344,46 @@ async fn paradedb_matches_builtin_evaluator() {
             .map(|row| row.get::<_, String>("run_id"))
             .collect();
         assert_eq!(actual_ids, expected_ids, "{input}");
+    }
+
+    for (input, expected_ids) in [
+        ("number = '7.0'", vec!["r2"]),
+        ("number = '1e3'", vec!["r7"]),
+        ("number = '9007199254740993'", vec!["r5"]),
+        ("number = '9007199254740993.0'", vec!["r5"]),
+        ("number = '7.5'", vec![]),
+        ("number IN ('7', '7.5')", vec!["r2"]),
+        ("number > '7.5'", vec!["r5", "r7"]),
+        ("number <= '-1.5'", vec!["r6"]),
+        ("number BETWEEN '1.5' AND '3.5'", vec!["r1", "r8"]),
+        (
+            "number != '7.5'",
+            vec!["r1", "r2", "r3", "r5", "r6", "r7", "r8"],
+        ),
+    ] {
+        let query = parse_and_check(input, &registry).expect("quoted numeric query");
+        let statement = translate_query(&query, &parity_tenant_column, 100, None)
+            .expect("translate quoted numeric query");
+        let actual_ids: BTreeSet<String> = client
+            .query(&statement.sql, &statement.parameter_refs())
+            .await
+            .expect(input)
+            .iter()
+            .map(|row| row.get("run_id"))
+            .collect();
+        let expected_ids: BTreeSet<String> = expected_ids.into_iter().map(str::to_owned).collect();
+        assert_eq!(actual_ids, expected_ids, "{input}");
+    }
+    for input in [
+        "number = '9223372036854775808'",
+        "number = '0x1p2'",
+        "number = 'Inf'",
+        "number = '1_0'",
+        "number = ' 7'",
+        "number = '7d'",
+    ] {
+        let error = parse_and_check(input, &registry).expect_err(input);
+        assert!(error.message.contains("literal"), "{input}: {error}");
     }
 
     for order in ["", "ORDER BY StartTime ASC", "ORDER BY CloseTime DESC"] {
