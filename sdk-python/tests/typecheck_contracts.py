@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Generator, cast
 
 from dex import (
+    ApiKeyCredential,
     AsyncContext,
     Attribute,
     AttributeMap,
@@ -47,6 +48,13 @@ from dex import (
 
 def credential_options_contract(token_path: str) -> tuple[ClientOptions, WorkerOptions]:
     credential: Credential = FileCredential(token_path)
+    return ClientOptions(credential=credential), WorkerOptions(credential=credential)
+
+
+def api_key_credential_options_contract(
+    token_url: str, server_id: str, api_key: str
+) -> tuple[ClientOptions, WorkerOptions]:
+    credential: Credential = ApiKeyCredential(token_url, server_id, api_key)
     return ClientOptions(credential=credential), WorkerOptions(credential=credential)
 
 

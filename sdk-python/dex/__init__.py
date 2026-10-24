@@ -24,7 +24,6 @@ from dex.blob_cache import BlobCache, BlobCacheConfig, open_blob_cache
 from dex.channel import Channel, ChannelMap, ChannelMapLoad, ChannelMessage
 from dex.client import Client
 from dex.client_options import ClientOptions
-from dex.credential import Credential, FileCredential
 from dex.codec import (
     BOOL,
     BYTES,
@@ -39,6 +38,12 @@ from dex.codec import (
 )
 from dex.condition import ConditionCombination
 from dex.context import AsyncContext, Context, RecoveryErrorInfo
+from dex.credential import (
+    ApiKeyCredential,
+    ApiKeyExchangeError,
+    Credential,
+    FileCredential,
+)
 from dex.flow import Flow, PersistenceSchema, Registry, RPCResult, rpc
 from dex.flow_config import ActiveStepSearchMode, FlowConfig
 from dex.flow_info import (
@@ -62,6 +67,12 @@ from dex.flow_options import (
     TimeTravelType,
 )
 from dex.flow_result import FlowResult, StepCompletion
+from dex.pull_registration import (
+    PullQueueRegistrationState,
+    PullRegistrationError,
+    PullRegistrationState,
+)
+from dex.rpc_invoke_options import RPCInvokeOptions
 from dex.runtime_errors import (
     AttributeMapNotLoadedError,
     ChannelMessageNotFoundError,
@@ -80,7 +91,6 @@ from dex.runtime_errors import (
     ValueMappingError,
     WorkerInvocationError,
 )
-from dex.rpc_invoke_options import RPCInvokeOptions
 from dex.step import (
     RetryPolicy,
     Step,
@@ -113,11 +123,6 @@ from dex.timer import Timer
 from dex.wait import Wait
 from dex.wait_options import WaitForAttributeOptions, WaitForStepCompletionOptions
 from dex.worker import Worker
-from dex.pull_registration import (
-    PullRegistrationError,
-    PullRegistrationState,
-    PullQueueRegistrationState,
-)
 from dex.worker_options import PullWorkerOptions, WorkerOptions, WorkerTarget
 
 __all__ = [
@@ -138,6 +143,8 @@ __all__ = [
     "AsyncClient",
     "AsyncBufferedTextStream",
     "AsyncWorker",
+    "ApiKeyCredential",
+    "ApiKeyExchangeError",
     "BlobCache",
     "BlobCacheConfig",
     "BufferedTextStream",
