@@ -8,6 +8,7 @@
 
 //! Shutdown steps that each run within their own budget.
 
+use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use crate::ServerError;
 /// Runs shutdown steps with separate budgets, so a stalled step never skips the engine's lease release.
 #[derive(Default)]
 pub(super) struct BoundedTeardown {
-    overrun_steps: Vec<&'static str>,
+    incomplete_steps: Vec<String>,
 }
 
 impl BoundedTeardown {
@@ -32,6 +33,20 @@ impl BoundedTeardown {
         }
     }
 
+    /// Runs a fallible `step`, abandons it after `budget`, and records its failure.
+    pub(super) async fn run_fallible<E: Display>(
+        &mut self,
+        name: &'static str,
+        budget: Duration,
+        step: impl Future<Output = Result<(), E>>,
+    ) {
+        match tokio::time::timeout(budget, step).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => self.record_failure(name, &error),
+            Err(_) => self.record_overrun(name, budget),
+        }
+    }
+
     /// Records a step that its owner abandoned after `budget`.
     pub(super) fn record_overrun(&mut self, name: &'static str, budget: Duration) {
         tracing::error!(
@@ -39,19 +54,29 @@ impl BoundedTeardown {
             budget_milliseconds = budget.as_millis(),
             "a shutdown step did not finish within its budget; abandoning it"
         );
-        self.overrun_steps.push(name);
+        self.incomplete_steps.push(format!(
+            "{name} exceeded its {} ms budget",
+            budget.as_millis()
+        ));
+    }
+
+    fn record_failure(&mut self, name: &'static str, error: &dyn Display) {
+        tracing::error!(step = name, %error, "a shutdown step failed");
+        self.incomplete_steps
+            .push(format!("{name} failed: {error}"));
     }
 
     /// Returns how serving ended.
     ///
     /// Returns `outcome` when it is an error or every step finished, and
-    /// [`ServerError::ShutdownIncomplete`] when serving ended normally but a step was abandoned.
+    /// [`ServerError::ShutdownIncomplete`] when serving ended normally but a step was abandoned or
+    /// failed.
     pub(super) fn finish(self, outcome: Result<(), ServerError>) -> Result<(), ServerError> {
-        if outcome.is_err() || self.overrun_steps.is_empty() {
+        if outcome.is_err() || self.incomplete_steps.is_empty() {
             return outcome;
         }
         Err(ServerError::ShutdownIncomplete {
-            steps: self.overrun_steps.join(", "),
+            steps: self.incomplete_steps.join(", "),
         })
     }
 }
@@ -82,7 +107,46 @@ mod tests {
         );
         assert!(matches!(
             teardown.finish(Ok(())),
-            Err(ServerError::ShutdownIncomplete { steps }) if steps == "effect tasks"
+            Err(ServerError::ShutdownIncomplete { steps })
+                if steps == "effect tasks exceeded its 1000 ms budget"
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_step_makes_a_normal_shutdown_incomplete() {
+        let mut teardown = BoundedTeardown::default();
+        teardown
+            .run_fallible("engine", Duration::from_secs(1), async {
+                Err::<(), _>("the lease release was rejected")
+            })
+            .await;
+        let mut is_stream_store_closed = false;
+        teardown
+            .run("Stream Store", Duration::from_secs(1), async {
+                is_stream_store_closed = true;
+            })
+            .await;
+        assert!(
+            is_stream_store_closed,
+            "later steps run after a failed step"
+        );
+        assert!(matches!(
+            teardown.finish(Ok(())),
+            Err(ServerError::ShutdownIncomplete { steps })
+                if steps == "engine failed: the lease release was rejected"
+        ));
+        let mut stalled = BoundedTeardown::default();
+        stalled
+            .run_fallible(
+                "engine",
+                Duration::from_secs(1),
+                std::future::pending::<Result<(), &str>>(),
+            )
+            .await;
+        assert!(matches!(
+            stalled.finish(Ok(())),
+            Err(ServerError::ShutdownIncomplete { steps })
+                if steps == "engine exceeded its 1000 ms budget"
         ));
     }
 

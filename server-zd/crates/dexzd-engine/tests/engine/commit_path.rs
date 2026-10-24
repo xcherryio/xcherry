@@ -51,7 +51,7 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
     );
     assert_eq!(test.committed_count("order-flow").await, 3);
     // Shutdown joins the applier lanes, which hand each command to the runtime before its ticket.
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
     let published = test.runtime.committed_command_ids("order-flow");
     let submitted: Vec<Vec<u8>> = stamped
         .into_iter()
@@ -94,7 +94,7 @@ async fn tickets_resolve_only_after_the_sink_received_the_whole_frame() {
         vec![command.command_id]
     );
     commit.await.expect("command commits");
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -115,7 +115,7 @@ async fn batched_commands_share_a_frame_and_see_earlier_writes() {
     seqs.dedup();
     assert_eq!(seqs.len(), 1, "one batch holds every batched command");
     assert_eq!(test.committed_count("batched-flow").await, 5);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -142,7 +142,7 @@ async fn each_frame_finishes_after_its_last_committed_command() {
     }
     test.commit_prompt("frame-flow", 2).await;
     // Shutdown joins the applier lanes, so every sink call has happened.
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
     let frame_events = test.runtime.sink_events_of(frame_partition);
     assert_eq!(frame_events.len(), 5 + 3);
     assert_eq!(assert_frames_finish_after_their_commands(&frame_events), 3);
@@ -164,7 +164,7 @@ async fn stamps_stay_monotonic_when_the_wall_clock_moves_backwards() {
         .expect("submit succeeds");
     ticket.wait().await.expect("command commits");
     assert_eq!(second.proposed_at_micros, first.proposed_at_micros + 1);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -185,7 +185,7 @@ async fn submissions_beyond_the_unapplied_budget_are_rejected() {
         matches!(&rejected, Err(CommitError::Unavailable { detail }) if detail.contains("backlog")),
         "{rejected:?}"
     );
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -208,7 +208,7 @@ async fn apply_failure_stops_only_its_partition() {
         test.commit_prompt(&healthy_flow, 2).await;
         assert_eq!(test.committed_count(&healthy_flow).await, 2);
         assert_eq!(test.node.stop_reason(), None);
-        test.node.shutdown().await;
+        test.node.shutdown().await.expect("lease released");
     }
 }
 
@@ -232,7 +232,7 @@ async fn repeated_apply_check_stops_a_nondeterministic_partition() {
     let error = ticket.wait().await.expect_err("apply differs");
     assert!(is_partition_stopped(&error), "{error:?}");
     assert_eq!(test.applier.applied_commands().len(), 6);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -269,7 +269,7 @@ async fn speculative_outcome_check_compares_only_when_enabled() {
             result.expect("checks are disabled");
             assert!(test.node.halted_partitions().is_empty());
         }
-        test.node.shutdown().await;
+        test.node.shutdown().await.expect("lease released");
     }
 }
 
@@ -308,7 +308,7 @@ async fn a_speculative_mismatch_reported_by_the_runtime_stops_the_partition() {
         .expect_err("the partition stopped");
     assert!(is_partition_stopped(&rejected), "{rejected:?}");
     test.commit_prompt(&other_flow, 1).await;
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -335,7 +335,10 @@ async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
     let shutdown = tokio::spawn(first.node.shutdown());
     assert_eq!(stopped.await, NodeStopReason::Shutdown);
     first.applier.gate.open();
-    shutdown.await.expect("shutdown completes");
+    shutdown
+        .await
+        .expect("shutdown completes")
+        .expect("lease released");
     assert!(matches!(
         ticket.wait().await,
         Err(CommitError::NodeStopping { .. })
@@ -356,7 +359,7 @@ async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
         .count();
     assert_eq!(replayed, 1);
     assert_eq!(second.committed_count(BLOCKING_FLOW).await, 1);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -388,7 +391,7 @@ async fn a_committed_view_keeps_the_state_it_was_opened_with() {
         test.commit_prompt("view-flow", 1).await;
         assert_eq!(test.count_in_view(earlier_view, "view-flow").await, 1);
         assert_eq!(test.committed_count("view-flow").await, 2);
-        test.node.shutdown().await;
+        test.node.shutdown().await.expect("lease released");
     }
 }
 
@@ -413,7 +416,7 @@ async fn object_storage_outage_stops_the_node() {
         test.submit("outage-flow", CommitUrgency::Prompt),
         Err(CommitError::NodeStopping { .. })
     ));
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -429,7 +432,10 @@ async fn lost_lease_stops_serving() {
         test.submit("lease-flow", CommitUrgency::Prompt),
         Err(CommitError::NodeStopping { .. })
     ));
-    test.node.shutdown().await;
+    assert!(
+        test.node.shutdown().await.is_err(),
+        "lease writes still fail, so the release fails"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -439,7 +445,7 @@ async fn shutdown_fails_waiting_tickets() {
     let (_, ticket) = test
         .submit("shutdown-flow", CommitUrgency::Batched)
         .expect("submit succeeds");
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
     let result = ticket.wait().await;
     assert!(
         matches!(result, Ok(_) | Err(CommitError::NodeStopping { .. })),

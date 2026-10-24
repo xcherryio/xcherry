@@ -79,7 +79,7 @@ async fn a_stale_snapshot_never_replaces_a_successor_snapshot_after_log_cleanup(
     drop(first);
     let restarted = cluster.start_in_memory().await;
     assert_eq!(restarted.committed_count("takeover-flow").await, 5);
-    restarted.node.shutdown().await;
+    restarted.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -115,7 +115,7 @@ async fn a_snapshot_is_not_published_after_another_epoch_owns_the_cluster() {
             .all(Option::is_none)
     );
     assert_eq!(first.node.wait_for_stop().await, NodeStopReason::Fenced);
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -146,7 +146,7 @@ async fn an_in_flight_snapshot_is_not_published_after_the_node_stops_serving() {
             .iter()
             .all(Option::is_none)
     );
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 }
 
 /// Runs in real time: paused time does not advance while the upload's blocking task runs.
@@ -173,7 +173,8 @@ async fn shutdown_abandons_an_in_flight_snapshot_upload_and_releases_the_lease()
 
     tokio::time::timeout(Duration::from_secs(5), first.node.shutdown())
         .await
-        .expect("shutdown does not wait for the upload");
+        .expect("shutdown does not wait for the upload")
+        .expect("lease released");
     let snapshot_keys = cluster
         .object_store
         .list("snapshot/", None, 1000)
@@ -200,5 +201,5 @@ async fn shutdown_abandons_an_in_flight_snapshot_upload_and_releases_the_lease()
         .await
         .expect("the abandoned upload left the snapshot number usable");
     assert_eq!(reference.snapshot_number, 1);
-    successor.node.shutdown().await;
+    successor.node.shutdown().await.expect("lease released");
 }

@@ -120,7 +120,7 @@ async fn take_over_after_log_cleanup(
     assert_eq!(serving.committed_count(TAKEOVER_FLOW).await, 9);
     let serving_last_seq = last_seq_of_epoch(cluster, serving_epoch).await;
     match exit {
-        ServingNodeExit::Shutdown => serving.node.shutdown().await,
+        ServingNodeExit::Shutdown => serving.node.shutdown().await.expect("lease released"),
         ServingNodeExit::Crash => drop(serving),
     }
 
@@ -152,7 +152,7 @@ async fn take_over_after_log_cleanup(
     assert!(rewritten.is_empty(), "{rewritten:?}");
     standby.commit_prompt(TAKEOVER_FLOW, 1).await;
     assert_eq!(standby.committed_count(TAKEOVER_FLOW).await, 10);
-    standby.node.shutdown().await;
+    standby.node.shutdown().await.expect("lease released");
 }
 
 /// Returns a node start that owns its inputs, so a task can run it while the test acts.

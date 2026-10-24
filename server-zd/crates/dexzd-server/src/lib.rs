@@ -122,12 +122,13 @@ pub enum ServerError {
         /// Why the node stopped.
         reason: NodeStopReason,
     },
-    /// Graceful shutdown abandoned steps that did not finish within their budgets.
+    /// Graceful shutdown abandoned steps that did not finish within their budgets, or a step failed.
     ///
     /// The node lease may still be held until it expires when the engine step is listed.
-    #[error("shutdown did not finish: {steps} exceeded their budget")]
+    #[error("shutdown did not finish: {steps}")]
     ShutdownIncomplete {
-        /// Comma-separated names of the abandoned steps, such as `engine`.
+        /// Comma-separated descriptions of the abandoned or failed steps, such as
+        /// `engine exceeded its 5500 ms budget` or `engine failed: releasing node ... lease failed`.
         steps: String,
     },
     /// A server task ended unexpectedly.

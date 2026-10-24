@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
-    AttributeIndexDeclaration, ClusterConfig, LeaseConfig, LeaseStatus, ManifestChange,
-    MetadataError, NodeConfig, acquire_lease, bootstrap_or_validate, bump_node_epoch,
-    create_initial_manifest, raise_version_barrier, read_attribute_index_registry, read_manifest,
-    register_attribute_indexes, update_manifest, update_partition_snapshot,
+    AttributeIndexDeclaration, ClusterConfig, LeaseConfig, LeaseHandle, LeaseReleaseError,
+    LeaseStatus, ManifestChange, MetadataError, NodeConfig, acquire_lease, bootstrap_or_validate,
+    bump_node_epoch, create_initial_manifest, raise_version_barrier, read_attribute_index_registry,
+    read_manifest, register_attribute_indexes, update_manifest, update_partition_snapshot,
 };
 use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
@@ -45,6 +45,7 @@ struct MemoryStore {
     continue_release: Notify,
     unknown_next_release_before_write: AtomicBool,
     unknown_next_release_after_write: AtomicBool,
+    reject_next_lease_release: AtomicBool,
     manifest_read_barrier: Mutex<Option<(Arc<Barrier>, usize)>>,
 }
 
@@ -68,6 +69,14 @@ impl ObjectStore for MemoryStore {
         if is_lease_release && self.pause_next_lease_release.swap(false, Ordering::SeqCst) {
             self.release_started.notify_one();
             self.continue_release.notified().await;
+        }
+        if is_lease_release && self.reject_next_lease_release.swap(false, Ordering::SeqCst) {
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Put,
+                key,
+                ObjectStoreErrorKind::Transient,
+                "injected lease release rejection",
+            ));
         }
         if is_lease_release
             && self
@@ -596,7 +605,7 @@ async fn lease_acquires_renews_and_rejects_second_process_with_same_node_id() {
         LeaseStatus::Lost(_) => panic!("expected renewal"),
     };
     assert!(second_deadline > first_deadline);
-    first.shutdown().await;
+    first.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -623,7 +632,7 @@ async fn lease_takeover_after_expiry_and_grace() {
         *second.subscribe().borrow(),
         LeaseStatus::ValidUntil(_)
     ));
-    second.shutdown().await;
+    second.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -652,7 +661,7 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
     assert!(!waiter.is_finished());
     tokio::time::advance(Duration::from_secs(1)).await;
     let second = waiter.await.unwrap().unwrap();
-    second.shutdown().await;
+    second.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -679,7 +688,7 @@ async fn lease_waiter_takes_a_released_lease_within_the_poll_interval() {
     tokio::time::advance(Duration::from_secs(2)).await;
     tokio::task::yield_now().await;
     assert!(!waiter.is_finished());
-    holder.shutdown().await;
+    holder.shutdown().await.unwrap();
     let released_at = Instant::now();
     let successor = waiter.await.unwrap().unwrap();
     // The lease would expire 8 seconds later; the waiter must not wait for that.
@@ -689,7 +698,7 @@ async fn lease_waiter_takes_a_released_lease_within_the_poll_interval() {
         released_at.elapsed()
     );
     assert_eq!(successor.epoch(), 2);
-    successor.shutdown().await;
+    successor.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -717,7 +726,7 @@ async fn lease_waiter_polling_a_short_lease_still_waits_out_the_grace() {
         started_at.elapsed()
     );
     assert!(started_at.elapsed() < Duration::from_millis(1_800));
-    successor.shutdown().await;
+    successor.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -737,7 +746,7 @@ async fn lease_release_allows_immediate_reacquire() {
     let first_epoch = first.epoch();
     let original = store.get("lease/node-a").await.unwrap().unwrap();
     let original_lease = NodeLease::decode(original.bytes).unwrap();
-    first.shutdown().await;
+    first.shutdown().await.unwrap();
     let released = store.get("lease/node-a").await.unwrap().unwrap();
     let released_lease = NodeLease::decode(released.bytes).unwrap();
     assert_eq!(released_lease.expires_at_unix_micros, i64::MIN);
@@ -748,7 +757,7 @@ async fn lease_release_allows_immediate_reacquire() {
     );
     let second = acquire_lease(store, clock, &node(), &config).await.unwrap();
     assert_eq!(second.epoch(), first_epoch + 1);
-    second.shutdown().await;
+    second.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -770,7 +779,7 @@ async fn release_after_takeover_preserves_new_holder() {
         .await
         .unwrap();
     let before = store.get("lease/node-a").await.unwrap().unwrap();
-    old_holder.shutdown().await;
+    old_holder.shutdown().await.unwrap();
     let after = store.get("lease/node-a").await.unwrap().unwrap();
     assert_eq!(after.etag, before.etag);
     assert_eq!(after.bytes, before.bytes);
@@ -778,7 +787,7 @@ async fn release_after_takeover_preserves_new_holder() {
         *new_holder.subscribe().borrow(),
         LeaseStatus::ValidUntil(_)
     ));
-    new_holder.shutdown().await;
+    new_holder.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -807,11 +816,11 @@ async fn release_conflict_preserves_a_concurrent_new_holder() {
         .unwrap();
     let before = store.get("lease/node-a").await.unwrap().unwrap();
     store.continue_release.notify_one();
-    shutdown.await.unwrap();
+    shutdown.await.unwrap().unwrap();
     let after = store.get("lease/node-a").await.unwrap().unwrap();
     assert_eq!(after.etag, before.etag);
     assert_eq!(after.bytes, before.bytes);
-    new_holder.shutdown().await;
+    new_holder.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -832,10 +841,43 @@ async fn subscribers_see_loss_before_a_blocked_release_times_out() {
     assert!(matches!(&*status.borrow(), LeaseStatus::Lost(_)));
     assert!(!shutdown.is_finished());
     tokio::time::advance(Duration::from_secs(11)).await;
-    shutdown.await.unwrap();
+    assert!(matches!(
+        shutdown.await.unwrap(),
+        Err(LeaseReleaseError::TimedOut { budget, .. }) if budget == LeaseHandle::RELEASE_BUDGET
+    ));
     let after = store.get("lease/node-a").await.unwrap().unwrap();
     assert_eq!(after.etag, before.etag);
     assert_eq!(after.bytes, before.bytes);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejected_release_is_reported_and_the_lease_stays_held() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let holder = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    store
+        .reject_next_lease_release
+        .store(true, Ordering::SeqCst);
+    assert!(matches!(
+        holder.shutdown().await,
+        Err(LeaseReleaseError::Rejected {
+            source: MetadataError::Store(_),
+            ..
+        })
+    ));
+    assert!(matches!(
+        acquire_lease(store, clock, &node(), &config).await,
+        Err(MetadataError::LeaseHeld { .. })
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -859,7 +901,7 @@ async fn release_handles_unknown_outcomes_with_and_without_a_write() {
                 .unknown_next_release_before_write
                 .store(true, Ordering::SeqCst);
         }
-        holder.shutdown().await;
+        holder.shutdown().await.unwrap();
         let after = store.get("lease/node-a").await.unwrap().unwrap();
         let released = NodeLease::decode(after.bytes).unwrap();
         assert_eq!(released.expires_at_unix_micros, i64::MIN);
@@ -892,7 +934,7 @@ async fn waiter_stays_pending_while_holder_renews() {
         tokio::task::yield_now().await;
         assert!(!waiter.is_finished());
     }
-    holder.shutdown().await;
+    holder.shutdown().await.unwrap();
     waiter.abort();
     assert!(matches!(waiter.await, Err(error) if error.is_cancelled()));
 }
@@ -920,8 +962,8 @@ async fn old_holder_reports_loss_after_takeover() {
     assert!(
         matches!(&*old_status.borrow(), LeaseStatus::Lost(detail) if detail.contains("precondition failed"))
     );
-    old_holder.shutdown().await;
-    new_holder.shutdown().await;
+    old_holder.shutdown().await.unwrap();
+    new_holder.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -941,7 +983,7 @@ async fn hung_renewal_reports_loss_at_the_local_deadline() {
     tokio::time::advance(Duration::from_secs(2)).await;
     status.changed().await.unwrap();
     assert!(matches!(&*status.borrow(), LeaseStatus::Lost(detail) if detail.contains("deadline")));
-    holder.shutdown().await;
+    holder.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -961,7 +1003,7 @@ async fn renewal_failure_reports_lease_loss() {
     assert!(
         matches!(&*status.borrow(), LeaseStatus::Lost(detail) if detail.contains("injected lease renewal failure"))
     );
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]

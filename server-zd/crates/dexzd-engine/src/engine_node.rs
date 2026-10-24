@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
-    ClusterConfig, LeaseConfig, LeaseHandle, LeaseStatus, NodeConfig, acquire_lease,
+    ClusterConfig, LeaseConfig, LeaseHandle, LeaseReleaseError, LeaseStatus, NodeConfig,
+    acquire_lease,
 };
 use dexzd_keyspace::PartitionId;
 use dexzd_log::{CommitPipeline, StreamIdentity};
@@ -82,6 +83,10 @@ pub struct EngineNode {
 }
 
 impl EngineNode {
+    /// Longest [`EngineNode::shutdown`] runs: the task stop budget plus the lease release budget.
+    pub const SHUTDOWN_BUDGET: Duration =
+        TASK_STOP_BUDGET.saturating_add(LeaseHandle::RELEASE_BUDGET);
+
     /// Restores state, replays the log, starts serving, and rebuilds every running partition's runtime.
     pub async fn start<F>(
         config: &EngineNodeConfig,
@@ -281,7 +286,18 @@ impl EngineNode {
                 tasks,
             }),
             Err(error) => {
-                stop_and_release_lease(&state, tasks, applier_pool.as_deref(), lease).await;
+                let parts = LeasedParts {
+                    state,
+                    tasks,
+                    appliers: applier_pool,
+                    lease,
+                };
+                if let Err(release_error) = parts.stop_and_release_lease().await {
+                    tracing::error!(
+                        error = %release_error,
+                        "the node lease stays held after a failed start"
+                    );
+                }
                 Err(error)
             }
         }
@@ -315,9 +331,12 @@ impl EngineNode {
 
     /// Stops serving, fails waiting tickets, stops every task, and releases the lease.
     ///
-    /// Tasks and applier lanes that do not stop within 3 seconds are abandoned, so the lease is
-    /// always released.
-    pub async fn shutdown(self) {
+    /// Tasks and applier lanes that do not stop within 3 seconds are abandoned, so the lease
+    /// release is always attempted. Finishes within [`EngineNode::SHUTDOWN_BUDGET`].
+    ///
+    /// Returns `Ok` once this process no longer holds the lease, and [`LeaseReleaseError`] when the
+    /// release was rejected or timed out; the lease then stays held until it expires.
+    pub async fn shutdown(self) -> Result<(), LeaseReleaseError> {
         let Self {
             state,
             appliers,
@@ -325,37 +344,58 @@ impl EngineNode {
             tasks,
             ..
         } = self;
-        stop_and_release_lease(&state, tasks, Some(&appliers), lease).await;
+        let released = LeasedParts {
+            state,
+            tasks,
+            appliers: Some(appliers),
+            lease,
+        }
+        .stop_and_release_lease()
+        .await;
         tracing::info!("engine node stopped");
+        released
     }
 }
 
-/// Stops serving, gives tasks and applier lanes [`TASK_STOP_BUDGET`] to stop, then releases the
-/// lease.
-async fn stop_and_release_lease(
-    state: &CommitState,
+/// Everything that runs under the node lease, stopped before the lease is released.
+struct LeasedParts {
+    state: Arc<CommitState>,
     tasks: RunningTasks,
-    appliers: Option<&PartitionApplierPool>,
+    appliers: Option<Arc<PartitionApplierPool>>,
     lease: LeaseHandle,
-) {
-    state.stop(NodeStopReason::Shutdown);
-    let stopping = async {
-        tasks.shutdown().await;
-        if let Some(appliers) = appliers {
-            appliers.shutdown().await;
+}
+
+impl LeasedParts {
+    /// Stops serving, gives tasks and applier lanes [`TASK_STOP_BUDGET`] to stop, then releases the
+    /// lease.
+    ///
+    /// Returns the outcome of the lease release.
+    async fn stop_and_release_lease(self) -> Result<(), LeaseReleaseError> {
+        let Self {
+            state,
+            tasks,
+            appliers,
+            lease,
+        } = self;
+        state.stop(NodeStopReason::Shutdown);
+        let stopping = async {
+            tasks.shutdown().await;
+            if let Some(appliers) = &appliers {
+                appliers.shutdown().await;
+            }
+        };
+        if tokio::time::timeout(TASK_STOP_BUDGET, stopping)
+            .await
+            .is_err()
+        {
+            // Dropping the tasks aborts them; a lane blocked in apply ends with the process.
+            tracing::error!(
+                budget_seconds = TASK_STOP_BUDGET.as_secs(),
+                "engine tasks did not stop in time; releasing the lease anyway"
+            );
         }
-    };
-    if tokio::time::timeout(TASK_STOP_BUDGET, stopping)
-        .await
-        .is_err()
-    {
-        // Dropping the tasks aborts them; a lane blocked in apply ends with the process.
-        tracing::error!(
-            budget_seconds = TASK_STOP_BUDGET.as_secs(),
-            "engine tasks did not stop in time; releasing the lease anyway"
-        );
+        lease.shutdown().await
     }
-    lease.shutdown().await;
 }
 
 fn validate_config(config: &EngineNodeConfig) -> Result<(), EngineStartError> {
