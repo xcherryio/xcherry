@@ -55,6 +55,7 @@ sdk-rust/coverage/
 examples/rust/target/
 s3mock/target/
 server-zd/target/
+server-zd/target/release/dex-server-zd
 
 # TypeScript
 sdk-typescript/node_modules/
