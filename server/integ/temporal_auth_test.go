@@ -35,6 +35,7 @@ func TestTemporalAuthTokenRotation(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip("Temporal integration tests disabled")
 	}
+	requireGoServerSetting(t, "Temporal client authentication")
 	keyPath := filepath.Join(t.TempDir(), "api-key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("initial-token\n"), 0600))
 	proxy := newTemporalAuthProxy(t, nil, "initial-token")
@@ -93,6 +94,7 @@ func TestTemporalAuthCustomCAAndServerName(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip("Temporal integration tests disabled")
 	}
+	requireGoServerSetting(t, "Temporal client authentication")
 	testCA := newTemporalTestCA(t)
 	proxy := newTemporalAuthProxy(t, &tls.Config{Certificates: []tls.Certificate{testCA.serverCertificate}, MinVersion: tls.VersionTLS12}, "")
 	workerTarget := startWorker(t, basic.NewHandler())
@@ -112,6 +114,7 @@ func TestTemporalAuthClientCertificateRotation(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip("Temporal integration tests disabled")
 	}
+	requireGoServerSetting(t, "Temporal client authentication")
 	testCA := newTemporalTestCA(t)
 	pool := x509.NewCertPool()
 	caPEM, err := os.ReadFile(testCA.caPath)
@@ -142,6 +145,7 @@ func TestTemporalAuthPlaintextKeyCompatibility(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip("Temporal integration tests disabled")
 	}
+	requireGoServerSetting(t, "Temporal client authentication")
 	proxy := newTemporalAuthProxy(t, nil, "static-token")
 	logPath := filepath.Join(t.TempDir(), "dex.log")
 	temporalConfig := &config.TemporalConfig{HostPort: proxy.listener.Addr().String(), CloudAPIKey: "static-token", TLS: &config.TemporalTLSConfig{Enabled: ptr.Any(false)}}
