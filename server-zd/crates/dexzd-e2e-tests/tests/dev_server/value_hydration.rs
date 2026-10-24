@@ -17,9 +17,9 @@ use dexzd_protocol::dex::{
     GetFlowStateRequest, GetFlowStateResponse, GetHistoryEventsRequest, InvokeExecuteMethodOutput,
     InvokeExecuteMethodResponse, InvokeRpcRequest, InvokeWaitForMethodOutput,
     InvokeWaitForMethodResponse, InvokeWorkerRpcResponse, Kv, PublishToChannelRequest,
-    ServiceErrorResponse, SetAttributesRequest, StartFlowRequest, StepOptions, Value,
-    WaitForFlowRequest, WaitingCondition, WaitingConditionType, WorkerTarget,
-    invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task,
+    ServiceErrorResponse, SetAttributesRequest, StartFlowRequest, StepOptions, SubFlowCondition,
+    SubFlowOptions, Value, WaitForFlowRequest, WaitingCondition, WaitingConditionType,
+    WorkerTarget, invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task,
     poll_worker_task_frame, value,
 };
 use prost::Message;
@@ -156,6 +156,148 @@ async fn oversized_hydrated_rpc_fails_before_worker_dispatch() {
         "the Worker receives no oversized RPC task"
     );
     worker.stop().await;
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hydration_delivers_sub_flow_result_to_worker_and_flow_state() {
+    check_sub_flow_result_delivery(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_hydration_sub_flow_result_is_a_value_reference() {
+    check_sub_flow_result_delivery(false).await;
+}
+
+async fn check_sub_flow_result_delivery(is_hydrating: bool) {
+    let server = DevServer::start_with_config_overrides(Some(&format!(
+        "values:\n  wireInlineThresholdBytes: 10\n  hydrateBeforeDispatch: {is_hydrating}\n"
+    )))
+    .await;
+    let mut flow_client = server.flow_client();
+    let mut parent_worker = ScriptedWorker::start(server.worker_client(), FLOW_TYPE).await;
+    let mut child_worker =
+        ScriptedWorker::start(server.worker_client(), "ChildHydrationFlow").await;
+    let expected = ValueExpectation { is_hydrating };
+    flow_client
+        .start_flow(StartFlowRequest {
+            flow_id: FLOW_ID.to_owned(),
+            flow_type: FLOW_TYPE.to_owned(),
+            start_step_type: "ParentStep".to_owned(),
+            flow_start_options: Some(FlowStartOptions {
+                flow_config_override: Some(FlowConfig {
+                    worker_target: Some(WorkerTarget {
+                        is_pull_mode: true,
+                        ..WorkerTarget::default()
+                    }),
+                    ..FlowConfig::default()
+                }),
+                ..FlowStartOptions::default()
+            }),
+            request_id: "sub-flow-parent-start".to_owned(),
+            ..StartFlowRequest::default()
+        })
+        .await
+        .expect("the parent Flow starts");
+
+    let parent_wait_task = parent_worker.next_task().await;
+    let Some(poll_worker_task::Request::WaitFor(_)) = parent_wait_task.request else {
+        panic!("the parent first waits, got {parent_wait_task:?}");
+    };
+    parent_worker.reply(
+        parent_wait_task.task_id,
+        poll_worker_task_frame::Output::WaitFor(InvokeWaitForMethodOutput {
+            output: Some(invoke_wait_for_method_output::Output::Result(
+                InvokeWaitForMethodResponse {
+                    waiting_condition: Some(WaitingCondition {
+                        waiting_condition_type: WaitingConditionType::AllCompleted as i32,
+                        sub_flow_conditions: vec![SubFlowCondition {
+                            condition_id: "child-completed".to_owned(),
+                            sub_flow_type: "ChildHydrationFlow".to_owned(),
+                            start_step_type: "ChildStep".to_owned(),
+                            step_options: Some(StepOptions {
+                                skip_wait_for: true,
+                                ..StepOptions::default()
+                            }),
+                            options: Some(SubFlowOptions {
+                                flow_config_override: Some(FlowConfig {
+                                    worker_target: Some(WorkerTarget {
+                                        is_pull_mode: true,
+                                        ..WorkerTarget::default()
+                                    }),
+                                    ..FlowConfig::default()
+                                }),
+                                ..SubFlowOptions::default()
+                            }),
+                            sub_flow_index: 0,
+                            ..SubFlowCondition::default()
+                        }],
+                        ..WaitingCondition::default()
+                    }),
+                    ..InvokeWaitForMethodResponse::default()
+                },
+            )),
+        }),
+    );
+
+    let child_task = child_worker.next_task().await;
+    let Some(poll_worker_task::Request::Execute(_)) = child_task.request else {
+        panic!("the child executes, got {child_task:?}");
+    };
+    let child_output = string_value(&"child-result-".repeat(10_000));
+    child_worker.reply(
+        child_task.task_id,
+        poll_worker_task_frame::Output::Execute(InvokeExecuteMethodOutput {
+            output: Some(invoke_execute_method_output::Output::Result(
+                InvokeExecuteMethodResponse {
+                    step_decision: Some(force_complete(child_output.clone())),
+                    ..InvokeExecuteMethodResponse::default()
+                },
+            )),
+        }),
+    );
+
+    let parent_execute_task = parent_worker.next_task().await;
+    let Some(poll_worker_task::Request::Execute(parent_execute)) =
+        parent_execute_task.request.as_ref()
+    else {
+        panic!("the parent executes after the child completes, got {parent_execute_task:?}");
+    };
+    let result = parent_execute
+        .condition_results
+        .as_ref()
+        .and_then(|results| results.sub_flow_results.first())
+        .expect("the parent Worker receives the SubFlow result");
+    assert_eq!(result.flow_status, FlowStatus::Completed as i32);
+    expected.value(
+        result.results[0].completed_step_output.as_ref(),
+        &child_output,
+        "Worker SubFlow result",
+    );
+    let state = get_flow_state(&mut flow_client).await;
+    let state_result = state.active_step_executions[0]
+        .completed_conditions
+        .as_ref()
+        .and_then(|conditions| conditions.completed_sub_flow_results.get(&0))
+        .expect("GetFlowState includes the completed SubFlow result");
+    expected.value(
+        state_result.results[0].completed_step_output.as_ref(),
+        &child_output,
+        "GetFlowState SubFlow result",
+    );
+    parent_worker.reply(
+        parent_execute_task.task_id,
+        poll_worker_task_frame::Output::Execute(InvokeExecuteMethodOutput {
+            output: Some(invoke_execute_method_output::Output::Result(
+                InvokeExecuteMethodResponse {
+                    step_decision: Some(force_complete(string_value("parent-completed"))),
+                    ..InvokeExecuteMethodResponse::default()
+                },
+            )),
+        }),
+    );
+    child_worker.stop().await;
+    parent_worker.stop().await;
     server.shutdown().await;
 }
 
