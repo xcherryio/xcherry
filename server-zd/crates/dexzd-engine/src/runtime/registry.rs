@@ -9,6 +9,8 @@
 //! The node's Flow runtimes: proposals through the speculative overlay, committed outcomes,
 //! the SYNC barrier, and lock checks.
 
+mod effect_runtime_adapter;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
