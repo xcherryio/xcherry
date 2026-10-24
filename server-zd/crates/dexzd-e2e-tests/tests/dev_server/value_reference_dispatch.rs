@@ -13,11 +13,12 @@ use std::time::Duration;
 
 use dexzd_protocol::dex::flow_service_client::FlowServiceClient;
 use dexzd_protocol::dex::{
-    AttributeWrite, FlowConfig, FlowStartOptions, FlowStatus, InvokeExecuteMethodOutput,
-    InvokeExecuteMethodRequest, InvokeExecuteMethodResponse, LoadBlobRequestEntry,
-    LoadBlobsRequest, PollWorkerTask, RetryPolicy, StartFlowRequest, StepDecision, StepDurability,
-    StepMovement, StepOptions, Value, WaitForFlowRequest, WorkerTarget,
-    invoke_execute_method_output, poll_worker_task, poll_worker_task_frame, value,
+    AttributeWrite, FlowConfig, FlowStartOptions, FlowStatus, GetAttributesRequest,
+    InvokeExecuteMethodOutput, InvokeExecuteMethodRequest, InvokeExecuteMethodResponse,
+    LoadBlobRequestEntry, LoadBlobsRequest, PollWorkerTask, RetryPolicy, SetAttributesRequest,
+    StartFlowRequest, StepDecision, StepDurability, StepMovement, StepOptions, Value,
+    WaitForFlowRequest, WorkerTarget, invoke_execute_method_output, poll_worker_task,
+    poll_worker_task_frame, value,
 };
 use tonic::transport::Channel;
 
@@ -26,14 +27,17 @@ use crate::harness::{DevServer, ScriptedWorker, force_complete};
 const FLOW_TYPE: &str = "ValueReferenceFlow";
 const CHAIN_STEP_TYPE: &str = "ChainStep";
 
-/// A 2 second batch window keeps ASYNC commands uncommitted while their next Step runs.
-const SLOW_BATCHED_COMMIT_CONFIG: &str = "commit:\n  batchWindow: 2s\n";
+/// ASYNC commands commit only when a prompt proposal, such as a client write, seals their batch.
+const GATED_COMMIT_CONFIG: &str = "commit:\n  batchWindow: 1h\n";
+
+/// How long a dispatch that waits for the gated commit must stay pending.
+const PENDING_DISPATCH_WINDOW: Duration = Duration::from_secs(1);
 
 /// An ASYNC Step whose input and Attribute were written by a still-uncommitted command must
 /// still succeed on its only attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
-    let server = DevServer::start_with_config_overrides(Some(SLOW_BATCHED_COMMIT_CONFIG)).await;
+    let server = DevServer::start_with_config_overrides(Some(GATED_COMMIT_CONFIG)).await;
     let mut flow_client = server.flow_client();
     let mut worker = ScriptedWorker::start(server.worker_client(), FLOW_TYPE).await;
     let flow_id = "async-uncommitted-values";
@@ -53,11 +57,7 @@ async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
     worker.reply(
         first_task.task_id.clone(),
         execute_output(InvokeExecuteMethodResponse {
-            upsert_attributes: vec![AttributeWrite {
-                key: "profile".to_owned(),
-                value: Some(profile.clone()),
-                ..AttributeWrite::default()
-            }],
+            upsert_attributes: vec![attribute_write("profile", &profile)],
             step_decision: Some(go_to_chain_step(
                 second_input.clone(),
                 StepDurability::Async,
@@ -73,29 +73,37 @@ async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
         1,
         "the second Step runs on its first and only attempt"
     );
+    assert_attribute_uncommitted(&mut flow_client, flow_id, "profile").await;
     assert_eq!(
         load_value(&mut flow_client, flow_id, second.step_input.as_ref()).await,
         second_input,
         "the Worker resolves the Step input"
     );
-    let received_profile = second
-        .attributes
-        .iter()
-        .find(|attribute| attribute.key == "profile")
-        .and_then(|attribute| attribute.value.as_ref());
+    let received_profile = attribute_value(second, "profile");
     assert_eq!(
         load_value(&mut flow_client, flow_id, received_profile).await,
         profile,
         "the Worker resolves the Attribute"
     );
+    assert_eq!(
+        second.step_input.as_ref(),
+        Some(&second_input),
+        "the uncommitted Step input arrives inline"
+    );
+    assert_eq!(
+        received_profile,
+        Some(&profile),
+        "the uncommitted Attribute arrives inline"
+    );
     worker.reply(
         second_task.task_id.clone(),
         execute_output(InvokeExecuteMethodResponse {
-            step_decision: Some(force_complete(text_value("done"))),
+            step_decision: Some(go_to_chain_step(text_value("finish"), StepDurability::Sync)),
             ..InvokeExecuteMethodResponse::default()
         }),
     );
 
+    complete_final_sync_step(&mut worker).await;
     assert_flow_completed(&mut flow_client, flow_id).await;
     worker.stop().await;
     server.shutdown().await;
@@ -106,7 +114,7 @@ async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     let server = DevServer::start_with_config_overrides(Some(&format!(
-        "{SLOW_BATCHED_COMMIT_CONFIG}api:\n  grpcMaxMessageBytes: 1048576\nvalues:\n  maxValueBytes: 524288\n"
+        "{GATED_COMMIT_CONFIG}api:\n  grpcMaxMessageBytes: 1048576\nvalues:\n  maxValueBytes: 524288\n"
     )))
     .await;
     let mut flow_client = server.flow_client();
@@ -133,8 +141,13 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
         }),
     );
     let second_task = worker.next_task().await;
-    assert_eq!(attempt_of(execute_request(&second_task)), 1);
-    let second_replied_at = tokio::time::Instant::now();
+    let second = execute_request(&second_task);
+    assert_eq!(attempt_of(second), 1);
+    assert_eq!(
+        attribute_value(second, "first"),
+        Some(&first_attribute),
+        "the uncommitted Attribute arrives inline"
+    );
     worker.reply(
         second_task.task_id.clone(),
         execute_output(InvokeExecuteMethodResponse {
@@ -144,30 +157,29 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
         }),
     );
 
+    let early_task = tokio::time::timeout(PENDING_DISPATCH_WINDOW, worker.next_task()).await;
+    assert!(
+        early_task.is_err(),
+        "an oversized request waits for the commit, but the Worker received task {:?}",
+        early_task.map(|task| task.task_id)
+    );
+    assert_attribute_uncommitted(&mut flow_client, flow_id, "second").await;
+    release_commit_gate(&mut flow_client, flow_id).await;
+
     let third_task = worker.next_task().await;
-    let dispatch_delay = second_replied_at.elapsed();
     let third = execute_request(&third_task);
     assert_eq!(attempt_of(third), 1);
     assert!(
         is_value_reference(third.step_input.as_ref()),
         "an oversized request falls back to value references"
     );
-    assert!(
-        dispatch_delay >= Duration::from_secs(1),
-        "the fallback waits for the 2 second batch to commit, but dispatch took {dispatch_delay:?}"
-    );
     assert_eq!(
         load_value(&mut flow_client, flow_id, third.step_input.as_ref()).await,
         third_input
     );
     for (key, expected) in [("first", &first_attribute), ("second", &second_attribute)] {
-        let received = third
-            .attributes
-            .iter()
-            .find(|attribute| attribute.key == key)
-            .and_then(|attribute| attribute.value.as_ref());
         assert_eq!(
-            &load_value(&mut flow_client, flow_id, received).await,
+            &load_value(&mut flow_client, flow_id, attribute_value(third, key)).await,
             expected,
             "Attribute {key}"
         );
@@ -175,11 +187,12 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     worker.reply(
         third_task.task_id.clone(),
         execute_output(InvokeExecuteMethodResponse {
-            step_decision: Some(force_complete(text_value("done"))),
+            step_decision: Some(go_to_chain_step(text_value("finish"), StepDurability::Sync)),
             ..InvokeExecuteMethodResponse::default()
         }),
     );
 
+    complete_final_sync_step(&mut worker).await;
     assert_flow_completed(&mut flow_client, flow_id).await;
     worker.stop().await;
     server.shutdown().await;
@@ -298,6 +311,54 @@ fn go_to_chain_step(input: Value, durability: StepDurability) -> StepDecision {
     }
 }
 
+/// Completes the Flow in a SYNC Step, whose prompt commits also commit earlier ASYNC commands.
+async fn complete_final_sync_step(worker: &mut ScriptedWorker) {
+    let task = worker.next_task().await;
+    assert_eq!(attempt_of(execute_request(&task)), 1);
+    worker.reply(
+        task.task_id.clone(),
+        execute_output(InvokeExecuteMethodResponse {
+            step_decision: Some(force_complete(text_value("done"))),
+            ..InvokeExecuteMethodResponse::default()
+        }),
+    );
+}
+
+/// Opens the commit gate: a prompt client write seals the batch and returns once it commits.
+async fn release_commit_gate(flow_client: &mut FlowServiceClient<Channel>, flow_id: &str) {
+    flow_client
+        .set_attributes(SetAttributesRequest {
+            flow_id: flow_id.to_owned(),
+            attributes: vec![attribute_write("commit-gate", &text_value("open"))],
+            request_id: format!("{flow_id}-commit-gate"),
+            ..SetAttributesRequest::default()
+        })
+        .await
+        .expect("SetAttributes succeeds");
+}
+
+/// Asserts that GetAttributes, which reads committed state, does not see `key` yet.
+async fn assert_attribute_uncommitted(
+    flow_client: &mut FlowServiceClient<Channel>,
+    flow_id: &str,
+    key: &str,
+) {
+    let attributes = flow_client
+        .get_attributes(GetAttributesRequest {
+            flow_id: flow_id.to_owned(),
+            keys: vec![key.to_owned()],
+            ..GetAttributesRequest::default()
+        })
+        .await
+        .expect("GetAttributes succeeds")
+        .into_inner()
+        .attributes;
+    assert!(
+        attributes.is_empty(),
+        "the commit gate is still closed, but Attribute {key} is committed"
+    );
+}
+
 fn execute_request(task: &PollWorkerTask) -> &InvokeExecuteMethodRequest {
     match task.request.as_ref() {
         Some(poll_worker_task::Request::Execute(request)) => request,
@@ -325,6 +386,14 @@ fn attribute_write(key: &str, value: &Value) -> AttributeWrite {
         value: Some(value.clone()),
         ..AttributeWrite::default()
     }
+}
+
+fn attribute_value<'a>(request: &'a InvokeExecuteMethodRequest, key: &str) -> Option<&'a Value> {
+    request
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
 }
 
 fn is_value_reference(value: Option<&Value>) -> bool {
