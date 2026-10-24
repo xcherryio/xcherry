@@ -107,9 +107,11 @@ impl LogReplay<'_> {
                 serving_incarnation = self.streams.serving_incarnation,
                 "closed the previous log stream; starting a new incarnation"
             );
-            self.recover_open_stream(&self.stream(self.streams.serving_incarnation), (0, 0))
-                .await?
-                .0
+            let (serving_log, serving_bytes) = self
+                .recover_open_stream(&self.stream(self.streams.serving_incarnation), (0, 0))
+                .await?;
+            replayed_bytes += serving_bytes;
+            serving_log
         } else {
             open_log
         };
