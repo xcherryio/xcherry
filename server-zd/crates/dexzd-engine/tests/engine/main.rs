@@ -13,6 +13,7 @@ mod harness;
 mod lease_lifecycle;
 mod node_identity;
 mod recovery;
+mod restart_replay;
 mod snapshot_fencing;
 mod snapshots;
 mod standby_takeover;
