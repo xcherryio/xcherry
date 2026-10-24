@@ -130,7 +130,8 @@ failure policies or Attribute Store sync. `make integTests` and
 reports them as filtered out, and print each one with the reason
 `server-zd does not support <feature>`. Flow smoke entries that server-zd
 rejects run as their own tests so they can be filtered. `make test` runs
-`check-server-zd-exclusions.sh`, which verifies the filter. Set
+`check-server-zd-exclusions.sh`, which verifies the filter. A direct
+`cargo test` does not apply these exclusions. Set
 `DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 The Go examples support `./run-e2e-tests.sh --keep-running` to leave Dex running
