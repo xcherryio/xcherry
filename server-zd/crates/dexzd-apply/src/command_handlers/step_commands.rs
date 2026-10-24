@@ -56,12 +56,10 @@ pub(crate) fn apply_step_command(
         ),
         Command::StepMethodCompleted(completed) => {
             let outcome = apply_method_completed(transaction, &mut cursor, scope, completed)?;
-            if let StepCommandOutcome::RejectedResult(rejection) = &outcome {
-                return Ok(StepHandlerResult::ApplyAsFailure(rejected_result_failure(
-                    completed.invocation.clone(),
-                    completed.attempt,
-                    rejection,
-                )));
+            if let Some(failure) =
+                rejected_result_failure(completed.invocation.clone(), completed.attempt, &outcome)
+            {
+                return Ok(StepHandlerResult::ApplyAsFailure(failure));
             }
             (outcome, HistoryKind::SEMANTIC)
         }
@@ -78,38 +76,51 @@ pub(crate) fn apply_step_command(
         StepCommandOutcome::Ignored(reply) => {
             Ok(StepHandlerResult::Done(HandlerResult::Rejected(reply)))
         }
-        StepCommandOutcome::RejectedResult(rejection) => {
+        outcome @ (StepCommandOutcome::RejectedResult(_)
+        | StepCommandOutcome::MismatchedResult(_)) => {
             let (invocation, attempt) = match command {
                 Command::StepAttemptHeartbeat(heartbeat) => {
                     (heartbeat.invocation.clone(), heartbeat.attempt)
                 }
                 _ => (None, 0),
             };
-            Ok(StepHandlerResult::ApplyAsFailure(rejected_result_failure(
-                invocation, attempt, &rejection,
-            )))
+            rejected_result_failure(invocation, attempt, &outcome)
+                .map(StepHandlerResult::ApplyAsFailure)
+                .ok_or_else(|| ApplyError::InvariantViolation {
+                    detail: "a rejected Step result produced no attempt failure".to_owned(),
+                })
         }
     }
 }
 
+/// Returns the non-retryable attempt failure that replaces a rejected Worker result, or
+/// `None` when the outcome is not a rejection.
 fn rejected_result_failure(
     invocation: Option<dexzd_protocol::dexzd::v1::StepInvocationKey>,
     attempt: u32,
-    rejection: &ValueRejection,
-) -> StepAttemptFailedCommand {
-    let kind = match rejection {
-        ValueRejection::TooLarge { .. } => StepAttemptFailureKind::ValueTooLarge,
-        ValueRejection::UnknownReference { .. } => StepAttemptFailureKind::InvalidResponse,
+    outcome: &StepCommandOutcome,
+) -> Option<StepAttemptFailedCommand> {
+    let (kind, server_detail) = match outcome {
+        StepCommandOutcome::RejectedResult(rejection @ ValueRejection::TooLarge { .. }) => {
+            (StepAttemptFailureKind::ValueTooLarge, rejection.message())
+        }
+        StepCommandOutcome::RejectedResult(rejection @ ValueRejection::UnknownReference { .. }) => {
+            (StepAttemptFailureKind::InvalidResponse, rejection.message())
+        }
+        StepCommandOutcome::MismatchedResult(detail) => {
+            (StepAttemptFailureKind::InvalidResponse, detail.clone())
+        }
+        StepCommandOutcome::Applied(_) | StepCommandOutcome::Ignored(_) => return None,
     };
-    StepAttemptFailedCommand {
+    Some(StepAttemptFailedCommand {
         invocation,
         attempt,
         kind: kind as i32,
         worker_error: None,
-        server_detail: rejection.message(),
+        server_detail,
         is_non_retryable: true,
         pull_routing: None,
-    }
+    })
 }
 
 /// Applies timers that fired. Timers of another run attempt, or already removed, are skipped.
