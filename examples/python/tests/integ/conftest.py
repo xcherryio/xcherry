@@ -37,6 +37,7 @@ from dex import AsyncClient, DexServiceError, FlowNotFoundError, FlowStatus
 
 from dex_examples.app import ExampleApp
 from dex_examples.config import ExamplesConfig
+from dex_examples.shared.worker_mode import read_worker_mode_from_environment
 
 DEFAULT_SERVER_ADDRESS = "127.0.0.1:8801"
 
@@ -52,6 +53,12 @@ def server_address() -> str:
     return os.environ.get("DEX_FLOW_SERVICE_ADDRESS", DEFAULT_SERVER_ADDRESS)
 
 
+def skip_when_server_zd(feature: str) -> None:
+    """Skips a test whose sample uses a feature that server-zd rejects."""
+    if os.environ.get("DEX_INTEG_ENGINE") == "zd":
+        pytest.skip(f"server-zd does not support {feature}")
+
+
 @pytest_asyncio.fixture(scope="session")
 async def example_app(
     tmp_path_factory: pytest.TempPathFactory,
@@ -64,18 +71,25 @@ async def example_app(
         worker_target=None,
         http_address="127.0.0.1:0",
         blob_cache_dir=tmp_path_factory.mktemp("dex-examples-blob-cache"),
+        worker_mode=read_worker_mode_from_environment(),
         agent_mcp_config=_agent_mcp_config(tmp_path_factory),
     )
     app = ExampleApp(config)
-    await app.start_worker()
-    if not await server_is_ready(app.client):
-        await app.close()
-        pytest.skip(
-            "no Dex server at "
-            f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to a running "
-            "Dex server to run the example integration tests"
-        )
     try:
+        if config.worker_mode.is_pull:
+            # Pull registration fails without a server, so probe first to keep the skip.
+            is_server_ready = await server_is_ready(app.client)
+            if is_server_ready:
+                await app.start_worker()
+        else:
+            await app.start_worker()
+            is_server_ready = await server_is_ready(app.client)
+        if not is_server_ready:
+            pytest.skip(
+                "no Dex server at "
+                f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to a running "
+                "Dex server to run the example integration tests"
+            )
         yield app
     finally:
         await app.close()

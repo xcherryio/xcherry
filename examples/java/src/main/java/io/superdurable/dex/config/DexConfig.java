@@ -25,14 +25,17 @@ import io.superdurable.dex.Registry;
 import io.superdurable.dex.Worker;
 import io.superdurable.dex.WorkerOptions;
 import io.superdurable.dex.WorkerTarget;
+import io.superdurable.dex.shared.ExampleWorkerMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 @Configuration
 public class DexConfig {
@@ -48,13 +51,26 @@ public class DexConfig {
         return BlobCache.open(new BlobCacheConfig(blobCacheDir, 1L << 30));
     }
 
+    @Bean
+    public ExampleWorkerMode exampleWorkerMode(
+            @Value("${DEX_EXAMPLES_WORKER_MODE:push}") final String workerMode) {
+        return ExampleWorkerMode.parse(workerMode);
+    }
+
     @Bean(destroyMethod = "close")
     public Worker worker(
             final Registry registry,
             final BlobCache blobCache,
+            final ExampleWorkerMode workerMode,
             @Value("${dex.server-address}") final String serverAddress,
             @Value("${dex.worker-bind-address}") final String workerBindAddress,
             @Value("${dex.worker-target:}") final String workerTarget) {
+        if (workerMode.isPull()) {
+            return new Worker(registry, blobCache, WorkerOptions.newBuilder()
+                    .serverAddress(serverAddress)
+                    .pull(ExampleWorkerMode.newExamplePullWorkerOptions())
+                    .build());
+        }
         final WorkerOptions.Builder options = WorkerOptions.newBuilder()
                 .bindAddress(workerBindAddress)
                 .serverAddress(serverAddress);
@@ -78,11 +94,15 @@ public class DexConfig {
 
     @Component
     public static class WorkerLifecycle {
+        private static final Duration PULL_REGISTRATION_TIMEOUT = Duration.ofSeconds(30);
+
         private final Worker worker;
+        private final ExampleWorkerMode workerMode;
         private Thread workerThread;
 
-        public WorkerLifecycle(final Worker worker) {
+        public WorkerLifecycle(final Worker worker, final ExampleWorkerMode workerMode) {
             this.worker = worker;
+            this.workerMode = workerMode;
         }
 
         @PostConstruct
@@ -90,6 +110,21 @@ public class DexConfig {
             workerThread = new Thread(worker::start, "dex-java-examples-worker");
             workerThread.setDaemon(true);
             workerThread.start();
+            if (workerMode.isPull()) {
+                waitForPullRegistration();
+            }
+        }
+
+        private void waitForPullRegistration() {
+            try {
+                worker.waitPullRegistered(PULL_REGISTRATION_TIMEOUT);
+            } catch (final InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "interrupted waiting for pull Worker registration", interrupted);
+            } catch (final TimeoutException timeout) {
+                throw new IllegalStateException("pull Worker did not register with Dex", timeout);
+            }
         }
     }
 }

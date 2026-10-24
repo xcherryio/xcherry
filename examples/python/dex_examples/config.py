@@ -27,6 +27,10 @@ from dex_examples.products.ai_agent.models import (
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
 )
+from dex_examples.shared.worker_mode import (
+    WorkerMode,
+    read_worker_mode_from_environment,
+)
 
 DEFAULT_TIMEOUT = timedelta(hours=1)
 
@@ -38,6 +42,7 @@ class ExamplesConfig:
     worker_target: str | None
     http_address: str
     blob_cache_dir: Path
+    worker_mode: WorkerMode
     agent_model: str = DEFAULT_MODEL
     agent_system_prompt: str = DEFAULT_SYSTEM_PROMPT
     agent_context_tokens: int = DEFAULT_CONTEXT_TOKENS
@@ -61,6 +66,7 @@ class ExamplesConfig:
                     "/tmp/dex-examples-python-blob-cache",
                 )
             ),
+            worker_mode=read_worker_mode_from_environment(),
             agent_model=os.environ.get("DEX_AGENT_MODEL", DEFAULT_MODEL),
             agent_system_prompt=os.environ.get(
                 "DEX_AGENT_SYSTEM_PROMPT",

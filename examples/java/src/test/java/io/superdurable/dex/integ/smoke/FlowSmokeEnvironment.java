@@ -18,6 +18,8 @@ package io.superdurable.dex.integ.smoke;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.superdurable.dex.SpringMainApplication;
+import io.superdurable.dex.Worker;
+import io.superdurable.dex.shared.ExampleWorkerMode;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -58,6 +60,7 @@ final class FlowSmokeEnvironment implements AutoCloseable {
     static FlowSmokeEnvironment start() throws Exception {
         final String serverAddress =
                 System.getenv().getOrDefault("DEX_FLOW_SERVICE_ADDRESS", "127.0.0.1:8801");
+        final ExampleWorkerMode workerMode = ExampleWorkerMode.readFromEnvironment();
         final Path cacheDirectory = Files.createTempDirectory("dex-java-flow-smoke-");
         final int workerPort = availablePort();
         final String workerAddress = "127.0.0.1:" + workerPort;
@@ -70,7 +73,11 @@ final class FlowSmokeEnvironment implements AutoCloseable {
                 "--dex.blob-cache-dir=" + cacheDirectory.toString());
         final WebServerApplicationContext webContext = (WebServerApplicationContext) context;
         final int httpPort = webContext.getWebServer().getPort();
-        awaitWorker(workerPort);
+        if (workerMode.isPull()) {
+            context.getBean(Worker.class).waitPullRegistered(Duration.ofSeconds(30));
+        } else {
+            awaitWorker(workerPort);
+        }
         return new FlowSmokeEnvironment(
                 context,
                 cacheDirectory,

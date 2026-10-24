@@ -26,6 +26,7 @@ import io.superdurable.dex.StartFlowOptions;
 import io.superdurable.dex.Worker;
 import io.superdurable.dex.WorkerOptions;
 import io.superdurable.dex.WaitForAttributeOptions;
+import io.superdurable.dex.shared.ExampleWorkerMode;
 import io.superdurable.dex.shared.MyDependencyService;
 import io.superdurable.dex.products.engagement.EngagementFlow;
 import io.superdurable.dex.products.dealdsl.DealDSLFlow;
@@ -51,6 +52,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -153,9 +155,9 @@ final class IntegEnvironment implements AutoCloseable {
                 userOnboardingFlow,
                 pollingFlow);
 
+        final ExampleWorkerMode workerMode = ExampleWorkerMode.readFromEnvironment();
         final Path cacheDirectory = Files.createTempDirectory("dex-java-examples-integ-");
         final int workerPort = availablePort();
-        final String workerAddress = "127.0.0.1:" + workerPort;
         final Registry registry = new Registry(flows);
         final BlobCache blobCache = BlobCache.open(new BlobCacheConfig(
                 cacheDirectory.toString(),
@@ -163,10 +165,7 @@ final class IntegEnvironment implements AutoCloseable {
         final Worker worker = new Worker(
                 registry,
                 blobCache,
-                WorkerOptions.newBuilder()
-                        .bindAddress(workerAddress)
-                        .serverAddress(serverAddress)
-                        .build());
+                integWorkerOptions(workerMode, serverAddress, workerPort));
         final AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         final Thread workerThread = new Thread(() -> {
             try {
@@ -177,7 +176,11 @@ final class IntegEnvironment implements AutoCloseable {
         }, "dex-java-examples-integ-worker");
         workerThread.setDaemon(true);
         workerThread.start();
-        awaitWorker(workerPort, workerFailure);
+        if (workerMode.isPull()) {
+            awaitPullWorkerRegistration(worker, workerFailure);
+        } else {
+            awaitWorker(workerPort, workerFailure);
+        }
         final Client client = new Client(
                 registry,
                 blobCache,
@@ -310,6 +313,22 @@ final class IntegEnvironment implements AutoCloseable {
         }
     }
 
+    private static WorkerOptions integWorkerOptions(
+            final ExampleWorkerMode workerMode,
+            final String serverAddress,
+            final int workerPort) {
+        if (workerMode.isPull()) {
+            return WorkerOptions.newBuilder()
+                    .serverAddress(serverAddress)
+                    .pull(ExampleWorkerMode.newExamplePullWorkerOptions())
+                    .build();
+        }
+        return WorkerOptions.newBuilder()
+                .bindAddress("127.0.0.1:" + workerPort)
+                .serverAddress(serverAddress)
+                .build();
+    }
+
     private static int availablePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
@@ -333,6 +352,25 @@ final class IntegEnvironment implements AutoCloseable {
             }
         }
         throw new IOException("Java examples integ Worker did not become ready");
+    }
+
+    private static void awaitPullWorkerRegistration(
+            final Worker worker,
+            final AtomicReference<Throwable> workerFailure) throws IOException {
+        try {
+            worker.waitPullRegistered(Duration.ofSeconds(30));
+        } catch (final InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted waiting for Java examples integ pull Worker", interrupted);
+        } catch (final TimeoutException timeout) {
+            final IOException notReady =
+                    new IOException("Java examples integ pull Worker did not register", timeout);
+            final Throwable failure = workerFailure.get();
+            if (failure != null) {
+                notReady.addSuppressed(failure);
+            }
+            throw notReady;
+        }
     }
 
     private static void deleteRecursively(final Path path) throws IOException {

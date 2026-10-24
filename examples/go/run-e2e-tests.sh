@@ -35,8 +35,30 @@ for arg in "$@"; do
   esac
 done
 
+export DEX_INTEG_ENGINE="${DEX_INTEG_ENGINE:-temporal}"
+if [[ "$DEX_INTEG_ENGINE" != temporal && "$DEX_INTEG_ENGINE" != zd ]]; then
+  echo "DEX_INTEG_ENGINE must be temporal or zd" >&2
+  exit 2
+fi
+default_worker_mode=push
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_worker_mode=pull
+fi
+export DEX_EXAMPLES_WORKER_MODE="${DEX_EXAMPLES_WORKER_MODE:-$default_worker_mode}"
+if [[ "$DEX_EXAMPLES_WORKER_MODE" != push && "$DEX_EXAMPLES_WORKER_MODE" != pull ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && "$DEX_EXAMPLES_WORKER_MODE" == push ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE=push is not supported with DEX_INTEG_ENGINE=zd" >&2
+  exit 2
+fi
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)
+if [[ -n "${DEX_SERVER_ZD_BINARY:-}" && "$DEX_SERVER_ZD_BINARY" == */* ]]; then
+  DEX_SERVER_ZD_BINARY="$(cd "$(dirname "$DEX_SERVER_ZD_BINARY")" && pwd)/$(basename "$DEX_SERVER_ZD_BINARY")"
+fi
 dex_port="${DEX_EXAMPLES_DEX_PORT:-19801}"
 web_port="${DEX_EXAMPLES_WEB_PORT:-19901}"
 deal_dsl_dex_port="${DEX_EXAMPLES_DEAL_DSL_DEX_PORT:-19803}"
@@ -94,13 +116,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ENTITY_STORE_POSTGRES_PORT="$entity_store_postgres_port" docker compose -p "$entity_store_project" \
-  -f "$entity_store_dir/docker-compose.yml" up --detach --wait
-entity_store_started=true
+# server-zd does not support Attribute Store sync, so zd runs skip the entity store.
+if [[ "$DEX_INTEG_ENGINE" == temporal ]]; then
+  ENTITY_STORE_POSTGRES_PORT="$entity_store_postgres_port" docker compose -p "$entity_store_project" \
+    -f "$entity_store_dir/docker-compose.yml" up --detach --wait
+  entity_store_started=true
 
-entity_store_config="$test_dir/entity-store.yaml"
-sed "s/localhost:55432/localhost:${entity_store_postgres_port}/" \
-  "$entity_store_dir/attribute-store.yaml" >"$entity_store_config"
+  entity_store_config="$test_dir/entity-store.yaml"
+  sed "s/localhost:55432/localhost:${entity_store_postgres_port}/" \
+    "$entity_store_dir/attribute-store.yaml" >"$entity_store_config"
+fi
 
 if [[ ! -f "$repo_root/web/assets/dist/index.html" ]]; then
   (
@@ -114,14 +139,31 @@ fi
   cd "$repo_root/cli"
   GOWORK=off go build -trimpath -o "$binary_dir/dexcli" ./cmd/dexcli
 )
+if [[ "$DEX_INTEG_ENGINE" == zd && -z "${DEX_SERVER_ZD_BINARY:-}" ]]; then
+  (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
+  DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
+fi
+
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_dev_args=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/default-zd")
+  deal_dsl_dev_args=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/deal-dsl-zd")
+else
+  default_dev_args=(
+    -attribute-store-config "$entity_store_config"
+    -sqlite-db-filename "$test_dir/default-temporal.db"
+  )
+  deal_dsl_dev_args=(
+    -attribute-store-config "$entity_store_config"
+    -sqlite-db-filename "$test_dir/deal-dsl-temporal.db"
+  )
+fi
 
 "$binary_dir/dexcli" dev \
-  -attribute-store-config "$entity_store_config" \
+  "${default_dev_args[@]}" \
   -bind-address 127.0.0.1 \
   -dex-port "$dex_port" \
   -web-port "$web_port" \
   -open=false \
-  -sqlite-db-filename "$test_dir/default-temporal.db" \
   >>"$log_file" 2>&1 &
 dexcli_pid=$!
 
@@ -169,12 +211,11 @@ DEAL_DSL_POSTGRES_PORT="$postgres_port" docker compose \
 deal_dsl_started=true
 
 "$binary_dir/dexcli" dev \
-  -attribute-store-config "$entity_store_config" \
+  "${deal_dsl_dev_args[@]}" \
   -bind-address 127.0.0.1 \
   -dex-port "$deal_dsl_dex_port" \
   -web-port "$deal_dsl_web_port" \
   -open=false \
-  -sqlite-db-filename "$test_dir/deal-dsl-temporal.db" \
   >>"$deal_dsl_dex_log" 2>&1 &
 dexcli_pid=$!
 

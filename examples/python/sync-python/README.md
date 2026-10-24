@@ -37,7 +37,9 @@ uv run --frozen python sync-python/main.py
 
 Env overrides: `DEX_FLOW_SERVICE_ADDRESS`, `DEX_SYNC_WORKER_BIND_ADDRESS`,
 `DEX_SYNC_WORKER_TARGET`, `DEX_SYNC_EXAMPLES_HTTP_ADDRESS`,
-`DEX_SYNC_BLOB_CACHE_DIR`.
+`DEX_SYNC_BLOB_CACHE_DIR`, `DEX_EXAMPLES_WORKER_MODE` (`push` by default, or
+`pull` to connect to Dex as a pull Worker and ignore the Worker bind address
+and target).
 
 ## Verify
 
