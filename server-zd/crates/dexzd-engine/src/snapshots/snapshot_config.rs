@@ -19,7 +19,8 @@ pub struct SnapshotConfig {
     pub check_interval: Duration,
     /// Defaults to 30 s; wait after a failed snapshot before the next attempt.
     pub retry_delay: Duration,
-    /// Defaults to 3; complete snapshot manifests kept per lineage.
+    /// Defaults to 3; complete snapshot manifests kept across every lineage of this node. The
+    /// snapshot the manifest points to is always kept.
     pub retained_count: usize,
     /// Defaults to 24 h. Log batches are deleted only when a snapshot at least this old covers
     /// them, and older snapshots are deleted only this long after a newer one exists.

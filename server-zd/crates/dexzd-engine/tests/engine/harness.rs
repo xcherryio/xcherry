@@ -8,6 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
@@ -23,9 +24,15 @@ use dexzd_engine::{
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
 };
-use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
-use dexzd_protocol::dexzd::v1::{AttributesSetCommand, CommandReply, FlowCommand, flow_command};
+use dexzd_object_store::{
+    FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
+};
+use dexzd_protocol::dexzd::v1::{
+    AttributesSetCommand, CommandReply, FlowCommand, Manifest, NodeLease, flow_command,
+};
 use futures::future::BoxFuture;
+use prost::Message;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 pub(crate) const PARTITION_COUNT: u32 = 4;
@@ -246,25 +253,119 @@ impl PartitionRuntimeRebuilder for RecordingRuntime {
     }
 }
 
-/// Fails every write under a key prefix once switched on.
+/// One armed delay: the next `operation` on a key that `matches_prefix` or equals `key`.
+struct DelayedOperation {
+    operation: ObjectStoreOperation,
+    key: String,
+    matches_prefix: bool,
+    delay: Duration,
+}
+
+/// Fails writes under a key prefix, fails writes of one key after some succeed, or delays one
+/// operation, once switched on. Records every operation it sees.
 #[derive(Default)]
 pub(crate) struct SwitchableFaults {
     failing_put_prefix: Mutex<Option<String>>,
+    /// Key whose writes fail once the remaining count of allowed writes is zero.
+    limited_put: Mutex<Option<(String, usize)>>,
+    delayed: Mutex<Option<DelayedOperation>>,
+    delayed_entered: Notify,
+    operations: Mutex<Vec<(ObjectStoreOperation, String)>>,
 }
 
 impl SwitchableFaults {
     pub(crate) fn fail_puts_under(&self, prefix: &str) {
         *self.failing_put_prefix.lock().expect("fault lock") = Some(prefix.to_owned());
     }
+
+    /// Lets `allowed` more writes of exactly `key` succeed, then fails the rest.
+    pub(crate) fn fail_puts_of_after(&self, key: &str, allowed: usize) {
+        *self.limited_put.lock().expect("fault lock") = Some((key.to_owned(), allowed));
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.failing_put_prefix.lock().expect("fault lock") = None;
+        *self.limited_put.lock().expect("fault lock") = None;
+        *self.delayed.lock().expect("fault lock") = None;
+    }
+
+    /// Delays the next read of exactly `key` by `delay`.
+    pub(crate) fn delay_next_get_of(&self, key: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Get, key, false, delay);
+    }
+
+    /// Delays the next write of a key under `prefix` by `delay`.
+    pub(crate) fn delay_next_put_under(&self, prefix: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Put, prefix, true, delay);
+    }
+
+    /// Waits until the operation armed by a `delay_next_*` call starts waiting.
+    pub(crate) async fn wait_until_delayed_operation_entered(&self) {
+        self.delayed_entered.notified().await;
+    }
+
+    /// Counts recorded operations of one kind whose key satisfies `is_counted`.
+    pub(crate) fn count_operations(
+        &self,
+        operation: ObjectStoreOperation,
+        is_counted: impl Fn(&str) -> bool,
+    ) -> usize {
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .iter()
+            .filter(|(recorded, key)| *recorded == operation && is_counted(key))
+            .count()
+    }
+
+    fn arm_delay(
+        &self,
+        operation: ObjectStoreOperation,
+        key: &str,
+        matches_prefix: bool,
+        delay: Duration,
+    ) {
+        *self.delayed.lock().expect("fault lock") = Some(DelayedOperation {
+            operation,
+            key: key.to_owned(),
+            matches_prefix,
+            delay,
+        });
+    }
 }
 
 impl FaultInjector for SwitchableFaults {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .push((operation, key.to_owned()));
+        let armed = self.delayed.lock().expect("fault lock").take_if(|delayed| {
+            delayed.operation == operation
+                && if delayed.matches_prefix {
+                    key.starts_with(&delayed.key)
+                } else {
+                    key == delayed.key
+                }
+        });
+        if let Some(delayed) = armed {
+            self.delayed_entered.notify_one();
+            return FaultAction::Delay(delayed.delay);
+        }
+        if operation != ObjectStoreOperation::Put {
+            return FaultAction::Proceed;
+        }
+        if let Some((limited_key, allowed)) = &mut *self.limited_put.lock().expect("fault lock")
+            && limited_key == key
+        {
+            if *allowed == 0 {
+                return FaultAction::FailBeforeEffect;
+            }
+            *allowed -= 1;
+        }
         let failing = self.failing_put_prefix.lock().expect("fault lock");
         match failing.as_deref() {
-            Some(prefix) if operation == ObjectStoreOperation::Put && key.starts_with(prefix) => {
-                FaultAction::FailBeforeEffect
-            }
+            Some(prefix) if key.starts_with(prefix) => FaultAction::FailBeforeEffect,
             _ => FaultAction::Proceed,
         }
     }
@@ -347,13 +448,50 @@ impl TestCluster {
 
     pub(crate) async fn start_in_memory(&mut self) -> TestNode {
         let config = self.config(LocalStoreConfig::InMemory);
+        self.start_with(&config).await.expect("node starts")
+    }
+
+    /// Starts a node with a fresh applier and runtime.
+    pub(crate) async fn start_with(
+        &mut self,
+        config: &EngineNodeConfig,
+    ) -> Result<TestNode, EngineStartError> {
         self.start(
-            &config,
+            config,
             Arc::new(CountingApplier::default()),
             Arc::new(RecordingRuntime::default()),
         )
         .await
-        .expect("node starts")
+    }
+
+    pub(crate) async fn cluster_manifest(&self) -> Manifest {
+        dexzd_cluster_metadata::read_manifest(self.object_store.as_ref())
+            .await
+            .expect("read cluster manifest")
+            .expect("cluster manifest exists")
+    }
+
+    /// Replaces the node lease with an expired one, as a successor's takeover would.
+    pub(crate) async fn expire_lease_of(&self, node_id: &str) {
+        let key = format!("lease/{node_id}");
+        let current = self
+            .object_store
+            .get(&key)
+            .await
+            .expect("read lease")
+            .expect("lease exists");
+        let mut lease = NodeLease::decode(current.bytes).expect("decode lease");
+        lease.holder_process_id = "taken-over-by-a-test".to_owned();
+        lease.expires_at_unix_micros = 0;
+        lease.version += 1;
+        self.object_store
+            .put(
+                &key,
+                lease.encode_to_vec().into(),
+                dexzd_object_store::WriteCondition::Unconditional,
+            )
+            .await
+            .expect("overwrite lease");
     }
 }
 

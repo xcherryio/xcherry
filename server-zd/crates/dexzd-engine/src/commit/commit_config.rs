@@ -22,7 +22,7 @@ pub struct CommitConfig {
     /// Defaults to 4; most batch writes in flight to object storage at once.
     pub max_in_flight_batches: usize,
     /// Defaults to 64 MiB; encoded bytes of submitted commands that are not yet applied.
-    /// Submissions beyond it fail with [`crate::CommitError::Backpressure`].
+    /// Submissions beyond it fail with [`crate::CommitError::Unavailable`].
     pub max_unapplied_bytes: u32,
     /// Defaults to 10 s; deadline for writing one batch, including retries.
     pub batch_write_deadline: Duration,

@@ -11,6 +11,7 @@
 mod cluster_metadata;
 mod local_store_opening;
 mod log_replay;
+mod node_streams;
 mod runtime_rebuild;
 
 pub use local_store_opening::LocalStoreConfig;
@@ -22,6 +23,7 @@ pub use runtime_rebuild::{
 pub(crate) use cluster_metadata::ClusterMetadata;
 pub(crate) use local_store_opening::{LocalStoreRequirements, open_local_store};
 pub(crate) use log_replay::LogReplay;
+pub(crate) use node_streams::describe_lost_ownership;
 
 use crate::commit::NodeStopReason;
 
@@ -31,6 +33,33 @@ pub enum EngineStartError {
     /// Cluster metadata could not be read, created, or validated.
     #[error("cluster metadata: {0}")]
     Metadata(#[from] dexzd_cluster_metadata::MetadataError),
+    /// The configured node ID differs from the node that owns the cluster's partitions.
+    #[error(
+        "configured node ID {configured:?} differs from node {recorded:?}, which owns partition \
+         {partition}; a cluster runs one node, so start it with node ID {recorded:?}"
+    )]
+    NodeIdentityMismatch {
+        /// Node ID in the node configuration.
+        configured: String,
+        /// Node ID that the manifest records as the partition owner.
+        recorded: String,
+        /// First partition owned by the recorded node.
+        partition: u32,
+    },
+    /// The configured incarnation precedes the newest incarnation recorded for this node.
+    #[error(
+        "configured incarnation {configured} of node {node_id:?} precedes its recorded \
+         incarnation {newest_recorded}; configure {newest_recorded} to continue that log stream \
+         or a larger value to start a new one"
+    )]
+    IncarnationRegressed {
+        /// This node's ID.
+        node_id: String,
+        /// Incarnation in the node configuration.
+        configured: u32,
+        /// Newest incarnation of this node that the manifest records.
+        newest_recorded: u32,
+    },
     /// Cluster metadata contradicts this node's configuration.
     #[error("invalid cluster metadata: {detail}")]
     InvalidMetadata {
@@ -56,9 +85,12 @@ pub enum EngineStartError {
     Log(#[from] dexzd_log::LogError),
     /// The local store and snapshot are older than the oldest retained log batch.
     #[error(
-        "log batches before {first_retained_seq} were deleted; local state resumes at {resumes_at}"
+        "log batches of incarnation {incarnation} before {first_retained_seq} were deleted; local \
+         state resumes at {resumes_at}"
     )]
     LogUnavailable {
+        /// Incarnation of the log stream that lacks the batches.
+        incarnation: u32,
         /// Oldest retained batch seq.
         first_retained_seq: u64,
         /// First batch seq the local state needs.

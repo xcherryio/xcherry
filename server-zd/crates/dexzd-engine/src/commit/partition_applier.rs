@@ -273,7 +273,7 @@ impl FrameApplier {
         if meta
             .applied
             .as_ref()
-            .is_some_and(|applied| applied.seq >= frame.position.seq)
+            .is_some_and(|applied| is_at_or_after(applied, &frame.position))
         {
             return Ok(None);
         }
@@ -351,7 +351,7 @@ impl FrameApplier {
             if meta
                 .applied
                 .as_ref()
-                .is_some_and(|applied| applied.seq >= position.seq)
+                .is_some_and(|applied| is_at_or_after(applied, position))
             {
                 continue;
             }
@@ -484,6 +484,11 @@ impl FrameApplier {
             }
         }
     }
+}
+
+/// Positions of one node order by incarnation, then seq; incarnations only increase.
+fn is_at_or_after(applied: &LogPosition, position: &LogPosition) -> bool {
+    (applied.incarnation, applied.seq) >= (position.incarnation, position.seq)
 }
 
 fn hex(bytes: &[u8]) -> String {
