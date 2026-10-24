@@ -1,0 +1,53 @@
+diff --git a/server-zd/crates/dexzd-apply/src/steps/invocations.rs b/server-zd/crates/dexzd-apply/src/steps/invocations.rs
+index 57c00c09d..438f98ee8 100644
+--- a/server-zd/crates/dexzd-apply/src/steps/invocations.rs
++++ b/server-zd/crates/dexzd-apply/src/steps/invocations.rs
+@@ -32,2 +32,3 @@ pub(crate) enum InvocationEnd {
+     Canceled,
++    Retrying,
+ }
+@@ -96,2 +97,5 @@ pub(crate) fn make_invocation_pending(
+             .and_then(|invocation| invocation.last_failure.clone()),
++        snapshot: previous
++            .as_ref()
++            .and_then(|invocation| invocation.snapshot.clone()),
+         heartbeat_checkpoint: previous.and_then(|invocation| invocation.heartbeat_checkpoint),
+@@ -260,3 +264,6 @@ pub(crate) fn end_running_attempt(
+     let was_running = invocation.phase == StepInvocationPhase::Running as i32;
+-    if let Some(snapshot) = invocation.snapshot.take() {
++    if let Some(snapshot) = (end != InvocationEnd::Retrying)
++        .then(|| invocation.snapshot.take())
++        .flatten()
++    {
+         let pin = ValueHolder::AttemptSnapshot {
+diff --git a/server-zd/crates/dexzd-apply/src/steps/step_results.rs b/server-zd/crates/dexzd-apply/src/steps/step_results.rs
+index e2b8e0309..5786d6b55 100644
+--- a/server-zd/crates/dexzd-apply/src/steps/step_results.rs
++++ b/server-zd/crates/dexzd-apply/src/steps/step_results.rs
+@@ -113,3 +113,11 @@ pub(crate) fn apply_attempt_started(
+     let method = StepMethod::try_from(key.method).unwrap_or(StepMethod::Execute);
+-    let snapshot = compute_attempt_snapshot(transaction, cursor, &step, method, command.attempt)?;
++    let snapshot = if let Some(previous) = step
++        .invocation
++        .as_ref()
++        .and_then(|invocation| invocation.snapshot.clone())
++    {
++        previous
++    } else {
++        compute_attempt_snapshot(transaction, cursor, &step, method, command.attempt)?
++    };
+     start_attempt(
+@@ -242,3 +250,8 @@ pub(crate) fn apply_attempt_failed(
+     }
+-    end_running_attempt(transaction, cursor, &mut step, InvocationEnd::Finished)?;
++    let end = if matches!(decision, RetryDecision::RetryAt { .. }) {
++        InvocationEnd::Retrying
++    } else {
++        InvocationEnd::Finished
++    };
++    end_running_attempt(transaction, cursor, &mut step, end)?;
+     match decision {
+@@ -251,3 +264,2 @@ pub(crate) fn apply_attempt_failed(
+                 invocation.last_failure = Some(failure);
+-                invocation.snapshot = None;
+             }

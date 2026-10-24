@@ -1,0 +1,22 @@
+diff --git a/server-zd/crates/dexzd-engine/src/commit/partition_applier.rs b/server-zd/crates/dexzd-engine/src/commit/partition_applier.rs
+index be31a6e02..2aed3dbea 100644
+--- a/server-zd/crates/dexzd-engine/src/commit/partition_applier.rs
++++ b/server-zd/crates/dexzd-engine/src/commit/partition_applier.rs
+@@ -404,2 +404,10 @@ impl FrameApplier {
+         };
++        for command in &mut applied {
++            if let Some(pending) = self.state.take(&command.command.command_id) {
++                pending.responder.resolve(Ok(CommittedCommand {
++                    outcome: command.outcome.clone(),
++                    position: frame.position.clone(),
++                }));
++            }
++        }
+         store
+@@ -407,6 +415,2 @@ impl FrameApplier {
+             .map_err(|error| FrameFailure::StoreFailed(error.to_string()))?;
+-        // Taken under the write admission, so `stop` cannot fail these tickets after the write.
+-        for command in &mut applied {
+-            command.pending = self.state.take(&command.command.command_id);
+-        }
+         Ok(Some(applied))

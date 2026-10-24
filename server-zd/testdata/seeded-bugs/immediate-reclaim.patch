@@ -1,0 +1,36 @@
+diff --git a/server-zd/crates/dexzd-apply/src/values/mod.rs b/server-zd/crates/dexzd-apply/src/values/mod.rs
+index 7eb91a6c4..e11cc139b 100644
+--- a/server-zd/crates/dexzd-apply/src/values/mod.rs
++++ b/server-zd/crates/dexzd-apply/src/values/mod.rs
+@@ -34,4 +34,3 @@ use dexzd_protocol::dex::value::Kind;
+ use dexzd_protocol::dexzd::v1::{
+-    StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord, ValueGarbageRecord,
+-    ValueRecord, stored_value,
++    StoredValue, StoredValueId, StoredValueReference, ValueBirthRecord, ValueRecord, stored_value,
+ };
+@@ -227,3 +226,3 @@ pub(crate) fn release_stored_value(
+     holder: &ValueHolder,
+-    current_seq: u64,
++    _current_seq: u64,
+ ) -> Result<(), ApplyError> {
+@@ -247,3 +246,3 @@ pub(crate) fn release_stored_value(
+     let birth_key = value_row_key(rows.flow_hash, rows.run_id, RunTable::ValueBirth, value_id);
+-    let Some(mut birth): Option<ValueBirthRecord> =
++    let Some(_birth): Option<ValueBirthRecord> =
+         transaction.get_message(ColumnFamily::Flow, &birth_key, "value birth")?
+@@ -252,11 +251,7 @@ pub(crate) fn release_stored_value(
+     };
+-    birth.garbage_seq = current_seq;
+-    transaction.put_message(ColumnFamily::Flow, birth_key, &birth);
+-    transaction.put_message(
+-        ColumnFamily::Flow,
+-        value_garbage_key(rows.flow_hash, rows.run_id, current_seq, value_id),
+-        &ValueGarbageRecord {
+-            size_bytes: stored_value_size(stored),
+-        },
++    transaction.delete(
++        ColumnFamily::Value,
++        value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id),
+     );
++    transaction.delete(ColumnFamily::Flow, birth_key);
+     Ok(())

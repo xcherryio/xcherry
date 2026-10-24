@@ -1,0 +1,22 @@
+diff --git a/server-zd/crates/dexzd-engine/src/recovery/log_replay.rs b/server-zd/crates/dexzd-engine/src/recovery/log_replay.rs
+index 02e00bdb1..542411159 100644
+--- a/server-zd/crates/dexzd-engine/src/recovery/log_replay.rs
++++ b/server-zd/crates/dexzd-engine/src/recovery/log_replay.rs
+@@ -122,6 +122,5 @@ impl LogReplay<'_> {
+         stream: &StreamIdentity,
+-        (applied_seq, applied_epoch): (u64, u64),
++        (applied_seq, _applied_epoch): (u64, u64),
+         end_seq: u64,
+     ) -> Result<u64, EngineStartError> {
+-        let mut effective_epoch = applied_epoch;
+         let mut batches = 0_usize;
+@@ -142,9 +141,2 @@ impl LogReplay<'_> {
+             })?;
+-            // Same rule as stream recovery: an older epoch after an EpochStart is void.
+-            if batch.header.epoch < effective_epoch {
+-                continue;
+-            }
+-            if let Some(epoch_start) = &batch.header.epoch_start {
+-                effective_epoch = epoch_start.epoch;
+-            }
+             replayed_bytes += reader
