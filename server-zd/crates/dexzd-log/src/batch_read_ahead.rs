@@ -137,10 +137,16 @@ impl<'a> OrderedBatchReader<'a> {
                     .expect("a fetched seq holds the oldest reservation");
                 self.next_seq_to_return = seq.checked_add(1).filter(|next| *next <= self.last_seq);
                 self.start_reads();
-                let batch = read?
-                    .map(|body| decode_stream_batch(&body, self.stream, seq))
-                    .transpose()?;
-                return Ok(Some((seq, batch)));
+                let batch = read.and_then(|body| {
+                    body.map(|body| decode_stream_batch(&body, self.stream, seq))
+                        .transpose()
+                });
+                if batch.is_err() {
+                    // A failed batch is never applied, so later reads may use its bytes now.
+                    self.reserved_bytes -= std::mem::take(&mut self.returned_reservation);
+                    self.start_reads();
+                }
+                return batch.map(|batch| Some((seq, batch)));
             }
             if self.next_seq_to_read == Some(seq)
                 && let Some(error) = self.listing.error.take()
@@ -335,3 +341,6 @@ fn decode_stream_batch(
     validate_batch_identity(&batch, stream, seq)?;
     Ok(batch)
 }
+
+#[cfg(test)]
+mod tests;
