@@ -15,7 +15,7 @@ use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ObjectStore, ObjectStoreErrorKind, WriteCondition, WriteOutcome};
 use dexzd_protocol::dexzd::v1::NodeLease;
 use prost::Message;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::{MetadataError, NodeConfig, bump_node_epoch};
 
 const RELEASED_LEASE_EXPIRY_UNIX_MICROS: i64 = i64::MIN;
+const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 /// Timing and contention policy for a node lease.
 #[derive(Debug, Clone)]
@@ -58,10 +59,8 @@ pub enum LeaseStatus {
 pub struct LeaseHandle {
     epoch: u64,
     status: watch::Receiver<LeaseStatus>,
-    renewal_task: Option<JoinHandle<()>>,
-    store: Arc<dyn ObjectStore>,
-    key: String,
-    holder_process_id: String,
+    renewal_task: Option<JoinHandle<LeaseOwner>>,
+    shutdown_sender: Option<oneshot::Sender<()>>,
 }
 
 impl LeaseHandle {
@@ -75,62 +74,35 @@ impl LeaseHandle {
         self.status.clone()
     }
 
-    /// Stops lease renewal and releases the lease if this process still owns it.
+    /// Stops renewal and releases the lease after the node stops serving.
+    /// Subscribers observe `Lost` before the release write.
     pub async fn shutdown(mut self) {
-        if let Some(task) = self.renewal_task.take() {
-            task.abort();
-            if let Err(error) = task.await
-                && !error.is_cancelled()
-            {
+        if let Some(sender) = self.shutdown_sender.take()
+            && sender.send(()).is_err()
+        {
+            tracing::debug!("lease renewal task stopped before shutdown");
+        }
+        let Some(task) = self.renewal_task.as_mut() else {
+            return;
+        };
+        let owner_result = task.await;
+        drop(self.renewal_task.take());
+        let owner = match owner_result {
+            Ok(owner) => owner,
+            Err(error) => {
                 tracing::warn!(error = %error, "lease renewal task failed during shutdown");
+                return;
             }
-        }
-        if let Err(error) = self.release().await {
-            tracing::warn!(error = %error, "node lease release failed during shutdown");
-        }
-    }
-
-    async fn release(&self) -> Result<(), MetadataError> {
-        loop {
-            let Some(content) = self.store.get(&self.key).await? else {
-                return Ok(());
-            };
-            let mut lease =
-                NodeLease::decode(content.bytes).map_err(|source| MetadataError::Decode {
-                    key: "lease",
-                    source,
-                })?;
-            if lease.holder_process_id != self.holder_process_id
-                || lease.expires_at_unix_micros == RELEASED_LEASE_EXPIRY_UNIX_MICROS
-            {
-                return Ok(());
+        };
+        drop(owner.status.send_replace(LeaseStatus::Lost(
+            "lease released during shutdown".to_owned(),
+        )));
+        match tokio::time::timeout(owner.duration, owner.release()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "node lease release failed during shutdown");
             }
-            lease.version = lease
-                .version
-                .checked_add(1)
-                .ok_or(MetadataError::Overflow {
-                    field: "node lease version",
-                })?;
-            lease.expires_at_unix_micros = RELEASED_LEASE_EXPIRY_UNIX_MICROS;
-            let outcome = self
-                .store
-                .put(
-                    &self.key,
-                    Bytes::from(lease.encode_to_vec()),
-                    WriteCondition::ReplaceIfEtagMatches { etag: content.etag },
-                )
-                .await;
-            match outcome {
-                Ok(WriteOutcome::Written { .. }) => return Ok(()),
-                Ok(WriteOutcome::PreconditionFailed) => continue,
-                Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
-                    let current = self.store.get(&self.key).await?;
-                    if current.is_some_and(|current| current.bytes == lease.encode_to_vec()) {
-                        return Ok(());
-                    }
-                }
-                Err(error) => return Err(error.into()),
-            }
+            Err(_) => tracing::warn!("node lease release timed out during shutdown"),
         }
     }
 }
@@ -290,32 +262,86 @@ pub async fn acquire_lease(
         owner.lease.epoch = epoch;
         owner.renew_before_deadline().await?;
         drop(receiver.borrow_and_update());
-        let handle_store = Arc::clone(&owner.store);
-        let handle_key = owner.key.clone();
-        let holder_process_id = owner.lease.holder_process_id.clone();
-        let renewal_task = tokio::spawn(async move { owner.run().await });
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let renewal_task = tokio::spawn(async move { owner.run(shutdown_receiver).await });
         return Ok(LeaseHandle {
             epoch,
             status: receiver,
             renewal_task: Some(renewal_task),
-            store: handle_store,
-            key: handle_key,
-            holder_process_id,
+            shutdown_sender: Some(shutdown_sender),
         });
     }
 }
 
 impl LeaseOwner {
-    async fn run(mut self) {
+    async fn run(mut self, mut shutdown_receiver: oneshot::Receiver<()>) -> Self {
         loop {
-            tokio::time::sleep_until(self.last_request_sent + self.duration / 3).await;
-            if let Err(error) = self.renew_before_deadline().await {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_receiver => return self,
+                () = tokio::time::sleep_until(self.last_request_sent + self.duration / 3) => {}
+            }
+            let renewal_result = tokio::select! {
+                biased;
+                _ = &mut shutdown_receiver => return self,
+                result = self.renew_before_deadline() => result,
+            };
+            if let Err(error) = renewal_result {
                 drop(
                     self.status
                         .send_replace(LeaseStatus::Lost(error.to_string())),
                 );
-                return;
+                return self;
             }
+        }
+    }
+
+    async fn release(&self) -> Result<(), MetadataError> {
+        let mut current_lease = self.lease.clone();
+        let mut current_etag = self.etag.clone();
+        loop {
+            let mut released = current_lease.clone();
+            released.version = released
+                .version
+                .checked_add(1)
+                .ok_or(MetadataError::Overflow {
+                    field: "node lease version",
+                })?;
+            released.expires_at_unix_micros = RELEASED_LEASE_EXPIRY_UNIX_MICROS;
+            let outcome = self
+                .store
+                .put(
+                    &self.key,
+                    Bytes::from(released.encode_to_vec()),
+                    WriteCondition::ReplaceIfEtagMatches { etag: current_etag },
+                )
+                .await;
+            match outcome {
+                Ok(WriteOutcome::Written { .. }) => return Ok(()),
+                Ok(WriteOutcome::PreconditionFailed) => {}
+                Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {}
+                Err(error) => return Err(error.into()),
+            }
+            let Some(content) = self.store.get(&self.key).await? else {
+                return Ok(());
+            };
+            let stored_lease =
+                NodeLease::decode(content.bytes).map_err(|source| MetadataError::Decode {
+                    key: "lease",
+                    source,
+                })?;
+            if stored_lease == released
+                || (stored_lease.holder_process_id == self.lease.holder_process_id
+                    && stored_lease.expires_at_unix_micros == RELEASED_LEASE_EXPIRY_UNIX_MICROS)
+            {
+                return Ok(());
+            }
+            if stored_lease.holder_process_id != self.lease.holder_process_id {
+                return Err(self.lost("release precondition failed"));
+            }
+            current_lease = stored_lease;
+            current_etag = content.etag;
+            tokio::time::sleep(RELEASE_RETRY_DELAY).await;
         }
     }
 
