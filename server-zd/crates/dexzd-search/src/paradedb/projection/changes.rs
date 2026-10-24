@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use dexzd_apply::{ApplyOutcome, StateWrite};
-use dexzd_keyspace::row_keys::{prefix_range, run_singleton_key};
+use dexzd_keyspace::row_keys::{decode_flow_run_after_prefix, prefix_range, run_singleton_key};
 use dexzd_keyspace::{
     ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, TenantId, parse_run_key,
     partition_index_prefix, run_prefix,
@@ -80,7 +80,7 @@ pub fn extract_search_document_changes(
                 key,
             } => {
                 if let Some((tenant_id, flow_hash, run_id)) =
-                    search_index_delete(partition_id, key)?
+                    decode_search_index_key(partition_id, key)?
                 {
                     indexed_deletes.insert((flow_hash, run_id));
                     changes.push(SearchDocumentChange::Delete { tenant_id, run_id });
@@ -106,6 +106,18 @@ pub fn extract_search_document_changes(
     Ok(changes)
 }
 
+/// Concatenates every outcome in one committed partition batch in apply order.
+pub fn extract_batch_search_document_changes(
+    partition_id: PartitionId,
+    outcomes: &[ApplyOutcome],
+) -> Result<Vec<SearchDocumentChange>, ProjectionError> {
+    let mut changes = Vec::new();
+    for outcome in outcomes {
+        changes.extend(extract_search_document_changes(partition_id, outcome)?);
+    }
+    Ok(changes)
+}
+
 fn search_document_key(key: &[u8]) -> Result<Option<(FlowHash, RunId)>, ProjectionError> {
     let Ok(parsed) = parse_run_key(key) else {
         return Ok(None);
@@ -123,7 +135,7 @@ fn search_document_key(key: &[u8]) -> Result<Option<(FlowHash, RunId)>, Projecti
     Ok(Some((parsed.flow_hash, parsed.run_id)))
 }
 
-fn search_index_delete(
+pub(super) fn decode_search_index_key(
     partition_id: PartitionId,
     key: &[u8],
 ) -> Result<Option<(TenantId, FlowHash, RunId)>, ProjectionError> {
@@ -136,17 +148,15 @@ fn search_index_delete(
             "malformed committed SearchDocument index delete".into(),
         ));
     }
-    let tenant_bytes: [u8; 8] = key[3..11]
+    let tenant_end = prefix.len() + 8;
+    let tenant_bytes: [u8; 8] = key[prefix.len()..tenant_end]
         .try_into()
         .map_err(|_| ProjectionError::InvalidState("malformed search tenant ID".into()))?;
-    let flow_hash_bytes: [u8; 8] = key[11..19]
-        .try_into()
-        .map_err(|_| ProjectionError::InvalidState("malformed search Flow hash".into()))?;
-    let run_id = RunId::from_slice(&key[19..35])
-        .map_err(|error| ProjectionError::InvalidState(error.to_string()))?;
+    let (flow_hash, run_id) = decode_flow_run_after_prefix(key, tenant_end)
+        .ok_or_else(|| ProjectionError::InvalidState("malformed search run identity".into()))?;
     Ok(Some((
         TenantId(u64::from_be_bytes(tenant_bytes)),
-        FlowHash(u64::from_be_bytes(flow_hash_bytes)),
+        flow_hash,
         run_id,
     )))
 }

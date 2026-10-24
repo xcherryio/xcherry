@@ -9,7 +9,9 @@
 mod changes;
 mod projector;
 
-pub use changes::{SearchDocumentChange, extract_search_document_changes};
+pub use changes::{
+    SearchDocumentChange, extract_batch_search_document_changes, extract_search_document_changes,
+};
 pub use projector::{ParadeDbProjector, ProjectionError};
 
 #[cfg(test)]

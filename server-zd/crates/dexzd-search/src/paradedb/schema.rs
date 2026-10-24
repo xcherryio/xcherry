@@ -8,10 +8,13 @@
 
 use thiserror::Error;
 use tokio_postgres::Client;
+use tokio_postgres::Transaction;
+use tokio_postgres::types::{ToSql, Type};
 
 use super::MIGRATION_SQL;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_ADVISORY_LOCK: i64 = 5_589_034_107_693_961_330;
 
 /// A failure while creating or checking the ParadeDB visibility schema.
 #[derive(Debug, Error)]
@@ -46,29 +49,35 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             source,
         })?;
     transaction
-        .batch_execute("SELECT pg_advisory_xact_lock(5589034107693961330); CREATE TABLE IF NOT EXISTS dexzd_visibility_schema_version (id integer PRIMARY KEY CHECK (id = 1), version integer NOT NULL); INSERT INTO dexzd_visibility_schema_version (id, version) VALUES (1, 1) ON CONFLICT (id) DO NOTHING")
+        .batch_execute("SET LOCAL lock_timeout = '5s'")
         .await
         .map_err(|source| SchemaError::Database {
-            operation: "lock and initialize",
+            operation: "set lock timeout for",
             source,
         })?;
-    let version_row = transaction
+    if is_current_version(schema_version(&transaction).await?)? {
+        return commit_schema(transaction).await;
+    }
+    transaction
         .query_typed_one(
-            "SELECT version FROM dexzd_visibility_schema_version WHERE id = 1 FOR UPDATE",
-            &[],
+            "SELECT pg_advisory_xact_lock($1::bigint)",
+            &[(&SCHEMA_ADVISORY_LOCK as &(dyn ToSql + Sync), Type::INT8)],
         )
         .await
         .map_err(|source| SchemaError::Database {
-            operation: "read version of",
+            operation: "lock migration of",
             source,
         })?;
-    let version: i32 = version_row.get(0);
-    if version > SCHEMA_VERSION {
-        return Err(SchemaError::NewerVersion {
-            found: version,
-            supported: SCHEMA_VERSION,
-        });
+    if is_current_version(schema_version(&transaction).await?)? {
+        return commit_schema(transaction).await;
     }
+    transaction
+        .batch_execute("CREATE TABLE IF NOT EXISTS dexzd_visibility_schema_version (id integer PRIMARY KEY CHECK (id = 1), version integer NOT NULL)")
+        .await
+        .map_err(|source| SchemaError::Database {
+            operation: "create version table for",
+            source,
+        })?;
     transaction
         .batch_execute(MIGRATION_SQL)
         .await
@@ -76,6 +85,67 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             operation: "migrate",
             source,
         })?;
+    transaction
+        .batch_execute("TRUNCATE TABLE dexzd_visibility_runs, dexzd_visibility_progress")
+        .await
+        .map_err(|source| SchemaError::Database {
+            operation: "clear older projection in",
+            source,
+        })?;
+    transaction
+        .execute_typed(
+            "INSERT INTO dexzd_visibility_schema_version (id, version) VALUES (1, $1::integer) ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version",
+            &[(&SCHEMA_VERSION as &(dyn ToSql + Sync), Type::INT4)],
+        )
+        .await
+        .map_err(|source| SchemaError::Database {
+            operation: "record version of",
+            source,
+        })?;
+    commit_schema(transaction).await
+}
+
+async fn schema_version(transaction: &Transaction<'_>) -> Result<Option<i32>, SchemaError> {
+    let table_row = transaction
+        .query_typed_one(
+            "SELECT to_regclass('dexzd_visibility_schema_version') IS NOT NULL",
+            &[],
+        )
+        .await
+        .map_err(|source| SchemaError::Database {
+            operation: "find version table for",
+            source,
+        })?;
+    if !table_row.get::<_, bool>(0) {
+        return Ok(None);
+    }
+    transaction
+        .query_typed_opt(
+            "SELECT version FROM dexzd_visibility_schema_version WHERE id = 1",
+            &[],
+        )
+        .await
+        .map(|row| row.map(|row| row.get(0)))
+        .map_err(|source| SchemaError::Database {
+            operation: "read version of",
+            source,
+        })
+}
+
+fn is_current_version(version: Option<i32>) -> Result<bool, SchemaError> {
+    if let Some(found) = version {
+        if found > SCHEMA_VERSION {
+            return Err(SchemaError::NewerVersion {
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        return Ok(found == SCHEMA_VERSION);
+    }
+    Ok(false)
+}
+
+async fn commit_schema(transaction: Transaction<'_>) -> Result<(), SchemaError> {
     transaction
         .commit()
         .await

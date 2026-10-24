@@ -8,13 +8,11 @@
 
 use std::sync::Arc;
 
-use dexzd_apply::FlowStateReader;
-use dexzd_keyspace::row_keys::{
-    decode_flow_run_after_prefix, partition_index_range, run_singleton_key,
-};
+use dexzd_apply::{FlowStateReader, StateReadError};
+use dexzd_keyspace::row_keys::{partition_index_range, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionId, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::IndexType;
-use dexzd_protocol::dexzd::v1::SearchDocumentRecord;
+use dexzd_protocol::dexzd::v1::{LogPosition, SearchDocumentRecord};
 use prost::Message;
 use thiserror::Error;
 use tokio_postgres::Transaction;
@@ -22,11 +20,16 @@ use tokio_postgres::types::{ToSql, Type};
 
 use super::super::search_backend::{ParadeDbSearchBackend, is_connection_error};
 use super::super::{SearchRow, SqlStatement, upsert_statement};
-use super::changes::SearchDocumentChange;
+use super::changes::{SearchDocumentChange, decode_search_index_key};
 use crate::SearchError;
 use crate::builtin::document::IndexedDocument;
 
 const REBUILD_SCAN_PAGE_SIZE: usize = 256;
+
+struct RebuildPage {
+    next_start: Vec<u8>,
+    changes: Vec<SearchDocumentChange>,
+}
 
 /// A failure while projecting committed run documents.
 #[derive(Debug, Error)]
@@ -35,29 +38,31 @@ pub enum ProjectionError {
     /// A committed row or index violates its expected format.
     #[error("invalid committed search state: {0}")]
     InvalidState(String),
-    /// A log batch was omitted and requires a partition rebuild.
+    /// The stored position differs from the caller's previous position.
     #[error(
-        "ParadeDB projection partition {partition_id} expected position {expected}, got {actual}"
+        "ParadeDB projection partition {partition_id} has position {stored:?}, expected {expected:?} before {offered:?}"
     )]
-    PositionGap {
+    PositionMismatch {
         /// Partition being projected.
         partition_id: PartitionId,
-        /// Next required log position.
-        expected: u64,
-        /// Position offered by the caller.
-        actual: u64,
+        /// Position stored in ParadeDB.
+        stored: Option<LogPosition>,
+        /// Previous position expected by the caller.
+        expected: Option<LogPosition>,
+        /// New position offered by the caller.
+        offered: LogPosition,
     },
     /// A rebuild source is older than the committed projection.
     #[error(
-        "ParadeDB partition {partition_id} is at position {current}, newer than rebuild position {offered}"
+        "ParadeDB partition {partition_id} is at position {current:?}, newer than rebuild position {offered:?}"
     )]
     StaleRebuild {
         /// Partition being rebuilt.
         partition_id: PartitionId,
         /// Committed projection position.
-        current: u64,
+        current: LogPosition,
         /// Offered rebuild position.
-        offered: u64,
+        offered: LogPosition,
     },
     /// Postgres could not complete a projection operation.
     #[error("{operation} ParadeDB projection: {source}")]
@@ -71,6 +76,9 @@ pub enum ProjectionError {
     /// A pooled connection could not be reopened.
     #[error("reconnect ParadeDB projector: {0}")]
     Connection(#[from] SearchError),
+    /// Reading a committed local-store row failed.
+    #[error("read committed search state: {0}")]
+    StateRead(#[from] StateReadError),
 }
 
 /// Projects committed partition documents through the search backend's shared connection pool.
@@ -89,9 +97,9 @@ impl ParadeDbProjector {
     pub async fn read_progress(
         &self,
         partition_id: PartitionId,
-    ) -> Result<Option<u64>, ProjectionError> {
+    ) -> Result<Option<LogPosition>, ProjectionError> {
         let partition_number = i32::from(partition_id.0);
-        let mut attempted_retry = false;
+        let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
             if slot.client.is_closed() {
@@ -100,14 +108,14 @@ impl ParadeDbProjector {
             let result = slot
                 .client
                 .query_typed_opt(
-                    "SELECT applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer",
+                    "SELECT applied_node_id, applied_incarnation, applied_seq, applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer",
                     &[(&partition_number as &(dyn ToSql + Sync), Type::INT4)],
                 )
                 .await
                 .map_err(|source| database_error("read progress from", source))
-                .and_then(|row| row.map(|row| position_from_row(&row)).transpose());
-            if should_retry(&result, attempted_retry) {
-                attempted_retry = true;
+                .and_then(|row| row.map(|row| position_from_row(&row)).transpose().map(Option::flatten));
+            if should_retry(&result, has_retried) {
+                has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
                 continue;
             }
@@ -115,15 +123,16 @@ impl ParadeDbProjector {
         }
     }
 
-    /// Applies one consecutive committed log batch and its progress in one transaction.
+    /// Applies one committed partition batch after `previous_position` in one transaction.
     pub async fn apply_batch(
         &self,
         partition_id: PartitionId,
-        applied_position: u64,
+        previous_position: Option<&LogPosition>,
+        applied_position: &LogPosition,
         changes: &[SearchDocumentChange],
     ) -> Result<(), ProjectionError> {
-        let position = database_position(applied_position)?;
-        let mut attempted_retry = false;
+        validate_position(applied_position)?;
+        let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
             if slot.client.is_closed() {
@@ -132,13 +141,13 @@ impl ParadeDbProjector {
             let result = apply_batch_transaction(
                 &mut slot.client,
                 partition_id,
+                previous_position,
                 applied_position,
-                position,
                 changes,
             )
             .await;
-            if should_retry(&result, attempted_retry) {
-                attempted_retry = true;
+            if should_retry(&result, has_retried) {
+                has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
                 continue;
             }
@@ -150,11 +159,11 @@ impl ParadeDbProjector {
     pub async fn rebuild_partition(
         &self,
         partition_id: PartitionId,
-        applied_position: u64,
-        committed_view: &dyn FlowStateReader,
+        applied_position: &LogPosition,
+        committed_view: Arc<dyn FlowStateReader + Send + Sync>,
     ) -> Result<(), ProjectionError> {
-        let position = database_position(applied_position)?;
-        let mut attempted_retry = false;
+        validate_position(applied_position)?;
+        let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
             if slot.client.is_closed() {
@@ -164,12 +173,11 @@ impl ParadeDbProjector {
                 &mut slot.client,
                 partition_id,
                 applied_position,
-                position,
-                committed_view,
+                committed_view.clone(),
             )
             .await;
-            if should_retry(&result, attempted_retry) {
-                attempted_retry = true;
+            if should_retry(&result, has_retried) {
+                has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
                 continue;
             }
@@ -181,8 +189,8 @@ impl ParadeDbProjector {
 async fn apply_batch_transaction(
     client: &mut tokio_postgres::Client,
     partition_id: PartitionId,
-    applied_position: u64,
-    position: i64,
+    previous_position: Option<&LogPosition>,
+    applied_position: &LogPosition,
     changes: &[SearchDocumentChange],
 ) -> Result<(), ProjectionError> {
     let transaction = client
@@ -190,26 +198,24 @@ async fn apply_batch_transaction(
         .await
         .map_err(|source| database_error("begin", source))?;
     let current = lock_progress(&transaction, partition_id).await?;
-    if applied_position <= current {
+    if is_replay(current.as_ref(), applied_position) {
         return transaction
             .commit()
             .await
             .map_err(|source| database_error("commit replay of", source));
     }
-    let expected = current.checked_add(1).ok_or_else(|| {
-        ProjectionError::InvalidState("ParadeDB projection position overflow".into())
-    })?;
-    if applied_position != expected {
-        return Err(ProjectionError::PositionGap {
+    if current.as_ref() != previous_position {
+        return Err(ProjectionError::PositionMismatch {
             partition_id,
-            expected,
-            actual: applied_position,
+            stored: current,
+            expected: previous_position.cloned(),
+            offered: applied_position.clone(),
         });
     }
     for change in changes {
         apply_change(&transaction, partition_id, change).await?;
     }
-    update_progress(&transaction, partition_id, position).await?;
+    update_progress(&transaction, partition_id, applied_position).await?;
     transaction
         .commit()
         .await
@@ -219,20 +225,21 @@ async fn apply_batch_transaction(
 async fn rebuild_transaction(
     client: &mut tokio_postgres::Client,
     partition_id: PartitionId,
-    applied_position: u64,
-    position: i64,
-    committed_view: &dyn FlowStateReader,
+    applied_position: &LogPosition,
+    committed_view: Arc<dyn FlowStateReader + Send + Sync>,
 ) -> Result<(), ProjectionError> {
     let transaction = client
         .transaction()
         .await
         .map_err(|source| database_error("begin rebuild of", source))?;
     let current = lock_progress(&transaction, partition_id).await?;
-    if applied_position < current {
+    if current.as_ref().is_some_and(|stored| {
+        same_stream(stored, applied_position) && stored.seq > applied_position.seq
+    }) {
         return Err(ProjectionError::StaleRebuild {
             partition_id,
-            current,
-            offered: applied_position,
+            current: current.expect("stale comparison requires stored position"),
+            offered: applied_position.clone(),
         });
     }
     let partition_number = i32::from(partition_id.0);
@@ -245,71 +252,79 @@ async fn rebuild_transaction(
         .map_err(|source| database_error("remove stale rows from", source))?;
     let (mut start, end) = partition_index_range(partition_id, IndexKind::SearchDocument);
     loop {
-        let rows = committed_view
-            .scan(
-                ColumnFamily::PartitionIndex,
-                &start,
-                &end,
-                REBUILD_SCAN_PAGE_SIZE,
-            )
-            .map_err(|error| {
-                ProjectionError::InvalidState(format!("scan committed search index: {error}"))
-            })?;
-        if rows.is_empty() {
+        let view = committed_view.clone();
+        let scan_start = start.clone();
+        let scan_end = end.clone();
+        let page = tokio::task::spawn_blocking(move || {
+            read_rebuild_page(view.as_ref(), partition_id, &scan_start, &scan_end)
+        })
+        .await
+        .map_err(|error| {
+            ProjectionError::InvalidState(format!("search rebuild reader task failed: {error}"))
+        })??;
+        let Some(RebuildPage {
+            next_start,
+            changes,
+        }) = page
+        else {
             break;
-        }
-        let last_key = rows.last().expect("nonempty search index scan").0.clone();
-        if last_key < start {
-            return Err(ProjectionError::InvalidState(
-                "search index scan regressed".into(),
-            ));
-        }
-        start = last_key;
-        start.push(0);
-        for (index_key, _) in rows {
-            if index_key.len() != 35 {
-                return Err(ProjectionError::InvalidState(
-                    "malformed search index key".into(),
-                ));
-            }
-            let tenant_bytes: [u8; 8] = index_key[3..11].try_into().map_err(|_| {
-                ProjectionError::InvalidState("malformed search index tenant".into())
-            })?;
-            let tenant_id = TenantId(u64::from_be_bytes(tenant_bytes));
-            let (flow_hash, run_id) =
-                decode_flow_run_after_prefix(&index_key, 11).ok_or_else(|| {
-                    ProjectionError::InvalidState("malformed search index identity".into())
-                })?;
-            let document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
-            let encoded_document = committed_view
-                .get(ColumnFamily::Flow, &document_key)
-                .map_err(|error| {
-                    ProjectionError::InvalidState(format!(
-                        "read committed search document: {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    ProjectionError::InvalidState(format!(
-                        "missing committed search document for {run_id}"
-                    ))
-                })?;
-            apply_change(
-                &transaction,
-                partition_id,
-                &SearchDocumentChange::Upsert {
-                    tenant_id,
-                    run_id,
-                    encoded_document,
-                },
-            )
-            .await?;
+        };
+        start = next_start;
+        for change in changes {
+            apply_change(&transaction, partition_id, &change).await?;
         }
     }
-    update_progress(&transaction, partition_id, position).await?;
+    update_progress(&transaction, partition_id, applied_position).await?;
     transaction
         .commit()
         .await
         .map_err(|source| database_error("commit rebuild of", source))
+}
+
+fn read_rebuild_page(
+    committed_view: &dyn FlowStateReader,
+    partition_id: PartitionId,
+    start: &[u8],
+    end: &[u8],
+) -> Result<Option<RebuildPage>, ProjectionError> {
+    let rows = committed_view.scan(
+        ColumnFamily::PartitionIndex,
+        start,
+        end,
+        REBUILD_SCAN_PAGE_SIZE,
+    )?;
+    let Some((last_key, _)) = rows.last() else {
+        return Ok(None);
+    };
+    if last_key.as_slice() < start {
+        return Err(ProjectionError::InvalidState(
+            "search index scan regressed".into(),
+        ));
+    }
+    let mut next_start = last_key.clone();
+    next_start.push(0);
+    let mut changes = Vec::with_capacity(rows.len());
+    for (index_key, _) in rows {
+        let (tenant_id, flow_hash, run_id) = decode_search_index_key(partition_id, &index_key)?
+            .ok_or_else(|| ProjectionError::InvalidState("search index left partition".into()))?;
+        let document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
+        let encoded_document = committed_view
+            .get(ColumnFamily::Flow, &document_key)?
+            .ok_or_else(|| {
+                ProjectionError::InvalidState(format!(
+                    "missing committed search document for {run_id}"
+                ))
+            })?;
+        changes.push(SearchDocumentChange::Upsert {
+            tenant_id,
+            run_id,
+            encoded_document,
+        });
+    }
+    Ok(Some(RebuildPage {
+        next_start,
+        changes,
+    }))
 }
 
 async fn apply_change(
@@ -373,7 +388,7 @@ fn row_from_document(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let document = IndexedDocument::decode(encoded_document, tenant_id, run_id)
+    let document = IndexedDocument::from_record(record.clone(), tenant_id, run_id)
         .map_err(|error| ProjectionError::InvalidState(error.to_string()))?;
     let mut row = SearchRow::from_document(tenant_id, version, &document, &application_fields)
         .and_then(|row| row.with_wire_attributes(&record.attributes))
@@ -396,7 +411,7 @@ async fn execute_statement(
 async fn lock_progress(
     transaction: &Transaction<'_>,
     partition_id: PartitionId,
-) -> Result<u64, ProjectionError> {
+) -> Result<Option<LogPosition>, ProjectionError> {
     let partition_number = i32::from(partition_id.0);
     transaction
         .execute_typed(
@@ -407,7 +422,7 @@ async fn lock_progress(
         .map_err(|source| database_error("initialize progress for", source))?;
     let row = transaction
         .query_typed_one(
-            "SELECT applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer FOR UPDATE",
+            "SELECT applied_node_id, applied_incarnation, applied_seq, applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer FOR UPDATE",
             &[(&partition_number as &(dyn ToSql + Sync), Type::INT4)],
         )
         .await
@@ -418,15 +433,21 @@ async fn lock_progress(
 async fn update_progress(
     transaction: &Transaction<'_>,
     partition_id: PartitionId,
-    position: i64,
+    position: &LogPosition,
 ) -> Result<(), ProjectionError> {
+    let sequence = i64::try_from(position.seq)
+        .map_err(|_| ProjectionError::InvalidState("log sequence exceeds bigint".into()))?;
     let partition_number = i32::from(partition_id.0);
+    let incarnation = i64::from(position.incarnation);
     transaction
         .execute_typed(
-            "UPDATE dexzd_visibility_progress SET applied_position = $2::bigint WHERE partition_id = $1::integer",
+            "UPDATE dexzd_visibility_progress SET applied_position = $2::bigint, applied_node_id = $3::text, applied_incarnation = $4::bigint, applied_seq = $5::bigint WHERE partition_id = $1::integer",
             &[
                 (&partition_number as &(dyn ToSql + Sync), Type::INT4),
-                (&position, Type::INT8),
+                (&sequence, Type::INT8),
+                (&position.node_id, Type::TEXT),
+                (&incarnation, Type::INT8),
+                (&sequence, Type::INT8),
             ],
         )
         .await
@@ -434,24 +455,58 @@ async fn update_progress(
     Ok(())
 }
 
-fn position_from_row(row: &tokio_postgres::Row) -> Result<u64, ProjectionError> {
-    let position: i64 = row
+fn position_from_row(row: &tokio_postgres::Row) -> Result<Option<LogPosition>, ProjectionError> {
+    let node_id: Option<String> = row
         .try_get(0)
-        .map_err(|source| database_error("decode progress from", source))?;
-    u64::try_from(position)
-        .map_err(|_| ProjectionError::InvalidState("negative ParadeDB projection position".into()))
+        .map_err(|source| database_error("decode progress node from", source))?;
+    let incarnation: Option<i64> = row
+        .try_get(1)
+        .map_err(|source| database_error("decode progress incarnation from", source))?;
+    let sequence: Option<i64> = row
+        .try_get(2)
+        .map_err(|source| database_error("decode progress sequence from", source))?;
+    let legacy_sequence: i64 = row
+        .try_get(3)
+        .map_err(|source| database_error("decode legacy progress from", source))?;
+    match (node_id, incarnation, sequence) {
+        (None, None, None) if legacy_sequence == 0 => Ok(None),
+        (Some(node_id), Some(incarnation), Some(sequence)) => Ok(Some(LogPosition {
+            node_id,
+            incarnation: u32::try_from(incarnation).map_err(|_| {
+                ProjectionError::InvalidState("invalid ParadeDB progress incarnation".into())
+            })?,
+            seq: u64::try_from(sequence).map_err(|_| {
+                ProjectionError::InvalidState("invalid ParadeDB progress sequence".into())
+            })?,
+        })),
+        _ => Err(ProjectionError::InvalidState(
+            "incomplete ParadeDB projection position".into(),
+        )),
+    }
 }
 
-fn database_position(position: u64) -> Result<i64, ProjectionError> {
-    i64::try_from(position)
-        .map_err(|_| ProjectionError::InvalidState("projection position exceeds bigint".into()))
+fn validate_position(position: &LogPosition) -> Result<(), ProjectionError> {
+    if position.node_id.is_empty() || position.incarnation == 0 || position.seq == 0 {
+        return Err(ProjectionError::InvalidState("invalid log position".into()));
+    }
+    i64::try_from(position.seq)
+        .map(|_| ())
+        .map_err(|_| ProjectionError::InvalidState("log sequence exceeds bigint".into()))
+}
+
+fn same_stream(left: &LogPosition, right: &LogPosition) -> bool {
+    left.node_id == right.node_id && left.incarnation == right.incarnation
+}
+
+fn is_replay(stored: Option<&LogPosition>, offered: &LogPosition) -> bool {
+    stored.is_some_and(|stored| same_stream(stored, offered) && stored.seq >= offered.seq)
 }
 
 fn database_error(operation: &'static str, source: tokio_postgres::Error) -> ProjectionError {
     ProjectionError::Database { operation, source }
 }
 
-fn should_retry(result: &Result<impl Sized, ProjectionError>, attempted_retry: bool) -> bool {
-    !attempted_retry
+fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {
+    !has_retried
         && matches!(result, Err(ProjectionError::Database { source, .. }) if is_connection_error(source))
 }

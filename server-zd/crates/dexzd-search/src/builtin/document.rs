@@ -36,6 +36,14 @@ impl IndexedDocument {
     ) -> Result<Self, SearchError> {
         let record = SearchDocumentRecord::decode(encoded)
             .map_err(|error| SearchError::Internal(format!("decode search document: {error}")))?;
+        Self::from_record(record, tenant_id, run_id)
+    }
+
+    pub(crate) fn from_record(
+        record: SearchDocumentRecord,
+        tenant_id: TenantId,
+        run_id: RunId,
+    ) -> Result<Self, SearchError> {
         if record.tenant_id != tenant_id.0 || record.run_id != run_id.as_bytes() {
             return Err(SearchError::Internal(
                 "search document identity differs from index".into(),

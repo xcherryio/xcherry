@@ -6,14 +6,16 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex as StandardMutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dexzd_keyspace::{RunId, TenantId};
 use dexzd_visibility_query::parse_and_check;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit};
 use tokio::task::JoinHandle;
 use tokio_postgres::{Client, Config, NoTls, Row};
 
@@ -38,7 +40,8 @@ pub trait ProjectionVisibilityWait: Send + Sync {
 pub struct ParadeDbSearchBackend {
     configuration: Config,
     slots: Vec<Mutex<ConnectionSlot>>,
-    next_slot: AtomicUsize,
+    free_slots: StandardMutex<VecDeque<usize>>,
+    available_slots: Semaphore,
     visibility_wait: Option<Arc<dyn ProjectionVisibilityWait>>,
     visibility_wait_timeout: Duration,
 }
@@ -56,13 +59,7 @@ impl ParadeDbSearchBackend {
                 "ParadeDB search pool size and visibility wait timeout must be positive".into(),
             ));
         }
-        let mut backend = Self {
-            configuration: configuration.clone(),
-            slots: Vec::with_capacity(pool_size),
-            next_slot: AtomicUsize::new(0),
-            visibility_wait,
-            visibility_wait_timeout,
-        };
+        let mut slots = Vec::with_capacity(pool_size);
         for slot_index in 0..pool_size {
             let mut slot = ConnectionSlot::open(configuration).await?;
             if slot_index == 0 {
@@ -70,9 +67,16 @@ impl ParadeDbSearchBackend {
                     .await
                     .map_err(schema_search_error)?;
             }
-            backend.slots.push(Mutex::new(slot));
+            slots.push(Mutex::new(slot));
         }
-        Ok(backend)
+        Ok(Self {
+            configuration: configuration.clone(),
+            slots,
+            free_slots: StandardMutex::new((0..pool_size).collect()),
+            available_slots: Semaphore::new(pool_size),
+            visibility_wait,
+            visibility_wait_timeout,
+        })
     }
 
     async fn query(&self, statement: &SqlStatement) -> Result<Vec<Row>, SearchError> {
@@ -102,19 +106,62 @@ impl ParadeDbSearchBackend {
         }
     }
 
-    pub(super) async fn lock_next_slot(&self) -> MutexGuard<'_, ConnectionSlot> {
-        let start = self.next_slot.fetch_add(1, Ordering::Relaxed) % self.slots.len();
-        for offset in 0..self.slots.len() {
-            let index = (start + offset) % self.slots.len();
-            if let Ok(slot) = self.slots[index].try_lock() {
-                return slot;
-            }
+    pub(super) async fn lock_next_slot(&self) -> PooledConnectionSlot<'_> {
+        let permit = self
+            .available_slots
+            .acquire()
+            .await
+            .expect("the owned connection pool never closes its semaphore");
+        let slot_index = self
+            .free_slots
+            .lock()
+            .expect("the connection pool slot queue cannot be poisoned")
+            .pop_front()
+            .expect("a semaphore permit guarantees one free connection slot");
+        let slot = self.slots[slot_index]
+            .try_lock()
+            .expect("a free slot is unlocked before its permit is released");
+        PooledConnectionSlot {
+            slot,
+            slot_index,
+            backend: self,
+            _permit: permit,
         }
-        self.slots[start].lock().await
     }
 
     pub(super) fn configuration(&self) -> &Config {
         &self.configuration
+    }
+}
+
+pub(super) struct PooledConnectionSlot<'a> {
+    slot: MutexGuard<'a, ConnectionSlot>,
+    slot_index: usize,
+    backend: &'a ParadeDbSearchBackend,
+    _permit: SemaphorePermit<'a>,
+}
+
+impl Deref for PooledConnectionSlot<'_> {
+    type Target = ConnectionSlot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.slot
+    }
+}
+
+impl DerefMut for PooledConnectionSlot<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot
+    }
+}
+
+impl Drop for PooledConnectionSlot<'_> {
+    fn drop(&mut self) {
+        self.backend
+            .free_slots
+            .lock()
+            .expect("the connection pool slot queue cannot be poisoned")
+            .push_back(self.slot_index);
     }
 }
 

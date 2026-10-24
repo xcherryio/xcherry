@@ -20,7 +20,7 @@ use prost::Message;
 use super::wire_value::{decode_wire_value, encode_wire_value};
 use super::{
     MIGRATION_SQL, ProjectionError, SearchDocumentChange, SearchRow, SearchRowError, SqlValue,
-    extract_search_document_changes, upsert_statement,
+    extract_batch_search_document_changes, extract_search_document_changes, upsert_statement,
 };
 
 #[derive(Default)]
@@ -133,6 +133,118 @@ fn extracts_ordered_document_writes_and_run_purge() {
     missing_delete.writes.remove(2);
     assert!(matches!(
         extract_search_document_changes(partition_id, &missing_delete),
+        Err(ProjectionError::InvalidState(_))
+    ));
+}
+
+#[test]
+fn extracts_every_outcome_of_one_batch_in_order() {
+    let partition_id = PartitionId(3);
+    let tenant_id = TenantId(7);
+    let flow_hash = FlowHash(42);
+    let first_run = RunId([5; 16]);
+    let second_run = RunId([6; 16]);
+    let encoded_document = |run_id: RunId| {
+        SearchDocumentRecord {
+            version: 13,
+            tenant_id: tenant_id.0,
+            run_id: run_id.as_bytes().to_vec(),
+            ..Default::default()
+        }
+        .encode_to_vec()
+    };
+    let first_outcome = ApplyOutcome {
+        writes: [first_run, second_run]
+            .into_iter()
+            .map(|run_id| StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key: run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
+                value: encoded_document(run_id),
+            })
+            .collect(),
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(first_run),
+    };
+    let second_outcome = ApplyOutcome {
+        writes: vec![StateWrite::Delete {
+            column_family: ColumnFamily::PartitionIndex,
+            key: tenant_run_index_key(
+                partition_id,
+                IndexKind::SearchDocument,
+                tenant_id,
+                flow_hash,
+                first_run,
+            ),
+        }],
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(first_run),
+    };
+    let changes =
+        extract_batch_search_document_changes(partition_id, &[first_outcome, second_outcome])
+            .unwrap();
+    assert_eq!(
+        changes,
+        vec![
+            SearchDocumentChange::Upsert {
+                tenant_id,
+                run_id: first_run,
+                encoded_document: encoded_document(first_run),
+            },
+            SearchDocumentChange::Upsert {
+                tenant_id,
+                run_id: second_run,
+                encoded_document: encoded_document(second_run),
+            },
+            SearchDocumentChange::Delete {
+                tenant_id,
+                run_id: first_run,
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_malformed_search_document_keys() {
+    let partition_id = PartitionId(3);
+    let run_id = RunId([5; 16]);
+    let flow_hash = FlowHash(42);
+    let mut malformed_document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
+    malformed_document_key.push(0);
+    let outcome = ApplyOutcome {
+        writes: vec![StateWrite::Put {
+            column_family: ColumnFamily::Flow,
+            key: malformed_document_key,
+            value: vec![],
+        }],
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(run_id),
+    };
+    assert!(matches!(
+        extract_search_document_changes(partition_id, &outcome),
+        Err(ProjectionError::InvalidState(_))
+    ));
+    let mut malformed_index_key = tenant_run_index_key(
+        partition_id,
+        IndexKind::SearchDocument,
+        TenantId(7),
+        flow_hash,
+        run_id,
+    );
+    malformed_index_key.pop();
+    let outcome = ApplyOutcome {
+        writes: vec![StateWrite::Delete {
+            column_family: ColumnFamily::PartitionIndex,
+            key: malformed_index_key,
+        }],
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(run_id),
+    };
+    assert!(matches!(
+        extract_search_document_changes(partition_id, &outcome),
         Err(ProjectionError::InvalidState(_))
     ));
 }

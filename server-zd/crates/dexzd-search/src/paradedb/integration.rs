@@ -22,7 +22,7 @@ use tokio_postgres::NoTls;
 
 use super::{
     MIGRATION_SQL, PageCursor, ParadeDbSearchBackend, ProjectionVisibilityWait, SearchRow,
-    tenant_column_value, translate_query, upsert_statement,
+    ensure_schema, tenant_column_value, translate_query, upsert_statement,
 };
 use crate::{SearchBackend, SearchError, SearchRequest};
 
@@ -98,7 +98,7 @@ async fn paradedb_matches_builtin_evaluator() {
     let Ok(database_url) = std::env::var("DEX_ZD_PARADEDB_URL") else {
         return;
     };
-    let (client, connection) = tokio_postgres::connect(&database_url, NoTls)
+    let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls)
         .await
         .expect("connect to CI ParadeDB");
     let connection_task = tokio::spawn(connection);
@@ -121,6 +121,9 @@ async fn paradedb_matches_builtin_evaluator() {
         .batch_execute(MIGRATION_SQL)
         .await
         .expect("create visibility schema");
+    ensure_schema(&mut client)
+        .await
+        .expect("record visibility schema version");
 
     let documents = vec![
         run("r1", "flow-a", "Running", 1_000_000_000, None)

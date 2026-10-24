@@ -53,5 +53,12 @@ CREATE INDEX IF NOT EXISTS dexzd_visibility_bm25_idx ON dexzd_visibility_runs US
 
 CREATE TABLE IF NOT EXISTS dexzd_visibility_progress (
     partition_id integer PRIMARY KEY,
-    applied_position bigint NOT NULL
+    applied_position bigint NOT NULL,
+    applied_node_id text,
+    applied_incarnation bigint,
+    applied_seq bigint
 );
+
+ALTER TABLE dexzd_visibility_progress ADD COLUMN IF NOT EXISTS applied_node_id text;
+ALTER TABLE dexzd_visibility_progress ADD COLUMN IF NOT EXISTS applied_incarnation bigint;
+ALTER TABLE dexzd_visibility_progress ADD COLUMN IF NOT EXISTS applied_seq bigint;
