@@ -34,8 +34,9 @@ use store::LocalFileStore;
 /// Stores immutable Dex blob payloads in a bounded local directory.
 ///
 /// A cache is thread-safe. Reads and writes may run concurrently, while deletion and close
-/// coordinate with in-flight operations. Payloads survive process restarts; [`BlobCache::open`]
-/// recovers valid committed entries and removes interrupted writes.
+/// coordinate with in-flight operations. [`BlobCache::open`] recovers valid committed entries
+/// after a process restart and removes interrupted writes. Writes are not synchronized to disk,
+/// so a crash may leave a missing or corrupt entry that callers must fetch again.
 ///
 /// # Examples
 ///

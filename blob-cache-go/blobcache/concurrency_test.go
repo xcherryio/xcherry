@@ -10,8 +10,11 @@ package blobcache
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +58,72 @@ func TestConcurrentSameIDPutsCommitOneFile(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Len(t, regularFiles(t, filepath.Join(rootDir, "blobs")), 1)
+}
+
+func TestConcurrentDifferentIDPutsCommitFiles(t *testing.T) {
+	cache, rootDir := newTestCache(t, 1<<20)
+	const workerCount = 16
+	start := make(chan struct{})
+	errorChannel := make(chan error, workerCount)
+	var waitGroup sync.WaitGroup
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		waitGroup.Add(1)
+		go runDistinctIDPut(cache, workerIndex, start, &waitGroup, errorChannel)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorChannel)
+	for err := range errorChannel {
+		require.NoError(t, err)
+	}
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		blobID := "distinct-" + strconv.Itoa(workerIndex)
+		payload, found, err := cache.Get(blobID)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, []byte("payload"), payload)
+	}
+	require.Len(t, regularFiles(t, filepath.Join(rootDir, "blobs")), workerCount)
+}
+
+func BenchmarkCachePut4KiB(b *testing.B) {
+	benchmarkCachePut4KiB(b, false)
+}
+
+func BenchmarkCachePut4KiBParallel(b *testing.B) {
+	benchmarkCachePut4KiB(b, true)
+}
+
+func benchmarkCachePut4KiB(b *testing.B, isParallel bool) {
+	cache, err := New(&Config{Dir: b.TempDir(), MaxBytes: 1 << 40, FrequencyCounters: 100_000})
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		require.NoError(b, cache.Close())
+	})
+	payload := make([]byte, 4096)
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	if isParallel {
+		var nextID atomic.Uint64
+		b.RunParallel(func(worker *testing.PB) {
+			for worker.Next() {
+				blobID := "benchmark-" + strconv.FormatUint(nextID.Add(1), 10)
+				cached, putErr := cache.Put(blobID, payload)
+				if putErr != nil || !cached {
+					b.Fatalf("put %s: cached=%t, error=%v", blobID, cached, putErr)
+				}
+			}
+		})
+		return
+	}
+	for index := 0; index < b.N; index++ {
+		blobID := "benchmark-" + strconv.Itoa(index)
+		cached, putErr := cache.Put(blobID, payload)
+		if putErr != nil || !cached {
+			b.Fatalf("put %s: cached=%t, error=%v", blobID, cached, putErr)
+		}
+	}
 }
 
 func TestDeleteWaitsForActiveReader(t *testing.T) {
@@ -208,6 +277,26 @@ func runSameIDPut(cache *Cache, waitGroup *sync.WaitGroup, errorChannel chan<- e
 	}
 	if !cached {
 		errorChannel <- errors.New("same-ID put was not cached")
+	}
+}
+
+func runDistinctIDPut(
+	cache *Cache,
+	workerIndex int,
+	start <-chan struct{},
+	waitGroup *sync.WaitGroup,
+	errorChannel chan<- error,
+) {
+	defer waitGroup.Done()
+	<-start
+	blobID := "distinct-" + strconv.Itoa(workerIndex)
+	cached, err := cache.Put(blobID, []byte("payload"))
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+	if !cached {
+		errorChannel <- fmt.Errorf("different-ID put %q was not cached", blobID)
 	}
 }
 

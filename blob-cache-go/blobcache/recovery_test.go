@@ -69,6 +69,52 @@ func TestCacheRecoveryRemovesTempAndCorruptFiles(t *testing.T) {
 	require.NoFileExists(t, tempPath)
 }
 
+func TestCacheRejectsDamagedFileAndAcceptsRefetch(t *testing.T) {
+	for _, damage := range []struct {
+		name  string
+		apply func(*testing.T, string, string)
+	}{
+		{
+			name: "truncated",
+			apply: func(t *testing.T, path string, blobID string) {
+				require.NoError(t, os.Truncate(path, int64(fixedHeaderSize+len(blobID)+2)))
+			},
+		},
+		{
+			name: "corrupted",
+			apply: func(t *testing.T, path string, blobID string) {
+				file, err := os.OpenFile(path, os.O_WRONLY, 0)
+				require.NoError(t, err)
+				_, err = file.WriteAt([]byte{0xff}, int64(fixedHeaderSize+len(blobID)))
+				require.NoError(t, err)
+				require.NoError(t, file.Close())
+			},
+		},
+	} {
+		t.Run(damage.name, func(t *testing.T) {
+			cache, rootDir := newTestCache(t, 1<<20)
+			blobID := "refetched-id"
+			payload := []byte("original-payload")
+			require.True(t, putForTest(t, cache, blobID, payload))
+			path := cache.store.pathFor(blobID)
+			damage.apply(t, path, blobID)
+
+			cachedPayload, found, err := cache.Get(blobID)
+			require.NoError(t, err)
+			require.False(t, found)
+			require.Nil(t, cachedPayload)
+			require.NoFileExists(t, path)
+
+			require.True(t, putForTest(t, cache, blobID, payload))
+			cachedPayload, found, err = cache.Get(blobID)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, payload, cachedPayload)
+			require.LessOrEqual(t, cacheOwnedBytes(t, rootDir), cache.cfg.MaxBytes)
+		})
+	}
+}
+
 func TestCacheRecoveryRemovesNonZeroReservedHeader(t *testing.T) {
 	rootDir := t.TempDir()
 	cfg := &Config{Dir: rootDir, MaxBytes: 1 << 20, FrequencyCounters: 10_000}

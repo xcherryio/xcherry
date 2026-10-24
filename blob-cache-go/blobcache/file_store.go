@@ -8,12 +8,12 @@
 
 // This file implements local persistence inside one exclusively owned cache
 // directory. Blob IDs map to deterministic sharded paths, commits write and
-// sync temporary files before atomic rename, and reads validate metadata before
+// close temporary files before atomic rename, and reads validate metadata before
 // returning payloads. Startup scans committed files, streams checksum
 // verification without loading the whole cache, and reports malformed paths
 // for removal. For example, a crash before rename leaves only a temporary file
-// that startup purges, while a crash after rename leaves a complete entry that
-// recovery can admit again.
+// that startup purges, while a crash after rename leaves an entry that recovery
+// admits only if its length and checksum remain valid.
 
 package blobcache
 
@@ -211,9 +211,6 @@ func (store *localFileStoreImpl) commit(metadata fileMetadata, payload []byte) (
 	}
 	if err := writeAll(tempFile, payload); err != nil {
 		return store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache payload: %w", err))
-	}
-	if err := tempFile.Sync(); err != nil {
-		return store.failCommit(tempFile, tempPath, fmt.Errorf("flush blob cache temp file: %w", err))
 	}
 	if err := tempFile.Close(); err != nil {
 		return store.failCommit(nil, tempPath, fmt.Errorf("close blob cache temp file: %w", err))

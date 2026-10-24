@@ -369,9 +369,7 @@ impl LocalFileStore {
         file.write_all(metadata.blob_id.as_bytes())
             .map_err(|error| BlobCacheError::io("write blob cache ID", error))?;
         file.write_all(payload)
-            .map_err(|error| BlobCacheError::io("write blob cache payload", error))?;
-        file.sync_all()
-            .map_err(|error| BlobCacheError::io("flush blob cache temp file", error))
+            .map_err(|error| BlobCacheError::io("write blob cache payload", error))
     }
 
     fn relative(&self, path: &Path) -> String {
