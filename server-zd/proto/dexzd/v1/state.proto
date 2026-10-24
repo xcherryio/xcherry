@@ -447,6 +447,7 @@ message HistoryRecord {
   // True when the command carried external input that time travel may reapply.
   bool is_external_input = 5;
   // The command with every value larger than the inline threshold replaced by a reference.
+  // During the MVP, apply stores the complete command; readers must accept both forms.
   FlowCommand command = 6;
   // History events projected from this command, with their event IDs.
   repeated dex.FlowHistoryEvent events = 7;
