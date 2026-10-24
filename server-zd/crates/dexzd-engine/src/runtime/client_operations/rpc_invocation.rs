@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::{ApplyContext, FlowStateReader};
+use dexzd_keyspace::row_keys::channel_name_prefix;
 use dexzd_keyspace::{RunId, RunTable, TenantId};
 use dexzd_protocol::dex::{
     ChannelInfo, ChannelMessage, ChannelValues, Context, ErrorSubStatus, InvokeRpcRequest,
@@ -320,8 +321,7 @@ fn read_channel_messages(
     run_id: RunId,
     channel_name: &str,
 ) -> Result<Vec<ChannelMessage>, RuntimeError> {
-    let mut suffix_prefix = channel_name.as_bytes().to_vec();
-    suffix_prefix.push(0);
+    let suffix_prefix = channel_name_prefix(channel_name);
     let rows: Vec<(Vec<u8>, ChannelMessageRecord)> = scan_run_rows(
         state,
         context.flow_hash,

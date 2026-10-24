@@ -15,6 +15,7 @@ use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
     WaitableChange,
 };
+use dexzd_keyspace::row_keys::channel_message_key;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, TenantId, flow_directory_key, run_key};
 use dexzd_protocol::dex::{ErrorSubStatus, FlowStatus, StopType};
 use dexzd_protocol::dexzd::v1::{
@@ -157,13 +158,10 @@ fn apply_model(
         flow_command::Command::ChannelPublish(publish) => {
             let request = publish.request.clone().unwrap_or_default();
             for (index, message) in request.messages.iter().enumerate() {
-                let mut suffix = message.channel_name.as_bytes().to_vec();
-                suffix.push(0);
                 let seq = u64::try_from(command.proposed_at_micros).unwrap() + index as u64;
-                suffix.extend_from_slice(&seq.to_be_bytes());
                 writes.push(put(
                     ColumnFamily::Flow,
-                    run_key(flow_hash, run_id, RunTable::ChannelMessage, &suffix),
+                    channel_message_key(flow_hash, run_id, &message.channel_name, seq),
                     &ChannelMessageRecord {
                         channel_name: message.channel_name.clone(),
                         message_id: message.message_id.clone(),
