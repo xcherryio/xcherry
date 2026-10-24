@@ -11,7 +11,8 @@ use std::sync::Arc;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ManifestChange, MetadataError};
 use dexzd_object_store::ObjectStore;
-use dexzd_protocol::dexzd::v1::Manifest;
+use dexzd_protocol::dexzd::v1::{Manifest, NodeLease};
+use prost::Message;
 
 use crate::commit::{CommitState, NodeStopReason};
 use crate::recovery::describe_lost_ownership;
@@ -34,6 +35,27 @@ impl OwnershipFence {
             Some(_) => Err(SnapshotError::NodeStopped),
             None => Ok(()),
         }
+    }
+
+    pub(crate) async fn ensure_current_lease(&self) -> Result<(), SnapshotError> {
+        self.ensure_serving()?;
+        let lease_key = format!("lease/{}", self.node_id);
+        let lease = self.object_store.get(&lease_key).await?;
+        let is_current = lease
+            .map(|content| NodeLease::decode(content.bytes))
+            .transpose()?
+            .is_some_and(|lease| {
+                lease.node_id == self.node_id
+                    && lease.epoch == self.epoch
+                    && lease.expires_at_unix_micros > self.clock.now_unix_micros()
+            });
+        if !is_current {
+            self.state.stop(NodeStopReason::LeaseLost {
+                detail: "snapshot cleanup no longer owns the node lease".to_owned(),
+            });
+            return Err(SnapshotError::NodeStopped);
+        }
+        self.ensure_serving()
     }
 
     /// Applies `edit` in the same conditional write that checks serving and epoch ownership.

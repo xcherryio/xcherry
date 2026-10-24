@@ -179,6 +179,21 @@ async fn check_store(store: &dyn ObjectStore) {
             .collect::<Vec<_>>(),
         ["objects/a", "objects/b"]
     );
+    assert!(
+        first
+            .objects
+            .iter()
+            .all(|object| object.last_modified_unix_micros.is_some())
+    );
+    assert!(
+        store
+            .head("objects/a")
+            .await
+            .expect("head succeeds")
+            .expect("object exists")
+            .last_modified_unix_micros
+            .is_some()
+    );
     let second = store
         .list("objects/", first.next_start_after.as_deref(), 2)
         .await

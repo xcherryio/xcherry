@@ -14,10 +14,13 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::ManifestChange;
 use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::{LogPosition, Manifest, SnapshotManifest, SnapshotReference};
-use dexzd_storage::{LocalReadView, RestoredLocalStore, SnapshotIdentity, create_snapshot};
-use tokio::sync::Mutex;
-use tokio::time::Instant;
+use dexzd_storage::{
+    LocalReadView, LocalStore, RestoredLocalStore, SnapshotIdentity, StorageError, create_snapshot,
+};
+use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
 use crate::snapshots::log_cleanup::LogCleanup;
@@ -41,7 +44,7 @@ pub(crate) struct SnapshotService {
     pub(crate) epoch: u64,
     pub(crate) node_meta_lock: Arc<std::sync::Mutex<()>>,
     pub(crate) config: SnapshotConfig,
-    /// Serializes snapshots and holds the manifests retention has read.
+    /// Holds manifests retention has read; its operation lock serializes snapshots and cleanup.
     pub(crate) catalog: Mutex<SnapshotCatalog>,
     /// Routed seq that the last successful snapshot covered; 0 before the first one.
     pub(crate) last_snapshot_routed_seq: AtomicU64,
@@ -52,12 +55,31 @@ impl SnapshotService {
         let mut last_attempt = Instant::now();
         let mut is_retrying = false;
         let mut bytes_at_last_snapshot = self.committed_log_bytes();
+        let cleanup_interval = self
+            .config
+            .deletion_delay
+            .min(std::time::Duration::from_secs(60))
+            .max(std::time::Duration::from_secs(1));
+        let mut snapshot_timer = tokio::time::interval(self.config.check_interval);
+        snapshot_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut cleanup_timer = tokio::time::interval(cleanup_interval);
+        cleanup_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        cleanup_timer.tick().await;
         loop {
-            tokio::select! {
+            let should_check_snapshot = tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return,
                 _ = self.fence.state.wait_stopped() => return,
-                () = tokio::time::sleep(self.config.check_interval) => {}
+                _ = cleanup_timer.tick() => {
+                    if let Err(error) = self.clean_orphans().await {
+                        tracing::warn!(error = %error, "snapshot orphan cleanup failed; retrying later");
+                    }
+                    false
+                }
+                _ = snapshot_timer.tick() => true,
+            };
+            if !should_check_snapshot {
+                continue;
             }
             let committed_bytes = self.committed_log_bytes();
             let elapsed = last_attempt.elapsed();
@@ -85,12 +107,39 @@ impl SnapshotService {
         }
     }
 
+    async fn clean_orphans(&self) -> Result<(), SnapshotError> {
+        let _operation_guard = self.acquire_operation_lock().await;
+        let cluster_manifest = self
+            .fence
+            .update_manifest(|_| ManifestChange::Unchanged)
+            .await?;
+        let referenced_keys: BTreeSet<String> = cluster_manifest
+            .partitions
+            .iter()
+            .filter_map(|partition| partition.snapshot.as_ref())
+            .map(|snapshot| snapshot.manifest_key.clone())
+            .collect();
+        let mut catalog = self.take_catalog().await;
+        let result = self
+            .retention
+            .run_once(
+                &mut catalog,
+                &referenced_keys,
+                &self.fence,
+                self.clock.now_unix_micros(),
+            )
+            .await
+            .map(|_| ());
+        self.restore_catalog(catalog).await;
+        result
+    }
+
     /// Uploads a snapshot, points every partition at it, and deletes covered objects.
     ///
     /// Nothing is published or deleted once the node stops serving or another epoch owns the
     /// cluster.
     pub(crate) async fn take_snapshot(&self) -> Result<SnapshotReference, SnapshotError> {
-        let mut catalog = self.catalog.lock().await;
+        let _operation_guard = self.acquire_operation_lock().await;
         self.fence.ensure_serving()?;
         let stream = &self.log_cleanup.stream;
         let last_routed_seq = self.progress.last_routed_seq.load(Ordering::Acquire);
@@ -109,7 +158,10 @@ impl SnapshotService {
         }
         let started = Instant::now();
         let (manifest_key, manifest) = self.upload_snapshot().await?;
-        catalog.insert(manifest_key.clone(), manifest.clone());
+        self.catalog
+            .lock()
+            .await
+            .insert(manifest_key.clone(), manifest.clone());
         let reference = SnapshotReference {
             node_id: stream.node_id.clone(),
             lineage_id: manifest.lineage_id.clone(),
@@ -131,22 +183,47 @@ impl SnapshotService {
             .collect();
         self.last_snapshot_routed_seq
             .store(last_routed_seq, Ordering::Release);
-        let retained = self
-            .retention
-            .run_once(
-                &mut catalog,
-                &referenced_keys,
-                &self.fence,
-                self.clock.now_unix_micros(),
-            )
-            .await?;
-        self.log_cleanup
-            .run_once(&retained, &manifest, &self.fence)
-            .await?;
+        let mut catalog = self.take_catalog().await;
+        let cleanup_result = async {
+            let retained = self
+                .retention
+                .run_once(
+                    &mut catalog,
+                    &referenced_keys,
+                    &self.fence,
+                    self.clock.now_unix_micros(),
+                )
+                .await?;
+            self.log_cleanup
+                .run_once(&retained, &manifest, &self.fence)
+                .await?;
+            Ok::<(), SnapshotError>(())
+        }
+        .await;
+        self.restore_catalog(catalog).await;
+        cleanup_result?;
         Ok(reference)
     }
 
+    async fn acquire_operation_lock(&self) -> OwnedMutexGuard<()> {
+        let operation_lock = self.catalog.lock().await.operation_lock.clone();
+        operation_lock.lock_owned().await
+    }
+
+    async fn take_catalog(&self) -> SnapshotCatalog {
+        let mut catalog_guard = self.catalog.lock().await;
+        let catalog = std::mem::take(&mut *catalog_guard);
+        catalog_guard.operation_lock = catalog.operation_lock.clone();
+        catalog
+    }
+
+    async fn restore_catalog(&self, catalog: SnapshotCatalog) {
+        *self.catalog.lock().await = catalog;
+    }
+
     async fn upload_snapshot(&self) -> Result<(String, SnapshotManifest), SnapshotError> {
+        let should_prepare_snapshot_lineage =
+            !self.catalog.lock().await.has_prepared_snapshot_lineage;
         let store = self.store.clone();
         let upload_store =
             SnapshotUploadStore::new(self.object_store.clone(), self.fence.state.clone());
@@ -158,11 +235,20 @@ impl SnapshotService {
         let runtime = tokio::runtime::Handle::current();
         let node_meta_lock = self.node_meta_lock.clone();
         // Checkpoints and file hashing block, so the whole upload runs on the blocking pool.
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             // create_snapshot reads NodeMeta first and writes it back before it publishes the manifest.
             let _node_meta_guard = node_meta_lock
                 .lock()
                 .expect("node metadata lock is not poisoned");
+            if should_prepare_snapshot_lineage {
+                let mut node_meta = store
+                    .node_meta()?
+                    .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
+                // Reused local stores retain their lineage; rotate it before this owner's first upload.
+                node_meta.lineage_id = Uuid::now_v7().as_bytes().to_vec();
+                node_meta.last_snapshot_number = 0;
+                store.put_node_meta(&node_meta)?;
+            }
             let snapshot_number = store
                 .node_meta()?
                 .map_or(0, |meta| meta.last_snapshot_number)
@@ -183,7 +269,11 @@ impl SnapshotService {
         .map_err(|error| match self.fence.state.stop_reason() {
             Some(_) => SnapshotError::NodeStopped,
             None => SnapshotError::from(error),
-        })
+        });
+        if result.is_ok() {
+            self.catalog.lock().await.has_prepared_snapshot_lineage = true;
+        }
+        result
     }
 
     async fn record_snapshot(

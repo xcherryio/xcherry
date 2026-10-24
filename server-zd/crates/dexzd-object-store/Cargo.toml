@@ -13,6 +13,7 @@ async-trait.workspace = true
 aws-config.workspace = true
 aws-sdk-s3.workspace = true
 bytes.workspace = true
+dexzd-clock = { path = "../dexzd-clock" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
