@@ -28,7 +28,7 @@ use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributesSetCommand, CommandReply, FlowCommand, Manifest, NodeLease, flow_command,
+    AttributesSetCommand, CommandReply, FlowCommand, LogPosition, Manifest, NodeLease, flow_command,
 };
 use futures::future::BoxFuture;
 use prost::Message;
@@ -192,12 +192,20 @@ pub(crate) fn decode_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes.try_into().expect("counter has eight bytes"))
 }
 
-/// Records rebuilt partitions and every committed command.
+/// Records rebuilt partitions, every committed command, and every frame end.
 #[derive(Default)]
 pub(crate) struct RecordingRuntime {
     rebuilt: Mutex<Vec<PartitionId>>,
     committed: Mutex<Vec<CommittedFlowCommand>>,
+    sink_events: Mutex<Vec<(PartitionId, SinkEvent)>>,
     failing_partition: Option<PartitionId>,
+}
+
+/// One call the committed command sink received, with the frame position it carried.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SinkEvent {
+    Applied(LogPosition),
+    FrameFinished(LogPosition),
 }
 
 impl RecordingRuntime {
@@ -224,15 +232,70 @@ impl RecordingRuntime {
             .map(|committed| committed.command.command_id)
             .collect()
     }
+
+    /// Returns the sink calls for `partition` in the order they arrived.
+    pub(crate) fn sink_events_of(&self, partition: PartitionId) -> Vec<SinkEvent> {
+        self.sink_events
+            .lock()
+            .expect("sink event lock")
+            .iter()
+            .filter(|(event_partition, _)| *event_partition == partition)
+            .map(|(_, event)| event.clone())
+            .collect()
+    }
+
+    fn record_sink_event(&self, partition: PartitionId, event: SinkEvent) {
+        self.sink_events
+            .lock()
+            .expect("sink event lock")
+            .push((partition, event));
+    }
 }
 
 impl CommittedCommandSink for RecordingRuntime {
     fn apply_committed(&self, committed: CommittedFlowCommand) {
+        self.record_sink_event(
+            committed.context.partition,
+            SinkEvent::Applied(committed.committed.position.clone()),
+        );
         self.committed
             .lock()
             .expect("committed lock")
             .push(committed);
     }
+
+    fn finish_frame(&self, partition: PartitionId, position: &LogPosition) {
+        self.record_sink_event(partition, SinkEvent::FrameFinished(position.clone()));
+    }
+}
+
+/// Asserts that every frame ends with one `FrameFinished` right after its last command.
+///
+/// Returns the number of frames in `events`.
+pub(crate) fn assert_frames_finish_after_their_commands(events: &[SinkEvent]) -> usize {
+    let mut open_frame: Option<&LogPosition> = None;
+    let mut finished_frames = 0;
+    for event in events {
+        match event {
+            SinkEvent::Applied(position) => {
+                if let Some(open) = open_frame {
+                    assert_eq!(open, position, "a frame ended without finish_frame");
+                }
+                open_frame = Some(position);
+            }
+            SinkEvent::FrameFinished(position) => {
+                assert_eq!(
+                    open_frame,
+                    Some(position),
+                    "finish_frame did not follow a command of its frame"
+                );
+                open_frame = None;
+                finished_frames += 1;
+            }
+        }
+    }
+    assert_eq!(open_frame, None, "the last frame has no finish_frame");
+    finished_frames
 }
 
 impl PartitionRuntimeRebuilder for RecordingRuntime {

@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use dexzd_keyspace::{PartitionHasher, PartitionId};
+use dexzd_protocol::dexzd::v1::LogPosition;
 use futures::future::BoxFuture;
 
 use crate::commit::{CommandCommitter, EngineLocalStore};
@@ -40,6 +41,9 @@ pub trait CommittedCommandSink: Send + Sync + 'static {
     ///
     /// Replayed commands arrive before rebuild with an older epoch; rebuild owns their effects.
     fn apply_committed(&self, committed: CommittedFlowCommand);
+
+    /// Called once after the last [`Self::apply_committed`] of each applied frame, replayed frames included.
+    fn finish_frame(&self, _partition: PartitionId, _position: &LogPosition) {}
 }
 
 /// Rebuilds a partition's runtime work from committed state; the node already accepts commands.

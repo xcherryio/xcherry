@@ -17,7 +17,7 @@ use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::{
     BLOCKING_FLOW, CountingApplier, FAILING_FLOW, NONDETERMINISTIC_FLOW, PANICKING_FLOW,
-    RecordingRuntime, TestCluster, is_partition_stopped,
+    RecordingRuntime, TestCluster, assert_frames_finish_after_their_commands, is_partition_stopped,
 };
 
 #[tokio::test(start_paused = true)]
@@ -79,6 +79,38 @@ async fn batched_commands_share_a_frame_and_see_earlier_writes() {
     assert_eq!(seqs.len(), 1, "one batch holds every batched command");
     assert_eq!(test.committed_count("batched-flow").await, 5);
     test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_frame_finishes_after_its_last_committed_command() {
+    let mut cluster = TestCluster::new();
+    let test = cluster.start_in_memory().await;
+    let other_flow = test.flow_in_other_partition(&["frame-flow"]);
+    let frame_partition = test.context("frame-flow").partition;
+    let other_partition = test.context(&other_flow).partition;
+    let mut tickets: Vec<_> = (0..3)
+        .map(|_| {
+            test.submit("frame-flow", CommitUrgency::Batched)
+                .expect("submit succeeds")
+                .1
+        })
+        .collect();
+    tickets.push(
+        test.submit(&other_flow, CommitUrgency::Batched)
+            .expect("submit succeeds")
+            .1,
+    );
+    for ticket in tickets {
+        ticket.wait().await.expect("command commits");
+    }
+    test.commit_prompt("frame-flow", 2).await;
+    // Shutdown joins the applier lanes, so every sink call has happened.
+    test.node.shutdown().await;
+    let frame_events = test.runtime.sink_events_of(frame_partition);
+    assert_eq!(frame_events.len(), 5 + 3);
+    assert_eq!(assert_frames_finish_after_their_commands(&frame_events), 3);
+    let other_events = test.runtime.sink_events_of(other_partition);
+    assert_eq!(assert_frames_finish_after_their_commands(&other_events), 1);
 }
 
 #[tokio::test(start_paused = true)]
