@@ -15,11 +15,15 @@ But the manager may forget(business discruption). The payment API may be down(ex
 
 Dex make every process is a durable execution. Every step is saved, retried, and can wait. If the manager forgets, we send a reminder, or escalate. If the API is down, we keep retrying. If our server restarts, the run picks up right where it stopped.
 
+**Dex** provides a structural programming model with only a few concepts as [durable primitives](https://docs.superdurable.io/primitives). You use Dex to write a Flow filled with ordinary code: durable Steps, Attributes, RPCs, and durable conditions using Channels and Timers. Then you run Workers hosting your Flow. The Client calls Dex Server to start and interact with Flow instances. Dex Server dispatches Step and RPC invocation tasks to your Workers.
+
+
 Underneath, Dex provide local state and control flow such as branches and loops, as well as parallel execution and coordination, waiting for timers or external events, error handling, and remote procedure invocations. The application logic is expressed directly in ordinary code, while the platform reliably restores and resumes the execution after failures and restarts. 
 
-Dex is a simple durable execution framework optimized for AI agents, human+AI processes, with high performance & scalability. It includes in-memory/best-effort streaming, attribute storage sync, and automatic offloading and cleanup of large payloads in blob storage. [Dex Connectors Library](https://github.com/superdurable/dex-connectors-library) provides reusable integrations that help you move workflows quickly from prototype to production. 
+Dex is optimized for AI agents, human+AI processes, highly performant & scalable. 
 
-**Dex** provides a structural programming model with only a few concepts as [durable primitives](https://docs.superdurable.io/primitives). You use Dex to write a Flow filled with ordinary code: durable Steps, Attributes, RPCs, and durable conditions using Channels and Timers. Then you run Workers hosting your Flow. The Client calls Dex Server to start and interact with Flow instances. Dex Server dispatches Step and RPC invocation tasks to your Workers.
+It includes in-memory/best-effort streaming, attribute storage sync, and automatic offloading and cleanup of large payloads in blob storage. [Dex Connectors Library](https://github.com/superdurable/dex-connectors-library) provides reusable integrations that help you move workflows quickly from prototype to production. 
+
 
 
 ### Dex: No Replay
