@@ -15,8 +15,8 @@ use dexzd_keyspace::{
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, ChannelMessageRecord, ChannelMetaRecord, FlowDirectoryRecord,
-    HistoryRecord, LockRecord, PermissionSetRecord, RequestDedupRecord, RunRecord,
-    SearchDocumentRecord, StepCounterRecord, StepExecutionRecord,
+    HistoryRecord, LockRecord, RequestDedupRecord, RunRecord, SearchDocumentRecord,
+    StepCounterRecord, StepExecutionRecord,
 };
 
 use crate::ApplyError;
@@ -86,10 +86,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn attempt_record(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -334,25 +330,6 @@ impl RunRows {
             .collect())
     }
 
-    pub(crate) fn permission_set(
-        &self,
-        transaction: &FlowTransaction<'_>,
-    ) -> Result<PermissionSetRecord, ApplyError> {
-        let key = run_singleton_key(self.flow_hash, self.run_id, RunTable::PermissionSet);
-        Ok(transaction
-            .get_message(ColumnFamily::Flow, &key, "permission set")?
-            .unwrap_or_default())
-    }
-
-    pub(crate) fn put_permission_set(
-        &self,
-        transaction: &mut FlowTransaction<'_>,
-        record: &PermissionSetRecord,
-    ) {
-        let key = run_singleton_key(self.flow_hash, self.run_id, RunTable::PermissionSet);
-        transaction.put_message(ColumnFamily::Flow, key, record);
-    }
-
     pub(crate) fn request_dedup(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -423,10 +400,6 @@ impl RunRows {
         Ok(())
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn put_search_document(
         &self,
         transaction: &mut FlowTransaction<'_>,
@@ -436,10 +409,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn search_document(
         &self,
         transaction: &FlowTransaction<'_>,

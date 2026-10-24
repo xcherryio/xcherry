@@ -78,8 +78,20 @@ pub(crate) fn close_flow(
     if cursor.record.status != FlowStatus::Running as i32 {
         return Ok(());
     }
-    for (_, mut step) in cursor.rows.step_executions(transaction)? {
+    let mut steps = cursor.rows.step_executions(transaction)?;
+    steps.sort_by(|(_, left), (_, right)| {
+        (left.created_seq, &left.step_execution_id)
+            .cmp(&(right.created_seq, &right.step_execution_id))
+    });
+    let should_record_pending = matches!(
+        closing.status,
+        FlowStatus::Canceled | FlowStatus::Terminated | FlowStatus::ServerSideTimeoutInternalOnly
+    );
+    for (_, mut step) in steps {
         if is_active(&step) {
+            if should_record_pending && step.invocation.is_some() {
+                history_events::record_method_pending(cursor, &step, scope.now_micros);
+            }
             finish_step(transaction, cursor, &mut step, StepExecutionPhase::Canceled)?;
         }
     }
