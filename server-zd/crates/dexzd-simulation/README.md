@@ -54,8 +54,11 @@ directory invariants hold on the committed history. The engine simulation adds t
 
 1. **Acknowledged writes survive.** Every write a client saw succeed is in the canonical log,
    and every recovered store equals the shadow row for row.
-2. **No speculative reads.** Every Attribute value and Channel message a client read was
-   committed before the read returned.
+2. **No speculative or stale reads.** Each GetAttributes and GetChannelMessages response, as a
+   whole, equals the committed state of the Flow's newest run at a frame its node applied during
+   the call. The shadow keeps each client Flow's state history by frame, and the call's window
+   runs from the node's applied position when the call began to the one when it returned. A
+   value that a later applied write overwrote fails, as does an uncommitted one.
 3. **One result per attempt.** The shadow rejects a second applied result (S2). Any frame
    applied again after recovery must reproduce its first outcome exactly.
 4. **Locks.** The shadow checks L1 to L4 after every command, and the recovered store passes

@@ -162,6 +162,7 @@ fn assert_covered(total: &EngineSimulationSummary) {
         ("self-stopped processes", total.self_stopped_processes),
         ("clock jumps", total.clock_jumps),
         ("acknowledged writes", total.acknowledged_writes),
+        ("checked reads", total.checked_reads),
         ("checked read values", total.checked_read_values),
         ("replayed frames", total.replayed_frames),
         ("state comparisons", total.state_comparisons),

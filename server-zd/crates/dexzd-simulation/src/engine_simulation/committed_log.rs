@@ -12,22 +12,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{ApplyOutcome, StateWrite};
-use dexzd_engine::{CommittedCommandSink, CommittedFlowCommand, FlowRuntimeRegistry};
-use dexzd_keyspace::{ColumnFamily, PartitionId, RunTable, parse_run_key};
-use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, ChannelMessageRecord, FlowCommand, LogPosition, stored_value,
+use dexzd_engine::{
+    CommittedCommandSink, CommittedFlowCommand, EngineLocalStore, FlowRuntimeRegistry,
 };
+use dexzd_keyspace::{PartitionId, RunId};
+use dexzd_protocol::dex::{ChannelMessage, Kv};
+use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition};
+use dexzd_storage::LocalReadView;
 use prost::Message;
 
 use crate::apply_checker::ApplyChecker;
 use crate::apply_simulation::command_kind;
 use crate::engine_simulation::event_trace::EventTrace;
+use crate::engine_simulation::simulated_clients::ENGINE_FLOW_IDS;
 use crate::engine_simulation::simulated_object_store::StorageObservations;
 use crate::engine_simulation::workload::operation_marker;
 use crate::invariants::InvariantViolation;
 use crate::memory_state::MemoryFlowState;
 use crate::model::wire_value;
 use crate::row_decoding::hex;
+use crate::state_view::RunSelection;
 
 /// Orders frames of one partition: node, incarnation, then seq.
 type FrameKey = (u16, String, u32, u64);
@@ -37,22 +41,44 @@ struct CanonicalCommand {
     outcome: ApplyOutcome,
 }
 
+struct CanonicalFrame {
+    /// Count of new frames the shadow accepted up to and including this one.
+    generation: u64,
+    commands: Vec<CanonicalCommand>,
+}
+
 struct OpenFrame {
     position: LogPosition,
     commands: Vec<CommittedFlowCommand>,
 }
 
+/// What a client read of one Flow may return: its newest run's Attributes and Channel messages.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FlowReadState {
+    /// Encoded wire value of each Attribute; `None` while the Flow has no run.
+    attributes: Option<BTreeMap<String, Vec<u8>>>,
+    /// Encoded messages of each Channel, oldest first.
+    channel_messages: BTreeMap<String, Vec<Vec<u8>>>,
+}
+
+/// The generations a read may observe: what its node had applied when the read began and ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReadWindow {
+    pub(crate) floor: u64,
+    pub(crate) ceiling: u64,
+}
+
 struct CommittedLogState {
     shadow: ApplyChecker,
-    frames: BTreeMap<FrameKey, Vec<CanonicalCommand>>,
+    frames: BTreeMap<FrameKey, CanonicalFrame>,
+    /// New frames accepted so far; each frame's generation.
+    generation: u64,
+    /// Read states of client Flows by the generation that produced them.
+    read_states: BTreeMap<String, BTreeMap<u64, FlowReadState>>,
     newest_frames: BTreeMap<u16, FrameKey>,
     open_frames: BTreeMap<(String, u16), OpenFrame>,
     first_violation: Option<InvariantViolation>,
     committed_markers: BTreeSet<String>,
-    /// Encoded wire values each Attribute of a Flow ever held in committed state.
-    attribute_values: BTreeMap<(String, String), BTreeSet<Vec<u8>>>,
-    /// Message IDs ever committed to a Flow's Channels.
-    channel_message_ids: BTreeSet<(String, String)>,
     applied_by_kind: BTreeMap<&'static str, u64>,
     /// Commands committed without writes, such as a second result of one attempt.
     rejected_by_kind: BTreeMap<&'static str, u64>,
@@ -77,12 +103,12 @@ impl CommittedLog {
             state: Mutex::new(CommittedLogState {
                 shadow: ApplyChecker::new(),
                 frames: BTreeMap::new(),
+                generation: 0,
+                read_states: BTreeMap::new(),
                 newest_frames: BTreeMap::new(),
                 open_frames: BTreeMap::new(),
                 first_violation: None,
                 committed_markers: BTreeSet::new(),
-                attribute_values: BTreeMap::new(),
-                channel_message_ids: BTreeSet::new(),
                 applied_by_kind: BTreeMap::new(),
                 rejected_by_kind: BTreeMap::new(),
                 replayed_frames: 0,
@@ -107,18 +133,95 @@ impl CommittedLog {
         self.lock().committed_markers.contains(marker)
     }
 
-    /// Whether `value` (encoded) was ever committed for this Attribute of this Flow.
-    pub(crate) fn was_attribute_committed(&self, flow_id: &str, key: &str, value: &[u8]) -> bool {
-        self.lock()
-            .attribute_values
-            .get(&(flow_id.to_owned(), key.to_owned()))
-            .is_some_and(|values| values.contains(value))
+    /// Returns the generation of the newest canonical frame of `flow_id`'s partition in `store`.
+    ///
+    /// Returns zero before the store applied any frame of the partition, or the read error.
+    pub(crate) fn applied_generation(
+        &self,
+        store: &EngineLocalStore,
+        flow_id: &str,
+    ) -> Result<u64, String> {
+        let state = self.lock();
+        let partition = state.shadow.context(flow_id).partition;
+        let meta = store
+            .partition_meta(partition)
+            .map_err(|error| format!("reading partition {} metadata: {error}", partition.0))?;
+        let Some(applied) = meta.and_then(|meta| meta.applied) else {
+            return Ok(0);
+        };
+        let lowest: FrameKey = (partition.0, String::new(), 0, 0);
+        let applied_key: FrameKey = (
+            partition.0,
+            applied.node_id,
+            applied.incarnation,
+            applied.seq,
+        );
+        Ok(state
+            .frames
+            .range(lowest..=applied_key)
+            .next_back()
+            .map_or(0, |(_, frame)| frame.generation))
     }
 
-    pub(crate) fn was_message_committed(&self, flow_id: &str, message_id: &str) -> bool {
-        self.lock()
-            .channel_message_ids
-            .contains(&(flow_id.to_owned(), message_id.to_owned()))
+    /// Checks that a GetAttributes response equals the newest run's Attributes at a generation
+    /// in `window`.
+    ///
+    /// Returns the response and the states it could have matched when it matches none.
+    pub(crate) fn check_attribute_read(
+        &self,
+        flow_id: &str,
+        window: ReadWindow,
+        attributes: &[Kv],
+    ) -> Result<(), String> {
+        let observed: BTreeMap<String, Vec<u8>> = attributes
+            .iter()
+            .map(|attribute| {
+                let value = attribute.value.clone().unwrap_or_default();
+                (attribute.key.clone(), value.encode_to_vec())
+            })
+            .collect();
+        self.check_read_against_history(flow_id, window, |state| {
+            state.attributes.as_ref() == Some(&observed)
+        })
+    }
+
+    /// Checks that a GetChannelMessages response equals the Channel's messages at a generation
+    /// in `window`.
+    ///
+    /// Returns a description of the mismatch when the response matches no state in the window.
+    pub(crate) fn check_channel_read(
+        &self,
+        flow_id: &str,
+        channel_name: &str,
+        window: ReadWindow,
+        messages: &[ChannelMessage],
+    ) -> Result<(), String> {
+        let observed: Vec<Vec<u8>> = messages.iter().map(Message::encode_to_vec).collect();
+        self.check_read_against_history(flow_id, window, |state| {
+            state.attributes.is_some()
+                && state
+                    .channel_messages
+                    .get(channel_name)
+                    .map_or(observed.is_empty(), |expected| *expected == observed)
+        })
+    }
+
+    fn check_read_against_history(
+        &self,
+        flow_id: &str,
+        window: ReadWindow,
+        matches: impl Fn(&FlowReadState) -> bool,
+    ) -> Result<(), String> {
+        let state = self.lock();
+        let empty = BTreeMap::new();
+        let history = state.read_states.get(flow_id).unwrap_or(&empty);
+        if is_state_in_window(history, window, matches) {
+            return Ok(());
+        }
+        Err(format!(
+            "no committed state of generations {}..={} matches it; the newest generation is {}",
+            window.floor, window.ceiling, state.generation
+        ))
     }
 
     /// Returns a copy of the shadow state, which never crashed.
@@ -247,10 +350,11 @@ impl CommittedLogState {
         key: &FrameKey,
         commands: &[CommittedFlowCommand],
     ) -> Result<(), InvariantViolation> {
-        let canonical = self
+        let canonical = &self
             .frames
             .get(key)
-            .expect("the caller checked that the frame exists");
+            .expect("the caller checked that the frame exists")
+            .commands;
         let same_commands = canonical.len() == commands.len()
             && canonical
                 .iter()
@@ -326,8 +430,27 @@ impl CommittedLogState {
                 outcome: shadow_outcome,
             });
         }
+        self.generation += 1;
+        let touched_flows: BTreeSet<String> = canonical
+            .iter()
+            .map(|command| command.command.flow_id.clone())
+            .filter(|flow_id| ENGINE_FLOW_IDS.contains(&flow_id.as_str()))
+            .collect();
+        for flow_id in touched_flows {
+            let read_state = read_state_of(&self.shadow, &flow_id)?;
+            let history = self.read_states.entry(flow_id).or_default();
+            if history.values().next_back() != Some(&read_state) {
+                history.insert(self.generation, read_state);
+            }
+        }
         self.newest_frames.insert(key.0, key.clone());
-        self.frames.insert(key, canonical);
+        self.frames.insert(
+            key,
+            CanonicalFrame {
+                generation: self.generation,
+                commands: canonical,
+            },
+        );
         Ok(())
     }
 
@@ -341,50 +464,71 @@ impl CommittedLogState {
         if let Some(marker) = operation_marker(command) {
             self.committed_markers.insert(marker.to_owned());
         }
-        for write in &outcome.writes {
-            let StateWrite::Put {
-                column_family: ColumnFamily::Flow,
-                key,
-                value,
-            } = write
-            else {
-                continue;
-            };
-            let Ok(parsed) = parse_run_key(key) else {
-                continue;
-            };
-            match parsed.table {
-                RunTable::Attribute => {
-                    let (Ok(name), Ok(record)) = (
-                        String::from_utf8(parsed.suffix.to_vec()),
-                        AttributeRecord::decode(value.as_slice()),
-                    ) else {
-                        continue;
-                    };
-                    let wire = record
-                        .value
-                        .as_ref()
-                        .filter(|stored| {
-                            !matches!(stored.kind, Some(stored_value::Kind::HardDeleteObject(_)))
-                        })
-                        .and_then(|stored| wire_value(parsed.run_id, stored));
-                    if let Some(wire) = wire {
-                        self.attribute_values
-                            .entry((command.flow_id.clone(), name))
-                            .or_default()
-                            .insert(wire.encode_to_vec());
-                    }
-                }
-                RunTable::ChannelMessage => {
-                    if let Ok(record) = ChannelMessageRecord::decode(value.as_slice()) {
-                        self.channel_message_ids
-                            .insert((command.flow_id.clone(), record.message_id));
-                    }
-                }
-                _ => {}
-            }
-        }
     }
+}
+
+/// Whether some state in effect during `window` satisfies `matches`.
+fn is_state_in_window<T>(
+    history: &BTreeMap<u64, T>,
+    window: ReadWindow,
+    matches: impl Fn(&T) -> bool,
+) -> bool {
+    let at_floor = history.range(..=window.floor).next_back();
+    let during = (window.ceiling > window.floor)
+        .then(|| history.range(window.floor + 1..=window.ceiling))
+        .into_iter()
+        .flatten();
+    at_floor
+        .into_iter()
+        .chain(during)
+        .any(|(_, state)| matches(state))
+}
+
+/// Returns what GetAttributes and GetChannelMessages of `flow_id` return in the shadow state.
+fn read_state_of(
+    shadow: &ApplyChecker,
+    flow_id: &str,
+) -> Result<FlowReadState, InvariantViolation> {
+    let directory = shadow.view(flow_id, RunSelection::Only(&BTreeSet::new()))?;
+    let newest = directory
+        .directory
+        .as_ref()
+        .and_then(|directory| directory.runs.last())
+        .and_then(|run| RunId::from_slice(&run.run_id).ok());
+    let Some(run_id) = newest else {
+        return Ok(FlowReadState::default());
+    };
+    let view = shadow.view(flow_id, RunSelection::Only(&BTreeSet::from([run_id])))?;
+    let Some(run) = view.runs.get(&run_id).filter(|run| run.record.is_some()) else {
+        return Ok(FlowReadState::default());
+    };
+    let attributes = run
+        .attributes
+        .iter()
+        .filter_map(|(key, record)| {
+            let value = wire_value(run_id, record.value.as_ref()?)?;
+            Some((key.clone(), value.encode_to_vec()))
+        })
+        .collect();
+    let mut channel_messages: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
+    for record in &run.channel_messages {
+        let message = ChannelMessage {
+            channel_name: record.channel_name.clone(),
+            value: record
+                .value
+                .as_ref()
+                .and_then(|stored| wire_value(run_id, stored)),
+            message_id: record.message_id.clone(),
+        };
+        channel_messages
+            .entry(record.channel_name.clone())
+            .or_default()
+            .push(message.encode_to_vec());
+    }
+    Ok(FlowReadState {
+        attributes: Some(attributes),
+        channel_messages,
+    })
 }
 
 /// Names the first difference between two outcomes of one command.
@@ -455,5 +599,38 @@ impl CommittedCommandSink for ObservingCommandSink {
     fn finish_frame(&self, partition: PartitionId, position: &LogPosition) {
         self.log
             .finish_frame(&self.process_label, partition, position);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{ReadWindow, is_state_in_window};
+
+    fn window(floor: u64, ceiling: u64) -> ReadWindow {
+        ReadWindow { floor, ceiling }
+    }
+
+    #[test]
+    fn a_read_after_an_overwrite_must_not_return_the_overwritten_value() {
+        let history = BTreeMap::from([(1, "A"), (2, "B")]);
+        let reads = |observed: &str, read_window| {
+            is_state_in_window(&history, read_window, |state| *state == observed)
+        };
+        assert!(reads("A", window(1, 1)));
+        assert!(reads("A", window(1, 2)));
+        assert!(reads("B", window(1, 2)));
+        assert!(reads("B", window(5, 7)));
+        assert!(!reads("A", window(2, 2)));
+        assert!(!reads("A", window(2, 9)));
+        assert!(!reads("B", window(0, 1)));
+    }
+
+    #[test]
+    fn a_read_before_the_first_commit_matches_no_state() {
+        let history = BTreeMap::from([(3, "A")]);
+        assert!(!is_state_in_window(&history, window(0, 2), |state| *state == "A"));
+        assert!(is_state_in_window(&history, window(0, 3), |state| *state == "A"));
     }
 }

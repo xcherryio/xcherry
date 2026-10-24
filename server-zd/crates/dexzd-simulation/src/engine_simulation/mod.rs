@@ -94,7 +94,10 @@ pub struct EngineSimulationSummary {
     pub client_calls: BTreeMap<String, u64>,
     /// Client writes acknowledged and then found in the committed log.
     pub acknowledged_writes: u64,
-    /// Values client reads returned, each checked against committed state.
+    /// Client reads whose whole response matched the committed state at a generation their node
+    /// applied during the call.
+    pub checked_reads: u64,
+    /// Values those reads returned.
     pub checked_read_values: u64,
     /// Frames applied again after a recovery and compared with their first application.
     pub replayed_frames: u64,
@@ -143,6 +146,7 @@ impl EngineSimulationSummary {
         merge_counts(&mut self.applied_by_kind, &other.applied_by_kind);
         merge_counts(&mut self.client_calls, &other.client_calls);
         self.acknowledged_writes += other.acknowledged_writes;
+        self.checked_reads += other.checked_reads;
         self.checked_read_values += other.checked_read_values;
         self.replayed_frames += other.replayed_frames;
         self.state_comparisons += other.state_comparisons;

@@ -636,8 +636,11 @@ impl Simulation {
     }
 
     fn serve(&mut self, process: NodeProcess) {
-        self.serving_node
-            .serve(&process.process_label, process.registry.clone());
+        self.serving_node.serve(
+            &process.process_label,
+            process.registry.clone(),
+            Arc::clone(&process.local_store),
+        );
         self.serving = Some(process);
     }
 
@@ -763,6 +766,7 @@ impl Simulation {
             .lock()
             .expect("client records lock is not poisoned");
         summary.acknowledged_writes = records.acknowledged_writes.len() as u64;
+        summary.checked_reads = records.checked_reads;
         summary.checked_read_values = records.checked_read_values;
         summary.client_calls = records
             .outcomes

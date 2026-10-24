@@ -14,14 +14,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dexzd_api::{FlowOperationError, FlowOperations};
-use dexzd_engine::FlowRuntimeRegistry;
+use dexzd_engine::{EngineLocalStore, FlowRuntimeRegistry};
 use dexzd_keyspace::TenantId;
 use dexzd_protocol::dex::{GetAttributesRequest, GetChannelMessagesRequest};
-use prost::Message;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-use crate::engine_simulation::committed_log::CommittedLog;
+use crate::engine_simulation::committed_log::{CommittedLog, ReadWindow};
 use crate::engine_simulation::event_trace::EventTrace;
 use crate::engine_simulation::workload::{
     OPERATION_MARKER_PREFIX, delete_message_request, publish_request, rpc_request,
@@ -37,26 +36,43 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Calls of one operation, including retries with the same request ID.
 const MAX_CALLS_PER_OPERATION: u32 = 4;
 
+/// What clients reach of the serving process: its label, registry, and local store.
+#[derive(Clone)]
+struct ServingProcess {
+    process_label: String,
+    registry: FlowRuntimeRegistry,
+    local_store: Arc<EngineLocalStore>,
+}
+
 /// The node process that currently serves clients.
 #[derive(Clone, Default)]
 pub(crate) struct ServingNode {
-    serving: Arc<Mutex<Option<(String, FlowRuntimeRegistry)>>>,
+    serving: Arc<Mutex<Option<ServingProcess>>>,
 }
 
 impl ServingNode {
-    pub(crate) fn serve(&self, process_label: &str, registry: FlowRuntimeRegistry) {
-        *self.lock() = Some((process_label.to_owned(), registry));
+    pub(crate) fn serve(
+        &self,
+        process_label: &str,
+        registry: FlowRuntimeRegistry,
+        local_store: Arc<EngineLocalStore>,
+    ) {
+        *self.lock() = Some(ServingProcess {
+            process_label: process_label.to_owned(),
+            registry,
+            local_store,
+        });
     }
 
     pub(crate) fn clear(&self) {
         *self.lock() = None;
     }
 
-    fn current(&self) -> Option<(String, FlowRuntimeRegistry)> {
+    fn current(&self) -> Option<ServingProcess> {
         self.lock().clone()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(String, FlowRuntimeRegistry)>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<ServingProcess>> {
         self.serving
             .lock()
             .expect("serving node lock is not poisoned")
@@ -78,12 +94,15 @@ pub(crate) struct AcknowledgedWrite {
 pub(crate) struct ClientRecords {
     pub(crate) acknowledged_writes: Vec<AcknowledgedWrite>,
     pub(crate) outcomes: BTreeMap<(&'static str, &'static str), u64>,
+    /// Reads whose whole response was checked against committed state.
+    pub(crate) checked_reads: u64,
     pub(crate) checked_read_values: u64,
     pub(crate) first_violation: Option<InvariantViolation>,
 }
 
 enum CallOutcome<T> {
-    Succeeded(T),
+    /// The call succeeded within the window of generations its node had applied.
+    Succeeded(T, ReadWindow),
     Rejected,
     /// Every call timed out or was unavailable; the write may or may not have happened.
     Unknown,
@@ -147,7 +166,7 @@ impl SimulatedClient {
                         }
                     })
                     .await;
-                if let CallOutcome::Succeeded(response) = outcome {
+                if let CallOutcome::Succeeded(response, _) = outcome {
                     self.acknowledge(&marker, "StartFlow", flow_id, Some(response.run_id));
                 }
             }
@@ -162,7 +181,7 @@ impl SimulatedClient {
                         }
                     })
                     .await;
-                if let CallOutcome::Succeeded(()) = outcome {
+                if let CallOutcome::Succeeded((), _) = outcome {
                     self.acknowledge(&marker, "SetAttributes", flow_id, None);
                 }
             }
@@ -181,7 +200,7 @@ impl SimulatedClient {
                         }
                     })
                     .await;
-                if let CallOutcome::Succeeded(()) = outcome {
+                if let CallOutcome::Succeeded((), _) = outcome {
                     self.acknowledge(&marker, "PublishToChannel", flow_id, None);
                 }
             }
@@ -196,7 +215,7 @@ impl SimulatedClient {
                         }
                     })
                     .await;
-                if let CallOutcome::Succeeded(()) = outcome {
+                if let CallOutcome::Succeeded((), _) = outcome {
                     self.acknowledge(&marker, "StopFlow", flow_id, None);
                 }
             }
@@ -210,7 +229,7 @@ impl SimulatedClient {
                         }
                     })
                     .await;
-                if let CallOutcome::Succeeded(_) = outcome {
+                if let CallOutcome::Succeeded(..) = outcome {
                     self.acknowledge(&marker, "InvokeRpc", flow_id, None);
                 }
             }
@@ -239,12 +258,12 @@ impl SimulatedClient {
                 }
             })
             .await;
-        if let CallOutcome::Succeeded(()) = outcome {
+        if let CallOutcome::Succeeded((), _) = outcome {
             self.acknowledge(marker, "DeleteChannelMessage", flow_id, None);
         }
     }
 
-    /// Every value a read returns must have been committed: reads never show speculation.
+    /// A read returns the committed state at a generation its node applied during the call.
     async fn read_attributes(&mut self, flow_id: &str) {
         let request = GetAttributesRequest {
             flow_id: flow_id.to_owned(),
@@ -259,25 +278,22 @@ impl SimulatedClient {
                 }
             })
             .await;
-        let CallOutcome::Succeeded(response) = outcome else {
+        let CallOutcome::Succeeded(response, window) = outcome else {
             return;
         };
-        for attribute in response.attributes {
-            let encoded = attribute.value.unwrap_or_default().encode_to_vec();
-            let is_committed =
-                self.committed_log
-                    .was_attribute_committed(flow_id, &attribute.key, &encoded);
-            self.check_read(flow_id, is_committed, || {
-                format!(
-                    "GetAttributes of Flow {flow_id} returned Attribute {} with a value no \
-                     committed command wrote",
-                    attribute.key
-                )
-            });
-        }
+        let checked =
+            self.committed_log
+                .check_attribute_read(flow_id, window, &response.attributes);
+        self.check_read(flow_id, response.attributes.len(), checked, |reason| {
+            format!(
+                "GetAttributes of Flow {flow_id} returned {:?}, which is not the committed state \
+                 its node applied during the call: {reason}",
+                response.attributes
+            )
+        });
     }
 
-    /// Returns the Channel name and ID of each message read, after checking they were committed.
+    /// Returns the Channel name and ID of each message read, after checking them like Attributes.
     async fn read_channel_messages(&mut self, flow_id: &str) -> Option<Vec<(String, String)>> {
         let channel_name = CHANNEL_NAMES[self.rng.random_range(0..CHANNEL_NAMES.len())];
         let request = GetChannelMessagesRequest {
@@ -294,36 +310,51 @@ impl SimulatedClient {
                 }
             })
             .await;
-        let CallOutcome::Succeeded(response) = outcome else {
+        let CallOutcome::Succeeded(response, window) = outcome else {
             return None;
         };
-        let mut messages = Vec::new();
-        for message in response.messages {
-            let is_committed = self
-                .committed_log
-                .was_message_committed(flow_id, &message.message_id);
-            self.check_read(flow_id, is_committed, || {
-                format!(
-                    "GetChannelMessages of Flow {flow_id} returned message {} that no committed \
-                     command wrote",
-                    message.message_id
-                )
-            });
-            messages.push((message.channel_name, message.message_id));
-        }
-        Some(messages)
+        let checked = self.committed_log.check_channel_read(
+            flow_id,
+            channel_name,
+            window,
+            &response.messages,
+        );
+        self.check_read(flow_id, response.messages.len(), checked, |reason| {
+            format!(
+                "GetChannelMessages of Flow {flow_id} Channel {channel_name} returned {:?}, which \
+                 is not the committed state its node applied during the call: {reason}",
+                response.messages
+            )
+        });
+        Some(
+            response
+                .messages
+                .into_iter()
+                .map(|message| (message.channel_name, message.message_id))
+                .collect(),
+        )
     }
 
-    fn check_read(&self, flow_id: &str, is_committed: bool, describe: impl FnOnce() -> String) {
+    fn check_read(
+        &self,
+        flow_id: &str,
+        value_count: usize,
+        checked: Result<(), String>,
+        describe: impl FnOnce(String) -> String,
+    ) {
         let mut records = self
             .records
             .lock()
             .expect("client records lock is not poisoned");
-        records.checked_read_values += 1;
-        if is_committed || records.first_violation.is_some() {
+        records.checked_reads += 1;
+        records.checked_read_values += value_count as u64;
+        let Err(reason) = checked else {
+            return;
+        };
+        if records.first_violation.is_some() {
             return;
         }
-        let detail = describe();
+        let detail = describe(reason);
         self.trace.record(&format!(
             "{} violation on Flow {flow_id}: {detail}",
             self.client_label
@@ -362,11 +393,13 @@ impl SimulatedClient {
         Fut: Future<Output = Result<T, FlowOperationError>>,
     {
         for call_number in 1..=MAX_CALLS_PER_OPERATION {
-            let Some((process_label, registry)) = self.serving.current() else {
+            let Some(serving) = self.serving.current() else {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
             };
-            let result = tokio::time::timeout(CALL_TIMEOUT, invoke(registry)).await;
+            let process_label = serving.process_label.clone();
+            let floor = self.applied_generation(&serving, flow_id);
+            let result = tokio::time::timeout(CALL_TIMEOUT, invoke(serving.registry.clone())).await;
             let (outcome_name, detail) = match &result {
                 Ok(Ok(_)) => ("ok", String::new()),
                 Ok(Err(error @ FlowOperationError::Unavailable { .. })) => {
@@ -388,7 +421,10 @@ impl SimulatedClient {
                 .entry((operation, outcome_name))
                 .or_default() += 1;
             match result {
-                Ok(Ok(value)) => return CallOutcome::Succeeded(value),
+                Ok(Ok(value)) => {
+                    let ceiling = self.applied_generation(&serving, flow_id);
+                    return CallOutcome::Succeeded(value, ReadWindow { floor, ceiling });
+                }
                 Ok(Err(FlowOperationError::Unavailable { .. })) | Err(_) => {
                     let backoff = Duration::from_millis(self.rng.random_range(100..2_000));
                     tokio::time::sleep(backoff).await;
@@ -397,5 +433,27 @@ impl SimulatedClient {
             }
         }
         CallOutcome::Unknown
+    }
+
+    /// Returns the generation the serving process applied for `flow_id`; a read error is a
+    /// violation.
+    fn applied_generation(&self, serving: &ServingProcess, flow_id: &str) -> u64 {
+        match self
+            .committed_log
+            .applied_generation(&serving.local_store, flow_id)
+        {
+            Ok(generation) => generation,
+            Err(error) => {
+                let mut records = self
+                    .records
+                    .lock()
+                    .expect("client records lock is not poisoned");
+                if records.first_violation.is_none() {
+                    records.first_violation =
+                        Some(InvariantViolation::new("local-store-read", error));
+                }
+                0
+            }
+        }
     }
 }
