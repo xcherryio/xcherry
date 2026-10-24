@@ -16,7 +16,7 @@ use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::{LogPosition, Manifest, SnapshotManifest, SnapshotReference};
 use dexzd_storage::{LocalReadView, RestoredLocalStore, SnapshotIdentity, create_snapshot};
 use tokio::sync::Mutex;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
@@ -52,12 +52,31 @@ impl SnapshotService {
         let mut last_attempt = Instant::now();
         let mut is_retrying = false;
         let mut bytes_at_last_snapshot = self.committed_log_bytes();
+        let cleanup_interval = self
+            .config
+            .deletion_delay
+            .min(std::time::Duration::from_secs(60))
+            .max(std::time::Duration::from_secs(1));
+        let mut snapshot_timer = tokio::time::interval(self.config.check_interval);
+        snapshot_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut cleanup_timer = tokio::time::interval(cleanup_interval);
+        cleanup_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        cleanup_timer.tick().await;
         loop {
-            tokio::select! {
+            let should_check_snapshot = tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return,
                 _ = self.fence.state.wait_stopped() => return,
-                () = tokio::time::sleep(self.config.check_interval) => {}
+                _ = cleanup_timer.tick() => {
+                    if let Err(error) = self.clean_orphans().await {
+                        tracing::warn!(error = %error, "snapshot orphan cleanup failed; retrying later");
+                    }
+                    false
+                }
+                _ = snapshot_timer.tick() => true,
+            };
+            if !should_check_snapshot {
+                continue;
             }
             let committed_bytes = self.committed_log_bytes();
             let elapsed = last_attempt.elapsed();
@@ -83,6 +102,29 @@ impl SnapshotService {
                 }
             }
         }
+    }
+
+    async fn clean_orphans(&self) -> Result<(), SnapshotError> {
+        let cluster_manifest = self
+            .fence
+            .update_manifest(|_| ManifestChange::Unchanged)
+            .await?;
+        let referenced_keys: BTreeSet<String> = cluster_manifest
+            .partitions
+            .iter()
+            .filter_map(|partition| partition.snapshot.as_ref())
+            .map(|snapshot| snapshot.manifest_key.clone())
+            .collect();
+        let mut catalog = self.catalog.lock().await;
+        self.retention
+            .run_once(
+                &mut catalog,
+                &referenced_keys,
+                &self.fence,
+                self.clock.now_unix_micros(),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Uploads a snapshot, points every partition at it, and deletes covered objects.

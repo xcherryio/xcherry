@@ -431,3 +431,112 @@ async fn retention_limits_snapshot_listing_pages_per_run() {
     );
     test.node.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn idle_orphan_cleanup_reconsiders_a_file_after_the_delay() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::from_secs(3);
+    let test = cluster.start_with(&config).await.expect("node starts");
+    test.commit_prompt("idle-orphan-flow", 1).await;
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    let orphan_key = "snapshot/node-a/idle/files/orphan";
+    cluster
+        .object_store
+        .put(orphan_key, Bytes::new(), WriteCondition::CreateOnly)
+        .await
+        .expect("upload orphan");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(orphan_key)
+            .await
+            .expect("read marked orphan")
+            .is_some()
+    );
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(orphan_key)
+            .await
+            .expect("read swept orphan")
+            .is_none()
+    );
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
+    test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_orphan_cleanup_finishes_paginated_scans() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::ZERO;
+    let test = cluster.start_with(&config).await.expect("node starts");
+    for index in 0..10_001 {
+        let key = format!("snapshot/node-a/zzzz/files/idle-{index:05}");
+        cluster
+            .object_store
+            .put(&key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload orphan");
+    }
+    test.commit_prompt("idle-pagination-flow", 1).await;
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    let first_orphan = "snapshot/node-a/zzzz/files/idle-00000";
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan)
+            .await
+            .expect("read orphan")
+            .is_some()
+    );
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan)
+            .await
+            .expect("read swept orphan")
+            .is_none()
+    );
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
+    test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_orphan_cleanup_stops_before_deleting_a_marked_file() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::from_secs(3);
+    let test = cluster.start_with(&config).await.expect("node starts");
+    test.commit_prompt("stopped-orphan-flow", 1).await;
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    let orphan_key = "snapshot/node-a/stopped/files/orphan";
+    cluster
+        .object_store
+        .put(orphan_key, Bytes::new(), WriteCondition::CreateOnly)
+        .await
+        .expect("upload orphan");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(orphan_key)
+            .await
+            .expect("read marked orphan")
+            .is_some()
+    );
+    test.node.shutdown().await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(orphan_key)
+            .await
+            .expect("read stopped orphan")
+            .is_some()
+    );
+}
