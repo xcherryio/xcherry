@@ -24,6 +24,7 @@ use dexzd_protocol::dexzd::v1::{
 use dexzd_request_validation::{
     ClientRequest, WorkerResponse, validate_client_request, validate_worker_response,
 };
+use prost::Message;
 
 use crate::runtime::client_operations::hard_delete_uploads::hard_delete_references;
 use crate::runtime::client_operations::request_fingerprint::request_fingerprint;
@@ -93,6 +94,16 @@ impl FlowRuntimeRegistry {
         };
         let run = snapshot.run.clone();
         let worker_request = self.complete_rpc_snapshot(&flow, snapshot).await?;
+        if worker_request.encoded_len() > self.inner.config.max_worker_rpc_request_bytes {
+            return Err(RuntimeError::rejected(
+                grpc_code::RESOURCE_EXHAUSTED,
+                ErrorSubStatus::Uncategorized,
+                format!(
+                    "RPC Worker request exceeds the {}-byte gRPC message limit",
+                    self.inner.config.max_worker_rpc_request_bytes
+                ),
+            ));
+        }
         let timeout = if request.timeout_seconds > 0 {
             std::time::Duration::from_secs(u64::from(request.timeout_seconds.unsigned_abs()))
         } else {
