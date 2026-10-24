@@ -27,7 +27,8 @@ use dexzd_protocol::dexzd::v1::{
 };
 
 use crate::runtime::read_operations::state_rows::{
-    WireValue, decode_row, read_directory, read_run, read_table_value, scan_run_rows, wire_value,
+    WireValue, decode_row, read_directory, read_run, read_table_value, response_value,
+    scan_run_rows, wire_value,
 };
 use crate::runtime::{FlowAddress, FlowRuntimeRegistry, RuntimeError};
 
@@ -37,8 +38,8 @@ pub(crate) const WORK_QUEUE_PERMISSIONS_KEY: &str = "DexWorkQueuePermissions";
 impl FlowRuntimeRegistry {
     /// Returns the requested Attributes of a run, sorted by key; missing keys are omitted.
     ///
-    /// Values above the inline threshold are returned as value references; hard-delete values
-    /// are always returned as content and omitted once deleted.
+    /// Values above the inline threshold are returned as value references unless hydration is
+    /// configured; hard-delete values are always returned as content and omitted once deleted.
     pub async fn get_attributes(
         &self,
         tenant_id: TenantId,
@@ -49,16 +50,9 @@ impl FlowRuntimeRegistry {
         }
         self.check_running()?;
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
-        let (run_id, records) = self.read_attribute_records(&flow, &request)?;
-        let mut attributes = Vec::with_capacity(records.len());
-        for (key, record) in records {
-            let Some(value) = record
-                .value
-                .as_ref()
-                .and_then(|stored| wire_value(stored, run_id))
-            else {
-                continue;
-            };
+        let (run_id, values) = self.read_attribute_values(&flow, &request)?;
+        let mut attributes = Vec::with_capacity(values.len());
+        for (key, value) in values {
             let value = match value {
                 WireValue::Value(value) => Some(value),
                 WireValue::HardDeleteObject(object) => {
@@ -77,6 +71,8 @@ impl FlowRuntimeRegistry {
     }
 
     /// Returns every pending message of one Channel of a run, oldest first.
+    ///
+    /// Values above the inline threshold are value references unless hydration is configured.
     pub async fn get_channel_messages(
         &self,
         tenant_id: TenantId,
@@ -100,19 +96,28 @@ impl FlowRuntimeRegistry {
             RunTable::ChannelMessage,
             &suffix_prefix,
         )?;
-        let messages = rows
-            .into_iter()
-            .map(|(_, record)| ChannelMessage {
-                value: record.value.as_ref().and_then(|stored| {
-                    match wire_value(stored, run.run_id)? {
-                        WireValue::Value(value) => Some(value),
-                        WireValue::HardDeleteObject(_) => None,
-                    }
-                }),
+        let is_hydrating = self.inner.config.hydrate_value_references;
+        let mut messages = Vec::with_capacity(rows.len());
+        for (_, record) in rows {
+            let value = match record.value.as_ref() {
+                Some(stored) => response_value(
+                    committed.as_ref(),
+                    context.flow_hash,
+                    run.run_id,
+                    stored,
+                    is_hydrating,
+                )?,
+                None => None,
+            };
+            messages.push(ChannelMessage {
+                value: match value {
+                    Some(WireValue::Value(value)) => Some(value),
+                    Some(WireValue::HardDeleteObject(_)) | None => None,
+                },
                 channel_name: record.channel_name,
                 message_id: record.message_id,
-            })
-            .collect();
+            });
+        }
         Ok(GetChannelMessagesResponse { messages })
     }
 
@@ -225,6 +230,7 @@ impl FlowRuntimeRegistry {
             self.flow_context(&flow),
             &flow,
             &request,
+            self.inner.config.hydrate_value_references,
         )
     }
 
@@ -245,11 +251,13 @@ impl FlowRuntimeRegistry {
         )
     }
 
-    fn read_attribute_records(
+    /// Returns the run and the wire values of the requested Attributes, sorted by key, read from
+    /// one committed view.
+    fn read_attribute_values(
         &self,
         flow: &FlowAddress,
         request: &GetAttributesRequest,
-    ) -> Result<(RunId, BTreeMap<String, AttributeRecord>), RuntimeError> {
+    ) -> Result<(RunId, Vec<(String, WireValue)>), RuntimeError> {
         let context = self.flow_context(flow);
         let committed = self.inner.dependencies.committer.committed_view()?;
         let state = committed.as_ref();
@@ -304,7 +312,19 @@ impl FlowRuntimeRegistry {
                 );
             }
         }
-        Ok((run.run_id, records))
+        let is_hydrating = self.inner.config.hydrate_value_references;
+        let mut values = Vec::with_capacity(records.len());
+        for (key, record) in records {
+            let Some(stored) = record.value.as_ref() else {
+                continue;
+            };
+            if let Some(value) =
+                response_value(state, context.flow_hash, run.run_id, stored, is_hydrating)?
+            {
+                values.push((key, value));
+            }
+        }
+        Ok((run.run_id, values))
     }
 
     /// Reads a hard-delete value, retrying once with the current object after an overwrite (plan 10.3).

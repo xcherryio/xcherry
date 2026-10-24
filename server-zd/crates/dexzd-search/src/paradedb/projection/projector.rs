@@ -18,7 +18,9 @@ use thiserror::Error;
 use tokio_postgres::Transaction;
 use tokio_postgres::types::{ToSql, Type};
 
-use super::super::search_backend::{ParadeDbSearchBackend, is_connection_error};
+use super::super::search_backend::{
+    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, is_connection_error,
+};
 use super::super::{SearchRow, SqlStatement, upsert_statement};
 use super::changes::{SearchDocumentChange, decode_search_index_key};
 use crate::SearchError;
@@ -136,18 +138,30 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = slot
-                .client
-                .query_typed_opt(
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                slot.client.query_typed_opt(
                     "SELECT applied_node_id, applied_incarnation, applied_seq, applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer",
                     &[(&partition_number as &(dyn ToSql + Sync), Type::INT4)],
-                )
-                .await
-                .map_err(|source| database_error("read progress from", source))
-                .and_then(|row| row.map(|row| position_from_row(&row)).transpose().map(Option::flatten));
+                ),
+            )
+            .await;
+            let result = match result {
+                Ok(result) => result
+                    .map_err(|source| database_error("read progress from", source))
+                    .and_then(|row| {
+                        row.map(|row| position_from_row(&row))
+                            .transpose()
+                            .map(Option::flatten)
+                    }),
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("read progress from"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -169,17 +183,27 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = apply_batch_transaction(
-                &mut slot.client,
-                partition_id,
-                previous_position,
-                applied_position,
-                changes,
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                apply_batch_transaction(
+                    &mut slot.client,
+                    partition_id,
+                    previous_position,
+                    applied_position,
+                    changes,
+                ),
             )
             .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("apply batch to"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -201,16 +225,26 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = rebuild_transaction(
-                &mut slot.client,
-                partition_id,
-                applied_position,
-                committed_view.clone(),
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                rebuild_transaction(
+                    &mut slot.client,
+                    partition_id,
+                    applied_position,
+                    committed_view.clone(),
+                ),
             )
             .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("rebuild partition in"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -645,6 +679,12 @@ fn is_replay(stored: Option<&LogPosition>, offered: &LogPosition) -> bool {
 
 fn database_error(operation: &'static str, source: tokio_postgres::Error) -> ProjectionError {
     ProjectionError::Database { operation, source }
+}
+
+fn operation_timeout(operation: &'static str) -> ProjectionError {
+    ProjectionError::Connection(SearchError::Unavailable(format!(
+        "{operation} ParadeDB projection timed out after {DATABASE_OPERATION_TIMEOUT:?}"
+    )))
 }
 
 fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {

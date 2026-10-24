@@ -125,3 +125,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Compare ParadeDB and builtin search
         run: cargo test -p dexzd-search paradedb::integration::paradedb_matches_builtin_evaluator -- --exact
+      - name: Serve with ParadeDB search
+        run: cargo test -p dexzd-server --test serve_process paradedb_search_projects_commits_and_rebuilds_on_startup -- --exact
+      - name: Recover ParadeDB search after an outage
+        run: cargo test -p dexzd-server --test serve_process paradedb_outage_overflows_the_queue_and_rebuilds_every_committed_write -- --exact

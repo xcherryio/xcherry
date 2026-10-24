@@ -29,6 +29,9 @@ use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 
 use super::search_result::response_entry;
 
+pub(super) const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Waits for an application-defined projection watermark before reading search results.
 #[async_trait]
 pub trait ProjectionVisibilityWait: Send + Sync {
@@ -81,29 +84,40 @@ impl ParadeDbSearchBackend {
 
     async fn query(&self, statement: &SqlStatement) -> Result<Vec<Row>, SearchError> {
         let mut slot = self.lock_next_slot().await;
-        if slot.client.is_closed() {
+        if slot.is_disconnected() {
             slot.reconnect(&self.configuration).await?;
         }
-        match slot
-            .client
-            .query_typed(&statement.sql, &statement.typed_parameter_refs())
-            .await
-        {
-            Ok(rows) => Ok(rows),
-            Err(error) if is_connection_error(&error) => {
-                slot.reconnect(&self.configuration).await?;
+        for attempt in 0..2 {
+            match tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
                 slot.client
-                    .query_typed(&statement.sql, &statement.typed_parameter_refs())
-                    .await
-                    .map_err(|error| {
-                        classify_database_error("query ParadeDB visibility runs", error)
-                    })
+                    .query_typed(&statement.sql, &statement.typed_parameter_refs()),
+            )
+            .await
+            {
+                Ok(Ok(rows)) => return Ok(rows),
+                Ok(Err(error)) if is_connection_error(&error) && attempt == 0 => {
+                    slot.reconnect(&self.configuration).await?;
+                }
+                Ok(Err(error)) => {
+                    return Err(classify_database_error(
+                        "query ParadeDB visibility runs",
+                        error,
+                    ));
+                }
+                Err(_) => {
+                    slot.invalidate();
+                    if attempt == 0 {
+                        slot.reconnect(&self.configuration).await?;
+                    } else {
+                        return Err(SearchError::Unavailable(format!(
+                            "query ParadeDB visibility runs timed out after {DATABASE_OPERATION_TIMEOUT:?}"
+                        )));
+                    }
+                }
             }
-            Err(error) => Err(classify_database_error(
-                "query ParadeDB visibility runs",
-                error,
-            )),
         }
+        unreachable!("the query returns on its second attempt")
     }
 
     pub(super) async fn lock_next_slot(&self) -> PooledConnectionSlot<'_> {
@@ -168,14 +182,24 @@ impl Drop for PooledConnectionSlot<'_> {
 pub(super) struct ConnectionSlot {
     pub(super) client: Client,
     connection_task: JoinHandle<()>,
+    is_invalidated: bool,
 }
 
 impl ConnectionSlot {
     pub(super) async fn open(configuration: &Config) -> Result<Self, SearchError> {
-        let (client, connection) = configuration
-            .connect(NoTls)
-            .await
-            .map_err(|error| classify_database_error("connect to ParadeDB", error))?;
+        let connect_timeout = configuration
+            .get_connect_timeout()
+            .copied()
+            .unwrap_or(DATABASE_CONNECT_TIMEOUT);
+        let (client, connection) =
+            tokio::time::timeout(connect_timeout, configuration.connect(NoTls))
+                .await
+                .map_err(|_| {
+                    SearchError::Unavailable(format!(
+                        "connect to ParadeDB timed out after {connect_timeout:?}"
+                    ))
+                })?
+                .map_err(|error| classify_database_error("connect to ParadeDB", error))?;
         let connection_task = tokio::spawn(async move {
             if let Err(error) = connection.await {
                 tracing::error!(%error, "ParadeDB search connection closed");
@@ -184,6 +208,7 @@ impl ConnectionSlot {
         Ok(Self {
             client,
             connection_task,
+            is_invalidated: false,
         })
     }
 
@@ -191,6 +216,15 @@ impl ConnectionSlot {
         let replacement = Self::open(configuration).await?;
         *self = replacement;
         Ok(())
+    }
+
+    pub(super) fn is_disconnected(&self) -> bool {
+        self.is_invalidated || self.client.is_closed() || self.connection_task.is_finished()
+    }
+
+    pub(super) fn invalidate(&mut self) {
+        self.is_invalidated = true;
+        self.connection_task.abort();
     }
 }
 
@@ -321,5 +355,68 @@ fn schema_search_error(error: SchemaError) -> SearchError {
     match error {
         SchemaError::Database { operation, source } => classify_database_error(operation, source),
         SchemaError::NewerVersion { .. } => SearchError::Internal(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::ConnectionSlot;
+
+    #[tokio::test]
+    async fn reconnects_after_a_stalled_postgres_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let mut connections = Vec::new();
+            for connection_number in 0..3 {
+                let (mut stream, _) = listener.accept().await.expect("client connects");
+                let startup_length = stream.read_u32().await.expect("startup has a length");
+                let mut startup = vec![0; startup_length as usize - 4];
+                stream
+                    .read_exact(&mut startup)
+                    .await
+                    .expect("client sends startup parameters");
+                if connection_number != 1 {
+                    stream
+                        .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+                        .await
+                        .expect("server accepts startup");
+                }
+                connections.push(stream);
+            }
+            pending::<()>().await;
+        });
+        let mut configuration = tokio_postgres::Config::new();
+        configuration
+            .host("127.0.0.1")
+            .port(port)
+            .user("test")
+            .dbname("test")
+            .connect_timeout(Duration::from_secs(1));
+
+        let mut slot = ConnectionSlot::open(&configuration)
+            .await
+            .expect("initial connection opens");
+        slot.invalidate();
+        assert!(slot.reconnect(&configuration).await.is_err());
+        assert!(slot.is_disconnected());
+        slot.reconnect(&configuration)
+            .await
+            .expect("a fresh connection replaces the failed slot");
+        assert!(!slot.is_disconnected());
+        server.abort();
+        let error = server.await.expect_err("fake server is aborted");
+        assert!(error.is_cancelled());
     }
 }

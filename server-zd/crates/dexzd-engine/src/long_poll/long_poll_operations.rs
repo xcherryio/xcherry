@@ -25,16 +25,34 @@ use tokio::time::Instant;
 
 use crate::long_poll::WaitInterest;
 use crate::runtime::read_operations::state_rows::{
-    ResolvedRun, WireValue, decode_row, is_closed_status, read_run, wire_value,
+    ResolvedRun, WireValue, decode_row, is_closed_status, read_run, response_value,
 };
 use crate::runtime::{FlowAddress, FlowRuntimeRegistry, RuntimeError, grpc_code};
+
+/// The Go Server's WaitForFlow message when the wait time or the client deadline ends first.
+pub const WAIT_FOR_FLOW_TIMEOUT_MESSAGE: &str =
+    "flow is still running and waiting exceeded the timeout";
+/// The Go Server's WaitForHistoryEvent message when the wait ends without a new event.
+pub const WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE: &str = "history long poll exceeded the deadline";
+/// The Go Server's message when a step completion or Attribute wait call ends before its request timeout.
+pub const WAIT_CALL_DEADLINE_MESSAGE: &str = "context deadline exceeded";
+/// The Go Server's WaitForStepCompletion message when `request_timeout_seconds` passes.
+pub const STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE: &str = "step completion request timed out";
+/// The Go Server's WaitForAttribute message when `request_timeout_seconds` passes.
+pub const ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE: &str = "attribute request timed out";
 
 /// When a long-poll call gives up.
 struct LongPollDeadline {
     /// End of this call; the client polls again with the same request ID.
     call_deadline: Instant,
     /// End of the whole request; reported as `REQUEST_TIMEOUT`.
-    request_deadline: Option<Instant>,
+    request_deadline: Option<RequestDeadline>,
+}
+
+/// The end of a whole wait request and the message reported when it passes.
+struct RequestDeadline {
+    expires_at: Instant,
+    timeout_message: &'static str,
 }
 
 impl FlowRuntimeRegistry {
@@ -57,17 +75,20 @@ impl FlowRuntimeRegistry {
             call_deadline: Instant::now() + self.wait_time(request.wait_time_seconds),
             request_deadline: None,
         };
+        let is_hydrating = self.inner.config.hydrate_value_references;
         self.long_poll(
             &flow,
             WaitInterest::FlowClose,
             &deadline,
-            "flow is still running and waiting exceeded the timeout",
+            WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
             |state, context| {
                 let run = read_run(state, context, &flow, &request.run_id)?;
                 if !is_closed_status(run.record.status) {
                     return Ok(None);
                 }
-                Ok(Some(flow_result(&run, request.needs_results)))
+                let result =
+                    flow_result(state, context, &run, request.needs_results, is_hydrating)?;
+                Ok(Some(result))
             },
         )
         .await
@@ -98,12 +119,15 @@ impl FlowRuntimeRegistry {
             })?;
         let step_execution_id = format!("{}-{step_execution_number}", request.step_type);
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
-        let deadline = self.request_deadline(request.request_timeout_seconds);
+        let deadline = self.request_deadline(
+            request.request_timeout_seconds,
+            STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,
+        );
         self.long_poll(
             &flow,
             WaitInterest::StepExecution(step_execution_id),
             &deadline,
-            "step completion is still pending; poll again",
+            WAIT_CALL_DEADLINE_MESSAGE,
             |state, context| {
                 let run = read_run(state, context, &flow, "")?;
                 let completion = step_completion_state(
@@ -145,12 +169,15 @@ impl FlowRuntimeRegistry {
             .clone()
             .ok_or_else(|| RuntimeError::invalid_argument("attribute match is required"))?;
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
-        let deadline = self.request_deadline(request.request_timeout_seconds);
+        let deadline = self.request_deadline(
+            request.request_timeout_seconds,
+            ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE,
+        );
         self.long_poll(
             &flow,
             WaitInterest::Attribute(attribute_match.key.clone()),
             &deadline,
-            "attribute did not match yet; poll again",
+            WAIT_CALL_DEADLINE_MESSAGE,
             |state, context| {
                 let run = read_run(state, context, &flow, "")?;
                 if is_closed_status(run.record.status) {
@@ -218,7 +245,7 @@ impl FlowRuntimeRegistry {
             &flow,
             WaitInterest::HistoryEvent(next_event_id),
             &deadline,
-            "history long poll exceeded the deadline",
+            WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
             |state, context| {
                 let run = read_run(state, context, &flow, &request.run_id)?;
                 let last_event_id = run.record.next_event_id - 1;
@@ -248,8 +275,8 @@ impl FlowRuntimeRegistry {
         self.check_running()?;
         let context = self.flow_context(flow);
         let registration = self.inner.waiters.register(flow, interest)?;
-        let call_deadline = match deadline.request_deadline {
-            Some(request_deadline) => request_deadline.min(deadline.call_deadline),
+        let call_deadline = match &deadline.request_deadline {
+            Some(request_deadline) => request_deadline.expires_at.min(deadline.call_deadline),
             None => deadline.call_deadline,
         };
         let halted = self.halted();
@@ -270,14 +297,15 @@ impl FlowRuntimeRegistry {
             tokio::select! {
                 () = registration.changed() => {}
                 () = tokio::time::sleep_until(call_deadline) => {
-                    let is_request_expired = deadline
+                    let expired_request = deadline
                         .request_deadline
-                        .is_some_and(|request_deadline| request_deadline <= call_deadline);
-                    return Err(if is_request_expired {
+                        .as_ref()
+                        .filter(|request_deadline| request_deadline.expires_at <= call_deadline);
+                    return Err(if let Some(expired_request) = expired_request {
                         RuntimeError::rejected(
                             grpc_code::DEADLINE_EXCEEDED,
                             ErrorSubStatus::RequestTimeout,
-                            "request timed out",
+                            expired_request.timeout_message,
                         )
                     } else {
                         RuntimeError::rejected(
@@ -300,20 +328,32 @@ impl FlowRuntimeRegistry {
             .min(self.inner.config.long_poll_max_wait)
     }
 
-    fn request_deadline(&self, request_timeout_seconds: i32) -> LongPollDeadline {
+    fn request_deadline(
+        &self,
+        request_timeout_seconds: i32,
+        timeout_message: &'static str,
+    ) -> LongPollDeadline {
         let now = Instant::now();
         LongPollDeadline {
             call_deadline: now + self.inner.config.long_poll_default_wait,
-            request_deadline: (request_timeout_seconds > 0).then(|| {
-                now + Duration::from_secs(u64::from(request_timeout_seconds.unsigned_abs()))
+            request_deadline: (request_timeout_seconds > 0).then(|| RequestDeadline {
+                expires_at: now
+                    + Duration::from_secs(u64::from(request_timeout_seconds.unsigned_abs())),
+                timeout_message,
             }),
         }
     }
 }
 
 /// Returns the run's result; Step outputs above the inline threshold are value references that the
-/// client loads with LoadBlobs.
-fn flow_result(run: &ResolvedRun, needs_results: bool) -> FlowResult {
+/// client loads with LoadBlobs, unless `is_hydrating` loads them here.
+fn flow_result(
+    state: &dyn FlowStateReader,
+    context: ApplyContext,
+    run: &ResolvedRun,
+    needs_results: bool,
+    is_hydrating: bool,
+) -> Result<FlowResult, RuntimeError> {
     let close = run.record.close.clone().unwrap_or_default();
     let mut result = FlowResult {
         flow_status: run.record.status,
@@ -323,21 +363,23 @@ fn flow_result(run: &ResolvedRun, needs_results: bool) -> FlowResult {
     };
     if needs_results && run.record.status == FlowStatus::Completed as i32 {
         for output in close.results {
-            let value = output
-                .completed_step_output
-                .as_ref()
-                .and_then(|stored| match wire_value(stored, run.run_id)? {
-                    WireValue::Value(value) => Some(value),
-                    WireValue::HardDeleteObject(_) => None,
-                });
+            let value = match output.completed_step_output.as_ref() {
+                Some(stored) => {
+                    response_value(state, context.flow_hash, run.run_id, stored, is_hydrating)?
+                }
+                None => None,
+            };
             result.results.push(StepCompletionOutput {
                 completed_step_type: output.completed_step_type,
                 completed_step_execution_id: output.completed_step_execution_id,
-                completed_step_output: value,
+                completed_step_output: match value {
+                    Some(WireValue::Value(value)) => Some(value),
+                    Some(WireValue::HardDeleteObject(_)) | None => None,
+                },
             });
         }
     }
-    result
+    Ok(result)
 }
 
 /// Matches like the Go Server: strings and booleans by equality; type mismatches never match.

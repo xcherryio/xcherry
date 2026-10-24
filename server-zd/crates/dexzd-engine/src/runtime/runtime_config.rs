@@ -46,6 +46,15 @@ pub struct RuntimeConfig {
     pub long_poll_max_wait: Duration,
     /// Worker call timeout of an RPC that sets `timeout_seconds` to 0. Default 60 s.
     pub rpc_default_timeout: Duration,
+    /// Largest encoded RPC request sent to a Worker. Default 32 MiB, from
+    /// `api.grpcMaxMessageBytes`. Larger requests fail with `ResourceExhausted` before dispatch.
+    pub max_worker_rpc_request_bytes: usize,
+    /// Default false, `values.hydrateBeforeDispatch`. When true, client reads and RPC Worker
+    /// requests carry complete values instead of value references: GetAttributes,
+    /// GetChannelMessages, GetFlowState, WaitForFlow results, the RPC Worker request, and the RPC
+    /// output. GetHistoryEvents still returns references, as the Go Server does, and LoadBlobs
+    /// resolves them. Hard-delete references in GetFlowState stay references in both modes.
+    pub hydrate_value_references: bool,
     /// Settings recorded into every new run at FlowStart; apply never reads configuration.
     /// Defaults follow the `RunSettings` field documentation.
     pub run_settings: RunSettings,
@@ -65,6 +74,8 @@ impl Default for RuntimeConfig {
             long_poll_default_wait: Duration::from_secs(60),
             long_poll_max_wait: Duration::from_secs(60),
             rpc_default_timeout: Duration::from_secs(60),
+            max_worker_rpc_request_bytes: 32 * 1024 * 1024,
+            hydrate_value_references: false,
             run_settings: default_run_settings(),
             validation: ValidationConfig::default(),
         }
