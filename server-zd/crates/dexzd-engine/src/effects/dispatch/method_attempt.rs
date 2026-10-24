@@ -17,14 +17,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use dexzd_keyspace::row_keys::hard_delete_current_key;
 use dexzd_keyspace::{ColumnFamily, TenantId};
 use dexzd_protocol::dex::{
-    self, DispatchTaskErrorReason, PollWorkerTaskFrame, PullRouting, PullRoutingSource, Value,
-    WorkerErrorResponse, invoke_execute_method_output, invoke_wait_for_method_output,
-    poll_worker_task_frame,
+    self, DispatchTaskErrorReason, PollWorkerTaskFrame, PullRouting, PullRoutingSource,
+    StepStreamWrite, Value, WorkerErrorResponse, invoke_execute_method_output,
+    invoke_wait_for_method_output, poll_worker_task_frame,
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, HardDeleteObjectRecord, StepAttemptFailedCommand, StepAttemptFailureKind,
     StepAttemptHeartbeatCommand, flow_command, step_attempt_heartbeat_command,
 };
+use dexzd_stream_store::WriteStreamInput;
 use dexzd_worker_dispatch::{DispatchEvent, DispatchOutcome};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -343,6 +344,8 @@ impl MethodAttempt {
                             heartbeat_deadline = Instant::now() + heartbeat_timeout;
                             if let Some(change) = heartbeat_change(&frame) {
                                 checkpoints.observe(change, self.context.config.heartbeat_batch_window);
+                            } else if let Some(write) = into_step_stream_write(frame) {
+                                self.write_step_stream(state, write).await;
                             }
                         }
                         Some(DispatchEvent::Completed(outcome)) => {
@@ -378,6 +381,34 @@ impl MethodAttempt {
         {
             tracing::warn!(%error, run_id = %self.key.run_id, "proposing a heartbeat failed");
         }
+    }
+
+    /// Appends a Step Stream write in frame order; a rejected write is logged and never fails
+    /// the attempt.
+    async fn write_step_stream(&self, state: &MethodAttemptState, write: StepStreamWrite) {
+        let Some(value) = write.value else {
+            tracing::warn!(
+                run_id = %self.key.run_id,
+                stream_name = %write.stream_name,
+                "Worker Stream write without a Value was dropped"
+            );
+            return;
+        };
+        let input = WriteStreamInput {
+            tenant_id: state.run_record.tenant_id,
+            flow_id: state.run_record.flow_id.clone(),
+            flow_type: state.run_record.flow_type.clone(),
+            stream_name: write.stream_name,
+            stream_capacity_bytes: Some(write.stream_capacity_bytes),
+            value,
+            source: String::new(),
+        };
+        // The store logs every dropped write itself.
+        let _is_written = self
+            .context
+            .stream_store
+            .write_worker_best_effort(input, &self.key.step_execution_id)
+            .await;
     }
 
     async fn complete(
@@ -419,6 +450,7 @@ impl MethodAttempt {
                 return Ok(());
             }
         };
+        result.assign_channel_message_ids();
         let mut backoff = self.context.retry_backoff();
         let uploads = loop {
             let upload = self
@@ -627,6 +659,21 @@ fn heartbeat_change(frame: &PollWorkerTaskFrame) -> Option<CheckpointChange> {
             invoke_execute_method_output::Output::Heartbeat(heartbeat) => {
                 Some(heartbeat.value.clone())
             }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the Step Stream write that a Worker frame carries.
+fn into_step_stream_write(frame: PollWorkerTaskFrame) -> Option<StepStreamWrite> {
+    match frame.output? {
+        poll_worker_task_frame::Output::WaitFor(output) => match output.output? {
+            invoke_wait_for_method_output::Output::StreamWrite(write) => Some(write),
+            _ => None,
+        },
+        poll_worker_task_frame::Output::Execute(output) => match output.output? {
+            invoke_execute_method_output::Output::StreamWrite(write) => Some(write),
             _ => None,
         },
         _ => None,

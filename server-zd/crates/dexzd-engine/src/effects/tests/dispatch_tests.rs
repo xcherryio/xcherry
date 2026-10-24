@@ -29,7 +29,7 @@ use super::{
 use crate::effects::{EffectsConfig, MethodRequest};
 use crate::runtime::{CommitUrgency, RuntimeEffectSink};
 
-fn force_complete() -> InvokeExecuteMethodResponse {
+pub(super) fn force_complete() -> InvokeExecuteMethodResponse {
     InvokeExecuteMethodResponse {
         step_decision: Some(StepDecision {
             close_decision: Some(CloseDecision {

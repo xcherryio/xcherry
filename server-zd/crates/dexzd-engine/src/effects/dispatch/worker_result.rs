@@ -52,6 +52,18 @@ impl MethodResult {
             pull_routing: Some(pull_routing),
         }
     }
+
+    /// Replaces every channel publication's message ID with a new UUIDv7, like the Go
+    /// Server's `channelmessage.AssignIDs`.
+    pub(crate) fn assign_channel_message_ids(&mut self) {
+        let publications = match self {
+            Self::WaitFor(response) => &mut response.publish_to_channel,
+            Self::Execute(response) => &mut response.publish_to_channel,
+        };
+        for publication in publications {
+            publication.message_id = uuid::Uuid::now_v7().hyphenated().to_string();
+        }
+    }
 }
 
 /// Outcome of checking a Worker's final frame.
