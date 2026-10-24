@@ -27,11 +27,8 @@ use crate::local_store::{
 pub struct RocksDbStoreOptions {
     /// Shared LRU block-cache capacity across all column families; defaults to 128 MiB.
     pub block_cache_bytes: usize,
-    /// Defaults to 256 MiB; total size of write-ahead log files that RocksDB keeps.
-    ///
-    /// Beyond it, RocksDB flushes the column families whose memtables hold the oldest log file,
-    /// so that file can be deleted. Without the cap, a column family with few writes keeps every
-    /// log file alive up to four times the memtable budget of all column families. Must be positive.
+    /// Defaults to 256 MiB; total size of write-ahead log files that RocksDB keeps. Must be
+    /// positive.
     pub max_total_wal_bytes: u64,
 }
 
@@ -93,11 +90,6 @@ impl RocksDbLocalStore {
     }
 
     /// Compacts every column family on a background thread, unless a compaction is running.
-    ///
-    /// Compaction first flushes every memtable, which lets RocksDB delete the write-ahead log files
-    /// they kept, then rewrites each column family without overwritten and deleted entries. Reads
-    /// and writes continue meanwhile. Dropping the store stops the compaction and waits for its
-    /// thread, which takes no longer than closing the store.
     ///
     /// Returns an I/O error when the thread cannot be started.
     pub fn start_background_compaction(&self) -> StorageResult<()> {

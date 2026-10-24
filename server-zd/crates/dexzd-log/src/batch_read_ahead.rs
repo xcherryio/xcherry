@@ -39,10 +39,8 @@ impl Default for LogReadAheadConfig {
     }
 }
 
-/// Reads consecutive batches of one stream with concurrent GETs and returns them in seq order.
-///
-/// Results, including read and decode errors, are returned strictly in seq order, so an error at
-/// a seq after one that the caller stops at is never seen.
+/// Reads consecutive batches of one stream concurrently and returns every result, errors
+/// included, in seq order.
 pub struct OrderedBatchReader<'a> {
     store: &'a dyn ObjectStore,
     stream: &'a StreamIdentity,
@@ -84,10 +82,8 @@ struct ListedObjectSizes {
 }
 
 impl<'a> OrderedBatchReader<'a> {
-    /// Creates a reader of `stream` from `first_seq` through `last_seq`, or without an upper
-    /// bound when `last_seq` is `None`.
-    ///
-    /// No read starts before the first call to [`Self::next_batch`].
+    /// Creates a reader from `first_seq` through `last_seq`, unbounded when `None`; reads start
+    /// at the first [`Self::next_batch`].
     pub fn new(
         store: &'a dyn ObjectStore,
         stream: &'a StreamIdentity,
@@ -122,11 +118,11 @@ impl<'a> OrderedBatchReader<'a> {
         }
     }
 
-    /// Returns the next seq with its batch, or with `None` when the store has no batch there.
+    /// Releases the batch returned by the previous call and reads the next one.
     ///
-    /// Releases the batch returned by the previous call. Returns `Ok(None)` once every seq
-    /// through the last one was returned, and the first listing, read, decode, or stream identity
-    /// error in seq order.
+    /// Returns the next seq with its batch, or with `None` when the store has no batch there.
+    /// Returns `Ok(None)` once every seq through the last one was returned, and the first
+    /// listing, read, decode, or stream identity error in seq order.
     pub async fn next_batch(&mut self) -> Result<Option<(u64, Option<DecodedBatch>)>, LogError> {
         self.reserved_bytes -= std::mem::take(&mut self.returned_reservation);
         let Some(seq) = self.next_seq_to_return else {
@@ -174,9 +170,8 @@ impl<'a> OrderedBatchReader<'a> {
         }
     }
 
-    /// Waits for one read or listing in flight, keeps its result, and starts more reads.
-    ///
-    /// Never finishes while nothing is in flight. Cancel safe: it awaits only the next result.
+    /// Keeps the next finished read or listing and starts more reads. Cancel safe; pends while
+    /// nothing is in flight.
     async fn finish_one_read(&mut self) {
         let Some(event) = self.in_flight.next().await else {
             return pending().await;

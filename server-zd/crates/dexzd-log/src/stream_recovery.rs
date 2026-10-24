@@ -141,11 +141,8 @@ async fn collect_recovered_stream(
     }
 }
 
-/// Recovers a log stream one step at a time, so its batches are applied as they are read.
-///
-/// The steps return every accepted batch in seq order, up to the first missing seq. The recovery
-/// then writes an EpochStart of the new epoch there, voids older batches after it, and fills
-/// pipelined holes. A batch older than the epoch of an earlier EpochStart is void, not returned.
+/// Recovers a log stream one step at a time, returning accepted batches in seq order as they are
+/// read.
 pub struct StreamRecovery<'a> {
     writer: EpochStartWriter<'a>,
     read_ahead: LogReadAheadConfig,

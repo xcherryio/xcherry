@@ -60,8 +60,9 @@ fn batch(epoch: u64, seq: u64, epoch_start_writer: Option<&str>) -> Bytes {
     .expect("test batch encodes")
 }
 
-/// Seq 1 holds epoch 1 and seq 2 starts epoch 2, so the epoch-1 batches after it are void. One
-/// epoch-2 batch follows them, then a missing seq and a pipelined tail of epoch-1 batches.
+/// Seq 2 starts epoch 2, voiding the epoch-1 batches after it on both sides of a missing seq.
+///
+/// Returns the store and the seq of the last batch before the missing seq.
 async fn void_heavy_store() -> (InMemoryObjectStore, u64) {
     let store = InMemoryObjectStore::new();
     let last_read_seq = 3 + VOIDED_WHILE_READING;

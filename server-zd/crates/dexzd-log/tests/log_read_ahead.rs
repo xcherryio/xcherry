@@ -33,8 +33,7 @@ impl WallClock for FixedClock {
     }
 }
 
-/// Delays each batch GET by an amount chosen per seq, fails GETs of chosen seqs while armed, and
-/// counts GETs.
+/// Delays batch GETs per seq, fails chosen seqs while armed, and counts GETs.
 struct BatchGetFaults {
     delay_of_seq: Box<dyn Fn(u64) -> Duration + Send + Sync>,
     failing_seqs: Vec<u64>,
@@ -126,7 +125,8 @@ fn batch(epoch: u64, seq: u64, record_bytes: usize) -> Bytes {
     .expect("test batch encodes")
 }
 
-/// Returns a batch whose one record holds `record_bytes` pseudo-random bytes that zstd cannot shrink.
+/// Returns a batch whose one record holds `record_bytes` pseudo-random bytes that zstd cannot
+/// shrink.
 fn incompressible_batch(epoch: u64, seq: u64, record_bytes: usize) -> Bytes {
     let mut state = seq.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
     let record: Vec<u8> = (0..record_bytes)
@@ -184,8 +184,7 @@ async fn store_with_injector(
     store
 }
 
-/// Seqs 1-11 hold epoch 1 and seq 12 starts epoch 2, so later epoch-1 batches are void. Seq 31
-/// starts epoch 3 the same way. Seq 41 is a pipelined hole with batches at 42 and 44 after it.
+/// EpochStarts at seqs 12 and 31 void later older-epoch batches; seq 41 is a hole before 42 and 44.
 fn mixed_epoch_log() -> Vec<(u64, Bytes)> {
     let mut objects = Vec::new();
     for seq in 1..=11 {
@@ -511,10 +510,7 @@ async fn read_ahead_stays_within_its_window_and_byte_budget_on_a_large_log() {
     }
 }
 
-/// Tracks the object bytes of batch GETs that started before the caller released their batch.
-///
-/// The caller releases a returned batch by asking for the next one, which the test reports
-/// through [`Self::release_through`] just before each call.
+/// Sums the object bytes of started GETs whose batch the test has not released.
 struct BufferedBytesProbe {
     object_sizes: BTreeMap<u64, usize>,
     max_buffered_bytes: usize,
@@ -549,6 +545,7 @@ impl BufferedBytesProbe {
         })
     }
 
+    /// Called before each request for a batch, when the reader releases the previous one.
     fn release_through(&self, seq: u64) {
         let mut state = self.state.lock().expect("probe lock");
         state.released_through = seq;

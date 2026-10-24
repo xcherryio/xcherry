@@ -30,13 +30,7 @@ use crate::recovery::{EngineStartError, describe_lost_ownership};
 pub struct RecoveryConfig {
     /// Read-ahead of log batches while startup replays them.
     pub log_read_ahead: LogReadAheadConfig,
-    /// Defaults to 16 MiB; once startup replays at least this many bytes of log records, every
-    /// column family of the local store is compacted on a background thread while the node serves.
-    ///
-    /// Replay writes reach RocksDB write-ahead log files that stay on disk until every column
-    /// family is flushed, about five bytes of log per record byte. Compaction flushes them and
-    /// drops overwritten entries, so the store returns to about its live data size. Otherwise the
-    /// store can hold the live data plus the write-ahead log cap of the RocksDB options.
+    /// Defaults to 16 MiB; replayed record bytes that start a background compaction.
     /// `u64::MAX` disables it.
     pub compact_after_replay_bytes: u64,
 }

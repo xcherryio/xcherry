@@ -15,11 +15,21 @@ collection. Writes keep the RocksDB WAL enabled, making batches across column fa
 atomic after a crash. Disabling WAL in the future would also require `atomic_flush`.
 
 `RocksDbStoreOptions::max_total_wal_bytes` (256 MiB by default) caps the WAL files on disk.
-Without it, a column family with few writes, such as partition metadata, keeps every WAL file
-alive until they reach four times the memtable budget of all column families.
+Beyond it, RocksDB flushes the column families whose memtables hold the oldest WAL file, so
+that file can be deleted. Without it, a column family with few writes, such as partition
+metadata, keeps every WAL file alive until they reach four times the memtable budget of all
+column families.
 `start_background_compaction` compacts every column family on a store-owned thread, which
-first flushes the memtables and so releases the WAL. Dropping the store cancels RocksDB
-background work and joins that thread before the database closes.
+first flushes the memtables and so releases the WAL, then rewrites each column family without
+overwritten and deleted entries. Reads and writes continue meanwhile. Dropping the store
+cancels RocksDB background work and joins that thread before the database closes, which takes
+no longer than closing the store.
+
+A bulk log replay writes about five bytes of WAL per record byte, and those files stay on disk
+until every column family is flushed. The engine therefore compacts the store in the background
+after a replay of at least `localStorage.compactAfterReplayBytes` of records (16 MiB by
+default), so the store returns to about its live data size instead of holding the live data
+plus the WAL cap.
 
 Snapshots use RocksDB checkpoints or one serialized memory file. All files are uploaded
 with CreateOnly under the node and lineage, and a manifest is written last. Restore
