@@ -230,6 +230,19 @@ pub async fn create_snapshot<S: SnapshotSource>(
     };
     let manifest_key = format!("{lineage_prefix}/manifest/{snapshot_number:020}");
     let bytes = manifest.encode_to_vec();
+    // Reserved before publishing, so a retry after a crash never reuses a published number.
+    let mut updated_meta = store
+        .node_meta()?
+        .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
+    if updated_meta.lineage_id != node_meta.lineage_id
+        || snapshot_number <= updated_meta.last_snapshot_number
+    {
+        return Err(StorageError::Invalid(
+            "store lineage or snapshot number changed during upload".into(),
+        ));
+    }
+    updated_meta.last_snapshot_number = snapshot_number;
+    store.put_node_meta(&updated_meta)?;
     match object_store
         .put(
             &manifest_key,
@@ -254,18 +267,6 @@ pub async fn create_snapshot<S: SnapshotSource>(
         }
         Err(error) => return Err(error.into()),
     }
-    let mut updated_meta = store
-        .node_meta()?
-        .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
-    if updated_meta.lineage_id != node_meta.lineage_id
-        || snapshot_number <= updated_meta.last_snapshot_number
-    {
-        return Err(StorageError::Invalid(
-            "store lineage or snapshot number changed during upload".into(),
-        ));
-    }
-    updated_meta.last_snapshot_number = snapshot_number;
-    store.put_node_meta(&updated_meta)?;
     Ok((manifest_key, manifest))
 }
 
