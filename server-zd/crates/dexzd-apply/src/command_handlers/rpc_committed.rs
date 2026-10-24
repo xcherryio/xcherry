@@ -138,7 +138,13 @@ pub(crate) fn apply_rpc_committed(
     }
     if let Some(decision) = response.step_decision.as_ref() {
         if !decision.cancel_step_types.is_empty() {
-            cancel_steps_by_type(transaction, &mut cursor, &decision.cancel_step_types, "")?;
+            cancel_steps_by_type(
+                transaction,
+                &mut cursor,
+                &decision.cancel_step_types,
+                &[],
+                "",
+            )?;
         }
         let source = format!("__rpc/{}", request.rpc_name);
         for movement in &decision.next_steps {
