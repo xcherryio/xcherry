@@ -1,6 +1,6 @@
 [package]
 name = "dexzd-server"
-description = "The dex-server-zd executable: typed configuration, startup, shutdown, and the dev mode with an embedded S3 emulator"
+description = "The dex-server-zd executable: typed configuration, startup, shutdown, the serve mode for external object storage, and the dev mode with an embedded S3 emulator"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
@@ -43,8 +43,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["process", "test-util"] }
+tonic-health.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

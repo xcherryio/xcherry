@@ -1130,6 +1130,7 @@ dependencies = [
 name = "dexzd-server"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "dexzd-api",
  "dexzd-apply",
@@ -1156,6 +1157,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tonic-health",
  "tower-layer",
  "tracing",
  "tracing-subscriber",

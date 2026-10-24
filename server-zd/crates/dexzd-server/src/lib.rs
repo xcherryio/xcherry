@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! The dex-server-zd executable: typed configuration, startup, shutdown, and the dev mode with an embedded S3 emulator.
+//! The dex-server-zd executable: typed configuration, startup, shutdown, the serve mode for external object storage, and the dev mode with an embedded S3 emulator.
 
 mod command_line_options;
 mod component_configs;
@@ -18,16 +18,20 @@ mod server_logging;
 mod server_node;
 mod worker_rpc_invoker;
 
-pub use command_line_options::{CommandLineOptions, DevCommandOptions, ServerCommand};
+pub use command_line_options::{
+    CommandLineOptions, DevCommandOptions, ServeCommandOptions, ServerCommand,
+};
 pub use server_node::RunningServer;
 
+use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use dexzd_engine::{EngineStartError, NodeStopReason};
 
 use crate::embedded_s3::EmbeddedS3;
+use crate::server_logging::TerminationSignals;
 
 /// Why the server could not start or stopped abnormally. Every variant exits with a failure status.
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +122,9 @@ pub enum ServerError {
         /// Why the node stopped.
         reason: NodeStopReason,
     },
+    /// SIGINT or SIGTERM arrived before the server finished starting; startup was abandoned.
+    #[error("a termination signal arrived during startup")]
+    StartupInterrupted,
     /// A server task ended unexpectedly.
     #[error("server task failed: {detail}")]
     ServingTaskFailed {
@@ -145,24 +152,58 @@ pub fn run_from_command_line() -> Result<(), ServerError> {
     match options.command {
         ServerCommand::Dev(options) => {
             let configuration = config::Config::load_dev(&options)?;
-            server_logging::install(configuration.dev.log_directory.as_deref())?;
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|source| ServerError::AsyncRuntime { source })?;
-            runtime.block_on(async {
-                let server = start_dev_server_with_config(configuration).await?;
-                let shutdown = server.shutdown_token();
-                let signals = tokio::spawn(async move {
-                    server_logging::wait_for_termination_signal().await;
-                    shutdown.cancel();
-                });
-                let result = server.wait().await;
-                signals.abort();
-                result
+            let log_directory = configuration.dev.log_directory.clone();
+            serve_until_terminated(
+                log_directory.as_deref(),
+                start_dev_server_with_config(configuration),
+            )
+        }
+        ServerCommand::Serve(options) => {
+            let configuration = load_serve_config(&options)?;
+            serve_until_terminated(None, async move {
+                server_node::start_server(&configuration, None).await
             })
         }
     }
+}
+
+/// Installs logging, starts the server, and stops it gracefully on the first SIGINT or SIGTERM.
+fn serve_until_terminated(
+    log_directory: Option<&Path>,
+    start: impl Future<Output = Result<RunningServer, ServerError>>,
+) -> Result<(), ServerError> {
+    server_logging::install(log_directory)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| ServerError::AsyncRuntime { source })?;
+    runtime.block_on(async {
+        let mut termination = TerminationSignals::register();
+        let server = tokio::select! {
+            started = start => started?,
+            () = termination.received() => return Err(ServerError::StartupInterrupted),
+        };
+        let shutdown = server.shutdown_token();
+        let signals = tokio::spawn(async move {
+            termination.received().await;
+            shutdown.cancel();
+        });
+        let result = server.wait().await;
+        signals.abort();
+        result
+    })
+}
+
+/// Loads the `serve` configuration file and rejects settings this build cannot serve.
+fn load_serve_config(options: &ServeCommandOptions) -> Result<config::Config, ServerError> {
+    let configuration = config::Config::load_file(&options.config)?;
+    if configuration.search.backend == config::SearchBackend::Paradedb {
+        return Err(ServerError::Config(config::ConfigError::Invalid {
+            field: "search.backend",
+            message: "the paradedb backend is not available in serve yet; use builtin".to_owned(),
+        }));
+    }
+    Ok(configuration)
 }
 
 /// Starts the single-node dev server with an embedded S3 emulator, serving on `--listen`.

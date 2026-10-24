@@ -7,9 +7,11 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::fs::{self, OpenOptions};
+use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -25,6 +27,7 @@ const LOG_FILE_NAME: &str = "dex-server-zd.log";
 pub(crate) fn install(log_directory: Option<&Path>) -> Result<(), ServerError> {
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
         .with_writer(std::io::stderr)
         .with_filter(filter());
     let file_layer = match log_directory {
@@ -58,28 +61,58 @@ pub(crate) fn install(log_directory: Option<&Path>) -> Result<(), ServerError> {
         })
 }
 
-/// Resolves on the first SIGINT or SIGTERM.
-pub(crate) async fn wait_for_termination_signal() {
-    let mut terminate =
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(terminate) => terminate,
+/// SIGINT and SIGTERM listeners; registering them before startup closes the window where a signal kills the process.
+pub(crate) struct TerminationSignals {
+    interrupt: Option<Signal>,
+    terminate: Option<Signal>,
+}
+
+impl TerminationSignals {
+    /// Replaces the default SIGINT and SIGTERM actions; call inside the async runtime.
+    pub(crate) fn register() -> Self {
+        let interrupt = match signal(SignalKind::interrupt()) {
+            Ok(interrupt) => Some(interrupt),
             Err(error) => {
-                tracing::warn!(%error, "cannot listen for SIGTERM; only SIGINT stops the server");
-                if let Err(error) = tokio::signal::ctrl_c().await {
-                    tracing::error!(%error, "cannot listen for SIGINT");
-                    std::future::pending::<()>().await;
-                }
-                return;
+                tracing::error!(%error, "cannot listen for SIGINT");
+                None
             }
         };
-    tokio::select! {
-        interrupted = tokio::signal::ctrl_c() => {
-            if let Err(error) = interrupted {
-                tracing::error!(%error, "cannot listen for SIGINT");
-                terminate.recv().await;
+        let terminate = match signal(SignalKind::terminate()) {
+            Ok(terminate) => Some(terminate),
+            Err(error) => {
+                tracing::warn!(%error, "cannot listen for SIGTERM; only SIGINT stops the server");
+                None
+            }
+        };
+        Self {
+            interrupt,
+            terminate,
+        }
+    }
+
+    /// Resolves on the first SIGINT or SIGTERM.
+    pub(crate) async fn received(&mut self) {
+        let Self {
+            interrupt,
+            terminate,
+        } = self;
+        tokio::select! {
+            () = next_signal(interrupt.as_mut()) => {}
+            () = next_signal(terminate.as_mut()) => {}
+        }
+        tracing::info!("termination signal received");
+    }
+}
+
+/// Waits for the next delivery; a listener that could not be registered never resolves.
+async fn next_signal(listener: Option<&mut Signal>) {
+    match listener {
+        Some(listener) => {
+            // None means the signal driver stopped, which only happens during runtime shutdown.
+            if listener.recv().await.is_none() {
+                tracing::debug!("signal listener closed");
             }
         }
-        _ = terminate.recv() => {}
+        None => std::future::pending().await,
     }
-    tracing::info!("termination signal received");
 }

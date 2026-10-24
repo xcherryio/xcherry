@@ -236,6 +236,12 @@ fn load_file_reports_io_and_field_failures() {
     let complete = temporary.path().join("complete.yaml");
     fs::write(&complete, "cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\n").expect("write complete config");
     Config::load_file(&complete).expect("load complete production config");
+    let with_dev = temporary.path().join("with-dev.yaml");
+    fs::write(&with_dev, "cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\ndev:\n  durabilityMode: strict\n").expect("write config with a dev section");
+    assert!(matches!(
+        Config::load_file(&with_dev),
+        Err(ConfigError::Invalid { field: "dev", .. })
+    ));
 }
 
 #[test]

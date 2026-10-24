@@ -17,9 +17,6 @@ use crate::config::{
     CredentialSource, ObjectStoreConfig, ObjectStoreCredentials, ObjectStoreLocationConfig,
 };
 
-/// Access key that unsigned local emulators accept; s3mock ignores signatures by default.
-const ANONYMOUS_ACCESS_KEY: &str = "s3mock";
-
 /// The durable stores: logs, metadata, and snapshots, plus the hard-delete value destination.
 pub(crate) struct ObjectStores {
     pub(crate) primary: Arc<dyn ObjectStore>,
@@ -102,26 +99,16 @@ fn s3_credentials(
 ) -> Result<S3Credentials, ServerError> {
     match (source, credentials) {
         (CredentialSource::DefaultChain, _) => Ok(S3Credentials::DefaultChain),
-        (CredentialSource::Environment, Some(credentials)) => {
-            if credentials.session_token.is_some() {
-                return Err(ServerError::UnsupportedCredentials {
-                    field,
-                    detail: "session tokens are not supported yet".to_owned(),
-                });
-            }
-            Ok(S3Credentials::Static {
-                access_key_id: credentials.access_key_id.clone(),
-                secret_access_key: credentials.secret_access_key.clone(),
-            })
-        }
+        (CredentialSource::Environment, Some(credentials)) => Ok(S3Credentials::Static {
+            access_key_id: credentials.access_key_id.clone(),
+            secret_access_key: credentials.secret_access_key.clone(),
+            session_token: credentials.session_token.clone(),
+        }),
         (CredentialSource::Environment, None) => Err(ServerError::UnsupportedCredentials {
             field,
             detail: "environment credentials were not resolved".to_owned(),
         }),
-        (CredentialSource::Anonymous, _) => Ok(S3Credentials::Static {
-            access_key_id: ANONYMOUS_ACCESS_KEY.to_owned(),
-            secret_access_key: ANONYMOUS_ACCESS_KEY.to_owned(),
-        }),
+        (CredentialSource::Anonymous, _) => Ok(S3Credentials::Anonymous),
     }
 }
 

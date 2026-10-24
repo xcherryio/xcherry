@@ -33,6 +33,71 @@ example, it supports only pull Workers).
 Crate layers are registered in `script/rust-crate-layers.json`; a crate may depend only on crates
 in the same or a lower layer.
 
+## Running
+
+`dex-server-zd` has two commands: `serve` for a Server node on external object storage and `dev`
+for local development.
+
+### serve
+
+```bash
+dex-server-zd serve --config /etc/dex/dex-server-zd.yaml
+```
+
+`serve` reads every setting from one YAML file. `config/dex-server-zd.example.yaml` lists every key
+with its default. Set at least `cluster.nodeId`, `objectStore.bucket`, and
+`localStorage.directory`. Unknown keys and a `dev` section with non-default values fail startup.
+An invalid value fails startup with the YAML path of the rejected field.
+
+Object storage uses `objectStore.endpoint` (empty for AWS endpoint resolution), `region`, `bucket`,
+`prefix`, and `forcePathStyle`. `objectStore.hardDeleteStore` optionally sends hard-delete values
+to a separate destination with the same keys; without it they use the primary bucket and prefix.
+`credentialsSource` selects the credentials of each destination:
+
+| Value | Credentials |
+| --- | --- |
+| `defaultChain` (default) | The AWS SDK default credential provider chain |
+| `environment` | `DEX_ZD_OBJECT_STORE_ACCESS_KEY_ID`, `DEX_ZD_OBJECT_STORE_SECRET_ACCESS_KEY`, and the optional `DEX_ZD_OBJECT_STORE_SESSION_TOKEN`; the hard-delete store reads the `DEX_ZD_HARD_DELETE_STORE_*` variables with the same suffixes |
+| `anonymous` | Unsigned requests, for a local emulator or a bucket that allows anonymous access |
+
+Startup proceeds in this order:
+
+1. Every destination must pass a conditional-write self-check.
+2. The node acquires the lease of `cluster.nodeId` for `lease.duration`. A lease that another
+   process still holds is awaited until it expires, or fails startup when `lease.failIfHeld` is
+   true.
+3. The node restores `localStorage.directory` from the latest snapshot and the command log. The
+   directory is a cache; an empty one is rebuilt from object storage.
+4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
+   `api.listen`.
+
+`search.backend: builtin` serves SearchFlows from committed local search documents. The `paradedb`
+backend is not available in `serve` yet and fails startup.
+
+On SIGTERM or SIGINT the node stops within 10 seconds. Health reports NOT_SERVING, Workers are told
+to reconnect, long polls close, and open calls get 4 seconds to finish. Then effects and the engine
+stop, and the node releases its lease. The process exits 0, and a replacement process with the same
+`cluster.nodeId` acquires the lease at once.
+
+A lost lease, a stopped commit pipeline, or a halted Flow runtime stops the node, and the process
+exits 1. Restart it. A signal that arrives before startup completes abandons startup and also exits
+1; that lease expires after `lease.duration`.
+
+Logs go to standard error. `RUST_LOG` filters them; the default level is `info`.
+
+### dev
+
+```bash
+dex-server-zd dev --data-dir ./zd-data [--listen 127.0.0.1:8801] [--log-dir <dir>] [--config <overrides.yaml>]
+```
+
+`dev` runs one node with an embedded s3mock whose data lives under `<data-dir>/s3`, and keeps local
+state under `<data-dir>/store`. `dexcli dev -engine zd` starts it with these flags. It fixes the
+node ID to `dev`, anonymous credentials, the embedded endpoint, and the `--listen` address, and it
+rejects `objectStore.hardDeleteStore`. With `--log-dir`, logs also go to
+`<log-dir>/dex-server-zd.log`. The ParadeDB search backend logs a warning, and SearchFlows returns
+Unimplemented.
+
 ## Development
 
 ```bash
