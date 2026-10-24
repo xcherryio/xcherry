@@ -7,11 +7,15 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
 use dexzd_keyspace::ColumnFamily;
 use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Direction,
-    IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
+    BlockBasedOptions, Cache, ColumnFamilyDescriptor, CompactOptions, DB, DBCompressionType,
+    Direction, IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
 };
 
 use crate::local_store::{
@@ -23,19 +27,33 @@ use crate::local_store::{
 pub struct RocksDbStoreOptions {
     /// Shared LRU block-cache capacity across all column families; defaults to 128 MiB.
     pub block_cache_bytes: usize,
+    /// Defaults to 256 MiB; total size of write-ahead log files that RocksDB keeps.
+    ///
+    /// Beyond it, RocksDB flushes the column families whose memtables hold the oldest log file,
+    /// so that file can be deleted. Without the cap, a column family with few writes keeps every
+    /// log file alive up to four times the memtable budget of all column families. Must be positive.
+    pub max_total_wal_bytes: u64,
 }
 
 impl Default for RocksDbStoreOptions {
     fn default() -> Self {
         Self {
             block_cache_bytes: 128 * 1024 * 1024,
+            max_total_wal_bytes: 256 * 1024 * 1024,
         }
     }
 }
 
 pub struct RocksDbLocalStore {
-    db: DB,
+    db: Arc<DB>,
     path: PathBuf,
+    compaction: Mutex<Option<BackgroundCompaction>>,
+}
+
+/// A compaction thread of [`RocksDbLocalStore::start_background_compaction`].
+struct BackgroundCompaction {
+    is_cancelled: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
 }
 
 impl RocksDbLocalStore {
@@ -48,14 +66,16 @@ impl RocksDbLocalStore {
         let mut db_options = Options::default();
         db_options.create_if_missing(true);
         db_options.create_missing_column_families(true);
+        db_options.set_max_total_wal_size(options.max_total_wal_bytes);
         let db = DB::open_cf_descriptors(
             &db_options,
             path.as_ref(),
             column_family_descriptors(options),
         )?;
         let store = Self {
-            db,
+            db: Arc::new(db),
             path: path.as_ref().to_path_buf(),
+            compaction: Mutex::new(None),
         };
         if store.node_meta()?.is_none() {
             if !is_new_store {
@@ -72,6 +92,41 @@ impl RocksDbLocalStore {
         &self.path
     }
 
+    /// Compacts every column family on a background thread, unless a compaction is running.
+    ///
+    /// Compaction first flushes each memtable, which lets RocksDB delete the write-ahead log files
+    /// they kept, then rewrites the column family without overwritten and deleted entries. Reads
+    /// and writes continue meanwhile. Dropping the store stops the compaction and waits for its
+    /// thread, which takes no longer than closing the store.
+    ///
+    /// Returns an I/O error when the thread cannot be started.
+    pub fn start_background_compaction(&self) -> StorageResult<()> {
+        let mut compaction = self
+            .compaction
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if compaction
+            .as_ref()
+            .is_some_and(|running| !running.thread.is_finished())
+        {
+            return Ok(());
+        }
+        if let Some(finished) = compaction.take() {
+            finished.join();
+        }
+        let db = self.db.clone();
+        let is_cancelled = Arc::new(AtomicBool::new(false));
+        let thread_cancelled = is_cancelled.clone();
+        let thread = std::thread::Builder::new()
+            .name("dexzd-store-compaction".to_owned())
+            .spawn(move || compact_column_families(&db, &thread_cancelled))?;
+        *compaction = Some(BackgroundCompaction {
+            is_cancelled,
+            thread,
+        });
+        Ok(())
+    }
+
     pub(crate) fn checkpoint(&self, directory: &Path) -> StorageResult<()> {
         rocksdb::checkpoint::Checkpoint::new(&self.db)?.create_checkpoint(directory)?;
         Ok(())
@@ -85,6 +140,7 @@ impl RocksDbLocalStore {
             directory,
             column_family_descriptors(RocksDbStoreOptions {
                 block_cache_bytes: 1024 * 1024,
+                ..RocksDbStoreOptions::default()
             }),
             false,
         )?;
@@ -95,6 +151,56 @@ impl RocksDbLocalStore {
         self.db
             .cf_handle(cf.name())
             .expect("all column families are opened")
+    }
+}
+
+impl Drop for RocksDbLocalStore {
+    fn drop(&mut self) {
+        let compaction = self
+            .compaction
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some(compaction) = compaction else {
+            return;
+        };
+        if !compaction.thread.is_finished() {
+            compaction.is_cancelled.store(true, Ordering::SeqCst);
+            // Aborts the running compaction; the store closes next, so background work is done.
+            self.db.cancel_all_background_work(true);
+        }
+        compaction.join();
+    }
+}
+
+impl BackgroundCompaction {
+    fn join(self) {
+        if self.thread.join().is_err() {
+            tracing::error!("the local store compaction thread panicked");
+        }
+    }
+}
+
+/// Compacts the column families in turn until all are done or `is_cancelled` is set.
+fn compact_column_families(db: &DB, is_cancelled: &AtomicBool) {
+    let started = Instant::now();
+    let mut options = CompactOptions::default();
+    // Lets automatic compactions keep running while serving writes.
+    options.set_exclusive_manual_compaction(false);
+    for cf in ColumnFamily::ALL {
+        if is_cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        let handle = db
+            .cf_handle(cf.name())
+            .expect("all column families are opened");
+        db.compact_range_cf_opt(handle, None::<&[u8]>, None::<&[u8]>, &options);
+    }
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if is_cancelled.load(Ordering::SeqCst) {
+        tracing::info!(elapsed_ms, "stopped compacting the local store");
+    } else {
+        tracing::info!(elapsed_ms, "compacted the local store");
     }
 }
 

@@ -11,6 +11,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use dexzd_engine::LocalStoreConfig;
+
 use super::{
     Config, ConfigError, CredentialSource, DevDurabilityMode, ObjectStoreLocationConfig,
     SearchBackend, StreamStoreBackend,
@@ -114,6 +116,53 @@ fn blocking_state_read_limit_parses_defaults_and_rejects_zero() {
             ..
         })
     ));
+}
+
+#[test]
+fn replay_and_local_store_disk_settings_reach_the_engine_node() {
+    let defaults = ComponentConfigs::from_config(&valid_config()).expect("component config");
+    assert_eq!(
+        defaults
+            .engine_node
+            .recovery
+            .log_read_ahead
+            .max_read_ahead_batches,
+        64
+    );
+    assert_eq!(
+        defaults
+            .engine_node
+            .recovery
+            .log_read_ahead
+            .max_buffered_bytes,
+        64 * 1024 * 1024
+    );
+    assert_eq!(
+        defaults.engine_node.recovery.compact_after_replay_bytes,
+        64 * 1024 * 1024
+    );
+
+    let parsed = Config::parse_yaml(
+        "localStorage:\n  maxWalBytes: 134217728\n  compactAfterReplayBytes: 0\nrecovery:\n  readAheadBatches: 8\n  readAheadBytes: 1048576\n",
+    )
+    .expect("parse replay settings");
+    let mut configuration = valid_config();
+    configuration.local_storage.max_wal_bytes = parsed.local_storage.max_wal_bytes;
+    configuration.local_storage.compact_after_replay_bytes =
+        parsed.local_storage.compact_after_replay_bytes;
+    configuration.recovery = parsed.recovery;
+    configuration.validate().expect("valid replay settings");
+    let components = ComponentConfigs::from_config(&configuration).expect("component config");
+    let recovery = components.engine_node.recovery;
+    assert_eq!(recovery.log_read_ahead.max_read_ahead_batches, 8);
+    assert_eq!(recovery.log_read_ahead.max_buffered_bytes, 1024 * 1024);
+    assert_eq!(recovery.compact_after_replay_bytes, 0);
+    match components.engine_node.local_store {
+        LocalStoreConfig::RocksDb { options, .. } => {
+            assert_eq!(options.max_total_wal_bytes, 128 * 1024 * 1024);
+        }
+        LocalStoreConfig::InMemory => panic!("serve uses a RocksDB local store"),
+    }
 }
 
 #[test]
@@ -338,6 +387,9 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
         ("localStorage.blockCacheBytes", |config| {
             config.local_storage.block_cache_bytes = 0
         }),
+        ("localStorage.maxWalBytes", |config| {
+            config.local_storage.max_wal_bytes = 64 * 1024 * 1024 - 1
+        }),
         ("commit.batchWindow", |config| {
             config.commit.batch_window = Duration::ZERO
         }),
@@ -364,6 +416,15 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
         }),
         ("snapshot.logDeletionDelay", |config| {
             config.snapshot.log_deletion_delay = Duration::ZERO
+        }),
+        ("recovery.readAheadBatches", |config| {
+            config.recovery.read_ahead_batches = 0
+        }),
+        ("recovery.readAheadBatches", |config| {
+            config.recovery.read_ahead_batches = 1_025
+        }),
+        ("recovery.readAheadBytes", |config| {
+            config.recovery.read_ahead_bytes = 0
         }),
         ("history.windowSemanticEvents", |config| {
             config.history.window_semantic_events = 0

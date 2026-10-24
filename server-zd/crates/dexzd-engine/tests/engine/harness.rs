@@ -20,7 +20,7 @@ use dexzd_engine::{
     CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
     CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
     EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
-    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
+    PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -504,6 +504,7 @@ impl TestCluster {
                 ..CommitConfig::default()
             },
             snapshots: SnapshotConfig::default(),
+            recovery: RecoveryConfig::default(),
         }
     }
 

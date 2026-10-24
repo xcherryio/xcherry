@@ -14,6 +14,10 @@ objectStore:
 localStorage:
   directory: ""
   blockCacheBytes: 268435456
+  # Caps RocksDB write-ahead log files; the store stays near live data plus this cap.
+  maxWalBytes: 268435456
+  # Compacts the store in the background after startup replays this many log record bytes.
+  compactAfterReplayBytes: 67108864
 commit:
   batchWindow: 20ms
   maxInFlight: 4
@@ -27,6 +31,10 @@ snapshot:
   interval: 10min
   retainedCount: 3
   logDeletionDelay: 24h
+recovery:
+  # Log batches read ahead while startup replays the log.
+  readAheadBatches: 64
+  readAheadBytes: 67108864
 history:
   windowSemanticEvents: 10000
   pruneChunkSize: 1000

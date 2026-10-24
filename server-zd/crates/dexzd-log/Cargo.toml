@@ -14,6 +14,7 @@ dexzd-clock.workspace = true
 dexzd-keyspace.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
+futures.workspace = true
 prost.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

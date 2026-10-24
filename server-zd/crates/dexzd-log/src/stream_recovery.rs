@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::future::Future;
 use std::time::Duration;
 
 use dexzd_clock::WallClock;
@@ -17,6 +18,7 @@ use xxhash_rust::xxh3::xxh3_128;
 use crate::batch_codec::{
     BatchContent, DecodedBatch, LogError, StreamIdentity, decode_batch, encode_batch,
 };
+use crate::batch_read_ahead::{LogReadAheadConfig, OrderedBatchReader};
 
 const RECOVERY_WRITE_DEADLINE: Duration = Duration::from_secs(10);
 const LIST_PAGE_KEYS: u32 = 1_000;
@@ -29,6 +31,44 @@ pub struct RecoveredStream {
     pub next_seq: u64,
 }
 
+/// Where a recovered stream continues, once every accepted batch was returned.
+#[derive(Debug)]
+pub struct StreamRecoveryResult {
+    /// Seqs of batches that an EpochStart voided, in the order recovery found them.
+    pub void_sequences: Vec<u64>,
+    /// Seq of the EpochStart that this recovery wrote.
+    pub epoch_start_seq: u64,
+    /// Seq after the last batch of the stream; the commit pipeline continues there.
+    pub next_seq: u64,
+}
+
+/// One step of a [`StreamRecovery`].
+#[derive(Debug)]
+pub enum StreamRecoveryStep {
+    /// The next accepted batch in seq order, to apply before the next step.
+    Apply(DecodedBatch),
+    /// The EpochStart is written and every batch after it is voided or filled.
+    Recovered(StreamRecoveryResult),
+}
+
+/// The stream that a recovery reads and the epoch that its EpochStart starts.
+#[derive(Clone, Copy)]
+pub struct StreamRecoveryInputs<'a> {
+    /// Object storage that holds the stream.
+    pub store: &'a dyn ObjectStore,
+    /// Clock for the EpochStart seal time.
+    pub clock: &'a dyn WallClock,
+    /// The stream to recover.
+    pub stream: &'a StreamIdentity,
+    /// Epoch of the EpochStart; recovery fails with [`LogError::Fenced`] unless it is the newest.
+    pub new_epoch: u64,
+    /// Process ID recorded in the EpochStart.
+    pub writer_process_id: &'a str,
+    /// Read-ahead of the batches after the start position.
+    pub read_ahead: LogReadAheadConfig,
+}
+
+/// Collects every accepted batch in memory; [`StreamRecovery`] returns them as they are read.
 pub async fn recover_stream(
     store: &dyn ObjectStore,
     clock: &dyn WallClock,
@@ -38,26 +78,23 @@ pub async fn recover_stream(
     new_epoch: u64,
     writer_process_id: &str,
 ) -> Result<RecoveredStream, LogError> {
-    if (last_applied_seq == 0) != (last_applied_epoch == 0) {
-        return Err(LogError::Invalid(
-            "invalid applied position or epoch".into(),
-        ));
-    }
-    let from_seq = last_applied_seq
-        .checked_add(1)
-        .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
-    recover_stream_from(
+    let inputs = StreamRecoveryInputs {
         store,
         clock,
         stream,
-        from_seq,
-        last_applied_epoch,
         new_epoch,
         writer_process_id,
-    )
+        read_ahead: LogReadAheadConfig::default(),
+    };
+    collect_recovered_stream(StreamRecovery::after_applied(
+        inputs,
+        last_applied_seq,
+        last_applied_epoch,
+    )?)
     .await
 }
 
+/// Collects every accepted batch in memory; [`StreamRecovery`] returns them as they are read.
 pub async fn recover_stream_from(
     store: &dyn ObjectStore,
     clock: &dyn WallClock,
@@ -67,64 +104,241 @@ pub async fn recover_stream_from(
     new_epoch: u64,
     writer_process_id: &str,
 ) -> Result<RecoveredStream, LogError> {
-    if from_seq == 0 || new_epoch == 0 || writer_process_id.is_empty() {
-        return Err(LogError::Invalid(
-            "invalid stream position, epoch, or writer process ID".into(),
-        ));
-    }
-    validate_node_identifier(&stream.node_id)
-        .map_err(|error| LogError::Invalid(error.to_string()))?;
-    if effective_epoch_at_start >= new_epoch {
-        return Err(LogError::Fenced);
-    }
-    let mut result = RecoveredStream {
-        batches_to_apply: Vec::new(),
-        void_sequences: Vec::new(),
-        epoch_start_seq: 0,
-        next_seq: 0,
-    };
-    let mut effective_epoch = effective_epoch_at_start;
-    let mut seq = from_seq;
-    loop {
-        let key = stream.batch_key(seq);
-        let Some(object) = store.get(&key).await? else {
-            break;
-        };
-        let batch = decode_batch(&object.bytes)?;
-        validate_batch_identity(&batch, stream, seq)?;
-        accept_batch(&mut result, batch, seq, &mut effective_epoch);
-        seq = seq
-            .checked_add(1)
-            .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
-    }
-    if effective_epoch >= new_epoch {
-        return Err(LogError::Fenced);
-    }
-    if seq == from_seq {
-        ensure_batches_after_start_were_not_deleted(store, stream, seq).await?;
-    }
-    let writer = EpochStartWriter {
+    let inputs = StreamRecoveryInputs {
         store,
         clock,
         stream,
         new_epoch,
         writer_process_id,
+        read_ahead: LogReadAheadConfig::default(),
     };
-    let deadline = Instant::now() + RECOVERY_WRITE_DEADLINE;
+    collect_recovered_stream(StreamRecovery::from_seq(
+        inputs,
+        from_seq,
+        effective_epoch_at_start,
+    )?)
+    .await
+}
+
+async fn collect_recovered_stream(
+    mut recovery: StreamRecovery<'_>,
+) -> Result<RecoveredStream, LogError> {
+    let mut batches_to_apply = Vec::new();
     loop {
-        match writer.create_epoch_start(seq, deadline).await? {
-            RecoveryWrite::Written => {
-                result.epoch_start_seq = seq;
-                return writer.finish_epoch_start(result).await;
-            }
-            RecoveryWrite::Found(batch) => {
-                if batch.header.epoch >= new_epoch {
-                    return Err(LogError::Fenced);
-                }
-                accept_batch(&mut result, batch, seq, &mut effective_epoch);
-                seq = next_seq_after(seq)?;
+        match recovery.next_step().await? {
+            StreamRecoveryStep::Apply(batch) => batches_to_apply.push(batch),
+            StreamRecoveryStep::Recovered(result) => {
+                return Ok(RecoveredStream {
+                    batches_to_apply,
+                    void_sequences: result.void_sequences,
+                    epoch_start_seq: result.epoch_start_seq,
+                    next_seq: result.next_seq,
+                });
             }
         }
+    }
+}
+
+/// Recovers a log stream one step at a time, so its batches are applied as they are read.
+///
+/// The steps return every accepted batch in seq order, up to the first missing seq. The recovery
+/// then writes an EpochStart of the new epoch there, voids older batches after it, and fills
+/// pipelined holes. A batch older than the epoch of an earlier EpochStart is void, not returned.
+pub struct StreamRecovery<'a> {
+    writer: EpochStartWriter<'a>,
+    read_ahead: LogReadAheadConfig,
+    from_seq: u64,
+    /// Next seq to examine.
+    seq: u64,
+    effective_epoch: u64,
+    void_sequences: Vec<u64>,
+    phase: RecoveryPhase<'a>,
+}
+
+enum RecoveryPhase<'a> {
+    /// Reading from `from_seq` up to the first missing seq.
+    Reading(OrderedBatchReader<'a>),
+    /// Writing the EpochStart at the first missing seq; a batch found there is examined instead.
+    WritingEpochStart { deadline: Instant },
+    /// No step remains.
+    Finished,
+}
+
+impl<'a> StreamRecovery<'a> {
+    /// Starts a recovery after the applied position `(last_applied_seq, last_applied_epoch)`,
+    /// or from seq 1 when both are zero.
+    ///
+    /// Returns [`LogError::Invalid`] for an inconsistent position and [`LogError::Fenced`] when
+    /// the applied epoch is not older than the new epoch.
+    pub fn after_applied(
+        inputs: StreamRecoveryInputs<'a>,
+        last_applied_seq: u64,
+        last_applied_epoch: u64,
+    ) -> Result<Self, LogError> {
+        if (last_applied_seq == 0) != (last_applied_epoch == 0) {
+            return Err(LogError::Invalid(
+                "invalid applied position or epoch".into(),
+            ));
+        }
+        let from_seq = last_applied_seq
+            .checked_add(1)
+            .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
+        Self::from_seq(inputs, from_seq, last_applied_epoch)
+    }
+
+    /// Starts a recovery that reads from `from_seq`, with `effective_epoch_at_start` in effect
+    /// before it.
+    ///
+    /// Returns [`LogError::Invalid`] for invalid inputs and [`LogError::Fenced`] when
+    /// `effective_epoch_at_start` is not older than the new epoch.
+    pub fn from_seq(
+        inputs: StreamRecoveryInputs<'a>,
+        from_seq: u64,
+        effective_epoch_at_start: u64,
+    ) -> Result<Self, LogError> {
+        let StreamRecoveryInputs {
+            store,
+            clock,
+            stream,
+            new_epoch,
+            writer_process_id,
+            read_ahead,
+        } = inputs;
+        if from_seq == 0 || new_epoch == 0 || writer_process_id.is_empty() {
+            return Err(LogError::Invalid(
+                "invalid stream position, epoch, or writer process ID".into(),
+            ));
+        }
+        validate_node_identifier(&stream.node_id)
+            .map_err(|error| LogError::Invalid(error.to_string()))?;
+        if effective_epoch_at_start >= new_epoch {
+            return Err(LogError::Fenced);
+        }
+        Ok(Self {
+            writer: EpochStartWriter {
+                store,
+                clock,
+                stream,
+                new_epoch,
+                writer_process_id,
+            },
+            read_ahead,
+            from_seq,
+            seq: from_seq,
+            effective_epoch: effective_epoch_at_start,
+            void_sequences: Vec::new(),
+            phase: RecoveryPhase::Reading(OrderedBatchReader::new(
+                store, stream, from_seq, None, read_ahead,
+            )),
+        })
+    }
+
+    /// Returns the next accepted batch, or the result once the EpochStart is written.
+    ///
+    /// Returns [`LogError::Fenced`] as soon as the stream shows an epoch that is not older than
+    /// the new epoch, [`LogError::MissingBatches`] when the batches from the start position were
+    /// deleted, and [`LogError::Invalid`] after the recovery finished or failed.
+    pub async fn next_step(&mut self) -> Result<StreamRecoveryStep, LogError> {
+        loop {
+            let (seq, batch) = match &mut self.phase {
+                RecoveryPhase::Reading(reader) => {
+                    let (seq, batch) = reader
+                        .next_batch()
+                        .await?
+                        .expect("a reader without a last seq returns every seq");
+                    match batch {
+                        Some(batch) => (seq, batch),
+                        None => {
+                            self.finish_reading().await?;
+                            continue;
+                        }
+                    }
+                }
+                RecoveryPhase::WritingEpochStart { deadline } => {
+                    let deadline = *deadline;
+                    match self.writer.create_epoch_start(self.seq, deadline).await? {
+                        RecoveryWrite::Written => {
+                            return self
+                                .finish_recovery()
+                                .await
+                                .map(StreamRecoveryStep::Recovered);
+                        }
+                        RecoveryWrite::Found(batch) => {
+                            if batch.header.epoch >= self.writer.new_epoch {
+                                return Err(LogError::Fenced);
+                            }
+                            (self.seq, batch)
+                        }
+                    }
+                }
+                RecoveryPhase::Finished => {
+                    return Err(LogError::Invalid(
+                        "the stream recovery has no step left".into(),
+                    ));
+                }
+            };
+            self.seq = next_seq_after(seq)?;
+            if let Some(batch) = self.accept_batch(batch, seq)? {
+                return Ok(StreamRecoveryStep::Apply(batch));
+            }
+        }
+    }
+
+    /// Runs `work`, such as applying the last returned batch, while read-ahead continues.
+    ///
+    /// Returns the output of `work`.
+    pub async fn read_ahead_while<F: Future>(&mut self, work: F) -> F::Output {
+        match &mut self.phase {
+            RecoveryPhase::Reading(reader) => reader.read_ahead_while(work).await,
+            RecoveryPhase::WritingEpochStart { .. } | RecoveryPhase::Finished => work.await,
+        }
+    }
+
+    /// Ends reading at the missing `self.seq` and prepares the EpochStart write there.
+    async fn finish_reading(&mut self) -> Result<(), LogError> {
+        // Dropping the reader discards reads past the missing seq unseen.
+        self.phase = RecoveryPhase::Finished;
+        if self.seq == self.from_seq {
+            ensure_batches_after_start_were_not_deleted(
+                self.writer.store,
+                self.writer.stream,
+                self.seq,
+            )
+            .await?;
+        }
+        self.phase = RecoveryPhase::WritingEpochStart {
+            deadline: Instant::now() + RECOVERY_WRITE_DEADLINE,
+        };
+        Ok(())
+    }
+
+    async fn finish_recovery(&mut self) -> Result<StreamRecoveryResult, LogError> {
+        self.phase = RecoveryPhase::Finished;
+        let void_sequences = std::mem::take(&mut self.void_sequences);
+        self.writer
+            .finish_epoch_start(self.seq, void_sequences, self.read_ahead)
+            .await
+    }
+
+    /// Voids `batch` when an earlier EpochStart superseded its epoch, or returns it to apply.
+    ///
+    /// Returns [`LogError::Fenced`] once the effective epoch reaches the new epoch.
+    fn accept_batch(
+        &mut self,
+        batch: DecodedBatch,
+        seq: u64,
+    ) -> Result<Option<DecodedBatch>, LogError> {
+        if batch.header.epoch < self.effective_epoch {
+            self.void_sequences.push(seq);
+            return Ok(None);
+        }
+        if let Some(epoch_start) = &batch.header.epoch_start {
+            self.effective_epoch = epoch_start.epoch;
+        }
+        if self.effective_epoch >= self.writer.new_epoch {
+            return Err(LogError::Fenced);
+        }
+        Ok(Some(batch))
     }
 }
 
@@ -148,25 +362,33 @@ struct EpochStartWriter<'a> {
 impl EpochStartWriter<'_> {
     /// Voids older batches after the EpochStart and fills every hole below the last listed batch.
     ///
-    /// Returns `result` with the voided seqs and `next_seq` after the last batch, or
+    /// Returns `void_sequences` with the voided seqs added and `next_seq` after the last batch, or
     /// [`LogError::Fenced`] when that range holds a batch of this or a newer epoch.
     async fn finish_epoch_start(
         &self,
-        mut result: RecoveredStream,
-    ) -> Result<RecoveredStream, LogError> {
-        let first_seq = next_seq_after(result.epoch_start_seq)?;
-        let Some(last_seq) = self.last_listed_seq_after(result.epoch_start_seq).await? else {
-            result.next_seq = first_seq;
-            return Ok(result);
+        epoch_start_seq: u64,
+        mut void_sequences: Vec<u64>,
+        read_ahead: LogReadAheadConfig,
+    ) -> Result<StreamRecoveryResult, LogError> {
+        let first_seq = next_seq_after(epoch_start_seq)?;
+        let Some(last_seq) = self.last_listed_seq_after(epoch_start_seq).await? else {
+            return Ok(StreamRecoveryResult {
+                void_sequences,
+                epoch_start_seq,
+                next_seq: first_seq,
+            });
         };
         let deadline = Instant::now() + RECOVERY_WRITE_DEADLINE;
-        for seq in first_seq..=last_seq {
-            let found = match self.store.get(&self.stream.batch_key(seq)).await? {
-                Some(object) => {
-                    let batch = decode_batch(&object.bytes)?;
-                    validate_batch_identity(&batch, self.stream, seq)?;
-                    Some(batch)
-                }
+        let mut reader = OrderedBatchReader::new(
+            self.store,
+            self.stream,
+            first_seq,
+            Some(last_seq),
+            read_ahead,
+        );
+        while let Some((seq, batch)) = reader.next_batch().await? {
+            let found = match batch {
+                Some(batch) => Some(batch),
                 // No empty ordinary batch decodes, so an EpochStart of this epoch fills the hole.
                 None => match self.create_epoch_start(seq, deadline).await? {
                     RecoveryWrite::Written => None,
@@ -177,11 +399,14 @@ impl EpochStartWriter<'_> {
                 if batch.header.epoch >= self.new_epoch {
                     return Err(LogError::Fenced);
                 }
-                result.void_sequences.push(seq);
+                void_sequences.push(seq);
             }
         }
-        result.next_seq = next_seq_after(last_seq)?;
-        Ok(result)
+        Ok(StreamRecoveryResult {
+            void_sequences,
+            epoch_start_seq,
+            next_seq: next_seq_after(last_seq)?,
+        })
     }
 
     /// Creates an EpochStart at `seq` unless a batch is there; retries reuse its bytes until `deadline`.
@@ -339,20 +564,4 @@ pub(crate) fn validate_batch_identity(
         )));
     }
     Ok(())
-}
-
-fn accept_batch(
-    result: &mut RecoveredStream,
-    batch: DecodedBatch,
-    seq: u64,
-    effective_epoch: &mut u64,
-) {
-    if batch.header.epoch < *effective_epoch {
-        result.void_sequences.push(seq);
-        return;
-    }
-    if let Some(epoch_start) = &batch.header.epoch_start {
-        *effective_epoch = epoch_start.epoch;
-    }
-    result.batches_to_apply.push(batch);
 }

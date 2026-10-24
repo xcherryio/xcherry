@@ -123,6 +123,21 @@ pub struct LocalStorageConfig {
     pub directory: PathBuf,
     /// Defaults to 256 MiB; memory reserved for the RocksDB block cache.
     pub block_cache_bytes: u64,
+    /// Defaults to 256 MiB; total size of the RocksDB write-ahead log files kept in the directory.
+    /// Beyond it, RocksDB flushes the column families whose memtables keep the oldest log file, so
+    /// the file can be deleted. Lower values bound disk use more tightly at the cost of more, smaller
+    /// flushes. Must be at least 64 MiB, the memtable size of one column family. Without this cap,
+    /// a column family with few writes keeps every log file until they reach four times the memtable
+    /// budget of all column families, about 3 GiB.
+    pub max_wal_bytes: u64,
+    /// Defaults to 64 MiB; once startup replays at least this many bytes of log records, the node
+    /// compacts every RocksDB column family on a background thread while it serves. Any value is
+    /// valid; 0 compacts after every startup. Compaction flushes the memtables, which releases the
+    /// write-ahead log, and drops overwritten and deleted entries. Expected disk use: about the
+    /// live data size once it finishes; while replay or compaction runs, up to the live data plus
+    /// maxWalBytes plus level-0 files that RocksDB has not compacted yet (at most four 64 MiB files
+    /// per column family). Graceful shutdown stops a running compaction.
+    pub compact_after_replay_bytes: u64,
 }
 
 impl Default for LocalStorageConfig {
@@ -130,6 +145,8 @@ impl Default for LocalStorageConfig {
         Self {
             directory: PathBuf::new(),
             block_cache_bytes: 256 * 1024 * 1024,
+            max_wal_bytes: 256 * 1024 * 1024,
+            compact_after_replay_bytes: 64 * 1024 * 1024,
         }
     }
 }
