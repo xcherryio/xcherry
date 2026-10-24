@@ -659,6 +659,7 @@ func TestActionPermissionProjectionSubFlowIsolation(t *testing.T) {
 }
 
 func TestActionPermissionProjectionContinueAsNew(t *testing.T) {
+	skipIfServerZD(t, "Continue-As-New")
 	ctx := integrationContext(t)
 	flow := actionPermissionFlow{}
 	flowID := newFlowID(t, "action-permission-continue")

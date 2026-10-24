@@ -18,6 +18,8 @@ pub enum StartupSelfCheckFailure {
     DuplicateCreate,
     /// A replacement with an incorrect ETag was accepted or failed unexpectedly.
     WrongEtagReplacement,
+    /// A replacement with the current ETag was rejected or failed unexpectedly.
+    CorrectEtagReplacement,
     /// The probe object could not be removed.
     Cleanup,
 }
@@ -38,7 +40,7 @@ pub struct StartupSelfCheckError {
 /// Verifies create-only and ETag replacement semantics, then removes its probe object.
 pub async fn startup_self_check(store: &dyn ObjectStore) -> Result<(), StartupSelfCheckError> {
     let key = format!(
-        ".dexzd-self-check-{}-{}",
+        "probe/{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -52,15 +54,18 @@ pub async fn startup_self_check(store: &dyn ObjectStore) -> Result<(), StartupSe
             WriteCondition::CreateOnly,
         )
         .await;
-    if !matches!(first, Ok(WriteOutcome::Written { .. })) {
-        let mut observed = failure(StartupSelfCheckFailure::InitialCreate, first);
-        if let Err(cleanup_error) = store.delete(&key).await {
-            observed
-                .detail
-                .push_str(&format!("; cleanup failed: {cleanup_error}"));
+    let initial_etag = match first {
+        Ok(WriteOutcome::Written { etag }) => etag,
+        other => {
+            let mut observed = failure(StartupSelfCheckFailure::InitialCreate, other);
+            if let Err(cleanup_error) = store.delete(&key).await {
+                observed
+                    .detail
+                    .push_str(&format!("; cleanup failed: {cleanup_error}"));
+            }
+            return Err(observed);
         }
-        return Err(observed);
-    }
+    };
     let duplicate = store
         .put(
             &key,
@@ -88,6 +93,25 @@ pub async fn startup_self_check(store: &dyn ObjectStore) -> Result<(), StartupSe
         .await;
     if !matches!(replacement, Ok(WriteOutcome::PreconditionFailed)) {
         let mut observed = failure(StartupSelfCheckFailure::WrongEtagReplacement, replacement);
+        if let Err(cleanup_error) = store.delete(&key).await {
+            observed
+                .detail
+                .push_str(&format!("; cleanup failed: {cleanup_error}"));
+        }
+        return Err(observed);
+    }
+    let correct_replacement = store
+        .put(
+            &key,
+            Bytes::from_static(b"replacement"),
+            WriteCondition::ReplaceIfEtagMatches { etag: initial_etag },
+        )
+        .await;
+    if !matches!(correct_replacement, Ok(WriteOutcome::Written { .. })) {
+        let mut observed = failure(
+            StartupSelfCheckFailure::CorrectEtagReplacement,
+            correct_replacement,
+        );
         if let Err(cleanup_error) = store.delete(&key).await {
             observed
                 .detail

@@ -26,7 +26,7 @@ pub struct AttributeIndexDeclaration {
 }
 
 /// Reads the current attribute index registry.
-pub async fn read_registry(
+pub async fn read_attribute_index_registry(
     store: &dyn ObjectStore,
 ) -> Result<AttributeIndexRegistry, MetadataError> {
     match store.get(REGISTRY_KEY).await? {
@@ -41,7 +41,7 @@ pub async fn read_registry(
 }
 
 /// Registers new keys and rejects a type change for an existing tenant key.
-pub async fn register(
+pub async fn register_attribute_indexes(
     store: &dyn ObjectStore,
     clock: &dyn WallClock,
     tenant_id: u64,
@@ -104,12 +104,12 @@ pub async fn register(
         match result {
             Ok(WriteOutcome::Written { .. }) => return Ok(proposed),
             Ok(WriteOutcome::PreconditionFailed) => {
-                if read_registry(store).await? == proposed {
+                if read_attribute_index_registry(store).await? == proposed {
                     return Ok(proposed);
                 }
             }
             Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
-                if read_registry(store).await? == proposed {
+                if read_attribute_index_registry(store).await? == proposed {
                     return Ok(proposed);
                 }
             }

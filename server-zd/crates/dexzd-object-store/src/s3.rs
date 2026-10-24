@@ -31,15 +31,30 @@ const DEFAULT_PART_SIZE: usize = 8 * 1024 * 1024;
 const MAX_CONFLICT_RETRIES: u32 = 2;
 
 /// Credentials used by an S3 object store.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum S3Credentials {
     /// Resolve credentials from the AWS default provider chain.
     DefaultChain,
     /// Sign requests with fixed credentials, usually for a local S3-compatible endpoint.
     Static {
+        /// Access key identifier used for signing.
         access_key_id: String,
+        /// Secret key used for signing.
         secret_access_key: String,
     },
+}
+
+impl std::fmt::Debug for S3Credentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DefaultChain => formatter.write_str("DefaultChain"),
+            Self::Static { .. } => formatter
+                .debug_struct("Static")
+                .field("access_key_id", &"[REDACTED]")
+                .field("secret_access_key", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 /// Configuration of an S3 object store. Keys passed to the store are relative to `key_prefix`.
@@ -57,7 +72,7 @@ pub struct S3ObjectStoreConfig {
     pub force_path_style: bool,
     /// Credentials provider.
     pub credentials: S3Credentials,
-    /// Maximum duration of one SDK request.
+    /// SDK operation timeout, including retries, and maximum wait between streamed body chunks.
     pub request_timeout: Duration,
     /// Bodies at least this size use multipart upload; default 8 MiB.
     pub multipart_threshold: usize,
@@ -90,20 +105,30 @@ pub struct S3ObjectStore {
     key_prefix: String,
     multipart_threshold: usize,
     multipart_part_size: usize,
+    request_timeout: Duration,
 }
 
 impl S3ObjectStore {
     /// Builds a client with the configured endpoint, credentials, timeout, and multipart policy.
     pub async fn new(config: S3ObjectStoreConfig) -> ObjectStoreResult<Self> {
-        if config.bucket.is_empty()
-            || config.multipart_part_size < 5 * 1024 * 1024
-            || config.multipart_threshold == 0
-        {
+        for (field, is_invalid) in [
+            ("region", config.region.is_empty()),
+            ("bucket", config.bucket.is_empty()),
+            ("multipart_threshold", config.multipart_threshold == 0),
+            (
+                "multipart_part_size",
+                config.multipart_part_size < 5 * 1024 * 1024,
+            ),
+            ("request_timeout", config.request_timeout.is_zero()),
+        ] {
+            if !is_invalid {
+                continue;
+            }
             return Err(ObjectStoreError::new(
                 ObjectStoreOperation::Put,
                 "",
                 ObjectStoreErrorKind::Permanent,
-                "bucket, multipart threshold, or part size is invalid",
+                format!("invalid object-store config field: {field}"),
             ));
         }
         let shared = aws_config::defaults(BehaviorVersion::latest())
@@ -115,6 +140,8 @@ impl S3ObjectStore {
             .force_path_style(config.force_path_style)
             .timeout_config(
                 TimeoutConfig::builder()
+                    .connect_timeout(config.request_timeout)
+                    .read_timeout(config.request_timeout)
                     .operation_timeout(config.request_timeout)
                     .build(),
             )
@@ -151,6 +178,7 @@ impl S3ObjectStore {
             },
             multipart_threshold: config.multipart_threshold,
             multipart_part_size: config.multipart_part_size,
+            request_timeout: config.request_timeout,
         })
     }
 
@@ -165,6 +193,8 @@ impl S3ObjectStore {
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
         let is_conditional = condition != WriteCondition::Unconditional;
+        let is_replace_if_etag_matches =
+            matches!(condition, WriteCondition::ReplaceIfEtagMatches { .. });
         let mut request = self
             .client
             .put_object()
@@ -178,7 +208,9 @@ impl S3ObjectStore {
         };
         let response = match request.send().await {
             Ok(response) => response,
-            Err(error) if is_conditional && is_precondition_error(&error) => {
+            Err(error)
+                if is_conditional && is_precondition_error(&error, is_replace_if_etag_matches) =>
+            {
                 return Ok(WriteOutcome::PreconditionFailed);
             }
             Err(error) => return Err(map_sdk_error(ObjectStoreOperation::Put, key, true, error)),
@@ -256,7 +288,7 @@ impl S3ObjectStore {
                 .body(ByteStream::from(Bytes::copy_from_slice(chunk)))
                 .send()
                 .await
-                .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, true, error))?;
+                .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, false, error))?;
             let etag = required(
                 response.e_tag(),
                 ObjectStoreOperation::Put,
@@ -363,7 +395,7 @@ impl S3ObjectStore {
                 .body(ByteStream::from(buffer))
                 .send()
                 .await
-                .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, true, error))?;
+                .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, false, error))?;
             let etag = required(
                 response.e_tag(),
                 ObjectStoreOperation::Put,
@@ -391,6 +423,8 @@ impl S3ObjectStore {
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
         let is_conditional = condition != WriteCondition::Unconditional;
+        let is_replace_if_etag_matches =
+            matches!(condition, WriteCondition::ReplaceIfEtagMatches { .. });
         let upload = CompletedMultipartUpload::builder()
             .set_parts(Some(parts))
             .build();
@@ -408,7 +442,9 @@ impl S3ObjectStore {
         };
         let response = match request.send().await {
             Ok(response) => response,
-            Err(error) if is_conditional && is_precondition_error(&error) => {
+            Err(error)
+                if is_conditional && is_precondition_error(&error, is_replace_if_etag_matches) =>
+            {
                 return Ok(WriteOutcome::PreconditionFailed);
             }
             Err(error) => return Err(map_sdk_error(ObjectStoreOperation::Put, key, true, error)),
@@ -447,6 +483,8 @@ impl S3ObjectStore {
             )
         })?;
         let is_conditional = condition != WriteCondition::Unconditional;
+        let is_replace_if_etag_matches =
+            matches!(condition, WriteCondition::ReplaceIfEtagMatches { .. });
         let mut request = self
             .client
             .put_object()
@@ -460,7 +498,9 @@ impl S3ObjectStore {
         };
         let response = match request.send().await {
             Ok(response) => response,
-            Err(error) if is_conditional && is_precondition_error(&error) => {
+            Err(error)
+                if is_conditional && is_precondition_error(&error, is_replace_if_etag_matches) =>
+            {
                 return Ok(WriteOutcome::PreconditionFailed);
             }
             Err(error) => return Err(map_sdk_error(ObjectStoreOperation::Put, key, true, error)),
@@ -468,6 +508,31 @@ impl S3ObjectStore {
         Ok(WriteOutcome::Written {
             etag: required(response.e_tag(), ObjectStoreOperation::Put, key, "ETag")?.to_owned(),
         })
+    }
+
+    async fn read_body_chunk(
+        &self,
+        body: &mut ByteStream,
+        key: &str,
+    ) -> ObjectStoreResult<Option<Bytes>> {
+        tokio::time::timeout(self.request_timeout, body.try_next())
+            .await
+            .map_err(|error| {
+                ObjectStoreError::new(
+                    ObjectStoreOperation::Get,
+                    key,
+                    ObjectStoreErrorKind::Transient,
+                    format!("body read timed out: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                ObjectStoreError::new(
+                    ObjectStoreOperation::Get,
+                    key,
+                    ObjectStoreErrorKind::Transient,
+                    error.to_string(),
+                )
+            })
     }
 
     async fn get_inner(
@@ -518,41 +583,61 @@ impl S3ObjectStore {
             }
         };
         let etag = required(response.e_tag(), ObjectStoreOperation::Get, key, "ETag")?.to_owned();
-        let object_size = response
-            .content_range()
-            .and_then(|value| value.rsplit_once('/'))
-            .and_then(|(_, size)| size.parse::<u64>().ok())
-            .or_else(|| {
-                response
-                    .content_length()
-                    .and_then(|size| u64::try_from(size).ok())
-            })
-            .ok_or_else(|| {
+        let object_size = if range.is_some() {
+            parse_content_range_size(
+                required(
+                    response.content_range(),
+                    ObjectStoreOperation::Get,
+                    key,
+                    "Content-Range",
+                )?,
+                key,
+            )?
+        } else {
+            u64::try_from(response.content_length().unwrap_or(-1)).map_err(|error| {
                 ObjectStoreError::new(
                     ObjectStoreOperation::Get,
                     key,
                     ObjectStoreErrorKind::Permanent,
-                    "response omitted object size",
-                )
-            })?;
-        let bytes = response
-            .body
-            .collect()
-            .await
-            .map_err(|error| {
-                ObjectStoreError::new(
-                    ObjectStoreOperation::Get,
-                    key,
-                    ObjectStoreErrorKind::Transient,
-                    error.to_string(),
+                    format!("invalid object size: {error}"),
                 )
             })?
-            .into_bytes();
+        };
+        let mut body = response.body;
+        let mut buffer = Vec::new();
+        while let Some(chunk) = self.read_body_chunk(&mut body, key).await? {
+            buffer.extend_from_slice(&chunk);
+        }
+        let bytes = Bytes::from(buffer);
         Ok(Some(ObjectContent {
             bytes,
             etag,
             object_size,
         }))
+    }
+}
+
+fn parse_content_range_size(value: &str, key: &str) -> ObjectStoreResult<u64> {
+    let invalid = || {
+        ObjectStoreError::new(
+            ObjectStoreOperation::Get,
+            key,
+            ObjectStoreErrorKind::Permanent,
+            format!("invalid Content-Range: {value}"),
+        )
+    };
+    let (bounds, total) = value
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(invalid)?;
+    let (start, end) = bounds.split_once('-').ok_or_else(invalid)?;
+    let start = start.parse::<u64>().map_err(|_| invalid())?;
+    let end = end.parse::<u64>().map_err(|_| invalid())?;
+    let total = total.parse::<u64>().map_err(|_| invalid())?;
+    if start <= end && end < total {
+        Ok(total)
+    } else {
+        Err(invalid())
     }
 }
 
@@ -654,14 +739,7 @@ impl ObjectStore for S3ObjectStore {
         })?;
         let mut download = TemporaryDownloadFile::create(key, path).await?;
         let mut body = response.body;
-        while let Some(chunk) = body.try_next().await.map_err(|error| {
-            ObjectStoreError::new(
-                ObjectStoreOperation::Get,
-                key,
-                ObjectStoreErrorKind::Transient,
-                error.to_string(),
-            )
-        })? {
+        while let Some(chunk) = self.read_body_chunk(&mut body, key).await? {
             download.write_all(&chunk).await?;
         }
         download.commit().await?;
@@ -723,6 +801,9 @@ impl ObjectStore for S3ObjectStore {
     }
 
     async fn delete_many(&self, keys: &[String]) -> ObjectStoreResult<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
         if keys.len() > 1000 {
             return Err(ObjectStoreError::new(
                 ObjectStoreOperation::Delete,
@@ -731,58 +812,56 @@ impl ObjectStore for S3ObjectStore {
                 "delete_many accepts at most 1000 keys",
             ));
         }
-        for chunk in keys.chunks(1000) {
-            let objects = chunk
-                .iter()
-                .map(|key| {
-                    ObjectIdentifier::builder()
-                        .key(self.full_key(key))
-                        .build()
-                        .map_err(|error| {
-                            ObjectStoreError::new(
-                                ObjectStoreOperation::Delete,
-                                key,
-                                ObjectStoreErrorKind::Permanent,
-                                error.to_string(),
-                            )
-                        })
-                })
-                .collect::<ObjectStoreResult<Vec<_>>>()?;
-            let delete = Delete::builder()
-                .set_objects(Some(objects))
-                .quiet(true)
-                .build()
-                .map_err(|error| {
-                    ObjectStoreError::new(
-                        ObjectStoreOperation::Delete,
-                        "",
-                        ObjectStoreErrorKind::Permanent,
-                        error.to_string(),
-                    )
-                })?;
-            let response = self
-                .client
-                .delete_objects()
-                .bucket(&self.bucket)
-                .delete(delete)
-                .send()
-                .await
-                .map_err(|error| map_sdk_error(ObjectStoreOperation::Delete, "", true, error))?;
-            if let Some(error) = response.errors().first() {
-                let kind = match error.code().unwrap_or("") {
-                    "SlowDown" | "Throttling" | "ThrottlingException" => {
-                        ObjectStoreErrorKind::Transient
-                    }
-                    "InternalError" | "ServiceUnavailable" => ObjectStoreErrorKind::OutcomeUnknown,
-                    _ => ObjectStoreErrorKind::Permanent,
-                };
-                return Err(ObjectStoreError::new(
+        let objects = keys
+            .iter()
+            .map(|key| {
+                ObjectIdentifier::builder()
+                    .key(self.full_key(key))
+                    .build()
+                    .map_err(|error| {
+                        ObjectStoreError::new(
+                            ObjectStoreOperation::Delete,
+                            key,
+                            ObjectStoreErrorKind::Permanent,
+                            error.to_string(),
+                        )
+                    })
+            })
+            .collect::<ObjectStoreResult<Vec<_>>>()?;
+        let delete = Delete::builder()
+            .set_objects(Some(objects))
+            .quiet(true)
+            .build()
+            .map_err(|error| {
+                ObjectStoreError::new(
                     ObjectStoreOperation::Delete,
-                    error.key().unwrap_or(""),
-                    kind,
-                    error.message().unwrap_or("batch deletion failed"),
-                ));
-            }
+                    "",
+                    ObjectStoreErrorKind::Permanent,
+                    error.to_string(),
+                )
+            })?;
+        let response = self
+            .client
+            .delete_objects()
+            .bucket(&self.bucket)
+            .delete(delete)
+            .send()
+            .await
+            .map_err(|error| map_sdk_error(ObjectStoreOperation::Delete, "", true, error))?;
+        if let Some(error) = response.errors().first() {
+            let kind = match error.code().unwrap_or("") {
+                "SlowDown" | "Throttling" | "ThrottlingException" => {
+                    ObjectStoreErrorKind::Transient
+                }
+                "InternalError" | "ServiceUnavailable" => ObjectStoreErrorKind::Transient,
+                _ => ObjectStoreErrorKind::Permanent,
+            };
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Delete,
+                error.key().unwrap_or(""),
+                kind,
+                error.message().unwrap_or("batch deletion failed"),
+            ));
         }
         Ok(())
     }

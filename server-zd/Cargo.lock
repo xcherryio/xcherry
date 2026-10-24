@@ -1117,6 +1117,7 @@ dependencies = [
  "dexzd-api",
  "dexzd-clock",
  "dexzd-engine",
+ "dexzd-keyspace",
  "dexzd-object-store",
  "dexzd-storage",
  "humantime-serde",
@@ -1175,6 +1176,7 @@ name = "dexzd-stream-store"
 version = "0.1.0"
 dependencies = [
  "dexzd-protocol",
+ "prost",
  "thiserror",
  "tokio",
  "tracing",

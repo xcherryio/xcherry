@@ -23,6 +23,22 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("persistent message decode failed: {0}")]
     Decode(#[from] prost::DecodeError),
+    #[error("invalid node ID: {0}")]
+    NodeIdentifier(#[from] dexzd_keyspace::NodeIdentifierError),
+    #[error("existing RocksDB at {path} has no node metadata")]
+    MissingNodeMetadata { path: std::path::PathBuf },
+    #[error("invalid range delete in {cf:?}: {start:?}..{end:?}")]
+    InvalidRange {
+        cf: ColumnFamily,
+        start: Vec<u8>,
+        end: Vec<u8>,
+    },
+    #[error("snapshot manifest already exists with different content at {key}")]
+    SnapshotManifestConflict { key: String },
+    #[error("snapshot file checksum mismatch at {key}")]
+    SnapshotChecksumMismatch { key: String },
+    #[error("snapshot object differs at {key}")]
+    SnapshotObjectMismatch { key: String },
     #[error("invalid local store content: {0}")]
     Invalid(String),
 }
@@ -113,7 +129,7 @@ impl WriteBatch {
     }
 }
 
-pub trait LocalReadView {
+pub trait LocalReadView: Send + Sync {
     fn get(&self, cf: ColumnFamily, key: &[u8]) -> StorageResult<Option<Vec<u8>>>;
 
     fn multi_get(&self, cf: ColumnFamily, keys: &[&[u8]]) -> StorageResult<Vec<Option<Vec<u8>>>> {
@@ -181,9 +197,9 @@ pub trait LocalReadView {
     }
 }
 
-pub trait LocalStore: LocalReadView {
+pub trait LocalStore: LocalReadView + Send + Sync {
     fn write(&self, batch: WriteBatch) -> StorageResult<()>;
-    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + '_>>;
+    fn consistent_view(&self) -> StorageResult<Box<dyn LocalReadView + Send + Sync + '_>>;
 
     fn put_partition_meta(&self, meta: &PartitionMeta) -> StorageResult<()> {
         let mut batch = WriteBatch::new();
