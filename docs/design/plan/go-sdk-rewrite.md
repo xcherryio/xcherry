@@ -570,6 +570,21 @@ type Credential interface {
 // FileCredential reads a token file and rereads it when it changes.
 func FileCredential(path string) (Credential, error)
 
+// APIKeyCredential exchanges a long-lived API key for short-lived access tokens.
+func APIKeyCredential(
+	tokenURL string,
+	serverID string,
+	apiKey string,
+	options ...APIKeyCredentialOption,
+) (Credential, error)
+
+type APIKeyCredentialOption interface {
+	// unexported
+}
+
+func WithAPIKeyExchangeTimeout(timeout time.Duration) APIKeyCredentialOption
+func WithAPIKeyHTTPClient(httpClient *http.Client) APIKeyCredentialOption
+
 type Worker struct {
 	// unexported
 }
@@ -640,6 +655,17 @@ and exposes an HTTP readiness handler. The other SDKs will follow.
 
 `FileCredential` rereads its file when the file changes, so a rotated token,
 such as a projected service account token, takes effect without a restart.
+
+`APIKeyCredential` posts `{"server_id","api_key"}` as JSON to an `https` token
+URL, or an `http` URL on a loopback host, and caches the returned bearer token.
+It refreshes on the first call after 80% of `expires_in`, runs at most one
+exchange at a time, and keeps serving a still-valid token while a failed
+refresh is retried at most every 5 seconds. Construction does not contact the
+network. The SDK attaches its token in client interceptors instead of
+per-RPC credentials, so an `UNAUTHENTICATED` rejection discards exactly the
+token that the call used. Unary calls retry once with a fresh token; pull poll
+streams only discard the token and rely on their reconnection. Other
+`Credential` implementations keep per-RPC credentials and get no retry.
 
 `Worker.WorkerTarget()` returns a fresh copy of the resolved target for
 `ClientOptions`. It does not mutate a caller-owned option value.

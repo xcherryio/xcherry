@@ -71,13 +71,7 @@ func withStreamingFlowService(
 }
 
 func newFlowService(options options) (*flowService, error) {
-	var perRPCCredential credentials.PerRPCCredentials
-	var err error
-	if options.hasFile || options.credentialFile != "" {
-		perRPCCredential, err = credential.File(options.credentialFile)
-	} else if options.hasCredential || options.credential != "" {
-		perRPCCredential, err = credential.Static(options.credential)
-	}
+	perRPCCredential, err := newPerRPCCredential(options)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +96,26 @@ func newFlowService(options options) (*flowService, error) {
 		connection: connection,
 		service:    dexpb.NewFlowServiceClient(connection),
 	}, nil
+}
+
+func newPerRPCCredential(options options) (credentials.PerRPCCredentials, error) {
+	if err := options.validateAPIKeySettings(); err != nil {
+		return nil, newUsageError("dexcli", err)
+	}
+	switch {
+	case options.hasAPIKeySettings():
+		apiKey, err := options.readAPIKey()
+		if err != nil {
+			return nil, err
+		}
+		return newAPIKeyCredential(options.tokenURL, options.serverID, apiKey)
+	case options.hasFile || options.credentialFile != "":
+		return credential.File(options.credentialFile)
+	case options.hasCredential || options.credential != "":
+		return credential.Static(options.credential)
+	default:
+		return nil, nil
+	}
 }
 
 func requestContext(ctx context.Context, options options) (context.Context, context.CancelFunc) {

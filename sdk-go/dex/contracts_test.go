@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net/http"
 	"testing"
 	"time"
 
@@ -234,6 +235,20 @@ var (
 	_ interface{ Unwrap() error }                 = (*dex.PullRegistrationError)(nil)
 )
 
+var (
+	_ func(string, string, string, ...dex.APIKeyCredentialOption) (dex.Credential, error) = dex.APIKeyCredential
+	_ func(time.Duration) dex.APIKeyCredentialOption                                      = dex.WithAPIKeyExchangeTimeout
+	_ func(*http.Client) dex.APIKeyCredentialOption                                       = dex.WithAPIKeyHTTPClient
+	_ dex.Credential                                                                      = applicationCredential{}
+)
+
+// applicationCredential proves an application Credential still needs only Token.
+type applicationCredential struct{}
+
+func (applicationCredential) Token(context.Context) (string, error) {
+	return "application-token", nil
+}
+
 func TestPublicContractsCompile(t *testing.T) {
 	_ = dex.PullWorkerOptions{MaxConcurrentTasks: 4, ReservedRPCTasks: ptr.Any(0)}
 	var reserveDeclines func(*dex.Worker) uint64 = (*dex.Worker).PullReservedRPCDeclines
@@ -325,6 +340,25 @@ func TestPublicContractsCompile(t *testing.T) {
 	}
 	if _, err := dex.NewClient(registry, cache, dex.ClientOptions{GrpcMaxMessageBytes: -1}); err == nil {
 		t.Fatal("negative GrpcMaxMessageBytes was accepted")
+	}
+	apiKeyCredential, err := dex.APIKeyCredential(
+		"https://auth.example.com/oauth/token",
+		"orders-production",
+		"contract-api-key",
+		dex.WithAPIKeyExchangeTimeout(5*time.Second),
+		dex.WithAPIKeyHTTPClient(&http.Client{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range []dex.Credential{apiKeyCredential, applicationCredential{}} {
+		credentialClient, err := dex.NewClient(registry, cache, dex.ClientOptions{Credential: credential})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := credentialClient.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err = client.StartFlow(
 		context.Background(),
