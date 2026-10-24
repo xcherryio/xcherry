@@ -205,7 +205,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.7.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/superdurable/dex/blob-cache-go v0.1.1
+	github.com/superdurable/dex/blob-cache-go v0.1.2
 	github.com/superdurable/dex/sdk-go v0.0.0
 	github.com/temporalio/ringpop-go v0.1.0 // indirect
 	github.com/temporalio/sqlparser v0.1.0 // indirect

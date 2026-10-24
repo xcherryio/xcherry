@@ -22,8 +22,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/superdurable/dex/blob-cache-go v0.1.0 h1:+c3H5YBWG3DlICOHbgT9IUM5vTlfLYGP5Vd5sWr7WTY=
-github.com/superdurable/dex/blob-cache-go v0.1.0/go.mod h1:Atepb7+sztvDCztVKmlvEKCSKFCkHKtDhoFYjaFmtEw=
+github.com/superdurable/dex/blob-cache-go v0.1.2 h1:vHwmUZl59GkpTdrcwouj47rnKdx45ETfZdtfxn/vzSM=
+github.com/superdurable/dex/blob-cache-go v0.1.2/go.mod h1:Atepb7+sztvDCztVKmlvEKCSKFCkHKtDhoFYjaFmtEw=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.39.0 h1:8yPrr/S0ND9QEfTfdP9V+SiwT4E0G7Y5MO7p85nis48=

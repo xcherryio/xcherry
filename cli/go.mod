@@ -121,7 +121,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/snowflakedb/gosnowflake/v2 v2.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/superdurable/dex/blob-cache-go v0.1.1 // indirect
+	github.com/superdurable/dex/blob-cache-go v0.1.2 // indirect
 	github.com/temporalio/ringpop-go v0.1.0 // indirect
 	github.com/temporalio/tchannel-go v1.22.1 // indirect
 	github.com/twmb/murmur3 v1.1.5 // indirect
