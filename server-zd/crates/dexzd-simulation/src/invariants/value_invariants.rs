@@ -18,13 +18,14 @@ use dexzd_protocol::dexzd::v1::{
     StepExecutionPhase, StoredStepCompletionOutput, StoredValue, command_reply, stored_value,
 };
 
-use crate::invariants::{InvariantViolation, RunContext};
+use crate::invariants::{CheckerMemory, InvariantViolation, RunContext, WindowPointState};
 use crate::row_decoding::hex;
-use crate::state_view::RunView;
+use crate::state_view::{FlowView, RunView};
 
 const HOLDERS: &str = "I1-value-holders";
 const GARBAGE: &str = "I1-value-garbage";
 const REFERENCE: &str = "I1-value-reference";
+const WINDOW_REFERENCE: &str = "I1-window-value-reference";
 const HARD_DELETE: &str = "hard-delete-object";
 
 /// RequestKind::InvokeRpc in `dexzd-keyspace`.
@@ -34,6 +35,7 @@ pub(crate) fn check_values(
     context: &RunContext<'_>,
     run: &RunView,
     genesis: Option<&BTreeSet<ValueId>>,
+    window_points: Option<&BTreeMap<u64, WindowPointState>>,
 ) -> Result<(), InvariantViolation> {
     let mut slots = HolderCollector::default();
     collect_slots(run, &mut slots);
@@ -83,7 +85,90 @@ pub(crate) fn check_values(
         }
     }
     check_garbage(context, run)?;
+    check_window_references(context, run, window_points)?;
     check_hard_delete_objects(context, run)
+}
+
+pub(crate) fn remember_window_points(view: &FlowView, memory: &mut CheckerMemory) {
+    for (run_id, run) in view.runs.iter().filter(|(_, run)| run.is_complete) {
+        let window_start = run
+            .record
+            .as_ref()
+            .map_or(0, |record| record.window_start_seq);
+        let points = memory.window_points.entry(*run_id).or_default();
+        points.retain(|seq, _| *seq >= window_start);
+        let current_references = collect_references(run);
+        let current_attribute_values: BTreeSet<ValueId> = run
+            .attributes
+            .values()
+            .filter_map(|attribute| table_value_id(attribute.value.as_ref()))
+            .collect();
+        for (seq, history) in &run.history {
+            if history.is_semantic && *seq >= window_start {
+                points.entry(*seq).or_insert_with(|| WindowPointState {
+                    references: current_references.clone(),
+                    attribute_values: current_attribute_values.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn collect_references(run: &RunView) -> BTreeSet<(ValueId, u64)> {
+    let mut slots = HolderCollector::default();
+    collect_slots(run, &mut slots);
+    slots.references
+}
+
+fn table_value_id(stored: Option<&StoredValue>) -> Option<ValueId> {
+    let stored_value::Kind::TableValue(reference) = stored?.kind.as_ref()? else {
+        return None;
+    };
+    let value_id = reference.value_id?;
+    Some(ValueId {
+        run_seq: value_id.run_seq,
+        index_in_command: value_id.index_in_command,
+    })
+}
+
+fn check_window_references(
+    context: &RunContext<'_>,
+    run: &RunView,
+    window_points: Option<&BTreeMap<u64, WindowPointState>>,
+) -> Result<(), InvariantViolation> {
+    let window_start = run
+        .record
+        .as_ref()
+        .map_or(0, |record| record.window_start_seq);
+    for (seq, history) in &run.history {
+        if !history.is_semantic || *seq < window_start {
+            continue;
+        }
+        let point = window_points
+            .and_then(|points| points.get(seq))
+            .ok_or_else(|| {
+                InvariantViolation::new(
+                    WINDOW_REFERENCE,
+                    format!("{context} semantic point {seq} has no recorded state"),
+                )
+            })?;
+        for (value_id, size_bytes) in &point.references {
+            let birth = run.value_births.get(value_id);
+            if !run.value_rows.contains(value_id)
+                || !birth.is_some_and(|birth| birth.size_bytes == *size_bytes)
+            {
+                return Err(InvariantViolation::new(
+                    WINDOW_REFERENCE,
+                    format!(
+                        "{context} semantic point {seq} references unreadable value {value_id:?} \
+                         of {size_bytes} bytes (value row: {}, birth: {birth:?})",
+                        run.value_rows.contains(value_id)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every hard-delete Attribute has exactly one current object row naming its object.
@@ -387,7 +472,7 @@ mod tests {
             flow_id: "order-1",
             run_id: &run_id,
         };
-        check_values(&context, run, None)
+        check_values(&context, run, None, None)
     }
 
     #[test]

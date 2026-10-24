@@ -20,6 +20,7 @@ use dexzd_keyspace::{RunId, ValueId};
 use crate::state_view::FlowView;
 
 pub use lock_invariants::check_fresh_snapshot;
+pub(crate) use value_invariants::remember_window_points;
 
 /// A broken invariant: a stable name for grouping and a description of the evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,14 @@ impl fmt::Display for InvariantViolation {
 pub struct CheckerMemory {
     /// Values each run pinned with the genesis holder when it started (plan D12).
     pub genesis_values: BTreeMap<RunId, BTreeSet<ValueId>>,
+    /// Value references observed when each semantic point was current, retained through its window.
+    pub(crate) window_points: BTreeMap<RunId, BTreeMap<u64, WindowPointState>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WindowPointState {
+    pub(crate) references: BTreeSet<(ValueId, u64)>,
+    pub(crate) attribute_values: BTreeSet<ValueId>,
 }
 
 /// Attribute keys that only lock-holding attempts write, for the lost-update check (L2).
@@ -74,7 +83,7 @@ pub fn check_flow(
         lock_invariants::check_locks(&context, run)?;
         lock_invariants::check_guarded_attributes(&context, run)?;
         let genesis = memory.genesis_values.get(run_id);
-        value_invariants::check_values(&context, run, genesis)?;
+        value_invariants::check_values(&context, run, genesis, memory.window_points.get(run_id))?;
     }
     Ok(())
 }

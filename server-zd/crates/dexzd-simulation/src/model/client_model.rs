@@ -294,3 +294,16 @@ pub(crate) fn later_handler_command(
         }),
     }
 }
+
+pub(crate) fn time_travel_to_window_point(flow_id: &str, timestamp_micros: i64) -> Command {
+    Command::TimeTravel(TimeTravelCommand {
+        request: Some(ResetFlowRequest {
+            flow_id: flow_id.to_owned(),
+            reset_type: FlowResetType::HistoryEventTime as i32,
+            history_event_time: (i128::from(timestamp_micros) * 1000).to_string(),
+            reason: "inspect an earlier value".to_owned(),
+            skip_writes_reapply: true,
+            ..ResetFlowRequest::default()
+        }),
+    })
+}

@@ -11,6 +11,7 @@
 //! Set `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_COMMANDS` for a longer budget, or
 //! `DEXZD_SIMULATION_SEED` for one seed.
 
+use dexzd_protocol::dexzd::v1::{command_reply, flow_command::Command};
 use dexzd_simulation::{
     ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, SimulationSummary, run_seed,
 };
@@ -92,4 +93,31 @@ fn the_same_seed_proposes_and_applies_the_same_commands() {
     let (second_trace, second_state) = run();
     assert!(first_trace == second_trace, "the command traces differ");
     assert!(first_state == second_state, "the final states differ");
+}
+
+#[test]
+fn an_overwritten_attribute_is_read_after_travel_to_its_earlier_point() {
+    let mut checker = ApplyChecker::new();
+    let mut generator = CommandGenerator::new(FIRST_SEED);
+    let mut successful_window_travels = 0;
+    for _ in 0..DEFAULT_COMMANDS_PER_SEED {
+        let command = generator.next_command(&checker).expect("state decodes");
+        let is_window_travel = matches!(
+            &command.command,
+            Some(Command::TimeTravel(travel))
+                if travel.request.as_ref().is_some_and(|request| request.reason == "inspect an earlier value")
+        );
+        let outcome = checker
+            .apply_and_check(&command)
+            .unwrap_or_else(|violation| panic!("{violation}"));
+        if is_window_travel
+            && matches!(
+                outcome.reply.reply,
+                Some(command_reply::Reply::TimeTravel(_))
+            )
+        {
+            successful_window_travels += 1;
+        }
+    }
+    assert!(successful_window_travels > 0);
 }

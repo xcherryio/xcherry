@@ -9,15 +9,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::{ApplyContext, ApplyOutcome, StateWrite, apply_flow_command};
-use dexzd_keyspace::row_keys::run_singleton_key;
-use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, parse_run_key};
+use dexzd_keyspace::row_keys::{run_singleton_key, value_row_key};
+use dexzd_keyspace::{
+    ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, parse_run_key,
+};
 use dexzd_protocol::dexzd::v1::{
-    FlowCommand, RunRecord, StepInvocationKey, command_reply, flow_command::Command, stored_value,
+    FlowCommand, RunRecord, StepInvocationKey, ValueRecord, command_reply, flow_command::Command,
+    stored_value,
 };
 use prost::Message;
 
 use crate::invalid_client_inputs::{check_invalid_client_input_rejected, invalid_client_input};
-use crate::invariants::{CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot};
+use crate::invariants::{
+    CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot, remember_window_points,
+};
 use crate::memory_state::MemoryFlowState;
 use crate::state_view::{FlowView, RunSelection};
 
@@ -133,11 +138,32 @@ impl ApplyChecker {
             .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
         let touched_runs = touched_runs(&outcome);
         let view = self.view(&command.flow_id, RunSelection::Only(&touched_runs))?;
+        remember_window_points(&view, &mut self.memory);
         if is_applied {
             self.check_command_effects(command, &outcome, &view)?;
         }
         check_flow(&command.flow_id, &view, &self.memory)?;
         Ok(outcome)
+    }
+
+    pub(crate) fn earlier_window_value_point(
+        &self,
+        run_id: RunId,
+        run: &crate::state_view::RunView,
+    ) -> Option<i64> {
+        let current_attempt = run.record.as_ref()?.current_attempt;
+        let points = self.memory.window_points.get(&run_id)?;
+        run.history.iter().find_map(|(seq, history)| {
+            (history.is_semantic
+                && history.attempt == current_attempt
+                && points.get(seq).is_some_and(|point| {
+                    point
+                        .attribute_values
+                        .iter()
+                        .any(|value_id| !run.value_holders.contains_key(value_id))
+                }))
+            .then_some(history.timestamp_micros)
+        })
     }
 
     fn record_applied_result(&mut self, command: &FlowCommand) -> Result<(), InvariantViolation> {
@@ -200,7 +226,70 @@ impl ApplyChecker {
                     .unwrap_or_default();
                 check_fresh_snapshot(run, step_execution_id)?;
             }
+            Some(Command::TimeTravel(_))
+                if matches!(
+                    outcome.reply.reply,
+                    Some(command_reply::Reply::TimeTravel(_))
+                ) =>
+            {
+                self.read_traveled_attributes(command, view)?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn read_traveled_attributes(
+        &self,
+        command: &FlowCommand,
+        view: &FlowView,
+    ) -> Result<(), InvariantViolation> {
+        let run_id = RunId::from_slice(&command.run_id)
+            .map_err(|error| InvariantViolation::new("apply-error", error.to_string()))?;
+        let run = view.runs.get(&run_id).ok_or_else(|| {
+            InvariantViolation::new("I1-time-travel-attribute-read", "traveled run has no rows")
+        })?;
+        let flow_hash = self.context(&command.flow_id).flow_hash;
+        for (key, attribute) in &run.attributes {
+            let Some(stored_value::Kind::TableValue(reference)) = attribute
+                .value
+                .as_ref()
+                .and_then(|value| value.kind.as_ref())
+            else {
+                continue;
+            };
+            let value_id = reference.value_id.ok_or_else(|| {
+                InvariantViolation::new(
+                    "I1-time-travel-attribute-read",
+                    format!("Attribute {key} has no value ID"),
+                )
+            })?;
+            let value_id = ValueId {
+                run_seq: value_id.run_seq,
+                index_in_command: value_id.index_in_command,
+            };
+            let value_key = value_row_key(flow_hash, run_id, RunTable::Value, value_id);
+            let bytes = self
+                .state
+                .row(ColumnFamily::Value, &value_key)
+                .ok_or_else(|| {
+                    InvariantViolation::new(
+                        "I1-time-travel-attribute-read",
+                        format!("Attribute {key} references missing value {value_id:?}"),
+                    )
+                })?;
+            let value_record = ValueRecord::decode(bytes).map_err(|error| {
+                InvariantViolation::new(
+                    "I1-time-travel-attribute-read",
+                    format!("Attribute {key} value {value_id:?} cannot be decoded: {error}"),
+                )
+            })?;
+            if value_record.value.is_none() {
+                return Err(InvariantViolation::new(
+                    "I1-time-travel-attribute-read",
+                    format!("Attribute {key} value {value_id:?} has no content"),
+                ));
+            }
         }
         Ok(())
     }
