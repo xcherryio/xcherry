@@ -213,7 +213,7 @@ pub(crate) struct ParadeDbSettings<'a> {
 }
 
 impl ServeConfig<'_> {
-    /// Writes the YAML file that `serve --config` reads, with hourly snapshots.
+    /// Writes the YAML file that `serve --config` reads.
     pub(crate) fn write(&self, path: &Path) {
         self.write_with_snapshot_schedule(path, "1h", "24h");
     }

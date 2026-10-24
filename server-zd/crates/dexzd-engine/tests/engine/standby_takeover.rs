@@ -74,8 +74,7 @@ async fn a_standby_with_its_own_rocksdb_store_keeps_every_acknowledged_write() {
     .await;
 }
 
-/// A standby waits on the lease while the serving node snapshots, deletes the covered log, and
-/// stops. The standby must recover from the newest snapshot, not from what it read before.
+/// The standby must recover from the newest snapshot after the serving node cleaned its log.
 async fn take_over_after_log_cleanup(
     cluster: &mut TestCluster,
     mut serving_config: EngineNodeConfig,
