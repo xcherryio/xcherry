@@ -12,7 +12,8 @@
 //! `DEXZD_SIMULATION_SEED` for one seed.
 
 use dexzd_simulation::{
-    ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, SimulationSummary, run_seed,
+    ApplyChecker, CommandGenerator, INVALID_CLIENT_INPUT_CLASSES, SimulationFailure,
+    SimulationSummary, run_seed,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -79,18 +80,14 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
     let mut failing_seeds = Vec::new();
     let mut total = SimulationSummary::default();
     for (seed, command_count) in seeds {
-        match run_seed(seed, command_count) {
+        match run_seed(seed, command_count, |failure| {
+            write_failure_report(failure_directory.as_ref(), failure);
+        }) {
             Ok(summary) => total.merge(&summary),
             Err(failure) => {
-                let report = failure.to_string();
-                eprintln!("{report}");
-                if let Some(directory) = &failure_directory {
-                    std::fs::create_dir_all(directory)
-                        .expect("create simulation failure directory");
-                    std::fs::write(directory.join(format!("{seed}.txt")), report)
-                        .expect("write simulation failure report");
-                }
+                write_failure_report(failure_directory.as_ref(), &failure);
                 failing_seeds.push(seed);
+                break;
             }
         }
     }
@@ -122,6 +119,22 @@ fn apply_keeps_every_invariant_over_random_command_sequences() {
             total.size_rejections.get(class).copied().unwrap_or(0) > 0,
             "the seed set never had apply reject an {class} for its size: {total:#?}"
         );
+    }
+}
+
+#[expect(clippy::print_stderr, reason = "test failures need a console report")]
+fn write_failure_report(directory: Option<&PathBuf>, failure: &SimulationFailure) {
+    let report = failure.to_string();
+    eprintln!("{report}");
+    if let Some(directory) = directory {
+        std::fs::create_dir_all(directory).expect("create simulation failure directory");
+        let pending_report = directory.join(format!("{}.tmp", failure.seed));
+        std::fs::write(&pending_report, report).expect("write simulation failure report");
+        std::fs::rename(
+            pending_report,
+            directory.join(format!("{}.txt", failure.seed)),
+        )
+        .expect("publish simulation failure report");
     }
 }
 

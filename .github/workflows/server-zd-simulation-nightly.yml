@@ -74,7 +74,8 @@ jobs:
         env:
           DEXZD_SIMULATION_FAILURE_DIR: ${{ runner.temp }}/dexzd-simulation-failures
         run: |
-          cargo test -p dexzd-simulation --test apply_invariants apply_keeps_every_invariant_over_random_command_sequences -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-simulation.log"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=1m 50m cargo test -p dexzd-simulation --test apply_invariants apply_keeps_every_invariant_over_random_command_sequences -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-simulation.log"
       - name: Summarize apply simulation
         if: always()
         shell: bash
@@ -95,19 +96,20 @@ jobs:
                 echo "- Seed $seed: \`${reproduction#reproduce with: }\`"
               done
               echo
-              echo "Download the failure artifact for each command index and shrunk sequence."
+              echo "Download the failure artifact for each command index and reproduction sequence."
             else
               echo "No invariant failures were recorded."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload apply simulation failures
-        if: ${{ failure() && steps.apply.outcome == 'failure' }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dexzd-apply-simulation-failures
           path: |
             ${{ runner.temp }}/dexzd-simulation-failures/
             ${{ runner.temp }}/dexzd-simulation.log
+          if-no-files-found: warn
           retention-days: 30
 
   engine-simulation:
