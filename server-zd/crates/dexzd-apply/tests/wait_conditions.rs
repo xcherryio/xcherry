@@ -21,19 +21,19 @@ use dexzd_keyspace::{
 };
 use dexzd_protocol::dex::{
     ChannelCondition, ChannelMessage, CloseDecision, CloseDecisionType, ConditionCombination,
-    ConditionStatus, FlowErrorType, FlowStatus, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, PublishToChannelRequest, RetryPolicy, SkipTimerRequest,
-    StartFlowRequest, StepDecision, StepMovement, StepOptions, StopFlowRequest, StopType,
-    TimerCondition, Value, WaitingCondition, WaitingConditionType, WorkerErrorResponse,
-    WorkerTarget, value,
+    ConditionResults, ConditionStatus, FlowErrorType, FlowStatus, FlowTimeoutPolicy,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, PublishToChannelRequest, RetryPolicy,
+    SkipTimerRequest, StartFlowRequest, StepDecision, StepMethodEventInput, StepMovement,
+    StepOptions, StopFlowRequest, StopType, TimerCondition, Value, WaitingCondition,
+    WaitingConditionType, WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    ChannelMetaRecord, ChannelPublishCommand, CommandReply, FlowCommand, FlowStartCommand,
-    FlowStopCommand, RunRecord, RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand,
-    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, TimerId, TimerRecord, TimerSkipCommand, TimersFiredCommand,
-    WaitConditionTimerId, command_reply, flow_command::Command, step_method_completed_command,
-    timer_id,
+    ChannelMetaRecord, ChannelPublishCommand, CommandReply, ConditionResultsRecord, FlowCommand,
+    FlowStartCommand, FlowStopCommand, HistoryRecord, RunRecord, RunSettings,
+    StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord,
+    StepInvocationKey, StepMethod, StepMethodCompletedCommand, TimerId, TimerRecord,
+    TimerSkipCommand, TimersFiredCommand, WaitConditionTimerId, command_reply,
+    flow_command::Command, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -192,8 +192,8 @@ impl Harness {
     }
 
     /// Starts a Flow whose first Step creates `WaitStep-1` and `WaitStep-2`, both with a
-    /// pending WaitFor.
-    fn start_two_waiting_steps(&mut self) {
+    /// pending WaitFor, and returns the outcome of that first Step's Execute completion.
+    fn start_two_waiting_steps(&mut self) -> ApplyOutcome {
         let mut request = start_request();
         request.start_step_type = "PlanStep".to_owned();
         request.step_options = Some(StepOptions {
@@ -212,7 +212,7 @@ impl Harness {
                 next_steps: vec![movement.clone(), movement],
                 ..StepDecision::default()
             },
-        );
+        )
     }
 
     fn start_attempt(&mut self, step_execution_id: &str, method: StepMethod, attempt: u32) {
@@ -252,7 +252,11 @@ impl Harness {
         outcome
     }
 
-    fn complete_execute(&mut self, step_execution_id: &str, decision: StepDecision) {
+    fn complete_execute(
+        &mut self,
+        step_execution_id: &str,
+        decision: StepDecision,
+    ) -> ApplyOutcome {
         let outcome = self.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
             invocation: Some(invocation_key(step_execution_id, StepMethod::Execute)),
             attempt: 1,
@@ -269,6 +273,7 @@ impl Harness {
             "Execute completion: {:?}",
             outcome.reply
         );
+        outcome
     }
 
     fn publish(&mut self, channel_name: &str, texts: &[&str]) {
@@ -1276,4 +1281,54 @@ fn graceful_completion_waits_for_a_waiting_step() {
     harness.start_attempt("WaitStep-1", StepMethod::Execute, 1);
     harness.complete_execute("WaitStep-1", StepDecision::default());
     assert_eq!(harness.run_record().status, FlowStatus::Completed as i32);
+}
+
+#[test]
+fn an_empty_wait_presents_empty_condition_results_but_skip_wait_for_omits_them() {
+    let mut harness = Harness::new();
+    let plan_completed = harness.start_two_waiting_steps();
+    assert_eq!(execute_inputs(&plan_completed)[0].condition_results, None);
+    harness.wait_on("WaitStep-1", WaitingCondition::default(), Vec::new());
+    harness.start_attempt("WaitStep-1", StepMethod::Execute, 1);
+    let snapshot = harness
+        .step("WaitStep-1")
+        .invocation
+        .and_then(|invocation| invocation.snapshot)
+        .expect("a running attempt has a snapshot");
+    assert_eq!(
+        snapshot.condition_results,
+        Some(ConditionResultsRecord::default())
+    );
+    let completed = harness.complete_execute("WaitStep-1", StepDecision::default());
+    assert_eq!(
+        execute_inputs(&completed)[0].condition_results,
+        Some(ConditionResults::default())
+    );
+}
+
+fn execute_inputs(outcome: &ApplyOutcome) -> Vec<StepMethodEventInput> {
+    history_events(outcome)
+        .into_iter()
+        .filter_map(|payload| match payload {
+            flow_history_event::Payload::StepExecuteCompleted(event) => event.input,
+            _ => None,
+        })
+        .collect()
+}
+
+fn history_events(outcome: &ApplyOutcome) -> Vec<flow_history_event::Payload> {
+    outcome
+        .writes
+        .iter()
+        .filter_map(|write| match write {
+            StateWrite::Put {
+                column_family: ColumnFamily::History,
+                value,
+                ..
+            } => HistoryRecord::decode(value.as_slice()).ok(),
+            _ => None,
+        })
+        .flat_map(|record| record.events)
+        .filter_map(|event| event.payload)
+        .collect()
 }

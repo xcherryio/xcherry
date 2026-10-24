@@ -30,10 +30,7 @@ pub(crate) struct ConditionProgress<'progress> {
     pub(crate) is_sub_flow_completed: &'progress [bool],
 }
 
-/// Returns the consumption of the first satisfied candidate, or `None` while unsatisfied.
-///
-/// An empty condition is satisfied with no consumption. The winning candidate's channel
-/// conditions appear in declaration order, each with its exact count (possibly zero).
+/// Returns the first satisfied candidate's channel consumptions in declaration order, or `None`.
 pub(crate) fn plan_condition(
     condition: &WaitingCondition,
     progress: &ConditionProgress<'_>,
