@@ -29,7 +29,10 @@ use crate::{ApplyError, WaitableChange};
 pub(crate) struct FlowClosing {
     pub(crate) status: FlowStatus,
     pub(crate) error_type: FlowErrorType,
+    /// Message of the Flow result.
     pub(crate) error_message: String,
+    /// Message of the FlowClosed history event; differs only for a terminated Flow.
+    pub(crate) history_message: String,
 }
 
 impl FlowClosing {
@@ -38,30 +41,37 @@ impl FlowClosing {
             status: FlowStatus::Completed,
             error_type: FlowErrorType::Unspecified,
             error_message: String::new(),
+            history_message: String::new(),
         }
     }
 
     pub(crate) fn failed(error_type: FlowErrorType, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             status: FlowStatus::Failed,
             error_type,
-            error_message: message.into(),
+            error_message: message.clone(),
+            history_message: message,
         }
     }
 
-    pub(crate) fn canceled(reason: impl Into<String>) -> Self {
+    /// As in the Go Server, a canceled Flow reports no message, whatever the stop reason.
+    pub(crate) fn canceled() -> Self {
         Self {
             status: FlowStatus::Canceled,
             error_type: FlowErrorType::Unspecified,
-            error_message: reason.into(),
+            error_message: String::new(),
+            history_message: String::new(),
         }
     }
 
+    /// As in the Go Server, only the FlowClosed history event keeps the termination reason.
     pub(crate) fn terminated(reason: impl Into<String>) -> Self {
         Self {
             status: FlowStatus::Terminated,
             error_type: FlowErrorType::Unspecified,
-            error_message: reason.into(),
+            error_message: String::new(),
+            history_message: reason.into(),
         }
     }
 }
@@ -152,7 +162,7 @@ pub(crate) fn close_flow(
         ColumnFamily::PartitionIndex,
         active_work_index_key(partition, cursor.rows.flow_hash, cursor.run_id()),
     );
-    history_events::record_flow_closed(cursor, results);
+    history_events::record_flow_closed(cursor, results, closing.history_message);
     crate::cross_flow::report_child_closed(transaction, cursor, scope)?;
     cursor.wake(WaitableChange::FlowClosed);
     Ok(())

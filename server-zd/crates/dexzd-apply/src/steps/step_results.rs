@@ -462,6 +462,7 @@ pub(crate) fn apply_method_completed(
             )? {
                 return Ok(StepCommandOutcome::RejectedResult(rejection));
             }
+            step.wait_for_pull_routing = command.pull_routing.clone();
             wait_conditions::register_wait(
                 transaction,
                 cursor,

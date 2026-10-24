@@ -17,7 +17,8 @@ mod step_results;
 pub(crate) mod wait_conditions;
 
 pub(crate) use invocations::{
-    InvocationEnd, end_running_attempt, make_invocation_pending, start_attempt,
+    InvocationEnd, configured_method_timeout_seconds, end_running_attempt, make_invocation_pending,
+    start_attempt,
 };
 pub(crate) use retry_backoff::{RetryDecision, decide_retry};
 pub(crate) use step_creation::{NewStepExecution, create_step_execution};

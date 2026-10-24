@@ -7,21 +7,21 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use dexzd_keyspace::{RunId, TenantId};
+use dexzd_protocol::dex::flow_history_event;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
 
+use crate::values::ValueIdAllocator;
 use crate::{ApplyEffect, ApplyOutcome, BehaviorVersion, StateWrite};
 
 /// Read-only facts of the command being applied.
 pub(crate) struct CommandScope<'command> {
     pub(crate) command: &'command FlowCommand,
-    #[expect(
-        dead_code,
-        reason = "Behavior-version predicates are added with the first behavior change."
-    )]
     pub(crate) behavior_version: BehaviorVersion,
     pub(crate) tenant_id: TenantId,
     /// The only time apply may use.
     pub(crate) now_micros: i64,
+    /// Time travel replays a recorded command to rebuild state; it records no history.
+    pub(crate) is_replay: bool,
 }
 
 impl<'command> CommandScope<'command> {
@@ -31,6 +31,7 @@ impl<'command> CommandScope<'command> {
             behavior_version,
             tenant_id: TenantId(command.tenant_id),
             now_micros: command.proposed_at_micros,
+            is_replay: false,
         }
     }
 
@@ -45,6 +46,21 @@ pub(crate) struct HandlerOutput {
     pub(crate) effects: Vec<ApplyEffect>,
     /// The run the command applied to or created.
     pub(crate) run_id: Option<RunId>,
+    /// Replay only: what TimeTravel folds into its own command when reapplying input.
+    pub(crate) replayed: Option<ReplayedCommandOutput>,
+}
+
+/// History a replayed command did not record, and the counters the next input continues.
+pub(crate) struct ReplayedCommandOutput {
+    pub(crate) events: Vec<flow_history_event::Payload>,
+    pub(crate) counters: ReplayedCommandCounters,
+}
+
+/// Per-command counters that inputs reapplied within one TimeTravel command share.
+#[derive(Clone)]
+pub(crate) struct ReplayedCommandCounters {
+    pub(crate) values: ValueIdAllocator,
+    pub(crate) next_channel_message_index: u64,
 }
 
 impl HandlerOutput {

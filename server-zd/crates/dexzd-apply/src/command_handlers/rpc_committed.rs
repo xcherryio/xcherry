@@ -45,10 +45,12 @@ pub(crate) fn apply_rpc_committed(
     if request.request_id.is_empty() {
         return Ok(reject_invalid("RPC request ID is missing"));
     }
-    if let Some(record) =
-        cursor
-            .rows
-            .request_dedup(transaction, RequestKind::InvokeRpc, &request.request_id)?
+    // Replays answer no client, so they skip request deduplication and store no reply.
+    if !scope.is_replay
+        && let Some(record) =
+            cursor
+                .rows
+                .request_dedup(transaction, RequestKind::InvokeRpc, &request.request_id)?
     {
         if record.request_fingerprint != command.request_fingerprint {
             return Ok(reject_invalid(format!(
@@ -156,7 +158,9 @@ pub(crate) fn apply_rpc_committed(
     if is_transactional && !command.app_worker_id.is_empty() {
         cursor.record.sticky_app_worker_id = command.app_worker_id.clone();
     }
-    let output = if let Some(value) = response.output.as_ref() {
+    let output = if !scope.is_replay
+        && let Some(value) = response.output.as_ref()
+    {
         let holder = ValueHolder::RpcReply {
             request_id: request.request_id.clone(),
         };
@@ -203,13 +207,15 @@ pub(crate) fn apply_rpc_committed(
     let reply = CommandReply {
         reply: Some(command_reply::Reply::Rpc(RpcReply { output })),
     };
-    remember_reply(
-        transaction,
-        &cursor,
-        request.request_id.as_str(),
-        command,
-        &reply,
-    )?;
+    if !scope.is_replay {
+        remember_reply(
+            transaction,
+            &cursor,
+            request.request_id.as_str(),
+            command,
+            &reply,
+        )?;
+    }
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,
         scope,

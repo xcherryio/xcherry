@@ -68,13 +68,17 @@ pub(crate) fn record_flow_started(
     cursor.add_event(flow_history_event::Payload::FlowStartedOrContinued(event));
 }
 
-pub(crate) fn record_flow_closed(cursor: &mut RunCursor, results: Vec<StepCompletionOutput>) {
+pub(crate) fn record_flow_closed(
+    cursor: &mut RunCursor,
+    results: Vec<StepCompletionOutput>,
+    error_message: String,
+) {
     let close = cursor.record.close.clone().unwrap_or_default();
     let event = FlowClosedHistoryEvent {
         flow_status: cursor.record.status,
         results,
         error_type: close.error_type,
-        error_message: close.error_message,
+        error_message,
         continued_to_run_id: String::new(),
         sticky_app_worker_id: cursor.record.sticky_app_worker_id.clone(),
     };

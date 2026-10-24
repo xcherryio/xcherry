@@ -25,13 +25,14 @@ use dexzd_keyspace::row_keys::{
 };
 use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::{
-    ActionPermissionMapping, ActionPermissionMappings, AttributeMatch, AttributeMatchOperator,
-    AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, ConditionStatus, FlowConfig,
-    FlowStartOptions, FlowStatus, FlowTimeoutPolicy, IndexConfig, IndexType,
-    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, LoadBlobRequestEntry,
-    PublishToChannelRequest, SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement,
-    StepOptions, StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value,
-    WorkerErrorResponse, WorkerTarget, flow_history_event, value,
+    ActionPermissionMapping, ActionPermissionMappings, ActiveStepPhase, AttributeMatch,
+    AttributeMatchOperator, AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType,
+    ConditionStatus, FlowConfig, FlowStartOptions, FlowStatus, FlowTimeoutPolicy, IndexConfig,
+    IndexType, InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, LoadBlobRequestEntry,
+    PublishToChannelRequest, PullRouting, PullRoutingSource, SetAttributesRequest,
+    StartFlowRequest, StepDecision, StepMovement, StepOptions, StopFlowRequest, StopType,
+    TimerCondition, TimerResult, UpdateFlowConfigRequest, Value, WaitingCondition,
+    WaitingConditionType, WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributesSetCommand, ChannelPublishCommand, ConditionResultsRecord, FlowCommand,
@@ -39,7 +40,7 @@ use dexzd_protocol::dexzd::v1::{
     HardDeleteObjectReference, RunRecord, RunSettings, StepAttemptFailedCommand,
     StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey, StepMethod,
     StepMethodCompletedCommand, StoredFlowResult, TimerId, TimersFiredCommand,
-    flow_command::Command, step_method_completed_command, timer_id,
+    WaitConditionTimerId, flow_command::Command, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -189,6 +190,8 @@ impl Harness {
                 max_value_bytes: 16 << 20,
                 retention_after_close_micros: 7 * 24 * 3600 * 1_000_000,
                 request_dedup_capacity: 1000,
+                max_run_state_bytes: 1 << 30,
+                max_retained_superseded_bytes: 256 << 20,
                 ..RunSettings::default()
             }),
             resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
@@ -1486,6 +1489,86 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
     let closed_summary =
         get_flow_summary(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
     assert!(closed_summary.close_time.is_some());
+}
+
+#[test]
+fn active_step_keeps_wait_for_routing_until_it_finishes() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    let wait_for_routing = PullRouting {
+        sticky_app_worker_id: "wait-worker".to_owned(),
+        served_by_app_worker_id: "wait-worker".to_owned(),
+        source: PullRoutingSource::StickyQueue as i32,
+    };
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                waiting_condition: Some(WaitingCondition {
+                    waiting_condition_type: WaitingConditionType::AllCompleted as i32,
+                    timer_conditions: vec![TimerCondition {
+                        condition_id: "delay".to_owned(),
+                        duration_seconds: 60,
+                        ..TimerCondition::default()
+                    }],
+                    ..WaitingCondition::default()
+                }),
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        app_worker_id: "wait-worker".to_owned(),
+        pull_routing: Some(wait_for_routing.clone()),
+        ..StepMethodCompletedCommand::default()
+    }));
+
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let waiting_step = &state.active_step_executions[0];
+    assert_eq!(waiting_step.phase, ActiveStepPhase::Waiting as i32);
+    assert_eq!(
+        waiting_step.wait_for_pull_routing,
+        Some(wait_for_routing.clone())
+    );
+    assert_eq!(
+        wait_for_routing.served_by_app_worker_id.as_str(),
+        state.sticky_app_worker_id.as_str()
+    );
+    assert!(waiting_step.execute_pull_routing.is_none());
+
+    harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::WaitCondition(WaitConditionTimerId {
+                step_execution_id: "ChargeStep-1".to_owned(),
+                timer_index: 0,
+            })),
+        }],
+    }));
+    harness.start_attempt(StepMethod::Execute);
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let executing_step = &state.active_step_executions[0];
+    assert_eq!(executing_step.phase, ActiveStepPhase::Active as i32);
+    assert_eq!(executing_step.wait_for_pull_routing, Some(wait_for_routing));
+    assert!(executing_step.execute_pull_routing.is_none());
+
+    harness.complete_execute(StepDecision::default());
+    let step_key = run_named_key(
+        harness.context.flow_hash,
+        harness.run_id,
+        RunTable::StepExecution,
+        "ChargeStep-1",
+    );
+    let step_row = harness
+        .state
+        .get(ColumnFamily::Flow, &step_key)
+        .unwrap()
+        .expect("Step row exists");
+    let step = StepExecutionRecord::decode(step_row.as_slice()).unwrap();
+    assert!(step.wait_for_pull_routing.is_none());
 }
 
 #[test]
