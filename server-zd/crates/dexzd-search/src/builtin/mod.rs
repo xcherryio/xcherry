@@ -8,7 +8,7 @@
 
 //! Tenant-scoped SearchFlows over committed local run documents.
 
-mod document;
+pub(crate) mod document;
 
 use std::cmp::Ordering;
 use std::sync::Arc;

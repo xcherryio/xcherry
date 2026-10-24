@@ -6,18 +6,23 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex as StandardMutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dexzd_keyspace::{RunId, TenantId};
 use dexzd_visibility_query::parse_and_check;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit};
 use tokio::task::JoinHandle;
 use tokio_postgres::{Client, Config, NoTls, Row};
 
-use super::{PageCursor, SqlStatement, SqlTranslationError, tenant_column_value, translate_query};
+use super::{
+    PageCursor, SchemaError, SqlStatement, SqlTranslationError, ensure_schema, tenant_column_value,
+    translate_query,
+};
 use crate::page_token::PagePosition;
 use crate::search_backend::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
@@ -31,17 +36,18 @@ pub trait ProjectionVisibilityWait: Send + Sync {
     async fn wait_until_visible(&self, request: SearchRequest<'_>) -> Result<(), SearchError>;
 }
 
-/// Searches tenant runs through a bounded pool of ParadeDB connections.
+/// Searches tenant runs through a bounded pool of PgBouncer-compatible connections.
 pub struct ParadeDbSearchBackend {
     configuration: Config,
     slots: Vec<Mutex<ConnectionSlot>>,
-    next_slot: AtomicUsize,
+    free_slots: StandardMutex<VecDeque<usize>>,
+    available_slots: Semaphore,
     visibility_wait: Option<Arc<dyn ProjectionVisibilityWait>>,
     visibility_wait_timeout: Duration,
 }
 
 impl ParadeDbSearchBackend {
-    /// Opens a fixed pool with a positive projection wait cap and an optional write barrier.
+    /// Opens `pool_size` connections, ensures the schema, and bounds projection visibility waits.
     pub async fn connect(
         configuration: &Config,
         pool_size: usize,
@@ -53,37 +59,41 @@ impl ParadeDbSearchBackend {
                 "ParadeDB search pool size and visibility wait timeout must be positive".into(),
             ));
         }
-        let mut backend = Self {
+        let mut slots = Vec::with_capacity(pool_size);
+        for slot_index in 0..pool_size {
+            let mut slot = ConnectionSlot::open(configuration).await?;
+            if slot_index == 0 {
+                ensure_schema(&mut slot.client)
+                    .await
+                    .map_err(schema_search_error)?;
+            }
+            slots.push(Mutex::new(slot));
+        }
+        Ok(Self {
             configuration: configuration.clone(),
-            slots: Vec::with_capacity(pool_size),
-            next_slot: AtomicUsize::new(0),
+            slots,
+            free_slots: StandardMutex::new((0..pool_size).collect()),
+            available_slots: Semaphore::new(pool_size),
             visibility_wait,
             visibility_wait_timeout,
-        };
-        for _ in 0..pool_size {
-            backend
-                .slots
-                .push(Mutex::new(ConnectionSlot::open(configuration).await?));
-        }
-        Ok(backend)
+        })
     }
 
     async fn query(&self, statement: &SqlStatement) -> Result<Vec<Row>, SearchError> {
-        let index = self.next_slot.fetch_add(1, Ordering::Relaxed) % self.slots.len();
-        let mut slot = self.slots[index].lock().await;
+        let mut slot = self.lock_next_slot().await;
         if slot.client.is_closed() {
             slot.reconnect(&self.configuration).await?;
         }
         match slot
             .client
-            .query(&statement.sql, &statement.parameter_refs())
+            .query_typed(&statement.sql, &statement.typed_parameter_refs())
             .await
         {
             Ok(rows) => Ok(rows),
             Err(error) if is_connection_error(&error) => {
                 slot.reconnect(&self.configuration).await?;
                 slot.client
-                    .query(&statement.sql, &statement.parameter_refs())
+                    .query_typed(&statement.sql, &statement.typed_parameter_refs())
                     .await
                     .map_err(|error| {
                         classify_database_error("query ParadeDB visibility runs", error)
@@ -95,15 +105,73 @@ impl ParadeDbSearchBackend {
             )),
         }
     }
+
+    pub(super) async fn lock_next_slot(&self) -> PooledConnectionSlot<'_> {
+        let permit = self
+            .available_slots
+            .acquire()
+            .await
+            .expect("the owned connection pool never closes its semaphore");
+        let slot_index = self
+            .free_slots
+            .lock()
+            .expect("the connection pool slot queue cannot be poisoned")
+            .pop_front()
+            .expect("a semaphore permit guarantees one free connection slot");
+        let slot = self.slots[slot_index]
+            .try_lock()
+            .expect("a free slot is unlocked before its permit is released");
+        PooledConnectionSlot {
+            slot,
+            slot_index,
+            backend: self,
+            _permit: permit,
+        }
+    }
+
+    pub(super) fn configuration(&self) -> &Config {
+        &self.configuration
+    }
 }
 
-struct ConnectionSlot {
-    client: Client,
+pub(super) struct PooledConnectionSlot<'a> {
+    slot: MutexGuard<'a, ConnectionSlot>,
+    slot_index: usize,
+    backend: &'a ParadeDbSearchBackend,
+    _permit: SemaphorePermit<'a>,
+}
+
+impl Deref for PooledConnectionSlot<'_> {
+    type Target = ConnectionSlot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.slot
+    }
+}
+
+impl DerefMut for PooledConnectionSlot<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot
+    }
+}
+
+impl Drop for PooledConnectionSlot<'_> {
+    fn drop(&mut self) {
+        self.backend
+            .free_slots
+            .lock()
+            .expect("the connection pool slot queue cannot be poisoned")
+            .push_back(self.slot_index);
+    }
+}
+
+pub(super) struct ConnectionSlot {
+    pub(super) client: Client,
     connection_task: JoinHandle<()>,
 }
 
 impl ConnectionSlot {
-    async fn open(configuration: &Config) -> Result<Self, SearchError> {
+    pub(super) async fn open(configuration: &Config) -> Result<Self, SearchError> {
         let (client, connection) = configuration
             .connect(NoTls)
             .await
@@ -119,7 +187,7 @@ impl ConnectionSlot {
         })
     }
 
-    async fn reconnect(&mut self, configuration: &Config) -> Result<(), SearchError> {
+    pub(super) async fn reconnect(&mut self, configuration: &Config) -> Result<(), SearchError> {
         let replacement = Self::open(configuration).await?;
         *self = replacement;
         Ok(())
@@ -226,7 +294,7 @@ fn translation_error(error: SqlTranslationError) -> SearchError {
     SearchError::InvalidArgument(error.to_string())
 }
 
-fn is_connection_error(error: &tokio_postgres::Error) -> bool {
+pub(super) fn is_connection_error(error: &tokio_postgres::Error) -> bool {
     error.is_closed()
         || error.as_db_error().is_some_and(|database_error| {
             let sqlstate = database_error.code().code();
@@ -234,7 +302,10 @@ fn is_connection_error(error: &tokio_postgres::Error) -> bool {
         })
 }
 
-fn classify_database_error(operation: &str, error: tokio_postgres::Error) -> SearchError {
+pub(super) fn classify_database_error(
+    operation: &str,
+    error: tokio_postgres::Error,
+) -> SearchError {
     let sqlstate = error
         .as_db_error()
         .map_or("none", |database_error| database_error.code().code());
@@ -243,5 +314,12 @@ fn classify_database_error(operation: &str, error: tokio_postgres::Error) -> Sea
         SearchError::Unavailable(message)
     } else {
         SearchError::Internal(message)
+    }
+}
+
+fn schema_search_error(error: SchemaError) -> SearchError {
+    match error {
+        SchemaError::Database { operation, source } => classify_database_error(operation, source),
+        SchemaError::NewerVersion { .. } => SearchError::Internal(error.to_string()),
     }
 }
