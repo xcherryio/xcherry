@@ -307,6 +307,35 @@ fn maps_typed_attributes_and_binds_upsert_values() {
 }
 
 #[test]
+fn upsert_binds_outage_sized_keyword_and_wire_buckets() {
+    let mut document = document();
+    let mut fields = Vec::new();
+    let mut attributes = Vec::new();
+    for write_number in 0..600 {
+        let name = format!("outage-{write_number:04}");
+        let value = format!("{write_number:04}-{}", "x".repeat(1024));
+        document = document.with(&name, SearchValue::String(value.clone()));
+        fields.push((name.clone(), IndexType::Keyword));
+        attributes.push(SearchAttributeValue {
+            index_key: name,
+            index_type: IndexType::Keyword.into(),
+            value: Some(dex::Value {
+                kind: Some(dex::value::Kind::StringValue(value)),
+            }),
+        });
+    }
+    let row = SearchRow::from_document(TenantId(1), 600, &document, &fields)
+        .expect("indexed values match their types")
+        .with_wire_attributes(&attributes)
+        .expect("wire values are present");
+    let statement = upsert_statement(&row);
+    assert_eq!(statement.parameters.len(), 13 + 600 * 4);
+    assert_eq!(statement.sql.matches("jsonb_build_object(").count(), 24);
+    assert!(statement.sql.contains("$2413::text"));
+    assert!(statement.sql.contains(" || "));
+}
+
+#[test]
 fn preserves_original_datetime_and_null_wire_values() {
     let original_datetime = dex::Value {
         kind: Some(dex::value::Kind::StringValue(
@@ -546,6 +575,78 @@ fn golden_sql_covers_operators_and_types() {
             "double < 3.5",
             "(sa_number ->> $2::text)::double precision < $3::double precision",
             vec![SqlValue::Text("double".into()), SqlValue::Double(3.5)],
+        ),
+        (
+            "number = '7'",
+            "(sa_number ->> $2::text)::bigint = $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number = '7.0'",
+            "(sa_number ->> $2::text)::bigint = $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number = '7.5'",
+            "CASE WHEN (sa_number ->> $2::text)::bigint IS NULL THEN NULL ELSE FALSE END",
+            vec![SqlValue::Text("number".into())],
+        ),
+        (
+            "number != '7.5'",
+            "(sa_number ->> $2::text)::bigint IS NOT NULL",
+            vec![SqlValue::Text("number".into())],
+        ),
+        (
+            "number > '7.5'",
+            "(sa_number ->> $2::text)::bigint >= $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(8)],
+        ),
+        (
+            "number <= '-1.5'",
+            "(sa_number ->> $2::text)::bigint <= $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(-2)],
+        ),
+        (
+            "number IN ('7', '7.5')",
+            "((sa_number ->> $2::text)::bigint = $3::bigint)",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number BETWEEN '1.5' AND '3.5'",
+            "((sa_number ->> $2::text)::bigint >= $3::bigint) AND ((sa_number ->> $2::text)::bigint <= $4::bigint)",
+            vec![
+                SqlValue::Text("number".into()),
+                SqlValue::Int(2),
+                SqlValue::Int(3),
+            ],
+        ),
+        (
+            "number BETWEEN '+2' AND 5",
+            "((sa_number ->> $2::text)::bigint >= $3::bigint) AND ((sa_number ->> $2::text)::bigint <= $4::bigint)",
+            vec![
+                SqlValue::Text("number".into()),
+                SqlValue::Int(2),
+                SqlValue::Int(5),
+            ],
+        ),
+        (
+            "double = '0.01'",
+            "(sa_number ->> $2::text)::double precision = $3::double precision",
+            vec![SqlValue::Text("double".into()), SqlValue::Double(0.01)],
+        ),
+        (
+            "double = '0x1p-2'",
+            "(sa_number ->> $2::text)::double precision = $3::double precision",
+            vec![SqlValue::Text("double".into()), SqlValue::Double(0.25)],
+        ),
+        (
+            "double IN ('1.5', 3.5e0)",
+            "((sa_number ->> $2::text)::double precision = $3::double precision OR (sa_number ->> $2::text)::double precision = $4::double precision)",
+            vec![
+                SqlValue::Text("double".into()),
+                SqlValue::Double(1.5),
+                SqlValue::Double(3.5),
+            ],
         ),
         (
             "datetime = '2026-07-03T00:00:00Z'",

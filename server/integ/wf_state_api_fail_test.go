@@ -110,7 +110,8 @@ func doTestStateApiFail(
 
 	history := workerHandler.GetTestResult().InvokeHistory
 	expectedWaitFor := int64(1)
-	if flowConfig != nil &&
+	// C2: server-zd ASYNC Steps have no local phase with its own retry attempt.
+	if !isServerZDBinaryMode() && flowConfig != nil &&
 		flowConfig.GetStepDurability() == dexpb.StepDurability_STEP_DURABILITY_ASYNC &&
 		waitForDurabilityOverride != dexpb.StepDurability_STEP_DURABILITY_SYNC {
 		expectedWaitFor = 2

@@ -116,7 +116,8 @@ func doTestResetByStatIdWorkflow(
 		"S1_execute": 1,
 		"S2_execute": 10,
 	}
-	if flowConfig.GetStepDurability() == dexpb.StepDurability_STEP_DURABILITY_ASYNC {
+	// C2: server-zd records ASYNC Steps like SYNC Steps, so time travel reruns the same Steps.
+	if flowConfig.GetStepDurability() == dexpb.StepDurability_STEP_DURABILITY_ASYNC && !isServerZDBinaryMode() {
 		expectedResetHistory["S1_execute"] = 2
 	}
 	assertions.Equalf(expectedResetHistory, resetHistory, "reset test fail, %v", resetHistory)
@@ -163,7 +164,8 @@ func doTestResetByStatIdWorkflow(
 		"S1_execute": 1,
 		"S2_execute": 12,
 	}
-	if flowConfig.GetStepDurability() == dexpb.StepDurability_STEP_DURABILITY_ASYNC {
+	// C2: server-zd records ASYNC Steps like SYNC Steps, so time travel reruns the same Steps.
+	if flowConfig.GetStepDurability() == dexpb.StepDurability_STEP_DURABILITY_ASYNC && !isServerZDBinaryMode() {
 		expectedReset2History["S1_execute"] = 3
 		expectedReset2History["S2_execute"] = 15
 	}

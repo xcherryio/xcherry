@@ -569,6 +569,7 @@ func TestPullWorkerSplitRoleTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "Go Server internals")
 	testPullWorkerSplitRole(t, service.BackendTypeTemporal)
 }
 
@@ -583,6 +584,7 @@ func TestPullWorkerAllInOneTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "Go Server internals")
 	testPullWorkerAllInOne(t, service.BackendTypeTemporal)
 }
 
@@ -957,6 +959,7 @@ func TestPullSubFlowRejectsInvalidTargetTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "Go Server internals")
 	testPullSubFlowRejectsInvalidTarget(t, service.BackendTypeTemporal)
 }
 
@@ -1356,6 +1359,7 @@ func TestPullUnknownRPCBoundedFailureTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "Go Server internals")
 	testPullUnknownRPCBoundedFailure(t, service.BackendTypeTemporal)
 }
 

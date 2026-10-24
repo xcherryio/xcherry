@@ -101,10 +101,12 @@ func doTestStateApiTimeout(
 		dexpb.FlowErrorType_FLOW_ERROR_TYPE_WORKER_API_FAIL,
 		resp.GetErrorType(),
 	)
-	switch backendType {
-	case service.BackendTypeTemporal:
+	switch {
+	case isServerZDBinaryMode():
+		require.Contains(t, resp.GetErrorMessage(), "method timeout of 1s expired")
+	case backendType == service.BackendTypeTemporal:
 		require.Contains(t, resp.GetErrorMessage(), "activity StartToClose timeout")
-	case service.BackendTypeCadence:
+	case backendType == service.BackendTypeCadence:
 		// Cadence may surface StartToClose or cancel the in-flight gRPC as RST_STREAM.
 		msg := resp.GetErrorMessage()
 		require.Truef(

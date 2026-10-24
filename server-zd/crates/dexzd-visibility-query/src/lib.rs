@@ -116,6 +116,8 @@ struct OrderBy {
 pub enum Expression {
     /// Matches every document.
     True,
+    /// Matches no present field value and preserves unknown for a missing field.
+    NoMatch(Predicate),
     /// Negates an expression.
     Not(Box<Expression>),
     /// Requires every expression.

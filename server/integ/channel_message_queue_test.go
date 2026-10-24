@@ -88,22 +88,25 @@ func testChannelMessageListAndDelete(t *testing.T, backendType service.BackendTy
 	require.Equal(t, messages[0].GetMessageId(), state.GetPendingChannelMessages()["pending"].GetMessages()[0].GetMessageId())
 	require.Equal(t, messages[1].GetMessageId(), state.GetPendingChannelMessages()["pending"].GetMessages()[1].GetMessageId())
 
-	_, err = runtime.FlowClient.TriggerContinueAsNew(ctx, &dexpb.TriggerContinueAsNewRequest{
-		FlowId: flowID,
-		RunId:  runID,
-	})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		currentRunID, queryErr := currentFlowRunID(ctx, runtime, flowID)
-		if queryErr != nil || currentRunID == runID {
-			return false
-		}
-		runID = currentRunID
-		return true
-	}, 10*time.Second, 50*time.Millisecond)
-	messagesAfterContinueAsNew := waitForChannelMessages(t, ctx, runtime, flowID, "pending", 2)
-	require.Equal(t, messages[0].GetMessageId(), messagesAfterContinueAsNew[0].GetMessageId())
-	require.Equal(t, messages[1].GetMessageId(), messagesAfterContinueAsNew[1].GetMessageId())
+	// C3: server-zd returns Unimplemented for TriggerContinueAsNew.
+	if !isServerZDBinaryMode() {
+		_, err = runtime.FlowClient.TriggerContinueAsNew(ctx, &dexpb.TriggerContinueAsNewRequest{
+			FlowId: flowID,
+			RunId:  runID,
+		})
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			currentRunID, queryErr := currentFlowRunID(ctx, runtime, flowID)
+			if queryErr != nil || currentRunID == runID {
+				return false
+			}
+			runID = currentRunID
+			return true
+		}, 10*time.Second, 50*time.Millisecond)
+		messagesAfterContinueAsNew := waitForChannelMessages(t, ctx, runtime, flowID, "pending", 2)
+		require.Equal(t, messages[0].GetMessageId(), messagesAfterContinueAsNew[0].GetMessageId())
+		require.Equal(t, messages[1].GetMessageId(), messagesAfterContinueAsNew[1].GetMessageId())
+	}
 
 	_, err = runtime.FlowClient.DeleteChannelMessage(ctx, &dexpb.DeleteChannelMessageRequest{
 		FlowId:      flowID,
@@ -173,7 +176,12 @@ func testChannelMessageListAndDelete(t *testing.T, backendType service.BackendTy
 	waitForFlowCompleted(t, ctx, runtime, flowID)
 	resetPending := waitForChannelMessages(t, ctx, runtime, flowID, "pending", 1)
 	require.Equal(t, remaining[0].GetMessageId(), resetPending[0].GetMessageId())
-	require.NotEqual(t, runID, resetResponse.GetRunId())
+	if isServerZDBinaryMode() {
+		// C1: server-zd keeps the run ID across time travel.
+		require.Equal(t, runID, resetResponse.GetRunId())
+	} else {
+		require.NotEqual(t, runID, resetResponse.GetRunId())
+	}
 }
 
 func testConcurrentChannelMessageDelete(t *testing.T) {

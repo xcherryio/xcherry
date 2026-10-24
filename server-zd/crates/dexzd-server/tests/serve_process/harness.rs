@@ -24,10 +24,10 @@ use dexzd_protocol::dex::{
 use s3mock::{Durability, EtagMode, ListObjectsRequest, Store, StoreConfig};
 use s3mock_server::{ServerConfig, ServerHandle, SignatureVerification};
 use tempfile::TempDir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::process::{Child, Command};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, watch};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_postgres::NoTls;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -431,6 +431,133 @@ impl ParadeDbSchema {
             .await
             .expect("the test schema is dropped");
         self.connection.abort();
+    }
+}
+
+/// Relays PostgreSQL connections and can cut them while the server keeps committing.
+pub(crate) struct ParadeDbTcpProxy {
+    address: SocketAddr,
+    availability: watch::Sender<bool>,
+    active_connections: watch::Receiver<usize>,
+    task: JoinHandle<()>,
+}
+
+impl ParadeDbTcpProxy {
+    pub(crate) async fn start(database_url: &str) -> Self {
+        let configuration = database_url
+            .parse::<tokio_postgres::Config>()
+            .expect("the ParadeDB URL is valid");
+        let host = match configuration.get_hosts().first() {
+            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+            _ => panic!("the ParadeDB URL names a TCP host"),
+        };
+        let port = configuration.get_ports().first().copied().unwrap_or(5432);
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("the ParadeDB proxy binds a loopback port");
+        let address = listener.local_addr().expect("the proxy has an address");
+        let (availability, mut is_available) = watch::channel(true);
+        let (connection_count, active_connections) = watch::channel(0_usize);
+        let task = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (incoming, _) = accepted.expect("the proxy accepts connections");
+                        if !*is_available.borrow() {
+                            continue;
+                        }
+                        connection_count.send_modify(|count| *count += 1);
+                        let active = connection_count.clone();
+                        let availability = is_available.clone();
+                        let host = host.clone();
+                        connections.spawn(async move {
+                            relay_parade_db_connection(incoming, &host, port, availability).await;
+                            active.send_modify(|count| *count -= 1);
+                        });
+                    }
+                    Some(result) = connections.join_next(), if !connections.is_empty() => {
+                        result.expect("a proxy connection task completes");
+                    }
+                    changed = is_available.changed() => {
+                        changed.expect("the proxy controller stays open");
+                    }
+                }
+            }
+        });
+        Self {
+            address,
+            availability,
+            active_connections,
+            task,
+        }
+    }
+
+    pub(crate) fn connection_string(&self, database_url: &str) -> String {
+        let (credentials, authority_and_path) = database_url
+            .rsplit_once('@')
+            .expect("the ParadeDB URL includes credentials");
+        let (_, path) = authority_and_path
+            .split_once('/')
+            .expect("the ParadeDB URL includes a database path");
+        format!("{credentials}@127.0.0.1:{}/{path}", self.address.port())
+    }
+
+    pub(crate) async fn cut(&mut self) {
+        self.availability
+            .send(false)
+            .expect("the proxy task remains live");
+        while *self.active_connections.borrow() != 0 {
+            self.active_connections
+                .changed()
+                .await
+                .expect("the proxy reports active connections");
+        }
+    }
+
+    pub(crate) fn restore(&self) {
+        self.availability
+            .send(true)
+            .expect("the proxy task remains live");
+    }
+
+    pub(crate) async fn shutdown(mut self) {
+        self.task.abort();
+        let error = (&mut self.task)
+            .await
+            .expect_err("the proxy task is aborted");
+        assert!(error.is_cancelled(), "the proxy task failed: {error}");
+    }
+}
+
+impl Drop for ParadeDbTcpProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn relay_parade_db_connection(
+    mut incoming: tokio::net::TcpStream,
+    host: &str,
+    port: u16,
+    mut availability: watch::Receiver<bool>,
+) {
+    let mut outgoing = match tokio::net::TcpStream::connect((host, port)).await {
+        Ok(outgoing) => outgoing,
+        Err(error) => {
+            eprintln!("the ParadeDB proxy could not connect: {error}");
+            return;
+        }
+    };
+    tokio::select! {
+        result = copy_bidirectional(&mut incoming, &mut outgoing) => {
+            if let Err(error) = result {
+                eprintln!("the ParadeDB proxy connection ended: {error}");
+            }
+        }
+        changed = availability.changed() => {
+            changed.expect("the proxy controller stays open");
+        }
     }
 }
 

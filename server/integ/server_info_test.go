@@ -43,10 +43,17 @@ func testServerInfo(t *testing.T, backendType service.BackendType) {
 	defer cancel()
 	serverInfo, err := runtime.FlowClient.GetServerInfo(ctx, &emptypb.Empty{})
 	require.NoError(t, err)
-	require.Equal(t, "integration-test-version", serverInfo.GetServerVersion())
+	if isServerZDBinaryMode() {
+		// The launched binary reports its own build version.
+		require.NotEmpty(t, serverInfo.GetServerVersion())
+	} else {
+		require.Equal(t, "integration-test-version", serverInfo.GetServerVersion())
+	}
 	require.Equal(t, uint32(1), serverInfo.GetMinimumSupportedProtocolVersion())
 	require.Equal(t, uint32(3), serverInfo.GetCurrentProtocolVersion())
-	if backendType == service.BackendTypeTemporal {
+	if isServerZDBinaryMode() {
+		require.Equal(t, dexpb.ServerEngine_SERVER_ENGINE_ZD, serverInfo.GetServerEngine())
+	} else if backendType == service.BackendTypeTemporal {
 		require.Equal(t, dexpb.ServerEngine_SERVER_ENGINE_TEMPORAL, serverInfo.GetServerEngine())
 	} else {
 		require.Equal(t, dexpb.ServerEngine_SERVER_ENGINE_CADENCE, serverInfo.GetServerEngine())

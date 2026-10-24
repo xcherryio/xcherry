@@ -268,6 +268,16 @@ func doTestPersistenceWorkflow(
 		expectedSearchBool,
 	}
 	requireAttributesMatch(t, expectedIndexedAttributes, allIndexed.GetAttributes())
+	expectedSearchIndexedAttributes := expectedIndexedAttributes
+	if isServerZDBinaryMode() {
+		// server-zd returns indexed datetimes in UTC; the Go Server uses its local time zone.
+		expectedSearchIndexedAttributes = []*dexpb.AttributeWrite{
+			indexedDatetimeAttribute("CustomDatetimeField", nowTime.UTC().Format(timeparser.DateTimeFormat)),
+			expectedSearchKeyword,
+			expectedSearchInt,
+			expectedSearchBool,
+		}
+	}
 
 	if *testSearchIntegTest {
 		var searchFlow *dexpb.SearchFlowsResponseEntry
@@ -288,7 +298,7 @@ func doTestPersistenceWorkflow(
 			}
 			for _, flowRun := range searchResponse.GetFlowRuns() {
 				if flowRun.GetRunId() == runId &&
-					searchAttributeWritesPresent(expectedIndexedAttributes, flowRun.GetIndexedAttributes()) &&
+					searchAttributeWritesPresent(expectedSearchIndexedAttributes, flowRun.GetIndexedAttributes()) &&
 					searchAttributePresent(flowRun.GetIndexedAttributes(), expectedFlowType) {
 					searchFlow = flowRun
 					return true
@@ -300,7 +310,7 @@ func doTestPersistenceWorkflow(
 		require.Equal(t, persistence.WorkflowType, searchFlow.GetFlowType())
 		require.NotEqual(t, dexpb.FlowStatus_FLOW_STATUS_UNSPECIFIED, searchFlow.GetFlowStatus())
 		require.NotNil(t, searchFlow.GetStartTime())
-		requireSearchAttributesMatch(t, expectedIndexedAttributes, searchFlow.GetIndexedAttributes())
+		requireSearchAttributesMatch(t, expectedSearchIndexedAttributes, searchFlow.GetIndexedAttributes())
 		requireSearchAttributePresent(t, searchFlow.GetIndexedAttributes(), expectedFlowType)
 
 		firstFlowId := flowId
@@ -400,7 +410,8 @@ func doTestPersistenceWorkflow(
 			boolQuery = fmt.Sprintf("CustomDatetimeField='%v' AND CustomBoolField='%v'", nowTimeStr, "true")
 		}
 
-		if flowConfig != nil {
+		// C3: server-zd never continues a run as new, so it has no earlier runs to count.
+		if flowConfig != nil && !isServerZDBinaryMode() {
 			assertSearchFlows(t, flowClient, fmt.Sprintf("CustomDatetimeField='%v'", nowTimeStr), 15, flowConfig != nil)
 			assertSearchFlows(t, flowClient, fmt.Sprintf("CustomDatetimeField='%v' AND CustomTextField='%v'", nowTimeStr, "Quanzheng"), 3, flowConfig != nil)
 			assertSearchFlows(t, flowClient, fmt.Sprintf("CustomDatetimeField='%v' AND CustomDoubleField='%v'", nowTimeStr, "0.01"), 9, flowConfig != nil)
