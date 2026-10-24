@@ -100,8 +100,10 @@ the release does not finish within 2 seconds, the process exits 1 and the lease 
 expires.
 
 A lost lease, a stopped commit pipeline, or a halted Flow runtime stops the node, and the process
-exits 1. Restart it. A signal that arrives during startup stops the node once startup finishes, with
-the same shutdown and exit status. A failed startup releases its lease and exits 1.
+exits 1. Restart it. A signal before the node acquires its lease cancels startup and exits 0. If
+the node already holds its lease, startup finishes before graceful shutdown begins. That shutdown
+has the same 14.5-second total and exit status as a signal received while serving. A failed startup
+releases its lease and exits 1.
 
 Logs go to standard error. `RUST_LOG` filters them; the default level is `info`.
 
