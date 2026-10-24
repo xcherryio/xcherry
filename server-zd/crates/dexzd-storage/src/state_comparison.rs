@@ -56,7 +56,9 @@ impl std::fmt::Display for StateDifference {
                 expected.len()
             ),
             (Some(expected), Some(actual)) => {
-                if let Some(offset) = expected
+                if expected == actual {
+                    write!(formatter, "metadata encoding is noncanonical")
+                } else if let Some(offset) = expected
                     .iter()
                     .zip(actual)
                     .position(|(first, second)| first != second)
@@ -95,6 +97,7 @@ pub enum StateComparisonError {
 }
 
 /// Compares all column families, returning the first difference; listed metadata fields are canonicalized.
+/// Tests and simulations provide the continuously running twin at the same log point.
 pub fn compare_store_views(
     expected: &dyn LocalReadView,
     actual: &dyn LocalReadView,
@@ -138,10 +141,20 @@ pub fn compare_store_views(
             if actual_value.is_some() {
                 actual_index += 1;
             }
-            let expected_value =
+            let expected_original = expected_value.cloned();
+            let actual_original = actual_value.cloned();
+            let (expected_value, is_expected_lossless) =
                 canonicalize_value(column_family, &key, expected_value, canonicalized_fields)?;
-            let actual_value =
+            let (actual_value, is_actual_lossless) =
                 canonicalize_value(column_family, &key, actual_value, canonicalized_fields)?;
+            if !is_expected_lossless || !is_actual_lossless {
+                return Err(StateComparisonError::Difference(StateDifference {
+                    column_family,
+                    key,
+                    expected: expected_original,
+                    actual: actual_original,
+                }));
+            }
             if expected_value != actual_value {
                 return Err(StateComparisonError::Difference(StateDifference {
                     column_family,
@@ -160,16 +173,17 @@ fn canonicalize_value(
     key: &[u8],
     value: Option<&Vec<u8>>,
     canonicalized_fields: &[CanonicalizedStoreField],
-) -> Result<Option<Vec<u8>>, StorageError> {
+) -> Result<(Option<Vec<u8>>, bool), StorageError> {
     let Some(value) = value else {
-        return Ok(None);
+        return Ok((None, true));
     };
     if canonicalized_fields.is_empty() {
-        return Ok(Some(value.clone()));
+        return Ok((Some(value.clone()), true));
     }
     match column_family {
         ColumnFamily::NodeMeta if key == b"node" => {
             let mut metadata = NodeMeta::decode(value.as_slice())?;
+            let is_lossless = metadata.encode_to_vec() == *value;
             for field in canonicalized_fields {
                 match field {
                     CanonicalizedStoreField::NodeLineageId => metadata.lineage_id.clear(),
@@ -179,10 +193,11 @@ fn canonicalize_value(
                     _ => {}
                 }
             }
-            Ok(Some(metadata.encode_to_vec()))
+            Ok((Some(metadata.encode_to_vec()), is_lossless))
         }
         ColumnFamily::PartitionMeta => {
             let mut metadata = PartitionMeta::decode(value.as_slice())?;
+            let is_lossless = metadata.encode_to_vec() == *value;
             for field in canonicalized_fields {
                 match field {
                     CanonicalizedStoreField::PartitionApplied => metadata.applied = None,
@@ -190,9 +205,9 @@ fn canonicalize_value(
                     _ => {}
                 }
             }
-            Ok(Some(metadata.encode_to_vec()))
+            Ok((Some(metadata.encode_to_vec()), is_lossless))
         }
-        _ => Ok(Some(value.clone())),
+        _ => Ok((Some(value.clone()), true)),
     }
 }
 
@@ -360,6 +375,67 @@ mod tests {
             compare_store_views(&expected, &actual, &canonicalized),
             Err(StateComparisonError::Difference(difference))
                 if difference.column_family == ColumnFamily::PartitionMeta && difference.key == key
+        ));
+    }
+
+    #[test]
+    fn reports_unknown_partition_metadata_field_with_canonicalization() {
+        let expected = InMemoryLocalStore::new();
+        let actual = InMemoryLocalStore::new();
+        let metadata = PartitionMeta {
+            partition: 2,
+            ..PartitionMeta::default()
+        };
+        let key = 2_u16.to_be_bytes().to_vec();
+        let mut batch = WriteBatch::new();
+        batch.put(
+            ColumnFamily::PartitionMeta,
+            key.clone(),
+            metadata.encode_to_vec(),
+        );
+        expected.write(batch).expect("write expected metadata");
+        let mut bytes = metadata.encode_to_vec();
+        bytes.extend_from_slice(&[0x80, 0x06, 0x01]);
+        let mut batch = WriteBatch::new();
+        batch.put(ColumnFamily::PartitionMeta, key.clone(), bytes);
+        actual
+            .write(batch)
+            .expect("write metadata with unknown field");
+        assert!(matches!(
+            compare_store_views(
+                &expected,
+                &actual,
+                &[CanonicalizedStoreField::PartitionApplied],
+            ),
+            Err(StateComparisonError::Difference(difference))
+                if difference.column_family == ColumnFamily::PartitionMeta && difference.key == key
+        ));
+    }
+
+    #[test]
+    fn reports_noncanonical_node_metadata_encoding() {
+        let expected = InMemoryLocalStore::new();
+        let actual = InMemoryLocalStore::new();
+        let metadata = NodeMeta {
+            lineage_id: vec![1],
+            ..NodeMeta::default()
+        };
+        expected
+            .put_node_meta(&metadata)
+            .expect("expected metadata");
+        let mut bytes = metadata.encode_to_vec();
+        bytes.extend_from_slice(&[0x10, 0x80, 0x00]);
+        let mut batch = WriteBatch::new();
+        batch.put(ColumnFamily::NodeMeta, b"node".to_vec(), bytes);
+        actual.write(batch).expect("write noncanonical metadata");
+        assert!(matches!(
+            compare_store_views(
+                &expected,
+                &actual,
+                &[CanonicalizedStoreField::NodeLineageId],
+            ),
+            Err(StateComparisonError::Difference(difference))
+                if difference.column_family == ColumnFamily::NodeMeta && difference.key == b"node"
         ));
     }
 }
