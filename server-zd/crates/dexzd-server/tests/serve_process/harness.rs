@@ -28,6 +28,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_postgres::NoTls;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
@@ -143,6 +144,14 @@ pub(crate) struct ServeConfig<'a> {
     pub(crate) local_directory: &'a Path,
     pub(crate) lease_duration: &'a str,
     pub(crate) fail_if_held: bool,
+    /// Selects `search.backend: paradedb` when set; builtin otherwise.
+    pub(crate) parade_db: Option<ParadeDbSettings<'a>>,
+}
+
+/// The ParadeDB database and schema that `search.backend: paradedb` uses.
+pub(crate) struct ParadeDbSettings<'a> {
+    pub(crate) connection_string: &'a str,
+    pub(crate) schema: &'a str,
 }
 
 impl ServeConfig<'_> {
@@ -155,8 +164,15 @@ impl ServeConfig<'_> {
             ),
             None => String::new(),
         };
+        let search = match &self.parade_db {
+            Some(parade_db) => format!(
+                "search:\n  backend: paradedb\n  paradeDbConnectionString: '{}'\n  paradeDbSchema: {}\n  paradeDbConnectionPoolSize: 2\n",
+                parade_db.connection_string, parade_db.schema
+            ),
+            None => "search:\n  backend: builtin\n".to_owned(),
+        };
         let contents = format!(
-            "cluster:\n  nodeId: {node_id}\n  partitionCount: 16\nobjectStore:\n  endpoint: {endpoint}\n  region: us-east-1\n  bucket: {bucket}\n  prefix: {prefix}\n  forcePathStyle: true\n  credentialsSource: environment\n{hard_delete_store}localStorage:\n  directory: {directory}\n  blockCacheBytes: 16777216\nlease:\n  duration: {lease}\n  failIfHeld: {fail_if_held}\nsnapshot:\n  interval: 1h\n  retainedCount: 2\napi:\n  listen: \"{listen}\"\nsearch:\n  backend: builtin\n",
+            "cluster:\n  nodeId: {node_id}\n  partitionCount: 16\nobjectStore:\n  endpoint: {endpoint}\n  region: us-east-1\n  bucket: {bucket}\n  prefix: {prefix}\n  forcePathStyle: true\n  credentialsSource: environment\n{hard_delete_store}localStorage:\n  directory: {directory}\n  blockCacheBytes: 16777216\nlease:\n  duration: {lease}\n  failIfHeld: {fail_if_held}\nsnapshot:\n  interval: 1h\n  retainedCount: 2\napi:\n  listen: \"{listen}\"\n{search}",
             node_id = super::NODE_ID,
             endpoint = self.primary_endpoint,
             bucket = super::PRIMARY_BUCKET,
@@ -277,6 +293,68 @@ impl ServeProcess {
     pub(crate) fn log(&self) -> String {
         fs::read_to_string(&self.log_path)
             .unwrap_or_else(|error| format!("<cannot read {}: {error}>", self.log_path.display()))
+    }
+}
+
+/// An isolated schema in the ParadeDB database that `DEX_ZD_PARADEDB_URL` names.
+pub(crate) struct ParadeDbSchema {
+    client: tokio_postgres::Client,
+    connection: JoinHandle<()>,
+    name: String,
+}
+
+impl ParadeDbSchema {
+    /// Installs `pg_search` and creates an empty schema with a name unique to this run.
+    pub(crate) async fn create(database_url: &str) -> Self {
+        let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+            .await
+            .expect("the test connects to ParadeDB");
+        let connection = tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                eprintln!("the ParadeDB test connection closed: {error}");
+            }
+        });
+        client
+            .batch_execute("CREATE EXTENSION IF NOT EXISTS pg_search")
+            .await
+            .expect("pg_search is installed");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the wall clock is after the Unix epoch")
+            .as_nanos();
+        let name = format!("dexzd_serve_{}_{nonce}", std::process::id());
+        client
+            .batch_execute(&format!("CREATE SCHEMA {name}"))
+            .await
+            .expect("the test schema is created");
+        Self {
+            client,
+            connection,
+            name,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Deletes every projected run and position, so only a rebuild can restore them.
+    pub(crate) async fn clear_projection(&self) {
+        self.client
+            .batch_execute(&format!(
+                "TRUNCATE TABLE {0}.dexzd_visibility_runs, {0}.dexzd_visibility_progress",
+                self.name
+            ))
+            .await
+            .expect("the projection tables are cleared");
+    }
+
+    pub(crate) async fn drop_schema(self) {
+        self.client
+            .batch_execute(&format!("DROP SCHEMA {} CASCADE", self.name))
+            .await
+            .expect("the test schema is dropped");
+        self.connection.abort();
     }
 }
 

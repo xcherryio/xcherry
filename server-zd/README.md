@@ -71,8 +71,23 @@ Startup proceeds in this order:
 4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
    `api.listen`.
 
-`search.backend: builtin` serves SearchFlows from committed local search documents. The `paradedb`
-backend is not available in `serve` yet and fails startup.
+`search.backend: builtin` serves SearchFlows from committed local search documents.
+
+`search.backend: paradedb` serves SearchFlows from ParadeDB:
+
+- Before the log is replayed, the node opens `search.paradeDbConnectionPoolSize` connections to
+  `search.paradeDbConnectionString` and creates or upgrades the search schema. It tries three
+  times, then fails startup. The first startup needs a role that may create the `pg_search`
+  extension, unless the extension is already installed.
+- A `search.paradeDbSchema` other than `public` is applied as the `search_path` connection option.
+  A transaction pooler must pass that startup option through; otherwise keep the tables in `public`.
+- A background task copies each committed partition frame's search documents to ParadeDB. Commits
+  never wait for it. When ParadeDB is unavailable, the task retries. When it falls behind its queue
+  or its stored position diverges, it rebuilds the partition from committed local state.
+- On startup, every partition whose ParadeDB position differs from the local store is rebuilt.
+- SearchFlows waits up to `search.readYourWritesWait` until frames committed before the request are
+  searchable, then returns Unavailable.
+- One ParadeDB schema belongs to one Dex cluster.
 
 On SIGTERM or SIGINT the node stops within 10 seconds. Health reports NOT_SERVING, Workers are told
 to reconnect, long polls close, and open calls get 4 seconds to finish. Then effects and the engine
@@ -95,8 +110,7 @@ dex-server-zd dev --data-dir ./zd-data [--listen 127.0.0.1:8801] [--log-dir <dir
 state under `<data-dir>/store`. `dexcli dev -engine zd` starts it with these flags. It fixes the
 node ID to `dev`, anonymous credentials, the embedded endpoint, and the `--listen` address, and it
 rejects `objectStore.hardDeleteStore`. With `--log-dir`, logs also go to
-`<log-dir>/dex-server-zd.log`. The ParadeDB search backend logs a warning, and SearchFlows returns
-Unimplemented.
+`<log-dir>/dex-server-zd.log`. A `search.backend: paradedb` override uses ParadeDB as `serve` does.
 
 ## Development
 

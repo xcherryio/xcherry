@@ -13,6 +13,7 @@ name = "dex-server-zd"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 dexzd-api.workspace = true
 dexzd-apply.workspace = true
@@ -29,12 +30,14 @@ dexzd-stream-store.workspace = true
 dexzd-worker-dispatch.workspace = true
 futures.workspace = true
 humantime-serde.workspace = true
+prost.workspace = true
 s3mock.workspace = true
 s3mock-server.workspace = true
 serde.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-postgres.workspace = true
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true

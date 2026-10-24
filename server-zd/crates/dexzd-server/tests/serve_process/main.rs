@@ -22,13 +22,18 @@ use dexzd_protocol::dex::flow_service_client::FlowServiceClient;
 use dexzd_protocol::dex::worker_task_service_client::WorkerTaskServiceClient;
 use dexzd_protocol::dex::{
     CloseDecision, CloseDecisionType, FlowConfig, FlowStartOptions, FlowStatus,
-    GetFlowSummaryRequest, InvokeExecuteMethodResponse, StartFlowRequest, StepDecision,
-    StepOptions, Value, WaitForFlowRequest, WorkerTarget, value,
+    GetFlowSummaryRequest, InvokeExecuteMethodResponse, SearchFlowsRequest,
+    SearchFlowsResponseEntry, StartFlowRequest, StepDecision, StepOptions, Value,
+    WaitForFlowRequest, WorkerTarget, value,
 };
 use s3mock_server::SignatureVerification;
 use tempfile::TempDir;
+use tonic::transport::Channel;
 
-use harness::{PullWorker, S3Emulator, ServeConfig, ServeProcess, free_loopback_address};
+use harness::{
+    ParadeDbSchema, ParadeDbSettings, PullWorker, S3Emulator, ServeConfig, ServeProcess,
+    free_loopback_address,
+};
 
 const NODE_ID: &str = "serve-node";
 const PRIMARY_BUCKET: &str = "dex-serve";
@@ -39,6 +44,8 @@ const FLOW_ID: &str = "serve-flow-1";
 /// Longer than every test budget, so only a released lease lets the next process start.
 const HELD_LEASE_DURATION: &str = "60s";
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(15);
+/// Covers the projection's startup catch-up and rebuild.
+const SEARCH_BUDGET: Duration = Duration::from_secs(30);
 
 fn string_value(text: &str) -> Value {
     Value {
@@ -64,6 +71,7 @@ async fn sigterm_releases_the_lease_and_a_second_process_takes_over() {
         local_directory: &directory.path().join("first-store"),
         lease_duration: HELD_LEASE_DURATION,
         fail_if_held: true,
+        parade_db: None,
     }
     .write(&first_config);
     let mut first = ServeProcess::spawn(
@@ -155,6 +163,7 @@ async fn sigterm_releases_the_lease_and_a_second_process_takes_over() {
         local_directory: &directory.path().join("second-store"),
         lease_duration: HELD_LEASE_DURATION,
         fail_if_held: true,
+        parade_db: None,
     }
     .write(&second_config);
     let mut second = ServeProcess::spawn(
@@ -206,6 +215,7 @@ async fn losing_the_lease_exits_non_zero() {
         local_directory: &directory.path().join("store"),
         lease_duration: "3s",
         fail_if_held: false,
+        parade_db: None,
     }
     .write(&config);
     let mut process = ServeProcess::spawn(&config, address, directory.path().join("serve.log"));
@@ -236,4 +246,187 @@ async fn losing_the_lease_exits_non_zero() {
     assert_eq!(status.code(), Some(1), "{log}");
     assert!(log.contains("dex-server-zd: the node stopped"), "{log}");
     primary.shutdown().await;
+}
+
+/// ParadeDB SearchFlows reads committed Flows, and a new process rebuilds a cleared projection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paradedb_search_projects_commits_and_rebuilds_on_startup() {
+    let Ok(database_url) = std::env::var("DEX_ZD_PARADEDB_URL") else {
+        return;
+    };
+    let schema = ParadeDbSchema::create(&database_url).await;
+    let primary = S3Emulator::start(PRIMARY_BUCKET, SignatureVerification::Strict).await;
+    let primary_endpoint = primary.endpoint();
+    let directory = TempDir::new().expect("a temporary test directory can be created");
+    let serve_config = |name: &str, listen| {
+        let path = directory.path().join(format!("{name}.yaml"));
+        ServeConfig {
+            primary_endpoint: &primary_endpoint,
+            hard_delete_endpoint: None,
+            listen,
+            local_directory: &directory.path().join(format!("{name}-store")),
+            lease_duration: HELD_LEASE_DURATION,
+            fail_if_held: true,
+            parade_db: Some(ParadeDbSettings {
+                connection_string: &database_url,
+                schema: schema.name(),
+            }),
+        }
+        .write(&path);
+        path
+    };
+
+    let first_address = free_loopback_address();
+    let mut first = ServeProcess::spawn(
+        &serve_config("first", first_address),
+        first_address,
+        directory.path().join("first.log"),
+    );
+    let channel = first.wait_until_serving().await;
+    let worker = start_greeting_worker(channel.clone()).await;
+    let mut flow_client = FlowServiceClient::new(channel);
+    let first_run_id = run_greeting_flow(&mut flow_client, "search-flow-1").await;
+    let found = search_until_completed(&mut flow_client, "search-flow-1").await;
+    assert_eq!(found.run_id, first_run_id);
+    assert_eq!(found.flow_type, FLOW_TYPE);
+    worker.stop().await;
+    let first_status = first.terminate(SHUTDOWN_BUDGET).await;
+    let first_log = first.log();
+    assert_eq!(first_status.code(), Some(0), "{first_log}");
+    assert!(
+        first_log.contains("the ParadeDB search projection caught up"),
+        "{first_log}"
+    );
+
+    schema.clear_projection().await;
+    let second_address = free_loopback_address();
+    let mut second = ServeProcess::spawn(
+        &serve_config("second", second_address),
+        second_address,
+        directory.path().join("second.log"),
+    );
+    let channel = second.wait_until_serving().await;
+    let mut flow_client = FlowServiceClient::new(channel.clone());
+    let rebuilt = search_until_completed(&mut flow_client, "search-flow-1").await;
+    assert_eq!(rebuilt.run_id, first_run_id);
+
+    let worker = start_greeting_worker(channel).await;
+    let second_run_id = run_greeting_flow(&mut flow_client, "search-flow-2").await;
+    // Read-your-writes: the Flow's committed completion is searchable without polling.
+    let entries = search_greeting_flows(&mut flow_client)
+        .await
+        .expect("SearchFlows succeeds once the projection caught up");
+    let projected = entries
+        .iter()
+        .find(|entry| entry.flow_id == "search-flow-2")
+        .unwrap_or_else(|| panic!("search-flow-2 is searchable: {entries:?}"));
+    assert_eq!(projected.run_id, second_run_id);
+    assert_eq!(projected.flow_status, FlowStatus::Completed as i32);
+    worker.stop().await;
+
+    let second_status = second.terminate(SHUTDOWN_BUDGET).await;
+    assert_eq!(second_status.code(), Some(0), "{}", second.log());
+    primary.shutdown().await;
+    schema.drop_schema().await;
+}
+
+/// Starts a pull Worker whose GreetStep completes the Flow with a greeting.
+async fn start_greeting_worker(channel: Channel) -> PullWorker {
+    PullWorker::start(
+        WorkerTaskServiceClient::new(channel),
+        FLOW_TYPE,
+        Box::new(|_| InvokeExecuteMethodResponse {
+            step_decision: Some(StepDecision {
+                close_decision: Some(CloseDecision {
+                    close_decision_type: CloseDecisionType::ForceComplete.into(),
+                    close_input: Some(string_value("hello from serve")),
+                    ..CloseDecision::default()
+                }),
+                ..StepDecision::default()
+            }),
+            ..InvokeExecuteMethodResponse::default()
+        }),
+    )
+    .await
+}
+
+/// Starts `flow_id` on the pull Worker, waits until it completes, and returns its run ID.
+async fn run_greeting_flow(flow_client: &mut FlowServiceClient<Channel>, flow_id: &str) -> String {
+    let started = flow_client
+        .start_flow(StartFlowRequest {
+            flow_id: flow_id.to_owned(),
+            flow_type: FLOW_TYPE.to_owned(),
+            start_step_type: "GreetStep".to_owned(),
+            step_input: Some(string_value("hello")),
+            step_options: Some(StepOptions {
+                skip_wait_for: true,
+                ..StepOptions::default()
+            }),
+            flow_start_options: Some(FlowStartOptions {
+                flow_config_override: Some(FlowConfig {
+                    worker_target: Some(WorkerTarget {
+                        is_pull_mode: true,
+                        ..WorkerTarget::default()
+                    }),
+                    ..FlowConfig::default()
+                }),
+                ..FlowStartOptions::default()
+            }),
+            request_id: format!("{flow_id}-request"),
+            ..StartFlowRequest::default()
+        })
+        .await
+        .expect("StartFlow succeeds")
+        .into_inner();
+    let result = flow_client
+        .wait_for_flow(WaitForFlowRequest {
+            flow_id: flow_id.to_owned(),
+            wait_time_seconds: 30,
+            ..WaitForFlowRequest::default()
+        })
+        .await
+        .expect("WaitForFlow succeeds")
+        .into_inner();
+    assert_eq!(result.flow_status, FlowStatus::Completed as i32);
+    started.run_id
+}
+
+/// Searches until `flow_id` appears as Completed; Unavailable means the projection is catching up.
+async fn search_until_completed(
+    flow_client: &mut FlowServiceClient<Channel>,
+    flow_id: &str,
+) -> SearchFlowsResponseEntry {
+    let deadline = tokio::time::Instant::now() + SEARCH_BUDGET;
+    loop {
+        let last_result = match search_greeting_flows(flow_client).await {
+            Ok(entries) => {
+                if let Some(entry) = entries.iter().find(|entry| {
+                    entry.flow_id == flow_id && entry.flow_status == FlowStatus::Completed as i32
+                }) {
+                    return entry.clone();
+                }
+                format!("{entries:?}")
+            }
+            Err(status) if status.code() == tonic::Code::Unavailable => status.to_string(),
+            Err(status) => panic!("SearchFlows failed: {status}"),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{flow_id} was not searchable as Completed within {SEARCH_BUDGET:?}: {last_result}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn search_greeting_flows(
+    flow_client: &mut FlowServiceClient<Channel>,
+) -> Result<Vec<SearchFlowsResponseEntry>, tonic::Status> {
+    flow_client
+        .search_flows(SearchFlowsRequest {
+            query: format!("FlowType = '{FLOW_TYPE}'"),
+            page_size: 10,
+            ..SearchFlowsRequest::default()
+        })
+        .await
+        .map(|response| response.into_inner().flow_runs)
 }

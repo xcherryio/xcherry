@@ -326,6 +326,11 @@ impl Config {
             "must be non-empty",
         )?;
         ensure(
+            is_unquoted_identifier(&self.search.parade_db_schema),
+            "search.paradeDbSchema",
+            "must be an unquoted PostgreSQL identifier of letters, digits, and underscores",
+        )?;
+        ensure(
             self.search.read_your_writes_wait > Duration::ZERO,
             "search.readYourWritesWait",
             "must be positive",
@@ -404,4 +409,13 @@ fn validate_endpoint(field: &'static str, endpoint: &str) -> Result<(), ConfigEr
 
 fn validate_prefix(field: &'static str, prefix: &str) -> Result<(), ConfigError> {
     ensure(!prefix.starts_with('/'), field, "must not begin with '/'")
+}
+
+/// The schema goes into a `search_path` connection option, which splits on commas and spaces.
+fn is_unquoted_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }

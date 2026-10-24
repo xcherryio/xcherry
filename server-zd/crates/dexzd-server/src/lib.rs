@@ -159,7 +159,7 @@ pub fn run_from_command_line() -> Result<(), ServerError> {
             )
         }
         ServerCommand::Serve(options) => {
-            let configuration = load_serve_config(&options)?;
+            let configuration = config::Config::load_file(&options.config)?;
             serve_until_terminated(None, async move {
                 server_node::start_server(&configuration, None).await
             })
@@ -192,18 +192,6 @@ fn serve_until_terminated(
         signals.abort();
         result
     })
-}
-
-/// Loads the `serve` configuration file and rejects settings this build cannot serve.
-fn load_serve_config(options: &ServeCommandOptions) -> Result<config::Config, ServerError> {
-    let configuration = config::Config::load_file(&options.config)?;
-    if configuration.search.backend == config::SearchBackend::Paradedb {
-        return Err(ServerError::Config(config::ConfigError::Invalid {
-            field: "search.backend",
-            message: "the paradedb backend is not available in serve yet; use builtin".to_owned(),
-        }));
-    }
-    Ok(configuration)
 }
 
 /// Starts the single-node dev server with an embedded S3 emulator, serving on `--listen`.

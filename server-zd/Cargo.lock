@@ -1134,6 +1134,7 @@ dependencies = [
 name = "dexzd-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "clap",
  "dexzd-api",
@@ -1151,6 +1152,7 @@ dependencies = [
  "dexzd-worker-dispatch",
  "futures",
  "humantime-serde",
+ "prost",
  "s3mock",
  "s3mock-server",
  "serde",
@@ -1158,6 +1160,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-postgres",
  "tokio-stream",
  "tokio-util",
  "tonic",

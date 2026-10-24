@@ -435,6 +435,9 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
         ("search.paradeDbSchema", |config| {
             config.search.parade_db_schema.clear()
         }),
+        ("search.paradeDbSchema", |config| {
+            config.search.parade_db_schema = "dex,public".to_owned()
+        }),
         ("search.readYourWritesWait", |config| {
             config.search.read_your_writes_wait = Duration::ZERO
         }),

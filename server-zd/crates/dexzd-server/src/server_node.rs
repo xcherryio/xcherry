@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 mod client_deadline;
+mod search_projection;
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -39,6 +40,10 @@ use crate::embedded_s3::EmbeddedS3;
 use crate::object_stores::ObjectStores;
 use crate::runtime_hooks::RegistryCommittedCommandSink;
 use crate::worker_rpc_invoker::PullWorkerRpcInvoker;
+
+pub(crate) use search_projection::CommittedSearchFrames;
+
+use search_projection::{ParadeDbSearch, SearchProjection};
 
 /// Total time allowed for a graceful shutdown before remaining work is abandoned.
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
@@ -147,6 +152,7 @@ struct ServerNode {
     dispatch: WorkerDispatch,
     stream_store: Arc<StreamStore>,
     flow_service: DexFlowService,
+    search_projection: Option<SearchProjection>,
 }
 
 /// What the engine's runtime factory builds; captured so the node can own it after start.
@@ -169,6 +175,18 @@ impl ServerNode {
             StreamStore::new(&components.stream_store)
                 .map_err(|source| ServerError::StreamStore { source })?,
         );
+        let partition_count = u16::try_from(config.cluster.partition_count).map_err(|_| {
+            ServerError::ConfigValueOutOfRange {
+                field: "cluster.partitionCount",
+            }
+        })?;
+        let parade_db_search = match config.search.backend {
+            SearchBackendKind::Builtin => None,
+            SearchBackendKind::Paradedb => Some(ParadeDbSearch::connect(&config.search).await?),
+        };
+        let committed_search_frames = parade_db_search
+            .as_ref()
+            .map(ParadeDbSearch::committed_frames);
         let runtime_parts: Arc<Mutex<Option<RuntimeParts>>> = Arc::new(Mutex::new(None));
         let started = EngineNode::start(
             &components.engine_node,
@@ -215,6 +233,7 @@ impl ServerNode {
                 let hooks = EngineRuntimeHooks {
                     committed_commands: Arc::new(RegistryCommittedCommandSink::new(
                         registry.clone(),
+                        committed_search_frames.clone(),
                     )),
                     rebuilder: Arc::new(effect_runner),
                 };
@@ -248,6 +267,20 @@ impl ServerNode {
             registry,
             effect_tasks,
         } = parts.expect("the engine calls the runtime factory before it starts serving");
+        let (search_backend, search_projection) = match parade_db_search {
+            Some(parade_db_search) => (
+                Some(parade_db_search.search_backend()),
+                Some(parade_db_search.start_projection(
+                    engine.committer().clone(),
+                    partition_count,
+                    engine.wait_for_stop(),
+                )),
+            ),
+            None => (
+                Some(builtin_search_backend(config, &engine, partition_count)?),
+                None,
+            ),
+        };
         let flow_service = DexFlowService::new(
             &components.flow_service,
             FlowServiceDependencies {
@@ -260,7 +293,7 @@ impl ServerNode {
                     object_stores.primary.clone(),
                     clock,
                 )),
-                search_backend: search_backend(config, &engine)?,
+                search_backend,
             },
         );
         Ok(Self {
@@ -270,6 +303,7 @@ impl ServerNode {
             dispatch,
             stream_store,
             flow_service,
+            search_projection,
         })
     }
 
@@ -288,6 +322,7 @@ impl ServerNode {
             dispatch,
             stream_store,
             flow_service,
+            search_projection,
         } = self;
         let (health, health_server) = HealthStatus::new().await;
         let worker_task_service =
@@ -353,6 +388,9 @@ impl ServerNode {
                 }
             }
             effect_tasks.shutdown().await;
+            if let Some(search_projection) = search_projection {
+                search_projection.shutdown().await;
+            }
             engine.shutdown().await;
             close_stream_store(&stream_store).await;
             if let Some(embedded_s3) = embedded_s3 {
@@ -373,39 +411,27 @@ impl ServerNode {
     }
 }
 
-/// Returns the configured SearchFlows backend, or `None` while the backend is not available.
-fn search_backend(
+/// Returns builtin SearchFlows over committed views of the engine.
+fn builtin_search_backend(
     config: &Config,
     engine: &EngineNode,
-) -> Result<Option<Arc<dyn SearchBackend>>, ServerError> {
-    match config.search.backend {
-        SearchBackendKind::Builtin => {
-            let partition_count = u16::try_from(config.cluster.partition_count).map_err(|_| {
-                ServerError::ConfigValueOutOfRange {
-                    field: "cluster.partitionCount",
-                }
-            })?;
-            let scan_budget = usize::try_from(config.search.builtin_scan_budget_documents)
-                .map_err(|_| ServerError::ConfigValueOutOfRange {
-                    field: "search.builtinScanBudgetDocuments",
-                })?;
-            let backend = BuiltinSearchBackend::with_scan_budget(
-                Arc::new(CommittedSearchViews {
-                    committer: engine.committer().clone(),
-                }),
-                partition_count,
-                scan_budget,
-            )
-            .map_err(|source| ServerError::SearchBackend { source })?;
-            Ok(Some(Arc::new(backend)))
-        }
-        SearchBackendKind::Paradedb => {
-            tracing::warn!(
-                "the ParadeDB search backend is not available yet; SearchFlows returns Unimplemented"
-            );
-            Ok(None)
-        }
-    }
+    partition_count: u16,
+) -> Result<Arc<dyn SearchBackend>, ServerError> {
+    let scan_budget =
+        usize::try_from(config.search.builtin_scan_budget_documents).map_err(|_| {
+            ServerError::ConfigValueOutOfRange {
+                field: "search.builtinScanBudgetDocuments",
+            }
+        })?;
+    let backend = BuiltinSearchBackend::with_scan_budget(
+        Arc::new(CommittedSearchViews {
+            committer: engine.committer().clone(),
+        }),
+        partition_count,
+        scan_budget,
+    )
+    .map_err(|source| ServerError::SearchBackend { source })?;
+    Ok(Arc::new(backend))
 }
 
 async fn close_stream_store(stream_store: &StreamStore) {
