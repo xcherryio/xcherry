@@ -392,6 +392,11 @@ fn settings() -> RunSettings {
         wire_inline_threshold_bytes: 100,
         max_value_bytes: 16 << 20,
         request_dedup_capacity: 1000,
+        max_run_state_bytes: 1 << 30,
+        max_active_step_executions: 10_000,
+        history_window_semantic_events: 10_000,
+        history_prune_chunk_semantic_events: 1000,
+        max_retained_superseded_bytes: 256 << 20,
         ..RunSettings::default()
     }
 }
