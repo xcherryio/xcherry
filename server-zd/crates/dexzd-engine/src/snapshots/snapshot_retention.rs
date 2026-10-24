@@ -39,7 +39,14 @@ pub(crate) struct SnapshotCatalog {
     listed_manifest_keys: BTreeSet<String>,
     listed_files: BTreeMap<String, ObjectMetadata>,
     inserted_manifest_keys: BTreeSet<String>,
-    orphan_first_seen: BTreeMap<String, (String, i64)>,
+    orphan_first_seen: BTreeMap<String, OrphanMark>,
+    completed_scan_number: u64,
+}
+
+struct OrphanMark {
+    etag: String,
+    first_seen_unix_micros: i64,
+    scan_number: u64,
 }
 
 impl SnapshotCatalog {
@@ -66,16 +73,11 @@ impl SnapshotRetention {
         if !self.refresh(catalog).await? {
             return Ok(Self::kept(catalog));
         }
-        let (obsolete_manifests, obsolete_files) =
-            self.find_obsolete(catalog, referenced_keys, now_unix_micros);
+        let obsolete_manifests = self.find_obsolete(catalog, referenced_keys, now_unix_micros);
         let orphan_files = self.find_orphan_files(catalog, now_unix_micros).await?;
         catalog.listed_files.clear();
         if !obsolete_manifests.is_empty() {
-            // Files go first, so a retry after a partial failure still finds them through the manifests.
-            for chunk in obsolete_files.chunks(LISTING_PAGE_SIZE as usize) {
-                fence.ensure_serving()?;
-                self.object_store.delete_many(chunk).await?;
-            }
+            // Files follow in a later sweep, so retries find them through the listing after partial manifest deletion.
             for chunk in obsolete_manifests.chunks(LISTING_PAGE_SIZE as usize) {
                 fence.ensure_serving()?;
                 self.object_store.delete_many(chunk).await?;
@@ -85,7 +87,6 @@ impl SnapshotRetention {
             }
             tracing::info!(
                 manifests = obsolete_manifests.len(),
-                files = obsolete_files.len(),
                 "deleted snapshots beyond the retained count"
             );
         }
@@ -102,7 +103,7 @@ impl SnapshotRetention {
         Ok(Self::kept(catalog))
     }
 
-    fn kept(catalog: &'_ SnapshotCatalog) -> Vec<&'_ SnapshotManifest> {
+    fn kept(catalog: &SnapshotCatalog) -> Vec<&SnapshotManifest> {
         let mut kept: Vec<&SnapshotManifest> = catalog.manifests.values().collect();
         kept.sort_by(|left, right| creation_order(left).cmp(&creation_order(right)));
         kept
@@ -131,13 +132,26 @@ impl SnapshotRetention {
             let first_seen = catalog
                 .orphan_first_seen
                 .entry(key.clone())
-                .or_insert_with(|| (listed_file.etag.clone(), now_unix_micros));
-            if first_seen.0 != listed_file.etag {
-                *first_seen = (listed_file.etag.clone(), now_unix_micros);
+                .or_insert_with(|| OrphanMark {
+                    etag: listed_file.etag.clone(),
+                    first_seen_unix_micros: now_unix_micros,
+                    scan_number: catalog.completed_scan_number,
+                });
+            if first_seen.etag != listed_file.etag {
+                *first_seen = OrphanMark {
+                    etag: listed_file.etag.clone(),
+                    first_seen_unix_micros: now_unix_micros,
+                    scan_number: catalog.completed_scan_number,
+                };
+            }
+            if first_seen.scan_number == catalog.completed_scan_number
+                || now_unix_micros.saturating_sub(first_seen.first_seen_unix_micros) < delay_micros
+            {
+                continue;
             }
             let written_at = listed_file
                 .last_modified_unix_micros
-                .unwrap_or(first_seen.1);
+                .unwrap_or(first_seen.first_seen_unix_micros);
             if now_unix_micros.saturating_sub(written_at) < delay_micros {
                 continue;
             }
@@ -146,7 +160,7 @@ impl SnapshotRetention {
             };
             let current_written_at = current_file
                 .last_modified_unix_micros
-                .unwrap_or(first_seen.1);
+                .unwrap_or(first_seen.first_seen_unix_micros);
             if current_file.etag == listed_file.etag
                 && now_unix_micros.saturating_sub(current_written_at) >= delay_micros
             {
@@ -156,13 +170,13 @@ impl SnapshotRetention {
         Ok(orphan_files)
     }
 
-    /// Returns the manifest keys to delete and the files that only those manifests reference.
+    /// Returns manifest keys to delete; files that only they reference enter a later sweep.
     fn find_obsolete(
         &self,
         catalog: &SnapshotCatalog,
         referenced_keys: &BTreeSet<String>,
         now_unix_micros: i64,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> Vec<String> {
         let mut snapshots: Vec<(&String, &SnapshotManifest)> = catalog.manifests.iter().collect();
         snapshots.sort_by(|left, right| creation_order(left.1).cmp(&creation_order(right.1)));
         let delay_micros = i64::try_from(self.deletion_delay.as_micros()).unwrap_or(i64::MAX);
@@ -180,29 +194,13 @@ impl SnapshotRetention {
                     ) >= delay_micros
             })
             .collect();
-        let kept_files: BTreeSet<&str> = snapshots
-            .iter()
-            .zip(&is_removable)
-            .filter(|(_, is_removable)| !**is_removable)
-            .flat_map(|((_, manifest), _)| &manifest.files)
-            .map(|file| file.object_key.as_str())
-            .collect();
         let removed: Vec<(&String, &SnapshotManifest)> = snapshots
             .iter()
             .zip(&is_removable)
             .filter(|(_, is_removable)| **is_removable)
             .map(|(snapshot, _)| *snapshot)
             .collect();
-        let obsolete_files: BTreeSet<&str> = removed
-            .iter()
-            .flat_map(|(_, manifest)| &manifest.files)
-            .map(|file| file.object_key.as_str())
-            .filter(|key| !kept_files.contains(key))
-            .collect();
-        (
-            removed.iter().map(|(key, _)| (*key).clone()).collect(),
-            obsolete_files.into_iter().map(str::to_owned).collect(),
-        )
+        removed.iter().map(|(key, _)| (*key).clone()).collect()
     }
 
     /// Reconciles the catalog with a listing and reads only manifests it has not seen.
@@ -239,6 +237,7 @@ impl SnapshotRetention {
         if catalog.listing_start_after.is_some() {
             return Ok(false);
         }
+        catalog.completed_scan_number = catalog.completed_scan_number.saturating_add(1);
         catalog.manifests.retain(|key, _| {
             catalog.listed_manifest_keys.contains(key)
                 || catalog.inserted_manifest_keys.contains(key)
@@ -300,6 +299,9 @@ mod tests {
     use dexzd_object_store::{
         InMemoryObjectStore, ObjectStore, ObjectStoreOperation, WriteCondition,
     };
+    use dexzd_protocol::dexzd::v1::{SnapshotFile, SnapshotManifest};
+    use prost::Message;
+    use uuid::Uuid;
 
     use crate::commit::{CommitState, NodeStopReason};
     use crate::snapshots::SnapshotError;
@@ -308,7 +310,7 @@ mod tests {
     use super::{SnapshotCatalog, SnapshotRetention};
 
     #[tokio::test]
-    async fn fenced_retention_does_not_delete_an_orphan_file() {
+    async fn orphan_requires_a_later_manifest_scan_before_deletion() {
         let object_store = Arc::new(InMemoryObjectStore::new());
         let orphan_key = "snapshot/node-a/lineage/files/orphan";
         object_store
@@ -317,7 +319,6 @@ mod tests {
             .expect("upload orphan");
         let state = Arc::new(CommitState::new(1));
         assert!(state.start_serving());
-        state.stop(NodeStopReason::Fenced);
         let fence = OwnershipFence {
             object_store: object_store.clone(),
             clock: Arc::new(SystemWallClock),
@@ -332,6 +333,118 @@ mod tests {
             deletion_delay: Duration::ZERO,
         };
         let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("mark orphan");
+        assert_eq!(object_store.call_count(ObjectStoreOperation::Delete, ""), 0);
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("sweep orphan");
+        assert!(
+            object_store
+                .get(orphan_key)
+                .await
+                .expect("read orphan")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_published_after_mark_protects_its_file_on_sweep() {
+        let object_store = Arc::new(InMemoryObjectStore::new());
+        let lineage = Uuid::now_v7();
+        let file_key = format!("snapshot/node-a/{lineage}/files/file");
+        object_store
+            .put(&file_key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload file");
+        let state = Arc::new(CommitState::new(1));
+        assert!(state.start_serving());
+        let fence = OwnershipFence {
+            object_store: object_store.clone(),
+            clock: Arc::new(SystemWallClock),
+            state,
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+        };
+        let retention = SnapshotRetention {
+            object_store: object_store.clone(),
+            node_id: "node-a".to_owned(),
+            retained_count: 3,
+            deletion_delay: Duration::ZERO,
+        };
+        let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("mark file while manifest is unpublished");
+        let manifest = SnapshotManifest {
+            node_id: "node-a".to_owned(),
+            lineage_id: lineage.as_bytes().to_vec(),
+            snapshot_number: 1,
+            files: vec![SnapshotFile {
+                object_key: file_key.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let manifest_key = format!("snapshot/node-a/{lineage}/manifest/{:020}", 1);
+        object_store
+            .put(
+                &manifest_key,
+                Bytes::from(manifest.encode_to_vec()),
+                WriteCondition::CreateOnly,
+            )
+            .await
+            .expect("publish delayed manifest");
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("sweep after a fresh manifest scan");
+        assert!(
+            object_store
+                .get(&file_key)
+                .await
+                .expect("read file")
+                .is_some()
+        );
+        assert_eq!(
+            object_store.call_count(ObjectStoreOperation::Delete, &file_key),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn fenced_retention_does_not_delete_an_orphan_file() {
+        let object_store = Arc::new(InMemoryObjectStore::new());
+        let orphan_key = "snapshot/node-a/lineage/files/orphan";
+        object_store
+            .put(orphan_key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload orphan");
+        let state = Arc::new(CommitState::new(1));
+        assert!(state.start_serving());
+        let fence = OwnershipFence {
+            object_store: object_store.clone(),
+            clock: Arc::new(SystemWallClock),
+            state,
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+        };
+        let retention = SnapshotRetention {
+            object_store: object_store.clone(),
+            node_id: "node-a".to_owned(),
+            retained_count: 3,
+            deletion_delay: Duration::ZERO,
+        };
+        let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("mark orphan");
+        fence.state.stop(NodeStopReason::Fenced);
         let result = retention
             .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
             .await;

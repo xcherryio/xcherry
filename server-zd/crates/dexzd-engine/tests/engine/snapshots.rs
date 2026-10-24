@@ -233,6 +233,13 @@ async fn retention_reclaims_the_lineage_that_a_restore_replaced() {
             .await
             .expect("snapshot succeeds");
     }
+    for _ in 0..2 {
+        second
+            .node
+            .take_snapshot()
+            .await
+            .expect("complete orphan sweep");
+    }
     let manifest_keys = snapshot_manifest_keys(&cluster).await;
     assert_eq!(manifest_keys.len(), retained_count, "{manifest_keys:?}");
     let objects = snapshot_object_keys(&cluster).await;
@@ -319,6 +326,7 @@ async fn retention_deletes_only_old_snapshot_files_without_a_manifest() {
         )
         .await
         .expect("upload old orphan");
+    test.node.take_snapshot().await.expect("mark old orphan");
     cluster.clock.shift(2 * 60 * 60 * 1_000_000);
     cluster
         .object_store
@@ -330,7 +338,7 @@ async fn retention_deletes_only_old_snapshot_files_without_a_manifest() {
         .await
         .expect("upload young orphan");
     test.commit_prompt("orphan-flow", 1).await;
-    test.node.take_snapshot().await.expect("second snapshot");
+    test.node.take_snapshot().await.expect("sweep old orphan");
 
     assert!(
         cluster
@@ -399,13 +407,26 @@ async fn retention_limits_snapshot_listing_pages_per_run() {
     test.node
         .take_snapshot()
         .await
-        .expect("second snapshot succeeds");
+        .expect("second snapshot marks orphans");
     assert!(
         cluster
             .object_store
             .get(first_orphan)
             .await
-            .expect("read orphan after scan completes")
+            .expect("read marked orphan")
+            .is_some()
+    );
+    test.node.take_snapshot().await.expect("start fresh scan");
+    test.node
+        .take_snapshot()
+        .await
+        .expect("complete fresh sweep");
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan)
+            .await
+            .expect("read swept orphan")
             .is_none()
     );
     test.node.shutdown().await;
