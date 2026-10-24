@@ -26,6 +26,8 @@ pub use server_node::RunningServer;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::Parser;
 use dexzd_engine::{EngineStartError, NodeStopReason};
@@ -159,25 +161,27 @@ pub fn run_from_command_line() -> Result<(), ServerError> {
         ServerCommand::Dev(options) => {
             let configuration = config::Config::load_dev(&options)?;
             let log_directory = configuration.dev.log_directory.clone();
-            serve_until_terminated(
-                log_directory.as_deref(),
-                start_dev_server_with_config(configuration),
-            )
+            serve_until_terminated(log_directory.as_deref(), move |lease_acquired| async move {
+                start_dev_server_with_config(configuration, &lease_acquired).await
+            })
         }
         ServerCommand::Serve(options) => {
             let configuration = config::Config::load_file(&options.config)?;
-            serve_until_terminated(None, async move {
-                server_node::start_server(&configuration, None).await
+            serve_until_terminated(None, move |lease_acquired| async move {
+                server_node::start_server(&configuration, None, &lease_acquired).await
             })
         }
     }
 }
 
 /// Installs logging, starts the server, and stops it gracefully on the first SIGINT or SIGTERM.
-fn serve_until_terminated(
+fn serve_until_terminated<StartFuture>(
     log_directory: Option<&Path>,
-    start: impl Future<Output = Result<RunningServer, ServerError>>,
-) -> Result<(), ServerError> {
+    start: impl FnOnce(Arc<AtomicBool>) -> StartFuture,
+) -> Result<(), ServerError>
+where
+    StartFuture: Future<Output = Result<RunningServer, ServerError>>,
+{
     server_logging::install(log_directory)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -185,11 +189,16 @@ fn serve_until_terminated(
         .map_err(|source| ServerError::AsyncRuntime { source })?;
     runtime.block_on(async {
         let mut termination = TerminationSignals::register();
-        let mut start = std::pin::pin!(start);
+        let lease_acquired = Arc::new(AtomicBool::new(false));
+        let mut start = std::pin::pin!(start(lease_acquired.clone()));
         let server = tokio::select! {
             started = &mut start => started?,
             () = termination.received() => {
-                // Dropping a startup that holds the node lease would keep the lease until it expires.
+                if !lease_acquired.load(Ordering::Acquire) {
+                    tracing::info!("termination signal before lease acquisition; cancelling startup");
+                    return Ok(());
+                }
+                // Dropping a leased startup delays release until its cleanup task runs.
                 tracing::info!("termination signal during startup; stopping once startup finishes");
                 return start.await?.shutdown().await;
             }
@@ -209,14 +218,16 @@ fn serve_until_terminated(
 ///
 /// The caller installs logging.
 pub async fn start_dev_server(options: &DevCommandOptions) -> Result<RunningServer, ServerError> {
-    start_dev_server_with_config(config::Config::load_dev(options)?).await
+    let lease_acquired = AtomicBool::new(false);
+    start_dev_server_with_config(config::Config::load_dev(options)?, &lease_acquired).await
 }
 
 async fn start_dev_server_with_config(
     mut configuration: config::Config,
+    lease_acquired: &AtomicBool,
 ) -> Result<RunningServer, ServerError> {
     let embedded_s3 =
         EmbeddedS3::start(&configuration.dev, &configuration.object_store.bucket).await?;
     configuration.object_store.endpoint = embedded_s3.endpoint();
-    server_node::start_server(&configuration, Some(embedded_s3)).await
+    server_node::start_server(&configuration, Some(embedded_s3), lease_acquired).await
 }

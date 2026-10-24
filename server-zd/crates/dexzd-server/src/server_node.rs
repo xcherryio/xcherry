@@ -12,6 +12,7 @@ mod search_projection;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -121,6 +122,7 @@ impl Drop for RunningServer {
 pub(crate) async fn start_server(
     config: &Config,
     embedded_s3: Option<EmbeddedS3>,
+    lease_acquired: &AtomicBool,
 ) -> Result<RunningServer, ServerError> {
     let components = ComponentConfigs::from_config(config)?;
     let listener = TcpListener::bind(config.api.listen)
@@ -136,7 +138,7 @@ pub(crate) async fn start_server(
             source,
         })?;
     let grpc = GrpcServer::start(listener, components.grpc_max_message_bytes).await;
-    let started = ServerNode::start(config, &components).await;
+    let started = ServerNode::start(config, &components, lease_acquired).await;
     let node = match started {
         Ok(node) => node,
         Err(error) => {
@@ -297,7 +299,11 @@ struct RuntimeParts {
 }
 
 impl ServerNode {
-    async fn start(config: &Config, components: &ComponentConfigs) -> Result<Self, ServerError> {
+    async fn start(
+        config: &Config,
+        components: &ComponentConfigs,
+        lease_acquired: &AtomicBool,
+    ) -> Result<Self, ServerError> {
         let object_stores = ObjectStores::connect(
             &config.object_store,
             config.commit.multipart_threshold_bytes,
@@ -319,7 +325,7 @@ impl ServerNode {
             .as_ref()
             .map(ParadeDbSearch::committed_frames);
         let runtime_parts: Arc<Mutex<Option<RuntimeParts>>> = Arc::new(Mutex::new(None));
-        let started = EngineNode::start(
+        let started = EngineNode::start_with_lease_observer(
             &components.engine_node,
             EngineNodeDependencies {
                 object_store: object_stores.primary.clone(),
@@ -377,6 +383,7 @@ impl ServerNode {
                     });
                 hooks
             },
+            lease_acquired,
         )
         .await;
         let parts = runtime_parts

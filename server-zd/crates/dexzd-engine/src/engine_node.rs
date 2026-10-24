@@ -10,7 +10,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use dexzd_clock::WallClock;
@@ -101,6 +101,21 @@ impl EngineNode {
     where
         F: FnOnce(EngineServices) -> EngineRuntimeHooks,
     {
+        let lease_acquired = AtomicBool::new(false);
+        Self::start_with_lease_observer(config, dependencies, runtime_factory, &lease_acquired)
+            .await
+    }
+
+    /// Starts the node and marks `lease_acquired` before recovery begins.
+    pub async fn start_with_lease_observer<F>(
+        config: &EngineNodeConfig,
+        dependencies: EngineNodeDependencies,
+        runtime_factory: F,
+        lease_acquired: &AtomicBool,
+    ) -> Result<Self, EngineStartError>
+    where
+        F: FnOnce(EngineServices) -> EngineRuntimeHooks,
+    {
         validate_config(config)?;
         let EngineNodeDependencies {
             object_store,
@@ -124,6 +139,7 @@ impl EngineNode {
             &config.lease,
         )
         .await?;
+        lease_acquired.store(true, Ordering::Release);
         let epoch = lease.epoch();
         tracing::info!(node_id = %config.node.node_id, epoch, partition_count, "engine node recovering");
         let state = Arc::new(CommitState::new(partition_count));

@@ -35,6 +35,69 @@ const RESPONSE_BUDGET: Duration = Duration::from_secs(1);
 const HEALTH_SERVICE_NAMES: [&str; 3] = ["", "dex.FlowService", "dex.WorkerTaskService"];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sigterm_stops_a_standby_waiting_for_a_live_holder() {
+    let primary = S3Emulator::start(PRIMARY_BUCKET, SignatureVerification::Strict).await;
+    let primary_endpoint = primary.endpoint();
+    let directory = TempDir::new().expect("a temporary test directory can be created");
+    let first_address = free_loopback_address();
+    let first_config = directory.path().join("first.yaml");
+    ServeConfig {
+        primary_endpoint: &primary_endpoint,
+        hard_delete_endpoint: None,
+        listen: first_address,
+        local_directory: &directory.path().join("first-store"),
+        lease_duration: "10s",
+        fail_if_held: true,
+        parade_db: None,
+    }
+    .write(&first_config);
+    let mut first = ServeProcess::spawn(
+        &first_config,
+        first_address,
+        directory.path().join("first.log"),
+    );
+    first.wait_until_serving().await;
+
+    let standby_address = free_loopback_address();
+    let standby_config = directory.path().join("standby.yaml");
+    ServeConfig {
+        primary_endpoint: &primary_endpoint,
+        hard_delete_endpoint: None,
+        listen: standby_address,
+        local_directory: &directory.path().join("standby-store"),
+        lease_duration: "10s",
+        fail_if_held: false,
+        parade_db: None,
+    }
+    .write(&standby_config);
+    let mut standby = ServeProcess::spawn(
+        &standby_config,
+        standby_address,
+        directory.path().join("standby.log"),
+    );
+    standby
+        .wait_for_log_line(
+            "another process holds the node lease; waiting",
+            Duration::from_secs(10),
+        )
+        .await;
+    let status = standby.terminate(Duration::from_secs(3)).await;
+    assert_eq!(status.code(), Some(0), "{}", standby.log());
+    assert!(
+        first.is_serving_within(RESPONSE_BUDGET).await,
+        "lease holder stopped serving:\n{}",
+        first.log()
+    );
+    assert_eq!(
+        first.terminate(SHUTDOWN_BUDGET).await.code(),
+        Some(0),
+        "{}",
+        first.log()
+    );
+    primary.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_dev_start_releases_the_grpc_listener() {
     let directory = TempDir::new().expect("a temporary test directory can be created");
     let store = Store::open(&StoreConfig {
