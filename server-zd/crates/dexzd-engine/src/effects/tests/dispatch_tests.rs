@@ -10,13 +10,14 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dexzd_apply::ApplyEffect;
+use dexzd_apply::read_model::get_history_events;
 use dexzd_keyspace::VALUE_REFERENCE_PREFIX;
 use dexzd_keyspace::row_keys::{run_named_key, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, RunTable};
 use dexzd_protocol::dex::{
-    AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, PullRouting, PullRoutingSource, StartFlowRequest, StepDecision,
-    StepOptions, StopFlowRequest, Value, value,
+    AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, FlowTimeoutPolicy,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, PullRouting, PullRoutingSource,
+    StartFlowRequest, StepDecision, StepOptions, StopFlowRequest, Value, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, FlowStopCommand, StepAttemptFailureKind, StepInvocationKey, StepMethod,
@@ -82,7 +83,7 @@ async fn sync_wait_for_and_execute_dispatch_with_go_server_context_and_complete_
         context.first_attempt_timestamp,
         START_MICROS / SECOND_MICROS
     );
-    assert_eq!(context.from_step_execution_id, "");
+    assert_eq!(context.from_step_execution_id, "__start__");
     assert_eq!(request.flow_type, "OrderFlow");
     assert_eq!(request.step_type, "ChargeStep");
     assert_eq!(request.step_input, Some(string_value("small input")));
@@ -107,11 +108,87 @@ async fn sync_wait_for_and_execute_dispatch_with_go_server_context_and_complete_
     assert_eq!(record.status, FlowStatus::Completed as i32);
     let completed = harness.runtime.commands_matching(is_method_completed);
     assert_eq!(completed.len(), 2);
+    let run = harness.run_location("order-1", run_id);
+    let history = get_history_events(
+        &harness.runtime.snapshot(),
+        run.flow_hash,
+        run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .expect("history reads");
+    let start_step = history
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            Some(flow_history_event::Payload::StepWaitForCompleted(completed)) => {
+                completed.context.as_ref()
+            }
+            _ => None,
+        });
+    assert_eq!(
+        start_step
+            .expect("start Step history event")
+            .from_step_execution_id,
+        "__start__"
+    );
     assert!(completed.iter().all(|recorded| {
         recorded.urgency == CommitUrgency::Prompt
             && recorded.command.expected_run_attempt == 1
             && recorded.command.run_id == run_id.as_bytes().to_vec()
     }));
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn flow_timeout_handler_dispatch_and_history_use_start_source() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("timeout-handler-source");
+    request.start_step_type.clear();
+    request.flow_timeout_seconds = 1;
+    let run_id =
+        harness.start_flow_with_timeout_policy(request, settings(), FlowTimeoutPolicy::Handler);
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let dispatch = harness.dispatcher.next_dispatch().await;
+    let MethodRequest::Execute(execute_request) = dispatch.method_request().clone() else {
+        panic!("expected timeout handler Execute request");
+    };
+    let context = execute_request.context.expect("timeout handler context");
+    assert_eq!(context.step_execution_id, "sys:timeout_handler-1");
+    assert_eq!(context.from_step_execution_id, "__start__");
+    dispatch.complete_execute(force_complete());
+    harness.settle().await;
+
+    let run = harness.run_location("timeout-handler-source", run_id);
+    let history = get_history_events(
+        &harness.runtime.snapshot(),
+        run.flow_hash,
+        run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .expect("history reads");
+    let timeout_handler = history
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            Some(flow_history_event::Payload::StepExecuteCompleted(completed)) => {
+                completed.context.as_ref()
+            }
+            _ => None,
+        });
+    assert_eq!(
+        timeout_handler
+            .expect("timeout handler history event")
+            .from_step_execution_id,
+        "__start__"
+    );
     harness.shutdown().await;
 }
 
