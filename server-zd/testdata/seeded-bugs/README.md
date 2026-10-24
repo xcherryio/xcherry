@@ -1,14 +1,15 @@
 # Seeded bug acceptance
 
-Each patch introduces one deliberate defect in a temporary Git worktree. The
-repository source stays unchanged. Run from the repository root:
+Each patch introduces one deliberate defect in a scratch Git worktree. The
+baseline and mutants use the same committed HEAD and a scratch Cargo target.
+The caller's source and build tree stay unchanged. Run from the repository root:
 
 ```bash
 script/server-zd-seeded-bugs.sh
 ```
 
 The runner first requires the unpatched apply simulation to pass. It then applies
-each active patch alone and requires a simulation invariant failure. A compile
+each active patch alone and requires its named invariant to fail. A compile
 failure, timeout, or passing mutant fails acceptance. It reports every gap before
 exiting nonzero.
 
@@ -18,8 +19,8 @@ compilation and shrinking. The same budget applies to every active patch.
 
 | Patch | Deliberate defect | Expected detector | Status |
 | --- | --- | --- | --- |
-| `wall-clock.patch` | Apply uses the process wall clock instead of the command timestamp. | A2 repeated apply compares byte-identical writes. | Caught at seed `1592590336`, command 0; 8.7 seconds. |
-| `hash-map-iteration.patch` | Attempt snapshots emit Attributes in `HashMap` iteration order. | A2 repeated or redecoded apply compares byte-identical writes. | Caught at seed `1592590336`, command 17; 5.0 seconds. |
+| `wall-clock.patch` | Apply uses the process wall clock instead of the command timestamp. | `A2-apply-twice` compares byte-identical writes. | Caught at seed `1592590336`, command 0. |
+| `hash-map-iteration.patch` | Attempt snapshots emit Attributes in `HashMap` iteration order. | `A2-apply-twice` or `A2-apply-redecoded` compares byte-identical writes. | Caught at seed `1592590336`, command 17. |
 | `immediate-reclaim.patch` | After the last slot holder leaves, R6 records that death point while an attempt snapshot still pins the value. It deletes the value when the final pin leaves after that death point reaches window floor W; otherwise it queues G at the old death point. | `I1-window-value-reference` must catch a retained point whose in-flight snapshot needs the deleted value. | **Gap:** the faithful mutant passed PR #839's 64 × 400 apply simulation; the runner exits nonzero. The targeted `snapshot_pin_survives_window_advance_and_collects_after_attempt_completion` integration test fails on the mutant and passes without it. |
 | `retry-stale-snapshot.patch` | A retry reconstructs its prior Running snapshot and selects it when the next attempt starts; table-value pins move to the new attempt. | `S5-fresh-snapshot` must catch stale data after an intervening write. | Caught at seed `1592590336`, command 77, after a Channel message deletion changed the selected Channel info. |
 
@@ -28,13 +29,9 @@ needs an attempt snapshot pinned across a slot overwrite and window advance,
 followed by attempt completion and time travel to an in-flight point. Do not
 weaken the mutant to force detection.
 
-The unpatched baseline passed in 24.1 seconds on the same machine. Durations
-include each case's targeted Cargo rebuild and will vary with build cache state.
-
 These patches are **pending** until the engine simulation can check them. The
-apply-only runner does not apply them. Their target acceptance budget is also
-64 seeds × 400 operations with a 300-second limit per mutant; measure and adjust
-that budget when the engine simulation command exists.
+apply-only runner does not apply them. Set an engine-specific seed and time
+budget when the engine simulation reaches main.
 
 | Patch | Deliberate defect | Expected engine invariant |
 | --- | --- | --- |

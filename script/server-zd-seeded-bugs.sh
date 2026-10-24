@@ -91,9 +91,10 @@ detected_count=0
 gap_count=0
 for name in wall-clock hash-map-iteration immediate-reclaim retry-stale-snapshot; do
   case "$name" in
-    wall-clock|hash-map-iteration) expected_invariant=A2-apply-twice ;;
-    immediate-reclaim) expected_invariant=I1-window-value-reference ;;
-    retry-stale-snapshot) expected_invariant=S5-fresh-snapshot ;;
+    wall-clock) expected_invariants=(A2-apply-twice) ;;
+    hash-map-iteration) expected_invariants=(A2-apply-twice A2-apply-redecoded) ;;
+    immediate-reclaim) expected_invariants=(I1-window-value-reference) ;;
+    retry-stale-snapshot) expected_invariants=(S5-fresh-snapshot) ;;
   esac
   patch_path="$patch_directory/$name.patch"
   git -C "$repository_root" worktree add --detach "$mutant_worktree" HEAD >/dev/null
@@ -116,13 +117,24 @@ for name in wall-clock hash-map-iteration immediate-reclaim retry-stale-snapshot
       echo "The $name run failed without a simulation invariant violation:" >&2
       tail -n 35 "$log_path" >&2
       gap_count=$((gap_count + 1))
-    elif [[ "$failure_line" != *": $expected_invariant:"* ]]; then
-      echo "The $name run broke a different invariant (expected $expected_invariant):" >&2
-      echo "$failure_line" >&2
-      gap_count=$((gap_count + 1))
     else
-      echo "$failure_line"
-      detected_count=$((detected_count + 1))
+      observed_invariant="${failure_line#*: }"
+      observed_invariant="${observed_invariant%%:*}"
+      is_expected=false
+      for expected_invariant in "${expected_invariants[@]}"; do
+        if [[ "$observed_invariant" == "$expected_invariant" ]]; then
+          is_expected=true
+          break
+        fi
+      done
+      if [[ "$is_expected" == true ]]; then
+        echo "$failure_line"
+        detected_count=$((detected_count + 1))
+      else
+        echo "The $name run broke a different invariant (expected ${expected_invariants[*]}):" >&2
+        echo "$failure_line" >&2
+        gap_count=$((gap_count + 1))
+      fi
     fi
   fi
   git -C "$repository_root" worktree remove --force "$mutant_worktree"
