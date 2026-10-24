@@ -16,6 +16,7 @@ use super::{
     SearchBackend, StreamStoreBackend,
 };
 use crate::DevCommandOptions;
+use crate::component_configs::ComponentConfigs;
 
 type InvalidConfigCase = (&'static str, fn(&mut Config));
 
@@ -88,6 +89,31 @@ fn yaml_overrides_sections_and_rejects_unknown_keys() {
             "{yaml}"
         );
     }
+}
+
+#[test]
+fn blocking_state_read_limit_parses_defaults_and_rejects_zero() {
+    assert_eq!(Config::default().limits.max_blocking_state_reads, 64);
+
+    let parsed = Config::parse_yaml("limits:\n  maxBlockingStateReads: 7\n")
+        .expect("parse blocking state read limit");
+    assert_eq!(parsed.limits.max_blocking_state_reads, 7);
+    let mut configuration = valid_config();
+    configuration.limits.max_blocking_state_reads = parsed.limits.max_blocking_state_reads;
+    configuration.validate().expect("positive read limit");
+    let components = ComponentConfigs::from_config(&configuration).expect("component config");
+    assert_eq!(components.effects.max_blocking_state_reads, 7);
+
+    let zero = Config::parse_yaml("limits:\n  maxBlockingStateReads: 0\n")
+        .expect("parse zero blocking state read limit");
+    configuration.limits.max_blocking_state_reads = zero.limits.max_blocking_state_reads;
+    assert!(matches!(
+        configuration.validate(),
+        Err(ConfigError::Invalid {
+            field: "limits.maxBlockingStateReads",
+            ..
+        })
+    ));
 }
 
 #[test]
