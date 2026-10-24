@@ -8,10 +8,10 @@
 
 use dexzd_keyspace::RunId;
 use dexzd_protocol::dex::{ErrorSubStatus, FlowHistoryEvent, flow_history_event};
-use dexzd_protocol::dexzd::v1::{CommandReply, HistoryRecord, RunRecord};
+use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, HistoryRecord, RunRecord};
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
-use crate::command_handlers::{CommandScope, HandlerOutput};
+use crate::command_handlers::{CommandScope, HandlerOutput, ReplayedCommandOutput};
 use crate::history;
 use crate::state_access::{FlowTransaction, RunRows};
 use crate::values::{ValueIdAllocator, ValueLimits};
@@ -55,6 +55,8 @@ pub(crate) struct RunCursor {
     /// Set by TimeTravel: the command starts a new attempt and writes its start checkpoint.
     pub(crate) starts_attempt: bool,
     pub(crate) history_window_page_used: bool,
+    /// Set by TimeTravel: input it reapplied, recorded so later travels reapply it again.
+    pub(crate) reapplied_inputs: Vec<FlowCommand>,
 }
 
 impl RunCursor {
@@ -93,6 +95,19 @@ impl RunCursor {
         Ok(Ok(Self::with_record(rows, record)))
     }
 
+    /// Continues the TimeTravel command at `seq` for one input it reapplies.
+    pub(crate) fn for_reapplied_input(
+        rows: RunRows,
+        record: RunRecord,
+        seq: u64,
+        values: ValueIdAllocator,
+    ) -> Self {
+        Self {
+            values,
+            ..Self::with_seq(rows, record, seq)
+        }
+    }
+
     /// Starts a cursor for a run created by this command.
     pub(crate) fn for_new_run(rows: RunRows, record: RunRecord) -> Self {
         Self::with_record(rows, record)
@@ -101,6 +116,10 @@ impl RunCursor {
     fn with_record(rows: RunRows, mut record: RunRecord) -> Self {
         let seq = record.next_run_seq.max(1);
         record.next_run_seq = seq + 1;
+        Self::with_seq(rows, record, seq)
+    }
+
+    fn with_seq(rows: RunRows, record: RunRecord, seq: u64) -> Self {
         Self {
             rows,
             record,
@@ -110,6 +129,7 @@ impl RunCursor {
             effects: Vec::new(),
             starts_attempt: false,
             history_window_page_used: false,
+            reapplied_inputs: Vec::new(),
         }
     }
 
@@ -151,6 +171,9 @@ impl RunCursor {
         reply: CommandReply,
         kind: HistoryKind,
     ) -> Result<HandlerOutput, ApplyError> {
+        if scope.is_replay {
+            return Ok(self.finish_replayed(transaction, reply));
+        }
         let event_time = timestamp(scope.now_micros);
         let mut events = Vec::with_capacity(self.events.len());
         for payload in std::mem::take(&mut self.events) {
@@ -168,24 +191,23 @@ impl RunCursor {
         }
         self.record.commands_since_checkpoint += 1;
         let last_event_id = events.last().map(|event| event.event_id);
-        if !scope.is_replay {
-            let pending_step_methods = history::pending_step_methods(transaction, &self)?;
-            self.rows.put_history_record(
-                transaction,
-                &HistoryRecord {
-                    seq: self.seq,
-                    attempt: self.record.current_attempt,
-                    timestamp_micros: scope.now_micros,
-                    is_semantic: kind.is_semantic,
-                    is_external_input: kind.is_external_input,
-                    command: Some(scope.command.clone()),
-                    events,
-                    state_hash: Vec::new(),
-                    pending_step_methods,
-                },
-            );
-            history::after_command(transaction, &mut self, kind)?;
-        }
+        let pending_step_methods = history::pending_step_methods(transaction, &self)?;
+        self.rows.put_history_record(
+            transaction,
+            &HistoryRecord {
+                seq: self.seq,
+                attempt: self.record.current_attempt,
+                timestamp_micros: scope.now_micros,
+                is_semantic: kind.is_semantic,
+                is_external_input: kind.is_external_input,
+                command: Some(scope.command.clone()),
+                events,
+                state_hash: Vec::new(),
+                pending_step_methods,
+                reapplied_inputs: std::mem::take(&mut self.reapplied_inputs),
+            },
+        );
+        history::after_command(transaction, &mut self, kind)?;
         self.rows.put_run_record(transaction, &self.record);
         if scope.is_replay {
             reconcile_run_storage(transaction, &mut self)?;
@@ -199,7 +221,26 @@ impl RunCursor {
             reply,
             effects: self.effects,
             run_id: Some(self.rows.run_id),
+            replayed: None,
         })
+    }
+
+    /// Saves the run record only; history, counters, and pruning belong to the recorded command.
+    fn finish_replayed(
+        self,
+        transaction: &mut FlowTransaction<'_>,
+        reply: CommandReply,
+    ) -> HandlerOutput {
+        self.rows.put_run_record(transaction, &self.record);
+        HandlerOutput {
+            reply,
+            effects: self.effects,
+            run_id: Some(self.rows.run_id),
+            replayed: Some(ReplayedCommandOutput {
+                events: self.events,
+                values: self.values,
+            }),
+        }
     }
 }
 

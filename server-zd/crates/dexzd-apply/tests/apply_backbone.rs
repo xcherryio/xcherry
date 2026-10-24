@@ -340,7 +340,7 @@ impl Harness {
         );
     }
 
-    fn set_attribute(
+    fn try_set_attribute(
         &mut self,
         attribute_key: &str,
         value: Value,
@@ -1364,7 +1364,7 @@ fn client_state_limit_rejects_writes_without_changes() {
     harness.start(start_request("request-1"));
     harness.set_max_run_state_bytes(1);
     let before = harness.state.rows.clone();
-    let rejected = harness.set_attribute("report", string_value(&"x".repeat(9000)), "set-1");
+    let rejected = harness.try_set_attribute("report", string_value(&"x".repeat(9000)), "set-1");
     assert!(is_error(&rejected.reply, 8));
     assert!(rejected.writes.is_empty());
     assert_eq!(harness.state.rows, before);
@@ -1459,7 +1459,8 @@ fn value_size_limit_rejects_client_writes_and_fails_worker_attempts() {
     let mut run_settings = settings();
     run_settings.max_value_bytes = 100;
     client_harness.start_with_settings(start_request("request-1"), run_settings);
-    let rejected = client_harness.set_attribute("report", string_value(&"x".repeat(500)), "set-1");
+    let rejected =
+        client_harness.try_set_attribute("report", string_value(&"x".repeat(500)), "set-1");
     assert!(is_error(&rejected.reply, 3));
     assert!(rejected.writes.is_empty());
 
@@ -1638,6 +1639,23 @@ fn stopping_a_flow_releases_held_locks_and_waiters() {
 
 /// Value-table bookkeeping read straight from the harness state.
 impl Harness {
+    fn set_attribute(
+        &mut self,
+        attribute_key: &str,
+        value: Value,
+        request_id: &str,
+    ) -> ApplyOutcome {
+        self.set_attributes(
+            AttributeWrite {
+                key: attribute_key.to_owned(),
+                value: Some(value),
+                ..AttributeWrite::default()
+            },
+            Vec::new(),
+            request_id,
+        )
+    }
+
     fn set_hard_delete_attribute(
         &mut self,
         attribute_key: &str,

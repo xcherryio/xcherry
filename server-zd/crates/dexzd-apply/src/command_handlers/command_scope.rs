@@ -7,8 +7,10 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use dexzd_keyspace::{RunId, TenantId};
+use dexzd_protocol::dex::flow_history_event;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
 
+use crate::values::ValueIdAllocator;
 use crate::{ApplyEffect, ApplyOutcome, BehaviorVersion, StateWrite};
 
 /// Read-only facts of the command being applied.
@@ -44,6 +46,14 @@ pub(crate) struct HandlerOutput {
     pub(crate) effects: Vec<ApplyEffect>,
     /// The run the command applied to or created.
     pub(crate) run_id: Option<RunId>,
+    /// Replay only: what TimeTravel folds into its own command when reapplying input.
+    pub(crate) replayed: Option<ReplayedCommandOutput>,
+}
+
+/// History a replayed command did not record, and its value ID allocator.
+pub(crate) struct ReplayedCommandOutput {
+    pub(crate) events: Vec<flow_history_event::Payload>,
+    pub(crate) values: ValueIdAllocator,
 }
 
 impl HandlerOutput {

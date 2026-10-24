@@ -74,9 +74,11 @@ pub(crate) fn after_command(
     let is_attempt_start = cursor.starts_attempt || record.last_checkpoint_seq == 0;
     let has_enough_commands = settings.checkpoint_max_commands > 0
         && record.commands_since_checkpoint >= settings.checkpoint_max_commands;
+    // A shrunk state lowers the bar; appends alone never catch up with the current size.
+    let current_state_bytes = record.storage.unwrap_or_default().state_row_bytes;
     let written_threshold = settings
         .checkpoint_min_written_bytes
-        .max(record.last_checkpoint_state_bytes);
+        .max(current_state_bytes.min(record.last_checkpoint_state_bytes));
     let has_enough_bytes = record.written_bytes_since_checkpoint >= written_threshold;
     if is_attempt_start || has_enough_commands || has_enough_bytes {
         write_checkpoint(transaction, cursor)?;

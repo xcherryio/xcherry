@@ -21,7 +21,7 @@ pub(crate) mod run_cursor;
 pub(crate) mod step_commands;
 
 pub(crate) use command_replies::unimplemented_reply;
-pub(crate) use command_scope::{CommandScope, HandlerOutput};
+pub(crate) use command_scope::{CommandScope, HandlerOutput, ReplayedCommandOutput};
 
 use dexzd_protocol::dex::ErrorSubStatus;
 use dexzd_protocol::dexzd::v1::flow_command::Command;

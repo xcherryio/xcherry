@@ -478,6 +478,8 @@ message HistoryRecord {
   bytes state_hash = 8;
   // Method calls whose first attempt became pending; time travel targets use them.
   repeated HistoryStepMethodPending pending_step_methods = 9;
+  // TimeTravel only: external input it reapplied, in order, so later travels before it reapply it.
+  repeated FlowCommand reapplied_inputs = 10;
 }
 
 // A Step method call whose first attempt became pending.
