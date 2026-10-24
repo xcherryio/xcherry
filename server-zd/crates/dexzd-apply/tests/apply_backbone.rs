@@ -1300,6 +1300,7 @@ fn reapplied_external_input_keeps_history_metadata_and_window_counts() {
     assert_eq!(metadata.is_semantic, record.is_semantic);
     assert_eq!(metadata.is_external_input, record.is_external_input);
     assert_eq!(metadata.attempt, record.attempt);
+    assert_eq!(metadata.timestamp_micros, record.timestamp_micros);
     assert!(metadata.is_semantic && metadata.is_external_input);
     for index in 0..8 {
         if harness.run_record().window_start_seq > travel_seq {
@@ -1314,6 +1315,7 @@ fn reapplied_external_input_keeps_history_metadata_and_window_counts() {
     let run = harness.run_record();
     assert!(run.window_start_seq > travel_seq);
     assert!(run.max_pruned_external_input_seq >= travel_seq);
+    assert!(run.last_pruned_semantic_timestamp_micros >= record.timestamp_micros);
 }
 
 fn garbage_row_count(harness: &Harness) -> usize {

@@ -415,6 +415,14 @@ fn reapply_external_inputs(
                 detail: "a recorded external input has no command body".to_owned(),
             });
         };
+        if let Command::AttributesSet(set) = body
+            && set
+                .request
+                .as_ref()
+                .is_none_or(|request| request.attributes.is_empty())
+        {
+            continue;
+        }
         let mut input_scope = CommandScope::new(&command, behavior_version);
         input_scope.is_replay = true;
         let (writes, output) = {
@@ -498,8 +506,13 @@ fn reapplied_command(input: &FlowCommand, scope: &CommandScope<'_>) -> FlowComma
     command.behavior_version = scope.command.behavior_version;
     match command.command.as_mut() {
         Some(Command::AttributesSet(set)) => {
+            // Hard-delete Attributes stay current (C4); their objects may already be deleted.
+            set.hard_delete_objects.clear();
             if let Some(request) = set.request.as_mut() {
                 request.request_id.clear();
+                request
+                    .attributes
+                    .retain(|write| !write.is_hard_delete_on_null);
             }
         }
         Some(Command::ChannelMessageDelete(delete)) => {

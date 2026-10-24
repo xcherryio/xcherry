@@ -85,6 +85,9 @@ pub(crate) fn advance_window(
     record.max_pruned_external_input_seq = record
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
+    record.last_pruned_semantic_timestamp_micros = record
+        .last_pruned_semantic_timestamp_micros
+        .max(pruned.max_semantic_timestamp_micros);
     crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
     Ok(true)
 }
@@ -93,6 +96,7 @@ struct PrunedChunk {
     window_start_seq: u64,
     semantic_points: u64,
     max_external_input_seq: u64,
+    max_semantic_timestamp_micros: i64,
 }
 
 /// Skips up to one page of history metadata; the next semantic record becomes the new W.
@@ -134,8 +138,10 @@ fn find_new_window_start(
             detail: format!("window start {current_start} has no history metadata"),
         })?;
     let mut previous_semantic_seq = current_start;
+    let mut previous_semantic_timestamp_micros = start_metadata.timestamp_micros;
     let mut was_previous_external = start_metadata.is_external_input;
     let mut max_external_input_seq = 0;
+    let mut max_semantic_timestamp_micros = i64::MIN;
     let mut semantic_points = 0;
     let mut candidate = None;
     let mut last_scanned_seq = None;
@@ -152,13 +158,17 @@ fn find_new_window_start(
         if was_previous_external {
             max_external_input_seq = max_external_input_seq.max(previous_semantic_seq);
         }
+        max_semantic_timestamp_micros =
+            max_semantic_timestamp_micros.max(previous_semantic_timestamp_micros);
         semantic_points += 1;
         candidate = Some(PrunedChunk {
             window_start_seq: seq,
             semantic_points,
             max_external_input_seq,
+            max_semantic_timestamp_micros,
         });
         previous_semantic_seq = seq;
+        previous_semantic_timestamp_micros = metadata.timestamp_micros;
         was_previous_external = metadata.is_external_input;
         match target {
             WindowAdvanceTarget::SemanticPoints(limit) if semantic_points >= limit => break,
