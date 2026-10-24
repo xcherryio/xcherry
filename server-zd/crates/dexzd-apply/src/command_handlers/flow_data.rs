@@ -393,9 +393,18 @@ pub(crate) fn apply_channel_publications(
     messages: &[ChannelMessage],
 ) -> Result<Result<Vec<String>, ValueRejection>, ApplyError> {
     let mut changed_channels: Vec<String> = Vec::new();
-    for (index, message) in messages.iter().enumerate() {
-        let enqueued_seq =
-            cursor.seq * MAX_MESSAGES_PER_COMMAND + u64::try_from(index).unwrap_or(u64::MAX);
+    for message in messages {
+        // One command may publish several times, so its message index continues across calls.
+        let index = cursor.next_channel_message_index;
+        if index >= MAX_MESSAGES_PER_COMMAND {
+            return Err(ApplyError::InvariantViolation {
+                detail: format!(
+                    "a command published more than {MAX_MESSAGES_PER_COMMAND} messages"
+                ),
+            });
+        }
+        cursor.next_channel_message_index += 1;
+        let enqueued_seq = cursor.seq * MAX_MESSAGES_PER_COMMAND + index;
         let holder = ValueHolder::ChannelMessage {
             channel_name: message.channel_name.clone(),
             enqueued_seq,
