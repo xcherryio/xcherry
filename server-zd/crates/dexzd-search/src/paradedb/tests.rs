@@ -548,6 +548,78 @@ fn golden_sql_covers_operators_and_types() {
             vec![SqlValue::Text("double".into()), SqlValue::Double(3.5)],
         ),
         (
+            "number = '7'",
+            "(sa_number ->> $2::text)::bigint = $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number = '7.0'",
+            "(sa_number ->> $2::text)::bigint = $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number = '7.5'",
+            "CASE WHEN (sa_number ->> $2::text)::bigint IS NULL THEN NULL ELSE FALSE END",
+            vec![SqlValue::Text("number".into())],
+        ),
+        (
+            "number != '7.5'",
+            "(sa_number ->> $2::text)::bigint IS NOT NULL",
+            vec![SqlValue::Text("number".into())],
+        ),
+        (
+            "number > '7.5'",
+            "(sa_number ->> $2::text)::bigint >= $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(8)],
+        ),
+        (
+            "number <= '-1.5'",
+            "(sa_number ->> $2::text)::bigint <= $3::bigint",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(-2)],
+        ),
+        (
+            "number IN ('7', '7.5')",
+            "((sa_number ->> $2::text)::bigint = $3::bigint)",
+            vec![SqlValue::Text("number".into()), SqlValue::Int(7)],
+        ),
+        (
+            "number BETWEEN '1.5' AND '3.5'",
+            "((sa_number ->> $2::text)::bigint >= $3::bigint) AND ((sa_number ->> $2::text)::bigint <= $4::bigint)",
+            vec![
+                SqlValue::Text("number".into()),
+                SqlValue::Int(2),
+                SqlValue::Int(3),
+            ],
+        ),
+        (
+            "number BETWEEN '+2' AND 5",
+            "((sa_number ->> $2::text)::bigint >= $3::bigint) AND ((sa_number ->> $2::text)::bigint <= $4::bigint)",
+            vec![
+                SqlValue::Text("number".into()),
+                SqlValue::Int(2),
+                SqlValue::Int(5),
+            ],
+        ),
+        (
+            "double = '0.01'",
+            "(sa_number ->> $2::text)::double precision = $3::double precision",
+            vec![SqlValue::Text("double".into()), SqlValue::Double(0.01)],
+        ),
+        (
+            "double = '0x1p-2'",
+            "(sa_number ->> $2::text)::double precision = $3::double precision",
+            vec![SqlValue::Text("double".into()), SqlValue::Double(0.25)],
+        ),
+        (
+            "double IN ('1.5', 3.5e0)",
+            "((sa_number ->> $2::text)::double precision = $3::double precision OR (sa_number ->> $2::text)::double precision = $4::double precision)",
+            vec![
+                SqlValue::Text("double".into()),
+                SqlValue::Double(1.5),
+                SqlValue::Double(3.5),
+            ],
+        ),
+        (
             "datetime = '2026-07-03T00:00:00Z'",
             "(sa_datetime ->> $2::text)::bigint = $3::bigint",
             vec![
