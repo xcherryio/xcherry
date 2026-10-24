@@ -311,7 +311,8 @@ async fn a_speculative_mismatch_reported_by_the_runtime_stops_the_partition() {
     test.node.shutdown().await.expect("lease released");
 }
 
-#[tokio::test(start_paused = true)]
+/// Runs in real time: paused time does not advance while the blocked apply runs.
+#[tokio::test]
 async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let mut cluster = TestCluster::new();

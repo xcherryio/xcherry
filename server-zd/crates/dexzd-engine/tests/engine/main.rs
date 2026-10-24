@@ -14,6 +14,7 @@ mod lease_lifecycle;
 mod log_replay;
 mod node_identity;
 mod recovery;
+mod restart_replay;
 mod snapshot_fencing;
 mod snapshots;
 mod standby_takeover;

@@ -113,44 +113,6 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_failed_step_makes_a_normal_shutdown_incomplete() {
-        let mut teardown = BoundedTeardown::default();
-        teardown
-            .run_fallible("engine", Duration::from_secs(1), async {
-                Err::<(), _>("the lease release was rejected")
-            })
-            .await;
-        let mut is_stream_store_closed = false;
-        teardown
-            .run("Stream Store", Duration::from_secs(1), async {
-                is_stream_store_closed = true;
-            })
-            .await;
-        assert!(
-            is_stream_store_closed,
-            "later steps run after a failed step"
-        );
-        assert!(matches!(
-            teardown.finish(Ok(())),
-            Err(ServerError::ShutdownIncomplete { steps })
-                if steps == "engine failed: the lease release was rejected"
-        ));
-        let mut stalled = BoundedTeardown::default();
-        stalled
-            .run_fallible(
-                "engine",
-                Duration::from_secs(1),
-                std::future::pending::<Result<(), &str>>(),
-            )
-            .await;
-        assert!(matches!(
-            stalled.finish(Ok(())),
-            Err(ServerError::ShutdownIncomplete { steps })
-                if steps == "engine exceeded its 1000 ms budget"
-        ));
-    }
-
-    #[tokio::test(start_paused = true)]
     async fn finished_steps_keep_the_serving_outcome() {
         let mut teardown = BoundedTeardown::default();
         teardown

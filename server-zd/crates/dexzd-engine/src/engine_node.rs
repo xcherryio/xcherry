@@ -29,9 +29,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::command_applier::CommandApplier;
 use crate::commit::{
-    CommandCommitter, CommandCommitterParts, CommitConfig, CommitProgress, CommitState,
-    CommittedBatchRouter, EngineLocalStore, FrameApplier, NodeStopReason, PartitionApplierPool,
-    run_log_proposer,
+    AppliedPositionAdvancer, CommandCommitter, CommandCommitterParts, CommitConfig, CommitProgress,
+    CommitState, CommittedBatchRouter, EngineLocalStore, FrameApplier, NodeStopReason,
+    PartitionApplierPool, run_log_proposer,
 };
 use crate::recovery::{
     ClusterMetadata, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
@@ -43,7 +43,11 @@ use crate::snapshots::{
 };
 
 /// Longest wait for engine tasks and applier lanes to stop before the lease is released anyway.
+/// It includes [`FINAL_ADVANCE_BUDGET`].
 const TASK_STOP_BUDGET: Duration = Duration::from_secs(3);
+
+/// Longest wait at shutdown for advancing applied positions, so the next start replays little.
+const FINAL_ADVANCE_BUDGET: Duration = Duration::from_secs(1);
 
 /// Configuration sections of an engine node.
 #[derive(Debug, Clone)]
@@ -79,6 +83,7 @@ pub struct EngineNode {
     committer: CommandCommitter,
     state: Arc<CommitState>,
     appliers: Arc<PartitionApplierPool>,
+    applied_positions: Arc<AppliedPositionAdvancer>,
     snapshots: Arc<SnapshotService>,
     lease: LeaseHandle,
     tasks: RunningTasks,
@@ -233,6 +238,15 @@ impl EngineNode {
                 }
                 .run(committed_batches, tasks.cancellation.clone()),
             );
+            let applied_positions = Arc::new(AppliedPositionAdvancer::new(
+                appliers.clone(),
+                progress.clone(),
+                stream.node_id.clone(),
+                stream.incarnation,
+                epoch,
+                partition_count,
+            ));
+            tasks.spawn(applied_positions.clone().run(tasks.cancellation.clone()));
             // Rebuilt work may submit at once, so commands are accepted before rebuilding.
             if !state.start_serving() {
                 return Err(EngineStartError::Stopped {
@@ -285,11 +299,11 @@ impl EngineNode {
             });
             tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
             tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");
-            Ok((committer, snapshots))
+            Ok((committer, applied_positions, snapshots))
         }
         .await;
         match serving {
-            Ok((committer, snapshots)) => {
+            Ok((committer, applied_positions, snapshots)) => {
                 let LeasedParts {
                     state,
                     tasks,
@@ -300,6 +314,7 @@ impl EngineNode {
                     committer,
                     state,
                     appliers: appliers.expect("the applier pool starts before the node serves"),
+                    applied_positions,
                     snapshots,
                     lease,
                     tasks,
@@ -340,8 +355,12 @@ impl EngineNode {
 
     /// Stops serving, fails waiting tickets, stops every task, and releases the lease.
     ///
+    /// It first records the last routed batch as every running partition's position, for at most
+    /// 1 second.
+    ///
     /// Tasks and applier lanes that do not stop within 3 seconds are abandoned, so the lease
-    /// release is always attempted. Finishes within [`EngineNode::SHUTDOWN_BUDGET`].
+    /// release is always attempted. The 3 seconds include that first second. Finishes within
+    /// [`EngineNode::SHUTDOWN_BUDGET`].
     ///
     /// Returns `Ok` once this process no longer holds the lease, and [`LeaseReleaseError`] when the
     /// release was rejected or timed out; the lease then stays held until it expires.
@@ -349,6 +368,7 @@ impl EngineNode {
         let Self {
             state,
             appliers,
+            applied_positions,
             lease,
             tasks,
             ..
@@ -359,7 +379,7 @@ impl EngineNode {
             appliers: Some(appliers),
             lease,
         }
-        .stop_and_release_lease()
+        .stop_and_release_lease(Some(&applied_positions))
         .await;
         tracing::info!("engine node stopped");
         released
@@ -378,14 +398,38 @@ impl LeasedParts {
     /// Stops serving, gives tasks and applier lanes [`TASK_STOP_BUDGET`] to stop, then releases the
     /// lease.
     ///
+    /// A serving node passes `final_advance` to advance applied positions before it stops.
+    ///
     /// Returns the outcome of the lease release.
-    async fn stop_and_release_lease(self) -> Result<(), LeaseReleaseError> {
+    async fn stop_and_release_lease(
+        self,
+        final_advance: Option<&AppliedPositionAdvancer>,
+    ) -> Result<(), LeaseReleaseError> {
         let Self {
             state,
             tasks,
             appliers,
             lease,
         } = self;
+        let stop_deadline = tokio::time::Instant::now() + TASK_STOP_BUDGET;
+        if let Some(advancer) = final_advance
+            && state.stop_reason().is_none()
+        {
+            // The stop blocks every later store write, so the advance must finish first.
+            match tokio::time::timeout(FINAL_ADVANCE_BUDGET, advancer.advance_to_last_routed())
+                .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "applied positions were not advanced before shutdown");
+                }
+                Err(_) => tracing::warn!(
+                    budget_seconds = FINAL_ADVANCE_BUDGET.as_secs(),
+                    "applied positions were not advanced in time; the next start replays more of \
+                     the log"
+                ),
+            }
+        }
         state.stop(NodeStopReason::Shutdown);
         let stopping = async {
             tasks.shutdown().await;
@@ -393,7 +437,7 @@ impl LeasedParts {
                 appliers.shutdown().await;
             }
         };
-        if tokio::time::timeout(TASK_STOP_BUDGET, stopping)
+        if tokio::time::timeout_at(stop_deadline, stopping)
             .await
             .is_err()
         {
@@ -457,7 +501,7 @@ impl Drop for StartingNode {
 
 /// Stops the parts of a failed or cancelled start, releases the lease, and logs the outcome.
 async fn release_after_unfinished_start(parts: LeasedParts) {
-    match parts.stop_and_release_lease().await {
+    match parts.stop_and_release_lease(None).await {
         Ok(()) => tracing::info!("released the node lease after an unfinished start"),
         Err(error) => {
             tracing::error!(%error, "the node lease stays held after an unfinished start")

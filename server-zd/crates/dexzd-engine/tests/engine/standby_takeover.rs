@@ -24,6 +24,8 @@ use crate::harness::{CountingApplier, RecordingRuntime, TestCluster, TestNode};
 const TAKEOVER_FLOW: &str = "takeover-flow";
 const LEASE_KEY: &str = "lease/node-a";
 const LOG_PREFIX: &str = "log/node-a/";
+/// Longest wait for a standby to read the held lease twice.
+const STANDBY_LEASE_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// How the serving node stops before the standby takes over.
 #[derive(Debug, Clone, Copy)]
@@ -98,13 +100,7 @@ async fn take_over_after_log_cleanup(
     let first_unsnapshotted_seq = last_seq_of_epoch(cluster, serving_epoch).await + 1;
 
     let standby = tokio::spawn(start_node(cluster, standby_config));
-    while cluster
-        .faults
-        .count_operations(ObjectStoreOperation::Get, |key| key == LEASE_KEY)
-        < 2
-    {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_the_standby_reads_the_held_lease(cluster, &standby, 0).await;
     assert!(!standby.is_finished(), "the standby waits for the lease");
 
     serving.commit_prompt(TAKEOVER_FLOW, 4).await;
@@ -215,10 +211,8 @@ async fn take_over_after_reclaiming_incarnation(
     standby_config.node.incarnation = 2;
     let lease_reads_before_standby = count_lease_reads(cluster);
     let standby = tokio::spawn(start_node(cluster, standby_config));
-    while count_lease_reads(cluster) < lease_reads_before_standby + 2 {
-        assert!(!standby.is_finished(), "the standby waits for the lease");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_the_standby_reads_the_held_lease(cluster, &standby, lease_reads_before_standby)
+        .await;
 
     serving
         .node
@@ -302,6 +296,24 @@ fn count_lease_reads(cluster: &TestCluster) -> usize {
     cluster
         .faults
         .count_operations(ObjectStoreOperation::Get, |key| key == LEASE_KEY)
+}
+
+/// Waits for two lease reads after `reads_before`; fails if the standby finishes or the deadline
+/// passes.
+async fn wait_until_the_standby_reads_the_held_lease<T>(
+    cluster: &TestCluster,
+    standby: &tokio::task::JoinHandle<T>,
+    reads_before: usize,
+) {
+    let deadline = tokio::time::Instant::now() + STANDBY_LEASE_READ_DEADLINE;
+    while count_lease_reads(cluster) < reads_before + 2 {
+        assert!(!standby.is_finished(), "the standby waits for the lease");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the standby did not read the held lease twice within {STANDBY_LEASE_READ_DEADLINE:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 async fn recorded_epoch(cluster: &TestCluster) -> u64 {
