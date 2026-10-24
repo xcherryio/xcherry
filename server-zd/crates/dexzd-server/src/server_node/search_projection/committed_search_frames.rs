@@ -42,6 +42,7 @@ pub(crate) struct CommittedSearchFrames {
     rebuild_requested: Notify,
     /// Highest frame sequence searchable along with all earlier frames; `None` until startup catch-up.
     projected_through: watch::Sender<Option<u64>>,
+    permanent_failure: watch::Sender<Option<String>>,
 }
 
 #[derive(Default)]
@@ -80,6 +81,7 @@ impl CommittedSearchFrames {
             max_queued_bytes,
             rebuild_requested: Notify::new(),
             projected_through: watch::Sender::new(None),
+            permanent_failure: watch::Sender::new(None),
         };
         (frames, receiver)
     }
@@ -225,6 +227,15 @@ impl CommittedSearchFrames {
         });
     }
 
+    pub(crate) fn record_permanent_failure(&self, partition: PartitionId, error: &str) {
+        let reason = format!(
+            "ParadeDB projection partition {} failed: {error}",
+            partition.0
+        );
+        tracing::error!(partition = partition.0, %error, "the search projection stopped");
+        self.permanent_failure.send_replace(Some(reason));
+    }
+
     fn request_rebuild(&self, tracking: &mut FrameTracking, partition: PartitionId, sequence: u64) {
         tracking.unprojected.remove(&sequence);
         match tracking.rebuild_requests.get_mut(&partition) {
@@ -283,13 +294,25 @@ impl FrameTracking {
 #[async_trait]
 impl ProjectionVisibilityWait for CommittedSearchFrames {
     async fn wait_until_visible(&self, _request: SearchRequest<'_>) -> Result<(), SearchError> {
+        let mut permanent_failure = self.permanent_failure.subscribe();
+        if let Some(reason) = permanent_failure.borrow().as_ref() {
+            return Err(SearchError::Internal(reason.clone()));
+        }
         let required_sequence = self.last_sequence();
         let mut projected_through = self.projected_through.subscribe();
-        projected_through
-            .wait_for(|projected| projected.is_some_and(|through| through >= required_sequence))
-            .await
-            .map(|_| ())
-            .map_err(|_| SearchError::Unavailable("the search projection stopped".to_owned()))
+        let result = tokio::select! {
+            projected = projected_through.wait_for(|projected| projected.is_some_and(|through| through >= required_sequence)) => {
+                projected.map(|_| ()).map_err(|_| SearchError::Unavailable("the search projection stopped".to_owned()))
+            }
+            failed = permanent_failure.wait_for(Option::is_some) => {
+                let reason = failed.map_err(|_| SearchError::Unavailable("the search projection stopped".to_owned()))?;
+                Err(SearchError::Internal(reason.as_ref().expect("failure notification carries a reason").clone()))
+            }
+        };
+        match permanent_failure.borrow().as_ref() {
+            Some(reason) => Err(SearchError::Internal(reason.clone())),
+            None => result,
+        }
     }
 }
 
@@ -403,5 +426,15 @@ mod tests {
         frames.publish_projected_through();
         assert_eq!(*frames.projected_through.borrow(), Some(20));
         assert!(frames.rebuild_requests().is_empty());
+    }
+
+    #[test]
+    fn permanent_projection_failure_records_partition_and_sqlstate() {
+        let (frames, _queue) = CommittedSearchFrames::new(1, 1024);
+        frames.record_permanent_failure(PARTITION, "upsert run failed: SQLSTATE 54023");
+        let failure = frames.permanent_failure.borrow();
+        let reason = failure.as_ref().expect("the failure is recorded");
+        assert!(reason.contains("partition 3"));
+        assert!(reason.contains("SQLSTATE 54023"));
     }
 }

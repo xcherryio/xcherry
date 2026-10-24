@@ -96,7 +96,7 @@ impl ParadeDbSearchBackend {
             .await
             {
                 Ok(Ok(rows)) => return Ok(rows),
-                Ok(Err(error)) if is_connection_error(&error) && attempt == 0 => {
+                Ok(Err(error)) if is_transient_database_error(&error) && attempt == 0 => {
                     slot.reconnect(&self.configuration).await?;
                 }
                 Ok(Err(error)) => {
@@ -328,27 +328,49 @@ fn translation_error(error: SqlTranslationError) -> SearchError {
     SearchError::InvalidArgument(error.to_string())
 }
 
-pub(super) fn is_connection_error(error: &tokio_postgres::Error) -> bool {
-    error.is_closed()
-        || error.as_db_error().is_some_and(|database_error| {
-            let sqlstate = database_error.code().code();
-            sqlstate.starts_with("08") || sqlstate.starts_with("57P0")
-        })
+pub(super) fn is_transient_database_error(error: &tokio_postgres::Error) -> bool {
+    error
+        .as_db_error()
+        .is_none_or(|database_error| is_transient_sqlstate(database_error.code().code()))
+}
+
+fn is_transient_sqlstate(sqlstate: &str) -> bool {
+    sqlstate.starts_with("08")
+        || sqlstate.starts_with("53")
+        || matches!(
+            sqlstate,
+            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+        )
 }
 
 pub(super) fn classify_database_error(
     operation: &str,
     error: tokio_postgres::Error,
 ) -> SearchError {
-    let sqlstate = error
-        .as_db_error()
-        .map_or("none", |database_error| database_error.code().code());
-    let message = format!("{operation} (SQLSTATE {sqlstate}): {error}");
-    if is_connection_error(&error) {
+    let message = format!("{operation}: {}", database_error_message(&error));
+    if is_transient_database_error(&error) {
         SearchError::Unavailable(message)
     } else {
         SearchError::Internal(message)
     }
+}
+
+pub(super) fn database_error_message(error: &tokio_postgres::Error) -> String {
+    let Some(database_error) = error.as_db_error() else {
+        return format!("SQLSTATE none: {error}");
+    };
+    let mut message = format!(
+        "SQLSTATE {}: {}",
+        database_error.code().code(),
+        database_error.message()
+    );
+    if let Some(detail) = database_error.detail() {
+        message.push_str(&format!("; detail: {detail}"));
+    }
+    if let Some(constraint) = database_error.constraint() {
+        message.push_str(&format!("; constraint: {constraint}"));
+    }
+    message
 }
 
 fn schema_search_error(error: SchemaError) -> SearchError {
@@ -365,8 +387,120 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio_postgres::{Config, NoTls};
 
-    use super::ConnectionSlot;
+    use super::{ConnectionSlot, classify_database_error, is_transient_database_error};
+    use crate::SearchError;
+
+    #[tokio::test]
+    async fn classifies_transient_and_permanent_sqlstates() {
+        for (sqlstate, is_transient) in [
+            ("08006", true),
+            ("08P01", true),
+            ("53100", true),
+            ("57P01", true),
+            ("57P02", true),
+            ("57P03", true),
+            ("57P04", true),
+            ("57P05", true),
+            ("40001", true),
+            ("40P01", true),
+            ("57P06", false),
+            ("40002", false),
+            ("40P02", false),
+            ("23505", false),
+            ("54023", false),
+        ] {
+            let error = rejected_startup_error(sqlstate).await;
+            assert_eq!(
+                error
+                    .as_db_error()
+                    .map(|database_error| database_error.code().code()),
+                Some(sqlstate)
+            );
+            assert_eq!(
+                is_transient_database_error(&error),
+                is_transient,
+                "{sqlstate}"
+            );
+            let classified = classify_database_error("connect to ParadeDB", error);
+            match (is_transient, classified) {
+                (true, SearchError::Unavailable(message))
+                | (false, SearchError::Internal(message)) => {
+                    assert!(message.contains(&format!("SQLSTATE {sqlstate}")));
+                }
+                (_, classified) => panic!("SQLSTATE {sqlstate} classified as {classified:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_error_without_sqlstate_is_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let error = match configuration.connect(NoTls).await {
+            Ok(_) => panic!("the closed startup connection cannot connect"),
+            Err(error) => error,
+        };
+        server.await.expect("fake server closes the connection");
+        assert!(error.as_db_error().is_none());
+        assert!(is_transient_database_error(&error));
+        assert!(matches!(
+            classify_database_error("connect to ParadeDB", error),
+            SearchError::Unavailable(message) if message.contains("SQLSTATE none")
+        ));
+    }
+
+    async fn rejected_startup_error(sqlstate: &str) -> tokio_postgres::Error {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let response = format!("SFATAL\0VFATAL\0C{sqlstate}\0Mforced rejection\0\0");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+            let mut message = vec![b'E'];
+            message.extend_from_slice(&((response.len() + 4) as u32).to_be_bytes());
+            message.extend_from_slice(response.as_bytes());
+            stream
+                .write_all(&message)
+                .await
+                .expect("server rejects startup");
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let error = match configuration.connect(NoTls).await {
+            Ok(_) => panic!("the rejected startup cannot connect"),
+            Err(error) => error,
+        };
+        server.await.expect("fake server sends its rejection");
+        error
+    }
 
     #[tokio::test]
     async fn reconnects_after_a_stalled_postgres_handshake() {

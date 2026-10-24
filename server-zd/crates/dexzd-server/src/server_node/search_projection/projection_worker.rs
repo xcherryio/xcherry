@@ -43,6 +43,15 @@ enum SearchProjectionError {
     Projection(#[from] ProjectionError),
 }
 
+impl SearchProjectionError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::CommittedState { .. } => true,
+            Self::Projection(error) => error.is_retryable(),
+        }
+    }
+}
+
 impl SearchProjectionWorker {
     pub(crate) fn new(
         projector: ParadeDbProjector,
@@ -63,24 +72,28 @@ impl SearchProjectionWorker {
 
     /// Catches up every partition, then projects queued frames until the queue closes.
     pub(crate) async fn run(mut self) {
-        self.catch_up_partitions().await;
+        if !self.catch_up_partitions().await {
+            return;
+        }
         loop {
             tokio::select! {
                 frame = self.queue.recv() => match frame {
-                    Some(frame) => self.project_frame(frame).await,
+                    Some(frame) => if !self.project_frame(frame).await { return; },
                     None => return,
                 },
                 () = self.frames.rebuild_requested().notified() => {}
             }
             for partition in self.frames.rebuild_requests() {
-                self.rebuild_partition(partition).await;
+                if !self.rebuild_partition(partition).await {
+                    return;
+                }
             }
             self.frames.publish_projected_through();
         }
     }
 
     /// Frames lost before startup leave ParadeDB behind the local store, so differing partitions rebuild.
-    async fn catch_up_partitions(&mut self) {
+    async fn catch_up_partitions(&mut self) -> bool {
         let caught_up_sequence = self.frames.last_sequence();
         let mut rebuilt_partitions = 0_u32;
         for partition in (0..self.partition_count).map(|partition| {
@@ -94,6 +107,11 @@ impl SearchProjectionWorker {
                         break;
                     }
                     Err(error) => {
+                        if !error.is_retryable() {
+                            self.frames
+                                .record_permanent_failure(partition, &error.to_string());
+                            return false;
+                        }
                         tracing::warn!(
                             partition = partition.0,
                             %error,
@@ -111,6 +129,7 @@ impl SearchProjectionWorker {
             rebuilt_partitions,
             "the ParadeDB search projection caught up"
         );
+        true
     }
 
     /// Returns whether the partition had to be rebuilt.
@@ -145,17 +164,20 @@ impl SearchProjectionWorker {
         }
     }
 
-    async fn project_frame(&mut self, frame: CommittedSearchFrame) {
-        if self.frames.has_rebuild_request(frame.partition) {
-            self.rebuild_partition(frame.partition).await;
+    async fn project_frame(&mut self, frame: CommittedSearchFrame) -> bool {
+        if self.frames.has_rebuild_request(frame.partition)
+            && !self.rebuild_partition(frame.partition).await
+        {
+            return false;
         }
-        if !self.is_projected(frame.partition, &frame.position) {
-            self.apply_frame(&frame).await;
+        if !self.is_projected(frame.partition, &frame.position) && !self.apply_frame(&frame).await {
+            return false;
         }
         self.frames.finish_projected_frame(&frame);
+        true
     }
 
-    async fn apply_frame(&mut self, frame: &CommittedSearchFrame) {
+    async fn apply_frame(&mut self, frame: &CommittedSearchFrame) -> bool {
         let mut retry_delay = RetryDelay::default();
         loop {
             let applied = self
@@ -171,16 +193,23 @@ impl SearchProjectionWorker {
                 Ok(()) => {
                     self.projected_positions
                         .insert(frame.partition, frame.position.clone());
-                    return;
+                    return true;
                 }
                 Err(error @ ProjectionError::PositionMismatch { .. }) => {
                     tracing::warn!(%error, "the search projection diverged; rebuilding the partition");
-                    self.rebuild_partition(frame.partition).await;
+                    if !self.rebuild_partition(frame.partition).await {
+                        return false;
+                    }
                     if self.is_projected(frame.partition, &frame.position) {
-                        return;
+                        return true;
                     }
                 }
                 Err(error) => {
+                    if !error.is_retryable() {
+                        self.frames
+                            .record_permanent_failure(frame.partition, &error.to_string());
+                        return false;
+                    }
                     tracing::warn!(
                         partition = frame.partition.0,
                         %error,
@@ -192,8 +221,15 @@ impl SearchProjectionWorker {
         }
     }
 
-    async fn rebuild_partition(&mut self, partition: PartitionId) {
-        retry_partition_rebuild(self, partition).await;
+    async fn rebuild_partition(&mut self, partition: PartitionId) -> bool {
+        match retry_partition_rebuild(self, partition).await {
+            Ok(()) => true,
+            Err(error) => {
+                self.frames
+                    .record_permanent_failure(partition, &error.to_string());
+                false
+            }
+        }
     }
 
     async fn try_rebuild_partition(
@@ -277,7 +313,10 @@ impl PartitionRebuilder for SearchProjectionWorker {
     }
 }
 
-async fn retry_partition_rebuild(rebuilder: &mut impl PartitionRebuilder, partition: PartitionId) {
+async fn retry_partition_rebuild(
+    rebuilder: &mut impl PartitionRebuilder,
+    partition: PartitionId,
+) -> Result<(), SearchProjectionError> {
     let mut retry_delay = RetryDelay::default();
     loop {
         // Every frame through this sequence is committed before the view opens.
@@ -285,9 +324,12 @@ async fn retry_partition_rebuild(rebuilder: &mut impl PartitionRebuilder, partit
         match rebuilder.attempt_rebuild(partition).await {
             Ok(()) => {
                 rebuilder.finish_rebuild(partition, covered_sequence);
-                return;
+                return Ok(());
             }
             Err(error) => {
+                if !error.is_retryable() {
+                    return Err(error);
+                }
                 tracing::warn!(
                     partition = partition.0,
                     %error,
@@ -325,6 +367,8 @@ mod tests {
 
     use async_trait::async_trait;
     use dexzd_keyspace::PartitionId;
+
+    use dexzd_search::paradedb::ProjectionError;
 
     use super::{PartitionRebuilder, SearchProjectionError, retry_partition_rebuild};
 
@@ -368,7 +412,9 @@ mod tests {
             finished: Mutex::new(None),
         };
         let started = tokio::time::Instant::now();
-        retry_partition_rebuild(&mut rebuilder, partition).await;
+        retry_partition_rebuild(&mut rebuilder, partition)
+            .await
+            .expect("the backend recovers");
         assert_eq!(rebuilder.attempts, 3);
         assert_eq!(
             tokio::time::Instant::now() - started,
@@ -381,5 +427,38 @@ mod tests {
                 .expect("fake rebuild record is unlocked"),
             Some((partition, 2))
         );
+    }
+
+    struct PermanentlyFailingRebuilder {
+        attempts: u64,
+    }
+
+    #[async_trait]
+    impl PartitionRebuilder for PermanentlyFailingRebuilder {
+        fn last_sequence(&self) -> u64 {
+            1
+        }
+
+        async fn attempt_rebuild(
+            &mut self,
+            _partition: PartitionId,
+        ) -> Result<(), SearchProjectionError> {
+            self.attempts += 1;
+            Err(ProjectionError::InvalidState("invalid search document".into()).into())
+        }
+
+        fn finish_rebuild(&self, _partition: PartitionId, _covered_sequence: u64) {
+            panic!("a failed partition cannot become searchable");
+        }
+    }
+
+    #[tokio::test]
+    async fn permanent_rebuild_failure_does_not_retry() {
+        let mut rebuilder = PermanentlyFailingRebuilder { attempts: 0 };
+        let error = retry_partition_rebuild(&mut rebuilder, PartitionId(3))
+            .await
+            .expect_err("invalid committed state cannot recover by retrying");
+        assert!(error.to_string().contains("invalid search document"));
+        assert_eq!(rebuilder.attempts, 1);
     }
 }

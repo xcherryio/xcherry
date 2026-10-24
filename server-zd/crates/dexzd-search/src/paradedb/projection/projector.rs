@@ -19,7 +19,8 @@ use tokio_postgres::Transaction;
 use tokio_postgres::types::{ToSql, Type};
 
 use super::super::search_backend::{
-    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, is_connection_error,
+    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, database_error_message,
+    is_transient_database_error,
 };
 use super::super::{SearchRow, SqlStatement, upsert_statement};
 use super::changes::{SearchDocumentChange, decode_search_index_key};
@@ -85,10 +86,21 @@ pub enum ProjectionError {
         offered: LogPosition,
     },
     /// Postgres could not complete a projection operation.
-    #[error("{operation} ParadeDB projection: {source}")]
+    #[error("{operation} ParadeDB projection: {}", database_error_message(source))]
     Database {
         /// Failed operation.
         operation: &'static str,
+        /// Database failure.
+        #[source]
+        source: tokio_postgres::Error,
+    },
+    /// Postgres rejected one committed run's upsert.
+    #[error("upsert run {run_id} in partition {} into ParadeDB projection: {}", partition_id.0, database_error_message(source))]
+    RowDatabase {
+        /// Partition containing the run.
+        partition_id: PartitionId,
+        /// Run whose upsert failed.
+        run_id: RunId,
         /// Database failure.
         #[source]
         source: tokio_postgres::Error,
@@ -99,6 +111,21 @@ pub enum ProjectionError {
     /// Reading a committed local-store row failed.
     #[error("read committed search state: {0}")]
     StateRead(#[from] StateReadError),
+}
+
+impl ProjectionError {
+    /// Returns whether reopening a failed connection can recover this projection operation.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Connection(SearchError::Unavailable(_)) => true,
+            Self::Database { source, .. } | Self::RowDatabase { source, .. } => {
+                is_transient_database_error(source)
+            }
+            Self::StateRead(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Projects committed partition documents through the search backend's shared connection pool.
@@ -445,7 +472,7 @@ async fn apply_change(
         } => match row_from_document(partition_id, *tenant_id, *run_id, encoded_document) {
             Ok(row) => {
                 let statement = upsert_statement(&row);
-                execute_statement(transaction, &statement).await?;
+                execute_statement(transaction, partition_id, *run_id, &statement).await?;
                 delete_skipped_document(transaction, *tenant_id, *run_id).await?;
             }
             Err(reason) => {
@@ -574,12 +601,18 @@ fn row_from_document(
 
 async fn execute_statement(
     transaction: &Transaction<'_>,
+    partition_id: PartitionId,
+    run_id: RunId,
     statement: &SqlStatement,
 ) -> Result<(), ProjectionError> {
     transaction
         .execute_typed(&statement.sql, &statement.typed_parameter_refs())
         .await
-        .map_err(|source| database_error("upsert run into", source))?;
+        .map_err(|source| ProjectionError::RowDatabase {
+            partition_id,
+            run_id,
+            source,
+        })?;
     Ok(())
 }
 
@@ -689,7 +722,7 @@ fn operation_timeout(operation: &'static str) -> ProjectionError {
 
 fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {
     !has_retried
-        && matches!(result, Err(ProjectionError::Database { source, .. }) if is_connection_error(source))
+        && matches!(result, Err(ProjectionError::Database { source, .. } | ProjectionError::RowDatabase { source, .. }) if is_transient_database_error(source))
 }
 
 #[cfg(test)]
