@@ -11,31 +11,33 @@
 use std::collections::BTreeMap;
 
 use dexzd_apply::{
-    ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
-    apply_flow_command,
+    ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateReadError, StateRow,
+    StateWrite, apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    attempt_record_key, checkpoint_key, history_record_key, run_singleton_key,
+    attempt_record_key, checkpoint_key, history_record_key, run_singleton_key, value_row_key,
 };
 use dexzd_keyspace::{
-    ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, flow_directory_key,
-    parse_run_key,
+    ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, ValueId,
+    flow_directory_key, parse_run_key,
 };
 use dexzd_protocol::dex::{
     AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, DeleteChannelMessageRequest,
     FlowResetStepMethod, FlowResetType, FlowStatus, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
     InvokeWaitForMethodResponse, PublishToChannelRequest, ResetFlowRequest, SetAttributesRequest,
-    StartFlowRequest, StepDecision, StepMovement, StepOptions, Value, WorkerErrorResponse,
-    WorkerTarget, flow_history_event, value,
+    SkipTimerRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions, TimerCondition,
+    Value, WaitingCondition, WaitingConditionType, WorkerErrorResponse, WorkerTarget,
+    flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, AttributesSetCommand, ChannelMessageDeleteCommand,
     ChannelPublishCommand, CheckpointRecord, CommandReply, FlowCommand, FlowDirectoryRecord,
-    FlowStartCommand, HistoryRecord, RetryBackoffTimerId, RunRecord, RunSettings,
-    StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
-    StepInvocationPhase, StepMethod, StepMethodCompletedCommand, TimeTravelCommand, TimerId,
-    TimerRecord, TimersFiredCommand, command_reply, flow_command::Command,
-    step_method_completed_command, timer_id,
+    FlowStartCommand, HistoryRecord, RetryBackoffTimerId, RpcCommittedCommand, RunRecord,
+    RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase,
+    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepMethod,
+    StepMethodCompletedCommand, TimeTravelCommand, TimerId, TimerRecord, TimerSkipCommand,
+    TimersFiredCommand, ValueRecord, command_reply, flow_command::Command,
+    step_method_completed_command, stored_value, timer_id,
 };
 use prost::Message;
 
@@ -963,16 +965,24 @@ fn reapply_restores_later_external_input_unless_skipped() {
         vec!["a".to_owned(), "b".to_owned()]
     );
     assert_eq!(reapplied.channel_message_count(), 1);
+    // Reapply is part of the TimeTravel command, and its start checkpoint holds the result.
     let fork_seq = before_travel + 1;
-    let reapplied_records: Vec<HistoryRecord> = (fork_seq + 1..reapplied.run_record().next_run_seq)
-        .map(|seq| reapplied.history_record(seq).unwrap())
-        .collect();
-    assert_eq!(reapplied_records.len(), 5);
-    assert!(
-        reapplied_records
-            .iter()
-            .all(|record| record.attempt == attempt && record.is_external_input)
+    assert_eq!(reapplied.last_seq(), fork_seq);
+    let fork = reapplied.history_record(fork_seq).unwrap();
+    assert!(fork.attempt == attempt && fork.is_semantic && fork.is_external_input);
+    assert_eq!(fork.reapplied_inputs.len(), 5);
+    assert!(matches!(
+        fork.events.first().and_then(|event| event.payload.as_ref()),
+        Some(flow_history_event::Payload::TimeTravelFork(_))
+    ));
+    assert_eq!(
+        reapplied.attempt_record(attempt).checkpoint_seqs,
+        vec![fork_seq]
     );
+    let start_checkpoint = reapplied.checkpoint(attempt, fork_seq).unwrap();
+    assert!(start_checkpoint.rows.iter().any(|row| {
+        row.table == u32::from(RunTable::Attribute as u8) && row.key_suffix == b"b"
+    }));
     assert!(
         outcome
             .effects
@@ -1300,4 +1310,282 @@ fn only_the_latest_run_of_a_flow_id_can_time_travel() {
     assert!(rejected.writes.is_empty());
     harness.run_id = vec![8; 16];
     harness.travel_to(reset(FlowResetType::Beginning));
+}
+
+/// Completes ChargeStep-1's WaitFor with a wait on timer `t0`.
+fn wait_on_timer(harness: &mut Harness) {
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    let outcome = harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                waiting_condition: Some(WaitingCondition {
+                    waiting_condition_type: WaitingConditionType::AnyCompleted as i32,
+                    timer_conditions: vec![TimerCondition {
+                        condition_id: "t0".to_owned(),
+                        duration_seconds: 60,
+                        firing_unix_timestamp_seconds: 0,
+                    }],
+                    ..WaitingCondition::default()
+                }),
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        app_worker_id: "worker-a".to_owned(),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert!(
+        is_ok(&outcome.reply),
+        "WaitFor completes: {:?}",
+        outcome.reply
+    );
+}
+
+fn skip_timer(harness: &mut Harness) -> ApplyOutcome {
+    harness.apply(Command::TimerSkip(TimerSkipCommand {
+        request: Some(SkipTimerRequest {
+            flow_id: "order-1".to_owned(),
+            step_execution_id: "ChargeStep-1".to_owned(),
+            timer_condition_id: "t0".to_owned(),
+            ..SkipTimerRequest::default()
+        }),
+    }))
+}
+
+fn reapplying(request: ResetFlowRequest) -> ResetFlowRequest {
+    ResetFlowRequest {
+        skip_writes_reapply: false,
+        ..request
+    }
+}
+
+fn attribute(harness: &Harness, attribute_key: &str) -> AttributeRecord {
+    harness
+        .attempt_rows()
+        .iter()
+        .find(|((table, suffix), _)| {
+            *table == RunTable::Attribute as u8 && suffix == attribute_key.as_bytes()
+        })
+        .map(|(_, value)| AttributeRecord::decode(value.as_slice()).expect("Attribute rows decode"))
+        .expect("the Attribute exists")
+}
+
+fn value_row(harness: &Harness, run_seq: u64) -> Option<ValueRecord> {
+    let value_id = ValueId {
+        run_seq,
+        index_in_command: 0,
+    };
+    let key = value_row_key(
+        harness.context.flow_hash,
+        harness.run(),
+        RunTable::Value,
+        value_id,
+    );
+    harness.get(ColumnFamily::Value, &key)
+}
+
+#[test]
+fn the_fork_point_includes_reapplied_input() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    harness.set_attribute("a", "1", "set-a");
+    let (first, _) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(harness.attribute_keys(), vec!["a".to_owned()]);
+    let after_first = harness.attempt_rows();
+    let fork_seq = harness.last_seq();
+    let fork_time = harness.history_record(fork_seq).unwrap().timestamp_micros;
+    let (second, _) = harness.travel_to(ResetFlowRequest {
+        run_attempt: first as i32,
+        ..reset_to_time(fork_time)
+    });
+    assert_eq!(harness.attempt_record(second).parent_seq, fork_seq);
+    assert_eq!(harness.attempt_rows(), after_first);
+}
+
+#[test]
+fn only_beginning_targets_genesis_outside_the_window() {
+    let mut harness = Harness::with_settings(RunSettings {
+        history_window_semantic_events: 4,
+        history_prune_chunk_semantic_events: 2,
+        checkpoint_max_commands: 3,
+        ..settings()
+    });
+    harness.start(start_request());
+    let genesis_time = harness.history_record(1).unwrap().timestamp_micros;
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.complete_wait_for("ChargeStep-1");
+    for index in 0..5 {
+        harness.set_attribute("status", &format!("v{index}"), "");
+    }
+    assert_eq!(harness.run_record().window_start_seq, 4);
+    for request in [
+        reset_to_time(genesis_time),
+        ResetFlowRequest {
+            step_type: "ChargeStep".to_owned(),
+            ..reset(FlowResetType::StepType)
+        },
+        ResetFlowRequest {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            step_method: FlowResetStepMethod::WaitFor as i32,
+            ..reset(FlowResetType::StepExecutionId)
+        },
+        ResetFlowRequest {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            step_method: FlowResetStepMethod::Execute as i32,
+            ..reset(FlowResetType::StepExecutionId)
+        },
+    ] {
+        let outcome = harness.time_travel(request.clone());
+        assert_eq!(
+            error_code(&outcome.reply),
+            Some(FAILED_PRECONDITION),
+            "{request:?}"
+        );
+        assert!(outcome.writes.is_empty());
+    }
+    let (attempt, _) = harness.travel_to(reset(FlowResetType::Beginning));
+    assert_eq!(harness.attempt_record(attempt).parent_seq, 1);
+}
+
+#[test]
+fn reapplied_skip_timer_completes_the_restored_wait_or_is_skipped() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    wait_on_timer(&mut harness);
+    let waiting_time = harness
+        .history_record(harness.last_seq())
+        .unwrap()
+        .timestamp_micros;
+    assert!(is_ok(&skip_timer(&mut harness).reply));
+    let (attempt, outcome) = harness.travel_to(reapplying(ResetFlowRequest {
+        run_attempt: 1,
+        ..reset_to_time(waiting_time)
+    }));
+    assert_eq!(
+        harness.step("ChargeStep-1").phase,
+        StepExecutionPhase::Execute as i32
+    );
+    assert!(
+        !harness
+            .attempt_rows()
+            .keys()
+            .any(|(table, _)| *table == RunTable::Timer as u8),
+        "the reapplied skip disarmed the timer"
+    );
+    assert_eq!(
+        pending_effects(&outcome),
+        vec![(
+            "ChargeStep-1".to_owned(),
+            StepMethod::Execute as i32,
+            1,
+            attempt
+        )]
+    );
+    // At the beginning no timer is pending, so the recorded skip is skipped.
+    let (beginning, outcome) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    let fork = harness.history_record(harness.last_seq()).unwrap();
+    assert_eq!(fork.reapplied_inputs.len(), 1);
+    assert_eq!(
+        pending_effects(&outcome),
+        vec![(
+            "ChargeStep-1".to_owned(),
+            StepMethod::WaitFor as i32,
+            1,
+            beginning
+        )]
+    );
+}
+
+#[test]
+fn an_unexpected_reapply_rejection_is_an_invariant_violation() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    harness.set_attribute("a", "1", "set-a");
+    let seq = harness.last_seq();
+    let mut record = harness.history_record(seq).unwrap();
+    record.command.as_mut().unwrap().command =
+        Some(Command::RpcCommitted(RpcCommittedCommand::default()));
+    let key = history_record_key(harness.context.flow_hash, harness.run(), seq);
+    harness
+        .state
+        .rows
+        .insert((ColumnFamily::History, key), record.encode_to_vec());
+    let command = harness.command(Command::TimeTravel(TimeTravelCommand {
+        request: Some(reapplying(reset(FlowResetType::Beginning))),
+    }));
+    let error = apply_flow_command(&harness.context, &harness.state, &command)
+        .expect_err("an unimplemented reapplied input fails apply");
+    assert!(
+        matches!(error, ApplyError::InvariantViolation { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_restored_large_value_survives_window_pruning() {
+    let mut harness = Harness::with_settings(RunSettings {
+        history_window_semantic_events: 4,
+        history_prune_chunk_semantic_events: 2,
+        checkpoint_max_commands: 3,
+        ..settings()
+    });
+    harness.start(start_request());
+    harness.set_attribute("report", &"a".repeat(300), "");
+    let restored_seq = harness.last_seq();
+    let restored_time = harness
+        .history_record(restored_seq)
+        .unwrap()
+        .timestamp_micros;
+    harness.set_attribute("report", &"b".repeat(300), "");
+    let overwritten_seq = harness.last_seq();
+    harness.travel_to(reset_to_time(restored_time));
+    let fork_seq = harness.last_seq();
+    for index in 0..8 {
+        harness.set_attribute("status", &format!("v{index}"), "");
+    }
+    assert!(harness.run_record().window_start_seq > fork_seq);
+    let report = attribute(&harness, "report");
+    let Some(stored_value::Kind::TableValue(reference)) = report.value.and_then(|value| value.kind)
+    else {
+        panic!("the restored report is a table value");
+    };
+    assert_eq!(reference.value_id.unwrap().run_seq, restored_seq);
+    let restored = value_row(&harness, restored_seq).expect("the restored value stays live");
+    assert_eq!(restored.value, Some(string_value(&"a".repeat(300))));
+    assert!(
+        value_row(&harness, overwritten_seq).is_none(),
+        "the abandoned attempt's value was released and pruned"
+    );
+}
+
+#[test]
+fn the_checkpoint_byte_threshold_follows_the_current_state_size() {
+    let mut harness = Harness::with_settings(RunSettings {
+        wire_inline_threshold_bytes: 1 << 20,
+        checkpoint_min_written_bytes: 200,
+        ..settings()
+    });
+    harness.start(start_request());
+    harness.set_attribute("big", &"x".repeat(20_000), "");
+    let big_seq = harness.last_seq();
+    assert_eq!(harness.run_record().last_checkpoint_seq, big_seq);
+    let cleared = harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes: vec![AttributeWrite {
+                key: "big".to_owned(),
+                value: None,
+                ..AttributeWrite::default()
+            }],
+            ..SetAttributesRequest::default()
+        }),
+        hard_delete_objects: Vec::new(),
+        request_fingerprint: Vec::new(),
+    }));
+    assert!(is_ok(&cleared.reply));
+    for index in 0..10 {
+        harness.set_attribute(&format!("small-{index}"), &"y".repeat(1000), "");
+    }
+    // The 20 KB state at the last checkpoint would need 20 KB of writes.
+    assert!(harness.run_record().last_checkpoint_seq > big_seq);
 }

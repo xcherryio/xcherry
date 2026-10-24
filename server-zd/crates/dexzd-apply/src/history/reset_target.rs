@@ -39,7 +39,9 @@ pub(crate) fn resolve_target(
     let genesis = genesis_seq(transaction, cursor.rows)?;
     let window_start = cursor.record.window_start_seq;
     let mut candidates = Vec::new();
-    if genesis < window_start
+    // Only BEGINNING may target the preserved genesis point outside the window (D12).
+    if reset_type == FlowResetType::Beginning
+        && genesis < window_start
         && let Some(record) = cursor.rows.history_record(transaction, genesis)?
     {
         candidates.push(record);
@@ -56,9 +58,13 @@ pub(crate) fn resolve_target(
                 Ok(nanos) => nanos,
                 Err(detail) => return Ok(Err(invalid_argument(detail))),
             };
-            candidates
-                .iter()
-                .find(|record| i128::from(record.timestamp_micros) * 1000 >= target_nanos)
+            if is_before_window(transaction, cursor, target_nanos)? {
+                None
+            } else {
+                candidates
+                    .iter()
+                    .find(|record| i128::from(record.timestamp_micros) * 1000 >= target_nanos)
+            }
         }
         FlowResetType::StepType => candidates.iter().find(|record| {
             record
@@ -108,6 +114,29 @@ pub(crate) fn resolve_target(
         },
         last_event_id: last_event_id_at(&candidates, selected.seq),
     }))
+}
+
+/// Whether a time precedes the window start after pruning; its first point may be pruned.
+fn is_before_window(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+    target_nanos: i128,
+) -> Result<bool, ApplyError> {
+    if cursor.record.pruned_semantic_event_count == 0 {
+        return Ok(false);
+    }
+    let Some(window_start) = cursor
+        .rows
+        .history_record(transaction, cursor.record.window_start_seq)?
+    else {
+        return Err(ApplyError::InvariantViolation {
+            detail: format!(
+                "the window start seq {} has no history record",
+                cursor.record.window_start_seq
+            ),
+        });
+    };
+    Ok(target_nanos < i128::from(window_start.timestamp_micros) * 1000)
 }
 
 fn last_event_id_at(candidates: &[HistoryRecord], seq: u64) -> i64 {

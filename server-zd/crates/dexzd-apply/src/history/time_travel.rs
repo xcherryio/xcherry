@@ -16,7 +16,7 @@ use dexzd_protocol::dex::{
     ErrorSubStatus, FlowStatus, TimeTravelForkHistoryEvent, flow_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttemptRecord, CommandReply, FlowCommand, RetentionTimerId, StepExecutionRecord,
+    AttemptRecord, CommandReply, FlowCommand, RetentionTimerId, RunRecord, StepExecutionRecord,
     StepInvocationKey, StepInvocationPhase, TimeTravelCommand, TimeTravelReply, TimerId,
     TimerRecord, command_reply, flow_command::Command, timer_id,
 };
@@ -35,6 +35,7 @@ use crate::history::reset_target::resolve_target;
 use crate::history::state_rebuild::rebuild_attempt_state;
 use crate::state_access::{FlowTransaction, read_flow_directory};
 use crate::steps::{arm_timer, disarm_timer};
+use crate::values::ValueIdAllocator;
 use crate::{ApplyEffect, ApplyError, BehaviorVersion, WaitableChange};
 
 pub(crate) fn apply_time_travel(
@@ -127,9 +128,7 @@ pub(crate) fn apply_time_travel(
         rebuilt.rows,
     )?;
     update_run_lifecycle(transaction, &mut cursor, scope, was_running)?;
-    apply_received_child_results(transaction, &mut cursor, scope)?;
     let restored_rows = read_attempt_rows(transaction, cursor.rows)?;
-    dispatch_restored_invocations(&mut cursor, &restored_rows)?;
     crate::values::rewrite_holders_for_time_travel(
         transaction,
         &cursor,
@@ -137,6 +136,11 @@ pub(crate) fn apply_time_travel(
         &holder_rows(&restored_rows, &run_status_of(&cursor.record)),
         cursor.seq,
     )?;
+    apply_received_child_results(transaction, &mut cursor, scope)?;
+    let reapplied_events =
+        reapply_external_inputs(transaction, &mut cursor, scope, &reapplied_inputs)?;
+    let final_rows = read_attempt_rows(transaction, cursor.rows)?;
+    dispatch_restored_invocations(&mut cursor, &final_rows)?;
     cursor.add_event(flow_history_event::Payload::TimeTravelFork(
         TimeTravelForkHistoryEvent {
             previous_run_id: cursor.run_id().to_string(),
@@ -145,44 +149,60 @@ pub(crate) fn apply_time_travel(
             target_event_id: target.last_event_id,
         },
     ));
+    for event in reapplied_events {
+        cursor.add_event(event);
+    }
     cursor.wake(WaitableChange::RunAttemptChanged);
     let reply = CommandReply {
         reply: Some(command_reply::Reply::TimeTravel(TimeTravelReply {
             run_attempt: new_attempt,
         })),
     };
-    let mut output = cursor.finish(transaction, scope, reply, HistoryKind::SEMANTIC)?;
-    reapply_external_inputs(transaction, scope, &reapplied_inputs, &mut output.effects)?;
+    let kind = if cursor.reapplied_inputs.is_empty() {
+        HistoryKind::SEMANTIC
+    } else {
+        HistoryKind::EXTERNAL_INPUT
+    };
+    let output = cursor.finish(transaction, scope, reply, kind)?;
     Ok(HandlerResult::Applied(output))
 }
 
 /// External input of the lineage after `target_seq`, in seq order. StopFlow is never input.
+///
+/// A TimeTravel record contributes the input it reapplied.
 fn collect_external_inputs(
     transaction: &FlowTransaction<'_>,
     cursor: &RunCursor,
     lineage: &Lineage,
     target_seq: u64,
 ) -> Result<Vec<FlowCommand>, ApplyError> {
-    Ok(
-        history_records(transaction, cursor.rows, target_seq + 1, u64::MAX)?
-            .into_iter()
-            .filter(|record| {
-                record.is_external_input && lineage.contains(record.attempt, record.seq)
-            })
-            .filter_map(|record| record.command)
-            .filter(|command| {
-                matches!(
-                    command.command,
-                    Some(
-                        Command::AttributesSet(_)
-                            | Command::ChannelPublish(_)
-                            | Command::ChannelMessageDelete(_)
-                            | Command::RpcCommitted(_)
-                            | Command::TimerSkip(_)
-                    )
-                )
-            })
-            .collect(),
+    let mut inputs = Vec::new();
+    for record in history_records(transaction, cursor.rows, target_seq + 1, u64::MAX)? {
+        if !record.is_external_input || !lineage.contains(record.attempt, record.seq) {
+            continue;
+        }
+        let Some(command) = record.command else {
+            continue;
+        };
+        if matches!(command.command, Some(Command::TimeTravel(_))) {
+            inputs.extend(record.reapplied_inputs);
+        } else if is_reapplied_input(&command) {
+            inputs.push(command);
+        }
+    }
+    Ok(inputs)
+}
+
+fn is_reapplied_input(command: &FlowCommand) -> bool {
+    matches!(
+        command.command,
+        Some(
+            Command::AttributesSet(_)
+                | Command::ChannelPublish(_)
+                | Command::ChannelMessageDelete(_)
+                | Command::RpcCommitted(_)
+                | Command::TimerSkip(_)
+        )
     )
 }
 
@@ -366,43 +386,105 @@ fn dispatch_restored_invocations(
     Ok(())
 }
 
-/// Reapplies each input as its own command, so later travels reapply it again.
-///
-/// Input the new state rejects is skipped.
+/// Reapplies input onto the restored state within the TimeTravel command, so its start
+/// checkpoint includes it. Returns the reapplied input's history events.
 fn reapply_external_inputs(
     transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
     scope: &CommandScope<'_>,
     inputs: &[FlowCommand],
-    effects: &mut Vec<ApplyEffect>,
-) -> Result<(), ApplyError> {
+) -> Result<Vec<flow_history_event::Payload>, ApplyError> {
+    let mut events = Vec::new();
+    if inputs.is_empty() {
+        return Ok(events);
+    }
     let behavior_version = BehaviorVersion::from_command(scope.command.behavior_version)?;
+    let rows = cursor.rows;
+    rows.put_run_record(transaction, &cursor.record);
+    let mut values = std::mem::replace(&mut cursor.values, ValueIdAllocator::new(cursor.seq));
     for input in inputs {
+        cursor.reapplied_inputs.push(input.clone());
+        let record = required_run_record(transaction, cursor)?;
+        // Client writes to a closed Flow are rejected, so a closed state skips the input.
+        if record.status != FlowStatus::Running as i32 {
+            continue;
+        }
         let command = reapplied_command(input, scope);
         let Some(body) = &command.command else {
-            continue;
+            return Err(ApplyError::InvariantViolation {
+                detail: "a recorded external input has no command body".to_owned(),
+            });
         };
-        let input_scope = CommandScope::new(&command, behavior_version);
-        let (writes, input_effects) = {
+        let mut input_scope = CommandScope::new(&command, behavior_version);
+        input_scope.is_replay = true;
+        let (writes, output) = {
             let reader = TransactionReader::new(transaction);
             let mut input_transaction = FlowTransaction::new(&reader, transaction.context());
-            let input_cursor = match RunCursor::open(&input_transaction, &input_scope)? {
-                Ok(input_cursor) => input_cursor,
-                Err(_) => continue,
-            };
+            let input_cursor =
+                RunCursor::for_reapplied_input(rows, record, cursor.seq, values.clone());
             match crate::command_handlers::apply_run_command(
                 &mut input_transaction,
                 input_cursor,
                 &input_scope,
                 body,
             )? {
-                HandlerResult::Applied(output) => (input_transaction.into_writes(), output.effects),
-                HandlerResult::Rejected(_) => continue,
+                HandlerResult::Applied(output) => (input_transaction.into_writes(), output),
+                HandlerResult::Rejected(reply) if is_skippable_rejection(body, &reply) => continue,
+                HandlerResult::Rejected(reply) => {
+                    return Err(ApplyError::InvariantViolation {
+                        detail: format!("time travel could not reapply recorded input: {reply:?}"),
+                    });
+                }
             }
         };
         absorb_writes(transaction, writes);
-        effects.extend(input_effects);
+        let Some(replayed) = output.replayed else {
+            return Err(ApplyError::InvariantViolation {
+                detail: "a reapplied input recorded its own history".to_owned(),
+            });
+        };
+        values = replayed.values;
+        events.extend(replayed.events);
+        // Dispatch follows the final restored state instead.
+        cursor
+            .effects
+            .extend(output.effects.into_iter().filter(|effect| {
+                !matches!(
+                    effect,
+                    ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. }
+                )
+            }));
     }
-    Ok(())
+    cursor.record = required_run_record(transaction, cursor)?;
+    cursor.values = values;
+    Ok(events)
+}
+
+/// The best-effort skips of plan section 8.4: input the restored state no longer accepts.
+fn is_skippable_rejection(body: &Command, reply: &CommandReply) -> bool {
+    let Some(command_reply::Reply::Error(error)) = &reply.reply else {
+        return false;
+    };
+    match body {
+        Command::TimerSkip(_) => error.grpc_code == grpc_code::INVALID_ARGUMENT,
+        Command::ChannelMessageDelete(_) => {
+            error.grpc_code == grpc_code::NOT_FOUND
+                && error.sub_status == ErrorSubStatus::ChannelMessageNotFound as i32
+        }
+        _ => false,
+    }
+}
+
+fn required_run_record(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+) -> Result<RunRecord, ApplyError> {
+    cursor
+        .rows
+        .run_record(transaction)?
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: "a time traveling run has no run record".to_owned(),
+        })
 }
 
 /// Clears request IDs, which the run-scoped deduplication table would otherwise answer.
