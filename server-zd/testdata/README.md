@@ -21,9 +21,14 @@ against every `v<N>` directory:
   after it. The test then compares the committed state with `state.txt` row by row.
 - It starts a second node that ignores the snapshot and replays the whole log into an empty
   store. The same comparison follows.
-- It compares a digest of each version's data files with the pin in `golden_replay.rs`. Any
-  changed byte fails. The README of a version is not part of the digest.
+- It compares a digest of every file of each version, the README included, with the pin in
+  `golden_replay.rs`. Any changed, added, or removed file fails. A second test changes, then
+  removes, each file of a copy in turn and requires the pin to fail every time.
 - It records the workload twice and requires identical bytes, so the generator stays usable.
+- It records the workload into a temporary directory. The result must match the newest version's
+  `objects/` and `state.txt` byte for byte. A change to the bytes the engine writes for this
+  workload fails this test. That is not a flake: add a new version. Older versions stay protected by their pins and
+  the replay tests.
 
 A replay difference is a compatibility break. Fix the code, never the recorded data. A change
 to the result of applying an already committed command needs a new behavior version.
@@ -53,6 +58,7 @@ Add `v<N+1>` in the change that does any of the following:
   layout, or the snapshot format;
 - adds a `FlowCommand` kind, a state table, an index kind, or an object kind;
 - adds a behavior version, recorded by a workload that runs on it;
+- changes the bytes the engine writes for the workload, which the reproduction test reports;
 - prepares a release whose persisted data differs from the newest recorded version.
 
 ## Adding a version
@@ -67,9 +73,8 @@ Run these commands from `server-zd/`:
      cargo test -p dexzd-engine --test format_compat generate_format_compat_testdata -- --ignored
    ```
 
-3. Generate it again into a temporary directory, and check that `diff -r` reports no
-   difference.
-4. Write `testdata/v2/README.md`.
-5. Add the digest to `PINNED_VERSION_DIGESTS` in `golden_replay.rs`. The failing pin test prints
+3. Write `testdata/v2/README.md`. The digest covers it, so finish it before the next step.
+4. Add the digest to `PINNED_VERSION_DIGESTS` in `golden_replay.rs`. The failing pin test prints
    it.
-6. Run `cargo test -p dexzd-engine --test format_compat`.
+5. Run `cargo test -p dexzd-engine --test format_compat`. It also regenerates the workload and
+   compares the result with `v2`.

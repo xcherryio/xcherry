@@ -18,7 +18,7 @@ use xxhash_rust::xxh3::Xxh3;
 pub(crate) const OBJECTS_DIRECTORY: &str = "objects";
 /// Canonical dump of the committed state the recorded workload produced.
 pub(crate) const STATE_DUMP_FILE: &str = "state.txt";
-/// Describes the version; not covered by the pinned digest.
+/// Describes how the version was produced; pinned like every other file.
 pub(crate) const README_FILE: &str = "README.md";
 /// Leases name a random holder process and expire; restoring needs none.
 pub(crate) const EXCLUDED_KEY_PREFIXES: &[&str] = &["lease/"];
@@ -84,13 +84,10 @@ pub(crate) async fn load_objects(version_directory: &Path) -> InMemoryObjectStor
 
 /// Writes every object except leases to `<output>/objects`.
 pub(crate) async fn write_objects(store: &InMemoryObjectStore, output_directory: &Path) {
-    let objects_directory = output_directory.join(OBJECTS_DIRECTORY);
-    for (key, body) in recorded_objects(store).await {
-        let path = objects_directory.join(&key);
-        fs::create_dir_all(path.parent().expect("object paths have a parent"))
-            .expect("create an object directory");
-        fs::write(&path, body).expect("write a recorded object");
-    }
+    write_files(
+        &output_directory.join(OBJECTS_DIRECTORY),
+        &recorded_objects(store).await,
+    );
 }
 
 /// Returns every object except leases, keyed by object key.
@@ -123,19 +120,51 @@ pub(crate) async fn recorded_objects(store: &InMemoryObjectStore) -> BTreeMap<St
     }
 }
 
-/// Returns the xxh3-128 digest of a version's data files in path order, excluding the README.
+/// Returns the xxh3-128 digest of every file of a version, README included, in path order.
 pub(crate) fn version_digest(version_directory: &Path) -> String {
     let mut hasher = Xxh3::new();
     for (relative_path, body) in read_files(version_directory) {
-        if relative_path == README_FILE {
-            continue;
-        }
         hasher.update(&(relative_path.len() as u64).to_be_bytes());
         hasher.update(relative_path.as_bytes());
         hasher.update(&(body.len() as u64).to_be_bytes());
         hasher.update(&body);
     }
     format!("{:032x}", hasher.digest128())
+}
+
+/// Writes each file below `directory`, creating its parent directories.
+pub(crate) fn write_files(directory: &Path, files: &BTreeMap<String, Vec<u8>>) {
+    for (relative_path, body) in files {
+        let path = directory.join(relative_path);
+        fs::create_dir_all(path.parent().expect("file paths have a parent"))
+            .expect("create a testdata directory");
+        fs::write(&path, body).expect("write a testdata file");
+    }
+}
+
+/// Returns one line per relative path that is missing, unexpected, or has different bytes.
+pub(crate) fn file_differences(
+    expected: &BTreeMap<String, Vec<u8>>,
+    actual: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for (relative_path, expected_body) in expected {
+        match actual.get(relative_path) {
+            None => differences.push(format!("missing {relative_path}")),
+            Some(body) if body != expected_body => differences.push(format!(
+                "differs {relative_path}: expected {} bytes, got {}",
+                expected_body.len(),
+                body.len()
+            )),
+            Some(_) => {}
+        }
+    }
+    for relative_path in actual.keys() {
+        if !expected.contains_key(relative_path) {
+            differences.push(format!("unexpected {relative_path}"));
+        }
+    }
+    differences
 }
 
 /// Returns every file below `directory` keyed by its `/`-separated relative path.

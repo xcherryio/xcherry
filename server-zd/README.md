@@ -153,7 +153,9 @@ no docker, MinIO, or Temporal.
 `testdata/v<N>` holds a recorded log, snapshot, cluster metadata, and committed state.
 `cargo test -p dexzd-engine --test format_compat` checks that the current code decodes every
 version and replays it to the recorded state. Recorded versions are immutable; a pinned digest
-fails the test when a byte changes.
+of every file fails the test when a byte changes. The scripted workload must also reproduce the
+newest version byte for byte, so a change to the bytes the engine writes for it needs a new
+version.
 
 Add the next version in the change that does any of the following:
 

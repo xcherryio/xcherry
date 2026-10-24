@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -23,12 +24,12 @@ use crate::state_dump::{
     StateDump, dump_committed_state, parse_state_dump, render_state_dump, state_dump_differences,
 };
 use crate::testdata_tree::{
-    OBJECTS_DIRECTORY, STATE_DUMP_FILE, TestdataVersion, load_objects, read_files,
-    recorded_objects, testdata_versions, version_digest,
+    OBJECTS_DIRECTORY, README_FILE, STATE_DUMP_FILE, TestdataVersion, file_differences,
+    load_objects, read_files, recorded_objects, testdata_versions, version_digest, write_files,
 };
 
-/// Digest of every data file of each version. Versions are immutable: add `v<N+1>` instead.
-const PINNED_VERSION_DIGESTS: &[(&str, &str)] = &[("v1", "f48ed41cc3e158adad535b3e44cc23d0")];
+/// Digest of every file of each version, README included. Versions are immutable: add `v<N+1>`.
+const PINNED_VERSION_DIGESTS: &[(&str, &str)] = &[("v1", "5663d4f19d5714efc9ea0c4bad2cef74")];
 /// The restoring node starts this long after the last recorded command.
 const RESTART_DELAY_MICROS: i64 = 60 * 60 * 1_000_000;
 
@@ -107,6 +108,56 @@ fn every_version_keeps_its_pinned_bytes() {
     }
 }
 
+#[test]
+fn changing_any_file_of_a_version_fails_its_pin() {
+    for (version, (_, pinned_digest)) in recorded_versions().iter().zip(PINNED_VERSION_DIGESTS) {
+        let files = read_files(&version.directory);
+        assert!(
+            files.contains_key(README_FILE),
+            "testdata/{} has a README",
+            version.name
+        );
+        let copy = tempfile::tempdir().expect("create a temporary directory");
+        write_files(copy.path(), &files);
+        assert_eq!(
+            version_digest(copy.path()),
+            *pinned_digest,
+            "an unchanged copy of testdata/{} matches its pin",
+            version.name
+        );
+        for (relative_path, body) in &files {
+            let path = copy.path().join(relative_path);
+            let mut changed_body = body.clone();
+            match changed_body.last_mut() {
+                Some(last_byte) => *last_byte ^= 1,
+                None => changed_body.push(0),
+            }
+            fs::write(&path, changed_body).expect("change a copied file");
+            assert_ne!(
+                version_digest(copy.path()),
+                *pinned_digest,
+                "changing testdata/{}/{relative_path} fails the pin",
+                version.name
+            );
+            fs::remove_file(&path).expect("remove a copied file");
+            assert_ne!(
+                version_digest(copy.path()),
+                *pinned_digest,
+                "removing testdata/{}/{relative_path} fails the pin",
+                version.name
+            );
+            fs::write(&path, body).expect("restore a copied file");
+        }
+        fs::write(copy.path().join("unexpected-file"), b"").expect("add a file");
+        assert_ne!(
+            version_digest(copy.path()),
+            *pinned_digest,
+            "adding a file to testdata/{} fails the pin",
+            version.name
+        );
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_workload_records_identical_bytes_every_time() {
     let first = record_workload().await;
@@ -119,6 +170,36 @@ async fn the_workload_records_identical_bytes_every_time() {
         render_state_dump(&first.state),
         render_state_dump(&second.state),
         "two recordings commit identical state"
+    );
+}
+
+/// Older versions stay protected by their pins and the replay tests.
+#[tokio::test(start_paused = true)]
+async fn the_workload_reproduces_the_newest_version() {
+    let newest = recorded_versions()
+        .pop()
+        .expect("testdata holds at least one version");
+    let output = tempfile::tempdir().expect("create a temporary directory");
+    record_workload().await.write_to(output.path()).await;
+    let mut checked_in = read_files(&newest.directory);
+    checked_in.remove(README_FILE);
+    let generated = read_files(output.path());
+    let mut differences = file_differences(&checked_in, &generated);
+    if let (Some(checked_in_state), Some(generated_state)) = (
+        checked_in.get(STATE_DUMP_FILE),
+        generated.get(STATE_DUMP_FILE),
+    ) {
+        differences.extend(state_dump_differences(
+            &parse_state_dump(&String::from_utf8_lossy(checked_in_state)),
+            &parse_state_dump(&String::from_utf8_lossy(generated_state)),
+        ));
+    }
+    assert!(
+        differences.is_empty(),
+        "the workload no longer reproduces testdata/{}; if the engine now writes different bytes, \
+         add a new version. Differences:\n{}",
+        newest.name,
+        differences.join("\n")
     );
 }
 
