@@ -27,6 +27,8 @@ use workload::Workload;
 
 /// A restart waits up to this plus a 1 s grace for the killed process's lease.
 const LEASE_DURATION: &str = "3s";
+/// Survives multi-second host stalls; takeover timing depends only on the owner's lease.
+const STANDBY_LEASE_DURATION: &str = "15s";
 const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 const CHAIN_STARTERS: usize = 4;
 const COUNTER_COUNT: usize = 3;
@@ -74,7 +76,7 @@ async fn kill9_under_load_loses_no_acknowledged_write() {
         .await;
     load.stop().await;
 
-    let report = workload.verify(node.channel()).await;
+    let report = node.verify(&workload).await;
     eprintln!(
         "kill9_under_load_loses_no_acknowledged_write: {} stale-batch restarts; {report}",
         node.stale_batch_restart_count()
@@ -167,7 +169,7 @@ async fn lost_local_directory_restores_from_snapshot_and_log_tail() {
         .await;
     load.stop().await;
 
-    let report = workload.verify(node.channel()).await;
+    let report = node.verify(&workload).await;
     eprintln!(
         "lost_local_directory_restores_from_snapshot_and_log_tail: restored at seq {last_applied_seq}; {} stale-batch restarts; {report}",
         node.stale_batch_restart_count()
@@ -187,13 +189,13 @@ async fn frozen_owner_is_fenced() {
     let workload = Workload::new();
     let mut fleet = ServeFleet::new(directory.path(), workload.summary_source());
     // A short log deletion delay would let the standby lose writes, a separate known defect.
-    let config = |name: &str, address| {
+    let config = |name: &str, address, lease_duration| {
         let path = directory.path().join(format!("{name}.yaml"));
         RobustnessServeConfig {
             primary_endpoint: &primary_endpoint,
             listen: address,
             local_directory: &directory.path().join(format!("{name}-store")),
-            lease_duration: LEASE_DURATION,
+            lease_duration,
             snapshot_interval: "1h",
             log_deletion_delay: "24h",
         }
@@ -202,8 +204,8 @@ async fn frozen_owner_is_fenced() {
     };
     let owner_address = free_loopback_address();
     let standby_address = free_loopback_address();
-    let owner_config = config("owner", owner_address);
-    let standby_config = config("standby", standby_address);
+    let owner_config = config("owner", owner_address, LEASE_DURATION);
+    let standby_config = config("standby", standby_address, STANDBY_LEASE_DURATION);
 
     let mut owner = fleet.spawn(&owner_config, owner_address, "owner");
     let owner_channel = owner.wait_until_serving().await;
@@ -233,6 +235,8 @@ async fn frozen_owner_is_fenced() {
     // The kill command has exited, so the owner seals nothing after this instant until SIGCONT.
     let frozen_at_unix_micros = unix_micros_now();
     let standby_channel = standby.wait_until_serving().await;
+    // Steps re-dispatched after the takeover fail and back off while no Worker is connected.
+    let standby_worker = workload.start_worker(standby_channel.clone()).await;
     let standby_lease = inspector.node_lease().await;
     assert!(
         standby_lease.epoch > owner_epoch,
@@ -256,6 +260,12 @@ async fn frozen_owner_is_fenced() {
     assert_eq!(owner_status.code(), Some(1), "{}", owner.log());
     load.stop().await;
     owner_worker.stop().await;
+    if let Some(status) = standby.exit_status() {
+        panic!(
+            "the standby exited with {status} while the owner resumed:\n{}",
+            standby.log()
+        );
+    }
     let lease = inspector.node_lease().await;
     assert_eq!(
         (lease.holder_process_id.as_str(), lease.epoch),
@@ -295,8 +305,7 @@ async fn frozen_owner_is_fenced() {
         }
     }
 
-    let standby_worker = workload.start_worker(standby_channel.clone()).await;
-    let report = workload.verify(standby_channel).await;
+    let report = workload.verify(standby_channel, &mut standby).await;
     eprintln!(
         "frozen_owner_is_fenced: EpochStart at seq {epoch_start_seq}; {late_owner_batch_count} owner batches sealed before the freeze landed after it; {} calls acknowledged after the resume; {report}",
         workload.acknowledged_count() - acknowledged_before_resume

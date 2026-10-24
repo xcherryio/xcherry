@@ -25,7 +25,7 @@ use tonic_health::pb::HealthCheckRequest;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 
-use super::workload::{Workload, WorkloadWorker};
+use super::workload::{VerificationReport, Workload, WorkloadWorker};
 use crate::harness;
 use crate::{NODE_ID, PRIMARY_BUCKET, PRIMARY_PREFIX};
 
@@ -412,6 +412,17 @@ impl SupervisedNode {
             self.accept_stale_batch_stop(stopped.process);
             self.launch(fleet, workload).await;
         }
+    }
+
+    /// Verifies `workload` on the current incarnation; panics if that incarnation exits meanwhile.
+    pub(crate) async fn verify(&mut self, workload: &Workload) -> VerificationReport {
+        let incarnation = self
+            .incarnation
+            .as_mut()
+            .expect("a supervised node has an incarnation between calls");
+        workload
+            .verify(incarnation.channel.clone(), &mut incarnation.process)
+            .await
     }
 
     /// Sends SIGTERM and requires a clean exit.

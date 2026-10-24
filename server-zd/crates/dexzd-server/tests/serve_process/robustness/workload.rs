@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use dexzd_engine::WAIT_FOR_FLOW_TIMEOUT_MESSAGE;
 use dexzd_protocol::dex::flow_service_client::FlowServiceClient;
 use dexzd_protocol::dex::worker_task_service_client::WorkerTaskServiceClient;
 use dexzd_protocol::dex::{
@@ -58,7 +59,8 @@ const PROGRESS_BUDGET: Duration = Duration::from_secs(30);
 const SETUP_BUDGET: Duration = Duration::from_secs(20);
 const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Covers chain Flows that resume only after the last restart.
-const VERIFICATION_BUDGET: Duration = Duration::from_secs(30);
+/// Also fits two 10 s dispatch waits and their retry backoff after a takeover.
+const VERIFICATION_BUDGET: Duration = Duration::from_secs(60);
 const VERIFICATION_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const RECENT_FAILURE_COUNT: usize = 20;
 
@@ -380,8 +382,14 @@ impl Workload {
         Ok(())
     }
 
-    /// Panics unless every acknowledged write is on the server behind `channel` and matches the journal.
-    pub(crate) async fn verify(&self, channel: Channel) -> VerificationReport {
+    /// Panics unless every acknowledged write is on `server` and matches the journal.
+    ///
+    /// Panics with the server log as soon as `server` exits.
+    pub(crate) async fn verify(
+        &self,
+        channel: Channel,
+        server: &mut RobustnessProcess,
+    ) -> VerificationReport {
         let mut client = FlowServiceClient::new(channel);
         let deadline = Instant::now() + VERIFICATION_BUDGET;
         let starts = self.ledger.starts();
@@ -390,12 +398,12 @@ impl Workload {
         for start in &starts {
             match start.kind {
                 WorkloadFlowKind::Chain => {
-                    self.verify_chain_completed(&mut client, start, deadline)
+                    self.verify_chain_completed(&mut client, server, start, deadline)
                         .await;
                     chain_flows += 1;
                 }
                 WorkloadFlowKind::Counter => {
-                    let final_value = self.read_counter(&mut client, start).await;
+                    let final_value = self.read_counter(&mut client, server, start).await;
                     final_counter_values.insert(start.flow_id.clone(), final_value);
                 }
             }
@@ -417,51 +425,62 @@ impl Workload {
     async fn verify_chain_completed(
         &self,
         client: &mut FlowServiceClient<Channel>,
+        server: &mut RobustnessProcess,
         start: &AcknowledgedStart,
         deadline: Instant,
     ) {
         loop {
+            assert_still_serving(server);
             let wait = client.wait_for_flow(WaitForFlowRequest {
                 flow_id: start.flow_id.clone(),
                 run_id: start.run_id.clone(),
                 needs_results: true,
                 wait_time_seconds: 2,
             });
-            let result = tokio::time::timeout(VERIFICATION_CALL_TIMEOUT, wait)
+            let outcome = tokio::time::timeout(VERIFICATION_CALL_TIMEOUT, wait)
                 .await
                 .unwrap_or_else(|_| {
                     panic!(
                         "WaitForFlow for {} did not return within {VERIFICATION_CALL_TIMEOUT:?}",
                         start.flow_id
                     )
-                })
-                .unwrap_or_else(|status| {
+                });
+            match outcome {
+                Ok(response) => {
+                    let result = response.into_inner();
+                    if result.flow_status == FlowStatus::Completed as i32 {
+                        assert!(
+                            result
+                                .results
+                                .iter()
+                                .any(|output| output.completed_step_output
+                                    == Some(int_value(LAST_CHAIN_INDEX))),
+                            "{} completed without output {LAST_CHAIN_INDEX}: {result:?}",
+                            start.flow_id
+                        );
+                        return;
+                    }
+                    assert_eq!(
+                        result.flow_status,
+                        FlowStatus::Running as i32,
+                        "acknowledged {} closed without completing: {result:?}",
+                        start.flow_id
+                    );
+                }
+                // The server answers a Flow that is still running when the wait time ends this way.
+                Err(status)
+                    if status.code() == tonic::Code::DeadlineExceeded
+                        && status.message() == WAIT_FOR_FLOW_TIMEOUT_MESSAGE => {}
+                Err(status) => {
+                    assert_still_serving(server);
                     panic!(
                         "WaitForFlow for acknowledged {} run {} failed: {status}\n{}",
                         start.flow_id,
                         start.run_id,
                         summarize(&self.ledger, &self.journal)
-                    )
-                })
-                .into_inner();
-            if result.flow_status == FlowStatus::Completed as i32 {
-                assert!(
-                    result
-                        .results
-                        .iter()
-                        .any(|output| output.completed_step_output
-                            == Some(int_value(LAST_CHAIN_INDEX))),
-                    "{} completed without output {LAST_CHAIN_INDEX}: {result:?}",
-                    start.flow_id
-                );
-                return;
+                    );
+                }
             }
-            assert_eq!(
-                result.flow_status,
-                FlowStatus::Running as i32,
-                "acknowledged {} closed without completing: {result:?}",
-                start.flow_id
-            );
             assert!(
                 Instant::now() < deadline,
                 "acknowledged {} was still running after {VERIFICATION_BUDGET:?}:\n{}",
@@ -474,8 +493,10 @@ impl Workload {
     async fn read_counter(
         &self,
         client: &mut FlowServiceClient<Channel>,
+        server: &mut RobustnessProcess,
         start: &AcknowledgedStart,
     ) -> i64 {
+        assert_still_serving(server);
         let read = client.get_attributes(GetAttributesRequest {
             flow_id: start.flow_id.clone(),
             run_id: start.run_id.clone(),
@@ -491,6 +512,7 @@ impl Workload {
                 )
             })
             .unwrap_or_else(|status| {
+                assert_still_serving(server);
                 panic!(
                     "GetAttributes for acknowledged {} run {} failed: {status}",
                     start.flow_id, start.run_id
@@ -1025,6 +1047,16 @@ fn integer_of(value: Option<&Value>) -> i64 {
     match value.and_then(|value| value.kind.as_ref()) {
         Some(value::Kind::IntValue(number)) => *number,
         other => panic!("expected an integer value, got {other:?}"),
+    }
+}
+
+/// Panics with the server log if `server` has exited.
+fn assert_still_serving(server: &mut RobustnessProcess) {
+    if let Some(status) = server.exit_status() {
+        panic!(
+            "dex-server-zd exited with {status} during verification:\n{}",
+            server.log()
+        );
     }
 }
 
