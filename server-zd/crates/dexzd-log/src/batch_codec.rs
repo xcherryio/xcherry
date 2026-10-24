@@ -39,6 +39,14 @@ pub enum LogError {
     Retryable,
     #[error("log pipeline deadline expired")]
     Deadline,
+    #[error(
+        "log stream has no batch at seq {missing_seq} but has one at seq {next_existing_seq}; \
+         the batches after the applied position were deleted"
+    )]
+    MissingBatches {
+        missing_seq: u64,
+        next_existing_seq: u64,
+    },
     #[error(transparent)]
     Store(#[from] dexzd_object_store::ObjectStoreError),
 }

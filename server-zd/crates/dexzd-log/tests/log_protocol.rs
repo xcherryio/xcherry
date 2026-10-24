@@ -753,6 +753,50 @@ async fn recovery_resumes_after_a_cleaned_applied_position() {
 }
 
 #[tokio::test]
+async fn recovery_rejects_a_deleted_range_after_the_applied_position() {
+    let store = MemoryStore::default();
+    for seq in 1..=10 {
+        store
+            .insert(stream().batch_key(seq), batch(1, seq, b"acknowledged"))
+            .await;
+    }
+    // Cleanup after a newer snapshot deleted seq 1 through 6, including the applied seq 3.
+    let deleted: Vec<String> = (1..=6).map(|seq| stream().batch_key(seq)).collect();
+    store.delete_many(&deleted).await.unwrap();
+    let result = recover_stream(&store, &FixedClock, &stream(), 3, 1, 2, "stale-state").await;
+    assert!(
+        matches!(
+            result,
+            Err(LogError::MissingBatches {
+                missing_seq: 4,
+                next_existing_seq: 7
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(store.put_count.load(Ordering::SeqCst), 0);
+    assert!(store.get(&stream().batch_key(4)).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn recovery_seals_a_pipelined_hole_at_the_snapshot_boundary() {
+    let store = MemoryStore::default();
+    // Cleanup kept the snapshot's applied seq 3; seq 4 never landed, but pipelined 5 and 6 did.
+    for seq in [3, 5, 6] {
+        store
+            .insert(stream().batch_key(seq), batch(1, seq, b"pipelined"))
+            .await;
+    }
+    let recovered = recover_stream(&store, &FixedClock, &stream(), 3, 1, 2, "replacement")
+        .await
+        .unwrap();
+    assert!(recovered.batches_to_apply.is_empty());
+    assert_eq!(recovered.epoch_start_seq, 4);
+    assert_eq!(recovered.void_sequences, vec![5, 6]);
+    assert_eq!(recovered.next_seq, 7);
+}
+
+#[tokio::test]
 async fn older_epoch_start_after_barrier_cannot_lower_effective_epoch() {
     let store = MemoryStore::default();
     store.insert(stream().batch_key(1), epoch_start(2, 1)).await;

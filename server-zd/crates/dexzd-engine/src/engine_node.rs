@@ -97,30 +97,16 @@ impl EngineNode {
             clock,
             applier,
         } = dependencies;
-        let metadata = ClusterMetadata::bootstrap_or_validate(
+        // Fails fast on a contradicting manifest; the predecessor may still change it until the lease.
+        let unleased_metadata = ClusterMetadata::bootstrap_or_validate(
             object_store.as_ref(),
             clock.as_ref(),
             config.cluster,
             &config.node,
         )
         .await?;
-        let partition_count = metadata.partition_count();
-        let cluster_id = metadata.cluster_id()?;
-        let stream = StreamIdentity {
-            cluster_id,
-            node_id: config.node.node_id.clone(),
-            incarnation: metadata.streams.serving_incarnation,
-        };
-        let store = open_local_store(
-            &config.local_store,
-            object_store.as_ref(),
-            &LocalStoreRequirements {
-                snapshot: metadata.node_snapshot(&config.node.node_id),
-                streams: &metadata.streams,
-                partition_count,
-            },
-        )
-        .await?;
+        let partition_count = unleased_metadata.partition_count();
+        let cluster_id = unleased_metadata.cluster_id()?;
         let lease = acquire_lease(
             object_store.clone(),
             clock.clone(),
@@ -140,6 +126,24 @@ impl EngineNode {
         // Every failure from here on must release the lease, or a successor waits for it to expire.
         let mut applier_pool: Option<Arc<PartitionApplierPool>> = None;
         let serving = async {
+            let metadata = unleased_metadata
+                .read_under_lease(object_store.as_ref(), &config.node, epoch)
+                .await?;
+            let stream = StreamIdentity {
+                cluster_id,
+                node_id: config.node.node_id.clone(),
+                incarnation: metadata.streams.serving_incarnation,
+            };
+            let store = open_local_store(
+                &config.local_store,
+                object_store.as_ref(),
+                &LocalStoreRequirements {
+                    snapshot: metadata.node_snapshot(&config.node.node_id),
+                    streams: &metadata.streams,
+                    partition_count,
+                },
+            )
+            .await?;
             let node_meta_lock = Arc::new(std::sync::Mutex::new(()));
             let (proposal_sender, proposal_receiver) = mpsc::unbounded_channel();
             let committer = CommandCommitter::new(CommandCommitterParts {

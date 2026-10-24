@@ -99,6 +99,9 @@ pub async fn recover_stream_from(
     if effective_epoch >= new_epoch {
         return Err(LogError::Fenced);
     }
+    if seq == from_seq {
+        ensure_batches_after_start_were_not_deleted(store, stream, seq).await?;
+    }
     let deadline = Instant::now() + RECOVERY_WRITE_DEADLINE;
     let mut backoff = Duration::from_millis(10);
     let mut encoded_seq = 0;
@@ -198,6 +201,42 @@ async fn finish_epoch_start(
             .checked_add(1)
             .ok_or_else(|| LogError::Invalid("stream sequence exhausted".into()))?;
     }
+}
+
+/// Fails with [`LogError::MissingBatches`] when `missing_seq` was deleted and later batches remain.
+async fn ensure_batches_after_start_were_not_deleted(
+    store: &dyn ObjectStore,
+    stream: &StreamIdentity,
+    missing_seq: u64,
+) -> Result<(), LogError> {
+    // Cleanup deletes only batches below a published snapshot's applied position, so a replayable
+    // applied position keeps its batch.
+    if missing_seq == 1
+        || store
+            .head(&stream.batch_key(missing_seq - 1))
+            .await?
+            .is_some()
+    {
+        return Ok(());
+    }
+    let missing_key = stream.batch_key(missing_seq);
+    let prefix_length = missing_key
+        .rfind('/')
+        .expect("a batch key ends with /<seq>")
+        + 1;
+    let listing = store
+        .list(&missing_key[..prefix_length], Some(&missing_key), 1)
+        .await?;
+    let Some(next) = listing.objects.first() else {
+        return Ok(());
+    };
+    let next_existing_seq = next.key[prefix_length..]
+        .parse::<u64>()
+        .map_err(|_| LogError::Corrupt(format!("log stream holds an object named {}", next.key)))?;
+    Err(LogError::MissingBatches {
+        missing_seq,
+        next_existing_seq,
+    })
 }
 
 pub(crate) fn validate_batch_identity(

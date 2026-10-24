@@ -24,6 +24,8 @@ use crate::{MetadataError, NodeConfig, bump_node_epoch};
 
 const RELEASED_LEASE_EXPIRY_UNIX_MICROS: i64 = i64::MIN;
 const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// Longest wait between reads of a lease another process holds.
+const HELD_LEASE_POLL_LIMIT: Duration = Duration::from_secs(1);
 
 /// Timing and contention policy for a node lease.
 #[derive(Debug, Clone)]
@@ -128,6 +130,8 @@ struct LeaseOwner {
 }
 
 /// Acquires a process-specific node lease, raises its epoch, and starts renewal.
+///
+/// Polls a held lease at most every second, so a released lease is taken at once.
 pub async fn acquire_lease(
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,
@@ -154,6 +158,7 @@ pub async fn acquire_lease(
     })?;
     let key = format!("lease/{}", node.node_id);
     let process_id = Uuid::new_v4().to_string();
+    let held_lease_poll_interval = HELD_LEASE_POLL_LIMIT.min(config.duration / 3);
     loop {
         let existing = store.get(&key).await?;
         let previous = existing
@@ -182,7 +187,8 @@ pub async fn acquire_lease(
                         expires_at_unix_micros: previous.expires_at_unix_micros,
                     });
                 }
-                tokio::time::sleep(Duration::from_micros((available_at - now) as u64)).await;
+                let until_available = Duration::from_micros((available_at - now) as u64);
+                tokio::time::sleep(until_available.min(held_lease_poll_interval)).await;
                 continue;
             }
         }

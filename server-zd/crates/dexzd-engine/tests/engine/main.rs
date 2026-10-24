@@ -14,3 +14,4 @@ mod node_identity;
 mod recovery;
 mod snapshot_fencing;
 mod snapshots;
+mod standby_takeover;

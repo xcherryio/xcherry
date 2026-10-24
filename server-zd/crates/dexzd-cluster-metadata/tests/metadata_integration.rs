@@ -656,6 +656,71 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn lease_waiter_takes_a_released_lease_within_the_poll_interval() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let holder = acquire_lease(
+        store.clone(),
+        clock.clone(),
+        &node(),
+        &LeaseConfig::default(),
+    )
+    .await
+    .unwrap();
+    let waiter_store = Arc::clone(&store);
+    let waiter_clock = Arc::clone(&clock);
+    let waiter = tokio::spawn(async move {
+        acquire_lease(waiter_store, waiter_clock, &node(), &LeaseConfig::default()).await
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+    holder.shutdown().await;
+    let released_at = Instant::now();
+    let successor = waiter.await.unwrap().unwrap();
+    // The lease would expire 8 seconds later; the waiter must not wait for that.
+    assert!(
+        released_at.elapsed() <= Duration::from_secs(1),
+        "took the released lease after {:?}",
+        released_at.elapsed()
+    );
+    assert_eq!(successor.epoch(), 2);
+    successor.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lease_waiter_polling_a_short_lease_still_waits_out_the_grace() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        duration: Duration::from_millis(900),
+        takeover_grace: Duration::from_millis(600),
+        fail_fast: false,
+    };
+    let crashed = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    drop(crashed);
+    let started_at = Instant::now();
+    let successor = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    // Polls every 300 ms; none of them may take the lease before expiry plus grace.
+    assert!(
+        started_at.elapsed() >= Duration::from_millis(1_500),
+        "took the expired lease after {:?}",
+        started_at.elapsed()
+    );
+    assert!(started_at.elapsed() < Duration::from_millis(1_800));
+    successor.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn lease_release_allows_immediate_reacquire() {
     let store = Arc::new(MemoryStore::default());
     let clock = Arc::new(TestClock::default());
