@@ -182,6 +182,7 @@ struct LeaseOwner {
 /// Acquires a process-specific node lease, raises its epoch, and starts renewal.
 ///
 /// Polls a held lease at most every second, so a released lease is taken at once.
+/// Each wait is randomized between half and all of that interval, so waiters spread their reads.
 pub async fn acquire_lease(
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,
@@ -248,7 +249,8 @@ pub async fn acquire_lease(
                     has_reported_wait = true;
                 }
                 let until_available = Duration::from_micros((available_at - now) as u64);
-                tokio::time::sleep(until_available.min(held_lease_poll_interval)).await;
+                let poll_delay = jittered_poll_delay(held_lease_poll_interval);
+                tokio::time::sleep(until_available.min(poll_delay)).await;
                 continue;
             }
         }
@@ -578,4 +580,9 @@ impl LeaseOwner {
             detail: detail.to_owned(),
         }
     }
+}
+
+/// Returns a random delay between half of `interval` and all of it.
+fn jittered_poll_delay(interval: Duration) -> Duration {
+    interval - rand::random_range(Duration::ZERO..=interval / 2)
 }

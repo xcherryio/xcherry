@@ -50,6 +50,7 @@ struct MemoryStore {
     block_next_manifest_write: AtomicBool,
     manifest_write_blocked: Notify,
     manifest_read_barrier: Mutex<Option<(Arc<Barrier>, usize)>>,
+    lease_read_instants: Mutex<Vec<Instant>>,
 }
 
 impl MemoryStore {
@@ -203,6 +204,12 @@ impl ObjectStore for MemoryStore {
     }
 
     async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
+        if key.starts_with("lease/") {
+            self.lease_read_instants
+                .lock()
+                .expect("test store mutex")
+                .push(Instant::now());
+        }
         let content =
             self.objects
                 .lock()
@@ -718,6 +725,50 @@ async fn lease_waiter_takes_a_released_lease_within_the_poll_interval() {
     );
     assert_eq!(successor.epoch(), 2);
     successor.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn lease_waiter_jitters_its_reads_within_the_poll_interval() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let holder = acquire_lease(
+        store.clone(),
+        clock.clone(),
+        &node(),
+        &LeaseConfig::default(),
+    )
+    .await
+    .unwrap();
+    store
+        .lease_read_instants
+        .lock()
+        .expect("test store mutex")
+        .clear();
+    let waiter_store = Arc::clone(&store);
+    let waiter_clock = Arc::clone(&clock);
+    let waiter = tokio::spawn(async move {
+        acquire_lease(waiter_store, waiter_clock, &node(), &LeaseConfig::default()).await
+    });
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(!waiter.is_finished());
+    let reads = store
+        .lease_read_instants
+        .lock()
+        .expect("test store mutex")
+        .clone();
+    let gaps: Vec<Duration> = reads.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert!(gaps.len() >= 7, "{gaps:?}");
+    assert!(
+        gaps.iter()
+            .all(|gap| *gap >= Duration::from_millis(500) && *gap <= Duration::from_secs(1)),
+        "{gaps:?}"
+    );
+    assert!(gaps.iter().any(|gap| *gap != gaps[0]), "{gaps:?}");
+    holder.shutdown().await.unwrap();
+    waiter.await.unwrap().unwrap().shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
