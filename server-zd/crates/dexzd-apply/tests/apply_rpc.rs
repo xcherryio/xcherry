@@ -28,8 +28,8 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, ChannelMessageRecord, CommandReply, FlowCommand,
-    FlowStartCommand, HistoryRecord, PermissionSetRecord, RpcCommittedCommand, RunRecord,
-    RunSettings, StepExecutionRecord, ValueBirthRecord, command_reply, flow_command::Command,
+    FlowStartCommand, HistoryRecord, RpcCommittedCommand, RunRecord, RunSettings,
+    StepExecutionRecord, ValueBirthRecord, command_reply, flow_command::Command,
 };
 use prost::Message;
 
@@ -300,18 +300,41 @@ fn plain_rpc_applies_writes_publications_permissions_and_history() {
         )
         .expect("publication exists");
     assert_eq!(message.message_id, "message-1");
-    let permissions: PermissionSetRecord = harness
+    let permissions: AttributeRecord = harness
         .state
         .row(
             ColumnFamily::Flow,
-            &run_singleton_key(
+            &run_named_key(
                 harness.context.flow_hash,
                 harness.run_id(),
-                RunTable::PermissionSet,
+                RunTable::Attribute,
+                "DexWorkQueuePermissions",
             ),
         )
         .expect("permissions exist");
-    assert_eq!(permissions.permissions, vec!["read-order"]);
+    let dexzd_protocol::dexzd::v1::stored_value::Kind::InlineValue(value) = permissions
+        .value
+        .expect("permissions have a value")
+        .kind
+        .expect("permissions have a stored kind")
+    else {
+        panic!("permissions are stored inline");
+    };
+    assert_eq!(
+        value.kind,
+        Some(value::Kind::ObjValue(dexzd_protocol::dex::EncodedObject {
+            encoding: "json".to_owned(),
+            payload: b"[\"read-order\"]".to_vec(),
+        }))
+    );
+    let search_document = dexzd_apply::read_model::get_search_document(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id(),
+    )
+    .expect("search document read succeeds")
+    .expect("search document exists");
+    assert_eq!(search_document.work_queue_permissions, ["read-order"]);
     assert_eq!(harness.run_record().sticky_app_worker_id, "");
     let history: HistoryRecord = harness
         .state

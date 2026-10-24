@@ -33,10 +33,14 @@ pub(crate) fn apply_step_decision(
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
     let decision = decision.cloned().unwrap_or_default();
     finish_step(transaction, cursor, step, StepExecutionPhase::Completed)?;
-    let mut cancel_types = decision.cancel_step_types.clone();
-    cancel_types.extend(decision.cancel_sibling_step_types.iter().cloned());
-    if !cancel_types.is_empty() {
-        cancel_steps_by_type(transaction, cursor, &cancel_types, &step.step_execution_id)?;
+    if !decision.cancel_step_types.is_empty() || !decision.cancel_sibling_step_types.is_empty() {
+        cancel_steps_by_type(
+            transaction,
+            cursor,
+            &decision.cancel_step_types,
+            &decision.cancel_sibling_step_types,
+            &step.from_step_execution_id,
+        )?;
     }
     let mut can_go_next = true;
     if let Some(close) = &decision.close_decision {
@@ -190,16 +194,20 @@ fn collect_output(
     Ok(Ok(()))
 }
 
-/// Cancels every active Step of these types except `except_step_execution_id`.
+/// Cancels every active Step of `global_step_types`, and of `sibling_step_types` under
+/// `parent_step_execution_id`.
 pub(crate) fn cancel_steps_by_type(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
-    step_types: &[String],
-    except_step_execution_id: &str,
+    global_step_types: &[String],
+    sibling_step_types: &[String],
+    parent_step_execution_id: &str,
 ) -> Result<(), ApplyError> {
     for (_, mut other) in cursor.rows.step_executions(transaction)? {
-        let is_target = step_types.contains(&other.step_type)
-            && other.step_execution_id != except_step_execution_id;
+        // Sibling types match only Steps of the same parent, as in the Go Server's selector.
+        let is_target = global_step_types.contains(&other.step_type)
+            || (sibling_step_types.contains(&other.step_type)
+                && other.from_step_execution_id == parent_step_execution_id);
         if is_target && is_active(&other) {
             finish_step(
                 transaction,

@@ -54,6 +54,10 @@ on `127.0.0.1:8080`, and stores large payload blobs under
 `/tmp/dex-rust-examples-blobs`. Override these with `DEX_SERVER_ADDRESS`,
 `DEX_WORKER_BIND_ADDRESS`, `DEX_EXAMPLES_HTTP_ADDRESS`, and `DEX_BLOB_CACHE_DIR`.
 
+Set `DEX_EXAMPLES_WORKER_MODE` to `push` (default) to listen on the Worker bind
+address. Set it to `pull` to connect to Dex as a pull Worker. Pull mode ignores
+the bind address and starts Flows with the pull Worker target.
+
 ## Products
 
 Every shared product example has a distinct Rust Flow and implementation file.
@@ -117,6 +121,18 @@ ensures the manifest uses the published crate rather than a local path.
 The integration script starts the current checkout's `dexcli dev`, then starts
 and verifies Money Transfer, Engagement, Microservice, Subscription,
 Deal DSL, and Failure Recovery Flows through the published Rust SDK.
+
+Set `DEX_EXAMPLES_WORKER_MODE=pull` to run the same tests with pull Workers.
+Set `DEX_INTEG_ENGINE=zd` to run them against server-zd. That mode defaults to
+pull Workers, does not start the entity store, and skips samples that use
+failure policies or Attribute Store sync. `make integTests` and
+`make flowSmokeTests` filter those tests out by exact name, so `cargo test`
+reports them as filtered out, and print each one with the reason
+`server-zd does not support <feature>`. Flow smoke entries that server-zd
+rejects run as their own tests so they can be filtered. `make test` runs
+`check-server-zd-exclusions.sh`, which verifies the filter. A direct
+`cargo test` does not apply these exclusions. Set
+`DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 The Go examples support `./run-e2e-tests.sh --keep-running` to leave Dex running
 after E2E tests for manual HTTP exploration.

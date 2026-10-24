@@ -37,6 +37,7 @@ import (
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/examples/go/products/deal-dsl"
 	"github.com/superdurable/dex/examples/go/server/httputil"
+	"github.com/superdurable/dex/examples/go/shared/workermode"
 	"github.com/superdurable/dex/sdk-go/dex"
 )
 
@@ -56,6 +57,7 @@ type integrationEnvironment struct {
 	apiServer     *httptest.Server
 	worker        *dex.Worker
 	workerAddress string
+	workerMode    workermode.WorkerMode
 	workerResult  chan error
 }
 
@@ -81,18 +83,17 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 		database.Close()
 		return nil, errors.Join(err, os.RemoveAll(cacheDir))
 	}
+	workerMode, err := workermode.ReadWorkerModeFromEnvironment()
+	if err != nil {
+		database.Close()
+		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
+	}
 	workerPort, err := availablePort()
 	if err != nil {
 		database.Close()
 		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
 	}
-	worker, err := dex.NewWorker(flowRegistry, cache, dex.WorkerOptions{
-		BindAddress:        net.JoinHostPort("127.0.0.1", workerPort),
-		FlowServiceAddress: flowServiceAddress(),
-		WorkerTarget: dex.WorkerTarget{
-			Address: net.JoinHostPort(workerHost(), workerPort),
-		},
-	})
+	worker, err := dex.NewWorker(flowRegistry, cache, integrationWorkerOptions(workerMode, workerPort))
 	if err != nil {
 		database.Close()
 		return nil, errors.Join(err, cache.Close(), os.RemoveAll(cacheDir))
@@ -123,6 +124,7 @@ func newIntegrationEnvironment() (*integrationEnvironment, error) {
 		apiServer:     apiServer,
 		worker:        worker,
 		workerAddress: net.JoinHostPort("127.0.0.1", workerPort),
+		workerMode:    workerMode,
 		workerResult:  workerResult,
 	}
 	if err := environment.waitUntilReady(); err != nil {
@@ -157,6 +159,12 @@ func newIntegrationDealDSLRepository() (*pgxpool.Pool, *dealdsl.PostgresReposito
 func (environment *integrationEnvironment) waitUntilReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	if environment.workerMode.IsPull() {
+		if err := environment.worker.WaitPullRegistered(ctx); err != nil {
+			return fmt.Errorf("wait for pull Worker registration: %w", err)
+		}
+		return nil
+	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -172,6 +180,22 @@ func (environment *integrationEnvironment) waitUntilReady() error {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for Worker readiness: %w", ctx.Err())
 		}
+	}
+}
+
+func integrationWorkerOptions(workerMode workermode.WorkerMode, workerPort string) dex.WorkerOptions {
+	if workerMode.IsPull() {
+		return dex.WorkerOptions{
+			FlowServiceAddress: flowServiceAddress(),
+			Pull:               workermode.NewExamplePullWorkerOptions(),
+		}
+	}
+	return dex.WorkerOptions{
+		BindAddress:        net.JoinHostPort("127.0.0.1", workerPort),
+		FlowServiceAddress: flowServiceAddress(),
+		WorkerTarget: dex.WorkerTarget{
+			Address: net.JoinHostPort(workerHost(), workerPort),
+		},
 	}
 }
 

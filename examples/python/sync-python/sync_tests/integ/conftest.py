@@ -25,6 +25,7 @@ from uuid import uuid4
 
 import pytest
 from dex import Client, DexServiceError
+from dex_examples.shared.worker_mode import read_worker_mode_from_environment
 
 from sync_examples.app import SyncExampleApp
 from sync_examples.config import SyncExamplesConfig
@@ -44,20 +45,33 @@ def sync_app(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SyncExampleAp
         worker_target=None,
         http_address="127.0.0.1:0",
         blob_cache_dir=tmp_path_factory.mktemp("dex-sync-examples-blob-cache"),
+        worker_mode=read_worker_mode_from_environment(),
     )
     app = SyncExampleApp(config)
-    app.start_worker()
-    if not _server_is_ready(app.client):
-        app.close()
-        pytest.skip(
-            "no Dex server at "
-            f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to run "
-            "sync-python integ tests"
-        )
     try:
+        if config.worker_mode.is_pull:
+            # Pull registration fails without a server, so probe first to keep the skip.
+            is_server_ready = _server_is_ready(app.client)
+            if is_server_ready:
+                app.start_worker()
+        else:
+            app.start_worker()
+            is_server_ready = _server_is_ready(app.client)
+        if not is_server_ready:
+            pytest.skip(
+                "no Dex server at "
+                f"{config.server_address}; set DEX_FLOW_SERVICE_ADDRESS to run "
+                "sync-python integ tests"
+            )
         yield app
     finally:
         app.close()
+
+
+def skip_when_server_zd(feature: str) -> None:
+    """Skips a test whose sample uses a feature that server-zd rejects."""
+    if os.environ.get("DEX_INTEG_ENGINE") == "zd":
+        pytest.skip(f"server-zd does not support {feature}")
 
 
 @pytest.fixture(scope="session")

@@ -966,7 +966,9 @@ dependencies = [
  "dexzd-protocol",
  "prost",
  "prost-types",
+ "serde_json",
  "thiserror",
+ "time",
  "uuid",
 ]
 

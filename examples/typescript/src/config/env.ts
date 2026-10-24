@@ -16,6 +16,8 @@
 
 import type { StartFlowOptions } from "@superdurable/dex";
 
+import { readWorkerModeFromEnvironment, type WorkerMode } from "./worker-mode.js";
+
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
 
@@ -34,6 +36,7 @@ export interface SampleEnv {
   readonly workerTarget: string | undefined;
   readonly httpAddress: string;
   readonly blobCacheDir: string;
+  readonly workerMode: WorkerMode;
 }
 
 export function loadEnv(): SampleEnv {
@@ -47,5 +50,6 @@ export function loadEnv(): SampleEnv {
       "DEX_BLOB_CACHE_DIR",
       `${process.env.TMPDIR ?? "/tmp"}/dex-typescript-examples-blobs`,
     ),
+    workerMode: readWorkerModeFromEnvironment(),
   };
 }

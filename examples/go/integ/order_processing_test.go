@@ -31,6 +31,7 @@ import (
 )
 
 func TestOrderProcessingHappyPath(t *testing.T) {
+	skipWhenServerZD(t, "failure policies")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "order-processing")
 	input := orderprocessing.OrderRequest{
@@ -70,6 +71,7 @@ func TestOrderProcessingHappyPath(t *testing.T) {
 }
 
 func TestOrderProcessingReminderThenShip(t *testing.T) {
+	skipWhenServerZD(t, "failure policies")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "order-processing-reminder")
 	input := orderprocessing.OrderRequest{
@@ -123,6 +125,7 @@ func TestOrderProcessingReminderThenShip(t *testing.T) {
 }
 
 func TestOrderProcessingShipFailureRefunds(t *testing.T) {
+	skipWhenServerZD(t, "failure policies")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "order-processing-refund")
 	input := orderprocessing.OrderRequest{
