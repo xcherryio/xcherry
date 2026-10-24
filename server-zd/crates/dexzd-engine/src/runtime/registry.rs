@@ -545,9 +545,10 @@ impl FlowRuntimeRegistry {
                     LockBlocker::Rpc => "another RPC",
                     LockBlocker::Step | LockBlocker::EarlierWaiter => "a running Step",
                 };
+                // The Go SDK maps ABORTED with WORKER_API_ERROR to RPCLockConflictError.
                 return Err(RuntimeError::rejected(
                     grpc_code::ABORTED,
-                    dexzd_protocol::dex::ErrorSubStatus::Uncategorized,
+                    dexzd_protocol::dex::ErrorSubStatus::WorkerApiError,
                     format!("RPC lock conflict: attribute key {lock_key} is locked by {holder}"),
                 ));
             }

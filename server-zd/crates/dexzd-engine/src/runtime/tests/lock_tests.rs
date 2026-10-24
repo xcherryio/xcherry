@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
-use dexzd_protocol::dex::{InvokeRpcRequest, InvokeWorkerRpcResponse};
+use dexzd_protocol::dex::{ErrorSubStatus, InvokeRpcRequest, InvokeWorkerRpcResponse};
 use dexzd_protocol::dexzd::v1::{LockRecord, LockWaiterRecord, StepInvocationKey, StepMethod};
 use prost::Message;
 use tokio::sync::Notify;
@@ -44,6 +44,11 @@ fn output_result(text: &str) -> WorkerRpcResult {
 
 fn assert_aborted(error: &RuntimeError) {
     assert_eq!(error.grpc_code(), grpc_code::ABORTED, "{error:?}");
+    assert_eq!(
+        error.sub_status(),
+        ErrorSubStatus::WorkerApiError,
+        "the Go SDK maps this pair to RPCLockConflictError"
+    );
 }
 
 fn seed_lock_record(harness: &RuntimeHarness, run_id: RunId, lock_key: &str, record: &LockRecord) {

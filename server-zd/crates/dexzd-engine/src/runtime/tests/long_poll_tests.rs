@@ -8,18 +8,19 @@
 
 use std::time::Duration;
 
+use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::history_record_key;
-use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
+use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference, run_key};
 use dexzd_protocol::dex::{
     AttributeMatch, AttributeMatchOperator, ErrorSubStatus, FlowClosedHistoryEvent,
-    FlowHistoryEvent, FlowStatus, StopFlowRequest, StopType, WaitForAttributeRequest,
+    FlowHistoryEvent, FlowStatus, StopFlowRequest, StopType, Value, WaitForAttributeRequest,
     WaitForFlowRequest, WaitForHistoryEventRequest, WaitForStepCompletionRequest,
-    flow_history_event,
+    flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, FlowCommand, FlowStopCommand, HistoryRecord, StepCounterRecord,
-    StepExecutionPhase, StepExecutionRecord, StoredValue, StoredValueReference, flow_command,
-    stored_value,
+    AttributeRecord, FlowCloseRecord, FlowCommand, FlowStopCommand, HistoryRecord, RunRecord,
+    StepCounterRecord, StepExecutionPhase, StepExecutionRecord, StoredStepCompletionOutput,
+    StoredValue, StoredValueId, StoredValueReference, flow_command, stored_value,
 };
 use prost::Message;
 
@@ -102,6 +103,76 @@ async fn wait_for_flow_wakes_only_on_the_committed_close() {
     let result = wait.await.unwrap();
     assert_eq!(result.flow_status, FlowStatus::Terminated as i32);
     assert_eq!(harness.registry.long_poll_waiter_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_flow_returns_large_step_outputs_as_value_references() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    let context = harness.registry.flow_context(&flow("order-1"));
+    let record_key = run_key(context.flow_hash, run_id, RunTable::RunRecord, &[]);
+    let stored_record = harness
+        .store
+        .view()
+        .get(ColumnFamily::Flow, &record_key)
+        .unwrap()
+        .unwrap();
+    let mut record = RunRecord::decode(stored_record.as_slice()).unwrap();
+    let value_id = ValueId {
+        run_seq: 3,
+        index_in_command: 0,
+    };
+    record.status = FlowStatus::Completed as i32;
+    record.close = Some(FlowCloseRecord {
+        results: vec![
+            StoredStepCompletionOutput {
+                completed_step_type: "SmallStep".to_owned(),
+                completed_step_execution_id: "SmallStep-1".to_owned(),
+                completed_step_output: Some(StoredValue {
+                    kind: Some(stored_value::Kind::InlineValue(string_value("done"))),
+                }),
+            },
+            StoredStepCompletionOutput {
+                completed_step_type: "LargeStep".to_owned(),
+                completed_step_execution_id: "LargeStep-1".to_owned(),
+                completed_step_output: Some(StoredValue {
+                    kind: Some(stored_value::Kind::TableValue(StoredValueReference {
+                        value_id: Some(StoredValueId {
+                            run_seq: value_id.run_seq,
+                            index_in_command: value_id.index_in_command,
+                        }),
+                        size_bytes: 5 * 1024 * 1024,
+                        is_string_value: true,
+                    })),
+                }),
+            },
+        ],
+        ..FlowCloseRecord::default()
+    });
+    harness
+        .store
+        .put(ColumnFamily::Flow, record_key, record.encode_to_vec());
+
+    let result = harness
+        .registry
+        .wait_for_flow(TENANT, wait_for_flow_request("order-1", 30))
+        .await
+        .unwrap();
+
+    assert_eq!(result.flow_status, FlowStatus::Completed as i32);
+    assert_eq!(
+        result.results[0].completed_step_output,
+        Some(string_value("done"))
+    );
+    assert_eq!(
+        result.results[1].completed_step_output,
+        Some(Value {
+            kind: Some(value::Kind::InternalBlobIdForStringValue(
+                ValueReference { run_id, value_id }.to_string()
+            )),
+        }),
+        "the client loads large outputs with LoadBlobs"
+    );
 }
 
 #[tokio::test(start_paused = true)]
