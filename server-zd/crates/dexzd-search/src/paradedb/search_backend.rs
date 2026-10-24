@@ -340,15 +340,30 @@ pub(super) fn classify_database_error(
     operation: &str,
     error: tokio_postgres::Error,
 ) -> SearchError {
-    let sqlstate = error
-        .as_db_error()
-        .map_or("none", |database_error| database_error.code().code());
-    let message = format!("{operation} (SQLSTATE {sqlstate}): {error}");
+    let message = format!("{operation}: {}", database_error_message(&error));
     if is_connection_error(&error) {
         SearchError::Unavailable(message)
     } else {
         SearchError::Internal(message)
     }
+}
+
+pub(super) fn database_error_message(error: &tokio_postgres::Error) -> String {
+    let Some(database_error) = error.as_db_error() else {
+        return format!("SQLSTATE none: {error}");
+    };
+    let mut message = format!(
+        "SQLSTATE {}: {}",
+        database_error.code().code(),
+        database_error.message()
+    );
+    if let Some(detail) = database_error.detail() {
+        message.push_str(&format!("; detail: {detail}"));
+    }
+    if let Some(constraint) = database_error.constraint() {
+        message.push_str(&format!("; constraint: {constraint}"));
+    }
+    message
 }
 
 fn schema_search_error(error: SchemaError) -> SearchError {

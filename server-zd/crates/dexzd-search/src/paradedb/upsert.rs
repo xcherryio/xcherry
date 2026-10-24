@@ -12,6 +12,9 @@ use dexzd_visibility_query::SearchValue;
 
 use super::{SearchRow, SqlStatement, SqlValue};
 
+// PostgreSQL permits 100 function arguments; each JSONB field supplies a key and value.
+const MAX_JSONB_OBJECT_FIELDS: usize = 50;
+
 /// Builds an idempotent upsert for a versioned search row.
 #[must_use]
 pub fn upsert_statement(row: &SearchRow) -> SqlStatement {
@@ -67,5 +70,9 @@ fn bucket_expression(
         let value_placeholder = format!("${}::{sql_type}", parameters.len());
         fields.push(format!("{key_placeholder}, to_jsonb({value_placeholder})"));
     }
-    format!("jsonb_build_object({})", fields.join(", "))
+    fields
+        .chunks(MAX_JSONB_OBJECT_FIELDS)
+        .map(|fields| format!("jsonb_build_object({})", fields.join(", ")))
+        .collect::<Vec<_>>()
+        .join(" || ")
 }
