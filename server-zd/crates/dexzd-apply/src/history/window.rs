@@ -63,8 +63,7 @@ pub(crate) fn advance_window_if_full(
 
 /// Moves W past up to the requested semantic points, keeping what rebuilds every later point.
 ///
-/// Returns false when this command's page has no later semantic point. The superseded value
-/// byte cap (task A5) also advances the window through this function.
+/// Returns false without a later semantic point; the superseded value byte cap also calls this.
 pub(crate) fn advance_window(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,

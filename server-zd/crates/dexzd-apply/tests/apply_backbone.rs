@@ -26,19 +26,20 @@ use dexzd_keyspace::{
 };
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowStartOptions,
-    FlowStatus, FlowTimeoutPolicy, IdReusePolicy, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, RetryPolicy, SetAttributesRequest, StartFlowRequest, StepDecision,
-    StepMovement, StepOptions, StopFlowRequest, StopType, Value, WorkerErrorResponse, WorkerTarget,
-    value,
+    FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, RetryPolicy,
+    SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
+    StopFlowRequest, StopType, Value, WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, CommandReply, FlowCommand, FlowStartCommand,
     FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
-    RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage, StepAttemptFailedCommand,
-    StepAttemptHeartbeatCommand, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
-    StepMethod, StepMethodCompletedCommand, StoredValue, TimerId, TimersFiredCommand,
-    ValueBirthRecord, ValueGarbageRecord, command_reply, flow_command::Command,
-    step_attempt_heartbeat_command, step_method_completed_command, stored_value, timer_id,
+    HistoryRecord, RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage,
+    StepAttemptFailedCommand, StepAttemptHeartbeatCommand, StepAttemptStartedCommand,
+    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
+    StepMethodCompletedCommand, StoredValue, TimerId, TimersFiredCommand, ValueBirthRecord,
+    ValueGarbageRecord, command_reply, flow_command::Command, step_attempt_heartbeat_command,
+    step_method_completed_command, stored_value, timer_id,
 };
 use prost::Message;
 
@@ -246,12 +247,29 @@ impl Harness {
         request: StartFlowRequest,
         run_settings: RunSettings,
     ) -> ApplyOutcome {
+        self.start_with_settings_and_timeout_policy(request, run_settings, FlowTimeoutPolicy::Fail)
+    }
+
+    fn start_with_timeout_policy(
+        &mut self,
+        request: StartFlowRequest,
+        resolved_timeout_policy: FlowTimeoutPolicy,
+    ) -> ApplyOutcome {
+        self.start_with_settings_and_timeout_policy(request, settings(), resolved_timeout_policy)
+    }
+
+    fn start_with_settings_and_timeout_policy(
+        &mut self,
+        request: StartFlowRequest,
+        run_settings: RunSettings,
+        resolved_timeout_policy: FlowTimeoutPolicy,
+    ) -> ApplyOutcome {
         let new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
         let outcome = self.apply(Command::FlowStart(FlowStartCommand {
             new_run_id: new_run_id.clone(),
             request: Some(request),
             settings: Some(run_settings),
-            resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
+            resolved_timeout_policy: resolved_timeout_policy as i32,
             worker_target: Some(WorkerTarget {
                 is_pull_mode: true,
                 ..WorkerTarget::default()
@@ -1119,6 +1137,38 @@ fn long_history_window_work_is_bounded_and_resumes_across_commands() {
             &format!("fill-{index}"),
         );
     }
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    let mut scanned_bookkeeping = false;
+    for _ in 0..300 {
+        let (outcome, history_reads, metadata_scan_rows) = harness.apply_with_history_counts(
+            Command::StepAttemptHeartbeat(StepAttemptHeartbeatCommand {
+                invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+                attempt: 1,
+                checkpoint: None,
+            }),
+        );
+        assert_eq!(history_reads, 0);
+        assert!(metadata_scan_rows <= 256);
+        assert!(
+            outcome
+                .writes
+                .iter()
+                .filter(|write| {
+                    matches!(
+                        write,
+                        StateWrite::Delete {
+                            column_family: ColumnFamily::History,
+                            ..
+                        }
+                    )
+                })
+                .count()
+                <= 128
+        );
+        let record = harness.run_record();
+        scanned_bookkeeping |= record.window_scan_seq > record.window_start_seq;
+    }
+    assert!(scanned_bookkeeping, "bookkeeping scan progress is saved");
     harness.complete_wait_for("ChargeStep-1", 1);
     let loss_seq = harness.run_record().next_run_seq - 1;
     assert!(
@@ -1864,4 +1914,244 @@ fn exhausted_retries_release_the_heartbeat_checkpoint() {
     assert_eq!(harness.run_record().status, FlowStatus::Failed as i32);
     assert_eq!(harness.holder_count(value_id), 0);
     assert_eq!(harness.garbage_seqs(value_id).len(), 1);
+}
+
+fn history_events(outcome: &ApplyOutcome) -> Vec<flow_history_event::Payload> {
+    outcome
+        .writes
+        .iter()
+        .filter_map(|write| match write {
+            StateWrite::Put {
+                column_family: ColumnFamily::History,
+                value,
+                ..
+            } => HistoryRecord::decode(value.as_slice()).ok(),
+            _ => None,
+        })
+        .flat_map(|record| record.events)
+        .filter_map(|event| event.payload)
+        .collect()
+}
+
+#[test]
+fn a_result_without_a_matching_response_fails_the_step_without_retry() {
+    let wrong_method =
+        step_method_completed_command::Response::Execute(InvokeExecuteMethodResponse::default());
+    for response in [None, Some(wrong_method)] {
+        let mut harness = Harness::new("order-1");
+        harness.start(start_request("request-1"));
+        harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+
+        let outcome = harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+            invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+            attempt: 1,
+            response,
+            app_worker_id: "worker-a".to_owned(),
+            ..StepMethodCompletedCommand::default()
+        }));
+
+        assert!(!is_error(&outcome.reply, 9), "{:?}", outcome.reply);
+        let record = harness.run_record();
+        assert_eq!(record.status, FlowStatus::Failed as i32);
+        assert!(
+            record
+                .close
+                .expect("the run is closed")
+                .error_message
+                .contains("does not match its running method")
+        );
+        let step = harness.step_execution("ChargeStep-1");
+        assert_eq!(step.phase, StepExecutionPhase::Failed as i32);
+        assert!(step.invocation.is_none());
+        assert!(
+            harness
+                .complete_wait_for("ChargeStep-1", 1)
+                .writes
+                .is_empty(),
+            "a repeated result is stale"
+        );
+    }
+}
+
+#[test]
+fn the_timeout_handler_waits_for_its_declared_locks() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.flow_timeout_seconds = 30;
+    request.step_options = Some(locking_options("counter"));
+    request.flow_start_options = Some(FlowStartOptions {
+        timeout_handler_options: Some(FlowTimeoutHandlerOptions {
+            lock_attribute_keys: vec!["counter".to_owned()],
+            ..FlowTimeoutHandlerOptions::default()
+        }),
+        ..FlowStartOptions::default()
+    });
+    harness.start_with_timeout_policy(request, FlowTimeoutPolicy::Handler);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+
+    let fired = harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::FlowTimeout(FlowTimeoutTimerId {})),
+        }],
+    }));
+    assert_eq!(
+        pending_invocations(&fired),
+        vec![(
+            "sys:timeout_handler-1".to_owned(),
+            StepMethod::Execute as i32,
+            1
+        )]
+    );
+    assert!(
+        is_aborted(&harness.start_attempt("sys:timeout_handler-1", StepMethod::Execute, 1)),
+        "ChargeStep-1 holds counter"
+    );
+
+    harness.complete_execute("ChargeStep-1", 1, StepDecision::default());
+    let handler = harness.start_attempt("sys:timeout_handler-1", StepMethod::Execute, 1);
+    assert!(
+        !matches!(handler.reply.reply, Some(command_reply::Reply::Error(_))),
+        "{:?}",
+        handler.reply
+    );
+}
+
+#[test]
+fn an_exhausted_step_releases_its_values_and_its_failure_event_keeps_the_snapshot() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.step_input = Some(string_value(&"i".repeat(500)));
+    request.flow_start_options = Some(FlowStartOptions {
+        attributes: vec![AttributeWrite {
+            key: "limit".to_owned(),
+            value: Some(string_value("ten")),
+            ..AttributeWrite::default()
+        }],
+        ..FlowStartOptions::default()
+    });
+    request.step_options = Some(StepOptions {
+        execute_retry_policy: Some(RetryPolicy {
+            maximum_attempts: 1,
+            ..RetryPolicy::default()
+        }),
+        ..StepOptions::default()
+    });
+    harness.start(request);
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_step_exe_locals: vec![Kv {
+                    key: "draft".to_owned(),
+                    value: Some(string_value(&"d".repeat(500))),
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        app_worker_id: "worker-a".to_owned(),
+        ..StepMethodCompletedCommand::default()
+    }));
+    let step = harness.step_execution("ChargeStep-1");
+    let input_value_id = table_value_id(step.input.as_ref());
+    let local_value_id = table_value_id(step.locals[0].value.as_ref());
+    // The start Step's input is also held for the whole run (plan D12).
+    assert_eq!(harness.holder_count(input_value_id), 2);
+    assert_eq!(harness.holder_count(local_value_id), 1);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+
+    let failed = harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::Execute)),
+        attempt: 1,
+        kind: 1,
+        worker_error: Some(WorkerErrorResponse {
+            detail: "boom".to_owned(),
+            ..WorkerErrorResponse::default()
+        }),
+        ..StepAttemptFailedCommand::default()
+    }));
+
+    let failure_inputs: Vec<_> = history_events(&failed)
+        .into_iter()
+        .filter_map(|payload| match payload {
+            flow_history_event::Payload::StepExecuteFailed(event) => event.input,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failure_inputs.len(), 1);
+    assert_eq!(
+        failure_inputs[0].attributes,
+        vec![Kv {
+            key: "limit".to_owned(),
+            value: Some(string_value("ten")),
+        }]
+    );
+    let step = harness.step_execution("ChargeStep-1");
+    assert_eq!(step.phase, StepExecutionPhase::Failed as i32);
+    assert!(step.input.is_none() && step.locals.is_empty());
+    assert_eq!(harness.holder_count(input_value_id), 1);
+    assert_eq!(harness.holder_count(local_value_id), 0);
+    assert_eq!(harness.run_record().status, FlowStatus::Failed as i32);
+}
+
+#[test]
+fn id_reuse_records_the_previous_runs_termination_as_a_replayable_stop() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    let previous_run_id = harness.harness_run_id();
+    let state_before_reuse = harness.state.rows.clone();
+    let mut request = start_request("request-2");
+    request.flow_start_options = Some(FlowStartOptions {
+        id_reuse_policy: IdReusePolicy::AllowTerminateIfRunning as i32,
+        ..FlowStartOptions::default()
+    });
+
+    harness.start(request);
+
+    let previous_run_prefix = run_prefix(harness.context.flow_hash, previous_run_id);
+    let previous_run_rows = |rows: &BTreeMap<(ColumnFamily, Vec<u8>), Vec<u8>>| {
+        rows.iter()
+            .filter(|((_, key), _)| key.starts_with(&previous_run_prefix))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>()
+    };
+    let history_prefix = run_singleton_key(
+        harness.context.flow_hash,
+        previous_run_id,
+        RunTable::HistoryRecord,
+    );
+    let last_history_record = harness
+        .state
+        .rows
+        .iter()
+        .rfind(|((column_family, key), _)| {
+            *column_family == ColumnFamily::History && key.starts_with(&history_prefix)
+        })
+        .map(|(_, value)| HistoryRecord::decode(value.as_slice()).expect("the record decodes"))
+        .expect("the previous run has history");
+    let recorded = last_history_record
+        .command
+        .expect("the record keeps its command");
+    assert_eq!(recorded.run_id, previous_run_id.as_bytes().to_vec());
+    let Some(Command::FlowStop(stop)) = &recorded.command else {
+        panic!("expected a recorded stop, got {:?}", recorded.command);
+    };
+    assert_eq!(
+        stop.request.as_ref().map(|request| request.stop_type),
+        Some(StopType::Terminate as i32)
+    );
+
+    let mut replayed = MemoryState {
+        rows: state_before_reuse,
+    };
+    let outcome =
+        apply_flow_command(&harness.context, &replayed, &recorded).expect("apply succeeds");
+    replayed.commit(&outcome);
+    assert_eq!(
+        previous_run_rows(&replayed.rows),
+        previous_run_rows(&harness.state.rows),
+        "replaying the recorded stop rebuilds the previous run exactly"
+    );
 }
