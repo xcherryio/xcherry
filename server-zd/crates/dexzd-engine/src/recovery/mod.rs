@@ -96,6 +96,19 @@ pub enum EngineStartError {
         /// First batch seq the local state needs.
         resumes_at: u64,
     },
+    /// The local store needs batches of a log stream that log cleanup already deleted.
+    #[error(
+        "the log stream of incarnation {incarnation} was deleted; local state resumes at seq \
+         {resumes_at} of it, and the oldest retained incarnation is {oldest_retained_incarnation}"
+    )]
+    LogStreamDeleted {
+        /// Incarnation of the deleted log stream.
+        incarnation: u32,
+        /// First batch seq of that stream the local state needs.
+        resumes_at: u64,
+        /// Oldest incarnation of this node that the manifest still records.
+        oldest_retained_incarnation: u32,
+    },
     /// A partition runtime could not be rebuilt.
     #[error(transparent)]
     RuntimeRebuild(#[from] RuntimeRebuildError),

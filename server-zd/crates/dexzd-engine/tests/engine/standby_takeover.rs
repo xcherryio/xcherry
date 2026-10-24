@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use dexzd_engine::{
 };
 use dexzd_log::{DecodedBatch, decode_batch};
 use dexzd_object_store::{ObjectStore, ObjectStoreOperation};
-use dexzd_storage::RocksDbStoreOptions;
+use dexzd_storage::{RocksDbLocalStore, RocksDbStoreOptions};
 
 use crate::harness::{CountingApplier, RecordingRuntime, TestCluster, TestNode};
 
@@ -155,6 +156,107 @@ async fn take_over_after_log_cleanup(
     standby.node.shutdown().await.expect("lease released");
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_standby_store_inside_a_reclaimed_incarnation_keeps_every_acknowledged_write() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut cluster = TestCluster::new();
+    let standby_store = rocksdb_store(&directory.path().join("standby"));
+    let config = cluster.config(standby_store.clone());
+    let earlier = cluster.start_with(&config).await.expect("node starts");
+    earlier.commit_prompt(TAKEOVER_FLOW, 3).await;
+    earlier.node.shutdown().await.expect("lease released");
+    take_over_after_reclaiming_incarnation(&mut cluster, directory.path(), standby_store, 3).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_standby_store_without_applied_batches_keeps_every_acknowledged_write() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut cluster = TestCluster::new();
+    let standby_directory = directory.path().join("standby");
+    drop(
+        RocksDbLocalStore::open(&standby_directory, RocksDbStoreOptions::default())
+            .expect("empty store opens"),
+    );
+    take_over_after_reclaiming_incarnation(
+        &mut cluster,
+        directory.path(),
+        rocksdb_store(&standby_directory),
+        0,
+    )
+    .await;
+}
+
+/// The standby's store predates incarnation 1's last writes, which a snapshot of incarnation 2
+/// reclaims while the standby waits.
+async fn take_over_after_reclaiming_incarnation(
+    cluster: &mut TestCluster,
+    directory: &Path,
+    standby_store: LocalStoreConfig,
+    standby_store_count: u64,
+) {
+    let serving_store = rocksdb_store(&directory.join("serving"));
+    let config = cluster.config(serving_store.clone());
+    let first_incarnation = cluster.start_with(&config).await.expect("node starts");
+    first_incarnation.commit_prompt(TAKEOVER_FLOW, 2).await;
+    first_incarnation
+        .node
+        .shutdown()
+        .await
+        .expect("lease released");
+
+    let mut serving_config = cluster.config(serving_store);
+    serving_config.node.incarnation = 2;
+    serving_config.snapshots.deletion_delay = Duration::ZERO;
+    let serving = cluster
+        .start_with(&serving_config)
+        .await
+        .expect("serving node starts incarnation 2");
+    let mut standby_config = cluster.config(standby_store);
+    standby_config.node.incarnation = 2;
+    let lease_reads_before_standby = count_lease_reads(cluster);
+    let standby = tokio::spawn(start_node(cluster, standby_config));
+    while count_lease_reads(cluster) < lease_reads_before_standby + 2 {
+        assert!(!standby.is_finished(), "the standby waits for the lease");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    serving
+        .node
+        .take_snapshot()
+        .await
+        .expect("snapshot succeeds");
+    assert!(
+        log_batches(cluster)
+            .await
+            .iter()
+            .all(|batch| batch.header.incarnation == 2),
+        "the snapshot reclaimed incarnation 1"
+    );
+    let segments: Vec<(u32, u64)> = cluster
+        .cluster_manifest()
+        .await
+        .partitions
+        .iter()
+        .flat_map(|partition| &partition.segments)
+        .map(|segment| (segment.incarnation, segment.start_seq))
+        .collect();
+    assert!(
+        segments.iter().all(|segment| *segment == (2, 1)),
+        "{segments:?}"
+    );
+    serving.commit_prompt(TAKEOVER_FLOW, 1).await;
+    let acknowledged = standby_store_count + 3;
+    assert_eq!(serving.committed_count(TAKEOVER_FLOW).await, acknowledged);
+    serving.node.shutdown().await.expect("lease released");
+
+    let standby = standby
+        .await
+        .expect("standby task completes")
+        .expect("standby takes over");
+    assert_eq!(standby.committed_count(TAKEOVER_FLOW).await, acknowledged);
+    standby.node.shutdown().await.expect("lease released");
+}
+
 /// Returns a node start that owns its inputs, so a task can run it while the test acts.
 pub(crate) fn start_node(
     cluster: &TestCluster,
@@ -187,6 +289,19 @@ pub(crate) fn start_node(
             hasher,
         })
     }
+}
+
+fn rocksdb_store(directory: &Path) -> LocalStoreConfig {
+    LocalStoreConfig::RocksDb {
+        directory: directory.to_owned(),
+        options: RocksDbStoreOptions::default(),
+    }
+}
+
+fn count_lease_reads(cluster: &TestCluster) -> usize {
+    cluster
+        .faults
+        .count_operations(ObjectStoreOperation::Get, |key| key == LEASE_KEY)
 }
 
 async fn recorded_epoch(cluster: &TestCluster) -> u64 {
