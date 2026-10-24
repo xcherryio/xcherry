@@ -122,7 +122,12 @@ pub(crate) fn apply_rpc_committed(
             Ok(channels) => channels,
             Err(rejection) => return Ok(reject_value(rejection)),
         };
-    wait_conditions::on_channels_changed(transaction, &mut cursor, &changed_channels)?;
+    wait_conditions::on_channels_changed(
+        transaction,
+        &mut cursor,
+        scope.now_micros,
+        &changed_channels,
+    )?;
     if let Some(mappings) = response.action_permission_mappings.as_ref() {
         apply_permission_mappings(
             transaction,

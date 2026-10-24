@@ -22,7 +22,7 @@ pub(crate) use invocations::{
 pub(crate) use retry_backoff::{RetryDecision, decide_retry};
 pub(crate) use step_creation::{NewStepExecution, create_step_execution};
 pub(crate) use step_decisions::{
-    apply_step_decision, cancel_steps_by_type, finish_step, is_active,
+    apply_step_decision, cancel_steps_by_type, complete_gracefully_if_ready, finish_step, is_active,
 };
 pub(crate) use step_results::{
     StepCommandOutcome, apply_attempt_failed, apply_attempt_heartbeat, apply_attempt_started,
