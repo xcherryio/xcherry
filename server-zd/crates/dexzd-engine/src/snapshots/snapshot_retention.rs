@@ -13,6 +13,7 @@ use std::time::Duration;
 use dexzd_object_store::{ObjectMetadata, ObjectStore};
 use dexzd_protocol::dexzd::v1::SnapshotManifest;
 use prost::Message;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::snapshots::SnapshotError;
@@ -20,6 +21,7 @@ use crate::snapshots::ownership_fence::OwnershipFence;
 
 const LISTING_PAGE_SIZE: u32 = 1000;
 const LISTING_PAGES_PER_RUN: usize = 10;
+const CANDIDATES_PER_RUN: usize = 64;
 
 /// Keeps the newest snapshots of this node across every lineage and deletes the rest.
 pub(crate) struct SnapshotRetention {
@@ -34,6 +36,7 @@ pub(crate) struct SnapshotRetention {
 /// Manifests never change, so each one is read at most once per process.
 #[derive(Default)]
 pub(crate) struct SnapshotCatalog {
+    pub(crate) operation_lock: Arc<Mutex<()>>,
     manifests: BTreeMap<String, SnapshotManifest>,
     listing_start_after: Option<String>,
     listed_manifest_keys: BTreeSet<String>,
@@ -41,6 +44,7 @@ pub(crate) struct SnapshotCatalog {
     inserted_manifest_keys: BTreeSet<String>,
     orphan_first_seen: BTreeMap<String, OrphanMark>,
     completed_scan_number: u64,
+    candidate_cursor: Option<String>,
 }
 
 struct OrphanMark {
@@ -73,7 +77,11 @@ impl SnapshotRetention {
         if !self.refresh(catalog).await? {
             return Ok(Self::kept(catalog));
         }
-        let obsolete_manifests = self.find_obsolete(catalog, referenced_keys, now_unix_micros);
+        let obsolete_manifests: Vec<String> = self
+            .find_obsolete(catalog, referenced_keys, now_unix_micros)
+            .into_iter()
+            .take(CANDIDATES_PER_RUN)
+            .collect();
         let orphan_files = self.find_orphan_files(catalog, now_unix_micros).await?;
         catalog.listed_files.clear();
         if !obsolete_manifests.is_empty() {
@@ -125,6 +133,8 @@ impl SnapshotRetention {
         });
         let delay_micros = i64::try_from(self.deletion_delay.as_micros()).unwrap_or(i64::MAX);
         let mut orphan_files = Vec::new();
+        let mut checked_candidates = 0;
+        let mut last_candidate = None;
         for (key, listed_file) in &catalog.listed_files {
             if referenced_files.contains(key.as_str()) {
                 continue;
@@ -155,6 +165,18 @@ impl SnapshotRetention {
             if now_unix_micros.saturating_sub(written_at) < delay_micros {
                 continue;
             }
+            if catalog
+                .candidate_cursor
+                .as_ref()
+                .is_some_and(|cursor| key <= cursor)
+            {
+                continue;
+            }
+            if checked_candidates == CANDIDATES_PER_RUN {
+                break;
+            }
+            checked_candidates += 1;
+            last_candidate = Some(key.clone());
             let Some(current_file) = self.object_store.head(key).await? else {
                 continue;
             };
@@ -167,6 +189,7 @@ impl SnapshotRetention {
                 orphan_files.push(key.clone());
             }
         }
+        catalog.candidate_cursor = last_candidate;
         Ok(orphan_files)
     }
 
@@ -307,7 +330,70 @@ mod tests {
     use crate::snapshots::SnapshotError;
     use crate::snapshots::ownership_fence::OwnershipFence;
 
-    use super::{SnapshotCatalog, SnapshotRetention};
+    use super::{CANDIDATES_PER_RUN, SnapshotCatalog, SnapshotRetention};
+
+    #[tokio::test]
+    async fn orphan_sweep_limits_head_and_delete_work_per_pass() {
+        let object_store = Arc::new(InMemoryObjectStore::new());
+        for index in 0..(CANDIDATES_PER_RUN + 1) {
+            let key = format!("snapshot/node-a/lineage/files/orphan-{index:03}");
+            object_store
+                .put(&key, Bytes::new(), WriteCondition::CreateOnly)
+                .await
+                .expect("upload orphan");
+        }
+        let state = Arc::new(CommitState::new(1));
+        assert!(state.start_serving());
+        let fence = OwnershipFence {
+            object_store: object_store.clone(),
+            clock: Arc::new(SystemWallClock),
+            state,
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+        };
+        let retention = SnapshotRetention {
+            object_store: object_store.clone(),
+            node_id: "node-a".to_owned(),
+            retained_count: 3,
+            deletion_delay: Duration::ZERO,
+        };
+        let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("mark orphans");
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("first bounded sweep");
+        assert_eq!(
+            object_store.call_count(ObjectStoreOperation::Head, "snapshot/node-a/"),
+            CANDIDATES_PER_RUN as u64
+        );
+        assert_eq!(object_store.call_count(ObjectStoreOperation::Delete, ""), 1);
+        assert!(
+            object_store
+                .get("snapshot/node-a/lineage/files/orphan-064")
+                .await
+                .expect("read remaining orphan")
+                .is_some()
+        );
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("resume sweep");
+        assert_eq!(
+            object_store.call_count(ObjectStoreOperation::Head, "snapshot/node-a/"),
+            (CANDIDATES_PER_RUN + 1) as u64
+        );
+        assert!(
+            object_store
+                .get("snapshot/node-a/lineage/files/orphan-064")
+                .await
+                .expect("read final orphan")
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn orphan_requires_a_later_manifest_scan_before_deletion() {
