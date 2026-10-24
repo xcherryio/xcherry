@@ -528,7 +528,7 @@ fn assert_replay_voided_a_batch(process: &RobustnessProcess) {
 pub(crate) fn replay_field(log: &str, field: &str) -> u64 {
     let line = log
         .lines()
-        .find(|line| line.contains("replaying the log stream"))
+        .find(|line| line.contains("replayed the log stream"))
         .unwrap_or_else(|| panic!("the process logged no log replay:\n{log}"));
     let prefix = format!("{field}=");
     line.split_whitespace()
