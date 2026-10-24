@@ -298,6 +298,14 @@ impl EffectRuntime for ApplyRuntime {
         Box::pin(async move { self.commit(flow, command, urgency) })
     }
 
+    fn sync_barrier<'a>(
+        &'a self,
+        _flow: &'a FlowAddress,
+    ) -> BoxFuture<'a, Result<(), EffectRuntimeError>> {
+        // Proposals commit before they return.
+        Box::pin(async { Ok(()) })
+    }
+
     fn try_start_invocation<'a>(
         &'a self,
         flow: &'a FlowAddress,
