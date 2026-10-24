@@ -162,6 +162,12 @@ impl S3Emulator {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     }
 
+    /// Removes every fault rule and releases requests that a delay rule still holds.
+    pub(crate) async fn clear_fault_rules(&self) {
+        let response = self.admin_request("DELETE", "/_s3mock/faults", "").await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
     /// Returns the emulator's JSON log of recent requests.
     pub(crate) async fn request_log(&self) -> String {
         self.admin_request("GET", "/_s3mock/requests", "").await
@@ -217,6 +223,16 @@ impl ServeConfig<'_> {
     /// Writes the YAML file that `serve --config` reads.
     pub(crate) fn write(&self, path: &Path) {
         self.write_with_snapshot_schedule(path, "1h", "24h");
+    }
+
+    /// Writes the YAML file with `retention.closedFlowDuration` set to `closed_flow_duration`.
+    pub(crate) fn write_with_closed_flow_retention(&self, path: &Path, closed_flow_duration: &str) {
+        self.write(path);
+        let mut contents = fs::read_to_string(path).expect("the serve configuration is readable");
+        contents.push_str(&format!(
+            "retention:\n  closedFlowDuration: {closed_flow_duration}\n"
+        ));
+        fs::write(path, contents).expect("the serve configuration is written");
     }
 
     /// Writes the YAML file with the given `snapshot.interval` and `snapshot.logDeletionDelay`.
