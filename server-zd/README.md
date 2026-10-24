@@ -62,14 +62,17 @@ to a separate destination with the same keys; without it they use the primary bu
 
 Startup proceeds in this order:
 
-1. Every destination must pass a conditional-write self-check.
-2. The node acquires the lease of `cluster.nodeId` for `lease.duration`. A lease that another
+1. The node binds `api.listen`. gRPC health Check and Watch report NOT_SERVING for `""`,
+   `dex.FlowService`, and `dex.WorkerTaskService`; FlowService and WorkerTaskService calls return
+   Unavailable while startup continues.
+2. Every destination must pass a conditional-write self-check.
+3. The node acquires the lease of `cluster.nodeId` for `lease.duration`. A lease that another
    process still holds is awaited until it expires, or fails startup when `lease.failIfHeld` is
    true.
-3. The node restores `localStorage.directory` from the latest snapshot and the command log. The
+4. The node restores `localStorage.directory` from the latest snapshot and the command log. The
    directory is a cache; an empty one is rebuilt from object storage.
-4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
-   `api.listen`.
+5. After recovery and rebuild finish, health switches to SERVING and the API serves requests.
+   Startup failure closes the listener.
 
 `search.backend: builtin` serves SearchFlows from committed local search documents.
 

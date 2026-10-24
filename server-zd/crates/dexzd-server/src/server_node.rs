@@ -10,8 +10,10 @@ mod bounded_teardown;
 mod client_deadline;
 mod search_projection;
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use dexzd_api::{
@@ -25,14 +27,19 @@ use dexzd_engine::{
     EngineServices, FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects,
     NodeMetaUploadLedger, NodeStopReason,
 };
+use dexzd_protocol::dex::flow_service_server::FlowServiceServer;
 use dexzd_protocol::dex::worker_task_service_server::WorkerTaskServiceServer;
 use dexzd_search::builtin::{BuiltinSearchBackend, CommittedSearchViewProvider};
 use dexzd_search::{SearchBackend, SearchError};
 use dexzd_stream_store::StreamStore;
-use dexzd_worker_dispatch::WorkerDispatch;
+use dexzd_worker_dispatch::{WorkerDispatch, WorkerTaskService};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tonic::Status;
+use tonic::body::Body;
+use tonic::codegen::{BoxFuture, Service, http};
+use tonic::server::NamedService;
 
 use crate::ServerError;
 use crate::component_configs::ComponentConfigs;
@@ -127,10 +134,12 @@ pub(crate) async fn start_server(
             address: config.api.listen,
             source,
         })?;
+    let grpc = GrpcServer::start(listener, components.grpc_max_message_bytes).await;
     let started = ServerNode::start(config, &components).await;
     let node = match started {
         Ok(node) => node,
         Err(error) => {
+            grpc.abort().await;
             if let Some(embedded_s3) = embedded_s3 {
                 embedded_s3.shutdown().await;
             }
@@ -138,18 +147,127 @@ pub(crate) async fn start_server(
         }
     };
     let shutdown_request = CancellationToken::new();
-    let serving = tokio::spawn(node.serve(
-        listener,
-        components.grpc_max_message_bytes,
-        shutdown_request.clone(),
-        embedded_s3,
-    ));
+    let serving = tokio::spawn(node.serve(grpc, shutdown_request.clone(), embedded_s3));
     tracing::info!(address = %local_address, "dex-server-zd serving");
     Ok(RunningServer {
         local_address,
         shutdown_request,
         serving,
     })
+}
+
+struct GrpcServer {
+    health: HealthStatus,
+    flow_service_gate: StartupService<FlowServiceServer<DexFlowService>>,
+    worker_task_service_gate: StartupService<WorkerTaskServiceServer<WorkerTaskService>>,
+    max_message_bytes: usize,
+    stop: CancellationToken,
+    task: JoinHandle<Result<(), tonic::transport::Error>>,
+}
+
+impl GrpcServer {
+    async fn start(listener: TcpListener, max_message_bytes: usize) -> Self {
+        let (health, health_server) = HealthStatus::new().await;
+        let flow_service_gate = StartupService::<FlowServiceServer<DexFlowService>>::new();
+        let worker_task_service_gate =
+            StartupService::<WorkerTaskServiceServer<WorkerTaskService>>::new();
+        let stop = CancellationToken::new();
+        let stopped = stop.clone();
+        let task = tokio::spawn(
+            tonic::transport::Server::builder()
+                .http2_keepalive_interval(Some(KEEPALIVE_INTERVAL))
+                .http2_keepalive_timeout(Some(KEEPALIVE_TIMEOUT))
+                .layer(tower_layer::layer_fn(
+                    client_deadline::client_deadline_layer,
+                ))
+                .add_service(health_server)
+                .add_service(flow_service_gate.clone())
+                .add_service(worker_task_service_gate.clone())
+                .serve_with_incoming_shutdown(
+                    futures::stream::unfold(listener, |listener| async move {
+                        let accepted = listener.accept().await.map(|(stream, _)| stream);
+                        Some((accepted, listener))
+                    }),
+                    async move { stopped.cancelled().await },
+                ),
+        );
+        Self {
+            health,
+            flow_service_gate,
+            worker_task_service_gate,
+            max_message_bytes,
+            stop,
+            task,
+        }
+    }
+
+    async fn abort(self) {
+        self.task.abort();
+        match self.task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "startup gRPC server failed"),
+            Err(join_error) if join_error.is_cancelled() => {}
+            Err(join_error) => {
+                tracing::warn!(%join_error, "startup gRPC server task failed");
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct StartupService<S> {
+    serving: Arc<RwLock<Option<S>>>,
+}
+
+impl<S> StartupService<S> {
+    fn new() -> Self {
+        Self {
+            serving: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    fn activate(&self, service: S) {
+        *self
+            .serving
+            .write()
+            .expect("startup service lock is poisoned only if a holder panicked") = Some(service);
+    }
+}
+
+impl<S: NamedService> NamedService for StartupService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+impl<S> Service<http::Request<Body>> for StartupService<S>
+where
+    S: Service<http::Request<Body>, Response = http::Response<Body>, Error = Infallible>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = http::Response<Body>;
+    type Error = Infallible;
+    type Future = BoxFuture<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self, _context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        let serving = self
+            .serving
+            .read()
+            .expect("startup service lock is poisoned only if a holder panicked")
+            .clone();
+        Box::pin(async move {
+            match serving {
+                Some(mut service) => service.call(request).await,
+                None => Ok(Status::unavailable("the node is starting").into_http()),
+            }
+        })
+    }
 }
 
 /// Every component of one node, in start order.
@@ -320,11 +438,18 @@ impl ServerNode {
     /// Serves until shutdown is requested or the node stops, then tears everything down.
     async fn serve(
         self,
-        listener: TcpListener,
-        grpc_max_message_bytes: usize,
+        grpc: GrpcServer,
         shutdown_request: CancellationToken,
         embedded_s3: Option<EmbeddedS3>,
     ) -> Result<(), ServerError> {
+        let GrpcServer {
+            health,
+            flow_service_gate,
+            worker_task_service_gate,
+            max_message_bytes: grpc_max_message_bytes,
+            stop: grpc_stop,
+            task: mut grpc_server,
+        } = grpc;
         let Self {
             engine,
             registry,
@@ -334,28 +459,12 @@ impl ServerNode {
             flow_service,
             search_projection,
         } = self;
-        let (health, health_server) = HealthStatus::new().await;
         let worker_task_service =
             WorkerTaskServiceServer::new(dispatch.service_for_tenant(DEFAULT_TENANT_ID))
                 .max_decoding_message_size(grpc_max_message_bytes)
                 .max_encoding_message_size(grpc_max_message_bytes);
-        let grpc_stop = CancellationToken::new();
-        let grpc_stopped = grpc_stop.clone();
-        let mut grpc_server = tokio::spawn(
-            tonic::transport::Server::builder()
-                .http2_keepalive_interval(Some(KEEPALIVE_INTERVAL))
-                .http2_keepalive_timeout(Some(KEEPALIVE_TIMEOUT))
-                .layer(tower_layer::layer_fn(
-                    client_deadline::client_deadline_layer,
-                ))
-                .add_service(health_server)
-                .add_service(flow_service.into_server(grpc_max_message_bytes))
-                .add_service(worker_task_service)
-                .serve_with_incoming_shutdown(
-                    tokio_stream::wrappers::TcpListenerStream::new(listener),
-                    async move { grpc_stopped.cancelled().await },
-                ),
-        );
+        flow_service_gate.activate(flow_service.into_server(grpc_max_message_bytes));
+        worker_task_service_gate.activate(worker_task_service);
         health.set_serving().await;
         let node_stopped = engine.wait_for_stop();
         let registry_halted = registry.halted();
