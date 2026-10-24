@@ -9,11 +9,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dexzd_engine::{CommitError, CommitUrgency, LocalStoreConfig, NodeStopReason, ReplayCheck};
+use dexzd_engine::{
+    CommitError, CommitUrgency, FlowCommandCommitter, LocalStoreConfig, NodeStopReason,
+    ReplayCheck, SpeculativeOutcomeMismatch,
+};
+use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::{
-    CountingApplier, FAILING_FLOW, NONDETERMINISTIC_FLOW, PANICKING_FLOW, RecordingRuntime,
-    TestCluster, is_partition_stopped,
+    BLOCKING_FLOW, CountingApplier, FAILING_FLOW, NONDETERMINISTIC_FLOW, PANICKING_FLOW,
+    RecordingRuntime, TestCluster, is_partition_stopped,
 };
 
 #[tokio::test(start_paused = true)]
@@ -197,6 +201,92 @@ async fn speculative_outcome_check_compares_only_when_enabled() {
         }
         test.node.shutdown().await;
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_speculative_mismatch_reported_by_the_runtime_stops_the_partition() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.commit.debug_replay_checks = true;
+    let test = cluster
+        .start(
+            &config,
+            Arc::new(CountingApplier::default()),
+            Arc::new(RecordingRuntime::default()),
+        )
+        .await
+        .expect("node starts");
+    let other_flow = test.flow_in_other_partition(&["seam-flow"]);
+    let partition = test.context("seam-flow").partition;
+    let (_, ticket) = test
+        .submit("seam-flow", CommitUrgency::Prompt)
+        .expect("submit succeeds");
+    let committed = ticket.wait().await.expect("command commits");
+    let committer: &dyn FlowCommandCommitter = test.node.committer();
+    committer
+        .check_speculative_outcome(partition, &committed.outcome, &committed)
+        .expect("identical outcomes match");
+    let mut diverged = committed.outcome.clone();
+    diverged.writes.pop();
+    let mismatch: SpeculativeOutcomeMismatch = committer
+        .check_speculative_outcome(partition, &diverged, &committed)
+        .expect_err("different outcomes mismatch");
+    assert!(mismatch.detail.contains("speculative versus committed"));
+    assert_eq!(test.node.halted_partitions(), vec![partition]);
+    let rejected = test
+        .submit("seam-flow", CommitUrgency::Prompt)
+        .expect_err("the partition stopped");
+    assert!(is_partition_stopped(&rejected), "{rejected:?}");
+    test.commit_prompt(&other_flow, 1).await;
+    test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut cluster = TestCluster::new();
+    let config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: directory.path().join("store"),
+        options: RocksDbStoreOptions::default(),
+    });
+    let first = cluster
+        .start(
+            &config,
+            Arc::new(CountingApplier::default()),
+            Arc::new(RecordingRuntime::default()),
+        )
+        .await
+        .expect("node starts");
+    let (_, ticket) = first
+        .submit(BLOCKING_FLOW, CommitUrgency::Prompt)
+        .expect("submit succeeds");
+    first.applier.gate.wait_until_entered().await;
+    let stopped = first.node.wait_for_stop();
+    let shutdown = tokio::spawn(first.node.shutdown());
+    assert_eq!(stopped.await, NodeStopReason::Shutdown);
+    first.applier.gate.open();
+    shutdown.await.expect("shutdown completes");
+    assert!(matches!(
+        ticket.wait().await,
+        Err(CommitError::NodeStopping { .. })
+    ));
+    assert!(first.runtime.committed_commands().is_empty());
+
+    let applier = Arc::new(CountingApplier::default());
+    applier.gate.open();
+    let second = cluster
+        .start(&config, applier, Arc::new(RecordingRuntime::default()))
+        .await
+        .expect("node restarts");
+    let replayed = second
+        .applier
+        .applied_commands()
+        .into_iter()
+        .filter(|command| command.flow_id == BLOCKING_FLOW)
+        .count();
+    assert_eq!(replayed, 1);
+    assert_eq!(second.committed_count(BLOCKING_FLOW).await, 1);
+    second.node.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

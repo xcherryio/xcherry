@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use dexzd_keyspace::{PartitionHasher, PartitionId};
 use futures::future::BoxFuture;
 
-use crate::commit::CommandCommitter;
+use crate::commit::{CommandCommitter, EngineLocalStore};
 use crate::runtime::CommittedFlowCommand;
 
 /// Engine services handed to the runtime factory before the log is replayed.
@@ -22,6 +22,8 @@ pub struct EngineServices {
     pub partition_hasher: PartitionHasher,
     /// Hold it around every read-modify-write of the local store's NodeMeta.
     pub node_meta_lock: Arc<Mutex<()>>,
+    /// The local store, for runtime state kept in NodeMeta such as pending hard-delete uploads.
+    pub local_store: Arc<EngineLocalStore>,
 }
 
 /// What the runtime factory returns: where committed commands go and how partitions rebuild.

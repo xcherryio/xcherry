@@ -124,7 +124,6 @@ impl CommandCommitter {
         command.epoch = inner.epoch;
         command.behavior_version = inner.behavior_version;
         command.command_id.clone_from(&command_id);
-        let (responder, ticket) = CommitTicket::new_pair();
         let mut stamps = self.lock_stamps();
         let watermark = stamps.last_stamped_micros[usize::from(partition.0)];
         command.proposed_at_micros = inner
@@ -144,6 +143,7 @@ impl CommandCommitter {
             .ok_or_else(|| CommitError::Unavailable {
                 detail: "the commit backlog is full".to_owned(),
             })?;
+        let (responder, ticket) = CommitTicket::new_pair();
         inner.state.register(
             command_id.clone(),
             PendingCommand {
@@ -157,14 +157,17 @@ impl CommandCommitter {
             waits_for_commit: urgency == CommitUrgency::Prompt,
         };
         if stamps.proposals.send(proposal).is_err() {
-            drop(inner.state.take(&command_id));
             let reason = inner
                 .state
                 .stop_reason()
                 .unwrap_or(NodeStopReason::Shutdown);
-            return Err(CommitError::NodeStopping {
+            let error = CommitError::NodeStopping {
                 detail: reason.to_string(),
-            });
+            };
+            if let Some(pending) = inner.state.take(&command_id) {
+                pending.responder.resolve(Err(error.clone()));
+            }
+            return Err(error);
         }
         stamps.last_stamped_micros[usize::from(partition.0)] = command.proposed_at_micros;
         drop(stamps);
@@ -219,5 +222,17 @@ impl FlowCommandCommitter for CommandCommitter {
 
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
         Ok(Box::new(CommandCommitter::committed_view(self)))
+    }
+
+    fn check_speculative_outcome(
+        &self,
+        partition: PartitionId,
+        speculative: &ApplyOutcome,
+        committed: &CommittedCommand,
+    ) -> Result<(), crate::runtime::ReplayMismatch> {
+        CommandCommitter::check_speculative_outcome(self, partition, speculative, committed)
+            .map_err(|mismatch| crate::runtime::ReplayMismatch {
+                detail: mismatch.to_string(),
+            })
     }
 }
