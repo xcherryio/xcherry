@@ -25,9 +25,11 @@ use dexzd_object_store::{
     ByteRange, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore, ObjectStoreError,
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
-use dexzd_protocol::dexzd::v1::{ClusterObject, ControllerLease, Manifest, SnapshotReference};
+use dexzd_protocol::dexzd::v1::{
+    ClusterObject, ControllerLease, Manifest, NodeLease, SnapshotReference,
+};
 use prost::Message;
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Notify};
 use tokio::time::Instant;
 
 #[derive(Default)]
@@ -38,6 +40,11 @@ struct MemoryStore {
     unknown_next_create_key: Mutex<Option<&'static str>>,
     block_next_lease_renewal: AtomicBool,
     fail_next_lease_renewal: AtomicBool,
+    pause_next_lease_release: AtomicBool,
+    release_started: Notify,
+    continue_release: Notify,
+    unknown_next_release_before_write: AtomicBool,
+    unknown_next_release_after_write: AtomicBool,
     manifest_read_barrier: Mutex<Option<(Arc<Barrier>, usize)>>,
 }
 
@@ -55,6 +62,25 @@ impl ObjectStore for MemoryStore {
         body: Bytes,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
+        let is_lease_release = key.starts_with("lease/")
+            && NodeLease::decode(body.clone())
+                .is_ok_and(|lease| lease.expires_at_unix_micros == i64::MIN);
+        if is_lease_release && self.pause_next_lease_release.swap(false, Ordering::SeqCst) {
+            self.release_started.notify_one();
+            self.continue_release.notified().await;
+        }
+        if is_lease_release
+            && self
+                .unknown_next_release_before_write
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Put,
+                key,
+                ObjectStoreErrorKind::OutcomeUnknown,
+                "injected lost release response without write",
+            ));
+        }
         if matches!(&condition, WriteCondition::CreateOnly) {
             let mut unknown_key = self
                 .unknown_next_create_key
@@ -104,6 +130,18 @@ impl ObjectStore for MemoryStore {
         }
         let etag = self.next_etag.fetch_add(1, Ordering::SeqCst).to_string();
         objects.insert(key.to_owned(), (body, etag.clone()));
+        if is_lease_release
+            && self
+                .unknown_next_release_after_write
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Put,
+                key,
+                ObjectStoreErrorKind::OutcomeUnknown,
+                "injected lost release response after write",
+            ));
+        }
         if key == "manifest"
             && self
                 .unknown_next_manifest_write
@@ -575,7 +613,7 @@ async fn lease_takeover_after_expiry_and_grace() {
     let first = acquire_lease(store.clone(), clock.clone(), &node(), &config)
         .await
         .unwrap();
-    first.shutdown().await;
+    drop(first);
     tokio::time::advance(Duration::from_secs(12)).await;
     let second = acquire_lease(store.clone(), clock.clone(), &node(), &config)
         .await
@@ -603,7 +641,7 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
     )
     .await
     .unwrap();
-    first.shutdown().await;
+    drop(first);
     let second_store = Arc::clone(&store);
     let second_clock = Arc::clone(&clock);
     let waiter = tokio::spawn(async move {
@@ -615,6 +653,153 @@ async fn lease_waiter_acquires_only_after_expiry_and_grace() {
     tokio::time::advance(Duration::from_secs(1)).await;
     let second = waiter.await.unwrap().unwrap();
     second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lease_release_allows_immediate_reacquire() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let first = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    let first_epoch = first.epoch();
+    let original = store.get("lease/node-a").await.unwrap().unwrap();
+    let original_lease = NodeLease::decode(original.bytes).unwrap();
+    first.shutdown().await;
+    let released = store.get("lease/node-a").await.unwrap().unwrap();
+    let released_lease = NodeLease::decode(released.bytes).unwrap();
+    assert_eq!(released_lease.expires_at_unix_micros, i64::MIN);
+    assert_eq!(released_lease.version, original_lease.version + 1);
+    assert_eq!(
+        released_lease.holder_process_id,
+        original_lease.holder_process_id
+    );
+    let second = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    assert_eq!(second.epoch(), first_epoch + 1);
+    second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_after_takeover_preserves_new_holder() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let old_holder = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    clock.offset_micros.store(12_000_000, Ordering::SeqCst);
+    let new_holder = acquire_lease(store.clone(), clock, &node(), &config)
+        .await
+        .unwrap();
+    let before = store.get("lease/node-a").await.unwrap().unwrap();
+    old_holder.shutdown().await;
+    let after = store.get("lease/node-a").await.unwrap().unwrap();
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(after.bytes, before.bytes);
+    assert!(matches!(
+        *new_holder.subscribe().borrow(),
+        LeaseStatus::ValidUntil(_)
+    ));
+    new_holder.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_conflict_preserves_a_concurrent_new_holder() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    let old_holder = acquire_lease(store.clone(), clock.clone(), &node(), &config)
+        .await
+        .unwrap();
+    let mut old_status = old_holder.subscribe();
+    store.pause_next_lease_release.store(true, Ordering::SeqCst);
+    let shutdown = tokio::spawn(old_holder.shutdown());
+    old_status.changed().await.unwrap();
+    assert!(matches!(&*old_status.borrow(), LeaseStatus::Lost(_)));
+    store.release_started.notified().await;
+    clock.offset_micros.store(12_000_000, Ordering::SeqCst);
+    let new_holder = acquire_lease(store.clone(), clock, &node(), &config)
+        .await
+        .unwrap();
+    let before = store.get("lease/node-a").await.unwrap().unwrap();
+    store.continue_release.notify_one();
+    shutdown.await.unwrap();
+    let after = store.get("lease/node-a").await.unwrap().unwrap();
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(after.bytes, before.bytes);
+    new_holder.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscribers_see_loss_before_a_blocked_release_times_out() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let holder = acquire_lease(store.clone(), clock, &node(), &LeaseConfig::default())
+        .await
+        .unwrap();
+    let mut status = holder.subscribe();
+    let before = store.get("lease/node-a").await.unwrap().unwrap();
+    store.block_next_lease_renewal.store(true, Ordering::SeqCst);
+    let shutdown = tokio::spawn(holder.shutdown());
+    status.changed().await.unwrap();
+    assert!(matches!(&*status.borrow(), LeaseStatus::Lost(_)));
+    assert!(!shutdown.is_finished());
+    tokio::time::advance(Duration::from_secs(11)).await;
+    shutdown.await.unwrap();
+    let after = store.get("lease/node-a").await.unwrap().unwrap();
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(after.bytes, before.bytes);
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_handles_unknown_outcomes_with_and_without_a_write() {
+    for was_written in [true, false] {
+        let store = Arc::new(MemoryStore::default());
+        let clock = Arc::new(TestClock::default());
+        create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+            .await
+            .unwrap();
+        let holder = acquire_lease(store.clone(), clock, &node(), &LeaseConfig::default())
+            .await
+            .unwrap();
+        let before = store.get("lease/node-a").await.unwrap().unwrap();
+        if was_written {
+            store
+                .unknown_next_release_after_write
+                .store(true, Ordering::SeqCst);
+        } else {
+            store
+                .unknown_next_release_before_write
+                .store(true, Ordering::SeqCst);
+        }
+        holder.shutdown().await;
+        let after = store.get("lease/node-a").await.unwrap().unwrap();
+        let released = NodeLease::decode(after.bytes).unwrap();
+        assert_eq!(released.expires_at_unix_micros, i64::MIN);
+        assert_ne!(after.etag, before.etag);
+    }
 }
 
 #[tokio::test(start_paused = true)]
