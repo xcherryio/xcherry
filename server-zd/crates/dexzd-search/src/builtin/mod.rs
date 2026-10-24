@@ -34,6 +34,9 @@ use crate::{SearchBackend, SearchError, SearchPage, SearchRequest};
 /// Default maximum number of indexed documents examined by one builtin search.
 pub const DEFAULT_SCAN_BUDGET: usize = 100_000;
 
+/// Largest partition count; partition IDs are `u16`.
+const MAX_PARTITION_COUNT: u32 = 65_536;
+
 /// Opens a consistent committed state view for each SearchFlows request.
 pub trait CommittedSearchViewProvider: Send + Sync {
     /// Returns one view that remains consistent through all partition scans of a search.
@@ -44,7 +47,7 @@ pub trait CommittedSearchViewProvider: Send + Sync {
 #[derive(Clone)]
 pub struct BuiltinSearchBackend {
     view_provider: Arc<dyn CommittedSearchViewProvider>,
-    partition_count: u16,
+    partition_count: u32,
     scan_budget: usize,
 }
 
@@ -52,7 +55,7 @@ impl BuiltinSearchBackend {
     /// Creates a backend using the default 100,000-document scan budget.
     pub fn new(
         view_provider: Arc<dyn CommittedSearchViewProvider>,
-        partition_count: u16,
+        partition_count: u32,
     ) -> Result<Self, SearchError> {
         Self::with_scan_budget(view_provider, partition_count, DEFAULT_SCAN_BUDGET)
     }
@@ -60,12 +63,13 @@ impl BuiltinSearchBackend {
     /// Creates a backend with a specified document scan budget.
     pub fn with_scan_budget(
         view_provider: Arc<dyn CommittedSearchViewProvider>,
-        partition_count: u16,
+        partition_count: u32,
         scan_budget: usize,
     ) -> Result<Self, SearchError> {
-        if partition_count == 0 || scan_budget == 0 {
+        if partition_count == 0 || partition_count > MAX_PARTITION_COUNT || scan_budget == 0 {
             return Err(SearchError::Internal(
-                "builtin search needs positive partition count and scan budget".into(),
+                "builtin search needs a partition count in 1..=65536 and a positive scan budget"
+                    .into(),
             ));
         }
         Ok(Self {
@@ -85,12 +89,14 @@ impl BuiltinSearchBackend {
             .transpose()?;
         let flow_type = pinned_flow_type(query.expression());
         let committed_view = self.view_provider.committed_view()?;
-        let mut partition_matches = Vec::with_capacity(usize::from(self.partition_count));
+        let mut partition_matches = Vec::new();
         let mut scan_state = ScanState {
             committed_view: committed_view.as_ref(),
             scanned: 0,
         };
         for partition_number in 0..self.partition_count {
+            let partition_number = u16::try_from(partition_number)
+                .expect("with_scan_budget limits the partition count to 65536");
             let mut matches = self.scan_partition(
                 PartitionId(partition_number),
                 request.tenant_id,

@@ -199,6 +199,9 @@ pub(crate) struct RecordingRuntime {
     committed: Mutex<Vec<CommittedFlowCommand>>,
     sink_events: Mutex<Vec<(PartitionId, SinkEvent)>>,
     failing_partition: Option<PartitionId>,
+    is_frame_end_gated: bool,
+    /// Holds every `finish_frame` call after it is recorded, when frame ends are gated.
+    pub(crate) frame_end_gate: ApplyGate,
 }
 
 /// One call the committed command sink received, with the frame position it carried.
@@ -212,6 +215,13 @@ impl RecordingRuntime {
     pub(crate) fn failing_rebuild_of(partition: PartitionId) -> Self {
         Self {
             failing_partition: Some(partition),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_gated_frame_ends() -> Self {
+        Self {
+            is_frame_end_gated: true,
             ..Self::default()
         }
     }
@@ -266,6 +276,9 @@ impl CommittedCommandSink for RecordingRuntime {
 
     fn finish_frame(&self, partition: PartitionId, position: &LogPosition) {
         self.record_sink_event(partition, SinkEvent::FrameFinished(position.clone()));
+        if self.is_frame_end_gated {
+            self.frame_end_gate.pass();
+        }
     }
 }
 

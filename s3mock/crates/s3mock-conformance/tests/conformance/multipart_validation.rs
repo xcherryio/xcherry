@@ -67,6 +67,95 @@ fn crc32_base64(body: &[u8]) -> String {
     BASE64.encode((!checksum).to_be_bytes())
 }
 
+#[tokio::test]
+async fn composite_completion_requires_each_part_checksum() {
+    let mut target = ConformanceTarget::connect().await;
+    let bucket = target.create_bucket().await;
+    let client = target.client.clone();
+    let upload_id = client
+        .create_multipart_upload()
+        .bucket(&bucket)
+        .key("composite")
+        .checksum_algorithm(ChecksumAlgorithm::Crc32)
+        .send()
+        .await
+        .expect("the composite upload starts")
+        .upload_id()
+        .expect("the upload has an ID")
+        .to_owned();
+    let mut parts = Vec::new();
+    let mut part_without_checksum = None;
+    for (index, body) in [vec![b'x'; 5 * 1024 * 1024], b"tail".to_vec()]
+        .into_iter()
+        .enumerate()
+    {
+        let part_number = i32::try_from(index + 1).expect("the part number fits");
+        let uploaded = client
+            .upload_part()
+            .bucket(&bucket)
+            .key("composite")
+            .upload_id(&upload_id)
+            .part_number(part_number)
+            .checksum_algorithm(ChecksumAlgorithm::Crc32)
+            .body(ByteStream::from(body))
+            .send()
+            .await
+            .expect("the part uploads");
+        let etag = uploaded.e_tag().expect("the part has an ETag");
+        if index == 1 {
+            part_without_checksum = Some(
+                CompletedPart::builder()
+                    .part_number(part_number)
+                    .e_tag(etag)
+                    .build(),
+            );
+        }
+        parts.push(
+            CompletedPart::builder()
+                .part_number(part_number)
+                .e_tag(etag)
+                .checksum_crc32(
+                    uploaded
+                        .checksum_crc32()
+                        .expect("the part has a CRC32 checksum"),
+                )
+                .build(),
+        );
+    }
+    let incomplete_parts = vec![
+        parts[0].clone(),
+        part_without_checksum.expect("the second part was uploaded"),
+    ];
+    let error = client
+        .complete_multipart_upload()
+        .bucket(&bucket)
+        .key("composite")
+        .upload_id(&upload_id)
+        .multipart_upload(
+            CompletedMultipartUpload::builder()
+                .set_parts(Some(incomplete_parts))
+                .build(),
+        )
+        .send()
+        .await
+        .expect_err("a composite part checksum is required");
+    assert_eq!(error_code_and_status(&error).1, Some(400));
+    client
+        .complete_multipart_upload()
+        .bucket(&bucket)
+        .key("composite")
+        .upload_id(&upload_id)
+        .multipart_upload(
+            CompletedMultipartUpload::builder()
+                .set_parts(Some(parts))
+                .build(),
+        )
+        .send()
+        .await
+        .expect("the completion succeeds with the part checksum");
+    target.cleanup().await;
+}
+
 // The x-amz-checksum-* header on CompleteMultipartUpload is the whole object's checksum:
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
 #[tokio::test]

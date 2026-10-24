@@ -79,6 +79,33 @@ func TestHydrateValuesDeduplicatesAndPreservesOrder(t *testing.T) {
 	require.JSONEq(t, `{"value":1}`, string(values[3].GetObjValue().Payload))
 }
 
+func TestHydrateHardDeleteAttributeUsesUpdatedValue(t *testing.T) {
+	for _, blobID := range []string{"hd/attribute-object", "hd1|run-id|attribute-object"} {
+		t.Run(blobID, func(t *testing.T) {
+			cache := newHydrationCache(t)
+			client := &fakeHydrationFlowServiceClient{values: map[string]*dexpb.Value{
+				blobID: {Kind: &dexpb.Value_StringValue{StringValue: "original"}},
+			}}
+			hydrator := newValueHydrator(client, cache, nil, "flow-test")
+			blobReference := &dexpb.Value{Kind: &dexpb.Value_InternalBlobIdForStringValue{
+				InternalBlobIdForStringValue: blobID,
+			}}
+			first := []*dexpb.Value{blobReference}
+			require.NoError(t, hydrator.HydrateValuesInPlace(context.Background(), valuePointers("flow-1", first)))
+			require.Equal(t, "original", first[0].GetStringValue())
+
+			client.values[blobID] = &dexpb.Value{Kind: &dexpb.Value_StringValue{StringValue: "updated"}}
+			second := []*dexpb.Value{blobReference}
+			require.NoError(t, hydrator.HydrateValuesInPlace(context.Background(), valuePointers("flow-1", second)))
+			require.Equal(t, "updated", second[0].GetStringValue())
+			require.Len(t, client.requests, 1)
+			_, found, err := cache.Get(flowBlobCacheKey("flow-1", blobID))
+			require.NoError(t, err)
+			require.False(t, found)
+		})
+	}
+}
+
 func TestHydrateValuesValidatesResponses(t *testing.T) {
 	stringBlob := &dexpb.Value{
 		Kind: &dexpb.Value_InternalBlobIdForStringValue{

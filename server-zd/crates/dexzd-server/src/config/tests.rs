@@ -16,6 +16,7 @@ use super::{
     SearchBackend, StreamStoreBackend,
 };
 use crate::DevCommandOptions;
+use crate::component_configs::ComponentConfigs;
 
 type InvalidConfigCase = (&'static str, fn(&mut Config));
 
@@ -88,6 +89,31 @@ fn yaml_overrides_sections_and_rejects_unknown_keys() {
             "{yaml}"
         );
     }
+}
+
+#[test]
+fn blocking_state_read_limit_parses_defaults_and_rejects_zero() {
+    assert_eq!(Config::default().limits.max_blocking_state_reads, 64);
+
+    let parsed = Config::parse_yaml("limits:\n  maxBlockingStateReads: 7\n")
+        .expect("parse blocking state read limit");
+    assert_eq!(parsed.limits.max_blocking_state_reads, 7);
+    let mut configuration = valid_config();
+    configuration.limits.max_blocking_state_reads = parsed.limits.max_blocking_state_reads;
+    configuration.validate().expect("positive read limit");
+    let components = ComponentConfigs::from_config(&configuration).expect("component config");
+    assert_eq!(components.effects.max_blocking_state_reads, 7);
+
+    let zero = Config::parse_yaml("limits:\n  maxBlockingStateReads: 0\n")
+        .expect("parse zero blocking state read limit");
+    configuration.limits.max_blocking_state_reads = zero.limits.max_blocking_state_reads;
+    assert!(matches!(
+        configuration.validate(),
+        Err(ConfigError::Invalid {
+            field: "limits.maxBlockingStateReads",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -236,6 +262,12 @@ fn load_file_reports_io_and_field_failures() {
     let complete = temporary.path().join("complete.yaml");
     fs::write(&complete, "cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\n").expect("write complete config");
     Config::load_file(&complete).expect("load complete production config");
+    let with_dev = temporary.path().join("with-dev.yaml");
+    fs::write(&with_dev, "cluster:\n  nodeId: node-a\nobjectStore:\n  bucket: dex-test\nlocalStorage:\n  directory: /tmp/dexzd\ndev:\n  durabilityMode: strict\n").expect("write config with a dev section");
+    assert!(matches!(
+        Config::load_file(&with_dev),
+        Err(ConfigError::Invalid { field: "dev", .. })
+    ));
 }
 
 #[test]
@@ -428,6 +460,9 @@ fn every_field_constraint_names_the_rejected_yaml_path() {
         }),
         ("search.paradeDbSchema", |config| {
             config.search.parade_db_schema.clear()
+        }),
+        ("search.paradeDbSchema", |config| {
+            config.search.parade_db_schema = "dex,public".to_owned()
         }),
         ("search.readYourWritesWait", |config| {
             config.search.read_your_writes_wait = Duration::ZERO

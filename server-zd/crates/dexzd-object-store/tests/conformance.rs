@@ -6,6 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+#[path = "conformance/recording_s3_proxy.rs"]
+mod recording_s3_proxy;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -15,6 +18,8 @@ use dexzd_object_store::{
 };
 use s3mock::{Durability, EtagMode, Store, StoreConfig};
 use tempfile::TempDir;
+
+use recording_s3_proxy::RecordingS3Proxy;
 
 async fn check_store(store: &dyn ObjectStore) {
     assert!(
@@ -417,6 +422,7 @@ async fn s3_conformance(durability: Durability) {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     config.multipart_threshold = 5 * 1024 * 1024;
     config.multipart_part_size = 5 * 1024 * 1024;
@@ -451,6 +457,234 @@ async fn strict_s3_conformance() {
 #[tokio::test]
 async fn relaxed_s3_conformance() {
     s3_conformance(Durability::Relaxed).await;
+}
+
+async fn start_anonymous_s3_store(
+    directory: &TempDir,
+    multipart_threshold: usize,
+) -> (Arc<Store>, s3mock_server::ServerHandle, S3ObjectStore) {
+    let store = Store::open(&StoreConfig {
+        root_directory: directory.path().join("s3"),
+        durability: Durability::Relaxed,
+        etag_mode: EtagMode::Opaque,
+    })
+    .expect("the emulator store opens");
+    store
+        .create_bucket("anonymous-file-uploads", false)
+        .expect("the bucket is created");
+    let store = Arc::new(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the emulator binds");
+    let server = s3mock_server::start(Arc::clone(&store), listener).expect("the emulator starts");
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "anonymous-file-uploads");
+    config.endpoint = Some(format!("http://{}", server.local_address()));
+    config.force_path_style = true;
+    config.credentials = S3Credentials::Anonymous;
+    config.multipart_threshold = multipart_threshold;
+    config.multipart_part_size = 5 * 1024 * 1024;
+    let object_store = S3ObjectStore::new(config)
+        .await
+        .expect("the anonymous client is configured");
+    (store, server, object_store)
+}
+
+#[tokio::test]
+async fn anonymous_s3_single_file_upload_preserves_crc32() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) = start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let single_file = directory.path().join("single-file");
+    let single_body = b"anonymous single-file upload";
+    tokio::fs::write(&single_file, single_body)
+        .await
+        .expect("the single-part file is written");
+    object_store
+        .put_file("single", &single_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous single-part upload succeeds");
+    assert_eq!(
+        object_store
+            .get("single")
+            .await
+            .expect("the single-part download succeeds")
+            .expect("the single-part object exists")
+            .bytes,
+        Bytes::from_static(single_body)
+    );
+    let single_checksum = store
+        .head_object(
+            "anonymous-file-uploads",
+            "single",
+            &s3mock::ObjectReadRequest::default(),
+        )
+        .expect("the single-part object is readable")
+        .record
+        .checksum
+        .expect("the single-part object has a checksum");
+    assert_eq!(single_checksum.algorithm, s3mock::ChecksumAlgorithm::Crc32);
+    assert_eq!(
+        single_checksum.base64_value,
+        s3mock::ChecksumAlgorithm::Crc32.base64_checksum(single_body)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn anonymous_s3_multipart_file_upload_preserves_composite_crc32() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) = start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let multipart_file = directory.path().join("multipart-file");
+    let multipart_body = vec![0x5a; 6 * 1024 * 1024];
+    tokio::fs::write(&multipart_file, &multipart_body)
+        .await
+        .expect("the multipart file is written");
+    object_store
+        .put_file("multipart", &multipart_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous multipart upload succeeds");
+    assert_eq!(
+        object_store
+            .get("multipart")
+            .await
+            .expect("the multipart download succeeds")
+            .expect("the multipart object exists")
+            .bytes,
+        Bytes::from(multipart_body.clone())
+    );
+    assert_multipart_crc32(&store, "multipart", &multipart_body, 5 * 1024 * 1024);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn anonymous_s3_multipart_file_upload_sends_crc32_for_every_part() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (_store, server, _direct_store) =
+        start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let proxy = RecordingS3Proxy::start(server.local_address()).await;
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "anonymous-file-uploads");
+    config.endpoint = Some(format!("http://{}", proxy.address()));
+    config.force_path_style = true;
+    config.credentials = S3Credentials::Anonymous;
+    config.multipart_threshold = 5 * 1024 * 1024;
+    config.multipart_part_size = 5 * 1024 * 1024;
+    let object_store = S3ObjectStore::new(config)
+        .await
+        .expect("the proxied anonymous client is configured");
+    let file = directory.path().join("multipart-file-requests");
+    let body = vec![0x5a; 6 * 1024 * 1024];
+    tokio::fs::write(&file, &body)
+        .await
+        .expect("the multipart file is written");
+    object_store
+        .put_file("multipart", &file, WriteCondition::CreateOnly)
+        .await
+        .expect("the proxied multipart upload succeeds");
+
+    let request_headers = proxy.multipart_request_headers();
+    let create_requests: Vec<_> = request_headers
+        .iter()
+        .filter(|request| {
+            request.starts_with("POST /anonymous-file-uploads/multipart?uploads HTTP/1.1")
+        })
+        .collect();
+    assert_eq!(
+        create_requests.len(),
+        1,
+        "one multipart upload is initiated"
+    );
+    assert!(create_requests[0].lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("x-amz-checksum-algorithm") && value.trim() == "CRC32"
+        })
+    }));
+
+    let upload_part_requests: Vec<_> = request_headers
+        .iter()
+        .filter(|request| {
+            request.starts_with("PUT /anonymous-file-uploads/multipart?")
+                && request
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains("partNumber="))
+        })
+        .collect();
+    assert_eq!(
+        upload_part_requests.len(),
+        2,
+        "both file parts are uploaded"
+    );
+    for (index, part_body) in body.chunks(5 * 1024 * 1024).enumerate() {
+        let part_number = index + 1;
+        let request = upload_part_requests
+            .iter()
+            .find(|request| {
+                request
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains(&format!("partNumber={part_number}")))
+            })
+            .expect("each part has an UploadPart request");
+        let expected_checksum = s3mock::ChecksumAlgorithm::Crc32.base64_checksum(part_body);
+        assert!(
+            request.lines().any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("x-amz-checksum-crc32")
+                        && value.trim() == expected_checksum
+                })
+            }),
+            "part {part_number} must carry its CRC32 checksum"
+        );
+    }
+    proxy.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn high_threshold_file_upload_uses_bounded_multipart_reads() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) =
+        start_anonymous_s3_store(&directory, 64 * 1024 * 1024).await;
+    let file = directory.path().join("larger-than-single-put-cap");
+    let body = vec![0x4b; 17 * 1024 * 1024];
+    tokio::fs::write(&file, &body)
+        .await
+        .expect("the large file is written");
+    object_store
+        .put_file("high-threshold", &file, WriteCondition::CreateOnly)
+        .await
+        .expect("the file uses multipart despite the high threshold");
+    assert_multipart_crc32(&store, "high-threshold", &body, 5 * 1024 * 1024);
+    server.shutdown().await;
+}
+
+fn assert_multipart_crc32(store: &Store, key: &str, body: &[u8], part_size: usize) {
+    let record = store
+        .head_object(
+            "anonymous-file-uploads",
+            key,
+            &s3mock::ObjectReadRequest::default(),
+        )
+        .expect("the multipart object is readable")
+        .record;
+    let part_count = body.chunks(part_size).count();
+    assert_eq!(record.parts_count, Some(part_count as u32));
+    let checksum = record
+        .checksum
+        .expect("the multipart object has a checksum");
+    assert_eq!(checksum.algorithm, s3mock::ChecksumAlgorithm::Crc32);
+    assert_eq!(checksum.checksum_type, s3mock::ChecksumType::Composite);
+    let mut part_checksums = Vec::new();
+    for part_body in body.chunks(part_size) {
+        let part_checksum = s3mock::ChecksumAlgorithm::Crc32.base64_checksum(part_body);
+        part_checksums.extend_from_slice(
+            &s3mock::decode_base64(&part_checksum).expect("the part checksum is valid base64"),
+        );
+    }
+    let expected = format!(
+        "{}-{part_count}",
+        s3mock::ChecksumAlgorithm::Crc32.base64_checksum(&part_checksums)
+    );
+    assert_eq!(checksum.base64_value, expected);
 }
 
 #[derive(Default)]
@@ -608,11 +842,84 @@ fn static_credentials_debug_redacts_sensitive_values() {
     config.credentials = S3Credentials::Static {
         access_key_id: "visible-key-identifier".to_owned(),
         secret_access_key: "visible-secret-key".to_owned(),
+        session_token: Some("visible-session-token".to_owned()),
     };
     let debug = format!("{config:?}");
     assert!(!debug.contains("visible-key-identifier"));
     assert!(!debug.contains("visible-secret-key"));
+    assert!(!debug.contains("visible-session-token"));
     assert!(debug.contains("[REDACTED]"));
+}
+
+/// Answers requests with 404 and returns the first lowercase request line and headers.
+async fn capture_request_headers(credentials: S3Credentials) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the capture listener binds");
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "capture-bucket");
+    config.endpoint = Some(format!(
+        "http://{}",
+        listener.local_addr().expect("the listener has an address")
+    ));
+    config.force_path_style = true;
+    config.credentials = credentials;
+    let store = S3ObjectStore::new(config)
+        .await
+        .expect("the capture store is configured");
+    let (captured_sender, captured) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("the client connects");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.expect("the request is read");
+                assert!(read > 0, "the client closed before sending headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .expect("the response is written");
+            stream.shutdown().await.expect("the response is flushed");
+            if captured_sender
+                .send(String::from_utf8_lossy(&request).to_lowercase())
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    let head = store.head("object").await;
+    server.abort();
+    let mut captured = captured;
+    let request = captured.recv().await.expect("one request was captured");
+    assert!(
+        !matches!(head, Ok(Some(_))),
+        "the capture endpoint stores no object"
+    );
+    request
+}
+
+#[tokio::test]
+async fn static_session_token_is_sent_and_anonymous_requests_are_unsigned() {
+    let signed = capture_request_headers(S3Credentials::Static {
+        access_key_id: "capture-key".to_owned(),
+        secret_access_key: "capture-secret".to_owned(),
+        session_token: Some("capture-session-token".to_owned()),
+    })
+    .await;
+    assert!(signed.contains("\r\nx-amz-security-token: capture-session-token\r\n"));
+    assert!(signed.contains("\r\nauthorization: aws4-hmac-sha256 credential=capture-key/"));
+    let unsigned = capture_request_headers(S3Credentials::Anonymous).await;
+    assert!(!unsigned.contains("\r\nauthorization:"), "{unsigned}");
+    assert!(
+        !unsigned.contains("\r\nx-amz-security-token:"),
+        "{unsigned}"
+    );
 }
 
 #[tokio::test]
@@ -693,6 +1000,7 @@ async fn s3_missing_bucket_and_access_denied_are_permanent() {
     missing.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let missing = S3ObjectStore::new(missing)
         .await
@@ -734,12 +1042,52 @@ async fn s3_missing_bucket_and_access_denied_are_permanent() {
         ObjectStoreErrorKind::Permanent
     );
 
+    let mut session = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
+    session.endpoint = Some(endpoint.clone());
+    session.force_path_style = true;
+    session.credentials = S3Credentials::Static {
+        access_key_id: "s3mock".to_owned(),
+        secret_access_key: "s3mock".to_owned(),
+        session_token: Some("temporary-session".to_owned()),
+    };
+    let session = S3ObjectStore::new(session)
+        .await
+        .expect("the conformance operation succeeds");
+    assert!(matches!(
+        session
+            .put(
+                "session-object",
+                Bytes::from_static(b"body"),
+                WriteCondition::CreateOnly
+            )
+            .await
+            .expect("a request signed with a session token verifies"),
+        WriteOutcome::Written { .. }
+    ));
+
+    let mut anonymous = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
+    anonymous.endpoint = Some(endpoint.clone());
+    anonymous.force_path_style = true;
+    anonymous.credentials = S3Credentials::Anonymous;
+    let anonymous = S3ObjectStore::new(anonymous)
+        .await
+        .expect("the conformance operation succeeds");
+    assert_eq!(
+        anonymous
+            .get("session-object")
+            .await
+            .expect_err("strict verification rejects unsigned requests")
+            .kind,
+        ObjectStoreErrorKind::Permanent
+    );
+
     let mut forbidden = S3ObjectStoreConfig::new("us-east-1", "present-bucket");
     forbidden.endpoint = Some(endpoint);
     forbidden.force_path_style = true;
     forbidden.credentials = S3Credentials::Static {
         access_key_id: "wrong".to_owned(),
         secret_access_key: "wrong".to_owned(),
+        session_token: None,
     };
     let forbidden = S3ObjectStore::new(forbidden)
         .await
@@ -848,6 +1196,7 @@ async fn s3_conflicts_and_ambiguous_writes() {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let object_store = S3ObjectStore::new(config)
         .await
@@ -1015,6 +1364,7 @@ async fn s3_conflicts_and_ambiguous_writes() {
     timeout_config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let timeout_store = S3ObjectStore::new(timeout_config)
         .await
@@ -1112,6 +1462,7 @@ async fn s3_connection_refused_is_transient() {
     config.credentials = S3Credentials::Static {
         access_key_id: "s3mock".to_owned(),
         secret_access_key: "s3mock".to_owned(),
+        session_token: None,
     };
     let store = S3ObjectStore::new(config)
         .await

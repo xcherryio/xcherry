@@ -17,7 +17,9 @@ use aws_sdk_s3::config::{
 };
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{
+    ChecksumAlgorithm, CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier,
+};
 use bytes::Bytes;
 
 use crate::file_download::TemporaryDownloadFile;
@@ -27,7 +29,12 @@ use crate::{
     ObjectStoreErrorKind, ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
 };
 
+mod file_read;
+
+use file_read::read_single_put_file;
+
 const DEFAULT_PART_SIZE: usize = 8 * 1024 * 1024;
+const MAX_SINGLE_PUT_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CONFLICT_RETRIES: u32 = 2;
 
 /// Credentials used by an S3 object store.
@@ -41,18 +48,27 @@ pub enum S3Credentials {
         access_key_id: String,
         /// Secret key used for signing.
         secret_access_key: String,
+        /// Session token of temporary credentials, sent as `x-amz-security-token`.
+        session_token: Option<String>,
     },
+    /// Send unsigned requests, for a local emulator or a bucket that allows anonymous access.
+    Anonymous,
 }
 
 impl std::fmt::Debug for S3Credentials {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DefaultChain => formatter.write_str("DefaultChain"),
-            Self::Static { .. } => formatter
+            Self::Static { session_token, .. } => formatter
                 .debug_struct("Static")
                 .field("access_key_id", &"[REDACTED]")
                 .field("secret_access_key", &"[REDACTED]")
+                .field(
+                    "session_token",
+                    &session_token.as_ref().map(|_| "[REDACTED]"),
+                )
                 .finish(),
+            Self::Anonymous => formatter.write_str("Anonymous"),
         }
     }
 }
@@ -74,7 +90,7 @@ pub struct S3ObjectStoreConfig {
     pub credentials: S3Credentials,
     /// SDK operation timeout, including retries, and maximum wait between streamed body chunks.
     pub request_timeout: Duration,
-    /// Bodies at least this size use multipart upload; default 8 MiB.
+    /// Bodies at least this size use multipart upload; files over 16 MiB also use multipart. Default 8 MiB.
     pub multipart_threshold: usize,
     /// Multipart part size; default 8 MiB and must be at least 5 MiB.
     pub multipart_part_size: usize,
@@ -131,10 +147,12 @@ impl S3ObjectStore {
                 format!("invalid object-store config field: {field}"),
             ));
         }
-        let shared = aws_config::defaults(BehaviorVersion::latest())
-            .region(Region::new(config.region))
-            .load()
-            .await;
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region));
+        if matches!(config.credentials, S3Credentials::Anonymous) {
+            loader = loader.no_credentials();
+        }
+        let shared = loader.load().await;
         let mut builder = aws_sdk_s3::Config::from(&shared)
             .to_builder()
             .force_path_style(config.force_path_style)
@@ -152,12 +170,13 @@ impl S3ObjectStore {
         if let S3Credentials::Static {
             access_key_id,
             secret_access_key,
+            session_token,
         } = config.credentials
         {
             builder = builder.credentials_provider(Credentials::new(
                 access_key_id,
                 secret_access_key,
-                None,
+                session_token,
                 None,
                 "dexzd-object-store",
             ));
@@ -318,6 +337,7 @@ impl S3ObjectStore {
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(&full_key)
+            .checksum_algorithm(ChecksumAlgorithm::Crc32)
             .send()
             .await
             .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, false, error))?;
@@ -393,6 +413,7 @@ impl S3ObjectStore {
                 .upload_id(upload_id)
                 .part_number(part_number)
                 .body(ByteStream::from(buffer))
+                .checksum_algorithm(ChecksumAlgorithm::Crc32)
                 .send()
                 .await
                 .map_err(|error| map_sdk_error(ObjectStoreOperation::Put, key, false, error))?;
@@ -402,10 +423,17 @@ impl S3ObjectStore {
                 key,
                 "part ETag",
             )?;
+            let checksum_crc32 = required(
+                response.checksum_crc32(),
+                ObjectStoreOperation::Put,
+                key,
+                "part CRC32 checksum",
+            )?;
             parts.push(
                 CompletedPart::builder()
                     .part_number(part_number)
                     .e_tag(etag)
+                    .checksum_crc32(checksum_crc32)
                     .build(),
             );
             part_number += 1;
@@ -471,17 +499,16 @@ impl S3ObjectStore {
                 )
             })?
             .len();
-        if size >= self.multipart_threshold as u64 {
+        let single_put_cap = self.multipart_threshold.min(MAX_SINGLE_PUT_FILE_BYTES);
+        if size >= self.multipart_threshold as u64 || size > single_put_cap as u64 {
             return self.put_multipart_file(key, path, condition).await;
         }
-        let body = ByteStream::from_path(path).await.map_err(|error| {
-            ObjectStoreError::new(
-                ObjectStoreOperation::Put,
-                key,
-                ObjectStoreErrorKind::Permanent,
-                format!("reading {}: {error}", path.display()),
-            )
-        })?;
+        // Anonymous HTTP uploads cannot supply the SDK's deferred streaming signer.
+        let Some(body) =
+            read_single_put_file(path, single_put_cap, self.request_timeout, key).await?
+        else {
+            return self.put_multipart_file(key, path, condition).await;
+        };
         let is_conditional = condition != WriteCondition::Unconditional;
         let is_replace_if_etag_matches =
             matches!(condition, WriteCondition::ReplaceIfEtagMatches { .. });
@@ -490,7 +517,8 @@ impl S3ObjectStore {
             .put_object()
             .bucket(&self.bucket)
             .key(self.full_key(key))
-            .body(body);
+            .body(ByteStream::from(body))
+            .checksum_algorithm(ChecksumAlgorithm::Crc32);
         request = match condition {
             WriteCondition::Unconditional => request,
             WriteCondition::CreateOnly => request.if_none_match("*"),

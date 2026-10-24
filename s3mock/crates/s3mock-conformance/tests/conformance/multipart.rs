@@ -578,6 +578,11 @@ async fn crc32_parts_echo_checksums_and_get_returns_a_composite_checksum() {
         .send()
         .await
         .unwrap();
+    assert_eq!(
+        created.checksum_algorithm(),
+        Some(&ChecksumAlgorithm::Crc32)
+    );
+    assert_eq!(created.checksum_type(), Some(&ChecksumType::Composite));
     let upload_id = created.upload_id().unwrap();
     let bodies = [vec![b'x'; MINIMUM_PART_BYTES], b"tail".to_vec()];
     let mut parts = Vec::new();
