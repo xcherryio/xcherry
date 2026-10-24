@@ -667,8 +667,29 @@ func (worker *pullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.Po
 }
 
 func (stream *pullStream) rejectTask(taskID string, reason dexpb.PollWorkerTaskRejectReason) {
-	if err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: taskID, Reason: reason}}}); err != nil {
-		stream.worker.service.logger.Error("reject Worker task", "error", err)
+	err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: taskID, Reason: reason}}})
+	if err == nil {
+		return
+	}
+	// The server re-dispatches a task whose stream closed before the rejection arrived.
+	if stream.isClosedStreamSendError(err) {
+		stream.worker.service.logger.Debug("reject Worker task on closed stream", "error", err)
+		return
+	}
+	stream.worker.service.logger.Error("reject Worker task", "error", err)
+}
+
+func (stream *pullStream) isClosedStreamSendError(err error) bool {
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Canceled:
+		return true
+	case codes.Unavailable:
+		return stream.ctx.Err() != nil
+	default:
+		return false
 	}
 }
 
