@@ -90,6 +90,11 @@ git -C "$repository_root" worktree remove --force "$baseline_worktree"
 detected_count=0
 gap_count=0
 for name in wall-clock hash-map-iteration immediate-reclaim retry-stale-snapshot; do
+  case "$name" in
+    wall-clock|hash-map-iteration) expected_invariant=A2-apply-twice ;;
+    immediate-reclaim) expected_invariant=I1-window-value-reference ;;
+    retry-stale-snapshot) expected_invariant=S5-fresh-snapshot ;;
+  esac
   patch_path="$patch_directory/$name.patch"
   git -C "$repository_root" worktree add --detach "$mutant_worktree" HEAD >/dev/null
   if ! git -C "$mutant_worktree" apply --check "$patch_path"; then
@@ -107,12 +112,16 @@ for name in wall-clock hash-map-iteration immediate-reclaim retry-stale-snapshot
     if [[ "$run_status" -eq 124 ]]; then
       echo "The $name run exceeded ${time_limit_seconds}s" >&2
       gap_count=$((gap_count + 1))
-    elif ! grep -Eq 'seed [0-9]+ broke an invariant at command index [0-9]+' "$log_path"; then
+    elif ! failure_line="$(grep -m 1 -E '^seed [0-9]+ broke an invariant at command index [0-9]+: [A-Za-z0-9-]+:' "$log_path")"; then
       echo "The $name run failed without a simulation invariant violation:" >&2
       tail -n 35 "$log_path" >&2
       gap_count=$((gap_count + 1))
+    elif [[ "$failure_line" != *": $expected_invariant:"* ]]; then
+      echo "The $name run broke a different invariant (expected $expected_invariant):" >&2
+      echo "$failure_line" >&2
+      gap_count=$((gap_count + 1))
     else
-      grep -m 1 -E 'seed [0-9]+ broke an invariant at command index [0-9]+' "$log_path"
+      echo "$failure_line"
       detected_count=$((detected_count + 1))
     fi
   fi
