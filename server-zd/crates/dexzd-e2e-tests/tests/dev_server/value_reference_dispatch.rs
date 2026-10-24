@@ -134,6 +134,7 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     );
     let second_task = worker.next_task().await;
     assert_eq!(attempt_of(execute_request(&second_task)), 1);
+    let second_replied_at = tokio::time::Instant::now();
     worker.reply(
         second_task.task_id.clone(),
         execute_output(InvokeExecuteMethodResponse {
@@ -144,11 +145,16 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     );
 
     let third_task = worker.next_task().await;
+    let dispatch_delay = second_replied_at.elapsed();
     let third = execute_request(&third_task);
     assert_eq!(attempt_of(third), 1);
     assert!(
         is_value_reference(third.step_input.as_ref()),
         "an oversized request falls back to value references"
+    );
+    assert!(
+        dispatch_delay >= Duration::from_secs(1),
+        "the fallback waits for the 2 second batch to commit, but dispatch took {dispatch_delay:?}"
     );
     assert_eq!(
         load_value(&mut flow_client, flow_id, third.step_input.as_ref()).await,
