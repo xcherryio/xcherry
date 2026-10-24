@@ -8,15 +8,18 @@
 
 use std::time::Duration;
 
+use dexzd_keyspace::row_keys::history_record_key;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
 use dexzd_protocol::dex::{
-    AttributeMatch, AttributeMatchOperator, ErrorSubStatus, FlowStatus, StopFlowRequest,
-    WaitForAttributeRequest, WaitForFlowRequest, WaitForHistoryEventRequest,
-    WaitForStepCompletionRequest,
+    AttributeMatch, AttributeMatchOperator, ErrorSubStatus, FlowClosedHistoryEvent,
+    FlowHistoryEvent, FlowStatus, StopFlowRequest, StopType, WaitForAttributeRequest,
+    WaitForFlowRequest, WaitForHistoryEventRequest, WaitForStepCompletionRequest,
+    flow_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, FlowCommand, FlowStopCommand, StepCounterRecord, StepExecutionPhase,
-    StepExecutionRecord, StoredValue, StoredValueReference, flow_command, stored_value,
+    AttributeRecord, FlowCommand, FlowStopCommand, HistoryRecord, StepCounterRecord,
+    StepExecutionPhase, StepExecutionRecord, StoredValue, StoredValueReference, flow_command,
+    stored_value,
 };
 use prost::Message;
 
@@ -240,7 +243,12 @@ async fn wait_for_step_completion_distinguishes_request_and_call_timeouts() {
     assert_eq!(error.sub_status(), ErrorSubStatus::LongPollTimeOut);
 }
 
-fn put_approve_step(harness: &RuntimeHarness, run_id: RunId, phase: StepExecutionPhase) {
+fn put_approve_step(
+    harness: &RuntimeHarness,
+    run_id: RunId,
+    phase: StepExecutionPhase,
+    completed_seq: u64,
+) {
     let context = harness.registry.flow_context(&flow("order-1"));
     harness.store.put(
         ColumnFamily::Flow,
@@ -261,10 +269,52 @@ fn put_approve_step(harness: &RuntimeHarness, run_id: RunId, phase: StepExecutio
         StepExecutionRecord {
             step_execution_id: "Approve-1".to_owned(),
             phase: phase as i32,
+            completed_seq,
             ..StepExecutionRecord::default()
         }
         .encode_to_vec(),
     );
+}
+
+/// Writes the history record at `seq`, optionally holding the FlowClosed event.
+fn put_history_record(harness: &RuntimeHarness, run_id: RunId, seq: u64, has_flow_closed: bool) {
+    let context = harness.registry.flow_context(&flow("order-1"));
+    let events = has_flow_closed
+        .then(|| FlowHistoryEvent {
+            payload: Some(flow_history_event::Payload::FlowClosed(
+                FlowClosedHistoryEvent {
+                    flow_status: FlowStatus::Terminated as i32,
+                    ..FlowClosedHistoryEvent::default()
+                },
+            )),
+            ..FlowHistoryEvent::default()
+        })
+        .into_iter()
+        .collect();
+    harness.store.put(
+        ColumnFamily::History,
+        history_record_key(context.flow_hash, run_id, seq),
+        HistoryRecord {
+            seq,
+            events,
+            ..HistoryRecord::default()
+        }
+        .encode_to_vec(),
+    );
+}
+
+async fn wait_for_approve_step(harness: &RuntimeHarness) -> Result<(), RuntimeError> {
+    harness
+        .registry
+        .wait_for_step_completion(TENANT, approve_step_request())
+        .await
+        .map(drop)
+}
+
+fn assert_closed_flow_error(result: Result<(), RuntimeError>) {
+    let error = result.unwrap_err();
+    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+    assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
 }
 
 fn approve_step_request() -> WaitForStepCompletionRequest {
@@ -277,24 +327,39 @@ fn approve_step_request() -> WaitForStepCompletionRequest {
 }
 
 #[tokio::test(start_paused = true)]
-async fn wait_for_step_completion_succeeds_only_for_a_completed_step() {
+async fn wait_for_step_completion_treats_completed_and_canceled_steps_as_completed() {
     let harness = RuntimeHarness::new();
     let run_id = start_flow(&harness, "order-1").await.unwrap();
-    put_approve_step(&harness, run_id, StepExecutionPhase::Canceled);
-    let error = harness
-        .registry
-        .wait_for_step_completion(TENANT, approve_step_request())
-        .await
-        .unwrap_err();
-    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
-    assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+    put_approve_step(&harness, run_id, StepExecutionPhase::Completed, 5);
+    wait_for_approve_step(&harness).await.unwrap();
+    put_approve_step(&harness, run_id, StepExecutionPhase::Canceled, 5);
+    wait_for_approve_step(&harness).await.unwrap();
+    put_approve_step(&harness, run_id, StepExecutionPhase::Failed, 5);
+    assert_closed_flow_error(wait_for_approve_step(&harness).await);
+}
 
-    put_approve_step(&harness, run_id, StepExecutionPhase::Completed);
+#[tokio::test(start_paused = true)]
+async fn wait_for_step_completion_reports_a_step_canceled_by_terminate_as_a_closed_flow() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
     harness
-        .registry
-        .wait_for_step_completion(TENANT, approve_step_request())
+        .drive(harness.registry.stop_flow(
+            TENANT,
+            StopFlowRequest {
+                flow_id: "order-1".to_owned(),
+                stop_type: StopType::Terminate as i32,
+                ..StopFlowRequest::default()
+            },
+        ))
         .await
         .unwrap();
+    put_approve_step(&harness, run_id, StepExecutionPhase::Canceled, 9);
+    put_history_record(&harness, run_id, 9, true);
+    assert_closed_flow_error(wait_for_approve_step(&harness).await);
+
+    // A Step canceled by a decision before the terminate still counts as completed.
+    put_history_record(&harness, run_id, 9, false);
+    wait_for_approve_step(&harness).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -316,9 +381,7 @@ async fn wait_for_step_completion_on_a_closed_flow_reports_a_missing_flow() {
         ))
         .await
         .unwrap();
-    let error = wait.await.unwrap_err();
-    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
-    assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+    assert_closed_flow_error(wait.await.map(drop));
 }
 
 #[tokio::test(start_paused = true)]
