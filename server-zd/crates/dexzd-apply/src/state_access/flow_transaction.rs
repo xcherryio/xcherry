@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 
-use dexzd_keyspace::ColumnFamily;
+use dexzd_keyspace::row_keys::history_row_metadata_key;
+use dexzd_keyspace::{ColumnFamily, RunTable, parse_run_key};
+use dexzd_protocol::dexzd::v1::HistoryRowMetadata;
 use prost::Message;
 
 use crate::state_access::StateRow;
@@ -76,13 +78,17 @@ impl<'reader> FlowTransaction<'reader> {
         limit: usize,
     ) -> Result<Vec<StateRow>, ApplyError> {
         self.check_key_scope(column_family, start);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let mut merged: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
         let mut page_start = start.to_vec();
+        let page_limit = limit.min(SCAN_PAGE_ROWS);
         loop {
             let page = self
                 .reader
-                .scan(column_family, &page_start, end, SCAN_PAGE_ROWS)?;
-            let is_last_page = page.len() < SCAN_PAGE_ROWS;
+                .scan(column_family, &page_start, end, page_limit)?;
+            let is_last_page = page.len() < page_limit;
             for (key, value) in page {
                 page_start = key.clone();
                 page_start.push(0);
@@ -108,11 +114,32 @@ impl<'reader> FlowTransaction<'reader> {
 
     pub(crate) fn put(&mut self, column_family: ColumnFamily, key: Vec<u8>, value: Vec<u8>) {
         self.check_key_scope(column_family, &key);
+        if column_family == ColumnFamily::History {
+            let metadata_key = metadata_key_for_history_row(&key);
+            let row_size_bytes = u64::try_from(key.len() + value.len())
+                .expect("a stored history row fits in a u64 byte count");
+            self.rows.insert(
+                (ColumnFamily::Flow, metadata_key),
+                Some(
+                    HistoryRowMetadata {
+                        row_size_bytes,
+                        ..HistoryRowMetadata::default()
+                    }
+                    .encode_to_vec(),
+                ),
+            );
+        }
         self.rows.insert((column_family, key), Some(value));
     }
 
     pub(crate) fn delete(&mut self, column_family: ColumnFamily, key: Vec<u8>) {
         self.check_key_scope(column_family, &key);
+        if column_family == ColumnFamily::History {
+            self.rows.insert(
+                (ColumnFamily::Flow, metadata_key_for_history_row(&key)),
+                None,
+            );
+        }
         self.rows.insert((column_family, key), None);
     }
 
@@ -185,9 +212,7 @@ impl<'reader> FlowTransaction<'reader> {
     ) -> Result<Vec<StateRowChange>, ApplyError> {
         let mut changes = BTreeMap::new();
         for ((column_family, key), current) in &self.rows {
-            if matches!(column_family, ColumnFamily::Flow | ColumnFamily::History)
-                && key.starts_with(run_prefix)
-            {
+            if *column_family == ColumnFamily::Flow && key.starts_with(run_prefix) {
                 changes.insert(
                     (*column_family, key.clone()),
                     StateRowChange {
@@ -200,7 +225,7 @@ impl<'reader> FlowTransaction<'reader> {
             }
         }
         for (column_family, start, end) in &self.range_deletes {
-            if !matches!(column_family, ColumnFamily::Flow | ColumnFamily::History) {
+            if *column_family != ColumnFamily::Flow {
                 continue;
             }
             let mut page_start = start.clone();
@@ -310,6 +335,32 @@ impl<'reader> FlowTransaction<'reader> {
             }
         }
     }
+}
+
+fn metadata_key_for_history_row(key: &[u8]) -> Vec<u8> {
+    let parsed = parse_run_key(key).expect("history writes use valid run keys");
+    let (seq, attempt) = match parsed.table {
+        RunTable::HistoryRecord => {
+            assert_eq!(
+                parsed.suffix.len(),
+                8,
+                "history records have eight-byte seqs"
+            );
+            (
+                u64::from_be_bytes(parsed.suffix.try_into().expect("eight-byte seq")),
+                0,
+            )
+        }
+        RunTable::Checkpoint => {
+            assert_eq!(parsed.suffix.len(), 12, "checkpoints have attempt and seq");
+            (
+                u64::from_be_bytes(parsed.suffix[4..].try_into().expect("eight-byte seq")),
+                u32::from_be_bytes(parsed.suffix[..4].try_into().expect("four-byte attempt")),
+            )
+        }
+        _ => panic!("the History column family stores only records and checkpoints"),
+    };
+    history_row_metadata_key(parsed.flow_hash, parsed.run_id, seq, parsed.table, attempt)
 }
 
 fn corrupt_row(table: &'static str, key: &[u8], error: &prost::DecodeError) -> ApplyError {

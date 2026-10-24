@@ -10,13 +10,25 @@
 //!
 //! FlowStart and the genesis checkpoint are kept until the run is deleted (D12).
 
-use dexzd_keyspace::ColumnFamily;
-use dexzd_keyspace::row_keys::{checkpoint_key, history_record_key};
+use std::collections::{BTreeMap, BTreeSet};
+
+use dexzd_keyspace::row_keys::{
+    checkpoint_key, history_record_key, history_row_metadata_key, prefix_range,
+};
+use dexzd_keyspace::{ColumnFamily, RunTable, run_table_prefix};
+use dexzd_protocol::dexzd::v1::HistoryRowMetadata;
 
 use crate::ApplyError;
 use crate::command_handlers::run_cursor::RunCursor;
-use crate::history::lineage::{genesis_seq, history_page, required_attempt_record};
+use crate::history::lineage::{genesis_seq, required_attempt_record};
 use crate::state_access::FlowTransaction;
+
+const HISTORY_ROWS_PER_COMMAND: usize = 128;
+
+pub(crate) enum WindowAdvanceTarget {
+    SemanticPoints(u64),
+    GarbageSeq(u64),
+}
 
 /// Advances the window start W when the window holds more than N + M semantic points.
 pub(crate) fn advance_window_if_full(
@@ -36,88 +48,153 @@ pub(crate) fn advance_window_if_full(
     if in_window <= window_events + chunk_events {
         return Ok(());
     }
-    if !advance_window(transaction, cursor, chunk_events)? {
-        return Err(ApplyError::InvariantViolation {
-            detail: format!(
-                "the window counts {in_window} semantic events but history has fewer from seq {}",
-                cursor.record.window_start_seq
-            ),
-        });
+    if crate::values::projected_superseded_value_bytes(transaction, cursor)?
+        > settings.max_retained_superseded_bytes
+    {
+        return Ok(());
     }
+    advance_window(
+        transaction,
+        cursor,
+        WindowAdvanceTarget::SemanticPoints(chunk_events),
+    )?;
     Ok(())
 }
 
-/// Moves W past its oldest `semantic_points` points, keeping what rebuilds every later point.
+/// Moves W past up to the requested semantic points, keeping what rebuilds every later point.
 ///
-/// Returns false, changing nothing, when no semantic point would remain in the window. The
-/// superseded value byte cap (task A5) also advances the window through this function.
+/// Returns false when this command's page has no later semantic point. The superseded value
+/// byte cap (task A5) also advances the window through this function.
 pub(crate) fn advance_window(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
-    semantic_points: u64,
+    target: WindowAdvanceTarget,
 ) -> Result<bool, ApplyError> {
-    let Some(pruned) = find_new_window_start(transaction, cursor, semantic_points)? else {
+    if cursor.history_window_page_used
+        || matches!(target, WindowAdvanceTarget::SemanticPoints(0))
+        || matches!(target, WindowAdvanceTarget::GarbageSeq(seq) if seq < cursor.record.window_start_seq)
+    {
+        return Ok(false);
+    }
+    let Some(pruned) = find_new_window_start(transaction, cursor, target)? else {
         return Ok(false);
     };
     let record = &mut cursor.record;
     record.window_start_seq = pruned.window_start_seq;
-    record.pruned_semantic_event_count += semantic_points;
+    record.window_scan_seq = 0;
+    record.pruned_semantic_event_count += pruned.semantic_points;
     record.max_pruned_external_input_seq = record
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
-    delete_unneeded_history(transaction, cursor, pruned.window_start_attempt)?;
     crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
     Ok(true)
 }
 
 struct PrunedChunk {
     window_start_seq: u64,
-    window_start_attempt: u32,
+    semantic_points: u64,
     max_external_input_seq: u64,
 }
 
-/// Skips `chunk_events` semantic records from W; the next semantic record is the new W.
+/// Skips up to one page of history metadata; the next semantic record becomes the new W.
 fn find_new_window_start(
     transaction: &FlowTransaction<'_>,
-    cursor: &RunCursor,
-    chunk_events: u64,
+    cursor: &mut RunCursor,
+    target: WindowAdvanceTarget,
 ) -> Result<Option<PrunedChunk>, ApplyError> {
-    let mut remaining = chunk_events;
+    let rows = cursor.rows;
+    let current_start = cursor.record.window_start_seq;
+    let start_seq = cursor.record.window_scan_seq.max(current_start);
+    let start = history_row_metadata_key(
+        rows.flow_hash,
+        rows.run_id,
+        start_seq,
+        RunTable::HistoryRecord,
+        0,
+    );
+    let prefix = run_table_prefix(rows.flow_hash, rows.run_id, RunTable::HistoryRowMetadata);
+    let (_, end) = prefix_range(&prefix);
+    let page = transaction.scan_messages::<HistoryRowMetadata>(
+        ColumnFamily::Flow,
+        &start,
+        &end,
+        HISTORY_ROWS_PER_COMMAND,
+        "history metadata",
+    )?;
+    cursor.history_window_page_used = true;
+    let start_metadata_key = history_row_metadata_key(
+        rows.flow_hash,
+        rows.run_id,
+        current_start,
+        RunTable::HistoryRecord,
+        0,
+    );
+    let start_metadata: HistoryRowMetadata = transaction
+        .get_message(ColumnFamily::Flow, &start_metadata_key, "history metadata")?
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: format!("window start {current_start} has no history metadata"),
+        })?;
+    let mut previous_semantic_seq = current_start;
+    let mut was_previous_external = start_metadata.is_external_input;
     let mut max_external_input_seq = 0;
-    let mut next_seq = cursor.record.window_start_seq;
-    loop {
-        let page = history_page(transaction, cursor.rows, next_seq)?;
-        let Some(last) = page.last() else {
-            return Ok(None);
-        };
-        next_seq = last.seq + 1;
-        for record in page {
-            if record.is_semantic {
-                if remaining == 0 {
-                    return Ok(Some(PrunedChunk {
-                        window_start_seq: record.seq,
-                        window_start_attempt: record.attempt,
-                        max_external_input_seq,
-                    }));
-                }
-                remaining -= 1;
-            }
-            if record.is_external_input {
-                max_external_input_seq = max_external_input_seq.max(record.seq);
-            }
+    let mut semantic_points = 0;
+    let mut candidate = None;
+    let mut last_scanned_seq = None;
+    for (key, metadata) in page {
+        let (seq, history_table, _) = metadata_identity(&key, &prefix)?;
+        last_scanned_seq = Some(seq);
+        if history_table != RunTable::HistoryRecord
+            || !metadata.is_semantic
+            || seq <= current_start
+            || seq > cursor.seq
+        {
+            continue;
+        }
+        if was_previous_external {
+            max_external_input_seq = max_external_input_seq.max(previous_semantic_seq);
+        }
+        semantic_points += 1;
+        candidate = Some(PrunedChunk {
+            window_start_seq: seq,
+            semantic_points,
+            max_external_input_seq,
+        });
+        previous_semantic_seq = seq;
+        was_previous_external = metadata.is_external_input;
+        match target {
+            WindowAdvanceTarget::SemanticPoints(limit) if semantic_points >= limit => break,
+            WindowAdvanceTarget::GarbageSeq(garbage_seq) if seq > garbage_seq => break,
+            _ => {}
         }
     }
+    if candidate.is_none()
+        && let Some(last_seq) = last_scanned_seq
+    {
+        cursor.record.window_scan_seq = last_seq.saturating_add(1);
+    }
+    Ok(candidate)
 }
 
 /// Deletes history records and checkpoints older than the checkpoint that rebuilds W.
-fn delete_unneeded_history(
+pub(crate) fn prune_window_history(
     transaction: &mut FlowTransaction<'_>,
     cursor: &RunCursor,
-    window_start_attempt: u32,
-) -> Result<(), ApplyError> {
-    let window_start_seq = cursor.record.window_start_seq;
+) -> Result<usize, ApplyError> {
     let rows = cursor.rows;
-    let keep_from = required_attempt_record(transaction, rows, window_start_attempt)?
+    let window_start_seq = cursor.record.window_start_seq;
+    let window_metadata_key = history_row_metadata_key(
+        rows.flow_hash,
+        rows.run_id,
+        window_start_seq,
+        RunTable::HistoryRecord,
+        0,
+    );
+    let window_metadata: HistoryRowMetadata = transaction
+        .get_message(ColumnFamily::Flow, &window_metadata_key, "history metadata")?
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: format!("window start {window_start_seq} has no history metadata"),
+        })?;
+    let keep_from = required_attempt_record(transaction, rows, window_metadata.attempt)?
         .checkpoint_seqs
         .iter()
         .copied()
@@ -125,37 +202,85 @@ fn delete_unneeded_history(
         .max()
         .ok_or_else(|| ApplyError::InvariantViolation {
             detail: format!(
-                "run attempt {window_start_attempt} has no checkpoint at or before seq \
-                 {window_start_seq}"
+                "run attempt {} has no checkpoint at or before seq {window_start_seq}",
+                window_metadata.attempt
             ),
         })?;
     let genesis = genesis_seq(transaction, rows)?;
-    if keep_from > genesis + 1 {
-        transaction.delete_range(
-            ColumnFamily::History,
-            history_record_key(rows.flow_hash, rows.run_id, genesis + 1),
-            history_record_key(rows.flow_hash, rows.run_id, keep_from),
-        );
+    if keep_from <= genesis + 1 {
+        return Ok(0);
     }
-    for attempt in 1..=cursor.record.current_attempt {
-        let mut attempt_record = required_attempt_record(transaction, rows, attempt)?;
-        let is_kept = |seq: &u64| *seq >= keep_from || (attempt == 1 && *seq == genesis);
-        let (kept, deleted): (Vec<u64>, Vec<u64>) = attempt_record
-            .checkpoint_seqs
-            .iter()
-            .copied()
-            .partition(is_kept);
-        if deleted.is_empty() {
-            continue;
-        }
-        for seq in deleted {
-            transaction.delete(
+    let prefix = run_table_prefix(rows.flow_hash, rows.run_id, RunTable::HistoryRowMetadata);
+    let start = history_row_metadata_key(
+        rows.flow_hash,
+        rows.run_id,
+        genesis + 1,
+        RunTable::HistoryRecord,
+        0,
+    );
+    let end = history_row_metadata_key(
+        rows.flow_hash,
+        rows.run_id,
+        keep_from,
+        RunTable::HistoryRecord,
+        0,
+    );
+    let page = transaction.scan_messages::<HistoryRowMetadata>(
+        ColumnFamily::Flow,
+        &start,
+        &end,
+        HISTORY_ROWS_PER_COMMAND,
+        "history metadata",
+    )?;
+    let mut deleted_checkpoints = BTreeMap::<u32, BTreeSet<u64>>::new();
+    let count = page.len();
+    for (key, _) in page {
+        let (seq, history_table, attempt) = metadata_identity(&key, &prefix)?;
+        match history_table {
+            RunTable::HistoryRecord => transaction.delete(
                 ColumnFamily::History,
-                checkpoint_key(rows.flow_hash, rows.run_id, attempt, seq),
-            );
+                history_record_key(rows.flow_hash, rows.run_id, seq),
+            ),
+            RunTable::Checkpoint => {
+                transaction.delete(
+                    ColumnFamily::History,
+                    checkpoint_key(rows.flow_hash, rows.run_id, attempt, seq),
+                );
+                deleted_checkpoints.entry(attempt).or_default().insert(seq);
+            }
+            _ => {
+                return Err(ApplyError::InvariantViolation {
+                    detail: "history metadata names an unexpected table".to_owned(),
+                });
+            }
         }
-        attempt_record.checkpoint_seqs = kept;
+    }
+    for (attempt, deleted_seqs) in deleted_checkpoints {
+        let mut attempt_record = required_attempt_record(transaction, rows, attempt)?;
+        attempt_record
+            .checkpoint_seqs
+            .retain(|seq| !deleted_seqs.contains(seq));
         rows.put_attempt_record(transaction, &attempt_record);
     }
-    Ok(())
+    Ok(count)
+}
+
+fn metadata_identity(key: &[u8], prefix: &[u8]) -> Result<(u64, RunTable, u32), ApplyError> {
+    let suffix = key
+        .strip_prefix(prefix)
+        .ok_or_else(|| ApplyError::InvariantViolation {
+            detail: "history metadata key is outside its run".to_owned(),
+        })?;
+    if suffix.len() != 13 {
+        return Err(ApplyError::InvariantViolation {
+            detail: "history metadata key must have a 13-byte suffix".to_owned(),
+        });
+    }
+    let seq = u64::from_be_bytes(suffix[..8].try_into().expect("eight-byte seq"));
+    let history_table =
+        RunTable::from_byte(suffix[8]).map_err(|error| ApplyError::InvariantViolation {
+            detail: format!("history metadata table is invalid: {error}"),
+        })?;
+    let attempt = u32::from_be_bytes(suffix[9..].try_into().expect("four-byte attempt"));
+    Ok((seq, history_table, attempt))
 }

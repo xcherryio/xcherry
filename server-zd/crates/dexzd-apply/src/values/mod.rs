@@ -199,6 +199,7 @@ pub(crate) fn release_stored_value(
     let Some((value_id, _)) = table_value_id(stored) else {
         return Ok(());
     };
+    // Removing a holder that does not exist does nothing (plan section 10.2).
     let holder_key = value_holder_key(rows.flow_hash, rows.run_id, value_id, &holder.encode());
     if transaction.get(ColumnFamily::Flow, &holder_key)?.is_none() {
         return Ok(());
