@@ -21,3 +21,15 @@ DEXZD_SIMULATION_SEED=1592590336 cargo test -p dexzd-simulation  # reproduce one
 
 A failing seed prints its seed, the failing command index, and a shrunk command sequence that
 `replay_commands` reproduces.
+
+The fixed test runs 64 seeds of 400 commands, plus every case in `regression-seeds.txt`.
+Each line in that file contains a decimal seed and the command count needed to reach its failure.
+The checked-in seed also runs for 1,000 commands. Nightly runs set `DEXZD_SIMULATION_BASE_SEED`
+to a printed random starting seed, then use `DEXZD_SIMULATION_SEEDS` consecutive seeds and
+`DEXZD_SIMULATION_COMMANDS` commands per seed. The single-seed override runs only that seed.
+
+When a nightly run fails, download its failure artifact. Each seed has a report containing the
+failing command index and shrunk command sequence. Reproduce the failure from `server-zd/` with
+`DEXZD_SIMULATION_SEED=<seed> DEXZD_SIMULATION_COMMANDS=<failing index + 1> cargo test -p dexzd-simulation`.
+Add `<seed> <failing index + 1>` as a line in `regression-seeds.txt`, then run the fixed test.
+The command count keeps failures beyond the default 400 commands in every PR run.
