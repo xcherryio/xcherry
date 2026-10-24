@@ -11,6 +11,7 @@
 
 use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::RunId;
+use dexzd_protocol::dex::PullRouting;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, StepInvocationKey};
 use futures::future::BoxFuture;
 
@@ -76,11 +77,16 @@ pub trait EffectRuntime: Send + Sync + 'static {
         urgency: CommitUrgency,
     ) -> BoxFuture<'a, Result<CommandReply, EffectRuntimeError>>;
 
-    /// Inside the Flow's actor: proposes `StepAttemptStarted` with `task_id` when every lock
-    /// key of the invocation is free in the overlay lock table and the in-memory RPC locks, and
-    /// no earlier waiter queues on any of its keys. The urgency follows the method's durability.
+    /// Inside the Flow's actor: proposes `StepAttemptStarted` with `task_id` and `pull_routing`
+    /// when every lock key of the invocation is free in the overlay lock table and the
+    /// in-memory RPC locks, and no earlier waiter queues on any of its keys. The urgency
+    /// follows the method's durability.
     ///
     /// Returns whether the attempt started, or [`EffectRuntimeError`] when nothing was proposed.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A lock-checked start names its Flow, run, call, attempt, and dispatch."
+    )]
     fn try_start_invocation<'a>(
         &'a self,
         flow: &'a FlowAddress,
@@ -89,6 +95,7 @@ pub trait EffectRuntime: Send + Sync + 'static {
         invocation: &'a StepInvocationKey,
         attempt: u32,
         task_id: Vec<u8>,
+        pull_routing: PullRouting,
     ) -> BoxFuture<'a, Result<InvocationStartOutcome, EffectRuntimeError>>;
 
     /// Returns a read view of `flow`'s state, including uncommitted speculative commands when

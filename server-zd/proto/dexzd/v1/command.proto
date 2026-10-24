@@ -164,6 +164,8 @@ message StepAttemptStartedCommand {
   uint32 attempt = 2;
   // 16-byte UUIDv7 of the dispatch.
   bytes task_id = 3;
+  // Routing of the dispatch, with no serving Worker yet; reported while the attempt runs.
+  dex.PullRouting pull_routing = 4;
 }
 
 // A heartbeat that changed the attempt's checkpoint value.

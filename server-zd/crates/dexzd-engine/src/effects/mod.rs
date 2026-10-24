@@ -65,9 +65,6 @@ use timer_service::TimerServices;
 /// Settings of the effect runner.
 #[derive(Debug, Clone)]
 pub struct EffectsConfig {
-    /// Default 10 seconds, the matching `dispatchWait`. Extends the first heartbeat window of
-    /// an attempt by the time matching may wait for a Worker.
-    pub dispatch_wait: Duration,
     /// Default 20 milliseconds, the commit batch window. Heartbeats that change an attempt's
     /// checkpoint within this window are proposed once, with the last value.
     pub heartbeat_batch_window: Duration,
@@ -102,7 +99,6 @@ pub struct EffectsConfig {
 impl Default for EffectsConfig {
     fn default() -> Self {
         Self {
-            dispatch_wait: Duration::from_secs(10),
             heartbeat_batch_window: Duration::from_millis(20),
             max_worker_request_bytes: 32 * 1024 * 1024,
             default_max_value_bytes: 16 * 1024 * 1024,

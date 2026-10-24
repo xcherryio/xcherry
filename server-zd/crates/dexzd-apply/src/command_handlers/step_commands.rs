@@ -8,7 +8,7 @@
 
 //! Step attempt commands and fired timers.
 
-use dexzd_protocol::dex::{FlowErrorType, FlowStatus, FlowTimeoutPolicy};
+use dexzd_protocol::dex::{FlowErrorType, FlowStatus, FlowTimeoutPolicy, PullRouting};
 use dexzd_protocol::dexzd::v1::{
     StepAttemptFailedCommand, StepAttemptFailureKind, StepExecutionPhase, StepMethod,
     TimersFiredCommand, flow_command::Command, timer_id,
@@ -56,9 +56,12 @@ pub(crate) fn apply_step_command(
         ),
         Command::StepMethodCompleted(completed) => {
             let outcome = apply_method_completed(transaction, &mut cursor, scope, completed)?;
-            if let Some(failure) =
-                rejected_result_failure(completed.invocation.clone(), completed.attempt, &outcome)
-            {
+            if let Some(failure) = rejected_result_failure(
+                completed.invocation.clone(),
+                completed.attempt,
+                completed.pull_routing.clone(),
+                &outcome,
+            ) {
                 return Ok(StepHandlerResult::ApplyAsFailure(failure));
             }
             (outcome, HistoryKind::SEMANTIC)
@@ -84,7 +87,7 @@ pub(crate) fn apply_step_command(
                 }
                 _ => (None, 0),
             };
-            rejected_result_failure(invocation, attempt, &outcome)
+            rejected_result_failure(invocation, attempt, None, &outcome)
                 .map(StepHandlerResult::ApplyAsFailure)
                 .ok_or_else(|| ApplyError::InvariantViolation {
                     detail: "a rejected Step result produced no attempt failure".to_owned(),
@@ -93,11 +96,12 @@ pub(crate) fn apply_step_command(
     }
 }
 
-/// Returns the non-retryable attempt failure that replaces a rejected Worker result, or
-/// `None` when the outcome is not a rejection.
+/// Returns the non-retryable attempt failure that replaces a rejected Worker result, keeping
+/// the result's `pull_routing`, or `None` when the outcome is not a rejection.
 fn rejected_result_failure(
     invocation: Option<dexzd_protocol::dexzd::v1::StepInvocationKey>,
     attempt: u32,
+    pull_routing: Option<PullRouting>,
     outcome: &StepCommandOutcome,
 ) -> Option<StepAttemptFailedCommand> {
     let (kind, server_detail) = match outcome {
@@ -119,7 +123,7 @@ fn rejected_result_failure(
         worker_error: None,
         server_detail,
         is_non_retryable: true,
-        pull_routing: None,
+        pull_routing,
     })
 }
 

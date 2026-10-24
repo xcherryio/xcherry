@@ -301,9 +301,8 @@ impl MethodAttempt {
                 ));
             }
         };
-        // Matching may wait for a Worker before the Worker can heartbeat.
-        let mut heartbeat_deadline =
-            started + self.context.config.dispatch_wait + heartbeat_timeout;
+        // Like the Go Server, the heartbeat timeout runs only while a Worker holds the task.
+        let mut heartbeat_deadline = None;
         let mut checkpoints = CheckpointTracker {
             last_proposed: heartbeat_checkpoint_value(state),
             pending: None,
@@ -320,7 +319,7 @@ impl MethodAttempt {
                     session.cancel();
                     return AttemptEnd::Failure(timeouts.method.timeout_failure());
                 }
-                () = sleep_until(heartbeat_deadline) => {
+                () = sleep_until_optional(heartbeat_deadline) => {
                     session.cancel();
                     return AttemptEnd::Failure(AttemptFailure::server(
                         StepAttemptFailureKind::HeartbeatTimeout,
@@ -340,8 +339,12 @@ impl MethodAttempt {
                                 "dispatch ended without an outcome",
                             ));
                         }
+                        Some(DispatchEvent::Assigned { .. }) => {
+                            heartbeat_deadline = Some(Instant::now() + heartbeat_timeout);
+                        }
+                        Some(DispatchEvent::Unassigned) => heartbeat_deadline = None,
                         Some(DispatchEvent::Output(frame)) => {
-                            heartbeat_deadline = Instant::now() + heartbeat_timeout;
+                            heartbeat_deadline = Some(Instant::now() + heartbeat_timeout);
                             if let Some(change) = heartbeat_change(&frame) {
                                 checkpoints.observe(change, self.context.config.heartbeat_batch_window);
                             } else if let Some(write) = into_step_stream_write(frame) {
@@ -714,7 +717,12 @@ async fn sleep_until_optional(deadline: Option<Instant>) {
     }
 }
 
-fn pull_routing(sticky_app_worker_id: &str, served_by_app_worker_id: &str) -> PullRouting {
+/// Returns the routing of a dispatch to the run's sticky Worker or its Flow type queue; an
+/// empty `served_by_app_worker_id` means no Worker served it yet.
+pub(crate) fn pull_routing(
+    sticky_app_worker_id: &str,
+    served_by_app_worker_id: &str,
+) -> PullRouting {
     let source = if served_by_app_worker_id.is_empty() {
         PullRoutingSource::Unspecified
     } else if served_by_app_worker_id == sticky_app_worker_id {

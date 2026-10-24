@@ -13,13 +13,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dexzd_keyspace::RunId;
+use dexzd_protocol::dex::PullRouting;
 use dexzd_protocol::dexzd::v1::StepInvocationKey;
 use tokio_util::sync::CancellationToken;
 
-use crate::effects::dispatch::method_attempt::MethodAttempt;
+use crate::effects::dispatch::method_attempt::{MethodAttempt, pull_routing};
 use crate::effects::effect_runtime::{EffectRuntimeError, InvocationStartOutcome};
 use crate::effects::method_request::MethodAttemptKey;
-use crate::effects::{EffectContext, RouterMessage};
+use crate::effects::state_reads::read_run_record;
+use crate::effects::{EffectContext, EffectError, RouterMessage};
 use crate::runtime::FlowAddress;
 
 /// Result of one lock-checked start, reported back to the router.
@@ -182,7 +184,7 @@ impl DispatchScheduler {
     }
 }
 
-/// Asks the runtime to start the attempt, retrying while the runtime is unavailable.
+/// Asks the runtime to start the attempt, retrying while the runtime or state is unavailable.
 async fn try_start_until_answered(
     context: &EffectContext,
     flow: &FlowAddress,
@@ -192,28 +194,55 @@ async fn try_start_until_answered(
     let task_id = uuid::Uuid::now_v7().as_bytes().to_vec();
     let mut backoff = context.retry_backoff();
     loop {
-        let outcome = context
-            .runtime
-            .try_start_invocation(
-                flow,
-                key.run_id,
-                key.run_attempt,
-                &invocation,
-                key.attempt,
-                task_id.clone(),
-            )
-            .await;
+        let outcome = match read_dispatch_pull_routing(context, flow, key) {
+            Ok(Some(pull_routing)) => context
+                .runtime
+                .try_start_invocation(
+                    flow,
+                    key.run_id,
+                    key.run_attempt,
+                    &invocation,
+                    key.attempt,
+                    task_id.clone(),
+                    pull_routing,
+                )
+                .await
+                .map_err(EffectError::Runtime),
+            Ok(None) => return InvocationStartResult::Stale,
+            Err(error) => Err(error),
+        };
         match outcome {
             Ok(InvocationStartOutcome::Started) => return InvocationStartResult::Started,
             Ok(InvocationStartOutcome::LocksBusy) => return InvocationStartResult::LocksBusy,
             Ok(InvocationStartOutcome::Stale) => return InvocationStartResult::Stale,
-            Err(EffectRuntimeError::NodeStopping { .. }) => return InvocationStartResult::Stopped,
-            Err(error @ EffectRuntimeError::Unavailable { .. }) => {
-                tracing::debug!(%error, run_id = %key.run_id, "invocation start is waiting for the runtime");
+            Err(EffectError::Runtime(EffectRuntimeError::NodeStopping { .. })) => {
+                return InvocationStartResult::Stopped;
+            }
+            Err(error) => {
+                // A corrupt run record also waits: dropping the start would strand the call.
+                if error.is_retryable() {
+                    tracing::debug!(%error, run_id = %key.run_id, "invocation start is waiting for the runtime");
+                } else {
+                    tracing::warn!(%error, run_id = %key.run_id, "invocation start cannot read the run");
+                }
                 if !backoff.wait(&context.shutdown).await {
                     return InvocationStartResult::Stopped;
                 }
             }
         }
     }
+}
+
+/// Returns the routing that the start records: the run's sticky Worker and no serving Worker.
+///
+/// Returns `None` when the run no longer exists, or [`EffectError`] when its state is unreadable.
+fn read_dispatch_pull_routing(
+    context: &EffectContext,
+    flow: &FlowAddress,
+    key: &MethodAttemptKey,
+) -> Result<Option<PullRouting>, EffectError> {
+    let reader = context.runtime.flow_state_reader(flow, true)?;
+    let run = context.run_location(flow, key.run_id);
+    let run_record = read_run_record(reader.as_ref(), run)?;
+    Ok(run_record.map(|record| pull_routing(&record.sticky_app_worker_id, "")))
 }
