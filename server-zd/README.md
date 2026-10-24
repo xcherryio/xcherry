@@ -66,18 +66,30 @@ to a separate destination with the same keys; without it they use the primary bu
 
 Startup proceeds in this order:
 
-1. Every destination must pass a conditional-write self-check.
-2. The node acquires the lease of `cluster.nodeId` for `lease.duration`. A lease that another
+1. The node binds `api.listen`. gRPC health Check and Watch report NOT_SERVING for `""`,
+   `dex.FlowService`, and `dex.WorkerTaskService`; FlowService and WorkerTaskService calls return
+   Unavailable while startup continues.
+2. Every destination must pass a conditional-write self-check.
+3. The node acquires the lease of `cluster.nodeId` for `lease.duration`. A lease that another
    process still holds is awaited until it expires, or fails startup when `lease.failIfHeld` is
    true.
-3. The node restores `localStorage.directory` from the latest snapshot and the command log. The
+4. The node restores `localStorage.directory` from the latest snapshot and the command log. The
    directory is a cache; an empty one is rebuilt from object storage. Replay keeps up to
    `recovery.readAheadBatches` log reads in flight, holding at most `recovery.readAheadBytes` of
    log objects or one larger batch, and applies batches in log order as they arrive. After a
    replay of at least `localStorage.compactAfterReplayBytes`, the local store is compacted in the
    background while the node serves.
-4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
-   `api.listen`.
+5. After recovery and rebuild finish, health switches to SERVING and the API serves requests.
+   Startup failure closes the listener.
+
+### Snapshot uploads after ownership changes
+
+The first snapshot after every takeover or restart uploads every file in the local checkpoint to
+a fresh lineage. It cannot reuse objects from the previous lineage, even when the local RocksDB
+directory is reused. Expect uploads approximately equal to the full checkpoint size, plus manifest
+data. Transfer time is at least checkpoint bytes divided by effective upload throughput, plus
+checkpoint and per-file request time. For example, 10 GiB at 100 MiB/s takes at least about 102
+seconds to transfer. Later snapshots from the same owner can reuse unchanged files.
 
 `search.backend: builtin` serves SearchFlows from committed local search documents.
 
@@ -105,8 +117,10 @@ the release does not finish within 2 seconds, the process exits 1 and the lease 
 expires.
 
 A lost lease, a stopped commit pipeline, or a halted Flow runtime stops the node, and the process
-exits 1. Restart it. A signal that arrives during startup stops the node once startup finishes, with
-the same shutdown and exit status. A failed startup releases its lease and exits 1.
+exits 1. Restart it. A signal before the node acquires its lease cancels startup and exits 0. If
+the node already holds its lease, startup finishes before graceful shutdown begins. That shutdown
+has the same 14.5-second total and exit status as a signal received while serving. A failed startup
+releases its lease and exits 1.
 
 Logs go to standard error. `RUST_LOG` filters them; the default level is `info`.
 

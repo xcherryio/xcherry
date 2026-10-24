@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use dexzd_clock::{SystemWallClock, WallClock};
 
 use crate::file_download::TemporaryDownloadFile;
 use crate::{
@@ -47,6 +48,7 @@ pub trait FaultInjector: Send + Sync {
 struct StoredObject {
     body: Bytes,
     etag: String,
+    last_modified_unix_micros: i64,
 }
 
 #[derive(Default)]
@@ -61,6 +63,7 @@ struct State {
 pub struct InMemoryObjectStore {
     state: Mutex<State>,
     injector: Option<Arc<dyn FaultInjector>>,
+    clock: Option<Arc<dyn WallClock>>,
 }
 
 impl InMemoryObjectStore {
@@ -74,6 +77,19 @@ impl InMemoryObjectStore {
         Self {
             state: Mutex::new(State::default()),
             injector: Some(injector),
+            clock: None,
+        }
+    }
+
+    /// Creates an empty fault-injecting store that timestamps writes with `clock`.
+    pub fn with_injector_and_clock(
+        injector: Arc<dyn FaultInjector>,
+        clock: Arc<dyn WallClock>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            injector: Some(injector),
+            clock: Some(clock),
         }
     }
 
@@ -155,6 +171,7 @@ impl InMemoryObjectStore {
             key: key.to_owned(),
             size: object.body.len() as u64,
             etag: object.etag.clone(),
+            last_modified_unix_micros: Some(object.last_modified_unix_micros),
         }
     }
 
@@ -210,6 +227,10 @@ impl ObjectStore for InMemoryObjectStore {
             StoredObject {
                 body,
                 etag: etag.clone(),
+                last_modified_unix_micros: self.clock.as_ref().map_or_else(
+                    || SystemWallClock.now_unix_micros(),
+                    |clock| clock.now_unix_micros(),
+                ),
             },
         );
         self.after_call(

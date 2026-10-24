@@ -493,10 +493,14 @@ pub(crate) struct TestCluster {
 impl TestCluster {
     pub(crate) fn new() -> Self {
         let faults = Arc::new(SwitchableFaults::default());
+        let clock = Arc::new(TestClock::new());
         Self {
-            object_store: Arc::new(InMemoryObjectStore::with_injector(faults.clone())),
+            object_store: Arc::new(InMemoryObjectStore::with_injector_and_clock(
+                faults.clone(),
+                clock.clone(),
+            )),
             faults,
-            clock: Arc::new(TestClock::new()),
+            clock,
             hasher: PartitionHasher::new(&[0; 16], PARTITION_COUNT).expect("valid hasher"),
         }
     }

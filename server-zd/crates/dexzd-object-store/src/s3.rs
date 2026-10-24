@@ -795,6 +795,12 @@ impl ObjectStore for S3ObjectStore {
                 })?,
                 etag: required(response.e_tag(), ObjectStoreOperation::Head, key, "ETag")?
                     .to_owned(),
+                last_modified_unix_micros: response.last_modified().map(|modified| {
+                    modified
+                        .secs()
+                        .saturating_mul(1_000_000)
+                        .saturating_add(i64::from(modified.subsec_nanos() / 1_000))
+                }),
             })),
             Err(error) => {
                 let status = error
@@ -952,6 +958,12 @@ impl ObjectStore for S3ObjectStore {
                     size,
                     etag: required(object.e_tag(), ObjectStoreOperation::List, prefix, "ETag")?
                         .to_owned(),
+                    last_modified_unix_micros: object.last_modified().map(|modified| {
+                        modified
+                            .secs()
+                            .saturating_mul(1_000_000)
+                            .saturating_add(i64::from(modified.subsec_nanos() / 1_000))
+                    }),
                 })
             })
             .collect::<ObjectStoreResult<Vec<_>>>()?;

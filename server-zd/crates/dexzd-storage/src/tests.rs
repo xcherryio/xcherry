@@ -221,6 +221,7 @@ impl ObjectStore for TestObjectStore {
                 key: key.to_owned(),
                 size: value.len() as u64,
                 etag: value.len().to_string(),
+                last_modified_unix_micros: None,
             }))
     }
 
@@ -259,6 +260,7 @@ impl ObjectStore for TestObjectStore {
                 key: key.clone(),
                 size: value.len() as u64,
                 etag: value.len().to_string(),
+                last_modified_unix_micros: None,
             })
             .collect();
         let next_start_after = if matching.len() > max_keys as usize {
