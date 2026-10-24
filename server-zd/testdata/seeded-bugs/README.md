@@ -38,7 +38,7 @@ that budget when the engine simulation command exists.
 
 | Patch | Deliberate defect | Expected engine invariant |
 | --- | --- | --- |
-| `ack-before-persist.patch` | The partition applier resolves a successful commit ticket before its local store write. | An acknowledged command must survive a crash and restart. |
+| `ack-before-persist.patch` | A client write returns its speculative reply immediately after proposal, before the object-store log write is durable. | An acknowledged command must survive a crash and restart. |
 | `skip-epoch-check.patch` | Closed-stream recovery replays batches from an older epoch after a new owner starts. | Recovered state must exclude commands voided by the epoch transition. |
 | `speculative-read-leak.patch` | GetAttributes reads the speculative overlay. | A client read must see only committed state, including before and after a failed commit. |
 
