@@ -122,6 +122,7 @@ impl DispatchScheduler {
         flow: FlowAddress,
         key: MethodAttemptKey,
         task_id: Vec<u8>,
+        method_timeout_seconds: i32,
     ) {
         let attempts = self.running.entry(task_id.clone()).or_default();
         if attempts.contains_key(&key) {
@@ -141,6 +142,7 @@ impl DispatchScheduler {
             run,
             key: key.clone(),
             task_id: task_id.clone(),
+            method_timeout_seconds,
             cancel,
         };
         let context = Arc::clone(&self.context);

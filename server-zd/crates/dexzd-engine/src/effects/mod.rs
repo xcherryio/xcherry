@@ -530,10 +530,15 @@ impl EffectRouter {
                 invocation,
                 attempt,
                 task_id,
+                method_timeout_seconds,
             } => {
                 let key = MethodAttemptKey::new(run_id, run_attempt, &invocation, attempt);
-                self.dispatch
-                    .run_started_attempt(flow.clone(), key, task_id);
+                self.dispatch.run_started_attempt(
+                    flow.clone(),
+                    key,
+                    task_id,
+                    method_timeout_seconds,
+                );
             }
             ApplyEffect::InvocationCanceled { task_id, .. } => {
                 self.dispatch.cancel_attempt(&task_id);

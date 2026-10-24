@@ -23,7 +23,7 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, HardDeleteObjectRecord, StepAttemptFailedCommand, StepAttemptFailureKind,
-    StepAttemptHeartbeatCommand, StepMethod, flow_command, step_attempt_heartbeat_command,
+    StepAttemptHeartbeatCommand, flow_command, step_attempt_heartbeat_command,
 };
 use dexzd_worker_dispatch::{DispatchEvent, DispatchOutcome};
 use tokio::time::{Instant, sleep_until};
@@ -52,6 +52,8 @@ pub(crate) struct MethodAttempt {
     pub(crate) run: RunLocation,
     pub(crate) key: MethodAttemptKey,
     pub(crate) task_id: Vec<u8>,
+    /// The method's configured timeout in seconds from the start effect; 0 means the default.
+    pub(crate) method_timeout_seconds: i32,
     /// Canceled by `InvocationCanceled` or node shutdown.
     pub(crate) cancel: CancellationToken,
 }
@@ -116,13 +118,20 @@ impl MethodAttempt {
 
     async fn run_attempt(&self) -> Result<(), EffectError> {
         // The owner-memory method timeout covers preparation, so slow state or object reads count.
-        let attempt_started = Instant::now();
-        let state = self
-            .retry_transient(|| async {
+        let method_deadline = MethodDeadline::start(self.method_timeout_seconds);
+        let state = tokio::select! {
+            () = self.cancel.cancelled() => return Ok(()),
+            () = sleep_until(method_deadline.expires_at) => {
+                // Without state, the failure carries no sticky Worker and commits promptly.
+                self.propose_failure(method_deadline.timeout_failure(), "", CommitUrgency::Prompt)
+                    .await;
+                return Ok(());
+            }
+            state = self.retry_transient(|| async {
                 let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
                 read_method_attempt_state(reader.as_ref(), self.run, &self.key, &self.task_id)
-            })
-            .await?;
+            }) => state?,
+        };
         let Some(state) = state else {
             tracing::debug!(run_id = %self.key.run_id, "method attempt is no longer running");
             return Ok(());
@@ -135,7 +144,7 @@ impl MethodAttempt {
             dex::StepDurability::Async => CommitUrgency::Batched,
             _ => CommitUrgency::Prompt,
         };
-        let timeouts = AttemptTimeouts::new(&state, self.key.method, attempt_started);
+        let timeouts = AttemptTimeouts::new(&state, method_deadline);
         let end = match self.prepare_request(&state, &timeouts).await? {
             PreparedRequest::Ready(request) => {
                 self.dispatch_and_follow(&state, *request, &timeouts).await
@@ -166,8 +175,8 @@ impl MethodAttempt {
     ) -> Result<PreparedRequest, EffectError> {
         let hard_delete_values = tokio::select! {
             () = self.cancel.cancelled() => return Ok(PreparedRequest::Ended(AttemptEnd::Canceled)),
-            () = sleep_until(timeouts.method_deadline) => {
-                return Ok(PreparedRequest::Ended(AttemptEnd::Failure(timeouts.method_timeout_failure())));
+            () = sleep_until(timeouts.method.expires_at) => {
+                return Ok(PreparedRequest::Ended(AttemptEnd::Failure(timeouts.method.timeout_failure())));
             }
             values = self.retry_transient(|| self.read_hard_delete_values(state)) => values?,
         };
@@ -264,7 +273,7 @@ impl MethodAttempt {
         timeouts: &AttemptTimeouts,
     ) -> AttemptEnd {
         let heartbeat_timeout = timeouts.heartbeat_timeout;
-        let method_deadline = timeouts.method_deadline;
+        let method_deadline = timeouts.method.expires_at;
         let started = Instant::now();
         let remaining = method_deadline.saturating_duration_since(started);
         let wall_deadline = unix_micros_to_system_time(
@@ -308,7 +317,7 @@ impl MethodAttempt {
                 }
                 () = sleep_until(method_deadline) => {
                     session.cancel();
-                    return AttemptEnd::Failure(timeouts.method_timeout_failure());
+                    return AttemptEnd::Failure(timeouts.method.timeout_failure());
                 }
                 () = sleep_until(heartbeat_deadline) => {
                     session.cancel();
@@ -500,33 +509,46 @@ impl MethodAttempt {
 
 /// The attempt's owner-memory timeouts.
 struct AttemptTimeouts {
-    method_timeout: Duration,
-    /// When the method timeout expires, counted from the attempt's start.
-    method_deadline: Instant,
+    method: MethodDeadline,
     heartbeat_timeout: Duration,
 }
 
 impl AttemptTimeouts {
     /// Returns the attempt's method timeout and heartbeat timeout, with the Go Server defaults.
-    fn new(state: &MethodAttemptState, method: i32, attempt_started: Instant) -> Self {
-        let options = state.step_execution.options.clone().unwrap_or_default();
-        let method_timeout_seconds = if method == StepMethod::WaitFor as i32 {
-            options.wait_for_timeout_seconds
-        } else {
-            options.execute_timeout_seconds
-        };
-        let method_timeout =
-            positive_seconds(method_timeout_seconds).unwrap_or(DEFAULT_METHOD_TIMEOUT);
-        let heartbeat_timeout = positive_seconds(options.heartbeat_timeout_seconds)
-            .unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT);
+    fn new(state: &MethodAttemptState, method: MethodDeadline) -> Self {
+        let heartbeat_timeout_seconds = state
+            .step_execution
+            .options
+            .as_ref()
+            .map_or(0, |options| options.heartbeat_timeout_seconds);
+        let heartbeat_timeout =
+            positive_seconds(heartbeat_timeout_seconds).unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT);
         Self {
-            method_timeout,
-            method_deadline: attempt_started + method_timeout,
+            method,
             heartbeat_timeout,
         }
     }
+}
 
-    fn method_timeout_failure(&self) -> AttemptFailure {
+/// The method timeout, started before the attempt's first state read.
+struct MethodDeadline {
+    method_timeout: Duration,
+    /// When the method timeout expires, counted from the attempt's start.
+    expires_at: Instant,
+}
+
+impl MethodDeadline {
+    /// Starts the configured method timeout now, or the Go Server default when it is not positive.
+    fn start(method_timeout_seconds: i32) -> Self {
+        let method_timeout =
+            positive_seconds(method_timeout_seconds).unwrap_or(DEFAULT_METHOD_TIMEOUT);
+        Self {
+            method_timeout,
+            expires_at: Instant::now() + method_timeout,
+        }
+    }
+
+    fn timeout_failure(&self) -> AttemptFailure {
         AttemptFailure::server(
             StepAttemptFailureKind::MethodTimeout,
             format!(

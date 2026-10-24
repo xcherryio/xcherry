@@ -172,12 +172,20 @@ pub(crate) fn start_attempt(
     let run_id = cursor.run_id();
     let run_attempt = cursor.attempt();
     let attempt = invocation.attempt;
+    let method_timeout_seconds = step.options.as_ref().map_or(0, |options| {
+        if invocation.method == StepMethod::WaitFor as i32 {
+            options.wait_for_timeout_seconds
+        } else {
+            options.execute_timeout_seconds
+        }
+    });
     cursor.add_effect(ApplyEffect::InvocationStarted {
         run_id,
         run_attempt,
         invocation: key,
         attempt,
         task_id: task_id.to_vec(),
+        method_timeout_seconds,
     });
     Ok(())
 }

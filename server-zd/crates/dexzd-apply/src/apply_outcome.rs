@@ -94,6 +94,8 @@ pub enum ApplyEffect {
         attempt: u32,
         /// Dispatch ID.
         task_id: Vec<u8>,
+        /// The started method's configured timeout in seconds; 0 means the default.
+        method_timeout_seconds: i32,
     },
     /// A running attempt ended without a result (canceled, Flow closed, time travel); tell the
     /// Worker to stop.

@@ -534,6 +534,7 @@ async fn speculative_and_committed_copies_of_a_start_dispatch_once() {
         },
         attempt: 1,
         task_id: invocation.task_id,
+        method_timeout_seconds: 0,
     };
     let flow = EffectHarness::flow("order-1");
     harness
@@ -666,6 +667,7 @@ async fn a_restored_running_attempt_is_redispatched_after_its_original_dispatch_
             },
             attempt: 1,
             task_id,
+            method_timeout_seconds: 0,
         }],
         true,
     );
@@ -677,5 +679,65 @@ async fn a_restored_running_attempt_is_redispatched_after_its_original_dispatch_
     assert_eq!(restored.context().attempt, 1);
     assert_eq!(restored.context().run_attempt, 2);
     assert_eq!(harness.dispatcher.dispatch_count.load(Ordering::SeqCst), 3);
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_attempt_state_times_out_the_method_and_releases_its_locks() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    harness
+        .runtime
+        .is_flow_state_unreadable
+        .store(true, Ordering::SeqCst);
+    let mut request = start_request("order-1");
+    request.step_options = Some(StepOptions {
+        wait_for_lock_attribute_keys: vec!["inventory".to_owned()],
+        wait_for_timeout_seconds: 30,
+        ..StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    harness.settle().await;
+    let published_effects = || {
+        harness
+            .runtime
+            .published_effects
+            .lock()
+            .expect("lock")
+            .clone()
+    };
+    assert!(
+        published_effects().iter().any(|effect| matches!(
+            effect,
+            ApplyEffect::InvocationStarted {
+                method_timeout_seconds: 30,
+                ..
+            }
+        )),
+        "apply reports the configured method timeout when the attempt starts"
+    );
+
+    tokio::time::sleep(Duration::from_millis(29_900)).await;
+    harness.settle().await;
+    assert!(failures(&harness).is_empty());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    harness.settle().await;
+    assert_eq!(
+        failures(&harness),
+        vec![(
+            StepAttemptFailureKind::MethodTimeout as i32,
+            false,
+            "method timeout of 30s expired".to_owned()
+        )]
+    );
+    assert_eq!(harness.dispatcher.dispatch_count.load(Ordering::SeqCst), 0);
+    assert!(
+        published_effects().iter().any(|effect| matches!(
+            effect,
+            ApplyEffect::LocksReleased { run_id: released, lock_keys }
+                if *released == run_id && lock_keys == &["inventory".to_owned()]
+        )),
+        "the timed-out attempt releases its locks"
+    );
     harness.shutdown().await;
 }

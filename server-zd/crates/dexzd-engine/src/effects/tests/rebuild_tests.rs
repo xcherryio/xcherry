@@ -22,7 +22,8 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, CrossFlowEndpoint, HardDeleteObjectRecord,
-    HardDeleteObjectReference, OutboxRecord, PendingHardDeleteUpload, flow_command, outbox_record,
+    HardDeleteObjectReference, OutboxRecord, PendingHardDeleteUpload, StepAttemptFailureKind,
+    flow_command, outbox_record,
 };
 use dexzd_storage::LocalStore;
 use prost::Message;
@@ -30,8 +31,8 @@ use prost::Message;
 use super::hard_delete_tests::set_hard_delete_attribute;
 use super::outbox_and_purge_tests::put_object;
 use super::{
-    DurableState, EffectHarness, SECOND_MICROS, SwitchableFault, is_method_completed, ok_override,
-    ok_reply, settings, start_request, string_value,
+    DurableState, EffectHarness, SECOND_MICROS, SwitchableFault, is_attempt_failed,
+    is_method_completed, ok_override, ok_reply, settings, start_request, string_value,
 };
 use crate::effects::{
     EffectError, EffectsConfig, HardDeleteUploadLedger, MethodRequest, NodeMetaUploadLedger,
@@ -98,6 +99,56 @@ async fn a_restart_redispatches_running_attempts_with_the_same_attempt_and_reque
         execute.method_request(),
         MethodRequest::Execute(_)
     ));
+    second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restarted_attempt_with_unreadable_state_times_out_at_its_configured_method_timeout() {
+    let first = EffectHarness::new();
+    first.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(StepOptions {
+        wait_for_timeout_seconds: 30,
+        ..StepOptions::default()
+    });
+    first.start_flow(request, settings());
+    let _before = first.dispatcher.next_dispatch().await;
+    let durable = first.durable.clone();
+    first.shutdown().await;
+
+    let second = restart(&durable);
+    second
+        .runtime
+        .is_flow_state_unreadable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    second.rebuild_all_partitions().await;
+    tokio::time::sleep(Duration::from_millis(29_900)).await;
+    second.settle().await;
+    assert!(
+        second
+            .runtime
+            .commands_matching(is_attempt_failed)
+            .is_empty()
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    second.settle().await;
+    let failures = second.runtime.commands_matching(is_attempt_failed);
+    let Some(flow_command::Command::StepAttemptFailed(failure)) = &failures[0].command.command
+    else {
+        panic!("expected a failure");
+    };
+    assert_eq!(failure.kind, StepAttemptFailureKind::MethodTimeout as i32);
+    assert_eq!(
+        failure.server_detail, "method timeout of 30s expired",
+        "the rebuilt start carries the configured method timeout"
+    );
+    assert_eq!(
+        second
+            .dispatcher
+            .dispatch_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     second.shutdown().await;
 }
 

@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dexzd_apply::{
-    ApplyContext, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
+    ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
 use dexzd_clock::WallClock;
@@ -174,8 +174,12 @@ pub(super) struct ApplyRuntime {
     sink: EffectRunner,
     last_proposed_micros: Mutex<i64>,
     pub(super) commands: Mutex<Vec<RecordedCommand>>,
+    /// Effects of every committed command, in commit order.
+    pub(super) published_effects: Mutex<Vec<ApplyEffect>>,
     pub(super) busy_lock_keys: Mutex<BTreeSet<String>>,
     pub(super) unavailable_proposals: AtomicUsize,
+    /// Makes `flow_state_reader` fail as unavailable; committed reads still succeed.
+    pub(super) is_flow_state_unreadable: AtomicBool,
     overrides: Mutex<Vec<CommandOverride>>,
 }
 
@@ -234,6 +238,10 @@ impl ApplyRuntime {
                 urgency,
                 reply: reply.clone(),
             });
+            self.published_effects
+                .lock()
+                .expect("lock")
+                .extend(effects.iter().cloned());
         }
         self.sink.handle(flow, &effects, true);
         Ok(reply)
@@ -336,6 +344,11 @@ impl EffectRuntime for ApplyRuntime {
         _flow: &FlowAddress,
         _include_speculative: bool,
     ) -> Result<Box<dyn FlowStateReader + Send>, EffectRuntimeError> {
+        if self.is_flow_state_unreadable.load(Ordering::SeqCst) {
+            return Err(EffectRuntimeError::Unavailable {
+                detail: "injected state reader outage".to_owned(),
+            });
+        }
         Ok(Box::new(self.snapshot()))
     }
 
@@ -614,8 +627,10 @@ impl EffectHarness {
             sink: runner.clone(),
             last_proposed_micros: Mutex::new(0),
             commands: Mutex::new(Vec::new()),
+            published_effects: Mutex::new(Vec::new()),
             busy_lock_keys: Mutex::new(BTreeSet::new()),
             unavailable_proposals: AtomicUsize::new(0),
+            is_flow_state_unreadable: AtomicBool::new(false),
             overrides: Mutex::new(Vec::new()),
         });
         let tasks = tasks.start(Arc::clone(&runtime) as _);
