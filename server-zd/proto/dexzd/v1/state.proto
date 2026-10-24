@@ -231,7 +231,9 @@ message StepExecutionRecord {
   uint64 created_seq = 8;
   int64 created_at_micros = 9;
   repeated StoredKeyValue locals = 10;
+  // Set only while the Step is WAITING.
   WaitStateRecord wait = 11;
+  // Set when the wait completes; released when the Step ends.
   ConditionResultsRecord condition_results = 12;
   // The method call of the current phase, when one exists.
   StepInvocationRecord invocation = 13;
@@ -279,6 +281,10 @@ message MethodSnapshotRecord {
   repeated string loaded_attribute_map_instances = 4;
   repeated string loaded_channel_names = 5;
   repeated string loaded_channel_map_instances = 6;
+  // Execute only: the Step's condition results, unchanged across attempts and held by
+  // ConditionResult holders until the Step ends. The dispatcher builds
+  // InvokeExecuteMethodRequest.condition_results from it: values only, through wire references.
+  ConditionResultsRecord condition_results = 7;
 }
 
 message LoadedChannelMessagesRecord {
