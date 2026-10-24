@@ -8,6 +8,7 @@
 
 //! Runtime that proposes, commits, and applies server-zd commands and runs their effects: dispatch, timers, deliveries, and recovery.
 
+mod blocking_work;
 mod command_applier;
 mod commit;
 mod effects;
@@ -18,6 +19,7 @@ mod recovery;
 mod runtime;
 mod snapshots;
 
+pub use blocking_work::BlockingWorkPlacement;
 pub use command_applier::{CommandApplier, DeterministicCommandApplier};
 pub use commit::{
     CommandCommitter, CommitConfig, CommittedStateView, EngineLocalStore, NodeStopReason,
@@ -31,6 +33,8 @@ pub use effects::{
     MethodRequest, NodeMetaUploadLedger, decode_hard_delete_value, encode_hard_delete_value,
     hard_delete_placeholder_value,
 };
+#[cfg(feature = "test-util")]
+pub use engine_id_source::SeededEngineIdSourceForTest;
 pub use engine_id_source::{EngineIdSource, SystemEngineIdSource};
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
 pub use long_poll::{

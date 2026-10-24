@@ -157,12 +157,10 @@ fn replay_and_local_store_disk_settings_reach_the_engine_node() {
     assert_eq!(recovery.log_read_ahead.max_read_ahead_batches, 8);
     assert_eq!(recovery.log_read_ahead.max_buffered_bytes, 1024 * 1024);
     assert_eq!(recovery.compact_after_replay_bytes, 0);
-    match components.engine_node.local_store {
-        LocalStoreConfig::RocksDb { options, .. } => {
-            assert_eq!(options.max_total_wal_bytes, 128 * 1024 * 1024);
-        }
-        LocalStoreConfig::InMemory => panic!("serve uses a RocksDB local store"),
-    }
+    let LocalStoreConfig::RocksDb { options, .. } = components.engine_node.local_store else {
+        panic!("serve uses a RocksDB local store");
+    };
+    assert_eq!(options.max_total_wal_bytes, 128 * 1024 * 1024);
 }
 
 #[test]

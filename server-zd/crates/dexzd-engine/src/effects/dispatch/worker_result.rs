@@ -22,6 +22,8 @@ use dexzd_request_validation::{
     ValidationCategory, ValidationConfig, WorkerResponse, validate_worker_response,
 };
 
+use crate::engine_id_source::EngineIdSource;
+
 /// A Worker method result that passed every check.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MethodResult {
@@ -55,13 +57,13 @@ impl MethodResult {
 
     /// Replaces every channel publication's message ID with a new UUIDv7, like the Go
     /// Server's `channelmessage.AssignIDs`.
-    pub(crate) fn assign_channel_message_ids(&mut self) {
+    pub(crate) fn assign_channel_message_ids(&mut self, id_source: &dyn EngineIdSource) {
         let publications = match self {
             Self::WaitFor(response) => &mut response.publish_to_channel,
             Self::Execute(response) => &mut response.publish_to_channel,
         };
         for publication in publications {
-            publication.message_id = uuid::Uuid::now_v7().hyphenated().to_string();
+            publication.message_id = id_source.channel_message_id().hyphenated().to_string();
         }
     }
 }

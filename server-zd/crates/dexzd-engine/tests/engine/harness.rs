@@ -15,9 +15,9 @@ use dexzd_apply::{ApplyContext, ApplyError, ApplyOutcome, FlowStateReader, State
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
-    CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
-    CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
-    EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    BlockingWorkPlacement, CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency,
+    CommittedCommandSink, CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig,
+    EngineNodeDependencies, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError, SnapshotConfig,
     SystemEngineIdSource,
 };
@@ -521,6 +521,7 @@ impl TestCluster {
             },
             snapshots: SnapshotConfig::default(),
             recovery: RecoveryConfig::default(),
+            blocking_work: BlockingWorkPlacement::BlockingThreadPool,
         }
     }
 

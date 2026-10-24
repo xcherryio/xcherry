@@ -11,9 +11,12 @@
 //! This first stage drives `dexzd-apply` alone with a seeded model of clients, the owner, and Workers.
 //!
 //! [`ApplyChecker`] checks determinism and the plan's state invariants after every command.
+//!
+//! [`run_engine_seed`] runs the second stage: the engine itself on simulated storage and crashes.
 
 mod apply_checker;
 mod apply_simulation;
+mod engine_simulation;
 mod invalid_client_inputs;
 mod invariants;
 mod memory_state;
@@ -24,6 +27,10 @@ mod state_view;
 pub use apply_checker::ApplyChecker;
 pub use apply_simulation::{
     SimulationFailure, SimulationSummary, command_kind, replay_commands, run_seed,
+};
+pub use engine_simulation::{
+    EngineSimulationConfig, EngineSimulationFailure, EngineSimulationFinalState,
+    EngineSimulationSummary, run_engine_seed, run_engine_seed_with_final_state,
 };
 pub use invalid_client_inputs::{
     INVALID_CLIENT_INPUT_CLASSES, OVERSIZED_ATTRIBUTE_VALUE, OVERSIZED_CHANNEL_MESSAGE,

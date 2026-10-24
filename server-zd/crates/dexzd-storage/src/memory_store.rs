@@ -11,6 +11,7 @@ use std::ops::Bound;
 use std::sync::RwLock;
 
 use dexzd_keyspace::ColumnFamily;
+use uuid::Uuid;
 
 use crate::local_store::{
     LocalReadView, LocalStore, ScanDirection, StorageError, StorageResult, WriteBatch,
@@ -31,12 +32,17 @@ impl Default for InMemoryLocalStore {
 
 impl InMemoryLocalStore {
     pub fn new() -> Self {
+        Self::with_lineage_id(Uuid::now_v7())
+    }
+
+    /// Creates an empty store whose node metadata names `lineage_id`.
+    pub fn with_lineage_id(lineage_id: Uuid) -> Self {
         let mut maps = empty_maps();
         maps.get_mut(&ColumnFamily::NodeMeta)
             .expect("node metadata column family exists")
             .insert(
                 b"node".to_vec(),
-                prost::Message::encode_to_vec(&new_node_meta()),
+                prost::Message::encode_to_vec(&new_node_meta(lineage_id)),
             );
         Self {
             maps: RwLock::new(maps),

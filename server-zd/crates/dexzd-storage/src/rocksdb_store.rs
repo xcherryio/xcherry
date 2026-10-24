@@ -18,6 +18,8 @@ use rocksdb::{
     Direction, FlushOptions, IteratorMode, Options, ReadOptions, Snapshot, WriteOptions,
 };
 
+use uuid::Uuid;
+
 use crate::local_store::{
     LocalReadView, LocalStore, ScanDirection, StorageError, StorageResult, WriteBatch,
     WriteOperation, new_node_meta,
@@ -55,6 +57,15 @@ struct BackgroundCompaction {
 
 impl RocksDbLocalStore {
     pub fn open(path: impl AsRef<Path>, options: RocksDbStoreOptions) -> StorageResult<Self> {
+        Self::open_with_new_store_lineage_id(path, options, Uuid::now_v7())
+    }
+
+    /// Opens the store like [`Self::open`]; a new store's node metadata names `lineage_id`.
+    pub fn open_with_new_store_lineage_id(
+        path: impl AsRef<Path>,
+        options: RocksDbStoreOptions,
+        lineage_id: Uuid,
+    ) -> StorageResult<Self> {
         let is_new_store = !path.as_ref().exists()
             || std::fs::read_dir(path.as_ref())?
                 .next()
@@ -80,7 +91,7 @@ impl RocksDbLocalStore {
                     path: path.as_ref().to_path_buf(),
                 });
             }
-            store.put_node_meta(&new_node_meta())?;
+            store.put_node_meta(&new_node_meta(lineage_id))?;
         }
         Ok(store)
     }

@@ -101,7 +101,10 @@ impl PartitionTimerService {
             let Some(wake_at) = wake_at else {
                 continue;
             };
+            // Biased for reproducible simulation; every wake starts a pass that fires due
+            // timers.
             tokio::select! {
+                biased;
                 () = self.context.shutdown.cancelled() => return,
                 () = self.wake.notified() => {}
                 () = tokio::time::sleep_until(wake_at) => {}

@@ -77,7 +77,7 @@ pub struct CheckerMemory {
     pub(crate) window_points: BTreeMap<RunId, BTreeMap<u64, WindowPointState>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowPointState {
     pub(crate) references: BTreeSet<WindowValueReference>,
     pub(crate) attribute_values: BTreeSet<ValueId>,

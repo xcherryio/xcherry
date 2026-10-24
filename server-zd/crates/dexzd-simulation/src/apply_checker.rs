@@ -15,13 +15,13 @@ use dexzd_keyspace::{
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, RunRecord, StepInvocationKey, ValueRecord, command_reply, flow_command::Command,
-    stored_value,
+    inbox_message_command, stored_value,
 };
 use prost::Message;
 
 use crate::invalid_client_inputs::{check_invalid_client_input_rejected, invalid_client_input};
 use crate::invariants::{
-    CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot,
+    CheckerMemory, InvariantViolation, WindowPointState, check_flow, check_fresh_snapshot,
     check_window_value_content, remember_window_points,
 };
 use crate::memory_state::MemoryFlowState;
@@ -41,6 +41,17 @@ pub struct ApplyChecker {
     memory: CheckerMemory,
     applied_results: BTreeSet<AppliedResultIdentity>,
     size_rejections: BTreeMap<&'static str, usize>,
+    /// Commands applied so far; stamps when window points were recorded and pruned.
+    applied_commands: u64,
+    window_point_spans: BTreeMap<RunId, BTreeMap<u64, WindowPointSpan>>,
+}
+
+/// When the checker retained one window point, in applied command counts.
+#[derive(Debug, Clone)]
+struct WindowPointSpan {
+    recorded_after: u64,
+    /// The count that pruned the point, and the point, which `memory` no longer holds.
+    pruned: Option<(u64, WindowPointState)>,
 }
 
 /// One result of one attempt (S2): at most one may ever be applied.
@@ -70,6 +81,8 @@ impl ApplyChecker {
             memory: CheckerMemory::default(),
             applied_results: BTreeSet::new(),
             size_rejections: BTreeMap::new(),
+            applied_commands: 0,
+            window_point_spans: BTreeMap::new(),
         }
     }
 
@@ -134,18 +147,20 @@ impl ApplyChecker {
             self.record_applied_result(command)?;
         }
         self.state.commit(&outcome.writes);
+        self.applied_commands += 1;
         self.redecoded_state
             .commit_redecoded(&outcome.writes)
             .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
         let touched_runs = touched_runs(&outcome);
         let view = self.view(&command.flow_id, RunSelection::Only(&touched_runs))?;
-        remember_window_points(
+        let pruned_points = remember_window_points(
             &command.flow_id,
             &view,
             &mut self.memory,
             &self.state,
             context.flow_hash,
         )?;
+        self.record_window_point_spans(&view, pruned_points);
         if is_applied {
             self.check_command_effects(command, &outcome, &view)?;
         }
@@ -158,6 +173,37 @@ impl ApplyChecker {
             context.flow_hash,
         )?;
         Ok(outcome)
+    }
+
+    /// Returns how many commands the checker has applied.
+    pub(crate) fn applied_commands(&self) -> u64 {
+        self.applied_commands
+    }
+
+    /// Returns the window points `run_id` retained right after the checker applied its first
+    /// `applied_commands` commands, by semantic point seq.
+    ///
+    /// A store that applied fewer commands needs points the window has advanced past since.
+    pub(crate) fn window_points_after(
+        &self,
+        run_id: &RunId,
+        applied_commands: u64,
+    ) -> BTreeMap<u64, WindowPointState> {
+        let live_points = self.memory.window_points.get(run_id);
+        self.window_point_spans
+            .get(run_id)
+            .into_iter()
+            .flatten()
+            .filter(|(_, span)| span.recorded_after <= applied_commands)
+            .filter_map(|(seq, span)| {
+                let point = match &span.pruned {
+                    Some((pruned_after, _)) if *pruned_after <= applied_commands => return None,
+                    Some((_, point)) => point,
+                    None => live_points?.get(seq)?,
+                };
+                Some((*seq, point.clone()))
+            })
+            .collect()
     }
 
     pub(crate) fn earlier_window_value_point(
@@ -178,6 +224,35 @@ impl ApplyChecker {
                 }))
             .then_some(history.timestamp_micros)
         })
+    }
+
+    /// Stamps the points `remember_window_points` just recorded or pruned.
+    fn record_window_point_spans(
+        &mut self,
+        view: &FlowView,
+        pruned_points: BTreeMap<RunId, BTreeMap<u64, WindowPointState>>,
+    ) {
+        for (run_id, points) in pruned_points {
+            let spans = self.window_point_spans.entry(run_id).or_default();
+            for (seq, point) in points {
+                // Only a violation inside `remember_window_points` leaves a point unstamped.
+                if let Some(span) = spans.get_mut(&seq) {
+                    span.pruned = Some((self.applied_commands, point));
+                }
+            }
+        }
+        for run_id in view.runs.keys() {
+            let Some(points) = self.memory.window_points.get(run_id) else {
+                continue;
+            };
+            let spans = self.window_point_spans.entry(*run_id).or_default();
+            for seq in points.keys() {
+                spans.entry(*seq).or_insert(WindowPointSpan {
+                    recorded_after: self.applied_commands,
+                    pruned: None,
+                });
+            }
+        }
     }
 
     fn record_applied_result(&mut self, command: &FlowCommand) -> Result<(), InvariantViolation> {
@@ -226,6 +301,16 @@ impl ApplyChecker {
                 {
                     self.remember_genesis_values(&reply.run_id, view)?;
                 }
+            }
+            // A child start creates its run only when the minted run ID now has rows.
+            Some(Command::InboxMessage(inbox))
+                if matches!(
+                    inbox.payload,
+                    Some(inbox_message_command::Payload::ChildStart(_))
+                ) && RunId::from_slice(&inbox.new_run_id)
+                    .is_ok_and(|run_id| view.runs.contains_key(&run_id)) =>
+            {
+                self.remember_genesis_values(&inbox.new_run_id, view)?;
             }
             Some(Command::StepAttemptStarted(started)) => {
                 let run_id = RunId::from_slice(&command.run_id)
@@ -308,7 +393,8 @@ impl ApplyChecker {
         Ok(())
     }
 
-    /// The new run's start Step input and initial Attributes hold the genesis pin (plan D12).
+    /// The new run's start Step input and initial Attributes hold the genesis pin (plan D12),
+    /// for a client start and a child start alike.
     fn remember_genesis_values(
         &mut self,
         run_id: &[u8],

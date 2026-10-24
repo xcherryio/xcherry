@@ -20,6 +20,8 @@ use crate::scripted_clock::ScriptedClock;
 pub(crate) struct SeededIdSource {
     seed: u64,
     issued: AtomicU64,
+    /// IDs that recorded objects never contain, kept apart so recordings stay unchanged.
+    unrecorded_issued: AtomicU64,
     clock: Arc<ScriptedClock>,
 }
 
@@ -28,13 +30,22 @@ impl SeededIdSource {
         Self {
             seed,
             issued: AtomicU64::new(0),
+            unrecorded_issued: AtomicU64::new(0),
             clock,
         }
     }
 
     pub(crate) fn next_uuid_v7(&self) -> Uuid {
-        let index = self.issued.fetch_add(1, Ordering::SeqCst);
-        let random = xxh3_128_with_seed(&index.to_be_bytes(), self.seed).to_be_bytes();
+        self.uuid_v7_from(&self.issued, self.seed)
+    }
+
+    fn next_unrecorded_uuid_v7(&self) -> Uuid {
+        self.uuid_v7_from(&self.unrecorded_issued, !self.seed)
+    }
+
+    fn uuid_v7_from(&self, issued: &AtomicU64, seed: u64) -> Uuid {
+        let index = issued.fetch_add(1, Ordering::SeqCst);
+        let random = xxh3_128_with_seed(&index.to_be_bytes(), seed).to_be_bytes();
         let millis = u64::try_from(self.clock.now_unix_micros() / 1000)
             .expect("scripted time is after 1970");
         let random_tail: &[u8; 10] = random[..10].try_into().expect("ten bytes");
@@ -53,5 +64,29 @@ impl EngineIdSource for SeededIdSource {
 
     fn lineage_id(&self) -> Uuid {
         self.next_uuid_v7()
+    }
+
+    fn run_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn channel_message_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn hard_delete_object_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn dispatch_task_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn store_lineage_id(&self) -> Uuid {
+        self.next_unrecorded_uuid_v7()
+    }
+
+    fn lease_holder_process_id(&self) -> String {
+        self.next_unrecorded_uuid_v7().to_string()
     }
 }

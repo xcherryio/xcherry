@@ -313,6 +313,25 @@ pub async fn restore_snapshot(
     target_directory: &Path,
     rocks_options: RocksDbStoreOptions,
 ) -> StorageResult<RestoredLocalStore> {
+    restore_snapshot_with_lineage_id(
+        object_store,
+        manifest_key,
+        target_directory,
+        rocks_options,
+        Uuid::now_v7(),
+    )
+    .await
+}
+
+/// Restores a snapshot like [`restore_snapshot`]; the restored store's node metadata names
+/// `lineage_id`.
+pub async fn restore_snapshot_with_lineage_id(
+    object_store: &dyn ObjectStore,
+    manifest_key: &str,
+    target_directory: &Path,
+    rocks_options: RocksDbStoreOptions,
+    lineage_id: Uuid,
+) -> StorageResult<RestoredLocalStore> {
     let content = object_store.get(manifest_key).await?.ok_or_else(|| {
         StorageError::Invalid(format!("snapshot manifest does not exist: {manifest_key}"))
     })?;
@@ -378,7 +397,7 @@ pub async fn restore_snapshot(
             "snapshot lineage differs from manifest".into(),
         ));
     }
-    meta.lineage_id = new_node_meta().lineage_id;
+    meta.lineage_id = new_node_meta(lineage_id).lineage_id;
     meta.last_snapshot_number = 0;
     restored.put_node_meta(&meta)?;
     target_guard.is_committed = true;

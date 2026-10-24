@@ -57,7 +57,35 @@ impl LeaseConfig {
         node: &NodeConfig,
         cancellation: &mut watch::Receiver<bool>,
     ) -> Result<Option<LeaseHandle>, MetadataError> {
-        acquire_lease_inner(store, clock, node, self, Some(cancellation)).await
+        self.acquire_until_cancelled_with_holder_process_id(
+            store,
+            clock,
+            node,
+            cancellation,
+            Uuid::new_v4().to_string(),
+        )
+        .await
+    }
+
+    /// Acquires the lease like [`Self::acquire_until_cancelled`], naming `holder_process_id` as
+    /// its holder.
+    pub async fn acquire_until_cancelled_with_holder_process_id(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        clock: Arc<dyn WallClock>,
+        node: &NodeConfig,
+        cancellation: &mut watch::Receiver<bool>,
+        holder_process_id: String,
+    ) -> Result<Option<LeaseHandle>, MetadataError> {
+        acquire_lease_inner(
+            store,
+            clock,
+            node,
+            self,
+            Some(cancellation),
+            holder_process_id,
+        )
+        .await
     }
 }
 
@@ -202,7 +230,19 @@ pub async fn acquire_lease(
     node: &NodeConfig,
     config: &LeaseConfig,
 ) -> Result<LeaseHandle, MetadataError> {
-    let acquired = acquire_lease_inner(store, clock, node, config, None).await?;
+    acquire_lease_with_holder_process_id(store, clock, node, config, Uuid::new_v4().to_string())
+        .await
+}
+
+/// Acquires the lease like [`acquire_lease`], naming `holder_process_id` as its holder.
+pub async fn acquire_lease_with_holder_process_id(
+    store: Arc<dyn ObjectStore>,
+    clock: Arc<dyn WallClock>,
+    node: &NodeConfig,
+    config: &LeaseConfig,
+    holder_process_id: String,
+) -> Result<LeaseHandle, MetadataError> {
+    let acquired = acquire_lease_inner(store, clock, node, config, None, holder_process_id).await?;
     Ok(acquired.expect("a lease acquisition without cancellation must complete"))
 }
 
@@ -212,6 +252,7 @@ async fn acquire_lease_inner(
     node: &NodeConfig,
     config: &LeaseConfig,
     mut cancellation: Option<&mut watch::Receiver<bool>>,
+    process_id: String,
 ) -> Result<Option<LeaseHandle>, MetadataError> {
     let duration_micros =
         i64::try_from(config.duration.as_micros()).map_err(|_| MetadataError::InvalidConfig {
@@ -232,7 +273,6 @@ async fn acquire_lease_inner(
         }
     })?;
     let key = format!("lease/{}", node.node_id);
-    let process_id = Uuid::new_v4().to_string();
     let held_lease_poll_interval = HELD_LEASE_POLL_LIMIT.min(config.duration / 3);
     let mut has_reported_wait = false;
     loop {

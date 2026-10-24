@@ -38,3 +38,141 @@ the command fails. Reproduce the failure from `server-zd/` with
 `DEXZD_SIMULATION_SEED=<seed> DEXZD_SIMULATION_COMMANDS=<failing index + 1> cargo test -p dexzd-simulation`.
 Add `<seed> <failing index + 1>` as a line in `regression-seeds.txt`, then run the fixed test.
 The command count keeps failures beyond the default 400 commands in every PR run.
+
+## Engine simulation
+
+The second stage runs the real engine: `EngineNode`, the Flow runtime registry, and the effect
+runner, assembled as the server assembles them. Everything runs on one current-thread Tokio
+runtime with paused time, and every choice derives from one seed.
+
+- **Object storage.** One shared `InMemoryObjectStore` has S3 conditional-write semantics. Each
+  node process sees it through its own seeded fault layer. The layer injects slow responses,
+  HTTP 5xx and 503, 409 conflicts, timeouts, and lost responses. A failed or timed-out write may
+  still take effect. A lost response hides only a write that took effect; a write that failed,
+  such as a 412, returns its own result. Old-epoch processes produce real 412 races.
+- **Processes.** A crash first cuts the process off from storage. Every write runs on a task
+  that the shared storage owns, so a write already sent lands even after its process and
+  caller are gone: at its normal time, during the successor's recovery, or just after the
+  successor starts serving. Some crashes wait until two log writes are in flight. The
+  successor's local store is kept, lost (restored from the newest snapshot), or rolled back to
+  an earlier copy. Some successors take over while the old-epoch process still runs and writes,
+  because their wall clock is ahead. Wall clocks also jump forward and back.
+- **Workers and clients.** Simulated pull Workers sit behind the engine's dispatch ports. They
+  succeed, fail, hang, run slowly, send heartbeats with and without values, return the same
+  attempt's result again, disconnect, or are missing. A WaitFor of a client's Flow may wait for
+  a child Flow, which the outbox starts; child Flows start no children of their own. Clients
+  start, stop, write, publish, delete, invoke RPCs, and read, retrying unavailable calls with
+  the same request ID. They also write and delete a hard-delete Attribute, whose values live in
+  object storage.
+- **Determinism.** The engine runs frame applies, state reads, and snapshot uploads on the
+  calling task (`BlockingWorkPlacement::CallingTaskForTest`), and every engine `select!` is
+  biased. Every ID the engine persists comes from one `SeededEngineIdSourceForTest` that all
+  processes of a seed share, so the trace keeps engine IDs as minted.
+- **Replay checks.** Every node runs with `debug_replay_checks`. Appliers apply each command
+  twice and compare the outcomes, and speculative outcomes are compared with committed ones. Any
+  difference halts the partition, which fails the seed.
+
+### Invariants
+
+A shadow `ApplyChecker` collects the canonical committed log from every process's applied
+frames. It runs the stage-1 checks on every new command, so the lock, snapshot, value, and
+directory invariants hold on the committed history. The engine simulation adds these checks:
+
+1. **Acknowledged writes survive.** Every write a client saw succeed is in the canonical log,
+   and every recovered store equals the never-crashed twin (invariant 5).
+2. **No speculative or stale reads.** Each GetAttributes and GetChannelMessages response, as a
+   whole, equals the committed state of the Flow's newest run at a frame its node applied during
+   the call. The shadow keeps each client Flow's state history by frame, and the call's window
+   runs from the node's applied position when the call began to the one when it returned. A
+   value that a later applied write overwrote fails, as does an uncommitted one.
+3. **One result per attempt.** The shadow rejects a second applied result (S2). Any frame
+   applied again after recovery must reproduce its first outcome exactly.
+4. **Locks.** The shadow checks L1 to L4 after every command, and the recovered store passes
+   `check_flow` again. An old-epoch process may have applied frames the successor has not, so
+   the check uses the window points the shadow retained at the store's applied position. The
+   summary field `recovered_checks_with_older_window_points` counts checks that needed them.
+5. **Recovered runtime equals a never-crashed one.** The twin is the store of a node that
+   applied the canonical log and never crashed: the shadow's rows, partition metadata derived
+   from the canonical commands, and node metadata. `compare_store_views` compares every column
+   family of the node's store with it. Only the four fields that recovery legitimately changes
+   are canonicalized: the store lineage, the snapshot number, and each partition's applied
+   position and epoch. The twin cannot model the node-local hard-delete upload ledger, so a
+   comparison is skipped and counted while the ledger holds uploads. The summary field
+   `state_comparisons_skipped_for_upload_ledger` holds the count, and the test prints it on its
+   `twin comparisons:` line next to the comparisons that ran. The recovered store equals
+   the twin, so timers, method calls, outbox rows, and hard-delete rows match. Every crash
+   counts the timers, running attempts, undelivered outbox rows, and pending hard-delete objects
+   it interrupts.
+   Recovered processes must deliver each interrupted outbox row and delete each interrupted
+   hard-delete object from storage. After a crash at a quiet point, the successor dispatches
+   every attempt that was running again. After a calm tail, every due timer has fired, no
+   method call is unfinished, and no outbox row or hard-delete object is left waiting.
+
+The log itself is checked too. Copies of one log position must hold the same commands, and a
+partition never applies a new frame below one it already applied.
+
+The fixed seed set also asserts that these checks had something to check. It requires every
+fault kind with each effect it can have on a call, such as a timed-out write that did or did
+not take effect. It requires every restart mode and Worker behavior, and crashes during
+recovery. It also requires 412 races on log and lease objects. An old-epoch window opens only
+when a successor's lease write takes effect; the seed set requires log and lease writes that
+old-epoch processes started, and frames they applied, inside such a window. Log writes that
+landed after their process died are required, along with EpochStarts written below an
+already landed batch (the recovery void and fill path) and successors that stopped on an
+older-epoch batch at their next seq. Log cleanup deletions, snapshot restores during starts,
+and rejected duplicate results are required too. So are crashes that interrupted each kind of
+outstanding work, recovered deliveries and deletions of that work, running attempts compared
+after the quiet crash, store comparisons right after a recovery, and live runs in the final
+state. Some crashes wait until two log writes are in flight or cross-Flow work is outstanding.
+
+### Not covered yet
+
+These section 13.1 items need later stages:
+
+- Byte-identical snapshots across dispatches of one attempt, and Step input, locals, and
+  condition results unchanged across attempts (section 8.1). The shadow checks only fresh
+  snapshots (S5).
+- Eventual progress of lock waiters beyond the calm-tail check (section 8.3).
+- Time travel rebuilds and their hashes (section 8.4); clients do not call ResetFlow, so the
+  replay checks verify no time-travel target.
+- Value lifecycle beyond I1: I3, liveness, reads within the window, and the G byte limit
+  (section 10).
+- Store comparisons while the hard-delete upload ledger holds uploads; about 3% of them.
+- Hard-delete Attributes that Workers write, and the hard-delete upload ledger after a crash
+  between upload and commit (section 10.3).
+- Worker Stream writes, and the Worker matching layer, which the simulated Workers bypass.
+- More than one node ID, and foreign writers of the manifest and lease.
+- The planted-bug acceptance list.
+
+### Running
+
+```bash
+cargo test -p dexzd-simulation --test engine_simulation         # 64 seeds of 120 s, 1-2 minutes
+DEXZD_SIMULATION_SEEDS=1000 DEXZD_SIMULATION_SECONDS=600 \
+  cargo test -p dexzd-simulation --test engine_simulation          # longer budget
+DEXZD_SIMULATION_SEED=7 cargo test -p dexzd-simulation --test engine_simulation -- --nocapture
+```
+
+`DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_SEED` also select the apply simulation's seeds
+when both tests run. A failing seed prints its reproduction command and the last 400 trace events.
+`DEXZD_SIMULATION_PRINT_EVENTS=1` prints the trace tail of a passing seed. A self-test runs seeds
+twice and requires identical raw traces, final local stores, and stored objects, leases
+included. It compares the two final local stores with `compare_store_views` and no canonicalized
+fields.
+
+`DEXZD_SIMULATION_BASE_SEED` replaces the fixed set's first seed, so a run covers
+`DEXZD_SIMULATION_SEEDS` consecutive seeds from there. Every run except a single-seed run also
+covers each line of `engine-regression-seeds.txt`: a decimal seed and the active seconds it
+failed with. A seed in both runs for the longer active phase, whose trajectory starts the same. `DEXZD_SIMULATION_FAILURE_DIR` names a
+directory that receives a `<seed>.txt` report for a failing seed before the test panics. Each
+report holds the violation, the reproduction command, and the last 400 trace events.
+
+### Nightly
+
+The nightly job picks a random 32-bit base seed and runs 250 seeds of 300 simulated seconds.
+That budget takes about 16 minutes on a recent laptop and leaves room for a runner three times
+slower. Manual runs accept 64–1,000 seeds and 60–1,200 seconds per seed, with at most 75,000
+simulated seconds in total. Every run needs at least 64 seeds because the coverage assertions
+still apply. The test stops at the first failing seed and has a 55-minute command limit. The
+job uploads the log and any failure report even when the command fails. Its summary lists each
+failing seed's reproduction command and the `twin comparisons:` line.

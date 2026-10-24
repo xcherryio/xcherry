@@ -126,7 +126,7 @@ fn read_delivery(
             (
                 source,
                 inbox_message_command::Payload::ChildStart(start),
-                uuid::Uuid::now_v7().as_bytes().to_vec(),
+                context.id_source.run_id().as_bytes().to_vec(),
                 Some(context.config.child_run_settings),
             )
         }

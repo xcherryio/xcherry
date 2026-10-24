@@ -56,7 +56,7 @@ impl FlowRuntimeRegistry {
             } else {
                 request.flow_timeout_policy
             };
-        let new_run_id = RunId(uuid::Uuid::now_v7().into_bytes());
+        let new_run_id = RunId(self.inner.dependencies.id_source.run_id().into_bytes());
         let fingerprint = request_fingerprint(&request);
         let mut request = request;
         let uploads = match request.flow_start_options.as_mut() {
@@ -194,7 +194,12 @@ impl FlowRuntimeRegistry {
             return Ok(());
         }
         for message in &mut request.messages {
-            message.message_id = uuid::Uuid::now_v7().to_string();
+            message.message_id = self
+                .inner
+                .dependencies
+                .id_source
+                .channel_message_id()
+                .to_string();
         }
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
         self.propose_targeted(&flow, &request.run_id.clone(), |_| {

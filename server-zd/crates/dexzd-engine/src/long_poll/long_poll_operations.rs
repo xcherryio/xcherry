@@ -294,8 +294,11 @@ impl FlowRuntimeRegistry {
                     detail: "long poll ended because the node is stopping; retry".to_owned(),
                 });
             }
+            // Biased for reproducible simulation; the halt and the deadline fire once, so changes
+            // cannot starve.
             tokio::select! {
-                () = registration.changed() => {}
+                biased;
+                () = halted.cancelled() => return Err(self.check_running().expect_err("halted")),
                 () = tokio::time::sleep_until(call_deadline) => {
                     let expired_request = deadline
                         .request_deadline
@@ -315,7 +318,7 @@ impl FlowRuntimeRegistry {
                         )
                     });
                 }
-                () = halted.cancelled() => return Err(self.check_running().expect_err("halted")),
+                () = registration.changed() => {}
             }
         }
     }

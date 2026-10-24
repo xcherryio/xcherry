@@ -56,6 +56,8 @@ pub use method_request::MethodRequest;
 pub(crate) use method_request::resolve_method_durability;
 pub(crate) use state_reads::{RunLocation, read_run_record, read_step_execution};
 
+use crate::blocking_work::BlockingWorkPlacement;
+use crate::engine_id_source::EngineIdSource;
 use crate::recovery::{PartitionRuntimeRebuilder, RuntimeRebuildError};
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
@@ -105,6 +107,9 @@ pub struct EffectsConfig {
     /// reads configuration. Set it to the runtime's run settings so that client and SubFlow
     /// starts record the same values. Defaults follow the `RunSettings` field documentation.
     pub child_run_settings: RunSettings,
+    /// Default [`BlockingWorkPlacement::BlockingThreadPool`]. Where method attempts run their
+    /// local store reads; see [`BlockingWorkPlacement`].
+    pub blocking_work: BlockingWorkPlacement,
 }
 
 impl Default for EffectsConfig {
@@ -134,6 +139,7 @@ impl Default for EffectsConfig {
                 max_run_state_bytes: 1024 * 1024 * 1024,
                 max_active_step_executions: 10_000,
             },
+            blocking_work: BlockingWorkPlacement::BlockingThreadPool,
         }
     }
 }
@@ -240,6 +246,8 @@ pub struct EffectDependencies {
     pub validation_config: ValidationConfig,
     /// Receives Step Stream writes from Worker frames, in frame order, on a best-effort basis.
     pub stream_store: Arc<StreamStore>,
+    /// Creates child run IDs, dispatch task IDs, and Worker Channel message IDs.
+    pub id_source: Arc<dyn EngineIdSource>,
 }
 
 /// Shared state of every effect task.
@@ -252,6 +260,7 @@ pub(crate) struct EffectContext {
     pub(crate) clock: Arc<dyn WallClock>,
     pub(crate) validation_config: ValidationConfig,
     pub(crate) stream_store: Arc<StreamStore>,
+    pub(crate) id_source: Arc<dyn EngineIdSource>,
     /// Hard-delete uploads recorded before this node started; recovery checks only these, so
     /// uploads of commands proposed after startup are never mistaken for orphans.
     /// An error fails every partition rebuild, because a later read could include new uploads.
@@ -299,7 +308,10 @@ impl EffectContext {
             let proposal = self
                 .runtime
                 .propose_committed(flow, command.clone(), urgency);
+            // Biased for reproducible simulation; shutdown fires once, so the proposal cannot
+            // starve.
             let outcome = tokio::select! {
+                biased;
                 () = self.shutdown.cancelled() => return None,
                 outcome = proposal => outcome,
             };
@@ -328,7 +340,9 @@ impl RetryBackoff {
     pub(crate) async fn wait(&mut self, shutdown: &CancellationToken) -> bool {
         let delay = self.next;
         self.next = (self.next * 2).min(self.max);
+        // Biased for reproducible simulation; shutdown fires once, so the sleep cannot starve.
         tokio::select! {
+            biased;
             () = shutdown.cancelled() => false,
             () = tokio::time::sleep(delay) => true,
         }
@@ -448,6 +462,7 @@ impl EffectTasks {
                 ..self.dependencies.validation_config
             },
             stream_store: self.dependencies.stream_store,
+            id_source: self.dependencies.id_source,
             startup_pending_uploads,
             shutdown: shutdown.clone(),
             tracker: tracker.clone(),
@@ -489,7 +504,10 @@ impl EffectRouter {
             tokio::time::interval(self.context.config.locked_invocation_retry_interval);
         parked_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
+            // Biased for reproducible simulation; the tick fires once per interval, so messages
+            // cannot starve.
             tokio::select! {
+                biased;
                 () = self.context.shutdown.cancelled() => return,
                 _ = parked_retry.tick(), if self.dispatch.has_parked_invocations() => {
                     self.dispatch.retry_parked_invocations();

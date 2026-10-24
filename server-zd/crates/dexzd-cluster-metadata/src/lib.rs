@@ -16,7 +16,10 @@ mod registry;
 
 pub use cluster::{ClusterBootstrap, ClusterConfig, bootstrap_or_validate};
 pub use error::MetadataError;
-pub use lease::{LeaseConfig, LeaseHandle, LeaseReleaseError, LeaseStatus, acquire_lease};
+pub use lease::{
+    LeaseConfig, LeaseHandle, LeaseReleaseError, LeaseStatus, acquire_lease,
+    acquire_lease_with_holder_process_id,
+};
 pub use manifest::{
     ManifestChange, NodeConfig, bump_node_epoch, create_initial_manifest, raise_version_barrier,
     read_manifest, update_manifest, update_partition_snapshot,

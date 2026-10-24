@@ -214,9 +214,9 @@ pub trait LocalStore: LocalReadView + Send + Sync {
     }
 }
 
-pub(crate) fn new_node_meta() -> NodeMeta {
+pub(crate) fn new_node_meta(lineage_id: Uuid) -> NodeMeta {
     NodeMeta {
-        lineage_id: Uuid::now_v7().as_bytes().to_vec(),
+        lineage_id: lineage_id.as_bytes().to_vec(),
         last_snapshot_number: 0,
         pending_hard_delete_uploads: Vec::new(),
     }

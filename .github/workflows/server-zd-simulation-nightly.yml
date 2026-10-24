@@ -15,6 +15,16 @@ on:
         required: true
         default: 1000
         type: number
+      engine_seed_count:
+        description: Number of consecutive engine simulation seeds
+        required: true
+        default: 250
+        type: number
+      engine_active_seconds:
+        description: Simulated seconds of client and Worker activity per engine simulation seed
+        required: true
+        default: 300
+        type: number
 
 permissions:
   contents: read
@@ -126,16 +136,15 @@ jobs:
         run: script/server-zd-seeded-bugs.sh
 
   engine-simulation:
-    name: Engine simulation (pending test target)
-    if: ${{ vars.DEXZD_ENGINE_SIMULATION_ENABLED == 'true' }}
+    name: Engine simulation
     runs-on: ubuntu-latest
     timeout-minutes: 75
     defaults:
       run:
         working-directory: server-zd
     env:
-      DEXZD_SIMULATION_SEEDS: ${{ inputs.seed_count || 500 }}
-      DEXZD_SIMULATION_COMMANDS: ${{ inputs.command_count || 1000 }}
+      DEXZD_SIMULATION_SEEDS: ${{ inputs.engine_seed_count || 250 }}
+      DEXZD_SIMULATION_SECONDS: ${{ inputs.engine_active_seconds || 300 }}
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
@@ -147,10 +156,64 @@ jobs:
           workspaces: server-zd
           shared-key: server-zd-test
           save-if: false
+      - name: Validate engine simulation budget
+        shell: bash
+        run: |
+          if ! [[ "$DEXZD_SIMULATION_SEEDS" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$DEXZD_SIMULATION_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+             (( ${#DEXZD_SIMULATION_SEEDS} > 4 || ${#DEXZD_SIMULATION_SECONDS} > 4 )) ||
+             (( DEXZD_SIMULATION_SEEDS < 64 || DEXZD_SIMULATION_SEEDS > 1000 )) ||
+             (( DEXZD_SIMULATION_SECONDS < 60 || DEXZD_SIMULATION_SECONDS > 1200 )) ||
+             (( DEXZD_SIMULATION_SEEDS * DEXZD_SIMULATION_SECONDS > 75000 )); then
+            echo 'Use 64–1000 seeds, 60–1200 simulated seconds per seed, and at most 75000 simulated seconds.' >&2
+            exit 1
+          fi
       - name: Choose random base seed
         run: |
           base_seed=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]')
           echo "DEXZD_SIMULATION_BASE_SEED=$base_seed" >> "$GITHUB_ENV"
           echo "Base seed: $base_seed"
       - name: Run engine simulation
-        run: cargo test -p dexzd-simulation --test engine_invariants -- --nocapture
+        id: engine
+        shell: bash
+        env:
+          DEXZD_SIMULATION_FAILURE_DIR: ${{ runner.temp }}/dexzd-engine-simulation-failures
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=1m 55m cargo test -p dexzd-simulation --test engine_simulation the_engine_keeps_every_invariant_through_faults_and_crashes -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/dexzd-engine-simulation.log"
+      - name: Summarize engine simulation
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Engine simulation"
+            echo "Base seed: ${DEXZD_SIMULATION_BASE_SEED:-not selected}"
+            echo "Seed count: $DEXZD_SIMULATION_SEEDS; simulated seconds per seed: $DEXZD_SIMULATION_SECONDS"
+            echo "Result: ${{ steps.engine.outcome }}"
+            grep -m1 '^twin comparisons:' "$RUNNER_TEMP/dexzd-engine-simulation.log" || true
+            echo
+            if compgen -G "$RUNNER_TEMP/dexzd-engine-simulation-failures/*.txt" > /dev/null; then
+              echo "### Failing seeds"
+              echo "Run reproduction commands from \`server-zd/\`."
+              for report in "$RUNNER_TEMP"/dexzd-engine-simulation-failures/*.txt; do
+                seed=${report##*/}
+                seed=${seed%.txt}
+                reproduction=$(grep -m1 '^reproduce with:' "$report")
+                echo "- Seed $seed: \`${reproduction#reproduce with: }\`"
+              done
+              echo
+              echo "Download the failure artifact for each violation and its last trace events."
+            else
+              echo "No invariant failures were recorded."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload engine simulation failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dexzd-engine-simulation-failures
+          path: |
+            ${{ runner.temp }}/dexzd-engine-simulation-failures/
+            ${{ runner.temp }}/dexzd-engine-simulation.log
+          if-no-files-found: warn
+          retention-days: 30

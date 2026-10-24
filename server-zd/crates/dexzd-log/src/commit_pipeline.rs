@@ -324,7 +324,25 @@ async fn run_pipeline(
             return;
         }
         let deadline = open_deadline.unwrap_or_else(|| Instant::now() + config.batch_window);
+        // Biased for reproducible simulation; in-flight writes are bounded and the deadline fires
+        // once per batch, so proposals cannot starve.
         tokio::select! {
+            biased;
+            result = writes.join_next(), if !writes.is_empty() => {
+                match result {
+                    Some(Ok((seq, outcome))) => {
+                        if let Some(batch) = in_flight.get_mut(&seq) { batch.outcome = Some(outcome); }
+                    }
+                    _ => {
+                        fail_all(&mut open, &mut ready, &mut in_flight, ProposalFailure::Unavailable);
+                        return;
+                    }
+                }
+            }
+            () = sleep_until(deadline), if open_deadline.is_some() => {
+                ready.push_back(std::mem::take(&mut open));
+                open_deadline = None;
+            }
             maybe_proposal = receiver.recv(), if !receiver_closed => {
                 match maybe_proposal {
                     Some(proposal) => {
@@ -342,21 +360,6 @@ async fn run_pipeline(
                         if !open.is_empty() { ready.push_back(std::mem::take(&mut open)); open_deadline = None; }
                     }
                 }
-            }
-            result = writes.join_next(), if !writes.is_empty() => {
-                match result {
-                    Some(Ok((seq, outcome))) => {
-                        if let Some(batch) = in_flight.get_mut(&seq) { batch.outcome = Some(outcome); }
-                    }
-                    _ => {
-                        fail_all(&mut open, &mut ready, &mut in_flight, ProposalFailure::Unavailable);
-                        return;
-                    }
-                }
-            }
-            () = sleep_until(deadline), if open_deadline.is_some() => {
-                ready.push_back(std::mem::take(&mut open));
-                open_deadline = None;
             }
         }
         while let Some((&seq, first)) = in_flight.first_key_value() {

@@ -9,20 +9,30 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+dexzd-api.workspace = true
 dexzd-apply.workspace = true
 dexzd-clock.workspace = true
-dexzd-engine.workspace = true
+dexzd-cluster-metadata.workspace = true
+dexzd-engine = { workspace = true, features = ["test-util"] }
 dexzd-keyspace.workspace = true
 dexzd-log.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
+dexzd-request-validation.workspace = true
 dexzd-storage.workspace = true
+dexzd-stream-store.workspace = true
+dexzd-worker-dispatch.workspace = true
+futures.workspace = true
 prost.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# The engine simulation runs its own current-thread runtime with paused time.
+tokio = { workspace = true, features = ["test-util"] }
 tracing.workspace = true
+xxhash-rust.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -15,6 +15,10 @@ mod value_generation;
 mod worker_model;
 
 pub(crate) use value_generation::MAX_VALUE_BYTES;
+pub(crate) use value_generation::{
+    ATTRIBUTE_KEYS, CHANNEL_NAMES, LOCAL_KEYS, STEP_TYPES, int_value, null_value, pick,
+    random_value, wire_value,
+};
 
 use std::collections::BTreeSet;
 

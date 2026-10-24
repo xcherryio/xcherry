@@ -27,6 +27,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::CommandApplier;
+use crate::engine_id_source::EngineIdSource;
 use crate::long_poll::WaiterRegistry;
 use crate::runtime::flow_runtime::{FlowRuntime, FlowRuntimeState};
 use crate::runtime::rpc_locks::{
@@ -55,6 +56,8 @@ pub struct FlowRuntimeDependencies {
     pub hard_delete_reader: Arc<dyn HardDeleteValueReader>,
     /// Uploads hard-delete Attribute values before their commands are proposed.
     pub hard_delete_uploader: Arc<dyn HardDeleteValueUploader>,
+    /// Creates run IDs and Channel message IDs.
+    pub id_source: Arc<dyn EngineIdSource>,
 }
 
 /// A pending method call that waits for its locks (plan 8.3).
@@ -157,13 +160,15 @@ impl FlowRuntimeRegistry {
         };
         let target = runtime.lock_state().proposed_count;
         let mut settled = runtime.subscribe_settled();
+        // Biased for reproducible simulation; the halt fires once, so the barrier cannot starve.
         tokio::select! {
+            biased;
+            () = self.inner.halted.cancelled() => Err(self.inner.halted_error()),
             result = settled.wait_for(|settled_count| *settled_count >= target) => {
                 result.map(|_| ()).map_err(|_| RuntimeError::NodeStopping {
                     detail: "Flow runtime dropped while waiting for the SYNC barrier".to_owned(),
                 })
             }
-            () = self.inner.halted.cancelled() => Err(self.inner.halted_error()),
         }
     }
 
@@ -390,7 +395,11 @@ impl FlowRuntimeRegistry {
                 }
                 return proposal;
             }
+            // Biased for reproducible simulation; the halt and the release fire once, so the
+            // deadline cannot starve.
             tokio::select! {
+                biased;
+                () = self.inner.halted.cancelled() => return Err(self.inner.halted_error()),
                 () = &mut capacity_released => {}
                 () = tokio::time::sleep_until(deadline) => {
                     return Err(RuntimeError::Unavailable {
@@ -400,7 +409,6 @@ impl FlowRuntimeRegistry {
                         ),
                     });
                 }
-                () = self.inner.halted.cancelled() => return Err(self.inner.halted_error()),
             }
         }
     }
@@ -499,7 +507,13 @@ impl FlowRuntimeRegistry {
             )
         {
             if inbox.new_run_id.is_empty() {
-                inbox.new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+                inbox.new_run_id = self
+                    .inner
+                    .dependencies
+                    .id_source
+                    .run_id()
+                    .as_bytes()
+                    .to_vec();
             }
             if inbox.settings.is_none() {
                 inbox.settings = Some(self.inner.config.run_settings);

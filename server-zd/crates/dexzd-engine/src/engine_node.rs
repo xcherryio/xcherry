@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::blocking_work::BlockingWorkPlacement;
 use crate::command_applier::CommandApplier;
 use crate::commit::{
     AppliedPositionAdvancer, CommandCommitter, CommandCommitterParts, CommitConfig, CommitProgress,
@@ -66,6 +67,9 @@ pub struct EngineNodeConfig {
     pub snapshots: SnapshotConfig,
     /// Log replay read-ahead and compaction after a bulk replay.
     pub recovery: crate::recovery::RecoveryConfig,
+    /// Where frame applies, applied-position writes, and snapshot uploads run.
+    /// [`BlockingWorkPlacement::BlockingThreadPool`] in production.
+    pub blocking_work: BlockingWorkPlacement,
 }
 
 /// Shared services the node runs on.
@@ -141,11 +145,12 @@ impl EngineNode {
         let cluster_id = unleased_metadata.cluster_id()?;
         let Some(lease) = config
             .lease
-            .acquire_until_cancelled(
+            .acquire_until_cancelled_with_holder_process_id(
                 object_store.clone(),
                 clock.clone(),
                 &config.node,
                 cancellation,
+                id_source.lease_holder_process_id(),
             )
             .await?
         else {
@@ -186,6 +191,7 @@ impl EngineNode {
                     snapshot: metadata.node_snapshot(&config.node.node_id),
                     streams: &metadata.streams,
                     partition_count,
+                    new_store_lineage_id: id_source.store_lineage_id(),
                 },
             )
             .await?;
@@ -207,6 +213,7 @@ impl EngineNode {
                 partition_hasher: metadata.cluster.partition_hasher.clone(),
                 node_meta_lock: node_meta_lock.clone(),
                 local_store: store.clone(),
+                id_source: id_source.clone(),
             });
             let pre_replay_semantic_points = if config.commit.debug_replay_checks {
                 FrameApplier::pre_replay_semantic_points(store.as_ref())?
@@ -225,6 +232,7 @@ impl EngineNode {
                     state: state.clone(),
                     committed_commands: runtime.committed_commands.clone(),
                     is_checking_replay: config.commit.debug_replay_checks,
+                    blocking_work: config.blocking_work,
                     semantic_point_hashes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
                     pre_replay_semantic_points,
                     verified_time_travels: AtomicU64::new(0),
@@ -337,6 +345,7 @@ impl EngineNode {
                 config: config.snapshots.clone(),
                 catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
                 last_snapshot_routed_seq: AtomicU64::new(0),
+                blocking_work: config.blocking_work,
             });
             tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
             tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");

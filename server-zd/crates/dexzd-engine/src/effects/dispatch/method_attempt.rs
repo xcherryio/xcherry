@@ -31,6 +31,7 @@ use dexzd_worker_dispatch::{DispatchEvent, DispatchOutcome};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
+use crate::blocking_work::BlockingWorkFailure;
 use crate::effects::dispatch::MethodDispatchRequest;
 use crate::effects::dispatch::worker_result::{
     MethodResult, WorkerResultCheck, check_worker_result,
@@ -262,8 +263,9 @@ impl MethodAttempt {
         let read_cancel = self.cancel.child_token();
         // When the attempt stops waiting, a read that has not started yet skips the store.
         let _cancel_unstarted_read = read_cancel.clone().drop_guard();
+        let placement = self.context.config.blocking_work;
         // Dropping the handle at the deadline detaches the read; it ends with its store call.
-        let handle = self.context.tracker.spawn_blocking(move || {
+        let handle = placement.run_tracked(&self.context.tracker, move || {
             let _read_slot = read_slot;
             if read_cancel.is_cancelled() {
                 return Err(EffectError::Stopped);
@@ -272,8 +274,8 @@ impl MethodAttempt {
         });
         match handle.await {
             Ok(result) => result,
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-            Err(error) => {
+            Err(BlockingWorkFailure::Panicked(payload)) => std::panic::resume_unwind(payload),
+            Err(error @ BlockingWorkFailure::Cancelled) => {
                 tracing::debug!(%error, run_id = %self.key.run_id, "state read did not run");
                 Err(EffectError::Stopped)
             }
@@ -615,7 +617,7 @@ impl MethodAttempt {
                 return Ok(());
             }
         };
-        result.assign_channel_message_ids();
+        result.assign_channel_message_ids(self.context.id_source.as_ref());
         let mut backoff = self.context.retry_backoff();
         let uploads = loop {
             let upload = self
