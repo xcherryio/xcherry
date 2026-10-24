@@ -144,6 +144,7 @@ func TestMessageSizeDefaultLimitCarriesValuesAboveGrpcDefault(t *testing.T) {
 }
 
 func TestMessageSizeHydrationSplitsBlobBatchesAboveLimit(t *testing.T) {
+	// C18: the whole test drives a push Worker listener, which server-zd rejects.
 	skipIfServerZD(t, "push Workers")
 	if isPullWorkerMode {
 		t.Skip("push-only Worker listener message-size limit")
