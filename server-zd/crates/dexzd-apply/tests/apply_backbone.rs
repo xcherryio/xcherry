@@ -17,29 +17,30 @@ use dexzd_apply::{
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    hard_delete_current_key, hard_delete_pending_key, history_record_key, prefix_range,
-    run_named_key, run_singleton_key, value_holder_key, value_row_key,
+    hard_delete_current_key, hard_delete_pending_key, history_record_key, history_row_metadata_key,
+    prefix_range, run_named_key, run_singleton_key, value_holder_key, value_row_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, ValueReference,
     parse_run_key, run_prefix, run_table_prefix,
 };
 use dexzd_protocol::dex::{
-    AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowStartOptions,
-    FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
-    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, RetryPolicy,
+    AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowResetType,
+    FlowStartOptions, FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, ResetFlowRequest, RetryPolicy,
     SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
     StopFlowRequest, StopType, Value, WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, CommandReply, FlowCommand, FlowStartCommand,
     FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
-    HistoryRecord, RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage,
-    StepAttemptFailedCommand, StepAttemptHeartbeatCommand, StepAttemptStartedCommand,
-    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, StoredValue, TimerId, TimersFiredCommand, ValueBirthRecord,
-    ValueGarbageRecord, command_reply, flow_command::Command, step_attempt_heartbeat_command,
-    step_method_completed_command, stored_value, timer_id,
+    HistoryRecord, HistoryRowMetadata, RetryBackoffTimerId, RunRecord, RunSettings,
+    RunStorageUsage, StepAttemptFailedCommand, StepAttemptHeartbeatCommand,
+    StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord, StepInvocationKey,
+    StepInvocationPhase, StepMethod, StepMethodCompletedCommand, StoredValue, TimeTravelCommand,
+    TimerId, TimersFiredCommand, ValueBirthRecord, ValueGarbageRecord, command_reply,
+    flow_command::Command, step_attempt_heartbeat_command, step_method_completed_command,
+    stored_value, timer_id,
 };
 use prost::Message;
 
@@ -384,7 +385,11 @@ impl Harness {
             let table = parse_run_key(key).expect("valid run key").table;
             match column_family {
                 ColumnFamily::Flow => {
-                    usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    if table == RunTable::HistoryRowMetadata {
+                        usage.history_bytes += (key.len() + value.len()) as u64;
+                    } else {
+                        usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    }
                     if table == RunTable::ValueBirth {
                         birth_bytes += ValueBirthRecord::decode(value.as_slice())
                             .expect("valid birth row")
@@ -1242,6 +1247,77 @@ fn long_history_window_work_is_bounded_and_resumes_across_commands() {
     assert!(collected, "later commands finish the bounded window work");
 }
 
+#[test]
+fn reapplied_external_input_keeps_history_metadata_and_window_counts() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.history_window_semantic_events = 2;
+    run_settings.history_prune_chunk_semantic_events = 1;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    harness.set_attribute("status", string_value("first"), "set-1");
+    harness.set_attribute("status", string_value("second"), "set-2");
+    let outcome = harness.apply(Command::TimeTravel(TimeTravelCommand {
+        request: Some(ResetFlowRequest {
+            flow_id: "order-1".to_owned(),
+            reset_type: FlowResetType::Beginning as i32,
+            run_attempt: 1,
+            reason: "test".to_owned(),
+            skip_writes_reapply: false,
+            ..ResetFlowRequest::default()
+        }),
+    }));
+    assert!(matches!(
+        outcome.reply.reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    let travel_seq = harness.run_record().next_run_seq - 1;
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    let record: HistoryRecord = harness
+        .state
+        .get(
+            ColumnFamily::History,
+            &history_record_key(harness.context.flow_hash, run_id, travel_seq),
+        )
+        .expect("memory read succeeds")
+        .map(|bytes| HistoryRecord::decode(bytes.as_slice()).expect("history decodes"))
+        .expect("time travel writes history");
+    assert_eq!(record.reapplied_inputs.len(), 2);
+    let metadata: HistoryRowMetadata = harness
+        .state
+        .get(
+            ColumnFamily::Flow,
+            &history_row_metadata_key(
+                harness.context.flow_hash,
+                run_id,
+                travel_seq,
+                RunTable::HistoryRecord,
+                0,
+            ),
+        )
+        .expect("memory read succeeds")
+        .map(|bytes| HistoryRowMetadata::decode(bytes.as_slice()).expect("metadata decodes"))
+        .expect("time travel writes metadata");
+    assert_eq!(metadata.is_semantic, record.is_semantic);
+    assert_eq!(metadata.is_external_input, record.is_external_input);
+    assert_eq!(metadata.attempt, record.attempt);
+    assert_eq!(metadata.timestamp_micros, record.timestamp_micros);
+    assert!(metadata.is_semantic && metadata.is_external_input);
+    for index in 0..8 {
+        if harness.run_record().window_start_seq > travel_seq {
+            break;
+        }
+        harness.set_attribute(
+            "status",
+            string_value(&format!("later-{index}")),
+            &format!("set-later-{index}"),
+        );
+    }
+    let run = harness.run_record();
+    assert!(run.window_start_seq > travel_seq);
+    assert!(run.max_pruned_external_input_seq >= travel_seq);
+    assert!(run.last_pruned_semantic_timestamp_micros >= record.timestamp_micros);
+}
+
 fn garbage_row_count(harness: &Harness) -> usize {
     harness
         .state
@@ -1411,6 +1487,38 @@ fn state_limit_does_not_drop_an_attempt_start() {
             .iter()
             .any(|effect| { matches!(effect, ApplyEffect::InvocationStarted { .. }) })
     );
+}
+
+#[test]
+fn empty_heartbeat_at_state_limit_does_not_fail_the_attempt() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_max_run_state_bytes(1);
+    let before = harness
+        .run_record()
+        .storage
+        .expect("run storage is accounted");
+    let heartbeat = harness.apply(Command::StepAttemptHeartbeat(StepAttemptHeartbeatCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        checkpoint: None,
+    }));
+    assert!(!heartbeat.writes.is_empty());
+    assert!(!is_error(&heartbeat.reply, 8));
+    let record = harness.run_record();
+    let after = record.storage.expect("run storage is accounted");
+    assert_eq!(record.status, FlowStatus::Running as i32);
+    assert_eq!(
+        harness
+            .step_execution("ChargeStep-1")
+            .invocation
+            .expect("attempt remains running")
+            .phase,
+        StepInvocationPhase::Running as i32
+    );
+    assert_eq!(after.state_row_bytes, before.state_row_bytes);
+    assert!(after.history_bytes > before.history_bytes);
 }
 
 #[test]

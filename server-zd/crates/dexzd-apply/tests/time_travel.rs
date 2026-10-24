@@ -15,7 +15,8 @@ use dexzd_apply::{
     StateWrite, apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    attempt_record_key, checkpoint_key, history_record_key, run_singleton_key, value_row_key,
+    attempt_record_key, checkpoint_key, hard_delete_current_key, hard_delete_pending_key,
+    history_record_key, run_singleton_key, value_row_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, ValueId,
@@ -32,12 +33,12 @@ use dexzd_protocol::dex::{
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, AttributesSetCommand, ChannelMessageDeleteCommand,
     ChannelPublishCommand, CheckpointRecord, CommandReply, FlowCommand, FlowDirectoryRecord,
-    FlowStartCommand, HistoryRecord, RetryBackoffTimerId, RpcCommittedCommand, RunRecord,
-    RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase,
-    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepMethod,
-    StepMethodCompletedCommand, TimeTravelCommand, TimerId, TimerRecord, TimerSkipCommand,
-    TimersFiredCommand, ValueRecord, command_reply, flow_command::Command,
-    step_method_completed_command, stored_value, timer_id,
+    FlowStartCommand, HardDeleteObjectRecord, HardDeleteObjectReference, HistoryRecord,
+    RetryBackoffTimerId, RpcCommittedCommand, RunRecord, RunSettings, StepAttemptFailedCommand,
+    StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord, StepInvocationKey,
+    StepInvocationPhase, StepMethod, StepMethodCompletedCommand, TimeTravelCommand, TimerId,
+    TimerRecord, TimerSkipCommand, TimersFiredCommand, ValueRecord, command_reply,
+    flow_command::Command, step_method_completed_command, stored_value, timer_id,
 };
 use prost::Message;
 
@@ -1415,12 +1416,14 @@ fn only_beginning_targets_genesis_outside_the_window() {
     let genesis_time = harness.history_record(1).unwrap().timestamp_micros;
     harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
     harness.complete_wait_for("ChargeStep-1");
+    let last_pruned_time = harness.history_record(3).unwrap().timestamp_micros;
     for index in 0..5 {
         harness.set_attribute("status", &format!("v{index}"), "");
     }
     assert_eq!(harness.run_record().window_start_seq, 4);
     for request in [
         reset_to_time(genesis_time),
+        reset_to_time(last_pruned_time),
         ResetFlowRequest {
             step_type: "ChargeStep".to_owned(),
             ..reset(FlowResetType::StepType)
@@ -1444,7 +1447,13 @@ fn only_beginning_targets_genesis_outside_the_window() {
         );
         assert!(outcome.writes.is_empty());
     }
-    let (attempt, _) = harness.travel_to(reset(FlowResetType::Beginning));
+    // A time after the last pruned point targets W, the first point at or after it.
+    let (attempt, _) = harness.travel_to(reset_to_time(last_pruned_time + 1));
+    assert_eq!(harness.attempt_record(attempt).parent_seq, 4);
+    let (attempt, _) = harness.travel_to(ResetFlowRequest {
+        run_attempt: 1,
+        ..reset(FlowResetType::Beginning)
+    });
     assert_eq!(harness.attempt_record(attempt).parent_seq, 1);
 }
 
@@ -1598,4 +1607,86 @@ fn the_checkpoint_byte_threshold_follows_the_current_state_size() {
     }
     // The 20 KB state at the last checkpoint would need 20 KB of writes.
     assert!(harness.run_record().last_checkpoint_seq > big_seq);
+}
+
+fn set_hard_delete_attribute(harness: &mut Harness, attribute_key: &str, object_id: &str) {
+    let outcome = harness.apply(Command::AttributesSet(AttributesSetCommand {
+        request: Some(SetAttributesRequest {
+            attributes: vec![AttributeWrite {
+                key: attribute_key.to_owned(),
+                is_hard_delete_on_null: true,
+                ..AttributeWrite::default()
+            }],
+            ..SetAttributesRequest::default()
+        }),
+        hard_delete_objects: vec![HardDeleteObjectReference {
+            write_index: 0,
+            object_id: object_id.to_owned(),
+            size_bytes: 500,
+            is_string_value: true,
+        }],
+        request_fingerprint: Vec::new(),
+    }));
+    assert!(
+        is_ok(&outcome.reply),
+        "hard-delete write: {:?}",
+        outcome.reply
+    );
+}
+
+fn hard_delete_object_id(record: &AttributeRecord) -> Option<String> {
+    match record.value.as_ref().and_then(|value| value.kind.as_ref()) {
+        Some(stored_value::Kind::HardDeleteObject(object)) => Some(object.object_id.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn time_travel_keeps_hard_delete_attributes_current() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    set_hard_delete_attribute(&mut harness, "secret", "object-1");
+    harness.set_attribute("plain", "1", "set-plain");
+    set_hard_delete_attribute(&mut harness, "secret", "object-2");
+    let flow_hash = harness.context.flow_hash;
+    let run = harness.run();
+    let pending = |harness: &Harness, object_id: &str| {
+        harness
+            .get::<HardDeleteObjectRecord>(
+                ColumnFamily::Flow,
+                &hard_delete_pending_key(flow_hash, run, object_id),
+            )
+            .is_some()
+    };
+    assert!(pending(&harness, "object-1"));
+    harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(
+        hard_delete_object_id(&attribute(&harness, "secret")),
+        Some("object-2".to_owned())
+    );
+    let current: HardDeleteObjectRecord = harness
+        .get(
+            ColumnFamily::Flow,
+            &hard_delete_current_key(flow_hash, run, "secret"),
+        )
+        .expect("the current object row stays");
+    assert_eq!(
+        current.object.map(|object| object.object_id),
+        Some("object-2".to_owned())
+    );
+    assert!(pending(&harness, "object-1"));
+    assert!(!pending(&harness, "object-2"));
+    assert!(
+        attribute(&harness, "plain").value.is_some(),
+        "plain writes still reapply"
+    );
+    let referenced: Vec<String> = harness
+        .attempt_rows()
+        .iter()
+        .filter(|((table, _), _)| *table == RunTable::Attribute as u8)
+        .filter_map(|(_, value)| {
+            hard_delete_object_id(&AttributeRecord::decode(value.as_slice()).unwrap())
+        })
+        .collect();
+    assert_eq!(referenced, vec!["object-2".to_owned()]);
 }

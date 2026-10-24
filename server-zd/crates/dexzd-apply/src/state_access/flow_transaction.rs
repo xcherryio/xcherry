@@ -118,12 +118,21 @@ impl<'reader> FlowTransaction<'reader> {
             let metadata_key = metadata_key_for_history_row(&key);
             let row_size_bytes = u64::try_from(key.len() + value.len())
                 .expect("a stored history row fits in a u64 byte count");
+            let buffered_metadata = self
+                .rows
+                .get(&(ColumnFamily::Flow, metadata_key.clone()))
+                .and_then(Option::as_ref)
+                .map(|bytes| {
+                    HistoryRowMetadata::decode(bytes.as_slice())
+                        .expect("buffered history metadata is valid")
+                })
+                .unwrap_or_default();
             self.rows.insert(
                 (ColumnFamily::Flow, metadata_key),
                 Some(
                     HistoryRowMetadata {
                         row_size_bytes,
-                        ..HistoryRowMetadata::default()
+                        ..buffered_metadata
                     }
                     .encode_to_vec(),
                 ),
@@ -368,5 +377,89 @@ fn corrupt_row(table: &'static str, key: &[u8], error: &prost::DecodeError) -> A
         table,
         key: key.iter().map(|byte| format!("{byte:02x}")).collect(),
         detail: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_keyspace::row_keys::{history_record_key, history_row_metadata_key};
+    use dexzd_keyspace::{ColumnFamily, FlowHash, PartitionId, RunId, RunTable};
+    use dexzd_protocol::dexzd::v1::{HistoryRecord, HistoryRowMetadata};
+    use prost::Message;
+
+    use super::FlowTransaction;
+    use crate::{ApplyContext, FlowStateReader, StateReadError, StateRow};
+
+    struct EmptyState;
+
+    impl FlowStateReader for EmptyState {
+        fn get(
+            &self,
+            _column_family: ColumnFamily,
+            _key: &[u8],
+        ) -> Result<Option<Vec<u8>>, StateReadError> {
+            Ok(None)
+        }
+
+        fn scan(
+            &self,
+            _column_family: ColumnFamily,
+            _start: &[u8],
+            _end: &[u8],
+            _limit: usize,
+        ) -> Result<Vec<StateRow>, StateReadError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn absorbing_history_after_metadata_preserves_semantic_flags() {
+        let flow_hash = FlowHash(7);
+        let run_id = RunId([3; 16]);
+        let mut transaction = FlowTransaction::new(
+            &EmptyState,
+            ApplyContext {
+                partition: PartitionId(0),
+                flow_hash,
+            },
+        );
+        let history_key = history_record_key(flow_hash, run_id, 9);
+        let metadata_key =
+            history_row_metadata_key(flow_hash, run_id, 9, RunTable::HistoryRecord, 0);
+        let metadata = HistoryRowMetadata {
+            is_semantic: true,
+            is_external_input: true,
+            attempt: 3,
+            ..HistoryRowMetadata::default()
+        };
+        let record = HistoryRecord {
+            seq: 9,
+            attempt: 3,
+            is_semantic: true,
+            is_external_input: true,
+            ..HistoryRecord::default()
+        };
+        let encoded_record = record.encode_to_vec();
+        transaction.put(
+            ColumnFamily::Flow,
+            metadata_key.clone(),
+            metadata.encode_to_vec(),
+        );
+        transaction.put(
+            ColumnFamily::History,
+            history_key.clone(),
+            encoded_record.clone(),
+        );
+        let buffered: HistoryRowMetadata = transaction
+            .get_message(ColumnFamily::Flow, &metadata_key, "history metadata")
+            .expect("metadata decodes")
+            .expect("metadata remains buffered");
+        assert!(buffered.is_semantic);
+        assert!(buffered.is_external_input);
+        assert_eq!(buffered.attempt, 3);
+        assert_eq!(
+            buffered.row_size_bytes,
+            (history_key.len() + encoded_record.len()) as u64
+        );
     }
 }

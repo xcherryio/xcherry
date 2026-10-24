@@ -81,21 +81,23 @@ fn usage_after_changes(
             })?;
         match change.column_family {
             ColumnFamily::Flow => {
-                state_delta += row_size(change.current.as_ref(), &change.key)
+                let row_delta = row_size(change.current.as_ref(), &change.key)
                     - row_size(change.previous.as_ref(), &change.key);
                 match parsed.table {
                     RunTable::ValueBirth => {
+                        state_delta += row_delta;
                         birth_delta += record_size::<ValueBirthRecord>(change, "value birth")?;
                     }
                     RunTable::ValueGarbage => {
+                        state_delta += row_delta;
                         garbage_delta +=
                             record_size::<ValueGarbageRecord>(change, "value garbage")?;
                     }
                     RunTable::HistoryRowMetadata => {
-                        history_delta +=
-                            record_size::<HistoryRowMetadata>(change, "history metadata")?;
+                        history_delta += row_delta
+                            + record_size::<HistoryRowMetadata>(change, "history metadata")?;
                     }
-                    _ => {}
+                    _ => state_delta += row_delta,
                 }
             }
             _ => {

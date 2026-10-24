@@ -461,6 +461,7 @@ impl RunRows {
                 is_semantic: record.is_semantic,
                 is_external_input: record.is_external_input,
                 attempt: record.attempt,
+                timestamp_micros: record.timestamp_micros,
             },
         );
     }

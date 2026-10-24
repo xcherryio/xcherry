@@ -58,7 +58,7 @@ pub(crate) fn resolve_target(
                 Ok(nanos) => nanos,
                 Err(detail) => return Ok(Err(invalid_argument(detail))),
             };
-            if is_before_window(transaction, cursor, target_nanos)? {
+            if is_before_window(cursor, target_nanos) {
                 None
             } else {
                 candidates
@@ -116,27 +116,10 @@ pub(crate) fn resolve_target(
     }))
 }
 
-/// Whether a time precedes the window start after pruning; its first point may be pruned.
-fn is_before_window(
-    transaction: &FlowTransaction<'_>,
-    cursor: &RunCursor,
-    target_nanos: i128,
-) -> Result<bool, ApplyError> {
-    if cursor.record.pruned_semantic_event_count == 0 {
-        return Ok(false);
-    }
-    let Some(window_start) = cursor
-        .rows
-        .history_record(transaction, cursor.record.window_start_seq)?
-    else {
-        return Err(ApplyError::InvariantViolation {
-            detail: format!(
-                "the window start seq {} has no history record",
-                cursor.record.window_start_seq
-            ),
-        });
-    };
-    Ok(target_nanos < i128::from(window_start.timestamp_micros) * 1000)
+/// Whether a pruned semantic point is at or after the time, so it would be the target.
+fn is_before_window(cursor: &RunCursor, target_nanos: i128) -> bool {
+    cursor.record.pruned_semantic_event_count > 0
+        && target_nanos <= i128::from(cursor.record.last_pruned_semantic_timestamp_micros) * 1000
 }
 
 fn last_event_id_at(candidates: &[HistoryRecord], seq: u64) -> i64 {

@@ -138,6 +138,8 @@ message RunRecord {
   uint64 window_scan_seq = 32;
   // Additional parents attached to this child run through SubFlow reuse.
   repeated ParentFlowReference attached_parents = 40;
+  // Largest timestamp of a pruned semantic point; earlier reset times target a pruned point.
+  int64 last_pruned_semantic_timestamp_micros = 55;
 }
 
 // Close details of a closed attempt.
@@ -169,6 +171,7 @@ message HistoryRowMetadata {
   bool is_semantic = 2;
   bool is_external_input = 3;
   uint32 attempt = 4;
+  int64 timestamp_micros = 5;
 }
 
 // Row of RunTable::AttemptRecord, keyed by attempt (4 bytes big-endian).
