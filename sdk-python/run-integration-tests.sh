@@ -45,7 +45,7 @@ fi
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test_paths=("$@")
 if [[ "${#test_paths[@]}" -eq 0 ]]; then
-  test_paths=("$script_dir"/tests/integ/test_*_runtime.py)
+  test_paths=("$script_dir"/tests/integ/test_*_runtime*.py)
 fi
 
 repo_root=$(cd "$script_dir/.." && pwd)
