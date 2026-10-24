@@ -539,9 +539,10 @@ file or directory meets its limit; stale entries fail the check.
   offenders; keep that file's frozen test settings identical to the workspace.
 - A change to the result of applying an already committed command needs a new
   behavior version with a named predicate. Never change the behavior of an
-  existing version. This rule starts with the first published `server-zd/v*`
-  release tag. Until then, server-zd stays at behavior version 1, and an
-  apply-result change needs no new version.
+  existing version. This rule starts with server-zd 1.0.0, the first
+  `server-zd/v1.*` release tag. Until then, server-zd stays at behavior
+  version 1, an apply-result change needs no new version, and no work goes
+  into version barriers or raising them.
 - Persistent formats (`server-zd/proto/dexzd/`, the RocksDB key layout, the
   object storage layout, and snapshots) follow the protobuf compatibility
   rules: additive only; never renumber or reuse field numbers or names.
