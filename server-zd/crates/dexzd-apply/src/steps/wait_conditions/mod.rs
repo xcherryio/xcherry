@@ -127,6 +127,7 @@ pub(crate) fn register_wait(
         timer_statuses: vec![ConditionStatus::Waiting as i32; timer_count],
         sub_flow_child_ids,
         started_waiting_seq: cursor.seq,
+        sub_flow_registration_attempt: cursor.attempt(),
     });
     evaluate_waiting_step(transaction, cursor, scope.now_micros, step)?;
     cursor.rows.put_step_execution(transaction, step);
@@ -187,12 +188,35 @@ pub(crate) fn on_timer_fired(
 
 /// A child Flow's result arrived. The caller (task A6) has already stored its
 /// SubFlowResultRecord; this completes the SubFlow conditions waiting on `child_flow_id`.
-#[expect(dead_code, reason = "Called by child Flow results (task A6).")]
 pub(crate) fn on_child_result(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
     scope: &CommandScope<'_>,
     child_flow_id: &str,
+    registration_attempt: u32,
+) -> Result<(), ApplyError> {
+    evaluate_sub_flow_waiters(
+        transaction,
+        cursor,
+        scope,
+        Some((child_flow_id, registration_attempt)),
+    )
+}
+
+/// Completes restored waits only with results addressed to their recorded registration attempt.
+pub(crate) fn complete_restored_sub_flow_waits(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+) -> Result<(), ApplyError> {
+    evaluate_sub_flow_waiters(transaction, cursor, scope, None)
+}
+
+fn evaluate_sub_flow_waiters(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+    arrived: Option<(&str, u32)>,
 ) -> Result<(), ApplyError> {
     let mut waiters: Vec<(u64, StepExecutionRecord)> = cursor
         .rows
@@ -200,10 +224,12 @@ pub(crate) fn on_child_result(
         .into_iter()
         .filter_map(|(_, step)| {
             let started_waiting_seq = step.wait.as_ref().and_then(|wait| {
-                wait.sub_flow_child_ids
-                    .iter()
-                    .any(|id| id == child_flow_id)
-                    .then_some(wait.started_waiting_seq)
+                (!wait.sub_flow_child_ids.is_empty()
+                    && arrived.is_none_or(|(child_flow_id, attempt)| {
+                        wait.sub_flow_registration_attempt == attempt
+                            && wait.sub_flow_child_ids.iter().any(|id| id == child_flow_id)
+                    }))
+                .then_some(wait.started_waiting_seq)
             })?;
             Some((started_waiting_seq, step))
         })
@@ -323,7 +349,12 @@ fn evaluate_waiting_step(
         .collect();
     let mut sub_flow_results = Vec::with_capacity(wait.sub_flow_child_ids.len());
     for child_flow_id in &wait.sub_flow_child_ids {
-        sub_flow_results.push(sub_flow_result(transaction, cursor.rows, child_flow_id)?);
+        sub_flow_results.push(sub_flow_result(
+            transaction,
+            cursor.rows,
+            child_flow_id,
+            wait.sub_flow_registration_attempt,
+        )?);
     }
     let is_sub_flow_completed: Vec<bool> = sub_flow_results.iter().map(Option::is_some).collect();
     let mut pending_counts: BTreeMap<String, u64> = BTreeMap::new();
@@ -569,13 +600,9 @@ fn sub_flow_result(
     transaction: &FlowTransaction<'_>,
     rows: RunRows,
     child_flow_id: &str,
+    registration_attempt: u32,
 ) -> Result<Option<StoredFlowResult>, ApplyError> {
-    let key = dexzd_keyspace::row_keys::run_named_key(
-        rows.flow_hash,
-        rows.run_id,
-        RunTable::SubFlowResult,
-        child_flow_id,
-    );
+    let key = crate::cross_flow::sub_flow_result_key(rows, child_flow_id, registration_attempt);
     let record: Option<SubFlowResultRecord> =
         transaction.get_message(ColumnFamily::Flow, &key, "sub flow result")?;
     Ok(record.map(|record| record.result.unwrap_or_default()))
