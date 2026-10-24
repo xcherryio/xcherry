@@ -53,6 +53,26 @@ pub(crate) enum ValueHolder {
     /// A recorded RPC reply for request ID deduplication.
     #[expect(dead_code, reason = "Used by RPC commits.")]
     RpcReply { request_id: String },
+    /// A complete value pinned by an unexpired outbox message.
+    OutboxMessage {
+        message_id: Vec<u8>,
+        value_index: u32,
+    },
+    /// One output of a completed child Flow.
+    #[expect(
+        dead_code,
+        reason = "Retained for previously stored child result holders."
+    )]
+    SubFlowResultOutput {
+        child_flow_id: String,
+        output_index: u32,
+    },
+    /// One output addressed to a specific parent registration attempt.
+    SubFlowResultAttemptOutput {
+        child_flow_id: String,
+        registration_attempt: u32,
+        output_index: u32,
+    },
 }
 
 impl ValueHolder {
@@ -124,6 +144,32 @@ impl ValueHolder {
             Self::RpcReply { request_id } => {
                 encoded.push(0x0b);
                 encoded.extend_from_slice(&length_prefixed_name(request_id));
+            }
+            Self::OutboxMessage {
+                message_id,
+                value_index,
+            } => {
+                encoded.push(0x0c);
+                encoded.extend_from_slice(message_id);
+                encoded.extend_from_slice(&value_index.to_be_bytes());
+            }
+            Self::SubFlowResultOutput {
+                child_flow_id,
+                output_index,
+            } => {
+                encoded.push(0x0d);
+                encoded.extend_from_slice(&length_prefixed_name(child_flow_id));
+                encoded.extend_from_slice(&output_index.to_be_bytes());
+            }
+            Self::SubFlowResultAttemptOutput {
+                child_flow_id,
+                registration_attempt,
+                output_index,
+            } => {
+                encoded.push(0x0e);
+                encoded.extend_from_slice(&registration_attempt.to_be_bytes());
+                encoded.extend_from_slice(&length_prefixed_name(child_flow_id));
+                encoded.extend_from_slice(&output_index.to_be_bytes());
             }
         }
         encoded

@@ -134,6 +134,8 @@ message RunRecord {
   uint64 pruned_semantic_event_count = 30;
   // Size of the latest checkpoint's rows; the checkpoint rule's attempt state size.
   uint64 last_checkpoint_state_bytes = 31;
+  // Additional parents attached to this child run through SubFlow reuse.
+  repeated ParentFlowReference attached_parents = 40;
   // Largest timestamp of a pruned semantic point; earlier reset times target a pruned point.
   int64 last_pruned_semantic_timestamp_micros = 55;
 }
@@ -310,6 +312,8 @@ message WaitStateRecord {
   // Child Flow IDs started for the SubFlow conditions, in declaration order.
   repeated string sub_flow_child_ids = 4;
   uint64 started_waiting_seq = 5;
+  // Attempt that registered these SubFlow conditions, retained across time travel.
+  uint32 sub_flow_registration_attempt = 6;
 }
 
 // Condition results consumed when the wait completed.
@@ -380,6 +384,8 @@ message OutboxRecord {
   uint64 written_seq = 5;
   // Set when the receiver acknowledged; the row is deleted when its retention timer fires.
   int64 acknowledged_at_micros = 6;
+  // Values pinned while this message is retained.
+  repeated StoredValue held_values = 7;
 }
 
 // Row of RunTable::InboxDedup, keyed by source run ID (16 bytes) and message ID (16 bytes).
@@ -394,12 +400,13 @@ message RequestDedupRecord {
   uint64 recorded_seq = 3;
 }
 
-// Row of RunTable::SubFlowResult, keyed by child Flow ID.
+// Row of RunTable::SubFlowResult, keyed by registration attempt and child Flow ID.
 message SubFlowResultRecord {
   bytes child_run_id = 1;
   uint32 child_run_attempt = 2;
   StoredFlowResult result = 3;
   uint64 received_seq = 4;
+  uint32 parent_registration_attempt = 5;
 }
 
 // Row of RunTable::HardDeleteObject: key 0x00 + Attribute key is the current object; key 0x01 +

@@ -259,9 +259,19 @@ pub(crate) fn wire_value(rows: RunRows, stored: &StoredValue) -> Value {
 
 /// Reads the complete value, or `None` if a table value was already collected.
 pub(crate) fn load_stored_value(
-    state: &dyn FlowStateReader,
+    transaction: &FlowTransaction<'_>,
     rows: RunRows,
     stored: &StoredValue,
+) -> Result<Option<Value>, ApplyError> {
+    load_stored_value_with(rows, stored, |key| {
+        transaction.get(ColumnFamily::Value, key)
+    })
+}
+
+fn load_stored_value_with(
+    rows: RunRows,
+    stored: &StoredValue,
+    read_value_row: impl Fn(&[u8]) -> Result<Option<Vec<u8>>, ApplyError>,
 ) -> Result<Option<Value>, ApplyError> {
     match &stored.kind {
         Some(stored_value::Kind::InlineValue(value)) => Ok(Some(value.clone())),
@@ -270,7 +280,7 @@ pub(crate) fn load_stored_value(
                 return Ok(None);
             };
             let key = value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id);
-            let record = state.get(ColumnFamily::Value, &key)?;
+            let record = read_value_row(&key)?;
             let record = record
                 .map(|bytes| {
                     ValueRecord::decode(bytes.as_slice()).map_err(|error| {
@@ -286,6 +296,47 @@ pub(crate) fn load_stored_value(
         }
         Some(stored_value::Kind::HardDeleteObject(_)) | None => Ok(None),
     }
+}
+
+/// Resolves a Worker's run-local value reference for a complete outbox payload.
+pub(crate) fn complete_value_for_outbox(
+    transaction: &FlowTransaction<'_>,
+    rows: RunRows,
+    limits: ValueLimits,
+    value: &Value,
+) -> Result<Result<Value, ValueRejection>, ApplyError> {
+    let Some(reference_text) = reference_text(value) else {
+        let size_bytes =
+            u64::try_from(value.encoded_len()).expect("encoded Value length fits a u64");
+        if size_bytes > limits.max_value_bytes {
+            return Ok(Err(ValueRejection::TooLarge {
+                size_bytes,
+                max_value_bytes: limits.max_value_bytes,
+            }));
+        }
+        return Ok(Ok(value.clone()));
+    };
+    let Some(reference) = parse_own_reference(reference_text, rows) else {
+        return Ok(Err(ValueRejection::UnknownReference {
+            reference: reference_text.to_owned(),
+        }));
+    };
+    let Some(birth) = value_birth(transaction, rows, reference.value_id)? else {
+        return Ok(Err(ValueRejection::UnknownReference {
+            reference: reference_text.to_owned(),
+        }));
+    };
+    let stored = table_value(
+        reference.value_id,
+        birth.size_bytes,
+        is_string_reference(value),
+    );
+    let complete = load_stored_value(transaction, rows, &stored)?.ok_or_else(|| {
+        ApplyError::InvariantViolation {
+            detail: "live SubFlow reference has no value row".to_owned(),
+        }
+    })?;
+    Ok(Ok(complete))
 }
 
 /// Size accounted for a stored value.
@@ -313,10 +364,10 @@ pub fn load_for_wire(
     if parsed.run_id != run_id {
         return Ok(None);
     }
-    load_stored_value(
-        state,
+    load_stored_value_with(
         RunRows::new(flow_hash, run_id),
         &table_value(parsed.value_id, 0, false),
+        |key| Ok(state.get(ColumnFamily::Value, key)?),
     )
 }
 
