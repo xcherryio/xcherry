@@ -35,6 +35,7 @@ public final class StateRecoveryTest {
 
     @Test
     void testStateApiFailAndRecoveryWorkflow() throws Exception {
+        // C21: server-zd rejects Step failure policies.
         IntegrationTestWaits.skipIfServerZD("Step failure policies");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,
@@ -47,6 +48,7 @@ public final class StateRecoveryTest {
 
     @Test
     void testStateApiFailAndRecoveryNoWaitUntilWorkflow() throws Exception {
+        // C21: server-zd rejects Step failure policies.
         IntegrationTestWaits.skipIfServerZD("Step failure policies");
         try (DexDevTestEnvironment environment = DexDevTestEnvironment.start(
                 cacheDirectory,

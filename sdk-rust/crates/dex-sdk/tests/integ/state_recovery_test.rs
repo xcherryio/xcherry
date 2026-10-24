@@ -19,6 +19,7 @@ use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_state_api_fail_and_recovery_workflow() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }
@@ -43,6 +44,7 @@ fn test_state_api_fail_and_recovery_workflow() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_state_api_fail_and_recovery_no_wait_until_workflow() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }

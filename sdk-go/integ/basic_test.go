@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/superdurable/dex/sdk-go/dex"
+	"github.com/superdurable/dex/sdk-go/gen/dexpb"
 )
 
 type basicFlow struct {
@@ -162,11 +163,10 @@ func (proceedOnWaitForFailureSecondStep) Execute(
 }
 
 func TestBasicFlow(t *testing.T) {
-	skipIfServerZD(t, "Flow retry")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "basic")
 	timeout := 30 * time.Second
-	runID, err := integClient.StartFlow(ctx, basicFlow{}, flowID, 1, dex.StartFlowOptions{
+	startOptions := dex.StartFlowOptions{
 		Timeout:       &timeout,
 		IDReusePolicy: dex.IDReuseDisallow,
 		RetryPolicy: &dex.FlowRetryPolicy{
@@ -175,7 +175,14 @@ func TestBasicFlow(t *testing.T) {
 			MaximumInterval:    10 * time.Second,
 			BackoffCoefficient: 3,
 		},
-	})
+	}
+	serverEngine, err := integrationServerEngine()
+	require.NoError(t, err)
+	if serverEngine == dexpb.ServerEngine_SERVER_ENGINE_ZD {
+		// C20: server-zd rejects Flow retry policies; this Flow never retries.
+		startOptions.RetryPolicy = nil
+	}
+	runID, err := integClient.StartFlow(ctx, basicFlow{}, flowID, 1, startOptions)
 	require.NoError(t, err)
 	require.NotEmpty(t, runID)
 
@@ -224,6 +231,7 @@ func TestMultiOutputFlow(t *testing.T) {
 }
 
 func TestProceedOnWaitForFailureFlow(t *testing.T) {
+	// C21: server-zd rejects Step failure policies.
 	skipIfServerZD(t, "Step failure policies")
 	flowID := newFlowID(t, "proceed-wait")
 	_, err := integClient.StartFlow(

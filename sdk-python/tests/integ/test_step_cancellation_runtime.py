@@ -29,6 +29,7 @@ def test_step_cancellation(scenario: CancellationScenario) -> None:
         CancellationScenario.GLOBAL_SELECTOR,
         CancellationScenario.SIBLING_SELECTOR,
     }:
+        # C21: server-zd rejects Step failure policies.
         skip_if_server_zd("Step failure policies")
     asyncio.run(_run_step_cancellation(scenario))
 
