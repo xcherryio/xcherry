@@ -106,8 +106,13 @@ func testReadsCompleteWithinCallerDeadline(t *testing.T) {
 		return err
 	})
 	require.NoError(t, reads.Wait())
-	// The first read attempt gets half of the 8-second deadline, so success after it proves a retry.
-	require.Greater(t, time.Since(readStarted), 4*time.Second)
+	if isServerZDBinaryMode() {
+		// server-zd reads a committed snapshot, so reads finish before the transactional RPC.
+		require.Less(t, time.Since(readStarted), handler.holdDuration)
+	} else {
+		// The first read attempt gets half of the 8-second deadline, so success after it proves a retry.
+		require.Greater(t, time.Since(readStarted), 4*time.Second)
+	}
 	require.Equal(t, readFlowRPCName, rpcResponse.GetOutput().GetStringValue())
 	require.NoError(t, <-holdResult)
 	stopSlowEngineTaskFlow(t, runtime, flowID)
@@ -134,14 +139,21 @@ func testDeadlineLessReadsReportRequestTimeout(t *testing.T) {
 		})
 	}()
 	reads.Wait()
-	requireReadRequestTimeout(t, rpcErr)
-	requireReadRequestTimeout(t, attributesErr)
+	if isServerZDBinaryMode() {
+		// server-zd reads a committed snapshot instead of waiting for the transactional RPC.
+		require.NoError(t, rpcErr)
+		require.NoError(t, attributesErr)
+	} else {
+		requireReadRequestTimeout(t, rpcErr)
+		requireReadRequestTimeout(t, attributesErr)
+	}
 	require.Less(t, time.Since(readStarted), 14*time.Second)
 	require.NoError(t, <-holdResult)
 	stopSlowEngineTaskFlow(t, runtime, flowID)
 }
 
 func testCallerDeadlineAndCancellationEndReadsAtOnce(t *testing.T) {
+	requireTemporalOnly(t)
 	handler := newSlowEngineTaskHandler(8 * time.Second)
 	runtime, flowID := startSlowEngineTaskFlow(t, handler, DexServiceTestConfig{})
 	holdResult := holdEngineTask(t, runtime, flowID, handler, 10)

@@ -888,18 +888,24 @@ func TestStreamAPITemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
-	requireGoServerSetting(t, "external Stream Store")
 	streamName := "api-" + newRequestID()
-	redisClient := newStreamRedisClient(t)
-	t.Cleanup(func() { deleteStreamTestKeys(t, redisClient, streamName) })
+	streamStoreConfig := config.StreamStoreConfig{
+		Backend:         config.StreamStoreBackendMemory,
+		MaxMessageBytes: 64,
+		MaxReadMessages: 2,
+	}
+	// Storage assertions read Redis directly; server-zd has only the memory backend.
+	hasRedisStorage := !isServerZDBinaryMode()
+	var redisClient *redis.Client
+	if hasRedisStorage {
+		streamStoreConfig.Backend = config.StreamStoreBackendRedis
+		streamStoreConfig.RedisURL = streamTestRedisURL
+		redisClient = newStreamRedisClient(t)
+		t.Cleanup(func() { deleteStreamTestKeys(t, redisClient, streamName) })
+	}
 	runtime := startDexService(t, DexServiceTestConfig{
 		BackendType: service.BackendTypeTemporal,
-		StreamStore: config.StreamStoreConfig{
-			Backend:         config.StreamStoreBackendRedis,
-			RedisURL:        streamTestRedisURL,
-			MaxMessageBytes: 64,
-			MaxReadMessages: 2,
-		},
+		StreamStore: streamStoreConfig,
 	})
 	flowClient := runtime.FlowClient
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -950,18 +956,20 @@ func TestStreamAPITemporal(t *testing.T) {
 		PageSize:   3,
 	})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
-	chargedBytes, err := redisClient.Get(context.Background(), streamTestBaseKey(streamName)+":charged").Int64()
-	require.NoError(t, err)
-	_, err = flowClient.WriteStream(ctx, &dexpb.WriteStreamRequest{
-		FlowId:              flowID,
-		FlowType:            streamTestFlowType,
-		StreamName:          streamName,
-		StreamCapacityBytes: chargedBytes*2 - 1,
-		Value:               stringValue("first"),
-		Source:              "second-key",
-	})
-	require.Equal(t, codes.ResourceExhausted, status.Code(err))
-	require.Equal(t, int64(1), streamLength(t, redisClient, streamName))
+	if hasRedisStorage {
+		chargedBytes, err := redisClient.Get(context.Background(), streamTestBaseKey(streamName)+":charged").Int64()
+		require.NoError(t, err)
+		_, err = flowClient.WriteStream(ctx, &dexpb.WriteStreamRequest{
+			FlowId:              flowID,
+			FlowType:            streamTestFlowType,
+			StreamName:          streamName,
+			StreamCapacityBytes: chargedBytes*2 - 1,
+			Value:               stringValue("first"),
+			Source:              "second-key",
+		})
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.Equal(t, int64(1), streamLength(t, redisClient, streamName))
+	}
 	_, err = flowClient.WriteStream(ctx, &dexpb.WriteStreamRequest{
 		FlowId:              flowID,
 		FlowType:            streamTestFlowType,
@@ -971,7 +979,18 @@ func TestStreamAPITemporal(t *testing.T) {
 		Source:              "message-too-large",
 	})
 	require.Equal(t, codes.ResourceExhausted, status.Code(err))
-	require.Equal(t, int64(1), streamLength(t, redisClient, streamName))
+	if hasRedisStorage {
+		require.Equal(t, int64(1), streamLength(t, redisClient, streamName))
+	} else {
+		listed, err = flowClient.ListStreamMessages(ctx, &dexpb.ListStreamMessagesRequest{
+			FlowId:     flowID,
+			FlowType:   streamTestFlowType,
+			StreamName: streamName,
+			PageSize:   2,
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{"first"}, protoStreamValues(listed.GetMessages()))
+	}
 	_, err = flowClient.WriteStream(ctx, &dexpb.WriteStreamRequest{
 		FlowId:              flowID,
 		FlowType:            streamTestFlowType,

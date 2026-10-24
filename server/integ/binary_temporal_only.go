@@ -73,7 +73,6 @@ var temporalOnlyScenarioTests = map[string]struct{}{
 	"TestPullWorkerStickyCapacityRecoveryTemporal":              {},
 	"TestPullWorkerStickyFallbackCadence":                       {},
 	"TestPullWorkerStickyFallbackTemporal":                      {},
-	"TestReadBehindSlowEngineTaskTemporal":                      {},
 	"TestRpcExternalStorageLockingTemporal":                     {},
 	"TestRpcExternalStorageNonLockingCadence":                   {},
 	"TestRpcExternalStorageNonLockingTemporal":                  {},
