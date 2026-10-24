@@ -13,7 +13,9 @@ alwaysApply: false
   offenders; keep that file's frozen test settings identical to the workspace.
 - A change to the result of applying an already committed command needs a new
   behavior version with a named predicate. Never change the behavior of an
-  existing version.
+  existing version. This rule starts with the first published `server-zd/v*`
+  release tag. Until then, server-zd stays at behavior version 1, and an
+  apply-result change needs no new version.
 - Persistent formats (`server-zd/proto/dexzd/`, the RocksDB key layout, the
   object storage layout, and snapshots) follow the protobuf compatibility
   rules: additive only; never renumber or reuse field numbers or names.
