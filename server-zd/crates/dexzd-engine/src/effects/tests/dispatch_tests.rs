@@ -10,6 +10,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dexzd_apply::ApplyEffect;
+use dexzd_keyspace::row_keys::{run_named_key, run_singleton_key};
+use dexzd_keyspace::{ColumnFamily, RunTable};
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, InvokeExecuteMethodResponse,
     InvokeWaitForMethodResponse, StepDecision, StepOptions, StopFlowRequest,
@@ -608,5 +610,72 @@ async fn async_methods_propose_with_batched_urgency() {
     harness.dispatcher.next_dispatch().await;
     let completed = harness.runtime.commands_matching(is_method_completed);
     assert_eq!(completed[0].urgency, CommitUrgency::Batched);
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_running_attempt_is_redispatched_after_its_original_dispatch_finished() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    let run_id = harness.start_flow(start_request("order-1"), settings());
+    let original = harness.dispatcher.next_dispatch().await;
+    let run = harness.run_location("order-1", run_id);
+    let step_key = run_named_key(
+        run.flow_hash,
+        run.run_id,
+        RunTable::StepExecution,
+        "ChargeStep-1",
+    );
+    let running_step = harness
+        .runtime
+        .snapshot()
+        .rows
+        .get(&(ColumnFamily::Flow, step_key.clone()))
+        .expect("the Step execution row exists")
+        .clone();
+    let task_id = harness
+        .step_execution("order-1", run_id, "ChargeStep-1")
+        .invocation
+        .expect("invocation")
+        .task_id;
+    original.complete_wait_for(InvokeWaitForMethodResponse::default());
+    let _execute = harness.dispatcher.next_dispatch().await;
+
+    // Time travel restores the WaitFor attempt, with its task ID, in run attempt 2.
+    {
+        let mut record = harness.run_record("order-1", run_id);
+        record.current_attempt = 2;
+        let mut state = harness.runtime.state.lock().expect("lock");
+        state
+            .rows
+            .insert((ColumnFamily::Flow, step_key), running_step);
+        state.put_message(
+            ColumnFamily::Flow,
+            run_singleton_key(run.flow_hash, run.run_id, RunTable::RunRecord),
+            &record,
+        );
+    }
+    harness.runner.handle(
+        &EffectHarness::flow("order-1"),
+        &[ApplyEffect::InvocationStarted {
+            run_id,
+            run_attempt: 2,
+            invocation: StepInvocationKey {
+                step_execution_id: "ChargeStep-1".to_owned(),
+                method: StepMethod::WaitFor as i32,
+            },
+            attempt: 1,
+            task_id,
+        }],
+        true,
+    );
+    let restored = harness.dispatcher.next_dispatch().await;
+    assert!(matches!(
+        restored.method_request(),
+        MethodRequest::WaitFor(_)
+    ));
+    assert_eq!(restored.context().attempt, 1);
+    assert_eq!(restored.context().run_attempt, 2);
+    assert_eq!(harness.dispatcher.dispatch_count.load(Ordering::SeqCst), 3);
     harness.shutdown().await;
 }

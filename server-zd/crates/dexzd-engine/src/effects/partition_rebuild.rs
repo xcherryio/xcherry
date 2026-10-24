@@ -27,10 +27,16 @@ pub(crate) async fn rebuild_partition(
     context: &EffectContext,
     partition: PartitionId,
 ) -> Result<(), EffectError> {
+    let startup_uploads = context
+        .startup_pending_uploads
+        .as_deref()
+        .map_err(|detail| EffectError::StartupUploadsUnreadable {
+            detail: detail.clone(),
+        })?;
     let reader = context.runtime.committed_state_reader()?;
     context
         .hard_delete_objects
-        .recover_pending_uploads(partition, &context.startup_pending_uploads, reader)
+        .recover_pending_uploads(partition, startup_uploads, reader)
         .await?;
     let reader = context.runtime.committed_state_reader()?;
     let mut work: BTreeMap<RunLocation, (FlowAddress, Vec<ApplyEffect>)> = BTreeMap::new();

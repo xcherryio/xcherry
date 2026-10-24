@@ -34,7 +34,7 @@ use dexzd_apply::{ApplyEffect, StateReadError};
 use dexzd_clock::WallClock;
 use dexzd_keyspace::{PartitionHasher, PartitionId, RunId};
 use dexzd_object_store::ObjectStoreError;
-use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, PendingHardDeleteUpload};
+use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, PendingHardDeleteUpload, RunSettings};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::StorageError;
 use futures::future::BoxFuture;
@@ -78,7 +78,8 @@ pub struct EffectsConfig {
     /// Default 60 seconds. The timer service keeps timers firing within this horizon in memory
     /// and rereads the Timer index at least this often.
     pub timer_lookahead: Duration,
-    /// Default 1024. Largest number of timer index rows loaded at once per partition.
+    /// Default 1024. Number of timer index rows read per page of a partition. A pass keeps
+    /// paging past rows in retry backoff until it has read this many other rows.
     pub timer_load_limit: usize,
     /// Default 1 second. A timer still in the index after its TimersFired command committed
     /// is retried after this delay instead of in a tight loop.
@@ -91,6 +92,10 @@ pub struct EffectsConfig {
     /// Default 30 seconds. Longest delay between retries of a transient failure; deliveries
     /// and deletions retry forever.
     pub retry_max_backoff: Duration,
+    /// Settings recorded into the child run that a delivered SubFlow start creates; apply never
+    /// reads configuration. Set it to the runtime's run settings so that client and SubFlow
+    /// starts record the same values. Defaults follow the `RunSettings` field documentation.
+    pub child_run_settings: RunSettings,
 }
 
 impl Default for EffectsConfig {
@@ -106,6 +111,19 @@ impl Default for EffectsConfig {
             locked_invocation_retry_interval: Duration::from_secs(1),
             retry_initial_backoff: Duration::from_millis(100),
             retry_max_backoff: Duration::from_secs(30),
+            child_run_settings: RunSettings {
+                history_window_semantic_events: 10_000,
+                history_prune_chunk_semantic_events: 1_000,
+                max_retained_superseded_bytes: 256 * 1024 * 1024,
+                retention_after_close_micros: 7 * 24 * 60 * 60 * 1_000_000,
+                wire_inline_threshold_bytes: 100,
+                max_value_bytes: 16 * 1024 * 1024,
+                checkpoint_min_written_bytes: 1024 * 1024,
+                checkpoint_max_commands: 10_000,
+                request_dedup_capacity: 1_000,
+                max_run_state_bytes: 1024 * 1024 * 1024,
+                max_active_step_executions: 10_000,
+            },
         }
     }
 }
@@ -141,6 +159,13 @@ pub enum EffectError {
     /// The runtime could not serve a proposal or read.
     #[error(transparent)]
     Runtime(#[from] EffectRuntimeError),
+    /// The hard-delete upload ledger could not be read when the effect runner started, so
+    /// recovery cannot tell which uploads predate the start. Restart the node to read it again.
+    #[error("reading pending hard-delete uploads at startup failed: {detail}")]
+    StartupUploadsUnreadable {
+        /// The ledger's error.
+        detail: String,
+    },
     /// The effect runner stopped before the work finished.
     #[error("effect runner stopped")]
     Stopped,
@@ -175,6 +200,7 @@ pub(crate) enum RouterMessage {
     },
     AttemptFinished {
         task_id: Vec<u8>,
+        key: MethodAttemptKey,
     },
     WorkFinished {
         flow: FlowAddress,
@@ -215,7 +241,8 @@ pub(crate) struct EffectContext {
     pub(crate) validation_config: ValidationConfig,
     /// Hard-delete uploads recorded before this node started; recovery checks only these, so
     /// uploads of commands proposed after startup are never mistaken for orphans.
-    pub(crate) startup_pending_uploads: Vec<PendingHardDeleteUpload>,
+    /// An error fails every partition rebuild, because a later read could include new uploads.
+    pub(crate) startup_pending_uploads: Result<Vec<PendingHardDeleteUpload>, String>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) tracker: TaskTracker,
     router: mpsc::UnboundedSender<RouterMessage>,
@@ -379,15 +406,14 @@ impl EffectTasks {
     pub fn start(self, runtime: Arc<dyn EffectRuntime>) -> EffectTasksHandle {
         let shutdown = CancellationToken::new();
         let tracker = TaskTracker::new();
-        let startup_pending_uploads = match self.dependencies.hard_delete_objects.pending_uploads()
-        {
-            Ok(uploads) => uploads,
-            Err(error) => {
-                // Unrecovered orphans are still deleted with their run's prefix at retention.
-                tracing::warn!(%error, "reading pending hard-delete uploads failed");
-                Vec::new()
-            }
-        };
+        let startup_pending_uploads = self
+            .dependencies
+            .hard_delete_objects
+            .pending_uploads()
+            .map_err(|error| {
+                tracing::error!(%error, "reading pending hard-delete uploads failed");
+                error.to_string()
+            });
         let context = Arc::new(EffectContext {
             config: self.config,
             runtime,
@@ -477,7 +503,9 @@ impl EffectRouter {
             RouterMessage::InvocationStartFinished { flow, key, result } => {
                 self.dispatch.finish_start(flow, key, result);
             }
-            RouterMessage::AttemptFinished { task_id } => self.dispatch.finish_attempt(task_id),
+            RouterMessage::AttemptFinished { task_id, key } => {
+                self.dispatch.finish_attempt(task_id, &key);
+            }
             RouterMessage::WorkFinished { flow, work } => {
                 if self.tracked_work.remove(&work) == Some(true) {
                     self.spawn_tracked(&flow, work);

@@ -8,29 +8,34 @@
 
 use std::time::Duration;
 
+use std::sync::{Arc, Mutex};
+
+use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::{
-    hard_delete_pending_key, outbox_key, retention_index_key, run_item_index_key,
+    hard_delete_pending_key, outbox_key, run_item_index_key, run_singleton_key,
 };
-use dexzd_keyspace::{ColumnFamily, IndexKind};
-use dexzd_object_store::ObjectStore;
+use dexzd_keyspace::{ColumnFamily, IndexKind, RunTable, partition_index_prefix};
+use dexzd_object_store::{FaultAction, ObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, InvokeExecuteMethodResponse,
     InvokeWaitForMethodResponse, StepDecision, StepOptions,
 };
 use dexzd_protocol::dexzd::v1::{
     ChildFlowCompletedMessage, CrossFlowEndpoint, HardDeleteObjectRecord,
-    HardDeleteObjectReference, OutboxRecord, flow_command, outbox_record,
+    HardDeleteObjectReference, OutboxRecord, PendingHardDeleteUpload, flow_command, outbox_record,
 };
 use dexzd_storage::LocalStore;
 use prost::Message;
 
 use super::hard_delete_tests::set_hard_delete_attribute;
-use super::outbox_and_purge_tests::{mark_purging, put_object};
+use super::outbox_and_purge_tests::put_object;
 use super::{
-    DurableState, EffectHarness, is_method_completed, ok_override, settings, start_request,
-    string_value,
+    DurableState, EffectHarness, SECOND_MICROS, SwitchableFault, is_method_completed, ok_override,
+    ok_reply, settings, start_request, string_value,
 };
-use crate::effects::{EffectsConfig, MethodRequest};
+use crate::effects::{
+    EffectError, EffectsConfig, HardDeleteUploadLedger, MethodRequest, NodeMetaUploadLedger,
+};
 
 fn restart(harness_durable: &DurableState) -> EffectHarness {
     EffectHarness::with_config(harness_durable.clone(), EffectsConfig::default())
@@ -221,18 +226,16 @@ async fn a_restart_deletes_uploads_whose_command_never_committed() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_restart_resumes_outbox_deliveries_hard_delete_deletions_and_purges() {
+async fn a_restart_resumes_outbox_deliveries_and_hard_delete_deletions() {
     let first = EffectHarness::new();
     let child_run = first.start_flow(start_request("child"), settings());
     let parent_run = first.start_flow(start_request("parent"), settings());
-    let purged_run = first.start_flow(start_request("expired"), settings());
     let child = first.run_location("child", child_run);
     let child_partition = first.partition_of("child");
     let owner = first
         .hard_delete_objects
         .owner_of(&EffectHarness::flow("child"), child_run);
     put_object(&first, &owner.object_key("replaced")).await;
-    mark_purging(&first, "expired", purged_run);
     {
         let mut state = first.runtime.state.lock().expect("lock");
         state.put_message(
@@ -289,19 +292,6 @@ async fn a_restart_resumes_outbox_deliveries_hard_delete_deletions_and_purges() 
             ),
             Vec::new(),
         );
-        let expired = first.run_location("expired", purged_run);
-        state.rows.insert(
-            (
-                ColumnFamily::PartitionIndex,
-                retention_index_key(
-                    first.partition_of("expired"),
-                    1,
-                    expired.flow_hash,
-                    expired.run_id,
-                ),
-            ),
-            Vec::new(),
-        );
     }
     let durable = first.durable.clone();
     first.shutdown().await;
@@ -310,9 +300,7 @@ async fn a_restart_resumes_outbox_deliveries_hard_delete_deletions_and_purges() 
     second.runtime.add_override(ok_override(|command| {
         matches!(
             command,
-            flow_command::Command::InboxMessage(_)
-                | flow_command::Command::OutboxAck(_)
-                | flow_command::Command::RunPurge(_)
+            flow_command::Command::InboxMessage(_) | flow_command::Command::OutboxAck(_)
         )
     }));
     second.runtime.add_override(Box::new(|command, state| {
@@ -338,11 +326,10 @@ async fn a_restart_resumes_outbox_deliveries_hard_delete_deletions_and_purges() 
             flow_command::Command::InboxMessage(_) => Some("inbox"),
             flow_command::Command::OutboxAck(_) => Some("ack"),
             flow_command::Command::HardDeleteObjectsDeleted(_) => Some("hard-delete"),
-            flow_command::Command::RunPurge(_) => Some("purge"),
             _ => None,
         })
         .collect();
-    for kind in ["inbox", "ack", "hard-delete", "purge"] {
+    for kind in ["inbox", "ack", "hard-delete"] {
         assert!(kinds.contains(&kind), "{kind} missing from {kinds:?}");
     }
     assert!(
@@ -430,4 +417,204 @@ async fn a_redispatch_reads_the_current_hard_delete_object_when_the_snapshot_obj
         FlowStatus::Completed as i32
     );
     second.shutdown().await;
+}
+
+fn force_complete() -> InvokeExecuteMethodResponse {
+    InvokeExecuteMethodResponse {
+        step_decision: Some(StepDecision {
+            close_decision: Some(CloseDecision {
+                close_decision_type: CloseDecisionType::ForceComplete as i32,
+                ..CloseDecision::default()
+            }),
+            ..StepDecision::default()
+        }),
+        ..InvokeExecuteMethodResponse::default()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_after_retention_expiry_is_purged_from_the_retention_index_on_restart() {
+    let (durable, object_fault) = SwitchableFault::install(
+        vec![ObjectStoreOperation::List, ObjectStoreOperation::Delete],
+        FaultAction::FailBeforeEffect,
+    );
+    let first = EffectHarness::with_config(durable, EffectsConfig::default());
+    first.rebuild_all_partitions().await;
+    let mut request = start_request("expired");
+    request.step_options = Some(StepOptions {
+        skip_wait_for: true,
+        ..StepOptions::default()
+    });
+    let mut run_settings = settings();
+    run_settings.retention_after_close_micros = 10 * SECOND_MICROS;
+    let run_id = first.start_flow(request, run_settings);
+    let owner = first
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("expired"), run_id);
+    put_object(&first, &owner.object_key("leftover")).await;
+    first
+        .dispatcher
+        .next_dispatch()
+        .await
+        .complete_execute(force_complete());
+    first.settle().await;
+    assert_eq!(
+        first.run_record("expired", run_id).status,
+        FlowStatus::Completed as i32
+    );
+    let partition = first.partition_of("expired");
+    let retention_prefix = partition_index_prefix(partition, IndexKind::Retention);
+    let retention_rows = |harness: &EffectHarness| {
+        harness
+            .runtime
+            .snapshot()
+            .rows
+            .keys()
+            .filter(|(column_family, key)| {
+                *column_family == ColumnFamily::PartitionIndex && key.starts_with(&retention_prefix)
+            })
+            .count()
+    };
+    assert_eq!(
+        retention_rows(&first),
+        1,
+        "close writes the Retention index"
+    );
+
+    // The owner crashes after TimersFired committed and before the purge finished.
+    object_fault.set_enabled(true);
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    first.settle().await;
+    assert!(first.run_record("expired", run_id).is_purging);
+    assert!(
+        first
+            .runtime
+            .commands_matching(|command| matches!(command, flow_command::Command::RunPurge(_)))
+            .is_empty()
+    );
+    let durable = first.durable.clone();
+    first.shutdown().await;
+    object_fault.set_enabled(false);
+
+    let second = restart(&durable);
+    second.rebuild_all_partitions().await;
+    second.settle().await;
+    let purges = second
+        .runtime
+        .commands_matching(|command| matches!(command, flow_command::Command::RunPurge(_)));
+    assert_eq!(purges.len(), 1);
+    assert_eq!(purges[0].reply, ok_reply());
+    let run = second.run_location("expired", run_id);
+    assert!(
+        second
+            .runtime
+            .snapshot()
+            .get(
+                ColumnFamily::Flow,
+                &run_singleton_key(run.flow_hash, run.run_id, RunTable::RunRecord),
+            )
+            .expect("memory reads never fail")
+            .is_none(),
+        "apply deleted the run"
+    );
+    assert_eq!(
+        retention_rows(&second),
+        0,
+        "RunPurge removes the Retention index"
+    );
+    let remaining = durable
+        .objects
+        .list(&owner.object_key_prefix(), None, 1000)
+        .await
+        .expect("list succeeds");
+    assert!(remaining.objects.is_empty());
+    second.shutdown().await;
+}
+
+/// Ledger whose reads fail, as a local metadata read error would.
+struct UnreadableUploadLedger {
+    ledger: NodeMetaUploadLedger,
+}
+
+impl HardDeleteUploadLedger for UnreadableUploadLedger {
+    fn record_pending_uploads(
+        &self,
+        uploads: &[PendingHardDeleteUpload],
+    ) -> Result<(), EffectError> {
+        self.ledger.record_pending_uploads(uploads)
+    }
+
+    fn clear_pending_uploads(&self, object_keys: &[String]) -> Result<(), EffectError> {
+        self.ledger.clear_pending_uploads(object_keys)
+    }
+
+    fn pending_uploads(&self) -> Result<Vec<PendingHardDeleteUpload>, EffectError> {
+        Err(EffectError::CorruptState {
+            table: "NodeMeta",
+            key: "node".to_owned(),
+            detail: "injected read failure".to_owned(),
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_upload_ledger_fails_startup_and_the_next_restart_recovers() {
+    let first = EffectHarness::new();
+    first.rebuild_all_partitions().await;
+    let run_id = first.start_flow(start_request("order-1"), settings());
+    let owner = first
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let mut orphan_writes = vec![AttributeWrite {
+        key: "secret".to_owned(),
+        value: Some(string_value("lost")),
+        is_hard_delete_on_null: true,
+        ..AttributeWrite::default()
+    }];
+    let orphan = first
+        .hard_delete_objects
+        .upload_attribute_writes(owner, &mut orphan_writes)
+        .await
+        .expect("upload succeeds");
+    let orphan_key = owner.object_key(&orphan.references[0].object_id);
+    let durable = first.durable.clone();
+    first.shutdown().await;
+
+    let ledger = Arc::new(UnreadableUploadLedger {
+        ledger: NodeMetaUploadLedger::new(
+            Arc::clone(&durable.local_store) as _,
+            Arc::new(Mutex::new(())),
+        ),
+    });
+    let second = EffectHarness::with_ledger(durable.clone(), EffectsConfig::default(), ledger);
+    let error = second
+        .try_rebuild_all_partitions()
+        .await
+        .expect_err("rebuild fails without the startup uploads");
+    assert!(
+        matches!(error, EffectError::StartupUploadsUnreadable { .. }),
+        "{error}"
+    );
+    second.shutdown().await;
+    assert!(
+        durable
+            .objects
+            .get(&orphan_key)
+            .await
+            .expect("get")
+            .is_some()
+    );
+
+    let third = restart(&durable);
+    third.rebuild_all_partitions().await;
+    assert!(
+        durable
+            .objects
+            .get(&orphan_key)
+            .await
+            .expect("get")
+            .is_none(),
+        "the next restart deletes the orphan"
+    );
+    third.shutdown().await;
 }

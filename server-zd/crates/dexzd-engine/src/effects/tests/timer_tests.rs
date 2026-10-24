@@ -241,3 +241,43 @@ async fn a_timer_left_in_the_index_is_retried_after_the_delay_not_in_a_loop() {
     assert_eq!(fired_commands(&harness).len(), 2);
     harness.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn due_timers_behind_a_full_page_of_timers_in_backoff_still_fire() {
+    let config = EffectsConfig {
+        timer_load_limit: 2,
+        ..EffectsConfig::default()
+    };
+    let harness = EffectHarness::with_config(super::DurableState::new(), config);
+    harness.rebuild_all_partitions().await;
+    harness.runtime.add_override(timers_fired_override());
+    let run_id = harness.start_flow(start_request("order-1"), settings());
+    // Timers of a missing run stay in the index; each pass puts them back into backoff.
+    let missing_run = RunId::from_slice(&[3; 16]).expect("16-byte run ID");
+    let base = harness.clock.now_unix_micros();
+    for index in 0..3 {
+        seed_timer(
+            &harness,
+            "order-1",
+            missing_run,
+            &wait_timer(index),
+            base - i64::from(3 - index) * MILLI_MICROS,
+        );
+    }
+    seed_timer(&harness, "order-1", run_id, &wait_timer(0), base);
+    harness.runner.handle(
+        &EffectHarness::flow("order-1"),
+        &[ApplyEffect::TimerArmed {
+            fire_at_micros: base,
+        }],
+        true,
+    );
+    sleep_until_micros(&harness, base + 10 * MILLI_MICROS).await;
+    harness.settle().await;
+
+    let fired = fired_commands(&harness);
+    assert_eq!(fired.len(), 1, "{fired:?}");
+    assert_eq!(fired[0].0, run_id.as_bytes().to_vec());
+    assert_eq!(fired[0].1, vec![wait_timer(0)]);
+    harness.shutdown().await;
+}
