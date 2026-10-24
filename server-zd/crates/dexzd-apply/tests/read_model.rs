@@ -113,7 +113,6 @@ struct Harness {
     flow_id: String,
     run_id: RunId,
     now_micros: i64,
-    behavior_version: u32,
 }
 
 impl Harness {
@@ -133,7 +132,6 @@ impl Harness {
             flow_id: flow_id.to_owned(),
             run_id,
             now_micros: 1_800_000_000_000_000,
-            behavior_version: 2,
         }
     }
 
@@ -147,7 +145,7 @@ impl Harness {
             } else {
                 self.run_id.as_bytes().to_vec()
             },
-            behavior_version: self.behavior_version,
+            behavior_version: 1,
             proposed_at_micros: self.now_micros,
             tenant_id: 0,
             command: Some(body),
@@ -805,40 +803,8 @@ fn active_step_search_mode_respects_skip_wait_for() {
 }
 
 #[test]
-fn earlier_behavior_version_keeps_its_history_and_search_writes() {
+fn version_one_start_writes_search_document_and_index_rows() {
     let mut harness = Harness::new();
-    harness.behavior_version = 1;
-    harness.start(FlowStartOptions::default(), None);
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-    harness.stop();
-    let history = get_history_events(
-        &harness.state,
-        harness.context.flow_hash,
-        harness.run_id,
-        1,
-        0,
-        &[],
-        0,
-    )
-    .unwrap();
-    assert_eq!(history.events.len(), 2);
-    assert!(matches!(
-        history.events[1].payload,
-        Some(flow_history_event::Payload::FlowClosed(_))
-    ));
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn search_projection_seeds_indexed_attributes_when_a_run_adopts_new_behavior() {
-    let mut harness = Harness::new();
-    harness.behavior_version = 1;
     harness.start(
         FlowStartOptions {
             attributes: vec![AttributeWrite {
@@ -851,22 +817,58 @@ fn search_projection_seeds_indexed_attributes_when_a_run_adopts_new_behavior() {
         },
         None,
     );
-    harness.behavior_version = 2;
-    harness.set_attributes(
-        vec![AttributeWrite {
-            key: "other".to_owned(),
-            value: Some(string_value("new")),
-            ..AttributeWrite::default()
-        }],
-        None,
-        Vec::new(),
-    );
     let document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
         .unwrap()
         .unwrap();
+    assert_eq!(document.version, 1);
     assert_eq!(document.attributes.len(), 1);
     assert_eq!(document.attributes[0].index_key, "ReviewState");
     assert_eq!(document.attributes[0].value, Some(string_value("created")));
+    let search_key = tenant_run_index_key(
+        harness.context.partition,
+        IndexKind::SearchDocument,
+        TenantId::DEFAULT,
+        harness.context.flow_hash,
+        harness.run_id,
+    );
+    assert_eq!(
+        harness
+            .state
+            .rows
+            .get(&(ColumnFamily::PartitionIndex, search_key)),
+        Some(&1_u64.to_be_bytes().to_vec())
+    );
+    let list_key = flow_list_index_key(
+        harness.context.partition,
+        TenantId::DEFAULT,
+        "OrderFlow",
+        FlowStatus::Running as u8,
+        harness.context.flow_hash,
+        harness.run_id,
+    );
+    assert!(
+        harness
+            .state
+            .rows
+            .contains_key(&(ColumnFamily::PartitionIndex, list_key))
+    );
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.stop();
+    let history = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        1,
+        0,
+        &[],
+        0,
+    )
+    .unwrap();
+    assert_eq!(history.events.len(), 3);
+    assert!(matches!(
+        history.events[1].payload,
+        Some(flow_history_event::Payload::StepWaitForPending(_))
+    ));
 }
 
 #[test]
