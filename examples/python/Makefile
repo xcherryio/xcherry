@@ -18,7 +18,7 @@ unitTests:
 	uv run --frozen pytest tests/unit -v
 
 syncIntegTests:
-	uv run --frozen pytest sync-python/tests/integ -v
+	uv run --frozen pytest sync-python/sync_tests/integ -v
 
 e2eTests:
 	./run-e2e-tests.sh

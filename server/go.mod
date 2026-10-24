@@ -16,7 +16,7 @@ require (
 	github.com/prometheus/client_golang v1.21.1
 	github.com/snowflakedb/gosnowflake/v2 v2.2.0
 	github.com/stretchr/testify v1.11.1
-	github.com/superdurable/dex/blob-cache-go v0.1.1
+	github.com/superdurable/dex/blob-cache-go v0.1.2
 	github.com/uber-go/tally/v4 v4.1.1
 	github.com/uber/cadence-idl v0.0.0-20250616185004-cc6f52f87bc6
 	go.mongodb.org/mongo-driver/v2 v2.9.1
@@ -39,6 +39,7 @@ require (
 	go.temporal.io/api v1.63.4
 	go.temporal.io/cloud-sdk v0.19.0
 	golang.org/x/sync v0.22.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
 )
 
 require (
@@ -130,7 +131,6 @@ require (
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gotest.tools/gotestsum v1.8.2 // indirect
 )
 

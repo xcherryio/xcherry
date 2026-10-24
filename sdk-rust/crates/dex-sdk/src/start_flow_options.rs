@@ -58,6 +58,10 @@ pub enum FlowTimeoutPolicy {
 /// All optional fields are absent by default. Initial Attribute values are encoded when the start
 /// request is sent. Use a stable request ID to make retries of the same logical request idempotent.
 ///
+/// A stable request ID alone does not make a retry succeed. Set
+/// [`StartFlowOptions::request_id`] and [`StartFlowOptions::ignore_already_started`] together, and
+/// reuse the same values on every retry of one logical start, for example after a lost response.
+///
 /// # Examples
 ///
 /// ```
@@ -70,6 +74,17 @@ pub enum FlowTimeoutPolicy {
 ///     .id_reuse_policy(IdReusePolicy::AllowIfNotRunning)
 ///     .initial_attribute(&customer, "customer-42".to_owned())
 ///     .request_id("create-order-42");
+/// ```
+///
+/// Retry-safe start options:
+///
+/// ```
+/// use dex_sdk::StartFlowOptions;
+///
+/// let order_id = "42";
+/// let options = StartFlowOptions::new()
+///     .ignore_already_started(true)
+///     .request_id(format!("start-order-{order_id}"));
 /// ```
 pub struct StartFlowOptions {
     pub(crate) timeout: Option<Duration>,
@@ -225,12 +240,26 @@ impl StartFlowOptions {
     }
 
     /// Returns the existing run ID instead of an error when the Flow already exists.
+    ///
+    /// It applies only when [`StartFlowOptions::request_id`] matches the request ID that started
+    /// the existing run. A different or generated request ID still returns
+    /// [`SdkError::FlowAlreadyStarted`](crate::SdkError::FlowAlreadyStarted). See
+    /// [`StartFlowOptions`] for an example that sets both options.
     pub fn ignore_already_started(mut self, value: bool) -> Self {
         self.ignore_already_started = value;
         self
     }
 
     /// Sets the idempotency key for this start request.
+    ///
+    /// When omitted, the SDK generates a new request ID for every call. A retried start returns the
+    /// existing run only when [`StartFlowOptions::ignore_already_started`] is `true` and this
+    /// request ID matches the request that started that run. Without that option, the retry returns
+    /// [`SdkError::FlowAlreadyStarted`](crate::SdkError::FlowAlreadyStarted) even when the first
+    /// attempt created the Flow. The match applies only when the ID reuse policy rejects the start.
+    /// A policy that permits another run starts a new run instead. Dex compares only request IDs,
+    /// not input or other options, so never reuse a request ID for a different logical start. See
+    /// [`StartFlowOptions`] for an example that sets both options.
     pub fn request_id(mut self, value: impl Into<String>) -> Self {
         self.request_id = Some(value.into());
         self

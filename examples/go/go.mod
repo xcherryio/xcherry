@@ -9,7 +9,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/superdurable/dex-connectors-library/connectors/openai v0.4.0
 	github.com/superdurable/dex-connectors-library/sdkgo v0.6.0
-	github.com/superdurable/dex/blob-cache-go v0.1.0
+	github.com/superdurable/dex/blob-cache-go v0.1.2
 	github.com/superdurable/dex/sdk-go v1.15.0
 )
 

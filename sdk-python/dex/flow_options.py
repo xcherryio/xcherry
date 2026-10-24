@@ -152,6 +152,10 @@ class StartFlowOptions:
     Durations are :class:`datetime.timedelta` values. ``None`` uses the registered
     Flow or server default. Use :meth:`with_attribute` to add initial Attribute writes.
 
+    To retry one logical start safely, for example after a lost response, set a
+    stable ``request_id`` and ``ignore_already_started=True`` together. Reuse the
+    same values on every retry.
+
     Attributes:
         timeout: Optional durable soft timeout. ``None`` or zero disables it.
         timeout_policy: Action taken when a positive timeout expires.
@@ -161,14 +165,32 @@ class StartFlowOptions:
         retry_policy: Optional Flow-level retry policy.
         config_override: Optional FlowConfig applied over registered defaults.
         ignore_already_started: Return the existing run rather than raising
-            ``FlowAlreadyStartedError`` when supported by the server.
+            ``FlowAlreadyStartedError`` when supported by the server. It applies
+            only when ``request_id`` matches the request ID that started the
+            existing run. A different or generated request ID still raises
+            ``FlowAlreadyStartedError``.
         request_id: Optional non-empty idempotency key. ``None`` generates one.
+            A retried start returns the existing run only when
+            ``ignore_already_started`` is ``True`` and this request ID matches
+            the request that started that run. Without that option, the retry
+            raises ``FlowAlreadyStartedError`` even when the first attempt
+            created the Flow. The match applies only when the ID reuse policy
+            rejects the start. A policy that permits another run starts a new
+            run instead. Dex compares only request IDs, not input or other
+            options, so never reuse a request ID for a different logical start.
 
     Examples:
         >>> options = (
         ...     StartFlowOptions(timeout=timedelta(hours=1))
         ...     .with_attribute(status, "pending")
         ...     .with_attribute(balances, "merchant-7", 1200)
+        ... )
+        >>> retry_safe_options = StartFlowOptions(
+        ...     ignore_already_started=True,
+        ...     request_id=f"start-order-{order_id}",
+        ... )
+        >>> run_id = client.start_flow(
+        ...     order_flow, f"order-{order_id}", order_input, retry_safe_options
         ... )
     """
 

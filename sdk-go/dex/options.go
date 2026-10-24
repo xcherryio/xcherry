@@ -232,6 +232,16 @@ type FlowConfig struct {
 
 // StartFlowOptions configures a new Flow execution.
 // Nil and zero fields preserve server defaults; RequestID is generated when omitted.
+//
+// To retry one logical start safely, for example after a lost response, set a stable
+// RequestID and AlreadyStarted.IgnoreError together. Reuse the same values on every retry:
+//
+//	flowID := "order-" + orderID
+//	requestID := "start-order-" + orderID
+//	runID, err := client.StartFlow(ctx, orderFlow, flowID, input, dex.StartFlowOptions{
+//		AlreadyStarted: &dex.AlreadyStartedOptions{IgnoreError: true},
+//		RequestID:      &requestID,
+//	})
 type StartFlowOptions struct {
 	// Timeout sets Dex's durable soft timeout; nil or zero disables it.
 	Timeout *time.Duration
@@ -252,8 +262,18 @@ type StartFlowOptions struct {
 	// ConfigOverride replaces registered Flow configuration for this execution.
 	ConfigOverride *FlowConfig
 	// AlreadyStarted controls whether an existing Flow is returned as success.
+	// IgnoreError returns the existing run only when RequestID matches the request that started it.
 	AlreadyStarted *AlreadyStartedOptions
 	// RequestID defaults to a UUID; set a stable business identifier for cross-call retries.
+	// A retried StartFlow returns the existing run only when AlreadyStarted.IgnoreError is true
+	// and RequestID matches the request that started that run.
+	// Without IgnoreError, the retry returns FlowAlreadyStartedError even when the first attempt
+	// created the Flow.
+	// The match applies only when IDReusePolicy rejects the start.
+	// A policy that permits another run starts a new run instead.
+	// Dex compares only request IDs, not input or other options.
+	// Never reuse a request ID for a different logical start.
+	// See StartFlowOptions for an example that sets both fields.
 	RequestID *string
 }
 
@@ -347,6 +367,8 @@ type FlowRetryPolicy struct {
 // AlreadyStartedOptions configures StartFlow behavior when the Flow ID already exists.
 type AlreadyStartedOptions struct {
 	// IgnoreError returns the existing run ID instead of FlowAlreadyStartedError.
+	// It applies only when StartFlowOptions.RequestID matches the request ID that started the
+	// existing run. A different or SDK-generated request ID still returns FlowAlreadyStartedError.
 	IgnoreError bool
 }
 
