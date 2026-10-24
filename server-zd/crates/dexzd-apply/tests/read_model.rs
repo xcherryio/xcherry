@@ -2472,6 +2472,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_final_start() {
             invocation: Some(invocation_key(method)),
             attempt: 2,
             task_id: vec![3; 16],
+            pull_routing: None,
         })
     };
 
@@ -2703,6 +2704,7 @@ fn pending_retry_context_reports_the_last_started_attempt() {
                 invocation: Some(invocation),
                 attempt: 2,
                 task_id: vec![3; 16],
+                pull_routing: None,
             }));
         }
         let expected_started_at = if is_retry_running {
