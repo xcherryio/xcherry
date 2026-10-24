@@ -42,12 +42,12 @@ if [[ "${1:-}" == "--coverage" ]]; then
   )
   shift
 fi
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test_paths=("$@")
 if [[ "${#test_paths[@]}" -eq 0 ]]; then
-  test_paths=(tests/integ/test_*_runtime.py)
+  test_paths=("$script_dir"/tests/integ/test_*_runtime.py)
 fi
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 dex_port="${DEX_INTEG_DEX_PORT:-18802}"
 web_port="${DEX_INTEG_WEB_PORT:-18902}"
