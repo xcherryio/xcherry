@@ -408,25 +408,30 @@ async fn paradedb_matches_builtin_evaluator() {
                 _ => panic!("test run must have an ID"),
             })
             .collect();
-        let first = translate_query(&query, &parity_tenant_column, 2, None).expect("first page");
-        let first_page = client
-            .query(&first.sql, &first.parameter_refs())
-            .await
-            .expect("first page SQL");
-        assert_eq!(first_page.len(), 2);
-        let last_id: String = first_page[1].get("run_id");
-        let cursor = PageCursor::from_row(rows.get(&last_id).expect("cursor row"));
-        let next =
-            translate_query(&query, &parity_tenant_column, 2, Some(&cursor)).expect("next page");
-        let next_page = client
-            .query(&next.sql, &next.parameter_refs())
-            .await
-            .expect("next page SQL");
-        let actual_ids: Vec<String> = first_page
-            .iter()
-            .chain(next_page.iter())
-            .map(|row| row.get("run_id"))
-            .collect();
+        let page_size: usize = 2;
+        let mut cursor = None;
+        let mut actual_ids = Vec::new();
+        loop {
+            let statement = translate_query(
+                &query,
+                &parity_tenant_column,
+                page_size as i64,
+                cursor.as_ref(),
+            )
+            .expect("ordered page");
+            let page = client
+                .query(&statement.sql, &statement.parameter_refs())
+                .await
+                .expect("ordered page SQL");
+            actual_ids.extend(page.iter().map(|row| row.get::<_, String>("run_id")));
+            if page.len() < page_size {
+                break;
+            }
+            let last_id: String = page.last().expect("full page has final row").get("run_id");
+            cursor = Some(PageCursor::from_row(
+                rows.get(&last_id).expect("cursor row"),
+            ));
+        }
         assert_eq!(actual_ids, expected_ids, "{order}");
     }
 
