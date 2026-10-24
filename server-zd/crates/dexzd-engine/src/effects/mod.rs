@@ -73,6 +73,11 @@ pub struct EffectsConfig {
     pub max_worker_request_bytes: usize,
     /// Default 16 MiB, `values.maxValueBytes`. Used only for runs whose settings carry no limit.
     pub default_max_value_bytes: u64,
+    /// Default false, `values.hydrateBeforeDispatch`. When true, method requests carry complete
+    /// values: the step input, Attributes, Step locals, condition results, loaded Channel messages,
+    /// and the last heartbeat value are read from the value table before dispatch instead of being
+    /// sent as value references. The request size limit applies to the complete request.
+    pub hydrate_before_dispatch: bool,
     /// Default 60 seconds. The timer service keeps timers firing within this horizon in memory
     /// and rereads the Timer index at least this often.
     pub timer_lookahead: Duration,
@@ -102,6 +107,7 @@ impl Default for EffectsConfig {
             heartbeat_batch_window: Duration::from_millis(20),
             max_worker_request_bytes: 32 * 1024 * 1024,
             default_max_value_bytes: 16 * 1024 * 1024,
+            hydrate_before_dispatch: false,
             timer_lookahead: Duration::from_secs(60),
             timer_load_limit: 1024,
             fired_timer_retry_delay: Duration::from_secs(1),

@@ -10,12 +10,13 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dexzd_apply::ApplyEffect;
+use dexzd_keyspace::VALUE_REFERENCE_PREFIX;
 use dexzd_keyspace::row_keys::{run_named_key, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, RunTable};
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, PullRouting, PullRoutingSource, StepDecision, StepOptions,
-    StopFlowRequest,
+    InvokeWaitForMethodResponse, PullRouting, PullRoutingSource, StartFlowRequest, StepDecision,
+    StepOptions, StopFlowRequest, Value, value,
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, FlowStopCommand, StepAttemptFailureKind, StepInvocationKey, StepMethod,
@@ -415,6 +416,71 @@ async fn the_next_attempt_receives_the_latest_heartbeat_checkpoint() {
         second.context().last_heartbeat_value,
         Some(string_value("page-7"))
     );
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn hydration_sends_complete_step_inputs_and_heartbeat_checkpoints() {
+    check_large_value_dispatch(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_hydration_large_step_inputs_and_checkpoints_are_value_references() {
+    check_large_value_dispatch(false).await;
+}
+
+/// Checks a step input and checkpoint above the 100-byte inline threshold across a retry.
+async fn check_large_value_dispatch(is_hydrating: bool) {
+    let config = EffectsConfig {
+        hydrate_before_dispatch: is_hydrating,
+        ..EffectsConfig::default()
+    };
+    let harness = EffectHarness::with_config(super::DurableState::new(), config);
+    harness.rebuild_all_partitions().await;
+    let step_input = string_value(&"large input ".repeat(20));
+    harness.start_flow(
+        StartFlowRequest {
+            step_input: Some(step_input.clone()),
+            ..start_request("order-1")
+        },
+        settings(),
+    );
+    let is_received_as = |received: Option<&Value>, original: &Value| {
+        if is_hydrating {
+            return received == Some(original);
+        }
+        matches!(
+            received.and_then(|value| value.kind.as_ref()),
+            Some(value::Kind::InternalBlobIdForStringValue(reference))
+                if reference.starts_with(VALUE_REFERENCE_PREFIX)
+        )
+    };
+    let first = harness.dispatcher.next_dispatch().await;
+    let MethodRequest::WaitFor(request) = first.method_request().clone() else {
+        panic!("expected a WaitFor request");
+    };
+    assert!(is_received_as(request.step_input.as_ref(), &step_input));
+    let checkpoint = string_value(&"page ".repeat(40));
+    first.send_wait_for_heartbeat(Some(checkpoint.clone()));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    first.fail_with_worker_error("transient");
+
+    let second = harness.dispatcher.next_dispatch().await;
+    assert!(is_received_as(
+        second.context().last_heartbeat_value.as_ref(),
+        &checkpoint
+    ));
+    // The Worker echoes what it received; an unchanged checkpoint is not proposed again.
+    second.send_wait_for_heartbeat(second.context().last_heartbeat_value);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    harness.settle().await;
+    let heartbeat_count = harness
+        .runtime
+        .commands_matching(|command| {
+            matches!(command, flow_command::Command::StepAttemptHeartbeat(_))
+        })
+        .len();
+    assert_eq!(heartbeat_count, 1);
     harness.shutdown().await;
 }
 

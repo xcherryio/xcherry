@@ -12,7 +12,8 @@
 use std::collections::BTreeMap;
 
 use dexzd_apply::FlowStateReader;
-use dexzd_keyspace::{RunId, ValueId, ValueReference};
+use dexzd_keyspace::row_keys::value_row_key;
+use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference};
 use dexzd_protocol::dex::{
     self, ChannelMessage, ChannelResult, ChannelValues, ConditionResults, Context, FlowResult,
     InvokeExecuteMethodRequest, InvokeWaitForMethodRequest, Kv, StepCompletionOutput, Value, value,
@@ -20,11 +21,11 @@ use dexzd_protocol::dex::{
 use dexzd_protocol::dexzd::v1::{
     ChannelMessageRecord, ConditionResultsRecord, HardDeleteObjectReference, RunRecord,
     StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepInvocationRecord, StepMethod,
-    StoredFlowResult, StoredKeyValue, StoredValue, stored_value,
+    StoredFlowResult, StoredKeyValue, StoredValue, ValueRecord, stored_value,
 };
 
 use crate::effects::EffectError;
-use crate::effects::state_reads::{RunLocation, read_run_record, read_step_execution};
+use crate::effects::state_reads::{RunLocation, decode_row, read_run_record, read_step_execution};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
@@ -116,11 +117,17 @@ impl MethodAttemptKey {
 
 /// Reads the state of a running attempt, or `None` when the attempt is no longer running with
 /// this dispatch ID (it finished, was canceled, or time travel replaced the run attempt).
+///
+/// With `is_hydrating`, value-table references that the Worker request reads become inline values
+/// from the same reader.
+///
+/// Returns [`EffectError::InvariantViolation`] when such a held value has no value row.
 pub(crate) fn read_method_attempt_state(
     reader: &dyn FlowStateReader,
     run: RunLocation,
     attempt_key: &MethodAttemptKey,
     task_id: &[u8],
+    is_hydrating: bool,
 ) -> Result<Option<MethodAttemptState>, EffectError> {
     let Some(run_record) = read_run_record(reader, run)? else {
         return Ok(None);
@@ -128,7 +135,8 @@ pub(crate) fn read_method_attempt_state(
     if run_record.current_attempt != attempt_key.run_attempt {
         return Ok(None);
     }
-    let Some(step_execution) = read_step_execution(reader, run, &attempt_key.step_execution_id)?
+    let Some(mut step_execution) =
+        read_step_execution(reader, run, &attempt_key.step_execution_id)?
     else {
         return Ok(None);
     };
@@ -144,10 +152,98 @@ pub(crate) fn read_method_attempt_state(
     if !is_running {
         return Ok(None);
     }
+    if is_hydrating {
+        load_request_values(reader, run, &mut step_execution)?;
+    }
     Ok(Some(MethodAttemptState {
         run_record,
         step_execution,
     }))
+}
+
+/// Replaces the value-table references that [`build_method_request`] reads with inline values.
+fn load_request_values(
+    reader: &dyn FlowStateReader,
+    run: RunLocation,
+    step_execution: &mut StepExecutionRecord,
+) -> Result<(), EffectError> {
+    let mut stored_values: Vec<&mut StoredValue> = Vec::new();
+    stored_values.extend(step_execution.input.as_mut());
+    stored_values.extend(stored_key_values(&mut step_execution.locals));
+    if let Some(results) = step_execution.condition_results.as_mut() {
+        for channel_result in &mut results.channel_results {
+            stored_values.extend(stored_message_values(&mut channel_result.messages));
+        }
+        for sub_flow_result in &mut results.sub_flow_results {
+            stored_values.extend(
+                sub_flow_result
+                    .results
+                    .iter_mut()
+                    .filter_map(|output| output.completed_step_output.as_mut()),
+            );
+        }
+    }
+    if let Some(invocation) = step_execution.invocation.as_mut() {
+        stored_values.extend(invocation.heartbeat_checkpoint.as_mut());
+        if let Some(snapshot) = invocation.snapshot.as_mut() {
+            stored_values.extend(stored_key_values(&mut snapshot.attributes));
+            for loaded in &mut snapshot.loaded_channel_messages {
+                stored_values.extend(stored_message_values(&mut loaded.messages));
+            }
+        }
+    }
+    for stored in stored_values {
+        let Some(stored_value::Kind::TableValue(table_value)) = stored.kind.as_ref() else {
+            continue;
+        };
+        let value_id = table_value
+            .value_id
+            .as_ref()
+            .ok_or_else(|| EffectError::CorruptState {
+                table: "StoredValue",
+                key: run.run_id.to_string(),
+                detail: "value-table reference has no value ID".to_owned(),
+            })?;
+        let key = value_row_key(
+            run.flow_hash,
+            run.run_id,
+            RunTable::Value,
+            ValueId {
+                run_seq: value_id.run_seq,
+                index_in_command: value_id.index_in_command,
+            },
+        );
+        let bytes = reader.get(ColumnFamily::Value, &key)?.ok_or_else(|| {
+            EffectError::InvariantViolation {
+                detail: format!(
+                    "held value {}-{} of run {} has no value row",
+                    value_id.run_seq, value_id.index_in_command, run.run_id
+                ),
+            }
+        })?;
+        let record: ValueRecord = decode_row("Value", &key, &bytes)?;
+        let value = record.value.ok_or_else(|| EffectError::CorruptState {
+            table: "Value",
+            key: run.run_id.to_string(),
+            detail: "value row has no value".to_owned(),
+        })?;
+        stored.kind = Some(stored_value::Kind::InlineValue(value));
+    }
+    Ok(())
+}
+
+fn stored_key_values(key_values: &mut [StoredKeyValue]) -> impl Iterator<Item = &mut StoredValue> {
+    key_values
+        .iter_mut()
+        .filter_map(|key_value| key_value.value.as_mut())
+}
+
+fn stored_message_values(
+    messages: &mut [ChannelMessageRecord],
+) -> impl Iterator<Item = &mut StoredValue> {
+    messages
+        .iter_mut()
+        .filter_map(|message| message.value.as_mut())
 }
 
 /// Builds the Worker request of the attempt.

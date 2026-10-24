@@ -130,7 +130,13 @@ impl MethodAttempt {
             }
             state = self.retry_transient(|| async {
                 let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
-                read_method_attempt_state(reader.as_ref(), self.run, &self.key, &self.task_id)
+                read_method_attempt_state(
+                    reader.as_ref(),
+                    self.run,
+                    &self.key,
+                    &self.task_id,
+                    self.context.config.hydrate_before_dispatch,
+                )
             }) => state?,
         };
         let Some(state) = state else {
