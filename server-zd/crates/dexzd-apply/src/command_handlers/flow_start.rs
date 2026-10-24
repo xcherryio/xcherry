@@ -13,10 +13,12 @@ use dexzd_keyspace::row_keys::{active_work_index_key, tenant_run_index_key};
 use dexzd_keyspace::{ColumnFamily, IndexKind, RunId};
 use dexzd_protocol::dex::{
     ErrorSubStatus, FlowConfig, FlowStatus, FlowTimeoutPolicy, IdReusePolicy, StartFlowRequest,
+    StopFlowRequest, StopType,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttemptRecord, CommandReply, FlowDirectoryRun, FlowStartCommand, FlowTimeoutTimerId,
-    HardDeleteObjectReference, RunRecord, RunSettings, TimerId, command_reply, timer_id,
+    AttemptRecord, CommandReply, FlowCommand, FlowDirectoryRun, FlowStartCommand, FlowStopCommand,
+    FlowTimeoutTimerId, HardDeleteObjectReference, RunRecord, RunSettings, TimerId, command_reply,
+    flow_command::Command, timer_id,
 };
 
 use crate::ApplyError;
@@ -273,6 +275,9 @@ fn pin_genesis_attributes(
     Ok(())
 }
 
+/// Close reason of a run that StartFlow terminated for ID reuse.
+const ID_REUSE_TERMINATION_REASON: &str = "terminated by StartFlow with ALLOW_TERMINATE_IF_RUNNING";
+
 /// ID reuse with ALLOW_TERMINATE_IF_RUNNING: terminates the running run in the same command.
 fn terminate_previous_run(
     transaction: &mut FlowTransaction<'_>,
@@ -288,15 +293,44 @@ fn terminate_previous_run(
     let Some(record) = rows.run_record(transaction)? else {
         return Ok(Vec::new());
     };
+    // The old run's history must replay as its own termination, not as the successor's start.
+    let termination = id_reuse_termination_command(scope, run_id_bytes);
+    let previous_run_scope = CommandScope {
+        command: &termination,
+        ..*scope
+    };
     let mut cursor = RunCursor::for_new_run(rows, record);
     close_flow(
         transaction,
         &mut cursor,
-        scope,
-        FlowClosing::terminated("terminated by StartFlow with ALLOW_TERMINATE_IF_RUNNING"),
+        &previous_run_scope,
+        FlowClosing::terminated(ID_REUSE_TERMINATION_REASON),
     )?;
     let reply = crate::command_handlers::command_replies::ok_reply();
     // The run's own history records the termination; its effects join this command's outcome.
-    let output = cursor.finish(transaction, scope, reply, HistoryKind::SEMANTIC)?;
+    let output = cursor.finish(
+        transaction,
+        &previous_run_scope,
+        reply,
+        HistoryKind::SEMANTIC,
+    )?;
     Ok(output.effects)
+}
+
+/// A TERMINATE stop of the previous run with the start's stamp; applying it alone produces
+/// the same old-run state as the ID-reuse termination.
+fn id_reuse_termination_command(scope: &CommandScope<'_>, run_id_bytes: &[u8]) -> FlowCommand {
+    FlowCommand {
+        run_id: run_id_bytes.to_vec(),
+        expected_run_attempt: 0,
+        command: Some(Command::FlowStop(FlowStopCommand {
+            request: Some(StopFlowRequest {
+                flow_id: scope.flow_id().to_owned(),
+                stop_type: StopType::Terminate as i32,
+                reason: ID_REUSE_TERMINATION_REASON.to_owned(),
+                ..StopFlowRequest::default()
+            }),
+        })),
+        ..scope.command.clone()
+    }
 }
