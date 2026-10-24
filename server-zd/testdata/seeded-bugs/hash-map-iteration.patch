@@ -1,0 +1,13 @@
+diff --git a/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs b/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
+index b67618e62..2daa49cb8 100644
+--- a/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
++++ b/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
+@@ -130,2 +130,8 @@ pub(crate) fn compute_attempt_snapshot(
+     }
++    let attributes = attributes
++        .into_iter()
++        .map(|attribute| (attribute.key.clone(), attribute))
++        .collect::<std::collections::HashMap<_, _>>()
++        .into_values()
++        .collect();
+     Ok(MethodSnapshotRecord {

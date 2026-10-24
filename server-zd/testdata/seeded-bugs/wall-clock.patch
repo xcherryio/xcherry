@@ -1,0 +1,12 @@
+diff --git a/server-zd/crates/dexzd-apply/src/command_handlers/command_scope.rs b/server-zd/crates/dexzd-apply/src/command_handlers/command_scope.rs
+index 7408d0861..669bf4146 100644
+--- a/server-zd/crates/dexzd-apply/src/command_handlers/command_scope.rs
++++ b/server-zd/crates/dexzd-apply/src/command_handlers/command_scope.rs
+@@ -32,3 +32,6 @@ impl<'command> CommandScope<'command> {
+             tenant_id: TenantId(command.tenant_id),
+-            now_micros: command.proposed_at_micros,
++            now_micros: std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .expect("the wall clock is after the Unix epoch")
++                .as_micros() as i64,
+             is_replay: false,

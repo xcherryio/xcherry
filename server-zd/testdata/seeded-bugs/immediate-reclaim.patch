@@ -1,0 +1,84 @@
+diff --git a/server-zd/crates/dexzd-apply/src/values/mod.rs b/server-zd/crates/dexzd-apply/src/values/mod.rs
+--- a/server-zd/crates/dexzd-apply/src/values/mod.rs
++++ b/server-zd/crates/dexzd-apply/src/values/mod.rs
+@@ -238,23 +238,50 @@
+     transaction.delete(ColumnFamily::Flow, holder_key);
+     let holder_prefix = value_holder_key(rows.flow_hash, rows.run_id, value_id, &[]);
+     let (start, end) = prefix_range(&holder_prefix);
+-    if !transaction
+-        .scan(ColumnFamily::Flow, &start, &end, 1)?
+-        .is_empty()
+-    {
+-        return Ok(());
+-    }
++    let remaining_holders = transaction.scan(ColumnFamily::Flow, &start, &end, usize::MAX)?;
+     let birth_key = value_row_key(rows.flow_hash, rows.run_id, RunTable::ValueBirth, value_id);
+     let Some(mut birth): Option<ValueBirthRecord> =
+         transaction.get_message(ColumnFamily::Flow, &birth_key, "value birth")?
+     else {
+         return Ok(());
+     };
+-    birth.garbage_seq = current_seq;
++    if !remaining_holders.is_empty() {
++        if !matches!(holder, ValueHolder::AttemptSnapshot { .. })
++            && remaining_holders
++                .iter()
++                .all(|(key, _)| key[holder_prefix.len()] == 0x08)
++        {
++            birth.written_seq = current_seq;
++            transaction.put_message(ColumnFamily::Flow, birth_key, &birth);
++        }
++        return Ok(());
++    }
++    let old_slot_death_seq = birth.written_seq;
++    let had_prior_slot_death = old_slot_death_seq > value_id.run_seq;
++    if matches!(holder, ValueHolder::AttemptSnapshot { .. }) && had_prior_slot_death {
++        let window_start_seq = rows
++            .run_record(transaction)?
++            .expect("the value belongs to a run with a record")
++            .window_start_seq;
++        if old_slot_death_seq <= window_start_seq {
++            transaction.delete(
++                ColumnFamily::Value,
++                value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id),
++            );
++            transaction.delete(ColumnFamily::Flow, birth_key);
++            return Ok(());
++        }
++    }
++    let garbage_seq = if had_prior_slot_death {
++        old_slot_death_seq
++    } else {
++        current_seq
++    };
++    birth.garbage_seq = garbage_seq;
+     transaction.put_message(ColumnFamily::Flow, birth_key, &birth);
+     transaction.put_message(
+         ColumnFamily::Flow,
+-        value_garbage_key(rows.flow_hash, rows.run_id, current_seq, value_id),
++        value_garbage_key(rows.flow_hash, rows.run_id, garbage_seq, value_id),
+         &ValueGarbageRecord {
+             size_bytes: stored_value_size(stored),
+         },
+@@ -489,12 +516,20 @@
+     holder: &ValueHolder,
+ ) {
+     // A value in G is revived: drop its garbage row so pruning keeps it (plan R1').
+-    if birth.garbage_seq != 0 {
++    let was_garbage = birth.garbage_seq != 0;
++    if was_garbage {
+         transaction.delete(
+             ColumnFamily::Flow,
+             value_garbage_key(rows.flow_hash, rows.run_id, birth.garbage_seq, value_id),
+         );
+         birth.garbage_seq = 0;
++    }
++    let is_new_slot = !matches!(holder, ValueHolder::AttemptSnapshot { .. });
++    let had_prior_slot_death = birth.written_seq != value_id.run_seq;
++    if is_new_slot {
++        birth.written_seq = value_id.run_seq;
++    }
++    if was_garbage || (is_new_slot && had_prior_slot_death) {
+         transaction.put_message(
+             ColumnFamily::Flow,
+             value_row_key(rows.flow_hash, rows.run_id, RunTable::ValueBirth, value_id),
