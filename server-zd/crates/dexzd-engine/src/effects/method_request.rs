@@ -68,8 +68,8 @@ pub(crate) struct MethodAttemptState {
 }
 
 impl MethodAttemptState {
-    /// Returns the state with value references in place of inlined uncommitted values, or
-    /// `None` when no value was inlined. Its references resolve once the Flow's commands commit.
+    /// Returns the state with references for inlined values, or `None` when none were; they
+    /// resolve once committed.
     pub(crate) fn with_value_references(&self) -> Option<MethodAttemptState> {
         let step_execution = self.step_execution_with_references.clone()?;
         Some(MethodAttemptState {
@@ -79,8 +79,8 @@ impl MethodAttemptState {
         })
     }
 
-    /// Returns the request slots of the values that `worker_error` reports LoadBlobs omitted, or
-    /// `None` when it reports no value-load failure.
+    /// Returns the request slots of values that `worker_error` reports LoadBlobs omitted, or
+    /// `None` otherwise.
     pub(crate) fn omitted_value_slots(
         &self,
         run_id: RunId,
@@ -253,8 +253,8 @@ pub(crate) fn read_method_attempt_state(
     }))
 }
 
-/// Returns the IDs of the request's value-table values that have no committed ValueBirth row.
-/// Opens the committed view only when the request has such values.
+/// Returns the request's value-table value IDs lacking a committed ValueBirth row; the committed
+/// view opens only if any exist.
 fn uncommitted_value_ids(
     open_committed: &dyn Fn() -> Result<Box<dyn FlowStateReader + Send>, EffectError>,
     run: RunLocation,

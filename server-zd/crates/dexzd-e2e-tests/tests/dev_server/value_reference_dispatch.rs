@@ -6,8 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Worker requests whose values are above the inline threshold: every reference a Worker
-//! receives resolves through LoadBlobs at once, also when ASYNC dispatch runs before commit.
+//! Worker requests with values above the inline threshold: each received reference resolves
+//! through LoadBlobs at once, even before commit.
 
 use std::time::Duration;
 
@@ -33,8 +33,8 @@ const GATED_COMMIT_CONFIG: &str = "commit:\n  batchWindow: 1h\n";
 /// How long a dispatch that waits for the gated commit must stay pending.
 const PENDING_DISPATCH_WINDOW: Duration = Duration::from_secs(1);
 
-/// An ASYNC Step whose input and Attribute were written by a still-uncommitted command must
-/// still succeed on its only attempt.
+/// An ASYNC Step whose input and Attribute come from an uncommitted command succeeds on its only
+/// attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
     let server = DevServer::start_with_config_overrides(Some(GATED_COMMIT_CONFIG)).await;
@@ -109,8 +109,8 @@ async fn async_step_receives_uncommitted_values_on_its_only_attempt() {
     server.shutdown().await;
 }
 
-/// When inlining uncommitted values would exceed the Worker message limit, dispatch waits for
-/// the commit and sends value references that LoadBlobs resolves.
+/// When inlined uncommitted values exceed the Worker message limit, dispatch waits for their
+/// commit and sends resolvable references.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     let server = DevServer::start_with_config_overrides(Some(&format!(
@@ -198,8 +198,7 @@ async fn oversized_uncommitted_values_are_sent_as_references_after_commit() {
     server.shutdown().await;
 }
 
-/// A chain of SYNC Steps with 4 KiB inputs stays close to the inline case; the bound is loose
-/// enough for shared CI runners.
+/// SYNC Steps with 4 KiB inputs dispatch promptly; the bound is loose enough for shared CI runners.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sync_steps_with_value_references_dispatch_promptly() {
     const STEP_COUNT: usize = 30;
@@ -406,8 +405,8 @@ fn is_value_reference(value: Option<&Value>) -> bool {
     )
 }
 
-/// Returns `value`, resolving a value reference through LoadBlobs as an SDK Worker does; an
-/// omitted reference fails the test, as it fails the SDK's attempt.
+/// Returns `value`, resolved through LoadBlobs as an SDK Worker does; an omitted reference fails
+/// the test.
 async fn load_value(
     flow_client: &mut FlowServiceClient<Channel>,
     flow_id: &str,

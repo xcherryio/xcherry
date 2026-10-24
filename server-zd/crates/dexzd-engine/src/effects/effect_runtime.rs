@@ -77,7 +77,7 @@ pub trait EffectRuntime: Send + Sync + 'static {
         urgency: CommitUrgency,
     ) -> BoxFuture<'a, Result<CommandReply, EffectRuntimeError>>;
 
-    /// Waits until every command proposed to `flow` before the call has committed.
+    /// Waits until every command proposed to `flow` before the call commits.
     ///
     /// Returns [`EffectRuntimeError::NodeStopping`] when the runtime halts while waiting.
     fn sync_barrier<'a>(

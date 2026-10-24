@@ -103,8 +103,7 @@ impl AttemptFailure {
         }
     }
 
-    /// Returns true for an error the Step's code returned. SDKs report those with gRPC
-    /// `UNKNOWN`; other codes come from the SDK itself, for example a failed value load.
+    /// Returns true for an error from the Step's code: SDKs report those with gRPC `UNKNOWN`.
     fn is_step_error(&self) -> bool {
         matches!(&self.worker_error, Some(error) if error.grpc_status == grpc_code::UNKNOWN)
             && self.omitted_value_slots.is_none()
@@ -283,8 +282,8 @@ impl MethodAttempt {
 
     /// Reads the hard-delete values and builds the Worker request before the method deadline.
     ///
-    /// When inlined uncommitted values make the request too large, waits until the Flow's
-    /// commands commit and sends their value references instead.
+    /// When inlined uncommitted values make the request too large, waits for their commit and
+    /// sends references instead.
     ///
     /// Returns the request, or the attempt's end when it was canceled, timed out, or is too large.
     async fn prepare_request(
@@ -335,8 +334,7 @@ impl MethodAttempt {
         Ok(PreparedRequest::Ready(Box::new(request)))
     }
 
-    /// Waits until every command the Flow proposed so far has committed, including the commands
-    /// that wrote this attempt's values.
+    /// Waits until the Flow's proposed commands, including this attempt's value writes, commit.
     ///
     /// Returns [`EffectError::Stopped`] when the node stops first.
     async fn wait_for_proposed_commands(&self) -> Result<(), EffectError> {
