@@ -689,16 +689,31 @@ fn parse_int_literal(value: &str, field: &str, offset: usize) -> Result<i64, Que
 }
 
 fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, QueryError> {
-    let number: f64 = match value.parse() {
-        Ok(number) => number,
-        Err(_) => {
-            return Err(invalid_numeric_literal(
-                "DOUBLE",
-                value,
-                field,
-                offset,
-                "decimal number",
-            ));
+    let number: f64 = if is_hex_float(value) {
+        match parse_hex_float(value) {
+            Some(number) => number,
+            None => {
+                return Err(invalid_numeric_literal(
+                    "DOUBLE",
+                    value,
+                    field,
+                    offset,
+                    "decimal number",
+                ));
+            }
+        }
+    } else {
+        match value.parse() {
+            Ok(number) => number,
+            Err(_) => {
+                return Err(invalid_numeric_literal(
+                    "DOUBLE",
+                    value,
+                    field,
+                    offset,
+                    "decimal number",
+                ));
+            }
         }
     };
     if number.is_finite() {
@@ -718,6 +733,93 @@ fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, 
             "decimal number",
         ))
     }
+}
+
+fn is_hex_float(value: &str) -> bool {
+    let unsigned = value.strip_prefix(['+', '-']).unwrap_or(value);
+    unsigned.starts_with("0x") || unsigned.starts_with("0X")
+}
+
+fn parse_hex_float(value: &str) -> Option<f64> {
+    let bytes = value.as_bytes();
+    let mut position = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let is_negative = bytes.first() == Some(&b'-');
+    position += 2;
+    let mut bits = Vec::new();
+    let mut fraction_digits = 0_i64;
+    let mut has_point = false;
+    let mut digit_count = 0;
+    while let Some(&byte) = bytes.get(position) {
+        if byte == b'.' && !has_point {
+            has_point = true;
+            position += 1;
+            continue;
+        }
+        let Some(nibble) = (byte as char).to_digit(16) else {
+            break;
+        };
+        digit_count += 1;
+        if has_point {
+            fraction_digits += 1;
+        }
+        for shift in (0..4).rev() {
+            bits.push(((nibble >> shift) & 1) as u8);
+        }
+        position += 1;
+    }
+    if digit_count == 0 || !matches!(bytes.get(position), Some(b'p' | b'P')) {
+        return None;
+    }
+    position += 1;
+    let binary_exponent = parse_signed_exponent(bytes, &mut position)?;
+    if position != bytes.len() {
+        return None;
+    }
+    let sign_bits = u64::from(is_negative) << 63;
+    let Some(first_one) = bits.iter().position(|bit| *bit == 1) else {
+        return Some(f64::from_bits(sign_bits));
+    };
+    let significant_bits = &bits[first_one..];
+    let highest_exponent = binary_exponent
+        .saturating_sub(fraction_digits.saturating_mul(4))
+        .saturating_add(i64::try_from(bits.len() - first_one - 1).expect("query length fits i64"));
+    if highest_exponent > 1023 {
+        return Some(f64::INFINITY);
+    }
+    if highest_exponent < -1075 {
+        return Some(f64::from_bits(sign_bits));
+    }
+    if highest_exponent >= -1022 {
+        let mut significand = round_binary_significand(significant_bits, 53);
+        let mut exponent = highest_exponent;
+        if significand == (1 << 53) {
+            significand >>= 1;
+            exponent += 1;
+        }
+        if exponent > 1023 {
+            return Some(f64::INFINITY);
+        }
+        let exponent_bits = u64::try_from(exponent + 1023).expect("normal exponent is positive");
+        return Some(f64::from_bits(
+            sign_bits | (exponent_bits << 52) | (significand & ((1 << 52) - 1)),
+        ));
+    }
+    let keep_count = usize::try_from(highest_exponent + 1075).expect("subnormal bit count");
+    let significand = round_binary_significand(significant_bits, keep_count);
+    Some(f64::from_bits(sign_bits | significand))
+}
+
+fn round_binary_significand(bits: &[u8], keep_count: usize) -> u64 {
+    let mut significand = 0_u64;
+    for index in 0..keep_count {
+        significand = (significand << 1) | u64::from(bits.get(index).copied().unwrap_or(0));
+    }
+    if bits.get(keep_count) == Some(&1)
+        && (significand & 1 == 1 || bits[keep_count + 1..].contains(&1))
+    {
+        significand += 1;
+    }
+    significand
 }
 
 fn invalid_numeric_literal(

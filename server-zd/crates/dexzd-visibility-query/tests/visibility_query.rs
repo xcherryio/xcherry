@@ -235,7 +235,6 @@ fn errors_have_byte_offsets_and_specific_reasons() {
         ("double1 = ' 0.01'", 10, "is not a decimal number"),
         ("double1 = '0.01 '", 10, "is not a decimal number"),
         ("double1 = '1,000'", 10, "is not a decimal number"),
-        ("double1 = '0x1p-2'", 10, "is not a decimal number"),
         ("double1 = 'NaN'", 10, "is not a decimal number"),
         ("double1 = '-Infinity'", 10, "is not a decimal number"),
         ("double1 = '1e999'", 10, "out of range"),
@@ -285,6 +284,7 @@ fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
     let seven = Document::default().with("int1", SearchValue::Int(7));
     let eight = Document::default().with("int1", SearchValue::Int(8));
     let negative_two = Document::default().with("int1", SearchValue::Int(-2));
+    let negative_one = Document::default().with("int1", SearchValue::Int(-1));
     let two = Document::default().with("int1", SearchValue::Int(2));
     let three = Document::default().with("int1", SearchValue::Int(3));
     let thousand = Document::default().with("int1", SearchValue::Int(1000));
@@ -308,8 +308,13 @@ fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
     assert!(!evaluate(&check("int1 IN ('7', '7.5')"), &eight));
     assert!(evaluate(&check("int1 > '7.5'"), &eight));
     assert!(!evaluate(&check("int1 > '7.5'"), &seven));
+    assert!(evaluate(&check("int1 >= '7.5'"), &eight));
+    assert!(evaluate(&check("int1 <= '7.5'"), &seven));
+    assert!(evaluate(&check("int1 >= '-1.5'"), &negative_one));
+    assert!(!evaluate(&check("int1 >= '-1.5'"), &negative_two));
     assert!(evaluate(&check("int1 <= '-1.5'"), &negative_two));
     assert!(!evaluate(&check("int1 <= '-1.5'"), &two));
+    assert!(!evaluate(&check("int1 = '.5'"), &seven));
     assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &two));
     assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &three));
     assert!(!evaluate(&check("int1 BETWEEN '1.5' AND '1.6'"), &two));
@@ -317,6 +322,8 @@ fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
     assert!(!evaluate(&check("int1 != '7.5'"), &missing));
     assert!(evaluate(&check("int1 NOT IN ('7.5')"), &seven));
     assert!(!evaluate(&check("int1 NOT IN ('7.5')"), &missing));
+    assert!(evaluate(&check("int1 NOT IN ('7', '7.5')"), &eight));
+    assert!(!evaluate(&check("int1 NOT IN ('7', '7.5')"), &seven));
 
     let query = check("int1 BETWEEN '1.5' AND '3.5'");
     let Expression::Predicate(predicate) = query.expression() else {
@@ -355,6 +362,47 @@ fn quoted_int_rejects_invalid_and_out_of_range_values() {
         let query = format!("int1 = '{value}'");
         let error = parse_and_check(&query, &registry()).expect_err(&query);
         assert!(error.message.contains("out of range"), "{query}: {error}");
+    }
+}
+
+#[test]
+fn quoted_hex_double_literals_round_to_nearest_f64() {
+    let quarter = Document::default().with("double1", SearchValue::Double(0.25));
+    let negative_three = Document::default().with("double1", SearchValue::Double(-3.0));
+    assert!(evaluate(&check("double1 = '0x1p-2'"), &quarter));
+    assert!(evaluate(&check("double1 = '0x.8P-1'"), &quarter));
+    assert!(evaluate(&check("double1 = '-0X1.8p1'"), &negative_three));
+    for (value, expected_bits) in [
+        ("0x1.00000000000008p0", 1.0_f64.to_bits()),
+        ("0x1.00000000000008001p0", 1.0_f64.to_bits() + 1),
+        ("0x1p-1075", 0.0_f64.to_bits()),
+        ("0x1.0000000000001p-1075", f64::from_bits(1).to_bits()),
+        ("0x1.fffffffffffffp1023", f64::MAX.to_bits()),
+    ] {
+        let query = check(&format!("double1 = '{value}'"));
+        let Expression::Predicate(predicate) = query.expression() else {
+            panic!("hex DOUBLE must remain a predicate");
+        };
+        assert!(
+            matches!(predicate.literals(), [Literal::Double(number)] if number.to_bits() == expected_bits),
+            "{value}"
+        );
+    }
+    for value in ["0x1p1024", "0x1.fffffffffffff8p1023"] {
+        let query = format!("double1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{query}: {error}");
+    }
+    for value in [
+        "0x1", "0x1p", "0x1p-", "0x.p1", "0x1p1f", "Inf", "Infinity", "NaN", "1_0", " 1", "1 ",
+        "1d", "1f",
+    ] {
+        let query = format!("double1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(
+            error.message.contains("invalid DOUBLE literal"),
+            "{query}: {error}"
+        );
     }
 }
 

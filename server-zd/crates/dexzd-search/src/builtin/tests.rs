@@ -550,7 +550,7 @@ async fn compares_quoted_numeric_literals_as_numbers() {
 }
 
 #[tokio::test]
-async fn quoted_int_bounds_match_indexed_values() {
+async fn quoted_numeric_bounds_and_hex_floats_match_indexed_values() {
     let mut state = MemoryState::default();
     for (ordinal, quantity, amount) in [
         (1, 7, 0.25),
@@ -604,6 +604,8 @@ async fn quoted_int_bounds_match_indexed_values() {
             "Quantity != '7.5'",
             vec!["flow-1", "flow-2", "flow-3", "flow-4", "flow-5"],
         ),
+        ("Amount = '0x1p-2'", vec!["flow-1"]),
+        ("Amount = '-0X1.8p1'", vec!["flow-2"]),
     ] {
         let page = backend
             .search(request(query, None, 10, &fields))
@@ -624,6 +626,13 @@ async fn quoted_int_bounds_match_indexed_values() {
         "Quantity = '1_0'",
         "Quantity = ' 7'",
         "Quantity = '7d'",
+        "Amount = 'Inf'",
+        "Amount = 'NaN'",
+        "Amount = '1e999'",
+        "Amount = '0x1p1024'",
+        "Amount = '1_0'",
+        "Amount = ' 1'",
+        "Amount = '1d'",
     ] {
         let error = backend
             .search(request(query, None, 10, &fields))

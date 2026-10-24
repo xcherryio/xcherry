@@ -284,6 +284,8 @@ async fn paradedb_matches_builtin_evaluator() {
         "double IN ('1.5', 3.5)",
         "double BETWEEN '2' AND '3.0'",
         "double > '2E0'",
+        "double = '0x1p-2'",
+        "double = '-0X1.8p1'",
         "flag = true",
         "datetime >= '1970-01-01T00:00:02Z'",
         "datetime IS NULL",
@@ -360,6 +362,8 @@ async fn paradedb_matches_builtin_evaluator() {
             "number != '7.5'",
             vec!["r1", "r2", "r3", "r5", "r6", "r7", "r8"],
         ),
+        ("double = '0x1p-2'", vec!["r5"]),
+        ("double = '-0X1.8p1'", vec!["r6"]),
     ] {
         let query = parse_and_check(input, &registry).expect("quoted numeric query");
         let statement = translate_query(&query, &parity_tenant_column, 100, None)
@@ -381,6 +385,13 @@ async fn paradedb_matches_builtin_evaluator() {
         "number = '1_0'",
         "number = ' 7'",
         "number = '7d'",
+        "double = 'Infinity'",
+        "double = 'NaN'",
+        "double = '1e999'",
+        "double = '0x1p1024'",
+        "double = '1_0'",
+        "double = ' 1'",
+        "double = '1f'",
     ] {
         let error = parse_and_check(input, &registry).expect_err(input);
         assert!(error.message.contains("literal"), "{input}: {error}");

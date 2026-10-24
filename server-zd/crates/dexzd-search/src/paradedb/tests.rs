@@ -606,6 +606,11 @@ fn golden_sql_covers_operators_and_types() {
             vec![SqlValue::Text("double".into()), SqlValue::Double(0.01)],
         ),
         (
+            "double = '0x1p-2'",
+            "(sa_number ->> $2::text)::double precision = $3::double precision",
+            vec![SqlValue::Text("double".into()), SqlValue::Double(0.25)],
+        ),
+        (
             "double IN ('1.5', 3.5e0)",
             "((sa_number ->> $2::text)::double precision = $3::double precision OR (sa_number ->> $2::text)::double precision = $4::double precision)",
             vec![
