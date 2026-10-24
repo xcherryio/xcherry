@@ -6,10 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Engine-level deterministic simulation over a fixed seed set.
-//!
-//! Set `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_SECONDS` for a longer budget, or
-//! `DEXZD_SIMULATION_SEED` for one seed.
+//! Engine simulation over a fixed seed set; the crate README lists its environment variables.
 
 use dexzd_simulation::{EngineSimulationConfig, EngineSimulationSummary, run_engine_seed};
 
@@ -129,7 +126,28 @@ fn assert_covered(total: &EngineSimulationSummary) {
             "the seed set never committed a {kind} command: {total:#?}"
         );
     }
+    for (counts, name) in [
+        (&total.precondition_failed_puts, "log"),
+        (&total.precondition_failed_puts, "lease"),
+        (&total.deleted_objects, "log"),
+        (&total.snapshot_reads_during_start, "lost"),
+        (&total.snapshot_reads_during_start, "takeover"),
+    ] {
+        assert!(
+            count(counts, name) > 0,
+            "missing {name} in a coverage count: {total:#?}"
+        );
+    }
+    let rejected_results = count(&total.rejected_by_kind, "StepMethodCompleted")
+        + count(&total.rejected_by_kind, "StepAttemptFailed");
     let checks = [
+        ("rejected duplicate results", rejected_results),
+        ("old-epoch frames", total.old_epoch_frames),
+        (
+            "attempts compared after the quiet crash",
+            total.attempts_compared_after_quiet_crash,
+        ),
+        ("runs in the final state", total.final_runs as u64),
         ("old-epoch overlaps", total.old_epoch_overlaps),
         ("crashes during start", total.crashes_during_start),
         ("self-stopped processes", total.self_stopped_processes),

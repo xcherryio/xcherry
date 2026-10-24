@@ -66,6 +66,13 @@ directory invariants hold on the committed history. The engine simulation adds t
 The log itself is checked too. Copies of one log position must hold the same commands, and a
 partition never applies a new frame below one it already applied.
 
+The fixed seed set also asserts that these checks had something to check. It requires every
+fault kind, restart mode, and Worker behavior, and crashes during recovery. It also requires
+412 races on log and lease objects, and frames that old-epoch processes applied after their
+successor started. Log cleanup deletions, snapshot restores during starts, and rejected
+duplicate results are required too. So are running attempts compared after the quiet crash,
+and live runs in the final state.
+
 ### Not covered yet
 
 These section 13.1 items need later stages:
@@ -86,7 +93,7 @@ These section 13.1 items need later stages:
 ### Running
 
 ```bash
-cargo test -p dexzd-simulation --test engine_simulation         # 64 seeds of 120 s, about a minute
+cargo test -p dexzd-simulation --test engine_simulation         # 64 seeds of 120 s, 1-2 minutes
 DEXZD_SIMULATION_SEEDS=1000 DEXZD_SIMULATION_SECONDS=600 \
   cargo test -p dexzd-simulation --test engine_simulation          # longer budget
 DEXZD_SIMULATION_SEED=7 cargo test -p dexzd-simulation --test engine_simulation -- --nocapture

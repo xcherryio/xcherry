@@ -304,7 +304,8 @@ impl EffectContext {
             let proposal = self
                 .runtime
                 .propose_committed(flow, command.clone(), urgency);
-            // Biased for reproducible simulation; shutdown fires once, so the proposal cannot starve.
+            // Biased for reproducible simulation; shutdown fires once, so the proposal cannot
+            // starve.
             let outcome = tokio::select! {
                 biased;
                 () = self.shutdown.cancelled() => return None,

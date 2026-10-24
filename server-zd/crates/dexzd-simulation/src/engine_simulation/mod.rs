@@ -6,7 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Engine-level deterministic simulation: real engine code on simulated storage, Workers, and crashes.
+//! Engine-level deterministic simulation: real engine code on simulated storage, Workers, and
+//! crashes.
 
 mod committed_log;
 mod engine_invariants;
@@ -55,6 +56,18 @@ pub struct EngineSimulationSummary {
     pub old_epoch_overlaps: u64,
     /// Processes that crashed during recovery, before they served.
     pub crashes_during_start: u64,
+    /// Frames old-epoch processes applied after their successor started.
+    pub old_epoch_frames: u64,
+    /// Conditional writes object storage rejected, by key class such as `log` or `lease`.
+    pub precondition_failed_puts: BTreeMap<String, u64>,
+    /// Objects deleted, by key class; `log` objects come from log cleanup.
+    pub deleted_objects: BTreeMap<String, u64>,
+    /// Snapshot manifest reads during starts, by how the start found its local store.
+    pub snapshot_reads_during_start: BTreeMap<String, u64>,
+    /// Commands committed without writes, by kind, such as a second result of one attempt.
+    pub rejected_by_kind: BTreeMap<String, u64>,
+    /// Running attempts the quiet-point crash compared with the successor's dispatches.
+    pub attempts_compared_after_quiet_crash: u64,
     /// Processes that stopped by themselves, such as after losing the lease.
     pub self_stopped_processes: u64,
     /// Failed process starts, by error kind.
@@ -96,6 +109,18 @@ impl EngineSimulationSummary {
         );
         self.old_epoch_overlaps += other.old_epoch_overlaps;
         self.crashes_during_start += other.crashes_during_start;
+        self.old_epoch_frames += other.old_epoch_frames;
+        merge_counts(
+            &mut self.precondition_failed_puts,
+            &other.precondition_failed_puts,
+        );
+        merge_counts(&mut self.deleted_objects, &other.deleted_objects);
+        merge_counts(
+            &mut self.snapshot_reads_during_start,
+            &other.snapshot_reads_during_start,
+        );
+        merge_counts(&mut self.rejected_by_kind, &other.rejected_by_kind);
+        self.attempts_compared_after_quiet_crash += other.attempts_compared_after_quiet_crash;
         self.self_stopped_processes += other.self_stopped_processes;
         merge_counts(&mut self.start_failures, &other.start_failures);
         self.clock_jumps += other.clock_jumps;

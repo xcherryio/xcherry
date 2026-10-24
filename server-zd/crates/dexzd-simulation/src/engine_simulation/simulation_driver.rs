@@ -12,10 +12,13 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use dexzd_api::FlowOperations;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::MetadataError;
 use dexzd_engine::{EngineLocalStore, EngineStartError};
+use dexzd_keyspace::TenantId;
 use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
+use dexzd_protocol::dex::FlowAlreadyStartedOptions;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tokio::task::JoinHandle;
@@ -27,7 +30,9 @@ use crate::engine_simulation::engine_invariants::{
     check_running_attempts_redispatched, check_store_matches_shadow, run_count, running_attempts,
 };
 use crate::engine_simulation::event_trace::EventTrace;
-use crate::engine_simulation::simulated_clients::{ClientRecords, ServingNode, SimulatedClient};
+use crate::engine_simulation::simulated_clients::{
+    ClientRecords, ENGINE_FLOW_IDS, ServingNode, SimulatedClient,
+};
 use crate::engine_simulation::simulated_clock::{
     SimulatedWallClock, duration_micros, elapsed_micros,
 };
@@ -35,7 +40,9 @@ use crate::engine_simulation::simulated_node::{
     ClusterEnvironment, LEASE_TAKEOVER_GRACE, LocalStoreStart, NodeProcess, ProcessStart,
     copy_local_store,
 };
+use crate::engine_simulation::simulated_object_store::StorageObservations;
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
+use crate::engine_simulation::workload::{OPERATION_MARKER_PREFIX, start_flow_request};
 use crate::engine_simulation::{
     EngineSimulationConfig, EngineSimulationFailure, EngineSimulationSummary,
 };
@@ -51,6 +58,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const OLD_EPOCH_LIFETIME: Duration = Duration::from_secs(15);
 /// A due timer may wait this long before the calm tail counts it as never fired.
 const TIMER_FIRING_SLACK: Duration = Duration::from_secs(10);
+/// Closed runs of half the seeds outlive the seed; the rest are purged within it.
+const LONG_RETENTION: Duration = Duration::from_secs(60 * 60);
+const SHORT_RETENTION: Duration = Duration::from_secs(30);
 /// Probability that a process crashes at a random point while it starts.
 const START_CRASH_PROBABILITY: f64 = 0.15;
 /// Longest wait after the calm tail for unfinished work to finish.
@@ -144,6 +154,11 @@ impl Simulation {
         ));
         let workers = Arc::new(SimulatedWorkers::new(rng.random(), Arc::clone(&trace)));
         let fault_probability = FAULT_PROBABILITIES[rng.random_range(0..FAULT_PROBABILITIES.len())];
+        let retention_after_close = if rng.random_bool(0.5) {
+            LONG_RETENTION
+        } else {
+            SHORT_RETENTION
+        };
         Self {
             seed,
             config,
@@ -152,7 +167,8 @@ impl Simulation {
                 workers,
                 committed_log: Arc::new(CommittedLog::new(Arc::clone(&trace))),
                 trace,
-                injected_faults: Arc::new(Mutex::new(BTreeMap::new())),
+                storage_observations: Arc::new(Mutex::new(StorageObservations::default())),
+                retention_after_close,
                 origin,
             },
             rng,
@@ -179,7 +195,9 @@ impl Simulation {
             "seed {} fault probability {}",
             self.seed, self.fault_probability
         ));
-        let first = self.start_until_serving(LocalStoreStart::Lost, 0).await?;
+        let first = self
+            .start_until_serving(LocalStoreStart::Lost, 0, "first")
+            .await?;
         self.serve(first);
         let active_end = Instant::now() + Duration::from_secs(self.config.active_seconds);
         let client_tasks = self.spawn_clients(active_end);
@@ -214,7 +232,7 @@ impl Simulation {
 
     async fn run_active_phase(&mut self, active_end: Instant) -> Result<(), InvariantViolation> {
         let mut next_check = Instant::now() + CHECK_INTERVAL;
-        let mut next_copy = self.later(2_000..8_000);
+        let mut next_copy = self.later(3_000..30_000);
         let mut next_jump = self.later(10_000..40_000);
         let mut next_crash = self.later(8_000..30_000);
         loop {
@@ -235,7 +253,7 @@ impl Simulation {
             }
             if now >= next_copy {
                 self.copy_serving_store();
-                next_copy = self.later(2_000..8_000);
+                next_copy = self.later(3_000..30_000);
             }
             if now >= next_jump {
                 self.jump_serving_clock();
@@ -268,6 +286,7 @@ impl Simulation {
         self.check_now()?;
         // A crash at a quiet point: the successor must dispatch every running attempt again.
         self.environment.workers.set_holding(true);
+        self.start_held_runs().await;
         tokio::time::sleep(Duration::from_secs(2)).await;
         let kind = self.draw_restart_kind();
         self.crash_and_restart(kind).await?;
@@ -288,6 +307,7 @@ impl Simulation {
             &running_now,
         )?;
         self.summary.dispatch_comparisons += 1;
+        self.summary.attempts_compared_after_quiet_crash += running_at_recovery.len() as u64;
         self.environment.workers.set_holding(false);
         let tail = Duration::from_secs(self.config.calm_tail_seconds);
         tokio::time::sleep(tail).await;
@@ -299,8 +319,36 @@ impl Simulation {
         check_acknowledged_writes(&records, &self.environment.committed_log)
     }
 
-    /// Polls until no method call is unfinished and no due timer is unfired; a calm node
-    /// must get there within [`DRAIN_GRACE`].
+    /// Starts a run of every Flow without one, so running attempts exist at the quiet crash.
+    async fn start_held_runs(&mut self) {
+        let Some(serving) = &self.serving else {
+            return;
+        };
+        let registry = serving.registry.clone();
+        for flow_id in ENGINE_FLOW_IDS {
+            let marker = format!("{OPERATION_MARKER_PREFIX}tail-{flow_id}");
+            let mut request = start_flow_request(&mut self.rng, flow_id, &marker);
+            if let Some(options) = request.flow_start_options.as_mut() {
+                options.flow_already_started_options = Some(FlowAlreadyStartedOptions {
+                    ignore_already_started_error: true,
+                });
+            }
+            let started = tokio::time::timeout(
+                Duration::from_secs(5),
+                FlowOperations::start_flow(&registry, TenantId::DEFAULT, request),
+            )
+            .await;
+            let outcome = match started {
+                Ok(Ok(_)) => "ok".to_owned(),
+                Ok(Err(error)) => error.to_string(),
+                Err(_) => "timeout".to_owned(),
+            };
+            self.trace(&format!("tail StartFlow {flow_id}: {outcome}"));
+        }
+    }
+
+    /// Polls until no method call is unfinished and no due timer is unfired, within
+    /// [`DRAIN_GRACE`].
     async fn wait_until_drained(&mut self) -> Result<(), InvariantViolation> {
         let deadline = Instant::now() + DRAIN_GRACE;
         loop {
@@ -432,13 +480,14 @@ impl Simulation {
             .restarts_by_local_store
             .entry(kind.name().to_owned())
             .or_default() += 1;
-        let process = self.start_until_serving(start, clock_offset).await?;
+        let process = self
+            .start_until_serving(start, clock_offset, kind.name())
+            .await?;
         self.serve(process);
         self.check_recovered_process()
     }
 
-    /// Starts a successor while the old process keeps running: its clock is ahead by more than
-    /// the lease, so it takes over at once.
+    /// Starts a successor whose clock is past the lease while the old process keeps running.
     async fn take_over_with_overlap(&mut self) -> Result<(), InvariantViolation> {
         let Some(old) = self.serving.take() else {
             return Ok(());
@@ -451,6 +500,9 @@ impl Simulation {
             old.process_label
         ));
         self.store_copies.clear();
+        self.environment
+            .committed_log
+            .mark_old_epoch(&old.process_label);
         let deadline = Instant::now() + OLD_EPOCH_LIFETIME;
         self.old_epoch_processes.push((old, deadline));
         self.summary.old_epoch_overlaps += 1;
@@ -460,7 +512,7 @@ impl Simulation {
             .entry(RestartKind::Lost.name().to_owned())
             .or_default() += 1;
         let process = self
-            .start_until_serving(LocalStoreStart::Lost, successor_offset)
+            .start_until_serving(LocalStoreStart::Lost, successor_offset, "takeover")
             .await?;
         self.serve(process);
         Ok(())
@@ -482,6 +534,7 @@ impl Simulation {
         &mut self,
         local_store: LocalStoreStart,
         clock_offset_micros: i64,
+        start_kind: &str,
     ) -> Result<NodeProcess, InvariantViolation> {
         let mut existing = match &local_store {
             LocalStoreStart::Lost => None,
@@ -493,6 +546,7 @@ impl Simulation {
             let process_label = format!("p{}", self.started_processes);
             let object_store = self.environment.node_object_store(
                 &process_label,
+                start_kind,
                 self.rng.random(),
                 self.fault_probability / START_FAULT_DIVISOR,
             );
@@ -527,6 +581,7 @@ impl Simulation {
             };
             match started {
                 Ok(process) => {
+                    process.object_store.mark_serving();
                     process
                         .object_store
                         .set_fault_probability(self.fault_probability);
@@ -620,13 +675,24 @@ impl Simulation {
         summary.trace_hash = environment.trace.digest();
         summary.trace_events = environment.trace.event_count();
         summary.recent_events = environment.trace.recent_events();
-        summary.injected_faults = environment
-            .injected_faults
-            .lock()
-            .expect("fault count lock is not poisoned")
-            .iter()
-            .map(|(fault, count)| (format!("{fault:?}"), *count))
-            .collect();
+        {
+            let observations = environment
+                .storage_observations
+                .lock()
+                .expect("storage observation lock is not poisoned");
+            summary.injected_faults = observations
+                .injected_faults
+                .iter()
+                .map(|(fault, count)| (format!("{fault:?}"), *count))
+                .collect();
+            summary.precondition_failed_puts = name_counts(&observations.precondition_failed_puts);
+            summary.deleted_objects = name_counts(&observations.deleted_objects);
+            summary
+                .snapshot_reads_during_start
+                .clone_from(&observations.snapshot_reads_during_start);
+        }
+        summary.old_epoch_frames = environment.committed_log.old_epoch_frames();
+        summary.rejected_by_kind = name_counts(&environment.committed_log.rejected_by_kind());
         summary.worker_behaviors = environment
             .workers
             .behavior_counts()
@@ -654,6 +720,13 @@ impl Simulation {
             .collect();
         summary
     }
+}
+
+fn name_counts(counts: &BTreeMap<&'static str, u64>) -> BTreeMap<String, u64> {
+    counts
+        .iter()
+        .map(|(name, count)| ((*name).to_owned(), *count))
+        .collect()
 }
 
 fn start_error_kind(error: &EngineStartError) -> &'static str {

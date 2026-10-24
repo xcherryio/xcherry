@@ -35,8 +35,8 @@ pub enum LocalStoreConfig {
     },
     /// A new in-memory store restored from the newest snapshot, for simulations and tests.
     InMemory,
-    /// A store a previous process left, for simulations that restart a node with its disk.
-    /// A store that the retained log cannot update is replaced by the newest snapshot.
+    /// A store an earlier simulated process left; one the retained log cannot update gives way
+    /// to the newest snapshot.
     #[cfg(feature = "test-util")]
     ExistingForTest(Arc<EngineLocalStore>),
 }

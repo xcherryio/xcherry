@@ -23,8 +23,8 @@ pub enum BlockingWorkPlacement {
     /// Tokio's blocking thread pool, so a slow store call never stalls async tasks. The default.
     #[default]
     BlockingThreadPool,
-    /// The thread of the task that needs the work. A slow store call then stalls the runtime,
-    /// so only single-threaded deterministic simulations use it.
+    /// The calling task's thread, for single-threaded simulation; a slow store call stalls the
+    /// runtime.
     #[cfg(feature = "test-util")]
     CallingTaskForTest,
 }

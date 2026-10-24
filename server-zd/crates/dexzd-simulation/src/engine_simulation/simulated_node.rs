@@ -8,7 +8,6 @@
 
 //! One engine node process: the engine, its Flow runtime and effects, and how it crashes.
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ use dexzd_engine::{
 };
 use dexzd_keyspace::{ColumnFamily, KEY_LAYOUT_VERSION};
 use dexzd_object_store::{InMemoryObjectStore, ObjectStore, WriteCondition};
-use dexzd_protocol::dexzd::v1::{ClusterObject, PartitionHashAlgorithm};
+use dexzd_protocol::dexzd::v1::{ClusterObject, PartitionHashAlgorithm, RunSettings};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::{InMemoryLocalStore, LocalStore, ScanDirection, WriteBatch};
 use dexzd_stream_store::{StreamStore, StreamStoreConfig};
@@ -34,8 +33,10 @@ use tokio::task::JoinHandle;
 
 use crate::engine_simulation::committed_log::CommittedLog;
 use crate::engine_simulation::event_trace::EventTrace;
-use crate::engine_simulation::simulated_clock::{START_UNIX_MICROS, SimulatedWallClock};
-use crate::engine_simulation::simulated_object_store::{InjectedFault, NodeObjectStore};
+use crate::engine_simulation::simulated_clock::{
+    START_UNIX_MICROS, SimulatedWallClock, duration_micros,
+};
+use crate::engine_simulation::simulated_object_store::{NodeObjectStore, StorageObservations};
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
 
 /// The single node of the simulated cluster.
@@ -54,7 +55,9 @@ pub(crate) struct ClusterEnvironment {
     pub(crate) workers: Arc<SimulatedWorkers>,
     pub(crate) committed_log: Arc<CommittedLog>,
     pub(crate) trace: Arc<EventTrace>,
-    pub(crate) injected_faults: Arc<Mutex<BTreeMap<InjectedFault, u64>>>,
+    pub(crate) storage_observations: Arc<Mutex<StorageObservations>>,
+    /// How long closed runs stay before their purge; some seeds keep them past the end.
+    pub(crate) retention_after_close: Duration,
     pub(crate) origin: tokio::time::Instant,
 }
 
@@ -63,15 +66,17 @@ impl ClusterEnvironment {
     pub(crate) fn node_object_store(
         &self,
         process_label: &str,
+        start_kind: &str,
         fault_seed: u64,
         fault_probability: f64,
     ) -> Arc<NodeObjectStore> {
         let object_store = Arc::new(NodeObjectStore::new(
             Arc::clone(&self.shared_store),
             process_label.to_owned(),
+            start_kind.to_owned(),
             fault_seed,
             Arc::clone(&self.trace),
-            Arc::clone(&self.injected_faults),
+            Arc::clone(&self.storage_observations),
         ));
         object_store.set_fault_probability(fault_probability);
         object_store
@@ -157,6 +162,7 @@ impl NodeProcess {
             LocalStoreStart::Lost => LocalStoreConfig::InMemory,
             LocalStoreStart::Existing(store) => LocalStoreConfig::ExistingForTest(store),
         };
+        let settings = run_settings(environment.retention_after_close);
         let applier: Arc<dyn CommandApplier> = Arc::new(DeterministicCommandApplier);
         let stream_store = Arc::new(
             StreamStore::new(&StreamStoreConfig::default())
@@ -191,7 +197,7 @@ impl NodeProcess {
                     partition_hasher.clone(),
                 );
                 let (effect_runner, effect_tasks) = EffectRunner::new(
-                    &effects_config(),
+                    &effects_config(settings),
                     EffectDependencies {
                         dispatcher: worker_port.clone(),
                         hard_delete_objects: hard_delete_objects.clone(),
@@ -202,7 +208,7 @@ impl NodeProcess {
                     },
                 );
                 let registry = FlowRuntimeRegistry::new(
-                    &runtime_config(),
+                    &runtime_config(settings),
                     FlowRuntimeDependencies {
                         hasher: partition_hasher,
                         committer: Arc::new(services.committer),
@@ -269,9 +275,7 @@ impl NodeProcess {
         self.registry.halted().is_cancelled()
     }
 
-    /// Kills the process: object storage first, so nothing it does afterwards reaches it.
-    ///
-    /// Adds the task that cancels its effect work, which may hang on cut-off storage, to `tasks`.
+    /// Kills the process, cutting off its storage first; `tasks` gets its effect shutdown task.
     pub(crate) fn crash(self, tasks: &mut Vec<JoinHandle<()>>) {
         let Self {
             engine,
@@ -348,29 +352,28 @@ fn engine_node_config(local_store: LocalStoreConfig) -> EngineNodeConfig {
     }
 }
 
-fn effects_config() -> EffectsConfig {
+fn effects_config(settings: RunSettings) -> EffectsConfig {
     EffectsConfig {
         retry_max_backoff: Duration::from_secs(5),
-        child_run_settings: run_settings(),
+        child_run_settings: settings,
         blocking_work: BlockingWorkPlacement::CallingTaskForTest,
         ..EffectsConfig::default()
     }
 }
 
-fn runtime_config() -> RuntimeConfig {
+fn runtime_config(settings: RunSettings) -> RuntimeConfig {
     RuntimeConfig {
         long_poll_default_wait: Duration::from_secs(5),
         long_poll_max_wait: Duration::from_secs(10),
         rpc_default_timeout: Duration::from_secs(5),
-        run_settings: run_settings(),
+        run_settings: settings,
         ..RuntimeConfig::default()
     }
 }
 
-/// Closed runs are purged after 30 simulated seconds, so purges run within one seed.
-fn run_settings() -> dexzd_protocol::dexzd::v1::RunSettings {
-    dexzd_protocol::dexzd::v1::RunSettings {
-        retention_after_close_micros: 30_000_000,
+fn run_settings(retention_after_close: Duration) -> RunSettings {
+    RunSettings {
+        retention_after_close_micros: duration_micros(retention_after_close),
         request_dedup_capacity: 64,
         ..default_run_settings()
     }

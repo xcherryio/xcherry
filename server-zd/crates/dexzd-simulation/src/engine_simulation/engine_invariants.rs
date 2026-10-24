@@ -239,8 +239,7 @@ pub(crate) fn running_attempts(
     Ok(running)
 }
 
-/// Invariant 5: after a crash, the successor dispatches every attempt running at recovery
-/// again, unless the attempt ended without a dispatch, for example by its timeout.
+/// Invariant 5: after a crash, the successor redispatches every attempt that is still running.
 pub(crate) fn check_running_attempts_redispatched(
     process_label: &str,
     dispatched: &[AttemptIdentity],

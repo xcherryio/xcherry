@@ -89,9 +89,8 @@ impl EventTrace {
     }
 }
 
-/// Replaces every hyphenated UUID in `text` with `uuid#N`, numbered by first appearance.
-///
-/// The engine mints UUIDv7 values from the real clock; ordinals keep one seed's traces identical.
+/// Replaces each hyphenated UUID with `uuid#N` by first appearance; engine UUIDs follow the
+/// real clock.
 fn canonicalize_uuids(text: &str, ordinals: &mut BTreeMap<String, usize>) -> String {
     let bytes = text.as_bytes();
     let mut canonical = String::with_capacity(text.len());

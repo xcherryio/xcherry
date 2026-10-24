@@ -6,9 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! The canonical committed log, assembled from every node's applied frames, and its shadow state.
-//!
-//! The first frame applied at a log position is canonical. Every later copy must match it.
+//! The canonical committed log from every process's applied frames, checked against a shadow.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -28,6 +26,7 @@ use crate::engine_simulation::workload::operation_marker;
 use crate::invariants::InvariantViolation;
 use crate::memory_state::MemoryFlowState;
 use crate::model::wire_value;
+use crate::row_decoding::hex;
 
 /// Orders frames of one partition: node, incarnation, then seq.
 type FrameKey = (u16, String, u32, u64);
@@ -54,7 +53,13 @@ struct CommittedLogState {
     /// Message IDs ever committed to a Flow's Channels.
     channel_message_ids: BTreeSet<(String, String)>,
     applied_by_kind: BTreeMap<&'static str, u64>,
+    /// Commands committed without writes, such as a second result of one attempt.
+    rejected_by_kind: BTreeMap<&'static str, u64>,
     replayed_frames: u64,
+    /// Processes whose successor started while they still ran.
+    old_epoch_processes: BTreeSet<String>,
+    /// Frames old-epoch processes applied after their successor started.
+    old_epoch_frames: u64,
 }
 
 /// Collects applied frames from every node process and checks them against the shadow.
@@ -77,7 +82,10 @@ impl CommittedLog {
                 attribute_values: BTreeMap::new(),
                 channel_message_ids: BTreeSet::new(),
                 applied_by_kind: BTreeMap::new(),
+                rejected_by_kind: BTreeMap::new(),
                 replayed_frames: 0,
+                old_epoch_processes: BTreeSet::new(),
+                old_epoch_frames: 0,
             }),
             trace,
         }
@@ -128,6 +136,21 @@ impl CommittedLog {
 
     pub(crate) fn replayed_frames(&self) -> u64 {
         self.lock().replayed_frames
+    }
+
+    pub(crate) fn rejected_by_kind(&self) -> BTreeMap<&'static str, u64> {
+        self.lock().rejected_by_kind.clone()
+    }
+
+    /// Records that `process_label` keeps running while its successor starts.
+    pub(crate) fn mark_old_epoch(&self, process_label: &str) {
+        self.lock()
+            .old_epoch_processes
+            .insert(process_label.to_owned());
+    }
+
+    pub(crate) fn old_epoch_frames(&self) -> u64 {
+        self.lock().old_epoch_frames
     }
 
     /// Returns a sink that records `process_label`'s frames and then passes them to `registry`.
@@ -190,6 +213,9 @@ impl CommittedLog {
             position.incarnation,
             position.seq,
         );
+        if state.old_epoch_processes.contains(process_label) {
+            state.old_epoch_frames += 1;
+        }
         self.trace.record(&format!(
             "{process_label} applied frame p{} {}:{} with {} commands",
             partition.0,
@@ -314,12 +340,12 @@ impl CommittedLogState {
     }
 
     fn remember_committed(&mut self, command: &FlowCommand, outcome: &ApplyOutcome) {
-        if !outcome.writes.is_empty() {
-            *self
-                .applied_by_kind
-                .entry(command_kind(command))
-                .or_default() += 1;
-        }
+        let counts = if outcome.writes.is_empty() {
+            &mut self.rejected_by_kind
+        } else {
+            &mut self.applied_by_kind
+        };
+        *counts.entry(command_kind(command)).or_default() += 1;
         if let Some(marker) = operation_marker(command) {
             self.committed_markers.insert(marker.to_owned());
         }
@@ -378,8 +404,9 @@ fn describe_outcome_difference(expected: &ApplyOutcome, actual: &ApplyOutcome) -
         .position(|(left, right)| left != right);
     match first_write_difference {
         Some(index) => format!(
-            "write {index} differs: {:?} vs {:?}",
-            expected.writes[index], actual.writes[index]
+            "write {index} differs: {} vs {}",
+            describe_write(&expected.writes[index]),
+            describe_write(&actual.writes[index])
         ),
         None if expected.writes.len() != actual.writes.len() => format!(
             "{} writes vs {} writes",
@@ -389,6 +416,33 @@ fn describe_outcome_difference(expected: &ApplyOutcome, actual: &ApplyOutcome) -
         None => format!(
             "writes match but effects or replies differ: {:?} / {:?} vs {:?} / {:?}",
             expected.effects, expected.reply, actual.effects, actual.reply
+        ),
+    }
+}
+
+fn describe_write(write: &StateWrite) -> String {
+    match write {
+        StateWrite::Put {
+            column_family,
+            key,
+            value,
+        } => format!(
+            "put {column_family:?} {} ({} bytes, xxh3 {:016x})",
+            hex(key),
+            value.len(),
+            xxhash_rust::xxh3::xxh3_64(value)
+        ),
+        StateWrite::Delete { column_family, key } => {
+            format!("delete {column_family:?} {}", hex(key))
+        }
+        StateWrite::DeleteRange {
+            column_family,
+            start,
+            end,
+        } => format!(
+            "delete range {column_family:?} {}..{}",
+            hex(start),
+            hex(end)
         ),
     }
 }

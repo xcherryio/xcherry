@@ -69,35 +69,68 @@ struct FaultState {
     fault_probability: f64,
 }
 
-/// One node process's view of the shared store; [`Self::cut_off`] makes its calls hang like a crash.
+/// What processes did to object storage, so coverage checks can show the risky paths ran.
+#[derive(Debug, Default)]
+pub(crate) struct StorageObservations {
+    pub(crate) injected_faults: BTreeMap<InjectedFault, u64>,
+    /// Conditional writes the store rejected, by key class.
+    pub(crate) precondition_failed_puts: BTreeMap<&'static str, u64>,
+    /// Objects deleted, by key class.
+    pub(crate) deleted_objects: BTreeMap<&'static str, u64>,
+    /// Snapshot manifest reads during a start, by how the start found its local store.
+    pub(crate) snapshot_reads_during_start: BTreeMap<String, u64>,
+}
+
+/// One node process's view of the shared store; [`Self::cut_off`] makes its calls hang like a
+/// crash.
 pub(crate) struct NodeObjectStore {
     shared: Arc<InMemoryObjectStore>,
     process_label: String,
+    /// How this process's start found its local store, such as `kept` or `lost`.
+    start_kind: String,
     faults: Mutex<FaultState>,
     is_cut_off: AtomicBool,
+    is_serving: AtomicBool,
     trace: Arc<EventTrace>,
-    injected_faults: Arc<Mutex<BTreeMap<InjectedFault, u64>>>,
+    observations: Arc<Mutex<StorageObservations>>,
 }
 
 impl NodeObjectStore {
     pub(crate) fn new(
         shared: Arc<InMemoryObjectStore>,
         process_label: String,
+        start_kind: String,
         fault_seed: u64,
         trace: Arc<EventTrace>,
-        injected_faults: Arc<Mutex<BTreeMap<InjectedFault, u64>>>,
+        observations: Arc<Mutex<StorageObservations>>,
     ) -> Self {
         Self {
             shared,
             process_label,
+            start_kind,
             faults: Mutex::new(FaultState {
                 rng: ChaCha8Rng::seed_from_u64(fault_seed),
                 fault_probability: 0.0,
             }),
             is_cut_off: AtomicBool::new(false),
+            is_serving: AtomicBool::new(false),
             trace,
-            injected_faults,
+            observations,
         }
+    }
+
+    /// Records that the process finished starting.
+    pub(crate) fn mark_serving(&self) {
+        self.is_serving.store(true, Ordering::SeqCst);
+    }
+
+    fn observe(&self, record: impl FnOnce(&mut StorageObservations)) {
+        record(
+            &mut self
+                .observations
+                .lock()
+                .expect("storage observation lock is not poisoned"),
+        );
     }
 
     /// Sets the probability that a call gets a fault; zero turns faults off.
@@ -132,12 +165,9 @@ impl NodeObjectStore {
         let is_effect_applied = rng.random_bool(0.5);
         drop(faults);
         if let Some(fault) = fault {
-            *self
-                .injected_faults
-                .lock()
-                .expect("fault count lock is not poisoned")
-                .entry(fault)
-                .or_default() += 1;
+            self.observe(|observations| {
+                *observations.injected_faults.entry(fault).or_default() += 1;
+            });
         }
         self.trace.record(&format!(
             "{} object-store {operation} {} {fault:?} applied={is_effect_applied}",
@@ -221,6 +251,18 @@ impl NodeObjectStore {
     }
 }
 
+/// The first segment of an object key: `log`, `lease`, `manifest`, `snapshot`, and so on.
+fn key_class(key: &str) -> &'static str {
+    match key.split('/').next() {
+        Some("log") => "log",
+        Some("lease") => "lease",
+        Some("manifest") => "manifest",
+        Some("snapshot") => "snapshot",
+        Some("cluster") => "cluster",
+        _ => "other",
+    }
+}
+
 /// Snapshot file keys end with a hash of content that holds engine UUIDs; the trace omits it.
 fn without_content_hash(key: &str) -> &str {
     match key.rsplit_once('.') {
@@ -252,10 +294,20 @@ impl ObjectStore for NodeObjectStore {
         body: Bytes,
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
-        self.run_call(ObjectStoreOperation::Put, key, true, || {
-            self.shared.put(key, body, condition)
-        })
-        .await
+        let outcome = self
+            .run_call(ObjectStoreOperation::Put, key, true, || {
+                self.shared.put(key, body, condition)
+            })
+            .await;
+        if let Ok(WriteOutcome::PreconditionFailed) = outcome {
+            self.observe(|observations| {
+                *observations
+                    .precondition_failed_puts
+                    .entry(key_class(key))
+                    .or_default() += 1;
+            });
+        }
+        outcome
     }
 
     /// Reads the file synchronously: `tokio::fs` runs on blocking threads, which break determinism.
@@ -277,6 +329,15 @@ impl ObjectStore for NodeObjectStore {
     }
 
     async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
+        let is_snapshot_manifest = key.starts_with("snapshot/") && key.contains("/manifest/");
+        if is_snapshot_manifest && !self.is_serving.load(Ordering::SeqCst) {
+            self.observe(|observations| {
+                *observations
+                    .snapshot_reads_during_start
+                    .entry(self.start_kind.clone())
+                    .or_default() += 1;
+            });
+        }
         self.run_call(ObjectStoreOperation::Get, key, false, || {
             self.shared.get(key)
         })
@@ -325,7 +386,14 @@ impl ObjectStore for NodeObjectStore {
         self.run_call(ObjectStoreOperation::Delete, key, true, || {
             self.shared.delete(key)
         })
-        .await
+        .await?;
+        self.observe(|observations| {
+            *observations
+                .deleted_objects
+                .entry(key_class(key))
+                .or_default() += 1;
+        });
+        Ok(())
     }
 
     async fn delete_many(&self, keys: &[String]) -> ObjectStoreResult<()> {
@@ -333,7 +401,16 @@ impl ObjectStore for NodeObjectStore {
         self.run_call(ObjectStoreOperation::Delete, first_key, true, || {
             self.shared.delete_many(keys)
         })
-        .await
+        .await?;
+        self.observe(|observations| {
+            for key in keys {
+                *observations
+                    .deleted_objects
+                    .entry(key_class(key))
+                    .or_default() += 1;
+            }
+        });
+        Ok(())
     }
 
     async fn list(
