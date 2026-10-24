@@ -424,6 +424,19 @@ async fn snapshot_tail_replay_detects_a_corrupted_time_travel_rebuild() {
     let (command, result) = submit_time_travel(&second, &hasher, "tail-replay-flow", run_id).await;
     let error = result.expect_err("the engine rejects a corrupted rebuild");
     assert!(crate::harness::is_partition_stopped(&error), "{error:?}");
+    let error_report = error.to_string();
+    let command_id_hex: String = command
+        .command_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert!(error_report.contains("tail-replay-flow"), "{error_report}");
+    assert!(error_report.contains(&command_id_hex), "{error_report}");
+    assert!(error_report.contains("log seq"), "{error_report}");
+    assert!(
+        error_report.contains(&format!("semantic key ({run_id}, 1, 1)")),
+        "{error_report}"
+    );
     assert_eq!(
         second.halted_partitions(),
         vec![hasher.partition_of(flow_hash)]

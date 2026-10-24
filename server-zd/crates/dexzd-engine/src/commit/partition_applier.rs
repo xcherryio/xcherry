@@ -36,7 +36,7 @@ use crate::commit::replay_checks::{compare_repeated_apply, compare_semantic_poin
 use crate::commit::staged_state_reader::StagedStateReader;
 use crate::commit::{CommitProgress, EngineLocalStore};
 use crate::recovery::CommittedCommandSink;
-use crate::runtime::{CommittedCommand, CommittedFlowCommand};
+use crate::runtime::{CommitError, CommittedCommand, CommittedFlowCommand};
 
 /// The records of one partition in one committed log batch.
 pub(crate) struct PartitionFrame {
@@ -390,7 +390,7 @@ impl FrameApplier {
     fn apply_frame(&self, frame: PartitionFrame) {
         let partition = frame.partition;
         if self.state.is_partition_halted(partition) {
-            self.reject_frame(&frame);
+            self.reject_frame(&frame, None);
             return;
         }
         match self.try_apply_frame(&frame) {
@@ -399,7 +399,7 @@ impl FrameApplier {
             Err(FrameFailure::Halt(detail)) => {
                 tracing::error!(partition = partition.0, seq = frame.position.seq, detail = %detail, "partition stopped applying commands");
                 self.state.halt_partition(partition);
-                self.reject_frame(&frame);
+                self.reject_frame(&frame, Some(&detail));
             }
             Err(FrameFailure::StoreFailed(detail)) => {
                 self.state.stop(NodeStopReason::LocalStoreFailed { detail });
@@ -738,7 +738,7 @@ impl FrameApplier {
         }
     }
 
-    fn reject_frame(&self, frame: &PartitionFrame) {
+    fn reject_frame(&self, frame: &PartitionFrame, detail: Option<&str>) {
         for record in &frame.records {
             let Ok(LogRecord {
                 body: Some(log_record::Body::Flow(command)),
@@ -748,9 +748,16 @@ impl FrameApplier {
                 continue;
             };
             if let Some(pending) = self.state.take(&command.command_id) {
-                pending
-                    .responder
-                    .resolve(Err(partition_stopped_error(frame.partition)));
+                let error = detail.map_or_else(
+                    || partition_stopped_error(frame.partition),
+                    |detail| CommitError::Unavailable {
+                        detail: format!(
+                            "partition {} stopped applying commands: {detail}",
+                            frame.partition.0
+                        ),
+                    },
+                );
+                pending.responder.resolve(Err(error));
             }
         }
     }
