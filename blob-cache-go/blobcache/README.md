@@ -106,9 +106,9 @@ return errors.Join(purgeErr, closeErr)
 
 Startup removes incomplete temp files, validates committed entries, and
 reconciles them against the current byte limit. Access-frequency history is not
-persisted. An operating-system or power failure may lose the newest committed
-directory entry because the parent directory is not synchronized; this is a
-safe miss because the cache is not authoritative.
+persisted. Cache writes do not synchronize files or directories to disk. An
+operating-system or power failure may lose a recent entry or leave an invalid
+file; validation rejects it, and the caller can fetch the blob again.
 
 ## Development
 
