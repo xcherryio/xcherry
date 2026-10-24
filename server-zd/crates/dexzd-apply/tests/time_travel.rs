@@ -1787,7 +1787,7 @@ fn commit_rpc(
     request_id: &str,
     response: InvokeWorkerRpcResponse,
     is_transactional: bool,
-) {
+) -> CommandReply {
     let outcome = harness.apply(Command::RpcCommitted(RpcCommittedCommand {
         request: Some(InvokeRpcRequest {
             flow_id: "order-1".to_owned(),
@@ -1806,6 +1806,27 @@ fn commit_rpc(
         "RPC commit: {:?}",
         outcome.reply
     );
+    outcome.reply
+}
+
+fn request_dedup_rows(harness: &Harness) -> BTreeMap<Vec<u8>, Vec<u8>> {
+    let run = harness.run();
+    harness
+        .state
+        .rows
+        .iter()
+        .filter(|((column_family, key), _)| {
+            *column_family == ColumnFamily::Flow
+                && parse_run_key(key).is_ok_and(|parsed| {
+                    parsed.run_id == run
+                        && matches!(
+                            parsed.table,
+                            RunTable::RequestDedup | RunTable::RequestDedupOrder
+                        )
+                })
+        })
+        .map(|((_, key), value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 fn rpc_attribute_write(attribute_key: &str) -> InvokeWorkerRpcResponse {
@@ -1824,6 +1845,7 @@ fn reapply_restores_committed_rpc_effects() {
     let mut harness = Harness::new();
     harness.start(start_request());
     commit_rpc(&mut harness, "rpc-1", rpc_attribute_write("from-rpc"), true);
+    let dedup_rows = request_dedup_rows(&harness);
     harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
     assert_eq!(harness.attribute_keys(), vec!["from-rpc".to_owned()]);
     let fork = harness.history_record(harness.last_seq()).unwrap();
@@ -1831,6 +1853,51 @@ fn reapply_restores_committed_rpc_effects() {
     // The reapplied input carries its original request ID, so a later travel reapplies it again.
     harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
     assert_eq!(harness.attribute_keys(), vec!["from-rpc".to_owned()]);
+    assert_eq!(request_dedup_rows(&harness), dedup_rows);
+}
+
+#[test]
+fn reapplied_rpcs_bypass_request_deduplication() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    let genesis_holders = value_holder_count(&harness);
+    let with_large_output = |attribute_key: &str| InvokeWorkerRpcResponse {
+        output: Some(string_value(&attribute_key.repeat(300))),
+        ..rpc_attribute_write(attribute_key)
+    };
+    commit_rpc(&mut harness, "foo", with_large_output("a"), true);
+    // A client may choose the ID a synthesized reapply request ID would take.
+    let second_reply = commit_rpc(
+        &mut harness,
+        "foo:time-travel-2",
+        with_large_output("b"),
+        true,
+    );
+    assert_eq!(value_holder_count(&harness), genesis_holders + 2);
+    let dedup_rows = request_dedup_rows(&harness);
+    let (attempt, _) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(attempt, 2);
+    assert_eq!(
+        harness.attribute_keys(),
+        vec!["a".to_owned(), "b".to_owned()]
+    );
+    assert_eq!(request_dedup_rows(&harness), dedup_rows);
+    assert_eq!(value_holder_count(&harness), genesis_holders + 2);
+    let retried = commit_rpc(
+        &mut harness,
+        "foo:time-travel-2",
+        with_large_output("b"),
+        true,
+    );
+    assert_eq!(retried, second_reply);
+    let (attempt, _) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
+    assert_eq!(attempt, 3);
+    assert_eq!(
+        harness.attribute_keys(),
+        vec!["a".to_owned(), "b".to_owned()]
+    );
+    assert_eq!(request_dedup_rows(&harness), dedup_rows);
+    assert_eq!(value_holder_count(&harness), genesis_holders + 2);
 }
 
 #[test]

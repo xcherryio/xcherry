@@ -13,13 +13,13 @@ use dexzd_apply::{
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    flow_list_index_key, hard_delete_pending_key, history_record_key, outbox_key, prefix_range,
-    retention_index_key, run_item_index_key, run_named_key, run_singleton_key,
-    tenant_run_index_key, timer_index_key, timer_key,
+    attempt_record_key, checkpoint_key, flow_list_index_key, hard_delete_pending_key,
+    history_record_key, outbox_key, prefix_range, retention_index_key, run_item_index_key,
+    run_named_key, run_singleton_key, tenant_run_index_key, timer_index_key, timer_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, flow_directory_key,
-    run_prefix, run_table_prefix,
+    parse_run_key, run_prefix, run_table_prefix,
 };
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowConfig, FlowErrorType, FlowResetType,
@@ -29,15 +29,16 @@ use dexzd_protocol::dex::{
     SubFlowReusePolicy, Value, WaitingCondition, WaitingConditionType, WorkerTarget, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, AttributesSetCommand, ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand,
-    FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord,
-    HardDeleteObjectReference, HardDeleteObjectsDeletedCommand, HistoryRecord, InboxMessageCommand,
-    OutboxAckCommand, OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, RetentionTimerId,
-    RunPurgeCommand, RunRecord, RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand,
-    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, SubFlowResultRecord, TimeTravelCommand, TimerId,
-    TimersFiredCommand, command_reply, flow_command::Command, inbox_message_command, outbox_record,
-    step_method_completed_command, timer_id,
+    AttemptRecord, AttributeRecord, AttributesSetCommand, CheckpointRecord, ChildFlowStartMessage,
+    CrossFlowEndpoint, FlowCommand, FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId,
+    HardDeleteObjectRecord, HardDeleteObjectReference, HardDeleteObjectsDeletedCommand,
+    HistoryRecord, InboxMessageCommand, OutboxAckCommand, OutboxRecord, OutboxRetentionTimerId,
+    ParentFlowReference, RetentionTimerId, RunPurgeCommand, RunRecord, RunSettings,
+    StepAttemptFailedCommand, StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord,
+    StepInvocationKey, StepMethod, StepMethodCompletedCommand, SubFlowResultRecord,
+    TimeTravelCommand, TimerId, TimerRecord, TimersFiredCommand, command_reply,
+    flow_command::Command, inbox_message_command, outbox_record, step_method_completed_command,
+    timer_id,
 };
 use prost::Message;
 
@@ -363,6 +364,72 @@ impl Harness {
             .into_iter()
             .map(|(_, bytes)| OutboxRecord::decode(bytes.as_slice()).expect("outbox decodes"))
             .collect()
+    }
+
+    fn parent_history_time(&self, seq: u64) -> i64 {
+        let parent_hash = self.hasher.flow_hash(TenantId::DEFAULT, "parent");
+        let bytes = self
+            .state
+            .get(
+                ColumnFamily::History,
+                &history_record_key(parent_hash, RunId(PARENT_RUN), seq),
+            )
+            .expect("memory reads")
+            .expect("the point is recorded");
+        HistoryRecord::decode(bytes.as_slice())
+            .expect("history decodes")
+            .timestamp_micros
+    }
+
+    /// Attempt rows without timer run attempts and dispatch IDs, so attempts compare.
+    fn attempt_rows(&self, flow_id: &str, run_id: [u8; 16]) -> BTreeMap<(u8, Vec<u8>), Vec<u8>> {
+        let attempt_tables = [
+            RunTable::Attribute,
+            RunTable::ChannelMessage,
+            RunTable::ChannelMeta,
+            RunTable::StepExecution,
+            RunTable::StepCounter,
+            RunTable::LockTable,
+            RunTable::Waiter,
+            RunTable::Timer,
+        ];
+        let flow_hash = self.hasher.flow_hash(TenantId::DEFAULT, flow_id);
+        let (start, end) = prefix_range(&run_prefix(flow_hash, RunId(run_id)));
+        let mut rows = BTreeMap::new();
+        for (key, value) in self
+            .state
+            .scan(ColumnFamily::Flow, &start, &end, usize::MAX)
+            .expect("memory reads")
+        {
+            let parsed = parse_run_key(&key).expect("run keys parse");
+            if !attempt_tables.contains(&parsed.table) {
+                continue;
+            }
+            let (suffix, value) = match parsed.table {
+                RunTable::Timer => {
+                    let mut timer =
+                        TimerRecord::decode(value.as_slice()).expect("timer rows decode");
+                    let mut timer_id = timer.timer_id.clone().expect("timer rows name their timer");
+                    if timer_id.run_attempt == 0 {
+                        continue;
+                    }
+                    timer_id.run_attempt = 0;
+                    timer.timer_id = Some(timer_id.clone());
+                    (timer_id.encode_to_vec(), timer.encode_to_vec())
+                }
+                RunTable::StepExecution => {
+                    let mut step =
+                        StepExecutionRecord::decode(value.as_slice()).expect("Step rows decode");
+                    if let Some(invocation) = step.invocation.as_mut() {
+                        invocation.task_id.clear();
+                    }
+                    (parsed.suffix.to_vec(), step.encode_to_vec())
+                }
+                _ => (parsed.suffix.to_vec(), value),
+            };
+            rows.insert((parsed.table as u8, suffix), value);
+        }
+        rows
     }
 
     fn deliver_completion(&mut self, outbox: &OutboxRecord) -> ApplyOutcome {
@@ -1818,23 +1885,39 @@ fn stale_attempt_timer_is_disarmed_without_closing_the_run() {
 }
 
 #[test]
-fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
+fn time_travel_without_reapply_completes_a_restored_wait_from_a_received_child_result() {
+    travel_to_a_wait_whose_child_result_was_received(true);
+}
+
+#[test]
+fn time_travel_with_reapply_completes_a_restored_wait_from_a_received_child_result() {
+    travel_to_a_wait_whose_child_result_was_received(false);
+}
+
+fn travel_to_a_wait_whose_child_result_was_received(skip_writes_reapply: bool) {
     let mut harness = Harness::new();
     harness.start_parent();
     let start = harness.register_sub_flow_wait(SubFlowReusePolicy::Unspecified);
-    let parent_hash = harness.hasher.flow_hash(TenantId::DEFAULT, "parent");
     let waiting_seq = harness.record("parent", PARENT_RUN).next_run_seq - 1;
-    let waiting_bytes = harness
-        .state
-        .get(
-            ColumnFamily::History,
-            &history_record_key(parent_hash, RunId(PARENT_RUN), waiting_seq),
-        )
-        .expect("memory reads")
-        .expect("the wait is recorded");
-    let waiting_time = HistoryRecord::decode(waiting_bytes.as_slice())
-        .expect("history decodes")
-        .timestamp_micros;
+    let waiting_time = harness.parent_history_time(waiting_seq);
+    // External input after the wait, which only the reapplying travel restores.
+    assert_ok(&harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::AttributesSet(AttributesSetCommand {
+            request: Some(SetAttributesRequest {
+                attributes: vec![AttributeWrite {
+                    key: "note".to_owned(),
+                    value: Some(Value {
+                        kind: Some(value::Kind::StringValue("kept".to_owned())),
+                    }),
+                    ..AttributeWrite::default()
+                }],
+                ..SetAttributesRequest::default()
+            }),
+            ..AttributesSetCommand::default()
+        }),
+    ));
     assert_ok(&harness.deliver_start_outbox(&start, FIRST_CHILD_RUN));
     harness.apply(
         CHILD_ID,
@@ -1846,11 +1929,23 @@ fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
             }),
         }),
     );
-    let report = harness.outbox(CHILD_ID, FIRST_CHILD_RUN).pop().unwrap();
+    let report = harness
+        .outbox(CHILD_ID, FIRST_CHILD_RUN)
+        .pop()
+        .expect("the child reports its result");
     assert_ok(&harness.deliver_completion(&report));
-    let completed_phase = harness.step("parent", PARENT_RUN, "StartStep-1").phase;
-    assert_ne!(completed_phase, StepExecutionPhase::Waiting as i32);
-    // The travel skips reapply; the stored child result still completes the restored wait.
+    let completed = harness.step("parent", PARENT_RUN, "StartStep-1");
+    assert_ne!(completed.phase, StepExecutionPhase::Waiting as i32);
+    let consumed = completed
+        .condition_results
+        .clone()
+        .expect("the wait consumed the child result");
+    let consumed_statuses: Vec<_> = consumed
+        .sub_flow_results
+        .iter()
+        .map(|result| result.flow_status)
+        .collect();
+    assert_eq!(consumed_statuses, vec![FlowStatus::Terminated as i32]);
     let travel = harness.apply(
         "parent",
         &PARENT_RUN,
@@ -1859,7 +1954,7 @@ fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
                 flow_id: "parent".to_owned(),
                 reset_type: FlowResetType::HistoryEventTime as i32,
                 history_event_time: (i128::from(waiting_time) * 1000).to_string(),
-                skip_writes_reapply: true,
+                skip_writes_reapply,
                 ..ResetFlowRequest::default()
             }),
         }),
@@ -1873,10 +1968,13 @@ fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
         travel.reply
     );
     assert_eq!(harness.record("parent", PARENT_RUN).current_attempt, 2);
-    assert_eq!(
-        harness.step("parent", PARENT_RUN, "StartStep-1").phase,
-        completed_phase
-    );
+    let restored = harness.step("parent", PARENT_RUN, "StartStep-1");
+    assert_eq!(restored.phase, completed.phase);
+    assert_eq!(restored.wait, None);
+    assert_eq!(restored.condition_results.as_ref(), Some(&consumed));
+    let after_travel = harness.attempt_rows("parent", PARENT_RUN);
+    let note_key = (RunTable::Attribute as u8, b"note".to_vec());
+    assert_eq!(after_travel.contains_key(&note_key), !skip_writes_reapply);
     let pending: Vec<_> = travel
         .effects
         .iter()
@@ -1897,4 +1995,63 @@ fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
         pending,
         vec![("StartStep-1".to_owned(), StepMethod::Execute as i32, 2)]
     );
+    // The fork point's checkpoint holds the consumed result.
+    let fork_seq = harness.record("parent", PARENT_RUN).next_run_seq - 1;
+    let parent_hash = harness.hasher.flow_hash(TenantId::DEFAULT, "parent");
+    let checkpoint_bytes = harness
+        .state
+        .get(
+            ColumnFamily::History,
+            &checkpoint_key(parent_hash, RunId(PARENT_RUN), 2, fork_seq),
+        )
+        .expect("memory reads")
+        .expect("the travel writes its start checkpoint");
+    let checkpoint =
+        CheckpointRecord::decode(checkpoint_bytes.as_slice()).expect("checkpoint decodes");
+    let checkpointed_step = checkpoint
+        .rows
+        .iter()
+        .find(|row| {
+            row.table == u32::from(RunTable::StepExecution as u8)
+                && row.key_suffix == b"StartStep-1"
+        })
+        .map(|row| StepExecutionRecord::decode(row.value.as_slice()).expect("Step decodes"))
+        .expect("the checkpoint holds the Step");
+    assert_eq!(checkpointed_step.phase, completed.phase);
+    assert_eq!(checkpointed_step.condition_results, Some(consumed));
+    let fork_time = harness.parent_history_time(fork_seq);
+    let to_fork = harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::TimeTravel(TimeTravelCommand {
+            request: Some(ResetFlowRequest {
+                flow_id: "parent".to_owned(),
+                reset_type: FlowResetType::HistoryEventTime as i32,
+                history_event_time: (i128::from(fork_time) * 1000).to_string(),
+                run_attempt: 2,
+                skip_writes_reapply,
+                ..ResetFlowRequest::default()
+            }),
+        }),
+    );
+    assert!(
+        matches!(
+            to_fork.reply.reply,
+            Some(command_reply::Reply::TimeTravel(_))
+        ),
+        "{:?}",
+        to_fork.reply
+    );
+    assert_eq!(harness.record("parent", PARENT_RUN).current_attempt, 3);
+    let attempt_bytes = harness
+        .state
+        .get(
+            ColumnFamily::Flow,
+            &attempt_record_key(parent_hash, RunId(PARENT_RUN), 3),
+        )
+        .expect("memory reads")
+        .expect("the attempt exists");
+    let attempt = AttemptRecord::decode(attempt_bytes.as_slice()).expect("attempt decodes");
+    assert_eq!(attempt.parent_seq, fork_seq);
+    assert_eq!(harness.attempt_rows("parent", PARENT_RUN), after_travel);
 }
