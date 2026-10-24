@@ -8,6 +8,11 @@
 
 use std::sync::Arc;
 
+use dexzd_engine::{
+    ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE, STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,
+    WAIT_CALL_DEADLINE_MESSAGE, WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
+    WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
+};
 use dexzd_keyspace::TenantId;
 use dexzd_protocol::dex::flow_service_server::{self, FlowServiceServer};
 use dexzd_protocol::dex::{
@@ -27,6 +32,7 @@ use dexzd_protocol::dex::{
 use dexzd_search::{SearchBackend, SearchError, SearchRequest};
 use tonic::{Request, Response, Status};
 
+use crate::client_deadline::WaitCallDeadline;
 use crate::{
     AttributeIndexes, FlowOperationError, FlowOperations, FlowServiceConfig, StreamOperations,
 };
@@ -253,9 +259,18 @@ impl flow_service_server::FlowService for DexFlowService {
         &self,
         request: Request<WaitForFlowRequest>,
     ) -> Result<Response<FlowResult>, Status> {
+        let deadline = WaitCallDeadline::new(
+            &request,
+            0,
+            WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
+            WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
+        );
         respond(
-            self.operations()
-                .wait_for_flow(TenantId::DEFAULT, request.into_inner())
+            deadline
+                .bound(
+                    self.operations()
+                        .wait_for_flow(TenantId::DEFAULT, request.into_inner()),
+                )
                 .await,
         )
     }
@@ -306,9 +321,18 @@ impl flow_service_server::FlowService for DexFlowService {
         &self,
         request: Request<WaitForHistoryEventRequest>,
     ) -> Result<Response<WaitForHistoryEventResponse>, Status> {
+        let deadline = WaitCallDeadline::new(
+            &request,
+            0,
+            WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
+            WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
+        );
         respond(
-            self.operations()
-                .wait_for_history_event(TenantId::DEFAULT, request.into_inner())
+            deadline
+                .bound(
+                    self.operations()
+                        .wait_for_history_event(TenantId::DEFAULT, request.into_inner()),
+                )
                 .await,
         )
     }
@@ -369,9 +393,18 @@ impl flow_service_server::FlowService for DexFlowService {
         &self,
         request: Request<WaitForStepCompletionRequest>,
     ) -> Result<Response<WaitForStepCompletionResponse>, Status> {
+        let deadline = WaitCallDeadline::new(
+            &request,
+            request.get_ref().request_timeout_seconds,
+            STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,
+            WAIT_CALL_DEADLINE_MESSAGE,
+        );
         respond(
-            self.operations()
-                .wait_for_step_completion(TenantId::DEFAULT, request.into_inner())
+            deadline
+                .bound(
+                    self.operations()
+                        .wait_for_step_completion(TenantId::DEFAULT, request.into_inner()),
+                )
                 .await,
         )
     }
@@ -380,9 +413,18 @@ impl flow_service_server::FlowService for DexFlowService {
         &self,
         request: Request<WaitForAttributeRequest>,
     ) -> Result<Response<WaitForAttributeResponse>, Status> {
+        let deadline = WaitCallDeadline::new(
+            &request,
+            request.get_ref().request_timeout_seconds,
+            ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE,
+            WAIT_CALL_DEADLINE_MESSAGE,
+        );
         respond(
-            self.operations()
-                .wait_for_attribute(TenantId::DEFAULT, request.into_inner())
+            deadline
+                .bound(
+                    self.operations()
+                        .wait_for_attribute(TenantId::DEFAULT, request.into_inner()),
+                )
                 .await,
         )
     }

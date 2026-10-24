@@ -1007,6 +1007,8 @@ dependencies = [
  "dexzd-protocol",
  "dexzd-server",
  "futures",
+ "prost",
+ "prost-types",
  "tempfile",
  "tokio",
  "tokio-stream",

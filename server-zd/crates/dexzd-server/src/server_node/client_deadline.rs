@@ -13,10 +13,14 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use dexzd_api::CLIENT_DEADLINE_ANSWER_MARGIN;
+use tokio::time::Instant;
 use tonic::codegen::{Service, http};
 
 /// How long before the client's deadline the server answers, so it wins tonic's own timer.
 const DEADLINE_MARGIN: Duration = Duration::from_millis(20);
+// Wait RPCs answer with their own timeout status before this fallback fires.
+const _: () = assert!(DEADLINE_MARGIN.as_nanos() < CLIENT_DEADLINE_ANSWER_MARGIN.as_nanos());
 
 /// Wraps every gRPC service of the server.
 pub(super) fn client_deadline_layer<S>(inner: S) -> ClientDeadline<S> {
@@ -43,18 +47,27 @@ where
         self.inner.poll_ready(context)
     }
 
-    fn call(&mut self, request: http::Request<RequestBody>) -> Self::Future {
-        let timeout = request
+    fn call(&mut self, mut request: http::Request<RequestBody>) -> Self::Future {
+        let client_deadline = request
             .headers()
             .get("grpc-timeout")
             .and_then(|value| value.to_str().ok())
-            .and_then(parse_grpc_timeout);
+            .and_then(parse_grpc_timeout)
+            .and_then(|timeout| Instant::now().checked_add(timeout));
+        if let Some(client_deadline) = client_deadline {
+            request
+                .extensions_mut()
+                .insert(dexzd_api::ClientDeadline(client_deadline));
+        }
         let response = self.inner.call(request);
         Box::pin(async move {
-            let Some(timeout) = timeout else {
+            let Some(client_deadline) = client_deadline else {
                 return response.await;
             };
-            match tokio::time::timeout(timeout.saturating_sub(DEADLINE_MARGIN), response).await {
+            let answer_by = client_deadline
+                .checked_sub(DEADLINE_MARGIN)
+                .unwrap_or(client_deadline);
+            match tokio::time::timeout_at(answer_by, response).await {
                 Ok(result) => result,
                 Err(_elapsed) => Ok(tonic::Status::deadline_exceeded(
                     "the client deadline elapsed before the call completed",

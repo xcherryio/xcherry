@@ -9,6 +9,7 @@
 //! FlowService gRPC handlers for server-zd: request validation, routing to the engine, long polling, and error mapping.
 
 mod attribute_indexes;
+mod client_deadline;
 mod flow_operation_error;
 mod flow_operations;
 mod flow_service;
@@ -18,6 +19,7 @@ mod runtime_flow_operations;
 mod stream_operations;
 
 pub use attribute_indexes::AttributeIndexes;
+pub use client_deadline::{CLIENT_DEADLINE_ANSWER_MARGIN, ClientDeadline};
 pub use flow_operation_error::FlowOperationError;
 pub use flow_operations::FlowOperations;
 pub use flow_service::{

@@ -11,4 +11,9 @@
 mod long_poll_operations;
 mod waiter_registry;
 
+pub use long_poll_operations::{
+    ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE, STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,
+    WAIT_CALL_DEADLINE_MESSAGE, WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
+    WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
+};
 pub(crate) use waiter_registry::{WaitInterest, WaiterRegistry};

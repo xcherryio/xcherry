@@ -64,6 +64,11 @@ impl DevServer {
         }
     }
 
+    /// Returns the connected channel, for calls that set their own gRPC timeout.
+    pub(crate) fn channel(&self) -> Channel {
+        self.channel.clone()
+    }
+
     pub(crate) fn flow_client(&self) -> FlowServiceClient<Channel> {
         FlowServiceClient::new(self.channel.clone())
     }

@@ -31,6 +31,11 @@ pub use effects::{
     hard_delete_placeholder_value,
 };
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
+pub use long_poll::{
+    ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE, STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,
+    WAIT_CALL_DEADLINE_MESSAGE, WAIT_FOR_FLOW_TIMEOUT_MESSAGE,
+    WAIT_FOR_HISTORY_EVENT_TIMEOUT_MESSAGE,
+};
 pub use recovery::{
     CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     PartitionRuntimeRebuilder, RuntimeRebuildError,
