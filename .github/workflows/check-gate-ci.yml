@@ -83,6 +83,11 @@ jobs:
               - 's3mock/**'
               - 'protos/**'
               - '.github/workflows/server-zd-ci.yml'
+            server_zd_image:
+              - 'server-zd/Dockerfile'
+              - '.dockerignore'
+              - '.github/workflows/server-zd-image-release.yml'
+              - '.github/workflows/server-zd-image-main.yml'
             examples_typescript:
               - 'examples/typescript/**'
               - '.github/workflows/examples-typescript-ci.yml'
@@ -149,6 +154,7 @@ jobs:
           FILTER_EXAMPLES_RUST: ${{ steps.filter.outputs.examples_rust }}
           FILTER_S3MOCK: ${{ steps.filter.outputs.s3mock }}
           FILTER_SERVER_ZD: ${{ steps.filter.outputs.server_zd }}
+          FILTER_SERVER_ZD_IMAGE: ${{ steps.filter.outputs.server_zd_image }}
           FILTER_EXAMPLES_TYPESCRIPT: ${{ steps.filter.outputs.examples_typescript }}
           FILTER_GENERATED_CODE: ${{ steps.filter.outputs.generated_code }}
           FILTER_RELEASE_TOOLING: ${{ steps.filter.outputs.release_tooling }}
@@ -197,6 +203,7 @@ jobs:
             [[ "$FILTER_EXAMPLES_RUST" == "true" ]] && expected+=("Rust examples CI")
             [[ "$FILTER_S3MOCK" == "true" ]] && expected+=("S3mock CI")
             [[ "$FILTER_SERVER_ZD" == "true" ]] && expected+=("Server ZD CI")
+            [[ "$FILTER_SERVER_ZD_IMAGE" == "true" ]] && expected+=("Server ZD image release")
             [[ "$FILTER_EXAMPLES_TYPESCRIPT" == "true" ]] && expected+=("TypeScript examples CI")
             [[ "$FILTER_GENERATED_CODE" == "true" ]] && expected+=("Generated Code CI")
             [[ "$FILTER_RELEASE_TOOLING" == "true" ]] && expected+=("Release Tooling CI")

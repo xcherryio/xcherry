@@ -131,8 +131,9 @@ The `dex-server-zd` image is published for `linux/amd64` and `linux/arm64`. Its 
 mount a production config at that path. The image includes
 `/etc/dex-server-zd/dex-server-zd.example.yaml` as a reference, not as its active config.
 Mount a writable directory for `localStorage.directory` and set that directory in the config.
-The process runs as the non-root `dex` user, so that directory must be writable by the container
-user.
+The process runs as UID 10001 and GID 10001. Make the data volume writable by that identity,
+for example by setting Kubernetes `fsGroup: 10001` or changing the directory ownership to
+`10001:10001`.
 
 Port 8801 serves the API and `grpc.health.v1` on `api.listen`. Kubernetes gRPC probes can call
 that service directly. Health is NOT_SERVING during startup and SERVING after recovery completes.

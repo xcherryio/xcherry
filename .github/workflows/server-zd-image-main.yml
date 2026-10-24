@@ -26,7 +26,7 @@ jobs:
           short_sha="${GITHUB_SHA:0:7}"
           base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
-          echo "version=${base_version}-dev.${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "version=${base_version}-dev.g${short_sha}" >> "${GITHUB_OUTPUT}"
 
   publish:
     name: Publish digest ${{ matrix.arch }}
@@ -61,7 +61,7 @@ jobs:
             SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
           outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
-          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=max
+          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=min
       - name: Save digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

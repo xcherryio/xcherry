@@ -3,6 +3,12 @@ name: Server ZD image release
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Server ZD image semantic version without the v prefix
+        required: true
+        type: string
   pull_request:
     paths:
       - server-zd/Dockerfile
@@ -22,12 +28,12 @@ permissions:
 
 concurrency:
   group: server-zd-image-release-${{ github.event.release.tag_name || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   metadata:
     name: Resolve image version
-    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'server-zd/v')
+    if: inputs.version != '' || github.event_name != 'release' || startsWith(github.event.release.tag_name, 'server-zd/v')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -40,16 +46,20 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          if [[ "${EVENT_NAME}" == "release" ]]; then
-            version="${RELEASE_TAG#server-zd/v}"
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            base_version="${INPUT_VERSION#v}"
+            publish=true
+          elif [[ "${EVENT_NAME}" == "release" ]]; then
+            base_version="${RELEASE_TAG#server-zd/v}"
             publish=true
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             if [[ "${GITHUB_REF}" == refs/tags/server-zd/v* ]]; then
-              version="${GITHUB_REF#refs/tags/server-zd/v}"
+              base_version="${GITHUB_REF#refs/tags/server-zd/v}"
             else
-              version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+              base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
             fi
             publish=false
             if [[ "${DRY_RUN}" == "false" ]]; then
@@ -60,12 +70,16 @@ jobs:
               publish=true
             fi
           else
-            version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+            base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("server-zd/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
             publish=false
           fi
-          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
-            echo "Invalid server-zd image version: ${version}" >&2
+          if [[ ! "${base_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid server-zd image version: ${base_version}" >&2
             exit 1
+          fi
+          version="${base_version}"
+          if [[ "${publish}" != true ]]; then
+            version="${base_version}-smoke.${GITHUB_RUN_NUMBER}"
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
@@ -99,11 +113,12 @@ jobs:
           build-args: |
             SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
           cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
-          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=max
+          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=min
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24.x'
+          cache: false
       - name: Build grpcurl
         run: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3
       - name: Smoke CLI, health, startup failure, and shutdown
@@ -115,7 +130,7 @@ jobs:
           go_path="$(go env GOPATH)"
           export PATH="${go_path}/bin:${PATH}"
           version_output="$(docker run --rm dex-server-zd:smoke --version)"
-          [[ "${version_output}" == *"${EXPECTED_VERSION}"* ]] || {
+          [[ "${version_output}" == "dex-server-zd ${EXPECTED_VERSION}" ]] || {
             echo "Unexpected version: ${version_output}" >&2
             exit 1
           }
@@ -221,32 +236,14 @@ jobs:
           }
           docker logs dex-zd-smoke-unreachable 2>&1 | grep -q 'failed the startup check'
           docker rm dex-zd-smoke-unreachable >/dev/null
-
-  publish:
-    name: Publish digest ${{ matrix.arch }}
-    if: needs.metadata.outputs.publish == 'true'
-    needs: [metadata, smoke]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
+        if: needs.metadata.outputs.publish == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Push native image by digest
-        id: build
+        if: needs.metadata.outputs.publish == 'true'
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -256,14 +253,15 @@ jobs:
             SERVER_ZD_VERSION=${{ needs.metadata.outputs.version }}
           outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=dex-server-zd-${{ matrix.arch }}
-          cache-to: type=gha,scope=dex-server-zd-${{ matrix.arch }},mode=max
       - name: Save digest
+        if: needs.metadata.outputs.publish == 'true'
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           mkdir -p "${RUNNER_TEMP}/digests"
           touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
       - uses: actions/upload-artifact@v7
+        if: needs.metadata.outputs.publish == 'true'
         with:
           name: server-zd-digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
@@ -272,9 +270,14 @@ jobs:
 
   manifest:
     name: Publish multi-arch tags
-    needs: [metadata, publish]
+    if: needs.metadata.outputs.publish == 'true'
+    needs: [metadata, smoke]
     runs-on: ubuntu-24.04
+    concurrency:
+      group: server-zd-image-latest
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
           pattern: server-zd-digest-*
@@ -285,11 +288,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Create version and latest manifests
+      - name: Create version and eligible latest manifests
         shell: bash
         env:
           IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/dex-server-zd
           VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -type f -printf '%f\n' | sort)
@@ -301,6 +306,19 @@ jobs:
           for digest in "${digests[@]}"; do
             sources+=("${IMAGE}@sha256:${digest}")
           done
-          docker buildx imagetools create \
-            -t "${IMAGE}:${VERSION}" -t "${IMAGE}:latest" "${sources[@]}"
+          tags=(-t "${IMAGE}:${VERSION}")
+          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${RELEASE_PRERELEASE}" != true ]]; then
+            if release_prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/server-zd/v${VERSION}" --jq .prerelease 2>/dev/null)"; then
+              if [[ "${release_prerelease}" == false ]]; then
+                remote_tags="$(git ls-remote --tags --refs origin 'refs/tags/server-zd/v*')"
+                latest_stable_version="$(printf '%s\n' "${remote_tags}" | sed -nE 's@.*refs/tags/server-zd/v([0-9]+\.[0-9]+\.[0-9]+)$@\1@p' | sort -V | tail -n 1)"
+                if [[ "${VERSION}" == "${latest_stable_version}" ]]; then
+                  tags+=(-t "${IMAGE}:latest")
+                fi
+              fi
+            else
+              echo "No readable GitHub release for server-zd/v${VERSION}; latest unchanged"
+            fi
+          fi
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
           docker buildx imagetools inspect "${IMAGE}:${VERSION}"
