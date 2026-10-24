@@ -50,10 +50,17 @@ pub(crate) struct HandlerOutput {
     pub(crate) replayed: Option<ReplayedCommandOutput>,
 }
 
-/// History a replayed command did not record, and its value ID allocator.
+/// History a replayed command did not record, and the counters the next input continues.
 pub(crate) struct ReplayedCommandOutput {
     pub(crate) events: Vec<flow_history_event::Payload>,
+    pub(crate) counters: ReplayedCommandCounters,
+}
+
+/// Per-command counters that inputs reapplied within one TimeTravel command share.
+#[derive(Clone)]
+pub(crate) struct ReplayedCommandCounters {
     pub(crate) values: ValueIdAllocator,
+    pub(crate) next_channel_message_index: u64,
 }
 
 impl HandlerOutput {

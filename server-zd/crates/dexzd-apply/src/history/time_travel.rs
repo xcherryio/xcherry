@@ -25,7 +25,7 @@ use prost::Message;
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::flow_close::update_directory_status;
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
-use crate::command_handlers::{CommandScope, HandlerResult};
+use crate::command_handlers::{CommandScope, HandlerResult, ReplayedCommandCounters};
 use crate::history::attempt_scope::{
     AttemptRow, decode_timer_id, hex, holder_rows, read_attempt_rows, run_status_of, set_run_status,
 };
@@ -419,7 +419,10 @@ fn reapply_external_inputs(
     let behavior_version = BehaviorVersion::from_command(scope.command.behavior_version)?;
     let rows = cursor.rows;
     rows.put_run_record(transaction, &cursor.record);
-    let mut values = std::mem::replace(&mut cursor.values, ValueIdAllocator::new(cursor.seq));
+    let mut counters = ReplayedCommandCounters {
+        values: std::mem::replace(&mut cursor.values, ValueIdAllocator::new(cursor.seq)),
+        next_channel_message_index: cursor.next_channel_message_index,
+    };
     for input in inputs {
         cursor.reapplied_inputs.push(input.clone());
         let record = required_run_record(transaction, cursor)?;
@@ -447,7 +450,7 @@ fn reapply_external_inputs(
             let reader = TransactionReader::new(transaction);
             let mut input_transaction = FlowTransaction::new(&reader, transaction.context());
             let input_cursor =
-                RunCursor::for_reapplied_input(rows, record, cursor.seq, values.clone());
+                RunCursor::for_reapplied_input(rows, record, cursor.seq, counters.clone());
             match crate::command_handlers::apply_run_command(
                 &mut input_transaction,
                 input_cursor,
@@ -469,12 +472,13 @@ fn reapply_external_inputs(
                 detail: "a reapplied input recorded its own history".to_owned(),
             });
         };
-        values = replayed.values;
+        counters = replayed.counters;
         events.extend(replayed.events);
         keep_fork_effects(cursor, output.effects);
     }
     cursor.record = required_run_record(transaction, cursor)?;
-    cursor.values = values;
+    cursor.values = counters.values;
+    cursor.next_channel_message_index = counters.next_channel_message_index;
     Ok(events)
 }
 

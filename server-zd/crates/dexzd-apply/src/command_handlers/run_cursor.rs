@@ -13,7 +13,9 @@ use dexzd_protocol::dexzd::v1::{
 };
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
-use crate::command_handlers::{CommandScope, HandlerOutput, ReplayedCommandOutput};
+use crate::command_handlers::{
+    CommandScope, HandlerOutput, ReplayedCommandCounters, ReplayedCommandOutput,
+};
 use crate::history;
 use crate::state_access::{FlowTransaction, RunRows};
 use crate::values::enforce_superseded_byte_cap;
@@ -52,6 +54,8 @@ pub(crate) struct RunCursor {
     /// Run seq of the command being applied.
     pub(crate) seq: u64,
     pub(crate) values: ValueIdAllocator,
+    /// Next index of a Channel message this command publishes.
+    pub(crate) next_channel_message_index: u64,
     events: Vec<flow_history_event::Payload>,
     pub(crate) effects: Vec<ApplyEffect>,
     /// Set by TimeTravel: the command starts a new attempt and writes its start checkpoint.
@@ -103,10 +107,11 @@ impl RunCursor {
         rows: RunRows,
         record: RunRecord,
         seq: u64,
-        values: ValueIdAllocator,
+        counters: ReplayedCommandCounters,
     ) -> Self {
         Self {
-            values,
+            values: counters.values,
+            next_channel_message_index: counters.next_channel_message_index,
             ..Self::with_seq(rows, record, seq)
         }
     }
@@ -128,6 +133,7 @@ impl RunCursor {
             record,
             seq,
             values: ValueIdAllocator::new(seq),
+            next_channel_message_index: 0,
             events: Vec::new(),
             effects: Vec::new(),
             starts_attempt: false,
@@ -237,7 +243,10 @@ impl RunCursor {
             run_id: Some(self.rows.run_id),
             replayed: Some(ReplayedCommandOutput {
                 events: self.events,
-                values: self.values,
+                counters: ReplayedCommandCounters {
+                    values: self.values,
+                    next_channel_message_index: self.next_channel_message_index,
+                },
             }),
         }
     }
