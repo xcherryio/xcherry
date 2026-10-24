@@ -1,0 +1,30 @@
+diff --git a/server-zd/crates/dexzd-engine/src/runtime/client_operations/mod.rs b/server-zd/crates/dexzd-engine/src/runtime/client_operations/mod.rs
+--- a/server-zd/crates/dexzd-engine/src/runtime/client_operations/mod.rs
++++ b/server-zd/crates/dexzd-engine/src/runtime/client_operations/mod.rs
+@@ -28,3 +28,3 @@
+ use crate::runtime::client_operations::hard_delete_uploads::{
+-    committed_reply, hard_delete_references, has_hard_delete_values,
++    hard_delete_references, has_hard_delete_values,
+ };
+@@ -329,7 +329,17 @@
+         flow: &FlowAddress,
+-        build: impl FnMut(&mut ProposalScope<'_>) -> Result<FlowCommand, RuntimeError>,
++        mut build: impl FnMut(&mut ProposalScope<'_>) -> Result<FlowCommand, RuntimeError>,
+     ) -> Result<command_reply::Reply, RuntimeError> {
+-        self.propose_and_wait_for_commit(flow, build)
+-            .await
+-            .and_then(committed_reply)
++        let proposal = self
++            .propose_with(flow, CommitUrgency::Prompt, |scope| {
++                build(scope).map(|command| Some((command, ())))
++            })
++            .await?;
++        let (result, ()) = proposal.expect("client builders always propose");
++        match result.speculative.reply.reply {
++            Some(command_reply::Reply::Error(error)) => Err(RuntimeError::from_reply(&error)),
++            Some(reply) => Ok(reply),
++            None => Err(RuntimeError::Internal {
++                detail: "apply returned an empty reply".to_owned(),
++            }),
++        }
+     }

@@ -1,0 +1,11 @@
+diff --git a/server-zd/crates/dexzd-engine/src/runtime/read_operations/mod.rs b/server-zd/crates/dexzd-engine/src/runtime/read_operations/mod.rs
+index 17408ad37..2b8538323 100644
+--- a/server-zd/crates/dexzd-engine/src/runtime/read_operations/mod.rs
++++ b/server-zd/crates/dexzd-engine/src/runtime/read_operations/mod.rs
+@@ -271,4 +271,4 @@ impl FlowRuntimeRegistry {
+         let context = self.flow_context(flow);
+-        let committed = self.inner.dependencies.committer.committed_view()?;
+-        let state = committed.as_ref();
++        let speculative = self.flow_state_reader(flow, true)?;
++        let state = speculative.as_ref();
+         let run = read_run(state, context, flow, &request.run_id)?;

@@ -1,0 +1,176 @@
+diff --git a/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs b/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
+--- a/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
++++ b/server-zd/crates/dexzd-apply/src/steps/attempt_snapshot.rs
+@@ -13,2 +13,3 @@
+
++use dexzd_keyspace::{RunTable, ValueId};
+ use dexzd_protocol::dex::ChannelInfo;
+@@ -16,4 +17,5 @@
+     LoadedChannelMessagesRecord, MethodSnapshotRecord, StepExecutionRecord, StepMethod,
+-    StoredKeyValue,
++    StoredKeyValue, StoredValue, flow_command, stored_value,
+ };
++use prost::Message;
+
+@@ -21,4 +23,5 @@
+ use crate::command_handlers::run_cursor::RunCursor;
++use crate::history::{HistoryPoint, history_records, rebuild_attempt_state};
+ use crate::state_access::FlowTransaction;
+-use crate::values::{ValueHolder, hold_stored_value};
++use crate::values::{ValueHolder, hold_stored_value, load_stored_value, release_stored_value};
+
+@@ -130,3 +133,3 @@
+     }
+-    Ok(MethodSnapshotRecord {
++    let current_snapshot = MethodSnapshotRecord {
+         attributes,
+@@ -141,3 +144,140 @@
+         },
+-    })
++    };
++    let Some(previous_snapshot) =
++        prior_method_snapshot(transaction, cursor, step, method, attempt)?
++    else {
++        return Ok(current_snapshot);
++    };
++    if transfer_snapshot_pins(
++        transaction,
++        cursor,
++        step,
++        method,
++        attempt,
++        &current_snapshot,
++        &previous_snapshot,
++    )? {
++        Ok(previous_snapshot)
++    } else {
++        Ok(current_snapshot)
++    }
++}
++
++fn prior_method_snapshot(
++    transaction: &FlowTransaction<'_>,
++    cursor: &RunCursor,
++    step: &StepExecutionRecord,
++    method: StepMethod,
++    attempt: u32,
++) -> Result<Option<MethodSnapshotRecord>, ApplyError> {
++    let Some(previous_attempt) = attempt.checked_sub(1).filter(|attempt| *attempt > 0) else {
++        return Ok(None);
++    };
++    let history = history_records(
++        transaction,
++        cursor.rows,
++        cursor.record.window_start_seq,
++        cursor.seq.saturating_sub(1),
++    )?;
++    let Some(started) = history.into_iter().rev().find(|record| {
++        record.attempt == cursor.attempt()
++            && matches!(
++                record.command.as_ref().and_then(|command| command.command.as_ref()),
++                Some(flow_command::Command::StepAttemptStarted(command))
++                    if command.attempt == previous_attempt
++                        && command.invocation.as_ref().is_some_and(|key| {
++                            key.method == method as i32
++                                && key.step_execution_id == step.step_execution_id
++                        })
++            )
++    }) else {
++        return Ok(None);
++    };
++    let rebuilt = rebuild_attempt_state(
++        transaction,
++        cursor.rows,
++        &cursor.record,
++        HistoryPoint {
++            attempt: started.attempt,
++            seq: started.seq,
++        },
++    )?;
++    let Some(step_row) = rebuilt.rows.iter().find(|row| {
++        row.table == RunTable::StepExecution && row.key_suffix == step.step_execution_id.as_bytes()
++    }) else {
++        return Ok(None);
++    };
++    let historical_step =
++        StepExecutionRecord::decode(step_row.value.as_slice()).map_err(|error| {
++            ApplyError::InvariantViolation {
++                detail: format!("historical Step execution is invalid: {error}"),
++            }
++        })?;
++    Ok(historical_step
++        .invocation
++        .and_then(|invocation| invocation.snapshot))
++}
++
++fn transfer_snapshot_pins(
++    transaction: &mut FlowTransaction<'_>,
++    cursor: &RunCursor,
++    step: &StepExecutionRecord,
++    method: StepMethod,
++    attempt: u32,
++    current_snapshot: &MethodSnapshotRecord,
++    previous_snapshot: &MethodSnapshotRecord,
++) -> Result<bool, ApplyError> {
++    let current_values = snapshot_table_values(current_snapshot);
++    let previous_values = snapshot_table_values(previous_snapshot);
++    for (value_id, stored) in &previous_values {
++        if !current_values.contains_key(value_id)
++            && load_stored_value(transaction, cursor.rows, stored)?.is_none()
++        {
++            return Ok(false);
++        }
++    }
++    let pin = ValueHolder::AttemptSnapshot {
++        step_execution_id: step.step_execution_id.clone(),
++        method: method as i32,
++        attempt,
++    };
++    for (value_id, stored) in &previous_values {
++        if !current_values.contains_key(value_id) {
++            hold_stored_value(transaction, cursor.rows, stored, &pin)?;
++        }
++    }
++    for (value_id, stored) in &current_values {
++        if !previous_values.contains_key(value_id) {
++            release_stored_value(transaction, cursor.rows, stored, &pin, cursor.seq)?;
++        }
++    }
++    Ok(true)
++}
++
++fn snapshot_table_values(snapshot: &MethodSnapshotRecord) -> BTreeMap<ValueId, StoredValue> {
++    snapshot
++        .attributes
++        .iter()
++        .filter_map(|attribute| attribute.value.as_ref())
++        .chain(
++            snapshot
++                .loaded_channel_messages
++                .iter()
++                .flat_map(|channel| &channel.messages)
++                .filter_map(|message| message.value.as_ref()),
++        )
++        .filter_map(|stored| {
++            let Some(stored_value::Kind::TableValue(reference)) = stored.kind.as_ref() else {
++                return None;
++            };
++            let value_id = reference.value_id.as_ref()?;
++            Some((
++                ValueId {
++                    run_seq: value_id.run_seq,
++                    index_in_command: value_id.index_in_command,
++                },
++                stored.clone(),
++            ))
++        })
++        .collect()
+ }
+diff --git a/server-zd/crates/dexzd-apply/src/history/mod.rs b/server-zd/crates/dexzd-apply/src/history/mod.rs
+--- a/server-zd/crates/dexzd-apply/src/history/mod.rs
++++ b/server-zd/crates/dexzd-apply/src/history/mod.rs
+@@ -21,2 +21,4 @@
+ pub(crate) use checkpoints::{after_command, pending_step_methods};
++pub(crate) use lineage::history_records;
++pub(crate) use state_rebuild::{HistoryPoint, rebuild_attempt_state};
+ pub(crate) use time_travel::apply_time_travel;

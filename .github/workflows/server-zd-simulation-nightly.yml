@@ -112,6 +112,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  seeded-bug-acceptance:
+    name: Seeded bug acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Install libclang for the RocksDB bindings
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - name: Detect seeded apply bugs
+        run: script/server-zd-seeded-bugs.sh
+
   engine-simulation:
     name: Engine simulation (pending test target)
     if: ${{ vars.DEXZD_ENGINE_SIMULATION_ENABLED == 'true' }}
