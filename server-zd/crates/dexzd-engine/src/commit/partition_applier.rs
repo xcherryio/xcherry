@@ -445,6 +445,8 @@ impl FrameApplier {
     }
 
     fn publish(&self, frame: &PartitionFrame, applied: Vec<AppliedCommand>) {
+        // The sink sees the whole frame before any proposer, so reads after a commit observe it.
+        let mut resolved = Vec::new();
         for AppliedCommand {
             command,
             context,
@@ -457,7 +459,7 @@ impl FrameApplier {
                 position: frame.position.clone(),
             };
             if let Some(pending) = pending {
-                pending.responder.resolve(Ok(committed.clone()));
+                resolved.push((pending, committed.clone()));
             }
             self.committed_commands
                 .apply_committed(CommittedFlowCommand {
@@ -468,6 +470,9 @@ impl FrameApplier {
         }
         self.committed_commands
             .finish_frame(frame.partition, &frame.position);
+        for (pending, committed) in resolved {
+            pending.responder.resolve(Ok(committed));
+        }
     }
 
     fn reject_frame(&self, frame: &PartitionFrame) {
