@@ -15,10 +15,12 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use dexzd_apply::{ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader};
-use dexzd_keyspace::{PartitionHasher, RunId, TenantId};
+use dexzd_apply::{
+    ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateWrite, WaitableChange,
+};
+use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, parse_run_key};
 use dexzd_protocol::dexzd::v1::{
-    FlowCommand, StepInvocationKey, flow_command, inbox_message_command,
+    FlowCommand, RunRecord, StepInvocationKey, flow_command, inbox_message_command,
 };
 use prost::Message;
 use tokio::sync::Notify;
@@ -291,6 +293,26 @@ impl FlowRuntimeRegistry {
         for effect in &outcome.effects {
             if let ApplyEffect::WakeWaiters { change, .. } = effect {
                 self.inner.waiters.wake(&flow, change);
+            }
+        }
+        for write in &outcome.writes {
+            if let StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key,
+                value,
+            } = write
+                && parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::RunRecord)
+            {
+                let run_record = RunRecord::decode(value.as_slice())
+                    .expect("committed apply emits a decodable RunRecord");
+                if run_record.is_purging {
+                    // Purge changes readability without emitting the normal Flow-close wake effect.
+                    let purging_flow =
+                        FlowAddress::new(TenantId(run_record.tenant_id), run_record.flow_id);
+                    self.inner
+                        .waiters
+                        .wake(&purging_flow, &WaitableChange::FlowClosed);
+                }
             }
         }
     }

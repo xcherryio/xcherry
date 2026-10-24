@@ -21,10 +21,12 @@ use dexzd_keyspace::row_keys::{
 use dexzd_keyspace::{
     ColumnFamily, IndexKind, PartitionId, RunTable, TenantId, partition_index_prefix,
 };
+use dexzd_protocol::dexzd::v1::RunRecord;
 use dexzd_visibility_query::{
     Expression, FieldRegistry, Literal, Operator, Query, compare_documents, evaluate,
     parse_and_check,
 };
+use prost::Message;
 
 use self::document::IndexedDocument;
 use crate::page_token::PagePosition;
@@ -172,6 +174,21 @@ impl BuiltinSearchBackend {
                 }
                 let (flow_hash, run_id) = decode_flow_run_after_prefix(&index_key, identity_offset)
                     .ok_or_else(|| SearchError::Internal("malformed search index key".into()))?;
+                let run_record_key = run_singleton_key(flow_hash, run_id, RunTable::RunRecord);
+                let encoded_run_record = scan_state
+                    .committed_view
+                    .get(ColumnFamily::Flow, &run_record_key)
+                    .map_err(|error| SearchError::Unavailable(error.to_string()))?
+                    .ok_or_else(|| {
+                        SearchError::Internal("search index has no run record".into())
+                    })?;
+                let run_record =
+                    RunRecord::decode(encoded_run_record.as_slice()).map_err(|error| {
+                        SearchError::Internal(format!("decode search run record: {error}"))
+                    })?;
+                if run_record.is_purging {
+                    continue;
+                }
                 let document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
                 let encoded = scan_state
                     .committed_view

@@ -10,9 +10,11 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
+use dexzd_apply::StateWrite;
 use dexzd_engine::CommittedFlowCommand;
-use dexzd_keyspace::PartitionId;
+use dexzd_keyspace::{ColumnFamily, PartitionId, RunTable, parse_run_key};
 use dexzd_protocol::dexzd::v1::LogPosition;
+use dexzd_protocol::dexzd::v1::flow_command::Command;
 use dexzd_search::paradedb::{
     ProjectionVisibilityWait, SearchDocumentChange, extract_search_document_changes,
 };
@@ -65,7 +67,7 @@ struct RebuildRequest {
 struct OpenSearchFrame {
     sequence: u64,
     changes: Vec<SearchDocumentChange>,
-    is_unreadable: bool,
+    requires_rebuild: bool,
 }
 
 impl CommittedSearchFrames {
@@ -90,11 +92,22 @@ impl CommittedSearchFrames {
     pub(crate) fn record_command(&self, committed: &CommittedFlowCommand) {
         let partition = committed.context.partition;
         let extracted = extract_search_document_changes(partition, &committed.committed.outcome);
-        if matches!(&extracted, Ok(changes) if changes.is_empty()) {
+        let is_postponed_purge = matches!(
+            committed.command.command.as_ref(),
+            Some(Command::RunPurge(_))
+        ) && committed.committed.outcome.writes.iter().any(|write| {
+            matches!(write, StateWrite::Put { column_family: ColumnFamily::Flow, key, .. }
+                if parse_run_key(key).is_ok_and(|parsed| parsed.table == RunTable::RunRecord))
+        });
+        if matches!(&extracted, Ok(changes) if changes.is_empty()) && !is_postponed_purge {
             return;
         }
         let mut tracking = self.lock_tracking();
         let frame = tracking.open_frame(partition);
+        if is_postponed_purge {
+            // A postponed purge restores visibility without rewriting its unchanged search document.
+            frame.requires_rebuild = true;
+        }
         match extracted {
             Ok(changes) => frame.changes.extend(changes),
             Err(error) => {
@@ -103,7 +116,7 @@ impl CommittedSearchFrames {
                     %error,
                     "a committed outcome has unreadable search documents; rebuilding its partition"
                 );
-                frame.is_unreadable = true;
+                frame.requires_rebuild = true;
             }
         }
     }
@@ -114,7 +127,7 @@ impl CommittedSearchFrames {
         let Some(frame) = tracking.open_frames.remove(&partition) else {
             return;
         };
-        if frame.is_unreadable {
+        if frame.requires_rebuild {
             self.request_rebuild(&mut tracking, partition, frame.sequence);
             return;
         }
@@ -286,7 +299,7 @@ impl FrameTracking {
             .or_insert_with(|| OpenSearchFrame {
                 sequence,
                 changes: Vec::new(),
-                is_unreadable: false,
+                requires_rebuild: false,
             })
     }
 }
@@ -322,7 +335,9 @@ mod tests {
     use dexzd_engine::CommittedCommand;
     use dexzd_keyspace::row_keys::run_singleton_key;
     use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, RunTable};
-    use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, SearchDocumentRecord};
+    use dexzd_protocol::dexzd::v1::{
+        CommandReply, FlowCommand, RunPurgeCommand, RunRecord, SearchDocumentRecord, flow_command,
+    };
     use prost::Message;
 
     use super::*;
@@ -426,6 +441,27 @@ mod tests {
         frames.publish_projected_through();
         assert_eq!(*frames.projected_through.borrow(), Some(20));
         assert!(frames.rebuild_requests().is_empty());
+    }
+
+    #[test]
+    fn run_purge_rebuilds_projection_when_retention_is_postponed() {
+        let (frames, queue) = CommittedSearchFrames::new(2, 1024);
+        let mut committed = committed_upsert(1);
+        committed.command.command = Some(flow_command::Command::RunPurge(RunPurgeCommand {}));
+        committed.committed.outcome.writes = vec![StateWrite::Put {
+            column_family: ColumnFamily::Flow,
+            key: run_singleton_key(FlowHash(7), RunId([1; 16]), RunTable::RunRecord),
+            value: RunRecord {
+                tenant_id: 1,
+                run_id: RunId([1; 16]).as_bytes().to_vec(),
+                ..RunRecord::default()
+            }
+            .encode_to_vec(),
+        }];
+        frames.record_command(&committed);
+        frames.finish_frame(PARTITION, &LogPosition::default());
+        assert!(queue.is_empty());
+        assert_eq!(frames.rebuild_requests(), vec![PARTITION]);
     }
 
     #[test]

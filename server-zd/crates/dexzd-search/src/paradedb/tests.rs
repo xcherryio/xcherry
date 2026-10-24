@@ -13,7 +13,7 @@ use dexzd_keyspace::TenantId;
 use dexzd_keyspace::row_keys::{prefix_range, run_singleton_key, tenant_run_index_key};
 use dexzd_keyspace::{ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, run_prefix};
 use dexzd_protocol::dex::{self, IndexType};
-use dexzd_protocol::dexzd::v1::{SearchAttributeValue, SearchDocumentRecord};
+use dexzd_protocol::dexzd::v1::{RunRecord, SearchAttributeValue, SearchDocumentRecord};
 use dexzd_visibility_query::{SearchDocument, SearchValue};
 use prost::Message;
 
@@ -90,7 +90,12 @@ fn extracts_ordered_document_writes_and_run_purge() {
             StateWrite::Put {
                 column_family: ColumnFamily::Flow,
                 key: run_singleton_key(flow_hash, run_id, RunTable::RunRecord),
-                value: vec![0],
+                value: RunRecord {
+                    tenant_id: tenant_id.0,
+                    run_id: run_id.as_bytes().to_vec(),
+                    ..RunRecord::default()
+                }
+                .encode_to_vec(),
             },
             StateWrite::Put {
                 column_family: ColumnFamily::Flow,
@@ -135,6 +140,46 @@ fn extracts_ordered_document_writes_and_run_purge() {
         extract_search_document_changes(partition_id, &missing_delete),
         Err(ProjectionError::InvalidState(_))
     ));
+}
+
+#[test]
+fn purging_run_deletes_its_search_projection_before_run_purge() {
+    let partition_id = PartitionId(3);
+    let tenant_id = TenantId(7);
+    let flow_hash = FlowHash(42);
+    let run_id = RunId([5; 16]);
+    let document = SearchDocumentRecord {
+        tenant_id: tenant_id.0,
+        run_id: run_id.as_bytes().to_vec(),
+        ..SearchDocumentRecord::default()
+    };
+    let run_record = RunRecord {
+        tenant_id: tenant_id.0,
+        run_id: run_id.as_bytes().to_vec(),
+        is_purging: true,
+        ..RunRecord::default()
+    };
+    let outcome = ApplyOutcome {
+        writes: vec![
+            StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key: run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
+                value: document.encode_to_vec(),
+            },
+            StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key: run_singleton_key(flow_hash, run_id, RunTable::RunRecord),
+                value: run_record.encode_to_vec(),
+            },
+        ],
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(run_id),
+    };
+    assert_eq!(
+        extract_search_document_changes(partition_id, &outcome).unwrap(),
+        vec![SearchDocumentChange::Delete { tenant_id, run_id }]
+    );
 }
 
 #[test]
