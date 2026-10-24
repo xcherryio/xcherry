@@ -89,4 +89,9 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  --credential-file path  token file; overrides DEX_CREDENTIAL_FILE and DEX_CREDENTIAL")
 	fmt.Fprintln(output, "  DEX_CREDENTIAL_FILE     fallback token file path")
 	fmt.Fprintln(output, "  DEX_CREDENTIAL          fallback token value; no raw-token flag to avoid shell history and process listings")
+	fmt.Fprintln(output, "  --api-key-file path     API key file exchanged for access tokens; overrides DEX_API_KEY")
+	fmt.Fprintln(output, "  DEX_API_KEY             fallback API key value; no raw-key flag to avoid shell history and process listings")
+	fmt.Fprintln(output, "  --token-url url         API key token endpoint (default DEX_TOKEN_URL)")
+	fmt.Fprintln(output, "  --server-id id          server ID the token endpoint scopes tokens to (default DEX_SERVER_ID)")
+	fmt.Fprintln(output, "  Use either a bearer token or an API key, not both.")
 }

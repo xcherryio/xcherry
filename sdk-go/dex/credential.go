@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // credentialFileCheckInterval bounds how often a call may stat the credential file.
@@ -26,6 +29,7 @@ const credentialFileCheckInterval = time.Second
 //
 // A Dex server with authentication enabled requires a credential on every public API call. Use FileCredential for a token that another
 // process, such as a Kubernetes projected service account token, writes and rotates.
+// Use APIKeyCredential when the application holds a long-lived API key that a token endpoint exchanges for short-lived access tokens.
 //
 //	credential, err := dex.FileCredential("/var/run/secrets/dex/token")
 //	if err != nil {
@@ -109,12 +113,101 @@ func (c *fileCredential) refreshLocked() {
 	c.token, c.loadErr, c.modTime, c.size = token, nil, info.ModTime(), info.Size()
 }
 
+// rejectedTokenDiscarder is an optional Credential capability for dropping a token that Dex rejected.
+type rejectedTokenDiscarder interface {
+	// discardRejectedToken forgets token only while it is still the cached token.
+	discardRejectedToken(token string)
+}
+
 // credentialDialOptions returns the dial option that attaches credential, or none without one.
 func credentialDialOptions(credential Credential) []grpc.DialOption {
 	if credential == nil {
 		return nil
 	}
-	return []grpc.DialOption{grpc.WithPerRPCCredentials(perRPCCredential{credential: credential})}
+	discarder, canDiscardRejectedToken := credential.(rejectedTokenDiscarder)
+	if !canDiscardRejectedToken {
+		return []grpc.DialOption{grpc.WithPerRPCCredentials(perRPCCredential{credential: credential})}
+	}
+	// Interceptors attach the token so a rejection identifies which token the call used.
+	interceptor := rejectedTokenInterceptor{credential: credential, discarder: discarder}
+	return []grpc.DialOption{
+		grpc.WithChainUnaryInterceptor(interceptor.interceptUnary),
+		grpc.WithChainStreamInterceptor(interceptor.interceptStream),
+	}
+}
+
+// rejectedTokenInterceptor attaches the bearer token and reports UNAUTHENTICATED rejections to the credential.
+type rejectedTokenInterceptor struct {
+	credential Credential
+	discarder  rejectedTokenDiscarder
+}
+
+// interceptUnary retries an UNAUTHENTICATED call once with a fresh token; Dex rejects it before executing.
+func (interceptor rejectedTokenInterceptor) interceptUnary(
+	ctx context.Context,
+	method string,
+	request any,
+	reply any,
+	connection *grpc.ClientConn,
+	invoker grpc.UnaryInvoker,
+	callOptions ...grpc.CallOption,
+) error {
+	token, err := interceptor.credential.Token(ctx)
+	if err != nil {
+		return err
+	}
+	err = invoker(withBearerToken(ctx, token), method, request, reply, connection, callOptions...)
+	if status.Code(err) != codes.Unauthenticated {
+		return err
+	}
+	interceptor.discarder.discardRejectedToken(token)
+	token, err = interceptor.credential.Token(ctx)
+	if err != nil {
+		return err
+	}
+	return invoker(withBearerToken(ctx, token), method, request, reply, connection, callOptions...)
+}
+
+// interceptStream discards a rejected token without retrying; stream owners reconnect on their own.
+func (interceptor rejectedTokenInterceptor) interceptStream(
+	ctx context.Context,
+	descriptor *grpc.StreamDesc,
+	connection *grpc.ClientConn,
+	method string,
+	streamer grpc.Streamer,
+	callOptions ...grpc.CallOption,
+) (grpc.ClientStream, error) {
+	token, err := interceptor.credential.Token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := streamer(withBearerToken(ctx, token), descriptor, connection, method, callOptions...)
+	if err != nil {
+		if status.Code(err) == codes.Unauthenticated {
+			interceptor.discarder.discardRejectedToken(token)
+		}
+		return nil, err
+	}
+	return &rejectedTokenStream{ClientStream: stream, token: token, discarder: interceptor.discarder}, nil
+}
+
+// rejectedTokenStream reports an UNAUTHENTICATED stream status to the credential that supplied its token.
+type rejectedTokenStream struct {
+	grpc.ClientStream
+	token     string
+	discarder rejectedTokenDiscarder
+}
+
+func (stream *rejectedTokenStream) RecvMsg(message any) error {
+	err := stream.ClientStream.RecvMsg(message)
+	if status.Code(err) == codes.Unauthenticated {
+		stream.discarder.discardRejectedToken(stream.token)
+	}
+	return err
+}
+
+func withBearerToken(ctx context.Context, token string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }
 
 type perRPCCredential struct {

@@ -244,6 +244,47 @@ dexcli flow history order-123 --no-hydrate
 RPC input and output use the same Blob Store hydration as other history values.
 Pass `--no-hydrate` to retain their references.
 
+### Authenticate
+
+A Dex server with authentication enabled requires a bearer credential on every
+FlowService call. Configure either a bearer token or an API key, not both.
+
+For a bearer token, pass `--credential-file path`, or set `DEX_CREDENTIAL_FILE`
+or `DEX_CREDENTIAL`. The flag takes precedence over both variables, and
+`DEX_CREDENTIAL_FILE` takes precedence over `DEX_CREDENTIAL`.
+
+For an API key, `dexcli` exchanges the key at a token endpoint for a short-lived
+access token and sends that token:
+
+```bash
+export DEX_API_KEY="$(cat ~/.dex/api-key)"
+export DEX_TOKEN_URL=https://auth.example.com/oauth/token
+export DEX_SERVER_ID=orders-production
+dexcli flow search --query 'ExecutionStatus = "Running"'
+
+dexcli health --api-key-file ~/.dex/api-key \
+  --token-url https://auth.example.com/oauth/token --server-id orders-production
+```
+
+- `--api-key-file path` reads the API key from a file and takes precedence over
+  `DEX_API_KEY`. There is no flag for the key value itself, so the key stays out
+  of shell history and process listings. Surrounding whitespace is ignored.
+- `--token-url` or `DEX_TOKEN_URL` names the token endpoint. It must use
+  `https`; `http` is allowed only for `localhost`, `127.0.0.0/8`, and `::1`.
+- `--server-id` or `DEX_SERVER_ID` names the server that the token endpoint
+  scopes the access token to. `dexcli` never derives it from `--server`.
+
+`dexcli` posts `{"server_id":"<server ID>","api_key":"<API key>"}` as JSON to the
+token URL before the first call and expects HTTP 200 with `access_token`,
+`token_type` `Bearer`, and a positive `expires_in`. It does not follow
+redirects. A command that makes several calls reuses the cached token and
+refreshes it after 80% of its lifetime. A failed exchange fails the command before any FlowService
+call, with the token URL, the HTTP status, and the endpoint's `error` and
+`error_description` fields. Errors never include the API key or an access token.
+
+Combining API key settings with a bearer token setting, or setting `--token-url`
+or `--server-id` without an API key, is a usage error that exits with status 2.
+
 ## Visualize Flow source
 
 Render a static possible-path graph from one Go or Python Flow source file in
