@@ -24,7 +24,6 @@ use crate::ApplyError;
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::flow_data::{
     apply_attribute_writes, apply_channel_deletions, apply_channel_publications,
-    apply_permission_mappings,
 };
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor, flow_not_found_reply};
 use crate::command_handlers::{CommandScope, HandlerResult};
@@ -112,7 +111,7 @@ pub(crate) fn apply_rpc_committed(
         &mut cursor,
         &response.upsert_attributes,
         &command.hard_delete_objects,
-        None,
+        response.action_permission_mappings.as_ref(),
     )? {
         return Ok(reject_value(rejection));
     }
@@ -128,14 +127,6 @@ pub(crate) fn apply_rpc_committed(
         scope.now_micros,
         &changed_channels,
     )?;
-    if let Some(mappings) = response.action_permission_mappings.as_ref() {
-        apply_permission_mappings(
-            transaction,
-            &mut cursor,
-            &response.upsert_attributes,
-            mappings,
-        )?;
-    }
     if let Some(decision) = response.step_decision.as_ref() {
         if !decision.cancel_step_types.is_empty() {
             cancel_steps_by_type(

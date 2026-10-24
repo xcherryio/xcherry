@@ -10,3 +10,4 @@
 
 pub(crate) mod history_events;
 pub(crate) mod search_document;
+pub(crate) mod work_queue_permissions;
