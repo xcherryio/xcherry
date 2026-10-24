@@ -579,6 +579,45 @@ fails the call before contacting Dex and reports gRPC `UNAUTHENTICATED` with
 the original error as its cause. Failed pull streams retry after 60–90 seconds.
 File checks use small synchronous stat and read operations.
 
+Use `ApiKeyCredential` when the application holds a long-lived API key and the
+token endpoint issues short-lived access tokens for a supplied Dex server ID:
+
+```typescript
+import { ApiKeyCredential, Client, Worker } from "@superdurable/dex";
+
+const credential = new ApiKeyCredential({
+  tokenUrl: "https://auth.example.com/token",
+  serverId: "dex-server-id",
+  apiKey: process.env.DEX_API_KEY!,
+});
+const worker = new Worker(registry, cache, { credential, pull: {} });
+const client = new Client(registry, cache, { credential, workerTarget: worker.workerTarget });
+try {
+  await worker.start();
+  await client.searchFlows("", 10);
+} finally {
+  await client.close();
+  await worker.close();
+}
+```
+
+The token URL must use HTTPS; HTTP is accepted only on localhost, 127.0.0.0/8,
+or ::1. The constructor validates settings without making a request. The first
+call exchanges the key. After 80% of the token lifetime, the next call starts
+one shared refresh and immediately returns the still-valid token. Failed
+refreshes wait at least five seconds before another attempt. Calls after expiry
+wait for the shared exchange, which defaults to a 10-second timeout covering
+connection and response. Set `exchangeTimeoutMs` to change it, or supply `fetch`
+for a proxy or a test endpoint. The application owns an injected fetch client.
+
+If Dex rejects a token with `UNAUTHENTICATED`, the credential discards it only
+when it is still current. Unary Client and Worker calls then retry once with a
+fresh token; rejected pull streams reconnect through the Worker's existing
+path. The API key and access token are absent from credential inspection and
+exchange error messages. A single credential is safe to share among concurrent
+Clients and Workers. It holds no persistent HTTP client or idle background task;
+an active exchange ends within its timeout.
+
 The bearer token travels over the SDK's plaintext gRPC connection. Protect
 the network path between the application and Dex.
 

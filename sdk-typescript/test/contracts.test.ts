@@ -17,6 +17,7 @@ import {
   AttributeMatch,
   AttributeMap,
   AttributeMapNotLoadedError,
+  ApiKeyCredential,
   Channel,
   ChannelMap,
   ChannelMessagesNotLoadedError,
@@ -186,6 +187,8 @@ test("credential contracts accept synchronous and asynchronous token providers",
   assert.equal(synchronous.token(), "current-token");
   assert.equal(options.credential, asynchronous);
   assert.equal(typeof FileCredential, "function");
+  const exchange = new ApiKeyCredential({ tokenUrl: "http://127.0.0.1/token", serverId: "server", apiKey: "key" });
+  assert.equal(typeof exchange.token, "function");
 });
 
 test("typed definitions construct without runtime", () => {
