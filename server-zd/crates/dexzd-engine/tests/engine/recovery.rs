@@ -329,6 +329,7 @@ async fn submissions_during_recovery_are_unavailable() {
             object_store: cluster.object_store.clone(),
             clock: cluster.clock.clone(),
             applier: Arc::new(CountingApplier::default()),
+            id_source: Arc::new(dexzd_engine::SystemEngineIdSource),
         },
         |services: EngineServices| {
             let flow_hash = services

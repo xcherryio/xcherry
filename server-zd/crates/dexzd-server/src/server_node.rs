@@ -25,7 +25,7 @@ use dexzd_engine::{
     CommandApplier, CommandCommitter, DeterministicCommandApplier, EffectDependencies,
     EffectRunner, EffectTasksHandle, EngineNode, EngineNodeDependencies, EngineRuntimeHooks,
     EngineServices, FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects,
-    NodeMetaUploadLedger, NodeStopReason,
+    NodeMetaUploadLedger, NodeStopReason, SystemEngineIdSource,
 };
 use dexzd_protocol::dex::flow_service_server::FlowServiceServer;
 use dexzd_protocol::dex::worker_task_service_server::WorkerTaskServiceServer;
@@ -338,6 +338,7 @@ impl ServerNode {
                 object_store: object_stores.primary.clone(),
                 clock: clock.clone(),
                 applier: applier.clone(),
+                id_source: Arc::new(SystemEngineIdSource),
             },
             |services: EngineServices| {
                 let partition_hasher = services.partition_hasher.clone();
