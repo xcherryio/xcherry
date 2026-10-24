@@ -667,30 +667,38 @@ func (worker *pullWorker) unknownTaskReason(task *dexpb.PollWorkerTask) dexpb.Po
 }
 
 func (stream *pullStream) rejectTask(taskID string, reason dexpb.PollWorkerTaskRejectReason) {
-	err := stream.send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: &dexpb.PollWorkerTaskReject{TaskId: taskID, Reason: reason}}})
+	wasPollStreamFinished, err := stream.sendReject(&dexpb.PollWorkerTaskReject{TaskId: taskID, Reason: reason})
 	if err == nil {
 		return
 	}
 	// The server re-dispatches a task whose stream closed before the rejection arrived.
-	if stream.isClosedStreamSendError(err) {
+	if stream.isClosedStreamSendError(err, wasPollStreamFinished) {
 		stream.worker.service.logger.Debug("reject Worker task on closed stream", "error", err)
 		return
 	}
 	stream.worker.service.logger.Error("reject Worker task", "error", err)
 }
 
-func (stream *pullStream) isClosedStreamSendError(err error) bool {
-	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+// sendReject sends a reject frame on the current poll stream.
+// The bool reports whether that gRPC stream had already finished before the send,
+// or whether send was already closed; the error is the send result.
+func (stream *pullStream) sendReject(reject *dexpb.PollWorkerTaskReject) (bool, error) {
+	stream.sendMu.Lock()
+	defer stream.sendMu.Unlock()
+	if stream.isSendClosed {
+		return true, io.ErrClosedPipe
+	}
+	// A failed Send cancels the gRPC stream context, so read it before sending.
+	wasPollStreamFinished := stream.stream.Context().Err() != nil
+	return wasPollStreamFinished, stream.stream.Send(&dexpb.PollWorkerTaskRequest{Frame: &dexpb.PollWorkerTaskRequest_Reject{Reject: reject}})
+}
+
+func (stream *pullStream) isClosedStreamSendError(err error, wasPollStreamFinished bool) bool {
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
 		return true
 	}
-	switch status.Code(err) {
-	case codes.Canceled:
-		return true
-	case codes.Unavailable:
-		return stream.ctx.Err() != nil
-	default:
-		return false
-	}
+	isCanceledOrUnavailable := errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled || status.Code(err) == codes.Unavailable
+	return isCanceledOrUnavailable && (wasPollStreamFinished || stream.ctx.Err() != nil)
 }
 
 func (stream *pullStream) executeTask(ctx context.Context, task *dexpb.PollWorkerTask) {
