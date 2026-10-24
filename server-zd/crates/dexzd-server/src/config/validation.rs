@@ -361,6 +361,11 @@ impl Config {
             "must hold at least one maximum-sized value",
         )?;
         ensure(
+            self.limits.max_blocking_state_reads > 0,
+            "limits.maxBlockingStateReads",
+            "must be positive",
+        )?;
+        ensure(
             self.limits.max_long_poll_waiters_per_node > 0,
             "limits.maxLongPollWaitersPerNode",
             "must be positive",
