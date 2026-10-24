@@ -7,12 +7,13 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use dexzd_keyspace::RunId;
-use dexzd_protocol::dex::{ErrorSubStatus, FlowHistoryEvent, flow_history_event};
+use dexzd_protocol::dex::{AttributeWrite, ErrorSubStatus, FlowHistoryEvent, flow_history_event};
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, HistoryRecord, RunRecord};
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::{CommandScope, HandlerOutput, ReplayedCommandOutput};
 use crate::history;
+use crate::projections::search_document;
 use crate::state_access::{FlowTransaction, RunRows};
 use crate::values::{ValueIdAllocator, ValueLimits};
 use crate::values::{enforce_superseded_byte_cap, reconcile_run_storage};
@@ -50,6 +51,7 @@ pub(crate) struct RunCursor {
     /// Run seq of the command being applied.
     pub(crate) seq: u64,
     pub(crate) values: ValueIdAllocator,
+    pub(crate) indexed_attribute_writes: Vec<AttributeWrite>,
     events: Vec<flow_history_event::Payload>,
     pub(crate) effects: Vec<ApplyEffect>,
     /// Set by TimeTravel: the command starts a new attempt and writes its start checkpoint.
@@ -125,6 +127,7 @@ impl RunCursor {
             record,
             seq,
             values: ValueIdAllocator::new(seq),
+            indexed_attribute_writes: Vec::new(),
             events: Vec::new(),
             effects: Vec::new(),
             starts_attempt: false,
@@ -208,6 +211,9 @@ impl RunCursor {
             },
         );
         history::after_command(transaction, &mut self, kind)?;
+        if scope.behavior_version.has_search_projection() {
+            search_document::refresh_search_document(transaction, &self, scope)?;
+        }
         self.rows.put_run_record(transaction, &self.record);
         if scope.is_replay {
             reconcile_run_storage(transaction, &mut self)?;

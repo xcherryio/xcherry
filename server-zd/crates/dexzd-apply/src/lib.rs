@@ -20,6 +20,7 @@ mod command_handlers;
 mod cross_flow;
 mod history;
 mod projections;
+pub mod read_model;
 mod state_access;
 mod steps;
 pub mod values;

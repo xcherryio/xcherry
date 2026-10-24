@@ -32,10 +32,12 @@ pub struct BehaviorVersion(u32);
 impl BehaviorVersion {
     /// The first behavior version.
     pub const INITIAL: Self = Self(1);
+    /// Adds the search projection and close-time pending history events.
+    pub const SEARCH_AND_HISTORY: Self = Self(2);
     /// Oldest version this binary can apply.
     pub const MINIMUM_SUPPORTED: Self = Self::INITIAL;
     /// Newest version this binary can apply and propose.
-    pub const CURRENT: Self = Self::INITIAL;
+    pub const CURRENT: Self = Self::SEARCH_AND_HISTORY;
 
     /// Validates the version recorded in a command.
     ///
@@ -52,5 +54,13 @@ impl BehaviorVersion {
     /// Returns the numeric version.
     pub fn number(self) -> u32 {
         self.0
+    }
+
+    pub(crate) fn has_search_projection(self) -> bool {
+        self >= Self::SEARCH_AND_HISTORY
+    }
+
+    pub(crate) fn has_close_pending_history(self) -> bool {
+        self >= Self::SEARCH_AND_HISTORY
     }
 }
