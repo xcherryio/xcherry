@@ -489,6 +489,192 @@ async fn applies_compatibility_and_attribute_values() {
 }
 
 #[tokio::test]
+async fn compares_quoted_numeric_literals_as_numbers() {
+    let mut state = MemoryState::default();
+    for (ordinal, amount, quantity) in [(1, 0.01, 3), (2, 2.5, 4)] {
+        let mut flow = record(7, ordinal, "Checkout", FlowStatus::Running, 1, 0);
+        flow.attributes = vec![
+            SearchAttributeValue {
+                index_key: "Amount".into(),
+                index_type: IndexType::Double.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::DoubleValue(amount)),
+                }),
+            },
+            SearchAttributeValue {
+                index_key: "Quantity".into(),
+                index_type: IndexType::Int.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::IntValue(quantity)),
+                }),
+            },
+        ];
+        state.insert(u16::from(ordinal), 7, ordinal, flow);
+    }
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 3).expect("backend");
+    let mut fields = fields();
+    fields.insert("Amount", IndexType::Double);
+    fields.insert("Quantity", IndexType::Int);
+    for (query, expected_flow_ids) in [
+        ("Amount = '0.01'", vec!["flow-1"]),
+        ("Amount = \"2.5\"", vec!["flow-2"]),
+        ("Amount > '1e-1'", vec!["flow-2"]),
+        ("Amount IN ('0.010', 2.5)", vec!["flow-1", "flow-2"]),
+        ("Amount BETWEEN '0' AND '1'", vec!["flow-1"]),
+        ("Quantity = '4'", vec!["flow-2"]),
+        ("Quantity NOT IN ('4')", vec!["flow-1"]),
+        ("Quantity BETWEEN '+3' AND 3", vec!["flow-1"]),
+    ] {
+        let page = backend
+            .search(request(query, None, 10, &fields))
+            .await
+            .expect(query);
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.flow_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_flow_ids,
+            "{query}"
+        );
+    }
+    let error = backend
+        .search(request("Amount = 'cheap'", None, 10, &fields))
+        .await
+        .expect_err("non-numeric DOUBLE literal");
+    assert!(
+        matches!(&error, SearchError::InvalidArgument(message) if message.contains("invalid DOUBLE literal for Amount")),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn quoted_numeric_bounds_and_hex_floats_match_indexed_values() {
+    let mut state = MemoryState::default();
+    for (ordinal, quantity, amount) in [
+        (1, 7, 0.25),
+        (2, 8, -3.0),
+        (3, -2, 1.5),
+        (4, 1_000, 3.5),
+        (5, 9_007_199_254_740_993, 2.5),
+        (6, 9_007_199_254_740_992, 0.0),
+        (7, -9_007_199_254_740_992, 0.0),
+        (8, i64::MAX - 1, 0.0),
+        (9, i64::MAX, 0.0),
+        (10, i64::MAX - 2, 0.0),
+    ] {
+        let mut flow = record(
+            7,
+            ordinal,
+            "Checkout",
+            FlowStatus::Running,
+            i64::from(ordinal),
+            0,
+        );
+        flow.attributes = vec![
+            SearchAttributeValue {
+                index_key: "Quantity".into(),
+                index_type: IndexType::Int.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::IntValue(quantity)),
+                }),
+            },
+            SearchAttributeValue {
+                index_key: "Amount".into(),
+                index_type: IndexType::Double.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::DoubleValue(amount)),
+                }),
+            },
+        ];
+        state.insert(u16::from(ordinal), 7, ordinal, flow);
+    }
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 11).expect("backend");
+    let mut fields = fields();
+    fields.insert("Quantity", IndexType::Int);
+    fields.insert("Amount", IndexType::Double);
+    for (query, expected_flow_ids) in [
+        ("Quantity = '7.0'", vec!["flow-1"]),
+        ("Quantity = '1e3'", vec!["flow-4"]),
+        ("Quantity = '9007199254740993'", vec!["flow-5"]),
+        ("Quantity = '9007199254740993.0'", vec!["flow-5"]),
+        ("Quantity = '9007199254740992.5'", vec!["flow-6"]),
+        ("Quantity = '-9007199254740992.5'", vec!["flow-7"]),
+        ("Quantity = '7.5'", vec![]),
+        ("Quantity IN ('7', '7.5')", vec!["flow-1"]),
+        (
+            "Quantity > '7.5'",
+            vec![
+                "flow-2", "flow-4", "flow-5", "flow-6", "flow-8", "flow-9", "flow-10",
+            ],
+        ),
+        ("Quantity <= '-1.5'", vec!["flow-3", "flow-7"]),
+        ("Quantity BETWEEN '1.5' AND '3.5'", vec![]),
+        (
+            "Quantity >= '9223372036854775806.5'",
+            vec!["flow-8", "flow-9"],
+        ),
+        (
+            "Quantity < '9223372036854775806.5'",
+            vec![
+                "flow-1", "flow-2", "flow-3", "flow-4", "flow-5", "flow-6", "flow-7", "flow-10",
+            ],
+        ),
+        (
+            "Quantity BETWEEN '9223372036854775806.5' AND '9223372036854775807'",
+            vec!["flow-8", "flow-9"],
+        ),
+        (
+            "Quantity != '7.5'",
+            vec![
+                "flow-1", "flow-2", "flow-3", "flow-4", "flow-5", "flow-6", "flow-7", "flow-8",
+                "flow-9", "flow-10",
+            ],
+        ),
+        ("Amount = '0x1p-2'", vec!["flow-1"]),
+        ("Amount = '-0X1.8p1'", vec!["flow-2"]),
+    ] {
+        let page = backend
+            .search(request(query, None, 10, &fields))
+            .await
+            .expect(query);
+        let actual: BTreeSet<&str> = page
+            .entries
+            .iter()
+            .map(|entry| entry.flow_id.as_str())
+            .collect();
+        let expected: BTreeSet<&str> = expected_flow_ids.into_iter().collect();
+        assert_eq!(actual, expected, "{query}");
+    }
+    for query in [
+        "Quantity = '9223372036854775808'",
+        "Quantity = '0x1p2'",
+        "Quantity = 'NaN'",
+        "Quantity = '1_0'",
+        "Quantity = ' 7'",
+        "Quantity = '7d'",
+        "Amount = 'Inf'",
+        "Amount = 'NaN'",
+        "Amount = '1e999'",
+        "Amount = '0x1p1024'",
+        "Amount = '1_0'",
+        "Amount = ' 1'",
+        "Amount = '1d'",
+    ] {
+        let error = backend
+            .search(request(query, None, 10, &fields))
+            .await
+            .expect_err(query);
+        assert!(
+            matches!(error, SearchError::InvalidArgument(_)),
+            "{query}: {error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn random_documents_with_sort_ties_match_the_shared_evaluator() {
     let mut state = MemoryState::default();
     let mut records = Vec::new();

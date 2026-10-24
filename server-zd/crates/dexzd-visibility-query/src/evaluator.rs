@@ -114,6 +114,7 @@ fn compare_optional_values(left: Option<SearchValue>, right: Option<SearchValue>
 fn evaluate_expression(expression: &Expression, document: &impl SearchDocument) -> Option<bool> {
     match expression {
         Expression::True => Some(true),
+        Expression::NoMatch(predicate) => document.field_value(&predicate.field).map(|_| false),
         Expression::Not(inner) => evaluate_expression(inner, document).map(|value| !value),
         Expression::And(children) => {
             let mut has_null = false;

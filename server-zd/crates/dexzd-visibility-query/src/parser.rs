@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::num::{IntErrorKind, ParseIntError};
+
 use dexzd_protocol::dex::IndexType;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -220,12 +222,28 @@ impl Parser<'_> {
             }
             _ => vec![self.parse_literal(&field, index_type, operator)?],
         };
-        Ok(Expression::Predicate(Predicate {
+        let predicate = Predicate {
             field,
             index_type,
             operator,
-            literals,
-        }))
+            literals: Vec::new(),
+        };
+        if index_type == IndexType::Int {
+            rewrite_int_predicate(predicate, literals)
+        } else {
+            Ok(Expression::Predicate(Predicate {
+                literals: literals
+                    .into_iter()
+                    .map(|literal| match literal {
+                        ParsedLiteral::Literal(value) => value,
+                        ParsedLiteral::DecimalInt { .. } => {
+                            unreachable!("decimal INT literal in another index type")
+                        }
+                    })
+                    .collect(),
+                ..predicate
+            }))
+        }
     }
 
     fn check_operator(
@@ -263,7 +281,7 @@ impl Parser<'_> {
         field: &str,
         index_type: IndexType,
         operator: Operator,
-    ) -> Result<Literal, QueryError> {
+    ) -> Result<ParsedLiteral, QueryError> {
         let token = self.advance().clone();
         let literal = match (&token.kind, index_type) {
             (
@@ -289,24 +307,14 @@ impl Parser<'_> {
             (TokenKind::Number(value), IndexType::Int)
                 if !value.contains('.') && !value.contains('e') && !value.contains('E') =>
             {
-                Literal::Int(value.parse().map_err(|_| {
-                    QueryError::new(
-                        token.offset,
-                        format!("INT literal out of range for {field}"),
-                    )
-                })?)
+                Literal::Int(parse_int_literal(value, field, token.offset)?)
             }
-            (TokenKind::Number(value), IndexType::Double) => {
-                let number: f64 = value.parse().map_err(|_| {
-                    QueryError::new(token.offset, format!("invalid DOUBLE literal for {field}"))
-                })?;
-                if !number.is_finite() {
-                    return Err(QueryError::new(
-                        token.offset,
-                        format!("DOUBLE literal out of range for {field}"),
-                    ));
-                }
-                Literal::Double(number)
+            // Temporal visibility accepts quoted numeric literals for INT and DOUBLE fields.
+            (TokenKind::String(value), IndexType::Int) => {
+                return parse_quoted_int_literal(value, field, token.offset);
+            }
+            (TokenKind::Number(value) | TokenKind::String(value), IndexType::Double) => {
+                Literal::Double(parse_double_literal(value, field, token.offset)?)
             }
             (TokenKind::Identifier(value) | TokenKind::String(value), IndexType::Bool)
                 if value.eq_ignore_ascii_case("true") =>
@@ -350,7 +358,7 @@ impl Parser<'_> {
                 format!("unsupported ExecutionStatus value {value:?}"),
             ));
         }
-        Ok(literal)
+        Ok(ParsedLiteral::Literal(literal))
     }
 
     fn current(&self) -> &Token {
@@ -408,6 +416,447 @@ impl Parser<'_> {
     fn describe_current(&self) -> String {
         describe(&self.current().kind)
     }
+}
+
+enum ParsedLiteral {
+    Literal(Literal),
+    DecimalInt {
+        truncated: i64,
+        has_decimal_part: bool,
+        is_positive: bool,
+    },
+}
+
+fn rewrite_int_predicate(
+    mut predicate: Predicate,
+    literals: Vec<ParsedLiteral>,
+) -> Result<Expression, QueryError> {
+    match predicate.operator {
+        Operator::Equal | Operator::NotEqual => {
+            if matches!(
+                literals.first(),
+                Some(ParsedLiteral::DecimalInt {
+                    has_decimal_part: true,
+                    ..
+                })
+            ) {
+                return Ok(if predicate.operator == Operator::Equal {
+                    no_match_predicate(&predicate)
+                } else {
+                    present_predicate(&predicate)
+                });
+            }
+        }
+        Operator::In | Operator::NotIn => {
+            predicate.literals = literals
+                .into_iter()
+                .filter_map(|literal| match literal {
+                    ParsedLiteral::Literal(value) => Some(value),
+                    ParsedLiteral::DecimalInt {
+                        has_decimal_part: true,
+                        ..
+                    } => None,
+                    ParsedLiteral::DecimalInt { truncated, .. } => Some(Literal::Int(truncated)),
+                })
+                .collect();
+            return if predicate.literals.is_empty() {
+                Ok(if predicate.operator == Operator::In {
+                    no_match_predicate(&predicate)
+                } else {
+                    present_predicate(&predicate)
+                })
+            } else {
+                Ok(Expression::Predicate(predicate))
+            };
+        }
+        Operator::Greater | Operator::GreaterEqual | Operator::Less | Operator::LessEqual => {
+            let is_lower = matches!(
+                predicate.operator,
+                Operator::Greater | Operator::GreaterEqual
+            );
+            let is_exclusive = matches!(predicate.operator, Operator::Greater | Operator::Less);
+            let Some(bound) = int_range_bound(&literals[0], is_lower, is_exclusive) else {
+                return Ok(no_match_predicate(&predicate));
+            };
+            predicate.operator = if is_lower {
+                Operator::GreaterEqual
+            } else {
+                Operator::LessEqual
+            };
+            predicate.literals = vec![Literal::Int(bound)];
+            return Ok(Expression::Predicate(predicate));
+        }
+        Operator::Between => {
+            let Some(lower) = int_range_bound(&literals[0], true, false) else {
+                return Ok(no_match_predicate(&predicate));
+            };
+            let Some(upper) = int_range_bound(&literals[1], false, false) else {
+                return Ok(no_match_predicate(&predicate));
+            };
+            if lower > upper {
+                return Ok(no_match_predicate(&predicate));
+            }
+            predicate.literals = vec![Literal::Int(lower), Literal::Int(upper)];
+            return Ok(Expression::Predicate(predicate));
+        }
+        _ => {}
+    }
+    predicate.literals = literals
+        .into_iter()
+        .map(|literal| match literal {
+            ParsedLiteral::Literal(value) => value,
+            ParsedLiteral::DecimalInt { truncated, .. } => Literal::Int(truncated),
+        })
+        .collect();
+    Ok(Expression::Predicate(predicate))
+}
+
+fn int_range_bound(literal: &ParsedLiteral, is_lower: bool, is_exclusive: bool) -> Option<i64> {
+    let (truncated, has_decimal_part, is_positive) = match literal {
+        ParsedLiteral::Literal(Literal::Int(value)) => (*value, false, *value > 0),
+        ParsedLiteral::DecimalInt {
+            truncated,
+            has_decimal_part,
+            is_positive,
+        } => (*truncated, *has_decimal_part, *is_positive),
+        ParsedLiteral::Literal(_) => unreachable!("INT range literal must be numeric"),
+    };
+    let should_advance = if has_decimal_part {
+        is_positive == is_lower
+    } else {
+        is_exclusive
+    };
+    if should_advance {
+        if is_lower {
+            truncated.checked_add(1)
+        } else {
+            truncated.checked_sub(1)
+        }
+    } else {
+        Some(truncated)
+    }
+}
+
+fn no_match_predicate(predicate: &Predicate) -> Expression {
+    Expression::NoMatch(Predicate {
+        field: predicate.field.clone(),
+        index_type: predicate.index_type,
+        operator: Operator::IsNotNull,
+        literals: Vec::new(),
+    })
+}
+
+fn present_predicate(predicate: &Predicate) -> Expression {
+    Expression::Predicate(Predicate {
+        field: predicate.field.clone(),
+        index_type: predicate.index_type,
+        operator: Operator::IsNotNull,
+        literals: Vec::new(),
+    })
+}
+
+fn parse_quoted_int_literal(
+    value: &str,
+    field: &str,
+    offset: usize,
+) -> Result<ParsedLiteral, QueryError> {
+    let bytes = value.as_bytes();
+    let mut position = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let is_negative = bytes.first() == Some(&b'-');
+    let mut digits = String::new();
+    let mut fraction_digits = 0_i64;
+    while bytes.get(position).is_some_and(u8::is_ascii_digit) {
+        digits.push(char::from(bytes[position]));
+        position += 1;
+    }
+    if bytes.get(position) == Some(&b'.') {
+        position += 1;
+        while bytes.get(position).is_some_and(u8::is_ascii_digit) {
+            digits.push(char::from(bytes[position]));
+            fraction_digits += 1;
+            position += 1;
+        }
+    }
+    if digits.is_empty() {
+        return Err(invalid_numeric_literal(
+            "INT",
+            value,
+            field,
+            offset,
+            "decimal number",
+        ));
+    }
+    let exponent = if matches!(bytes.get(position), Some(b'e' | b'E')) {
+        position += 1;
+        match parse_signed_exponent(bytes, &mut position) {
+            Some(exponent) => exponent,
+            None => {
+                return Err(invalid_numeric_literal(
+                    "INT",
+                    value,
+                    field,
+                    offset,
+                    "decimal number",
+                ));
+            }
+        }
+    } else {
+        0
+    };
+    if position != bytes.len() {
+        return Err(invalid_numeric_literal(
+            "INT",
+            value,
+            field,
+            offset,
+            "decimal number",
+        ));
+    }
+    let significant = digits.trim_start_matches('0').trim_end_matches('0');
+    if significant.is_empty() {
+        return Ok(ParsedLiteral::DecimalInt {
+            truncated: 0,
+            has_decimal_part: false,
+            is_positive: false,
+        });
+    }
+    let trailing_zeros = digits.trim_start_matches('0').len() - significant.len();
+    let scale = exponent
+        .saturating_sub(fraction_digits)
+        .saturating_add(i64::try_from(trailing_zeros).expect("query length fits i64"));
+    let truncated = if scale >= 0 {
+        let integer_digits = i64::try_from(significant.len())
+            .expect("query length fits i64")
+            .saturating_add(scale);
+        if integer_digits > 19 {
+            return Err(QueryError::new(
+                offset,
+                format!("INT literal out of range for {field}"),
+            ));
+        }
+        let mut integer = significant.to_owned();
+        integer.extend(std::iter::repeat_n(
+            '0',
+            usize::try_from(scale).expect("bounded by i64 digit count"),
+        ));
+        if is_negative {
+            integer.insert(0, '-');
+        }
+        integer
+            .parse::<i64>()
+            .map_err(|_| QueryError::new(offset, format!("INT literal out of range for {field}")))?
+    } else {
+        let integer_digits = i64::try_from(significant.len())
+            .expect("query length fits i64")
+            .saturating_add(scale);
+        if integer_digits > 19 {
+            return Err(QueryError::new(
+                offset,
+                format!("INT literal out of range for {field}"),
+            ));
+        }
+        let magnitude = if integer_digits <= 0 {
+            0
+        } else {
+            significant[..usize::try_from(integer_digits).expect("positive digit count")]
+                .parse::<i128>()
+                .expect("at most 19 decimal digits")
+        };
+        i64::try_from(if is_negative { -magnitude } else { magnitude })
+            .map_err(|_| QueryError::new(offset, format!("INT literal out of range for {field}")))?
+    };
+    let rounded = value
+        .parse::<f64>()
+        .map_err(|_| invalid_numeric_literal("INT", value, field, offset, "decimal number"))?;
+    Ok(ParsedLiteral::DecimalInt {
+        truncated,
+        has_decimal_part: rounded % 1.0 != 0.0,
+        is_positive: rounded > 0.0,
+    })
+}
+
+fn parse_signed_exponent(bytes: &[u8], position: &mut usize) -> Option<i64> {
+    let is_negative = match bytes.get(*position) {
+        Some(b'-') => {
+            *position += 1;
+            true
+        }
+        Some(b'+') => {
+            *position += 1;
+            false
+        }
+        _ => false,
+    };
+    let start = *position;
+    let mut magnitude = 0_i64;
+    while bytes.get(*position).is_some_and(u8::is_ascii_digit) {
+        magnitude = magnitude
+            .saturating_mul(10)
+            .saturating_add(i64::from(bytes[*position] - b'0'));
+        *position += 1;
+    }
+    (start != *position).then_some(if is_negative { -magnitude } else { magnitude })
+}
+
+fn parse_int_literal(value: &str, field: &str, offset: usize) -> Result<i64, QueryError> {
+    value
+        .parse()
+        .map_err(|error: ParseIntError| match error.kind() {
+            IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
+                QueryError::new(offset, format!("INT literal out of range for {field}"))
+            }
+            _ => QueryError::new(
+                offset,
+                format!("invalid INT literal for {field}: {value:?} is not a whole number"),
+            ),
+        })
+}
+
+fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, QueryError> {
+    let number: f64 = if is_hex_float(value) {
+        match parse_hex_float(value) {
+            Some(number) => number,
+            None => {
+                return Err(invalid_numeric_literal(
+                    "DOUBLE",
+                    value,
+                    field,
+                    offset,
+                    "decimal number",
+                ));
+            }
+        }
+    } else {
+        match value.parse() {
+            Ok(number) => number,
+            Err(_) => {
+                return Err(invalid_numeric_literal(
+                    "DOUBLE",
+                    value,
+                    field,
+                    offset,
+                    "decimal number",
+                ));
+            }
+        }
+    };
+    if number.is_finite() {
+        Ok(number)
+    } else if value.bytes().any(|byte| byte.is_ascii_digit()) {
+        Err(QueryError::new(
+            offset,
+            format!("DOUBLE literal out of range for {field}"),
+        ))
+    } else {
+        // Rust parses NaN and infinity names, which no DOUBLE value can match.
+        Err(invalid_numeric_literal(
+            "DOUBLE",
+            value,
+            field,
+            offset,
+            "decimal number",
+        ))
+    }
+}
+
+fn is_hex_float(value: &str) -> bool {
+    let unsigned = value.strip_prefix(['+', '-']).unwrap_or(value);
+    unsigned.starts_with("0x") || unsigned.starts_with("0X")
+}
+
+fn parse_hex_float(value: &str) -> Option<f64> {
+    let bytes = value.as_bytes();
+    let mut position = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let is_negative = bytes.first() == Some(&b'-');
+    position += 2;
+    let mut bits = Vec::new();
+    let mut fraction_digits = 0_i64;
+    let mut has_point = false;
+    let mut digit_count = 0;
+    while let Some(&byte) = bytes.get(position) {
+        if byte == b'.' && !has_point {
+            has_point = true;
+            position += 1;
+            continue;
+        }
+        let Some(nibble) = (byte as char).to_digit(16) else {
+            break;
+        };
+        digit_count += 1;
+        if has_point {
+            fraction_digits += 1;
+        }
+        for shift in (0..4).rev() {
+            bits.push(((nibble >> shift) & 1) as u8);
+        }
+        position += 1;
+    }
+    if digit_count == 0 || !matches!(bytes.get(position), Some(b'p' | b'P')) {
+        return None;
+    }
+    position += 1;
+    let binary_exponent = parse_signed_exponent(bytes, &mut position)?;
+    if position != bytes.len() {
+        return None;
+    }
+    let sign_bits = u64::from(is_negative) << 63;
+    let Some(first_one) = bits.iter().position(|bit| *bit == 1) else {
+        return Some(f64::from_bits(sign_bits));
+    };
+    let significant_bits = &bits[first_one..];
+    let highest_exponent = binary_exponent
+        .saturating_sub(fraction_digits.saturating_mul(4))
+        .saturating_add(i64::try_from(bits.len() - first_one - 1).expect("query length fits i64"));
+    if highest_exponent > 1023 {
+        return Some(f64::INFINITY);
+    }
+    if highest_exponent < -1075 {
+        return Some(f64::from_bits(sign_bits));
+    }
+    if highest_exponent >= -1022 {
+        let mut significand = round_binary_significand(significant_bits, 53);
+        let mut exponent = highest_exponent;
+        if significand == (1 << 53) {
+            significand >>= 1;
+            exponent += 1;
+        }
+        if exponent > 1023 {
+            return Some(f64::INFINITY);
+        }
+        let exponent_bits = u64::try_from(exponent + 1023).expect("normal exponent is positive");
+        return Some(f64::from_bits(
+            sign_bits | (exponent_bits << 52) | (significand & ((1 << 52) - 1)),
+        ));
+    }
+    let keep_count = usize::try_from(highest_exponent + 1075).expect("subnormal bit count");
+    let significand = round_binary_significand(significant_bits, keep_count);
+    Some(f64::from_bits(sign_bits | significand))
+}
+
+fn round_binary_significand(bits: &[u8], keep_count: usize) -> u64 {
+    let mut significand = 0_u64;
+    for index in 0..keep_count {
+        significand = (significand << 1) | u64::from(bits.get(index).copied().unwrap_or(0));
+    }
+    if bits.get(keep_count) == Some(&1)
+        && (significand & 1 == 1 || bits[keep_count + 1..].contains(&1))
+    {
+        significand += 1;
+    }
+    significand
+}
+
+fn invalid_numeric_literal(
+    index_type: &str,
+    value: &str,
+    field: &str,
+    offset: usize,
+    syntax: &str,
+) -> QueryError {
+    QueryError::new(
+        offset,
+        format!("invalid {index_type} literal for {field}: {value:?} is not a {syntax}"),
+    )
 }
 
 fn describe(kind: &TokenKind) -> String {
