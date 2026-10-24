@@ -58,8 +58,8 @@ pub(crate) struct RunCursor {
     pub(crate) starts_attempt: bool,
     /// Set by TimeTravel: input it reapplied, recorded so later travels reapply it again.
     pub(crate) reapplied_inputs: Vec<FlowCommand>,
-    /// Set by TimeTravel: method calls its reapplied input made pending for the first time.
-    pub(crate) reapplied_pending_invocations: Vec<StepInvocationKey>,
+    /// Set by TimeTravel: first-attempt method calls that reapply or child results made pending.
+    pub(crate) fork_pending_invocations: Vec<StepInvocationKey>,
 }
 
 impl RunCursor {
@@ -132,7 +132,7 @@ impl RunCursor {
             effects: Vec::new(),
             starts_attempt: false,
             reapplied_inputs: Vec::new(),
-            reapplied_pending_invocations: Vec::new(),
+            fork_pending_invocations: Vec::new(),
         }
     }
 

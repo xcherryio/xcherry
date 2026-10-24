@@ -136,9 +136,9 @@ pub(crate) fn apply_time_travel(
         &holder_rows(&restored_rows, &run_status_of(&cursor.record)),
         cursor.seq,
     )?;
-    apply_received_child_results(transaction, &mut cursor, scope)?;
     let reapplied_events =
         reapply_external_inputs(transaction, &mut cursor, scope, &reapplied_inputs)?;
+    apply_received_child_results(transaction, &mut cursor, scope)?;
     let final_rows = read_attempt_rows(transaction, cursor.rows)?;
     dispatch_restored_invocations(&mut cursor, &final_rows)?;
     cursor.add_event(flow_history_event::Payload::TimeTravelFork(
@@ -338,14 +338,32 @@ fn update_run_lifecycle(
     update_directory_status(transaction, cursor, scope)
 }
 
-/// Completes restored SubFlow conditions from received child results (C15); tasks A3 and A6.
+/// Completes restored SubFlow conditions from received child results (C15), even without reapply.
 fn apply_received_child_results(
     transaction: &mut FlowTransaction<'_>,
     cursor: &mut RunCursor,
     scope: &CommandScope<'_>,
 ) -> Result<(), ApplyError> {
-    let _ = (transaction, cursor, scope);
+    let effects_before = cursor.effects.len();
+    crate::cross_flow::complete_restored_sub_flow_waits(transaction, cursor, scope)?;
+    let effects = cursor.effects.split_off(effects_before);
+    keep_fork_effects(cursor, effects);
     Ok(())
+}
+
+/// Keeps effects of work folded into the fork; dispatch follows the final restored state instead.
+fn keep_fork_effects(cursor: &mut RunCursor, effects: Vec<ApplyEffect>) {
+    for effect in effects {
+        match effect {
+            ApplyEffect::InvocationPending {
+                invocation,
+                attempt: 1,
+                ..
+            } => cursor.fork_pending_invocations.push(invocation),
+            ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. } => {}
+            other => cursor.effects.push(other),
+        }
+    }
 }
 
 /// Re-dispatches the restored calls: running attempts with their stored snapshots and attempt
@@ -453,18 +471,7 @@ fn reapply_external_inputs(
         };
         values = replayed.values;
         events.extend(replayed.events);
-        // Dispatch follows the final restored state instead.
-        for effect in output.effects {
-            match effect {
-                ApplyEffect::InvocationPending {
-                    invocation,
-                    attempt: 1,
-                    ..
-                } => cursor.reapplied_pending_invocations.push(invocation),
-                ApplyEffect::InvocationPending { .. } | ApplyEffect::InvocationStarted { .. } => {}
-                other => cursor.effects.push(other),
-            }
-        }
+        keep_fork_effects(cursor, output.effects);
     }
     cursor.record = required_run_record(transaction, cursor)?;
     cursor.values = values;

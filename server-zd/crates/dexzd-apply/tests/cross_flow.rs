@@ -9,35 +9,35 @@
 use std::collections::BTreeMap;
 
 use dexzd_apply::{
-    ApplyContext, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
+    ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    flow_list_index_key, hard_delete_pending_key, outbox_key, prefix_range, retention_index_key,
-    run_item_index_key, run_named_key, run_singleton_key, tenant_run_index_key, timer_index_key,
-    timer_key,
+    flow_list_index_key, hard_delete_pending_key, history_record_key, outbox_key, prefix_range,
+    retention_index_key, run_item_index_key, run_named_key, run_singleton_key,
+    tenant_run_index_key, timer_index_key, timer_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, TenantId, flow_directory_key,
     run_prefix, run_table_prefix,
 };
 use dexzd_protocol::dex::{
-    AttributeWrite, CloseDecision, CloseDecisionType, FlowConfig, FlowErrorType, FlowStatus,
-    FlowTimeoutHandlerOptions, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, SetAttributesRequest, StartFlowRequest, StepDecision, StepOptions,
-    StopFlowRequest, StopType, SubFlowCondition, SubFlowOptions, SubFlowReusePolicy, Value,
-    WaitingCondition, WaitingConditionType, WorkerTarget, value,
+    AttributeWrite, CloseDecision, CloseDecisionType, FlowConfig, FlowErrorType, FlowResetType,
+    FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, InvokeExecuteMethodResponse,
+    InvokeWaitForMethodResponse, ResetFlowRequest, SetAttributesRequest, StartFlowRequest,
+    StepDecision, StepOptions, StopFlowRequest, StopType, SubFlowCondition, SubFlowOptions,
+    SubFlowReusePolicy, Value, WaitingCondition, WaitingConditionType, WorkerTarget, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, ChildFlowStartMessage, CrossFlowEndpoint, FlowCommand,
     FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord,
-    HardDeleteObjectReference, HardDeleteObjectsDeletedCommand, InboxMessageCommand,
+    HardDeleteObjectReference, HardDeleteObjectsDeletedCommand, HistoryRecord, InboxMessageCommand,
     OutboxAckCommand, OutboxRecord, OutboxRetentionTimerId, ParentFlowReference, RetentionTimerId,
     RunPurgeCommand, RunRecord, RunSettings, StepAttemptFailedCommand, StepAttemptStartedCommand,
     StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, SubFlowResultRecord, TimerId, TimersFiredCommand, command_reply,
-    flow_command::Command, inbox_message_command, outbox_record, step_method_completed_command,
-    timer_id,
+    StepMethodCompletedCommand, SubFlowResultRecord, TimeTravelCommand, TimerId,
+    TimersFiredCommand, command_reply, flow_command::Command, inbox_message_command, outbox_record,
+    step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -402,6 +402,8 @@ fn settings() -> RunSettings {
         wire_inline_threshold_bytes: 100,
         max_value_bytes: 16 << 20,
         request_dedup_capacity: 1000,
+        max_run_state_bytes: 1 << 30,
+        max_retained_superseded_bytes: 256 << 20,
         ..RunSettings::default()
     }
 }
@@ -1812,5 +1814,87 @@ fn stale_attempt_timer_is_disarmed_without_closing_the_run() {
     assert_eq!(
         harness.record("parent", PARENT_RUN).status,
         FlowStatus::Running as i32
+    );
+}
+
+#[test]
+fn time_travel_completes_a_restored_wait_from_a_received_child_result() {
+    let mut harness = Harness::new();
+    harness.start_parent();
+    let start = harness.register_sub_flow_wait(SubFlowReusePolicy::Unspecified);
+    let parent_hash = harness.hasher.flow_hash(TenantId::DEFAULT, "parent");
+    let waiting_seq = harness.record("parent", PARENT_RUN).next_run_seq - 1;
+    let waiting_bytes = harness
+        .state
+        .get(
+            ColumnFamily::History,
+            &history_record_key(parent_hash, RunId(PARENT_RUN), waiting_seq),
+        )
+        .expect("memory reads")
+        .expect("the wait is recorded");
+    let waiting_time = HistoryRecord::decode(waiting_bytes.as_slice())
+        .expect("history decodes")
+        .timestamp_micros;
+    assert_ok(&harness.deliver_start_outbox(&start, FIRST_CHILD_RUN));
+    harness.apply(
+        CHILD_ID,
+        &FIRST_CHILD_RUN,
+        Command::FlowStop(FlowStopCommand {
+            request: Some(StopFlowRequest {
+                stop_type: StopType::Terminate as i32,
+                ..StopFlowRequest::default()
+            }),
+        }),
+    );
+    let report = harness.outbox(CHILD_ID, FIRST_CHILD_RUN).pop().unwrap();
+    assert_ok(&harness.deliver_completion(&report));
+    let completed_phase = harness.step("parent", PARENT_RUN, "StartStep-1").phase;
+    assert_ne!(completed_phase, StepExecutionPhase::Waiting as i32);
+    // The travel skips reapply; the stored child result still completes the restored wait.
+    let travel = harness.apply(
+        "parent",
+        &PARENT_RUN,
+        Command::TimeTravel(TimeTravelCommand {
+            request: Some(ResetFlowRequest {
+                flow_id: "parent".to_owned(),
+                reset_type: FlowResetType::HistoryEventTime as i32,
+                history_event_time: (i128::from(waiting_time) * 1000).to_string(),
+                skip_writes_reapply: true,
+                ..ResetFlowRequest::default()
+            }),
+        }),
+    );
+    assert!(
+        matches!(
+            travel.reply.reply,
+            Some(command_reply::Reply::TimeTravel(_))
+        ),
+        "{:?}",
+        travel.reply
+    );
+    assert_eq!(harness.record("parent", PARENT_RUN).current_attempt, 2);
+    assert_eq!(
+        harness.step("parent", PARENT_RUN, "StartStep-1").phase,
+        completed_phase
+    );
+    let pending: Vec<_> = travel
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            ApplyEffect::InvocationPending {
+                invocation,
+                run_attempt,
+                ..
+            } => Some((
+                invocation.step_execution_id.clone(),
+                invocation.method,
+                *run_attempt,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pending,
+        vec![("StartStep-1".to_owned(), StepMethod::Execute as i32, 2)]
     );
 }

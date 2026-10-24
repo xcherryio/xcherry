@@ -25,7 +25,7 @@ pub(crate) fn pending_step_methods(
     cursor: &RunCursor,
 ) -> Result<Vec<HistoryStepMethodPending>, ApplyError> {
     let first_pending: Vec<&StepInvocationKey> = if cursor.starts_attempt {
-        cursor.reapplied_pending_invocations.iter().collect()
+        cursor.fork_pending_invocations.iter().collect()
     } else {
         cursor
             .effects
