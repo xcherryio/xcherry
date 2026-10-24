@@ -13,10 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::value_row_key;
-use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference};
+use dexzd_keyspace::{
+    ColumnFamily, RunId, RunTable, VALUE_REFERENCE_PREFIX, ValueId, ValueReference,
+};
 use dexzd_protocol::dex::{
     self, ChannelMessage, ChannelResult, ChannelValues, ConditionResults, Context, FlowResult,
-    InvokeExecuteMethodRequest, InvokeWaitForMethodRequest, Kv, StepCompletionOutput, Value, value,
+    InvokeExecuteMethodRequest, InvokeWaitForMethodRequest, Kv, StepCompletionOutput, Value,
+    WorkerErrorResponse, value,
 };
 use dexzd_protocol::dexzd::v1::{
     ChannelMessageRecord, ConditionResultsRecord, HardDeleteObjectReference, RunRecord,
@@ -28,6 +31,12 @@ use crate::effects::EffectError;
 use crate::effects::state_reads::{RunLocation, decode_row, read_run_record, read_step_execution};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
+/// SDK error text for a value that LoadBlobs did not return.
+const VALUE_LOAD_OMISSION_MARKERS: [&str; 2] = ["LoadBlobs omitted", "did not hydrate blob"];
+/// Most value references read from one Worker error.
+const MAX_OMITTED_VALUE_REFERENCES: usize = 16;
+/// Length of `zd1|<UUID>|<u64>-<u32>` with the widest numbers.
+const MAX_VALUE_REFERENCE_LENGTH: usize = 72;
 
 /// The request a Worker receives for one method attempt.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +77,48 @@ impl MethodAttemptState {
             step_execution,
             step_execution_with_references: None,
         })
+    }
+
+    /// Returns the request slots of the values that `worker_error` reports LoadBlobs omitted, or
+    /// `None` when it reports no value-load failure.
+    pub(crate) fn omitted_value_slots(
+        &self,
+        run_id: RunId,
+        worker_error: Option<&WorkerErrorResponse>,
+    ) -> Option<Vec<RequestValueSlot>> {
+        let detail = &worker_error?.detail;
+        if !VALUE_LOAD_OMISSION_MARKERS
+            .iter()
+            .any(|marker| detail.contains(marker))
+        {
+            return None;
+        }
+        Some(self.value_reference_slots(&value_ids_in_text(run_id, detail)))
+    }
+
+    /// Returns the slots whose value-table reference names one of `value_ids`, in request order.
+    fn value_reference_slots(&self, value_ids: &BTreeSet<ValueId>) -> Vec<RequestValueSlot> {
+        // A clone, because the slot walk borrows mutably; only failed value loads call this.
+        let mut step_execution = self
+            .step_execution_with_references
+            .as_ref()
+            .unwrap_or(&self.step_execution)
+            .clone();
+        request_stored_values(&mut step_execution)
+            .into_iter()
+            .filter(|(_, stored)| {
+                let Some(stored_value::Kind::TableValue(table_value)) = stored.kind.as_ref() else {
+                    return false;
+                };
+                table_value.value_id.as_ref().is_some_and(|value_id| {
+                    value_ids.contains(&ValueId {
+                        run_seq: value_id.run_seq,
+                        index_in_command: value_id.index_in_command,
+                    })
+                })
+            })
+            .map(|(slot, _)| slot)
+            .collect()
     }
 
     /// Returns the running invocation; reading the state checked that it exists.
@@ -210,7 +261,7 @@ fn uncommitted_value_ids(
     step_execution: &mut StepExecutionRecord,
 ) -> Result<BTreeSet<ValueId>, EffectError> {
     let mut value_ids = BTreeSet::new();
-    for stored in request_stored_values(step_execution) {
+    for (_, stored) in request_stored_values(step_execution) {
         value_ids.extend(table_value_id(run, stored)?);
     }
     if value_ids.is_empty() {
@@ -235,7 +286,7 @@ fn load_request_values(
     step_execution: &mut StepExecutionRecord,
     should_load: impl Fn(ValueId) -> bool,
 ) -> Result<(), EffectError> {
-    for stored in request_stored_values(step_execution) {
+    for (_, stored) in request_stored_values(step_execution) {
         let Some(value_id) = table_value_id(run, stored)? else {
             continue;
         };
@@ -262,34 +313,95 @@ fn load_request_values(
     Ok(())
 }
 
-/// Returns every stored value that [`build_method_request`] reads.
-fn request_stored_values(step_execution: &mut StepExecutionRecord) -> Vec<&mut StoredValue> {
-    let mut stored_values: Vec<&mut StoredValue> = Vec::new();
-    stored_values.extend(step_execution.input.as_mut());
-    stored_values.extend(stored_key_values(&mut step_execution.locals));
+/// The part of a Worker request that carries a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RequestValueSlot {
+    StepInput,
+    StepLocal,
+    ChannelConditionMessage,
+    SubFlowStepOutput,
+    HeartbeatCheckpoint,
+    Attribute,
+    LoadedChannelMessage,
+}
+
+/// Returns every stored value that [`build_method_request`] reads, with its slot.
+fn request_stored_values(
+    step_execution: &mut StepExecutionRecord,
+) -> Vec<(RequestValueSlot, &mut StoredValue)> {
+    let mut stored_values: Vec<(RequestValueSlot, &mut StoredValue)> = Vec::new();
+    stored_values.extend(in_slot(
+        RequestValueSlot::StepInput,
+        step_execution.input.as_mut(),
+    ));
+    stored_values.extend(in_slot(
+        RequestValueSlot::StepLocal,
+        stored_key_values(&mut step_execution.locals),
+    ));
     if let Some(results) = step_execution.condition_results.as_mut() {
         for channel_result in &mut results.channel_results {
-            stored_values.extend(stored_message_values(&mut channel_result.messages));
+            stored_values.extend(in_slot(
+                RequestValueSlot::ChannelConditionMessage,
+                stored_message_values(&mut channel_result.messages),
+            ));
         }
         for sub_flow_result in &mut results.sub_flow_results {
-            stored_values.extend(
+            stored_values.extend(in_slot(
+                RequestValueSlot::SubFlowStepOutput,
                 sub_flow_result
                     .results
                     .iter_mut()
                     .filter_map(|output| output.completed_step_output.as_mut()),
-            );
+            ));
         }
     }
     if let Some(invocation) = step_execution.invocation.as_mut() {
-        stored_values.extend(invocation.heartbeat_checkpoint.as_mut());
+        stored_values.extend(in_slot(
+            RequestValueSlot::HeartbeatCheckpoint,
+            invocation.heartbeat_checkpoint.as_mut(),
+        ));
         if let Some(snapshot) = invocation.snapshot.as_mut() {
-            stored_values.extend(stored_key_values(&mut snapshot.attributes));
+            stored_values.extend(in_slot(
+                RequestValueSlot::Attribute,
+                stored_key_values(&mut snapshot.attributes),
+            ));
             for loaded in &mut snapshot.loaded_channel_messages {
-                stored_values.extend(stored_message_values(&mut loaded.messages));
+                stored_values.extend(in_slot(
+                    RequestValueSlot::LoadedChannelMessage,
+                    stored_message_values(&mut loaded.messages),
+                ));
             }
         }
     }
     stored_values
+}
+
+fn in_slot<'a>(
+    slot: RequestValueSlot,
+    stored_values: impl IntoIterator<Item = &'a mut StoredValue>,
+) -> impl Iterator<Item = (RequestValueSlot, &'a mut StoredValue)> {
+    stored_values.into_iter().map(move |stored| (slot, stored))
+}
+
+/// Returns the IDs of `run_id`'s values whose canonical references appear in `text`, at most
+/// [`MAX_OMITTED_VALUE_REFERENCES`].
+fn value_ids_in_text(run_id: RunId, text: &str) -> BTreeSet<ValueId> {
+    text.match_indices(VALUE_REFERENCE_PREFIX)
+        .filter_map(|(start, _)| {
+            let token_length = text.as_bytes()[start..]
+                .iter()
+                .take(MAX_VALUE_REFERENCE_LENGTH + 1)
+                .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'|' | b'-'))
+                .count();
+            // Text that is not a canonical reference names no value.
+            text[start..start + token_length]
+                .parse::<ValueReference>()
+                .ok()
+        })
+        .filter(|reference| reference.run_id == run_id)
+        .take(MAX_OMITTED_VALUE_REFERENCES)
+        .map(|reference| reference.value_id)
+        .collect()
 }
 
 /// Returns the value ID of a value-table reference, or `None` for any other stored value.
@@ -611,4 +723,102 @@ pub(crate) fn configured_method_timeout_seconds(
             options.execute_timeout_seconds
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_keyspace::{RunId, ValueId, ValueReference};
+    use dexzd_protocol::dex::WorkerErrorResponse;
+    use dexzd_protocol::dexzd::v1::{
+        MethodSnapshotRecord, RunRecord, StepExecutionRecord, StepInvocationRecord, StoredKeyValue,
+        StoredValue, StoredValueId, StoredValueReference, stored_value,
+    };
+
+    use super::{MethodAttemptState, RequestValueSlot};
+
+    const INPUT_ID: ValueId = ValueId {
+        run_seq: 3,
+        index_in_command: 0,
+    };
+    const ATTRIBUTE_ID: ValueId = ValueId {
+        run_seq: 3,
+        index_in_command: 1,
+    };
+
+    #[test]
+    fn value_load_errors_name_the_request_slots_of_their_references() {
+        let run_id: RunId = "0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a6".parse().unwrap();
+        let other_run_id: RunId = "0192f3a4-5b6c-7d8e-9fa0-b1c2d3e4f5a7".parse().unwrap();
+        let state = state_with_input_and_attribute();
+        let reference = |run_id, value_id| ValueReference { run_id, value_id }.to_string();
+        let slots = |detail: String| {
+            let error = WorkerErrorResponse {
+                detail,
+                grpc_status: 13,
+                ..WorkerErrorResponse::default()
+            };
+            state.omitted_value_slots(run_id, Some(&error))
+        };
+
+        let go_detail = format!(
+            "dex: LoadBlobs omitted blobs; Flow ID \"f\": blob {:?} (Attribute \"profile\"); blob {:?} (Step input)",
+            reference(run_id, ATTRIBUTE_ID),
+            reference(other_run_id, INPUT_ID),
+        );
+        assert_eq!(slots(go_detail), Some(vec![RequestValueSlot::Attribute]));
+        let detail = format!("LoadBlobs omitted blob {}", reference(run_id, INPUT_ID));
+        assert_eq!(slots(detail), Some(vec![RequestValueSlot::StepInput]));
+        let detail = format!(
+            "Dex did not hydrate blob {}",
+            reference(run_id, ATTRIBUTE_ID)
+        );
+        assert_eq!(slots(detail), Some(vec![RequestValueSlot::Attribute]));
+        let detail = format!("LoadBlobs omitted blob {}0", reference(run_id, INPUT_ID));
+        assert_eq!(
+            slots(detail),
+            Some(Vec::new()),
+            "a longer number names another value"
+        );
+        let detail = format!("card declined for {}", reference(run_id, INPUT_ID));
+        assert_eq!(
+            slots(detail),
+            None,
+            "other errors are not value-load failures"
+        );
+        assert_eq!(state.omitted_value_slots(run_id, None), None);
+    }
+
+    fn state_with_input_and_attribute() -> MethodAttemptState {
+        MethodAttemptState {
+            run_record: RunRecord::default(),
+            step_execution: StepExecutionRecord {
+                input: Some(table_value(INPUT_ID)),
+                invocation: Some(StepInvocationRecord {
+                    snapshot: Some(MethodSnapshotRecord {
+                        attributes: vec![StoredKeyValue {
+                            key: "profile".to_owned(),
+                            value: Some(table_value(ATTRIBUTE_ID)),
+                        }],
+                        ..MethodSnapshotRecord::default()
+                    }),
+                    ..StepInvocationRecord::default()
+                }),
+                ..StepExecutionRecord::default()
+            },
+            step_execution_with_references: None,
+        }
+    }
+
+    fn table_value(value_id: ValueId) -> StoredValue {
+        StoredValue {
+            kind: Some(stored_value::Kind::TableValue(StoredValueReference {
+                value_id: Some(StoredValueId {
+                    run_seq: value_id.run_seq,
+                    index_in_command: value_id.index_in_command,
+                }),
+                size_bytes: 4096,
+                is_string_value: true,
+            })),
+        }
+    }
 }

@@ -37,7 +37,7 @@ use crate::effects::dispatch::worker_result::{
 };
 use crate::effects::hard_delete_objects::{HardDeleteObjectOwner, HardDeleteUploads};
 use crate::effects::method_request::{
-    MethodAttemptKey, MethodAttemptState, MethodRequest, RequestValueHydration,
+    MethodAttemptKey, MethodAttemptState, MethodRequest, RequestValueHydration, RequestValueSlot,
     build_method_request, heartbeat_checkpoint_value, read_method_attempt_state,
     resolve_method_durability,
 };
@@ -87,6 +87,8 @@ struct AttemptFailure {
     server_detail: String,
     is_non_retryable: bool,
     served_by_app_worker_id: String,
+    /// Slots of the values a Worker reported LoadBlobs omitted; `None` for other failures.
+    omitted_value_slots: Option<Vec<RequestValueSlot>>,
 }
 
 impl AttemptFailure {
@@ -97,15 +99,15 @@ impl AttemptFailure {
             server_detail: detail.into(),
             is_non_retryable: false,
             served_by_app_worker_id: String::new(),
+            omitted_value_slots: None,
         }
     }
 
     /// Returns true for an error the Step's code returned. SDKs report those with gRPC
     /// `UNKNOWN`; other codes come from the SDK itself, for example a failed value load.
     fn is_step_error(&self) -> bool {
-        self.worker_error
-            .as_ref()
-            .is_some_and(|error| error.grpc_status == grpc_code::UNKNOWN)
+        matches!(&self.worker_error, Some(error) if error.grpc_status == grpc_code::UNKNOWN)
+            && self.omitted_value_slots.is_none()
     }
 }
 
@@ -170,7 +172,9 @@ impl MethodAttempt {
         let sticky_app_worker_id = state.run_record.sticky_app_worker_id.clone();
         match end {
             AttemptEnd::Canceled => Ok(()),
-            AttemptEnd::Failure(failure) => {
+            AttemptEnd::Failure(mut failure) => {
+                failure.omitted_value_slots =
+                    state.omitted_value_slots(self.key.run_id, failure.worker_error.as_ref());
                 self.propose_failure(failure, &sticky_app_worker_id, urgency)
                     .await;
                 Ok(())
@@ -606,6 +610,7 @@ impl MethodAttempt {
                     server_detail: detail,
                     is_non_retryable,
                     served_by_app_worker_id: app_worker_id,
+                    omitted_value_slots: None,
                 };
                 self.propose_failure(failure, &sticky_app_worker_id, urgency)
                     .await;
@@ -713,11 +718,9 @@ impl MethodAttempt {
             .await;
     }
 
-    /// Logs the failure with its Worker error; failures other than a Step's own error are warnings.
+    /// Logs the failure without Worker error text, which may hold values or secrets.
     fn log_failure(&self, failure: &AttemptFailure) {
         let worker_error = failure.worker_error.as_ref();
-        let worker_detail = worker_error.map_or("", |error| error.detail.as_str());
-        let worker_error_type = worker_error.map_or("", |error| error.error_type.as_str());
         let worker_grpc_status = worker_error.map_or(0, |error| error.grpc_status);
         if failure.is_step_error() {
             tracing::info!(
@@ -727,8 +730,6 @@ impl MethodAttempt {
                 attempt = self.key.attempt,
                 kind = ?failure.kind,
                 detail = %failure.server_detail,
-                worker_detail,
-                worker_error_type,
                 worker_grpc_status,
                 "method attempt failed"
             );
@@ -740,9 +741,8 @@ impl MethodAttempt {
                 attempt = self.key.attempt,
                 kind = ?failure.kind,
                 detail = %failure.server_detail,
-                worker_detail,
-                worker_error_type,
                 worker_grpc_status,
+                omitted_value_slots = ?failure.omitted_value_slots,
                 "method attempt failed"
             );
         }
@@ -866,6 +866,7 @@ fn attempt_end(outcome: DispatchOutcome) -> AttemptEnd {
                 worker_error: Some(worker_error),
                 is_non_retryable: false,
                 served_by_app_worker_id: app_worker_id,
+                omitted_value_slots: None,
             })
         }
         DispatchOutcome::DispatchError { reason, detail } => {
