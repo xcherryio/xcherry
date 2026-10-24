@@ -96,6 +96,15 @@ async fn open_rocksdb_store(
 ) -> Result<RestoredLocalStore, EngineStartError> {
     if is_nonempty_directory(directory)? {
         match RocksDbLocalStore::open(directory, options) {
+            Ok(store)
+                if requirements.snapshot.is_some()
+                    && lowest_applied_position(&store, requirements.partition_count)?.is_none() =>
+            {
+                // Log cleanup may have deleted streams older than the oldest recorded one.
+                tracing::warn!(
+                    "a partition of the local store applied no batch; restoring the newest snapshot"
+                );
+            }
             Ok(store) => match find_unreplayable_gap(&store, requirements)? {
                 None => return Ok(RestoredLocalStore::RocksDb(store)),
                 Some(gap) => {
@@ -136,7 +145,20 @@ fn find_unreplayable_gap(
             ),
         }));
     }
-    for segment in &requirements.streams.segments {
+    let segments = &requirements.streams.segments;
+    // Cleanup drops older segments whole, so the rest of an unrecorded stream is gone.
+    if let Some(applied) = applied
+        && !segments
+            .iter()
+            .any(|segment| segment.incarnation == applied.incarnation)
+    {
+        return Ok(Some(EngineStartError::LogStreamDeleted {
+            incarnation: applied.incarnation,
+            resumes_at: applied.seq + 1,
+            oldest_retained_incarnation: segments[0].incarnation,
+        }));
+    }
+    for segment in segments {
         let resumes_at = match applied {
             Some(applied) if applied.incarnation > segment.incarnation => continue,
             Some(applied) if applied.incarnation == segment.incarnation => applied.seq + 1,

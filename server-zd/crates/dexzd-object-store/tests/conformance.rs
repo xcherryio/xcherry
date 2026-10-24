@@ -6,6 +6,9 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+#[path = "conformance/recording_s3_proxy.rs"]
+mod recording_s3_proxy;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -15,6 +18,8 @@ use dexzd_object_store::{
 };
 use s3mock::{Durability, EtagMode, Store, StoreConfig};
 use tempfile::TempDir;
+
+use recording_s3_proxy::RecordingS3Proxy;
 
 async fn check_store(store: &dyn ObjectStore) {
     assert!(
@@ -437,6 +442,234 @@ async fn strict_s3_conformance() {
 #[tokio::test]
 async fn relaxed_s3_conformance() {
     s3_conformance(Durability::Relaxed).await;
+}
+
+async fn start_anonymous_s3_store(
+    directory: &TempDir,
+    multipart_threshold: usize,
+) -> (Arc<Store>, s3mock_server::ServerHandle, S3ObjectStore) {
+    let store = Store::open(&StoreConfig {
+        root_directory: directory.path().join("s3"),
+        durability: Durability::Relaxed,
+        etag_mode: EtagMode::Opaque,
+    })
+    .expect("the emulator store opens");
+    store
+        .create_bucket("anonymous-file-uploads", false)
+        .expect("the bucket is created");
+    let store = Arc::new(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the emulator binds");
+    let server = s3mock_server::start(Arc::clone(&store), listener).expect("the emulator starts");
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "anonymous-file-uploads");
+    config.endpoint = Some(format!("http://{}", server.local_address()));
+    config.force_path_style = true;
+    config.credentials = S3Credentials::Anonymous;
+    config.multipart_threshold = multipart_threshold;
+    config.multipart_part_size = 5 * 1024 * 1024;
+    let object_store = S3ObjectStore::new(config)
+        .await
+        .expect("the anonymous client is configured");
+    (store, server, object_store)
+}
+
+#[tokio::test]
+async fn anonymous_s3_single_file_upload_preserves_crc32() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) = start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let single_file = directory.path().join("single-file");
+    let single_body = b"anonymous single-file upload";
+    tokio::fs::write(&single_file, single_body)
+        .await
+        .expect("the single-part file is written");
+    object_store
+        .put_file("single", &single_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous single-part upload succeeds");
+    assert_eq!(
+        object_store
+            .get("single")
+            .await
+            .expect("the single-part download succeeds")
+            .expect("the single-part object exists")
+            .bytes,
+        Bytes::from_static(single_body)
+    );
+    let single_checksum = store
+        .head_object(
+            "anonymous-file-uploads",
+            "single",
+            &s3mock::ObjectReadRequest::default(),
+        )
+        .expect("the single-part object is readable")
+        .record
+        .checksum
+        .expect("the single-part object has a checksum");
+    assert_eq!(single_checksum.algorithm, s3mock::ChecksumAlgorithm::Crc32);
+    assert_eq!(
+        single_checksum.base64_value,
+        s3mock::ChecksumAlgorithm::Crc32.base64_checksum(single_body)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn anonymous_s3_multipart_file_upload_preserves_composite_crc32() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) = start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let multipart_file = directory.path().join("multipart-file");
+    let multipart_body = vec![0x5a; 6 * 1024 * 1024];
+    tokio::fs::write(&multipart_file, &multipart_body)
+        .await
+        .expect("the multipart file is written");
+    object_store
+        .put_file("multipart", &multipart_file, WriteCondition::CreateOnly)
+        .await
+        .expect("the anonymous multipart upload succeeds");
+    assert_eq!(
+        object_store
+            .get("multipart")
+            .await
+            .expect("the multipart download succeeds")
+            .expect("the multipart object exists")
+            .bytes,
+        Bytes::from(multipart_body.clone())
+    );
+    assert_multipart_crc32(&store, "multipart", &multipart_body, 5 * 1024 * 1024);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn anonymous_s3_multipart_file_upload_sends_crc32_for_every_part() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (_store, server, _direct_store) =
+        start_anonymous_s3_store(&directory, 5 * 1024 * 1024).await;
+    let proxy = RecordingS3Proxy::start(server.local_address()).await;
+    let mut config = S3ObjectStoreConfig::new("us-east-1", "anonymous-file-uploads");
+    config.endpoint = Some(format!("http://{}", proxy.address()));
+    config.force_path_style = true;
+    config.credentials = S3Credentials::Anonymous;
+    config.multipart_threshold = 5 * 1024 * 1024;
+    config.multipart_part_size = 5 * 1024 * 1024;
+    let object_store = S3ObjectStore::new(config)
+        .await
+        .expect("the proxied anonymous client is configured");
+    let file = directory.path().join("multipart-file-requests");
+    let body = vec![0x5a; 6 * 1024 * 1024];
+    tokio::fs::write(&file, &body)
+        .await
+        .expect("the multipart file is written");
+    object_store
+        .put_file("multipart", &file, WriteCondition::CreateOnly)
+        .await
+        .expect("the proxied multipart upload succeeds");
+
+    let request_headers = proxy.multipart_request_headers();
+    let create_requests: Vec<_> = request_headers
+        .iter()
+        .filter(|request| {
+            request.starts_with("POST /anonymous-file-uploads/multipart?uploads HTTP/1.1")
+        })
+        .collect();
+    assert_eq!(
+        create_requests.len(),
+        1,
+        "one multipart upload is initiated"
+    );
+    assert!(create_requests[0].lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("x-amz-checksum-algorithm") && value.trim() == "CRC32"
+        })
+    }));
+
+    let upload_part_requests: Vec<_> = request_headers
+        .iter()
+        .filter(|request| {
+            request.starts_with("PUT /anonymous-file-uploads/multipart?")
+                && request
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains("partNumber="))
+        })
+        .collect();
+    assert_eq!(
+        upload_part_requests.len(),
+        2,
+        "both file parts are uploaded"
+    );
+    for (index, part_body) in body.chunks(5 * 1024 * 1024).enumerate() {
+        let part_number = index + 1;
+        let request = upload_part_requests
+            .iter()
+            .find(|request| {
+                request
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains(&format!("partNumber={part_number}")))
+            })
+            .expect("each part has an UploadPart request");
+        let expected_checksum = s3mock::ChecksumAlgorithm::Crc32.base64_checksum(part_body);
+        assert!(
+            request.lines().any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("x-amz-checksum-crc32")
+                        && value.trim() == expected_checksum
+                })
+            }),
+            "part {part_number} must carry its CRC32 checksum"
+        );
+    }
+    proxy.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn high_threshold_file_upload_uses_bounded_multipart_reads() {
+    let directory = TempDir::new().expect("the temporary directory is created");
+    let (store, server, object_store) =
+        start_anonymous_s3_store(&directory, 64 * 1024 * 1024).await;
+    let file = directory.path().join("larger-than-single-put-cap");
+    let body = vec![0x4b; 17 * 1024 * 1024];
+    tokio::fs::write(&file, &body)
+        .await
+        .expect("the large file is written");
+    object_store
+        .put_file("high-threshold", &file, WriteCondition::CreateOnly)
+        .await
+        .expect("the file uses multipart despite the high threshold");
+    assert_multipart_crc32(&store, "high-threshold", &body, 5 * 1024 * 1024);
+    server.shutdown().await;
+}
+
+fn assert_multipart_crc32(store: &Store, key: &str, body: &[u8], part_size: usize) {
+    let record = store
+        .head_object(
+            "anonymous-file-uploads",
+            key,
+            &s3mock::ObjectReadRequest::default(),
+        )
+        .expect("the multipart object is readable")
+        .record;
+    let part_count = body.chunks(part_size).count();
+    assert_eq!(record.parts_count, Some(part_count as u32));
+    let checksum = record
+        .checksum
+        .expect("the multipart object has a checksum");
+    assert_eq!(checksum.algorithm, s3mock::ChecksumAlgorithm::Crc32);
+    assert_eq!(checksum.checksum_type, s3mock::ChecksumType::Composite);
+    let mut part_checksums = Vec::new();
+    for part_body in body.chunks(part_size) {
+        let part_checksum = s3mock::ChecksumAlgorithm::Crc32.base64_checksum(part_body);
+        part_checksums.extend_from_slice(
+            &s3mock::decode_base64(&part_checksum).expect("the part checksum is valid base64"),
+        );
+    }
+    let expected = format!(
+        "{}-{part_count}",
+        s3mock::ChecksumAlgorithm::Crc32.base64_checksum(&part_checksums)
+    );
+    assert_eq!(checksum.base64_value, expected);
 }
 
 #[derive(Default)]

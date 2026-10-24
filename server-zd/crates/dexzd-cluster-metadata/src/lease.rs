@@ -24,6 +24,8 @@ use crate::{MetadataError, NodeConfig, bump_node_epoch};
 
 const RELEASED_LEASE_EXPIRY_UNIX_MICROS: i64 = i64::MIN;
 const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// Longest wait between reads of a lease another process holds.
+const HELD_LEASE_POLL_LIMIT: Duration = Duration::from_secs(1);
 
 /// Timing and contention policy for a node lease.
 #[derive(Debug, Clone)]
@@ -55,8 +57,41 @@ pub enum LeaseStatus {
     Lost(String),
 }
 
+/// Why this process could not confirm its node lease release; the lease stays held until expiry.
+#[derive(Debug, thiserror::Error)]
+pub enum LeaseReleaseError {
+    /// The renewal task ended abnormally, so the state needed for the release write is gone.
+    #[error("node {node_id:?} lease renewal task failed before the release: {detail}")]
+    RenewalTaskFailed {
+        /// Node ID.
+        node_id: String,
+        /// How the task ended.
+        detail: String,
+    },
+    /// Object storage rejected the release write or its follow-up read.
+    #[error("releasing node {node_id:?} lease failed: {source}")]
+    Rejected {
+        /// Node ID.
+        node_id: String,
+        /// The failed metadata operation.
+        #[source]
+        source: MetadataError,
+    },
+    /// Stopping renewal and writing the release did not finish within the budget.
+    #[error("releasing node {node_id:?} lease did not finish within {budget:?}")]
+    TimedOut {
+        /// Node ID.
+        node_id: String,
+        /// The exceeded budget, [`LeaseHandle::RELEASE_BUDGET`].
+        budget: Duration,
+    },
+}
+
 /// Owns lease renewal and publishes lease validity.
+///
+/// Dropping it unreleased leaves the lease to expire, like a crash.
 pub struct LeaseHandle {
+    node_id: String,
     epoch: u64,
     status: watch::Receiver<LeaseStatus>,
     renewal_task: Option<JoinHandle<LeaseOwner>>,
@@ -64,6 +99,9 @@ pub struct LeaseHandle {
 }
 
 impl LeaseHandle {
+    /// Longest time [`LeaseHandle::shutdown`] spends stopping renewal and writing the release.
+    pub const RELEASE_BUDGET: Duration = Duration::from_secs(2);
+
     /// Returns the node epoch assigned after lease acquisition.
     pub fn epoch(&self) -> u64 {
         self.epoch
@@ -76,34 +114,48 @@ impl LeaseHandle {
 
     /// Stops renewal and releases the lease after the node stops serving.
     /// Subscribers observe `Lost` before the release write.
-    pub async fn shutdown(mut self) {
+    ///
+    /// Returns `Ok` once this process no longer holds the lease: the release was written, or another
+    /// process had already taken the lease over. Returns [`LeaseReleaseError`] when the release could
+    /// not be confirmed within [`LeaseHandle::RELEASE_BUDGET`]; the lease then stays held until it
+    /// expires.
+    pub async fn shutdown(mut self) -> Result<(), LeaseReleaseError> {
+        let stopped =
+            tokio::time::timeout(Self::RELEASE_BUDGET, self.stop_renewal_and_release()).await;
+        stopped.unwrap_or_else(|_| {
+            Err(LeaseReleaseError::TimedOut {
+                node_id: self.node_id.clone(),
+                budget: Self::RELEASE_BUDGET,
+            })
+        })
+    }
+
+    async fn stop_renewal_and_release(&mut self) -> Result<(), LeaseReleaseError> {
         if let Some(sender) = self.shutdown_sender.take()
             && sender.send(()).is_err()
         {
             tracing::debug!("lease renewal task stopped before shutdown");
         }
-        let Some(task) = self.renewal_task.as_mut() else {
-            return;
-        };
+        let task = self
+            .renewal_task
+            .as_mut()
+            .expect("only shutdown takes the renewal task, and it consumes the handle");
         let owner_result = task.await;
         drop(self.renewal_task.take());
-        let owner = match owner_result {
-            Ok(owner) => owner,
-            Err(error) => {
-                tracing::warn!(error = %error, "lease renewal task failed during shutdown");
-                return;
-            }
-        };
+        let owner = owner_result.map_err(|error| LeaseReleaseError::RenewalTaskFailed {
+            node_id: self.node_id.clone(),
+            detail: error.to_string(),
+        })?;
         drop(owner.status.send_replace(LeaseStatus::Lost(
             "lease released during shutdown".to_owned(),
         )));
-        match tokio::time::timeout(owner.duration, owner.release()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(error = %error, "node lease release failed during shutdown");
-            }
-            Err(_) => tracing::warn!("node lease release timed out during shutdown"),
-        }
+        owner
+            .release()
+            .await
+            .map_err(|source| LeaseReleaseError::Rejected {
+                node_id: self.node_id.clone(),
+                source,
+            })
     }
 }
 
@@ -128,6 +180,9 @@ struct LeaseOwner {
 }
 
 /// Acquires a process-specific node lease, raises its epoch, and starts renewal.
+///
+/// Polls a held lease at most every second, so a released lease is taken at once.
+/// Each wait is randomized between half and all of that interval, so waiters spread their reads.
 pub async fn acquire_lease(
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn WallClock>,
@@ -154,6 +209,8 @@ pub async fn acquire_lease(
     })?;
     let key = format!("lease/{}", node.node_id);
     let process_id = Uuid::new_v4().to_string();
+    let held_lease_poll_interval = HELD_LEASE_POLL_LIMIT.min(config.duration / 3);
+    let mut has_reported_wait = false;
     loop {
         let existing = store.get(&key).await?;
         let previous = existing
@@ -182,7 +239,18 @@ pub async fn acquire_lease(
                         expires_at_unix_micros: previous.expires_at_unix_micros,
                     });
                 }
-                tokio::time::sleep(Duration::from_micros((available_at - now) as u64)).await;
+                if !has_reported_wait {
+                    tracing::info!(
+                        node_id = %node.node_id,
+                        holder_process_id = %previous.holder_process_id,
+                        expires_at_unix_micros = previous.expires_at_unix_micros,
+                        "another process holds the node lease; waiting for its release or expiry"
+                    );
+                    has_reported_wait = true;
+                }
+                let until_available = Duration::from_micros((available_at - now) as u64);
+                let poll_delay = jittered_poll_delay(held_lease_poll_interval);
+                tokio::time::sleep(until_available.min(poll_delay)).await;
                 continue;
             }
         }
@@ -234,42 +302,108 @@ pub async fn acquire_lease(
             Err(error) => return Err(error.into()),
         };
         let valid_until = sent_at + config.duration;
-        if Instant::now() >= valid_until {
-            return Err(MetadataError::LeaseLost {
-                node_id: node.node_id.clone(),
-                detail: "acquisition completed after local lease deadline".to_owned(),
-            });
-        }
         let (status, mut receiver) = watch::channel(LeaseStatus::ValidUntil(valid_until));
-        let mut owner = LeaseOwner {
-            store,
-            clock,
-            key,
-            lease,
-            etag,
-            duration: config.duration,
-            last_request_sent: sent_at,
-            current_valid_until: valid_until,
-            status,
+        let mut pending = PendingLease {
+            owner: Some(LeaseOwner {
+                store,
+                clock,
+                key,
+                lease,
+                etag,
+                duration: config.duration,
+                last_request_sent: sent_at,
+                current_valid_until: valid_until,
+                status,
+            }),
         };
-        let epoch = bump_node_epoch(owner.store.as_ref(), owner.clock.as_ref(), node).await?;
-        if Instant::now() >= valid_until {
-            return Err(MetadataError::LeaseLost {
-                node_id: node.node_id.clone(),
-                detail: "epoch update completed after local lease deadline".to_owned(),
-            });
-        }
-        owner.lease.epoch = epoch;
-        owner.renew_before_deadline().await?;
+        let epoch = match pending.owner_mut().finish_acquisition(node).await {
+            Ok(epoch) => epoch,
+            Err(error) => return Err(pending.release_after(error).await),
+        };
+        let owner = pending.take_owner();
         drop(receiver.borrow_and_update());
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
         let renewal_task = tokio::spawn(async move { owner.run(shutdown_receiver).await });
         return Ok(LeaseHandle {
+            node_id: node.node_id.clone(),
             epoch,
             status: receiver,
             renewal_task: Some(renewal_task),
             shutdown_sender: Some(shutdown_sender),
         });
+    }
+}
+
+/// A written lease still being acquired; dropping it releases the lease in the background.
+struct PendingLease {
+    owner: Option<LeaseOwner>,
+}
+
+impl PendingLease {
+    fn owner_mut(&mut self) -> &mut LeaseOwner {
+        self.owner
+            .as_mut()
+            .expect("the owner stays until the acquisition finishes")
+    }
+
+    /// Disarms the guard and returns the owner.
+    fn take_owner(&mut self) -> LeaseOwner {
+        self.owner
+            .take()
+            .expect("the owner stays until the acquisition finishes")
+    }
+
+    /// Releases the lease, then returns `error`. The release continues if the caller is cancelled.
+    async fn release_after(mut self, error: MetadataError) -> MetadataError {
+        let owner = self.take_owner();
+        let release_task = tokio::spawn(release_unfinished_acquisition(owner));
+        if let Err(join_error) = release_task.await {
+            tracing::error!(
+                error = %join_error,
+                "the node lease release task failed after an unfinished acquisition"
+            );
+        }
+        error
+    }
+}
+
+impl Drop for PendingLease {
+    fn drop(&mut self) {
+        let Some(owner) = self.owner.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                // Detached on purpose: the release must outlive the cancelled acquisition.
+                let release_task = runtime.spawn(release_unfinished_acquisition(owner));
+                drop(release_task);
+            }
+            Err(_) => tracing::error!(
+                node_id = %owner.lease.node_id,
+                "no async runtime can release the node lease; it stays held until it expires"
+            ),
+        }
+    }
+}
+
+/// Releases the lease of a failed or cancelled acquisition within the release budget.
+async fn release_unfinished_acquisition(owner: LeaseOwner) {
+    let node_id = owner.lease.node_id.clone();
+    match tokio::time::timeout(LeaseHandle::RELEASE_BUDGET, owner.release()).await {
+        Ok(Ok(())) => tracing::info!(
+            %node_id,
+            "released the node lease after an unfinished acquisition"
+        ),
+        Ok(Err(error)) => tracing::error!(
+            %node_id,
+            %error,
+            "the node lease stays held after an unfinished acquisition"
+        ),
+        Err(_) => tracing::error!(
+            %node_id,
+            budget_milliseconds = LeaseHandle::RELEASE_BUDGET.as_millis(),
+            "releasing the node lease after an unfinished acquisition timed out"
+        ),
     }
 }
 
@@ -296,6 +430,26 @@ impl LeaseOwner {
         }
     }
 
+    /// Raises the node epoch and renews once, both within the first lease period.
+    ///
+    /// Returns the raised epoch, or the error that ended the acquisition.
+    async fn finish_acquisition(&mut self, node: &NodeConfig) -> Result<u64, MetadataError> {
+        if Instant::now() >= self.current_valid_until {
+            return Err(self.lost("acquisition completed after local lease deadline"));
+        }
+        let epoch = bump_node_epoch(self.store.as_ref(), self.clock.as_ref(), node).await?;
+        if Instant::now() >= self.current_valid_until {
+            return Err(self.lost("epoch update completed after local lease deadline"));
+        }
+        self.lease.epoch = epoch;
+        self.renew_before_deadline().await?;
+        Ok(epoch)
+    }
+
+    /// Writes an expired copy of the lease.
+    ///
+    /// Returns `Ok` once this process no longer holds the lease, including when another process
+    /// already took it over, and the storage or decode error otherwise.
     async fn release(&self) -> Result<(), MetadataError> {
         let mut current_lease = self.lease.clone();
         let mut current_etag = self.etag.clone();
@@ -337,7 +491,11 @@ impl LeaseOwner {
                 return Ok(());
             }
             if stored_lease.holder_process_id != self.lease.holder_process_id {
-                return Err(self.lost("release precondition failed"));
+                tracing::info!(
+                    node_id = %self.lease.node_id,
+                    "another process took the node lease over before the release"
+                );
+                return Ok(());
             }
             current_lease = stored_lease;
             current_etag = content.etag;
@@ -422,4 +580,9 @@ impl LeaseOwner {
             detail: detail.to_owned(),
         }
     }
+}
+
+/// Returns a random delay between half of `interval` and all of it.
+fn jittered_poll_delay(interval: Duration) -> Duration {
+    interval - rand::random_range(Duration::ZERO..=interval / 2)
 }

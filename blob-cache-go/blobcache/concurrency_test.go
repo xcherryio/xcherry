@@ -10,8 +10,11 @@ package blobcache
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +58,105 @@ func TestConcurrentSameIDPutsCommitOneFile(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Len(t, regularFiles(t, filepath.Join(rootDir, "blobs")), 1)
+}
+
+func TestConcurrentDifferentIDPutsCommitFiles(t *testing.T) {
+	cache, rootDir := newTestCache(t, 1<<20)
+	const workerCount = 16
+	start := make(chan struct{})
+	errorChannel := make(chan error, workerCount)
+	var waitGroup sync.WaitGroup
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		waitGroup.Add(1)
+		go runDistinctIDPut(cache, workerIndex, start, &waitGroup, errorChannel)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorChannel)
+	for err := range errorChannel {
+		require.NoError(t, err)
+	}
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		blobID := "distinct-" + strconv.Itoa(workerIndex)
+		payload, found, err := cache.Get(blobID)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, []byte("payload"), payload)
+	}
+	require.Len(t, regularFiles(t, filepath.Join(rootDir, "blobs")), workerCount)
+}
+
+func TestDistinctPutProgressesDuringBlockedWrite(t *testing.T) {
+	rootDir := t.TempDir()
+	baseStore, err := newLocalFileStore(rootDir)
+	require.NoError(t, err)
+	blockingStore := &blockingStageStore{
+		fileStore: baseStore,
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	cache, err := newCache(&Config{Dir: rootDir, MaxBytes: 1 << 20, FrequencyCounters: 10_000}, blockingStore)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cache.Close()) })
+	defer blockingStore.releaseOnce.Do(func() { close(blockingStore.release) })
+
+	firstDone := make(chan error, 1)
+	go runCachePut(cache, "first", firstDone)
+	select {
+	case <-blockingStore.started:
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("first write did not reach the blocked stage")
+	}
+	secondDone := make(chan error, 1)
+	go runCachePut(cache, "second", secondDone)
+	select {
+	case putErr := <-secondDone:
+		require.NoError(t, putErr)
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("distinct Put waited for the blocked write")
+	}
+	blockingStore.releaseOnce.Do(func() { close(blockingStore.release) })
+	require.NoError(t, <-firstDone)
+}
+
+func BenchmarkCachePut4KiB(b *testing.B) {
+	benchmarkCachePut4KiB(b, false)
+}
+
+func BenchmarkCachePut4KiBParallel(b *testing.B) {
+	benchmarkCachePut4KiB(b, true)
+}
+
+func benchmarkCachePut4KiB(b *testing.B, isParallel bool) {
+	cache, err := New(&Config{Dir: b.TempDir(), MaxBytes: 1 << 40, FrequencyCounters: 100_000})
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		require.NoError(b, cache.Close())
+	})
+	payload := make([]byte, 4096)
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	if isParallel {
+		var nextID atomic.Uint64
+		b.RunParallel(func(worker *testing.PB) {
+			for worker.Next() {
+				blobID := "benchmark-" + strconv.FormatUint(nextID.Add(1), 10)
+				cached, putErr := cache.Put(blobID, payload)
+				if putErr != nil || !cached {
+					b.Fatalf("put %s: cached=%t, error=%v", blobID, cached, putErr)
+				}
+			}
+		})
+		return
+	}
+	for index := 0; index < b.N; index++ {
+		blobID := "benchmark-" + strconv.Itoa(index)
+		cached, putErr := cache.Put(blobID, payload)
+		if putErr != nil || !cached {
+			b.Fatalf("put %s: cached=%t, error=%v", blobID, cached, putErr)
+		}
+	}
 }
 
 func TestDeleteWaitsForActiveReader(t *testing.T) {
@@ -211,6 +313,26 @@ func runSameIDPut(cache *Cache, waitGroup *sync.WaitGroup, errorChannel chan<- e
 	}
 }
 
+func runDistinctIDPut(
+	cache *Cache,
+	workerIndex int,
+	start <-chan struct{},
+	waitGroup *sync.WaitGroup,
+	errorChannel chan<- error,
+) {
+	defer waitGroup.Done()
+	<-start
+	blobID := "distinct-" + strconv.Itoa(workerIndex)
+	cached, err := cache.Put(blobID, []byte("payload"))
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+	if !cached {
+		errorChannel <- fmt.Errorf("different-ID put %q was not cached", blobID)
+	}
+}
+
 func runCacheGet(cache *Cache, blobID string, done chan<- error) {
 	_, _, err := cache.Get(blobID)
 	done <- err
@@ -218,6 +340,14 @@ func runCacheGet(cache *Cache, blobID string, done chan<- error) {
 
 func runCacheDelete(cache *Cache, blobID string, done chan<- error) {
 	done <- cache.Delete(blobID)
+}
+
+func runCachePut(cache *Cache, blobID string, done chan<- error) {
+	cached, err := cache.Put(blobID, []byte("payload"))
+	if err == nil && !cached {
+		err = fmt.Errorf("blob %q was not admitted", blobID)
+	}
+	done <- err
 }
 
 type evictionProbe struct {
@@ -246,6 +376,21 @@ type blockingReadStore struct {
 	releaseRead  chan struct{}
 	removeCalled chan struct{}
 	startOnce    sync.Once
+}
+
+type blockingStageStore struct {
+	fileStore
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (store *blockingStageStore) stage(metadata fileMetadata, payload []byte) (string, commitResult, error) {
+	if metadata.blobID == "first" {
+		close(store.started)
+		<-store.release
+	}
+	return store.fileStore.stage(metadata, payload)
 }
 
 func (store *blockingReadStore) read(entry *diskEntry) ([]byte, error) {

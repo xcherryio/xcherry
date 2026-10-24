@@ -264,6 +264,9 @@ func (hydrator *valueHydratorImpl) loadCached(
 	request *dexpb.Value,
 	blobID blobIDDef,
 ) (*dexpb.Value, bool) {
+	if strings.HasPrefix(blobID.value, "hd/") || strings.HasPrefix(blobID.value, "hd1|") {
+		return nil, false
+	}
 	cacheKey := flowBlobCacheKey(flowID, blobID.value)
 	payload, found, err := hydrator.cache.Get(cacheKey)
 	if err != nil {
@@ -294,6 +297,9 @@ func (hydrator *valueHydratorImpl) storeCached(
 	blobID blobIDDef,
 	concrete *dexpb.Value,
 ) {
+	if strings.HasPrefix(blobID.value, "hd/") || strings.HasPrefix(blobID.value, "hd1|") {
+		return
+	}
 	payload, err := marshalBlobCachePayload(request, concrete)
 	if err != nil {
 		hydrator.logger.Warn("encode blob cache", "blob_id", blobID.value, "error", err)
