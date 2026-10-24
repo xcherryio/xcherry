@@ -37,6 +37,7 @@ pub(crate) struct SnapshotRetention {
 #[derive(Default)]
 pub(crate) struct SnapshotCatalog {
     pub(crate) operation_lock: Arc<Mutex<()>>,
+    pub(crate) has_prepared_snapshot_lineage: bool,
     manifests: BTreeMap<String, SnapshotManifest>,
     listing_start_after: Option<String>,
     listed_manifest_keys: BTreeSet<String>,
@@ -77,12 +78,15 @@ impl SnapshotRetention {
         if !self.refresh(catalog).await? {
             return Ok(Self::kept(catalog));
         }
+        let orphan_files = self.find_orphan_files(catalog, now_unix_micros).await?;
+        let orphan_files = self
+            .exclude_newly_referenced_files(catalog, orphan_files)
+            .await?;
         let obsolete_manifests: Vec<String> = self
             .find_obsolete(catalog, referenced_keys, now_unix_micros)
             .into_iter()
             .take(CANDIDATES_PER_RUN)
             .collect();
-        let orphan_files = self.find_orphan_files(catalog, now_unix_micros).await?;
         catalog.listed_files.clear();
         if !obsolete_manifests.is_empty() {
             // Files follow in a later sweep, so retries find them through the listing after partial manifest deletion.
@@ -100,6 +104,7 @@ impl SnapshotRetention {
         }
         for chunk in orphan_files.chunks(LISTING_PAGE_SIZE as usize) {
             fence.ensure_current_lease().await?;
+            // An issued delete can finish after lease loss; successors upload into fresh lineages.
             self.object_store.delete_many(chunk).await?;
         }
         if !orphan_files.is_empty() {
@@ -115,6 +120,57 @@ impl SnapshotRetention {
         let mut kept: Vec<&SnapshotManifest> = catalog.manifests.values().collect();
         kept.sort_by(|left, right| creation_order(left).cmp(&creation_order(right)));
         kept
+    }
+
+    async fn exclude_newly_referenced_files(
+        &self,
+        catalog: &mut SnapshotCatalog,
+        orphan_files: Vec<String>,
+    ) -> Result<Vec<String>, SnapshotError> {
+        let lineage_prefixes: BTreeSet<&str> = orphan_files
+            .iter()
+            .filter_map(|key| key.split_once("/files/").map(|(prefix, _)| prefix))
+            .collect();
+        let mut incomplete_lineages = BTreeSet::new();
+        for lineage_prefix in lineage_prefixes {
+            let manifest_prefix = format!("{lineage_prefix}/manifest/");
+            let listing = self
+                .object_store
+                .list(&manifest_prefix, None, LISTING_PAGE_SIZE)
+                .await?;
+            if listing.next_start_after.is_some() {
+                incomplete_lineages.insert(lineage_prefix.to_owned());
+                continue;
+            }
+            for manifest_object in listing.objects {
+                if catalog.manifests.contains_key(&manifest_object.key) {
+                    continue;
+                }
+                let Some(content) = self.object_store.get(&manifest_object.key).await? else {
+                    continue;
+                };
+                let manifest = SnapshotManifest::decode(content.bytes)?;
+                self.validate(&manifest_object.key, &manifest)?;
+                catalog.manifests.insert(manifest_object.key, manifest);
+            }
+        }
+        let referenced_files: BTreeSet<&str> = catalog
+            .manifests
+            .values()
+            .flat_map(|manifest| &manifest.files)
+            .map(|file| file.object_key.as_str())
+            .collect();
+        Ok(orphan_files
+            .into_iter()
+            .filter(|key| {
+                let lineage_prefix = key
+                    .split_once("/files/")
+                    .expect("listed snapshot file has a files segment")
+                    .0;
+                !incomplete_lineages.contains(lineage_prefix)
+                    && !referenced_files.contains(key.as_str())
+            })
+            .collect())
     }
 
     async fn find_orphan_files(
@@ -323,7 +379,7 @@ fn creation_order(manifest: &SnapshotManifest) -> (i64, &[u8], u64) {
 mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -345,6 +401,84 @@ mod tests {
 
     struct MetadataWithoutTimestamp {
         inner: Arc<InMemoryObjectStore>,
+    }
+
+    struct ManifestPublishingStore {
+        inner: Arc<InMemoryObjectStore>,
+        pending_manifest: Mutex<Option<(String, Bytes)>>,
+    }
+
+    #[async_trait]
+    impl ObjectStore for ManifestPublishingStore {
+        async fn put(
+            &self,
+            key: &str,
+            body: Bytes,
+            condition: WriteCondition,
+        ) -> ObjectStoreResult<WriteOutcome> {
+            self.inner.put(key, body, condition).await
+        }
+
+        async fn put_file(
+            &self,
+            key: &str,
+            path: &Path,
+            condition: WriteCondition,
+        ) -> ObjectStoreResult<WriteOutcome> {
+            self.inner.put_file(key, path, condition).await
+        }
+
+        async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
+            self.inner.get(key).await
+        }
+
+        async fn get_range(
+            &self,
+            key: &str,
+            range: ByteRange,
+        ) -> ObjectStoreResult<Option<ObjectContent>> {
+            self.inner.get_range(key, range).await
+        }
+
+        async fn get_to_file(&self, key: &str, path: &Path) -> ObjectStoreResult<Option<u64>> {
+            self.inner.get_to_file(key, path).await
+        }
+
+        async fn head(&self, key: &str) -> ObjectStoreResult<Option<ObjectMetadata>> {
+            self.inner.head(key).await
+        }
+
+        async fn delete(&self, key: &str) -> ObjectStoreResult<()> {
+            self.inner.delete(key).await
+        }
+
+        async fn delete_many(&self, keys: &[String]) -> ObjectStoreResult<()> {
+            self.inner.delete_many(keys).await
+        }
+
+        async fn list(
+            &self,
+            prefix: &str,
+            start_after: Option<&str>,
+            max_keys: u32,
+        ) -> ObjectStoreResult<ObjectListing> {
+            let listing = self.inner.list(prefix, start_after, max_keys).await?;
+            if prefix == "snapshot/node-a/" {
+                let pending_manifest = self
+                    .pending_manifest
+                    .lock()
+                    .expect("manifest publication lock")
+                    .take();
+                if let Some((key, body)) = pending_manifest {
+                    let outcome = self
+                        .inner
+                        .put(&key, body, WriteCondition::CreateOnly)
+                        .await?;
+                    assert!(matches!(outcome, WriteOutcome::Written { .. }));
+                }
+            }
+            Ok(listing)
+        }
     }
 
     #[async_trait]
@@ -642,6 +776,62 @@ mod tests {
             object_store.call_count(ObjectStoreOperation::Delete, &file_key),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn manifest_published_after_deleting_pass_list_protects_its_file() {
+        let inner = Arc::new(InMemoryObjectStore::new());
+        let object_store = Arc::new(ManifestPublishingStore {
+            inner: inner.clone(),
+            pending_manifest: Mutex::new(None),
+        });
+        let lineage = Uuid::now_v7();
+        let file_key = format!("snapshot/node-a/{lineage}/files/file");
+        inner
+            .put(&file_key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload file");
+        let fence = test_fence(object_store.clone()).await;
+        let retention = SnapshotRetention {
+            object_store: object_store.clone(),
+            node_id: "node-a".to_owned(),
+            retained_count: 3,
+            deletion_delay: Duration::ZERO,
+        };
+        let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("mark file");
+        let manifest = SnapshotManifest {
+            node_id: "node-a".to_owned(),
+            lineage_id: lineage.as_bytes().to_vec(),
+            snapshot_number: 1,
+            files: vec![SnapshotFile {
+                object_key: file_key.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let manifest_key = format!("snapshot/node-a/{lineage}/manifest/{:020}", 1);
+        *object_store
+            .pending_manifest
+            .lock()
+            .expect("manifest publication lock") =
+            Some((manifest_key.clone(), Bytes::from(manifest.encode_to_vec())));
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("sweep after manifest publication during listing");
+        assert!(
+            inner
+                .get(&file_key)
+                .await
+                .expect("read referenced file")
+                .is_some()
+        );
+        assert!(catalog.manifests.contains_key(&manifest_key));
+        assert_eq!(inner.call_count(ObjectStoreOperation::Delete, ""), 0);
     }
 
     #[tokio::test]

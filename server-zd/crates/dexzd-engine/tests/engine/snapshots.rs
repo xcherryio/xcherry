@@ -7,15 +7,40 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_engine::{LocalStoreConfig, NodeStopReason};
-use dexzd_object_store::{ObjectStore, ObjectStoreOperation, WriteCondition};
+use dexzd_object_store::{
+    FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
+    WriteCondition,
+};
 use dexzd_protocol::dexzd::v1::SnapshotManifest;
+use dexzd_storage::RocksDbStoreOptions;
 use prost::Message;
+use tokio::sync::Notify;
 
 use crate::harness::{CountingApplier, PARTITION_COUNT, RecordingRuntime, TestCluster};
+
+#[derive(Default)]
+struct DelayedSnapshotDelete {
+    is_armed: AtomicBool,
+    entered: Notify,
+}
+
+impl FaultInjector for DelayedSnapshotDelete {
+    fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if operation == ObjectStoreOperation::Delete
+            && key.is_empty()
+            && self.is_armed.swap(false, Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            return FaultAction::Delay(Duration::from_secs(30));
+        }
+        FaultAction::Proceed
+    }
+}
 
 async fn snapshot_manifest_keys(cluster: &TestCluster) -> Vec<String> {
     cluster
@@ -644,6 +669,163 @@ async fn idle_orphan_cleanup_stops_after_losing_the_lease() {
             .await
             .expect("read successor sweep")
             .is_none()
+    );
+    successor.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn successor_snapshot_survives_old_owners_in_flight_delete() {
+    let mut cluster = TestCluster::new();
+    let delayed_delete = Arc::new(DelayedSnapshotDelete::default());
+    cluster.object_store = Arc::new(InMemoryObjectStore::with_injector_and_clock(
+        delayed_delete.clone(),
+        cluster.clock.clone(),
+    ));
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::ZERO;
+    let first = cluster
+        .start_with(&config)
+        .await
+        .expect("first owner starts");
+    first.commit_prompt("in-flight-delete-flow", 1).await;
+    let first_reference = first.node.take_snapshot().await.expect("first snapshot");
+    let first_lineage = lineage_of(&first_reference.manifest_key);
+    let orphan_key = format!("snapshot/node-a/{first_lineage}/files/orphan");
+    cluster
+        .object_store
+        .put(&orphan_key, Bytes::new(), WriteCondition::CreateOnly)
+        .await
+        .expect("upload orphan");
+    first.node.take_snapshot().await.expect("mark orphan");
+
+    delayed_delete.is_armed.store(true, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    delayed_delete.entered.notified().await;
+    tokio::task::yield_now().await;
+    assert!(
+        cluster
+            .object_store
+            .get(&orphan_key)
+            .await
+            .expect("read in-flight orphan")
+            .is_some()
+    );
+    cluster.expire_lease_of("node-a").await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(matches!(
+        first.node.wait_for_stop().await,
+        NodeStopReason::LeaseLost { .. }
+    ));
+
+    let mut successor_config = cluster.config(LocalStoreConfig::InMemory);
+    successor_config.snapshots.deletion_delay = Duration::from_secs(24 * 60 * 60);
+    let successor = cluster
+        .start_with(&successor_config)
+        .await
+        .expect("successor starts while delete is in flight");
+    successor.commit_prompt("in-flight-delete-flow", 1).await;
+    let successor_reference = successor
+        .node
+        .take_snapshot()
+        .await
+        .expect("successor snapshot");
+    let successor_lineage = lineage_of(&successor_reference.manifest_key);
+    assert_ne!(successor_lineage, first_lineage);
+    let content = cluster
+        .object_store
+        .get(&successor_reference.manifest_key)
+        .await
+        .expect("read successor manifest")
+        .expect("successor manifest exists");
+    let successor_manifest = SnapshotManifest::decode(content.bytes).expect("decode manifest");
+    assert!(!successor_manifest.files.is_empty());
+    assert!(
+        successor_manifest
+            .files
+            .iter()
+            .all(|file| lineage_of(&file.object_key) == successor_lineage)
+    );
+    assert!(
+        cluster
+            .object_store
+            .get(&orphan_key)
+            .await
+            .expect("read old in-flight file after successor snapshot")
+            .is_some()
+    );
+
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        cluster
+            .object_store
+            .get(&orphan_key)
+            .await
+            .expect("read deleted old orphan")
+            .is_none()
+    );
+    for file in &successor_manifest.files {
+        assert!(
+            cluster
+                .object_store
+                .get(&file.object_key)
+                .await
+                .expect("read successor snapshot file")
+                .is_some(),
+            "{} survives the old owner's delete",
+            file.object_key
+        );
+    }
+    first
+        .node
+        .shutdown()
+        .await
+        .expect("stopped node shuts down");
+    successor.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn reused_local_store_starts_a_new_snapshot_lineage() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut cluster = TestCluster::new();
+    let config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: directory.path().join("store"),
+        options: RocksDbStoreOptions::default(),
+    });
+    let first = cluster
+        .start_with(&config)
+        .await
+        .expect("first owner starts");
+    first.commit_prompt("reused-store-flow", 1).await;
+    let first_reference = first.node.take_snapshot().await.expect("first snapshot");
+    first.node.shutdown().await.expect("first lease released");
+
+    let successor = cluster
+        .start_with(&config)
+        .await
+        .expect("successor reuses the local store");
+    successor.commit_prompt("reused-store-flow", 1).await;
+    let successor_reference = successor
+        .node
+        .take_snapshot()
+        .await
+        .expect("successor snapshot");
+    let first_lineage = lineage_of(&first_reference.manifest_key);
+    let successor_lineage = lineage_of(&successor_reference.manifest_key);
+    assert_ne!(successor_lineage, first_lineage);
+    let content = cluster
+        .object_store
+        .get(&successor_reference.manifest_key)
+        .await
+        .expect("read successor manifest")
+        .expect("successor manifest exists");
+    let manifest = SnapshotManifest::decode(content.bytes).expect("decode successor manifest");
+    assert!(!manifest.files.is_empty());
+    assert!(
+        manifest
+            .files
+            .iter()
+            .all(|file| lineage_of(&file.object_key) == successor_lineage)
     );
     successor.node.shutdown().await.expect("lease released");
 }

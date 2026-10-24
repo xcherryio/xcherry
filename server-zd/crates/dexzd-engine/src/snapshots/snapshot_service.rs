@@ -14,10 +14,13 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::ManifestChange;
 use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::{LogPosition, Manifest, SnapshotManifest, SnapshotReference};
-use dexzd_storage::{LocalReadView, RestoredLocalStore, SnapshotIdentity, create_snapshot};
+use dexzd_storage::{
+    LocalReadView, LocalStore, RestoredLocalStore, SnapshotIdentity, StorageError, create_snapshot,
+};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
 use crate::snapshots::log_cleanup::LogCleanup;
@@ -219,6 +222,8 @@ impl SnapshotService {
     }
 
     async fn upload_snapshot(&self) -> Result<(String, SnapshotManifest), SnapshotError> {
+        let should_prepare_snapshot_lineage =
+            !self.catalog.lock().await.has_prepared_snapshot_lineage;
         let store = self.store.clone();
         let upload_store =
             SnapshotUploadStore::new(self.object_store.clone(), self.fence.state.clone());
@@ -230,11 +235,20 @@ impl SnapshotService {
         let runtime = tokio::runtime::Handle::current();
         let node_meta_lock = self.node_meta_lock.clone();
         // Checkpoints and file hashing block, so the whole upload runs on the blocking pool.
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             // create_snapshot reads NodeMeta first and writes it back before it publishes the manifest.
             let _node_meta_guard = node_meta_lock
                 .lock()
                 .expect("node metadata lock is not poisoned");
+            if should_prepare_snapshot_lineage {
+                let mut node_meta = store
+                    .node_meta()?
+                    .ok_or_else(|| StorageError::Invalid("store has no node metadata".into()))?;
+                // Reused local stores retain their lineage; rotate it before this owner's first upload.
+                node_meta.lineage_id = Uuid::now_v7().as_bytes().to_vec();
+                node_meta.last_snapshot_number = 0;
+                store.put_node_meta(&node_meta)?;
+            }
             let snapshot_number = store
                 .node_meta()?
                 .map_or(0, |meta| meta.last_snapshot_number)
@@ -255,7 +269,11 @@ impl SnapshotService {
         .map_err(|error| match self.fence.state.stop_reason() {
             Some(_) => SnapshotError::NodeStopped,
             None => SnapshotError::from(error),
-        })
+        });
+        if result.is_ok() {
+            self.catalog.lock().await.has_prepared_snapshot_lineage = true;
+        }
+        result
     }
 
     async fn record_snapshot(
